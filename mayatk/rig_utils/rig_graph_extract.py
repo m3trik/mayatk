@@ -883,3 +883,125 @@ class RigGraphExtractor(_RigGraphExtractorInternal, ptk.HelpMixin):
             "nodes": list(self._nodes.values()),
             "records": list(self._records),
         }
+
+    #: The shapes a rig's apparatus draws with. The census is a DENYLIST of
+    #: these: a transform holding any other shape -- or one this list does not
+    #: know -- is content, and survives.
+    MACHINERY_SHAPES: Tuple[str, ...] = ("nurbsCurve", "bezierCurve", "locator")
+
+    def machinery(
+        self,
+        rig: Optional[Dict[str, Any]] = None,
+        scope: Optional[Sequence[str]] = None,
+    ) -> Tuple[Dict[str, str], Tuple[str, ...]]:
+        """Name the rig apparatus a bake leaves inert: ``({dag path: kind}, kept)``.
+
+        A carrier ships every DAG node as an object, so a rig that could not
+        travel arrives TWICE: its motion, as keys on whatever renders, AND the
+        apparatus that used to produce it -- constraint nodes, IK handles and
+        effectors, control curves, up-vector locators, the groups that hold
+        only those, and joints nothing content is skinned to. On a production
+        module that is 924 of 2727 transforms; on a production assembly ~600
+        of ~2480 GLB nodes and half its animation data.
+
+        Only the FACTS are Maya's, and they are all this decides: what each
+        transform is (one of ``ptk.RigMachinery.KINDS``, else ``CONTENT`` --
+        :attr:`MACHINERY_SHAPES` is a denylist, so an unknown shape counts as
+        content), which nodes are load-bearing (every influence of a
+        skinCluster that deforms content -- one deforming only the rig's own IK
+        curve protects nothing -- and every node a BUILT record of *rig* names,
+        since a consumer resolves those ids in the delivered scene), and which
+        nodes ARE the rig (this extractor's graph, plus every constraint and IK
+        node). ``ptk.RigMachinery`` turns them into the answer -- protection
+        propagating up, the sweep down, and a short name shared with a node that
+        must survive resolved in favour of keeping, because a carrier keeps
+        names and loses paths.
+
+        Named, never deleted: on a live scene the apparatus still drives the
+        motion a write is about to sample. A consumer drops it from what it
+        received -- ``ptk.FbxMedia.drop_apparatus`` from a written FBX (the Scene
+        Exporter, the WebXR preview), the Blender bridge from its import.
+
+        Parameters:
+            rig: A rig-transfer section (``{"graph", "plan"}``) whose graph is
+                reused, and whose BUILT records' nodes are kept. Without it the
+                scene's graph is extracted here.
+            scope: DAG roots the answer is limited to -- what a selection
+                export ships: each root and everything under it. ``None`` reads
+                the whole scene.
+
+        Returns:
+            tuple: ``(apparatus, kept)`` -- ``{dag path: kind}``, empty when
+            nothing qualifies, and the apparatus paths kept because a surviving
+            node shares their short name.
+        """
+        if scope is None:
+            transforms = cmds.ls(type="transform", long=True) or []
+            dag = cmds.ls(dag=True, long=True) or []
+        else:
+            roots = cmds.ls([str(root) for root in scope], long=True) or []
+            if not roots:
+                return {}, ()
+            transforms = cmds.ls(roots, dag=True, type="transform", long=True) or []
+            dag = cmds.ls(roots, dag=True, long=True) or []
+        if not transforms:
+            return {}, ()
+
+        nodes: Dict[str, str] = {}
+        for node in transforms:
+            node_type = cmds.nodeType(node)
+            shapes = [
+                cmds.nodeType(shape)
+                for shape in cmds.listRelatives(
+                    node, shapes=True, fullPath=True, noIntermediate=True
+                )
+                or []
+            ]
+            if any(shape not in self.MACHINERY_SHAPES for shape in shapes):
+                kind = ptk.RigMachinery.CONTENT
+            elif node_type.endswith("Constraint"):
+                kind = "constraint"
+            elif node_type in ("ikHandle", "ikEffector"):
+                kind = "ik"
+            elif node_type == "joint":
+                kind = "joint"  # nothing content is skinned to it
+            elif shapes:
+                kind = "locator" if set(shapes) == {"locator"} else "control"
+            else:
+                kind = "group"
+            nodes[node] = kind
+
+        protected: List[str] = []
+        for skin in cmds.ls(type="skinCluster") or []:
+            geometry = cmds.skinCluster(skin, query=True, geometry=True) or []
+            if not any(
+                cmds.nodeType(shape) not in self.MACHINERY_SHAPES for shape in geometry
+            ):
+                continue  # deforms only the rig's own curve: its joints are rig too
+            for influence in cmds.skinCluster(skin, query=True, influence=True) or []:
+                protected.extend(cmds.ls(influence, long=True) or [])
+
+        graph = (rig or {}).get("graph")
+        if graph is None:
+            graph = self.extract()
+        path_of = {n.get("id"): n.get("path") for n in graph.get("nodes") or []}
+        build = set(((rig or {}).get("plan") or {}).get("build") or [])
+        for record in graph.get("records") or []:
+            if record.get("id") not in build:
+                continue
+            ids = [(record.get("target") or {}).get("id")]
+            ids += [source.get("id") for source in record.get("sources") or []]
+            for node_id in ids:
+                path = path_of.get(node_id)
+                protected.extend((cmds.ls(path, long=True) or []) if path else ())
+
+        seeds = set()
+        for path in path_of.values():
+            seeds.update((cmds.ls(path, long=True) or []) if path else ())
+        for node_type in ("constraint", "ikHandle", "ikEffector"):
+            seeds.update(cmds.ls(type=node_type, long=True) or [])
+
+        kinds = ptk.RigMachinery.classify(nodes, seeds=seeds, protected=protected)
+        # Every DAG node, shapes included: a USD payload lands each shape as
+        # its own object, so a shape's name is in the consumer's namespace too.
+        return ptk.RigMachinery.unambiguous(kinds, dag)

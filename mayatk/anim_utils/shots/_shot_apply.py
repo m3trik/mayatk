@@ -20,6 +20,8 @@ matching the graceful-degradation contract of the rest of the shot
 model.
 """
 
+import bisect
+import contextlib
 import logging
 from typing import Any, Callable, Iterable, Optional, Tuple
 
@@ -133,12 +135,90 @@ class _ShotApplyInternal(object):
         return moved
 
     @staticmethod
+    @contextlib.contextmanager
+    def _claims_follow(ledger, curves, window, time_map):
+        """Carry the edit ledger's claims through a RETIME of *curves*.
+
+        A retime moves keys the shot system claims -- a respace pin on a
+        bound, the seam key a gap hold stepped -- and each claim has to travel
+        with its key: left on the frame the key left, the next reconcile
+        releases it and the sample reads as the animator's key from then on
+        (one key more per pinned curve on every later count, and a hold the
+        system can no longer take back).  The ripple writer already carries
+        claims by the keys it moved (:meth:`ShotApply.apply`); this is the
+        same rule for a scale.  The keys of every CLAIMED curve sitting in the
+        writer's *window* are read BEFORE the retime and remapped by
+        *time_map* after it -- by the keys moved, never by the window.
+
+        The remap is the movers' own primitive, ``ShotEditLedger.remap``;
+        this only supplies the pairs a scale produces.  The mover that
+        already takes per-key destinations AND the ledger,
+        ``ShotSequencer.recreate_curve_keys``, cannot stand in for the scale
+        itself: it rebuilds each key from its recorded tangent angles and
+        weights, which is right for a translation and wrong for a time scale
+        -- ``scaleKey`` stretches every tangent with the time axis, so
+        replaying the old angles on the stretched spacing reshapes the curve.
+        The writer stays ``scaleKey``; only its claims ride here.
+
+        Each claim goes to the key that actually LANDED nearest its mapped
+        time, not to the mapped time itself: ``scaleKey`` snaps to whole
+        frames when its ``autoSnap`` is on -- a GUI session's preference,
+        off under mayapy -- so a key mapped to 2.5 sits at 3.0 there, and a
+        claim left at 2.5 is released exactly as if it had never moved.
+
+        Unclaimed curves cost nothing; *ledger* ``None`` is a no-op.  An
+        exception in the body skips the remap (nothing was retimed).
+        """
+        pending = []
+        if ledger is not None and cmds is not None:
+            claimed = ledger.curves
+            for crv in {str(c) for c in (curves or ())}:
+                if crv not in claimed:
+                    continue
+                times = cmds.keyframe(crv, q=True, time=window, timeChange=True)
+                if not times:
+                    continue
+                times = sorted(float(t) for t in times)
+                # The keys the retime leaves where they are: never a landing.
+                still = sorted(
+                    float(t)
+                    for t in cmds.keyframe(crv, q=True, timeChange=True) or []
+                    if not times[0] - 1e-6 <= float(t) <= times[-1] + 1e-6
+                )
+                pending.append((crv, times, still))
+        yield
+        for crv, times, still in pending:
+            landed = sorted(
+                t
+                for t in (
+                    float(k) for k in cmds.keyframe(crv, q=True, timeChange=True) or []
+                )
+                if not _ShotApplyInternal._near(still, t, 1e-6)
+            )
+            pairs = []
+            for t in times:
+                want = time_map(t)
+                # Within half a frame: the most a whole-frame snap moves one.
+                got = _ShotApplyInternal._near(landed, want, 0.501)
+                pairs.append((t, want if got is None else got))
+            ledger.remap(crv, pairs)
+
+    @staticmethod
+    def _near(times, t, tol):
+        """The entry of sorted *times* nearest *t* within *tol*, else ``None``."""
+        i = bisect.bisect_left(times, t)
+        near = [times[j] for j in (i - 1, i) if 0 <= j < len(times)]
+        got = min(near, key=lambda k: abs(k - t), default=None)
+        return got if got is not None and abs(got - t) <= tol else None
+
+    @staticmethod
     def _scale_gap_keys(
         cmds,
         objects: Iterable[str],
         lo: float,
         hi: float,
         scale: float,
+        ledger=None,
     ) -> Tuple[int, int]:
         """Retime the keys strictly INSIDE ``(lo, hi)`` about *lo*.
 
@@ -157,6 +237,9 @@ class _ShotApplyInternal(object):
         (:class:`ShotBoundaryConflict`, raised before any write when the two
         shots' boundary poses disagree); leaving the keys where they are and
         reporting it keeps that promise instead of quietly discarding data.
+
+        *ledger* (the store's edit ledger) has its claims on the retimed keys
+        carried with them (:meth:`_claims_follow`).
 
         Returns the number of curves it moved, and separately how many it
         declined for a collapsed gap: ``(moved, declined)``.
@@ -183,7 +266,10 @@ class _ShotApplyInternal(object):
                 declined += 1
                 continue
             try:
-                cmds.scaleKey(crv, time=window, timePivot=lo, timeScale=scale)
+                with _ShotApplyInternal._claims_follow(
+                    ledger, [crv], window, lambda t: lo + (t - lo) * scale
+                ):
+                    cmds.scaleKey(crv, time=window, timePivot=lo, timeScale=scale)
             except RuntimeError:
                 continue  # locked or referenced curve — leave it as it was
             moved += 1
@@ -275,7 +361,10 @@ class ShotApply(_ShotApplyInternal):
 
     @staticmethod
     def retime_gaps(
-        retimes: Iterable[Any], objects: Iterable[str], after_move: bool
+        retimes: Iterable[Any],
+        objects: Iterable[str],
+        after_move: bool,
+        ledger: Optional[Any] = None,
     ) -> int:
         """Scale each gap's content into the width the plan gives that gap.
 
@@ -302,6 +391,12 @@ class ShotApply(_ShotApplyInternal):
         extra objects costs nothing: the window is the gap's interior, and a
         curve with no key in it is skipped.
 
+        *ledger* -- the store's ``edit_ledger`` -- has the claims on every
+        retimed key carried with it.  A gap's seam key is routinely one the
+        system stepped as its hold, and left behind the claim was released
+        by the next hold pass while the key kept the step: a hold nothing
+        could take back any more.  ``None`` (the old behaviour) skips it.
+
         Returns the number of curves moved.
         """
         if cmds is None:
@@ -318,7 +413,7 @@ class ShotApply(_ShotApplyInternal):
             lo = gap.lo + (gap.left_delta if after_move else 0.0)
             hi = lo + gap.width
             one, declined = _ShotApplyInternal._scale_gap_keys(
-                cmds, targets, lo, hi, gap.scale
+                cmds, targets, lo, hi, gap.scale, ledger=ledger
             )
             moved += one
             stranded += declined

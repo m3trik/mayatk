@@ -373,3 +373,120 @@ class TestHumanIKRig(MayaTkTestCase):
         self.assertTrue(plan.bake, "a rig nobody can build must still be baked")
         reasons = {e.reason for e in plan.report}
         self.assertIn("unsupported_shape", reasons)
+
+
+def _apparatus_scene():
+    """A skinned body, the rig that drives it, and the scene's own furniture.
+
+    Content: ``body`` skinned to ``skel_root``/``skel_tip``. The rig: ``ctrl``
+    in its offset group orient-drives the tip and point-drives ``driver_jnt``,
+    which deforms only the rig's own ``ik_curve``; ``aimed`` aims at the control
+    with ``up_loc`` as its up object. Furniture: an empty group, a marker
+    locator and a camera no rig names.
+    """
+    cmds.file(new=True, force=True)
+    cmds.select(clear=True)
+    root = cmds.joint(position=(0, 0, 0), name="skel_root")
+    tip = cmds.joint(position=(0, 2, 0), name="skel_tip")
+    body = cmds.polyCube(name="body", constructionHistory=False)[0]
+    cmds.skinCluster(root, tip, body, name="body_skin", toSelectedBones=True)
+    rig = cmds.group(empty=True, name="rig")
+    ctrl_grp = cmds.group(empty=True, name="ctrl_GRP", parent=rig)
+    ctrl = cmds.circle(name="ctrl", constructionHistory=False)[0]
+    ctrl = cmds.parent(ctrl, ctrl_grp)[0]
+    cmds.orientConstraint(ctrl, tip, maintainOffset=True)
+    cmds.select(clear=True)
+    driver = cmds.parent(cmds.joint(position=(0, 0, 3), name="driver_jnt"), rig)[0]
+    curve = cmds.curve(name="ik_curve", degree=1, point=[(0, 0, 3), (0, 2, 3)])
+    curve = cmds.parent(curve, rig)[0]
+    cmds.skinCluster(driver, curve, name="curve_skin", toSelectedBones=True)
+    cmds.pointConstraint(ctrl, driver, maintainOffset=True)
+    up = cmds.parent(cmds.spaceLocator(name="up_loc")[0], rig)[0]
+    aimed = cmds.group(empty=True, name="aimed", parent=rig)
+    cmds.aimConstraint(ctrl, aimed, worldUpType="object", worldUpObject=up)
+    cmds.group(empty=True, name="artist_null")
+    cmds.spaceLocator(name="marker_loc")
+    cmds.camera(name="shot_cam")
+
+
+class TestMachinery(MayaTkTestCase):
+    """``RigGraphExtractor.machinery`` -- the rig apparatus a bake leaves inert.
+
+    The Maya facts behind ``ptk.RigMachinery``'s rule, shared by the Blender
+    bridge (which drops what it names after its import), the Scene Exporter's
+    Exclude Rig Helpers row and the WebXR preview (which drop it from their FBX).
+    What it must NOT name is the half that matters: "draws nothing" is not "is a
+    rig", or a scene's own marker goes with the controls.
+    """
+
+    RIG = {
+        "|rig": "group",
+        "|rig|ctrl_GRP": "group",
+        "|rig|ctrl_GRP|ctrl": "control",
+        "|rig|driver_jnt": "joint",
+        "|rig|driver_jnt|driver_jnt_pointConstraint1": "constraint",
+        "|rig|ik_curve": "control",
+        "|rig|up_loc": "locator",
+        "|rig|aimed": "group",
+        "|rig|aimed|aimed_aimConstraint1": "constraint",
+        "|skel_root|skel_tip|skel_tip_orientConstraint1": "constraint",
+    }
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.rig_utils.rig_graph_extract import RigGraphExtractor
+
+        _apparatus_scene()
+        self.extractor = RigGraphExtractor()
+
+    def test_the_rig_apparatus_is_named_by_kind_wrappers_included(self):
+        kinds, kept = self.extractor.machinery()
+        self.assertEqual(kinds, self.RIG)
+        self.assertEqual(kept, ())
+
+    def test_content_influences_and_the_scenes_own_nulls_are_kept(self):
+        kinds, _kept = self.extractor.machinery()
+        for survivor in (
+            "|skel_root",
+            "|skel_root|skel_tip",
+            "|body",
+            "|artist_null",
+            "|marker_loc",
+            "|shot_cam",
+        ):
+            self.assertNotIn(survivor, kinds)
+
+    def test_a_short_name_a_survivor_shares_is_kept(self):
+        """A carrier keeps names and loses paths, so the consumer matches by
+        leaf -- and a mirrored rig repeats short names. Ambiguity resolves where
+        the paths still exist, in favour of keeping."""
+        keep = cmds.group(empty=True, name="keepme")
+        cmds.parent(cmds.spaceLocator(name="up_loc")[0], keep)
+        kinds, kept = self.extractor.machinery()
+        self.assertNotIn("|rig|up_loc", kinds)
+        self.assertNotIn("|keepme|up_loc", kinds)
+        self.assertEqual(kept, ("|rig|up_loc",))
+        self.assertIn("|rig|ctrl_GRP|ctrl", kinds)
+
+    def test_a_built_record_keeps_its_nodes_and_their_wrapper_groups(self):
+        graph = self.extractor.extract()
+        path_of = {n["id"]: n.get("path") or "" for n in graph["nodes"]}
+        aim = next(
+            r["id"]
+            for r in graph["records"]
+            if path_of.get((r.get("target") or {}).get("id"), "").endswith("aimed")
+        )
+        kinds, _kept = self.extractor.machinery(
+            rig={"graph": graph, "plan": {"build": [aim]}}
+        )
+        for kept in ("|rig", "|rig|ctrl_GRP", "|rig|ctrl_GRP|ctrl", "|rig|up_loc"):
+            self.assertNotIn(kept, kinds)
+        self.assertIn("|rig|ik_curve", kinds)
+
+    def test_a_scope_limits_the_answer_to_what_ships(self):
+        kinds, _kept = self.extractor.machinery(scope=["rig"])
+        self.assertEqual(
+            kinds, {p: k for p, k in self.RIG.items() if p.startswith("|rig")}
+        )
+        self.assertEqual(self.extractor.machinery(scope=["body"]), ({}, ()))
+        self.assertEqual(self.extractor.machinery(scope=["no_such_node"]), ({}, ()))

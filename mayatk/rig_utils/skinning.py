@@ -1372,9 +1372,13 @@ class SkinUtils(ptk.HelpMixin):
         every = [entry for _, _, plan in plans for entry in plan]
         rows = WorldFitBake.sample_locals(every, frames, orient=orient or None)
         # The joints are keyed next; what drove them must not be found again.
-        stale: List[str] = list(
-            WorldFitBake.ik_handles_touching(path for path, _, _, _ in every)
+        # Held as handles, not names: the census has to run before the
+        # reparents, and a handle parented under an influence that moves is
+        # renamed by the move.
+        handles = CoreUtils.node_handles(
+            list(WorldFitBake.ik_handles_touching(path for path, _, _, _ in every))
         )
+        stale: List[str] = []
         result: Dict[str, Dict[str, str]] = {}
         for root, meshes, plan in plans:
             placed: Dict[str, str] = {}
@@ -1404,6 +1408,7 @@ class SkinUtils(ptk.HelpMixin):
                 for mesh in meshes:
                     cls._unpin_skinned_mesh(mesh)
             result[root] = placed
+        stale += CoreUtils.resolve_handles(handles)
         if stale:
             cmds.delete(stale)
         return result

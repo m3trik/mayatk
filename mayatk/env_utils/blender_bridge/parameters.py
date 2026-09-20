@@ -94,20 +94,23 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "HDRI for that."
         ),
     ),
-    "INCLUDE_SHOTS": AttributeSpec(
-        key="INCLUDE_SHOTS",
-        label="Include Shots",
+    "INCLUDE_SCENE_DATA": AttributeSpec(
+        key="INCLUDE_SCENE_DATA",
+        label="Include Scene Data",
         kind="bool",
-        default=DEFAULTS["INCLUDE_SHOTS"],
+        default=DEFAULTS["INCLUDE_SCENE_DATA"],
         tooltip=(
-            "Carry the scene's shots across so Blender's Shot Sequencer shows the same\n"
-            "shots: names, ranges, descriptions, memberships, markers, locked gaps and the\n"
-            "samples the sequencer planted on shot bounds -- rebuilt 1:1 on the far side.\n\n"
-            "Neither FBX nor USD can hold a shot, so they travel as data beside the file\n"
+            "Carry the scene's tool data across -- every record that means the same in\n"
+            "Blender: the Shot Sequencer's shots (names, ranges, descriptions,\n"
+            "memberships, markers, locked gaps and the samples planted on shot bounds)\n"
+            "and the Emissive Groups (slots, defaults, face membership) -- rebuilt 1:1 on\n"
+            "the far side.\n\n"
+            "Neither FBX nor USD can hold them, so they travel as data beside the file\n"
             "(the same manifest the materials and lights ride). Memberships are scoped to\n"
             "what is sent; the shots themselves always cross. A scene that already has\n"
-            "shots gains the sent ones after its own instead of losing them.\n\n"
-            "Turn it off for a pure asset hand-off, or when the shots are not the\n"
+            "shots or groups gains the sent ones beside its own instead of losing them,\n"
+            "and anything renamed or re-slotted on the way is named in the log.\n\n"
+            "Turn it off for a pure asset hand-off, or when the scene's data is not the\n"
             "receiving scene's business."
         ),
     ),

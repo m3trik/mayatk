@@ -3926,6 +3926,23 @@ class TestAnimUtils(MayaTkTestCase):
             f"Key t=30 out_type changed from 'linear' to '{out_types_post[idx_30]}'",
         )
 
+    @staticmethod
+    def _auto_tangents_facing_gaps(curve):
+        """``(time, side)`` of every 'auto' tangent facing a neighbour more
+        than one frame away -- what FBX's eTangentAuto re-solves and
+        overshoots.  One frame away, no tangent algorithm can move a frame."""
+        times = cmds.keyframe(curve, q=True, timeChange=True) or []
+        ins = cmds.keyTangent(curve, q=True, inTangentType=True) or []
+        outs = cmds.keyTangent(curve, q=True, outTangentType=True) or []
+        return [
+            (times[i], side)
+            for i in range(len(times))
+            for side, j, types in (("in", i - 1, ins), ("out", i + 1, outs))
+            if 0 <= j < len(times)
+            and abs(times[j] - times[i]) > 1.0 + 1e-6
+            and types[i] == "auto"
+        ]
+
     def test_optimize_keys_baked_auto_tangent_flat_region_no_drift(self):
         """Verify optimize_keys preserves flat-region values with baked
         per-frame auto-tangent keys (COPILOT_BREAK production pattern).
@@ -4014,16 +4031,18 @@ class TestAnimUtils(MayaTkTestCase):
             f"out-tangent (inward-facing), got '{out_type_start}'",
         )
 
-        # Non-boundary surviving keys must NOT be 'auto' — they must be
-        # 'fixed' so FBX exports them as eTangentUser (explicit angles).
-        post_out_types = cmds.keyTangent(curve, q=True, outTangentType=True)
-        auto_count = sum(1 for t in post_out_types if t == "auto")
-        self.assertEqual(
-            auto_count,
-            0,
-            f"After optimize_keys, {auto_count} surviving keys still have "
-            f"'auto' out-tangent — FBX will reinterpret these with its own "
-            f"algorithm, corrupting curve shape",
+        # No 'auto' tangent may face a gap wider than one frame: FBX exports
+        # it as eTangentAuto, whose own algorithm overshoots across the
+        # vanished run (the incident).  A survivor with a neighbour one frame
+        # away on each side keeps its 'auto': no algorithm can move a frame
+        # there, so the per-frame-dense curve is not frozen whole (measured
+        # 2026-09-19 at production scale: the same keys, the same drift in
+        # Maya and through an FBX round trip).
+        self.assertEqual(self._auto_tangents_facing_gaps(curve), [])
+        self.assertIn(
+            "auto",
+            cmds.keyTangent(curve, q=True, outTangentType=True),
+            "the dense survivors were frozen whole after all",
         )
 
         # All evaluated values must match within tight tolerance.
@@ -4042,6 +4061,29 @@ class TestAnimUtils(MayaTkTestCase):
             f"Value drifted after optimize_keys: max diff={max_diff:.6f} "
             f"at frame {worst_frame}",
         )
+
+    def test_simplify_freezes_a_dense_curve_the_flat_pass_left_auto(self):
+        """The flat pass freezes a per-frame-dense curve only at its holds'
+        boundaries; the key reducer that runs next needs every angle explicit,
+        or the keys it keeps face the gaps it opens with 'auto' tangents --
+        the FBX overshoot the flat pass's own freeze exists to prevent."""
+        cmds.cutKey(self.cube, clear=True)
+        for t in range(0, 100):  # a hold, then an ease the reducer can thin
+            s = min(max((t - 40) / 50.0, 0.0), 1.0)
+            cmds.setKeyframe(
+                self.cube, attribute="translateY", time=t, value=s * s * (3 - 2 * s)
+            )
+        curve = cmds.listConnections(f"{self.cube}.translateY", type="animCurve")[0]
+        AnimUtils.optimize_keys(
+            [self.cube],
+            remove_static_curves=True,
+            remove_flat_keys=True,
+            simplify_keys=True,
+            recursive=False,
+            quiet=True,
+        )
+        self.assertLess(cmds.keyframe(curve, q=True, keyframeCount=True), 60)
+        self.assertEqual(self._auto_tangents_facing_gaps(curve), [])
 
     def test_optimize_keys_leaves_dense_untouched_curve_tangents_alone(self):
         """A per-frame-dense curve that loses no key keeps its 'auto' tangents;
@@ -4159,7 +4201,8 @@ class TestAnimUtils(MayaTkTestCase):
         different algorithm, producing sinusoidal waves over sparse keys.
         Fix: Phase C freezes auto→fixed (skipping flat boundaries),
         then tie_keyframes adds bookend keys. The full pipeline must
-        produce zero auto tangents and zero value drift.
+        leave no auto tangent facing a gap wider than one frame, and no
+        value drift.
         Fixed: 2026-03-06
         """
 
@@ -4207,21 +4250,9 @@ class TestAnimUtils(MayaTkTestCase):
         )
         AnimUtils.tie_keyframes([self.cube], custom_range=(0, 700))
 
-        # No surviving keys should have 'auto' tangent type
-        post_out = cmds.keyTangent(curve, q=True, outTangentType=True) or []
-        post_in = cmds.keyTangent(curve, q=True, inTangentType=True) or []
-        auto_out = sum(1 for t in post_out if t == "auto")
-        auto_in = sum(1 for t in post_in if t == "auto")
-        self.assertEqual(
-            auto_out,
-            0,
-            f"{auto_out} keys still have 'auto' out-tangent after pipeline",
-        )
-        self.assertEqual(
-            auto_in,
-            0,
-            f"{auto_in} keys still have 'auto' in-tangent after pipeline",
-        )
+        # No 'auto' tangent faces a gap wider than one frame -- a vanished
+        # run's or a bookend's (tie_keyframes freezes the key it lands beside)
+        self.assertEqual(self._auto_tangents_facing_gaps(curve), [])
 
         # All values in original range must match within tolerance
         max_diff = 0

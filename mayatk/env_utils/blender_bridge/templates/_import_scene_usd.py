@@ -31,7 +31,7 @@ user-pickable send recipe; it belongs to the pull engine).
 
 # Dependency-free Blender Python at module scope: no mayatk/blendertk/pythontk imports
 # (only Blender's own bundled modules are guaranteed in the child process). blendertk
-# is imported OPTIONALLY, inside ``shots_section``, and its absence is never fatal.
+# is imported OPTIONALLY, inside ``scene_data_sections``, and its absence is never fatal.
 import glob
 import math
 import os
@@ -44,8 +44,8 @@ OUT_USD = r"__OUT_USD__"
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
 TEX_DIR = r"__TEX_DIR__"
 # Roots for blendertk + pythontk, resolved in the parent Maya. Blender ignores
-# PYTHONPATH, so the one OPTIONAL toolkit pass below (``shots_section``) could not
-# import otherwise; the core conversion never needs them.
+# PYTHONPATH, so the one OPTIONAL toolkit pass below (``scene_data_sections``) could
+# not import otherwise; the core conversion never needs them.
 EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 # Rig transfer (schema section 15): the mode, and the CONSUMER's capability
 # manifest (JSON; empty unless the mode is "rig") this side plans against.
@@ -927,7 +927,7 @@ def scene_settings(bpy):
 
 
 def write_manifest(
-    bpy, scene, materials=None, scene_materials=None, shots=None, rig=None
+    bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None
 ):
     """Sidecar beside the USD carrying what the flat export cannot: instance
     groups, and the scene's time setup (*scene* -- read BEFORE the export, since
@@ -938,7 +938,8 @@ def write_manifest(
     can tell "no instances" from "sidecar lost" -- it REQUIRES the file. Raises
     on failure; main() then withholds the USD artifact, so the parent's
     judged-by-artifact contract reports a failed conversion instead of shipping
-    a payload that would import silently flattened.
+    a payload that would import silently flattened. *scene_data* is
+    ``scene_data_sections``' sections (``shots``, ``records``), merged in.
     """
     import json
 
@@ -958,8 +959,8 @@ def write_manifest(
         "scene_materials": scene_materials or [],
         "scene": scene,
     }
-    if shots:  # absent = nothing to say; the consumer gates on presence
-        data["shots"] = shots
+    # Absent = nothing to say; the consumer gates on presence.
+    data.update(scene_data or {})
     if rig:  # rig mode only: the graph, its plan and the verify samples
         data["rig"] = rig
     with open(OUT_USD + ".manifest.json", "w", encoding="utf-8") as fh:
@@ -978,30 +979,30 @@ def _extend_sys_path():
             sys.path.insert(0, entry)
 
 
-def shots_section(bpy, spell):
-    """The scene's shots as the manifest's ``shots`` section, or ``None``.
+def scene_data_sections(bpy, spell):
+    """The scene's portable records as manifest sections (``shots``,
+    ``records``), or ``{}``.
 
-    Neither carrier has a place for a shot, a marker, a locked gap or the samples
-    the sequencer planted on shot bounds, so the store crosses as data and
-    ``mtk.BlenderSceneImport`` rebuilds it 1:1. blendertk's store encodes it
-    (``BlenderShotStore.export_transfer`` over ``pythontk.ShotTransfer``), names
-    spelled by *spell* as the carrier will write them -- the ONE optional toolkit
-    import in this otherwise dependency-free script, guarded like the mayapy
-    twins' mayatk pre-passes: without blendertk the shots are not carried, and a
-    printed line says so.
+    Neither carrier has a place for a shot, an emissive group's membership or
+    any other tool record, so they cross as data and ``mtk.BlenderSceneImport``
+    lands them 1:1. blendertk writes them (``DataNodes.transfer_sections`` over
+    ``pythontk.RecordTransfer``), names spelled by *spell* as the carrier will
+    write them -- the ONE optional toolkit import in this otherwise
+    dependency-free script, guarded like the mayapy twins' mayatk pre-passes:
+    without blendertk nothing is carried, and a printed line says so.
     """
     _extend_sys_path()
     try:
-        from blendertk.anim_utils.shots._shots import BlenderShotStore
+        from blendertk.node_utils.data_nodes import DataNodes
     except Exception as error:  # noqa: BLE001 -- degrade, never fail the conversion
-        print("shots: blendertk unavailable ({}); not carried.".format(error))
-        return None
+        print("scene data: blendertk unavailable ({}); not carried.".format(error))
+        return {}
     try:
-        return BlenderShotStore.export_transfer(spell=spell)
+        return DataNodes.transfer_sections(spell=spell) or {}
     except Exception:  # noqa: BLE001
-        print("shots: could not read the scene's shots; not carried:")
+        print("scene data: could not read the scene's records; not carried:")
         traceback.print_exc()
-        return None
+        return {}
 
 
 def _transfer_rig(bpy, frames):
@@ -1137,9 +1138,9 @@ def main():
     _progress(0, 4, "Opening the scene")
     open_source(bpy)
     scene = scene_settings(bpy)  # the author's ranges, before export narrows them
-    # Read first too: the section describes the artist's scene. Names spelled as
+    # Read first too: the sections describe the artist's scene. Names spelled as
     # the exporter writes the prims (the instance section's own spelling).
-    shots = shots_section(bpy, _sanitize_prim_name)
+    scene_data = scene_data_sections(bpy, _sanitize_prim_name)
     _progress(1, 5, "Collecting materials")
     materials, scene_materials = collect_texture_manifest(bpy)
     rig = {}
@@ -1153,7 +1154,9 @@ def main():
     # AFTER the export: the sidecar describes the scene the USD was written
     # from. A failure in either withholds both (`_withhold`): a USD without its
     # sidecar would import silently flattened.
-    write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)
+    write_manifest(
+        bpy, scene, materials, scene_materials, scene_data=scene_data, rig=rig
+    )
     _progress(5, 5, "Converted")
 
 

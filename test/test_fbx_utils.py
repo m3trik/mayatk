@@ -205,6 +205,77 @@ class TestFbxUtilsExport(MayaTkTestCase):
         )
 
 
+class TestDropRigApparatus(MayaTkTestCase):
+    """``FbxUtils.drop_rig_apparatus`` -- the census named in the scene, dropped
+    from the written file, the scene untouched."""
+
+    def setUp(self):
+        super().setUp()
+        from test_rig_graph_extract import _apparatus_scene
+
+        FbxUtils.load_plugin()
+        _apparatus_scene()
+        self.tempdir = tempfile.mkdtemp(prefix="fbx_rig_test_")
+        self.addCleanup(self._clean)
+
+    def _clean(self):
+        for name in os.listdir(self.tempdir):
+            try:
+                os.remove(os.path.join(self.tempdir, name))
+            except OSError:
+                pass
+        try:
+            os.rmdir(self.tempdir)
+        except OSError:
+            pass
+
+    def _models(self, path):
+        import pythontk as ptk
+
+        return set(ptk.FbxFile.load(path, raw_payloads=False).object_names("Model"))
+
+    def test_the_written_file_loses_the_rig_and_keeps_what_it_drove(self):
+        roots = ["skel_root", "body", "rig", "artist_null", "marker_loc"]
+        path = FbxUtils.export(
+            os.path.join(self.tempdir, "rigged.fbx"),
+            objects=roots,
+            options={"FBXExportCameras": False},
+        )
+        before = self._models(path)
+        self.assertLessEqual({"rig", "ctrl", "driver_jnt", "up_loc"}, before)
+
+        report = FbxUtils.drop_rig_apparatus(path, cmds.ls(roots, long=True))
+
+        after = self._models(path)
+        self.assertTrue(
+            {
+                "rig",
+                "ctrl_GRP",
+                "ctrl",
+                "driver_jnt",
+                "ik_curve",
+                "up_loc",
+                "aimed",
+            }.isdisjoint(after),
+            sorted(after),
+        )
+        self.assertLessEqual(
+            {"skel_root", "skel_tip", "body", "artist_null", "marker_loc"}, after
+        )
+        self.assertEqual(report["models"], len(before) - len(after))
+        # Named, never deleted: the scene still has the rig that drove the bake.
+        self.assertTrue(cmds.objExists("|rig|ctrl_GRP|ctrl"))
+
+    def test_a_failure_keeps_the_file_and_never_raises(self):
+        junk = os.path.join(self.tempdir, "not_an.fbx")
+        with open(junk, "wb") as fh:
+            fh.write(b"not an fbx" * 40)
+        with self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING"):
+            self.assertIsNone(FbxUtils.drop_rig_apparatus(junk))
+        with open(junk, "rb") as fh:
+            self.assertEqual(fh.read(), b"not an fbx" * 40)
+
+
 class TestFbxUtilsSetOptions(MayaTkTestCase):
     """set_fbx_options should accept bool/int/float/str types via the ``-v`` flag."""
 

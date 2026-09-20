@@ -4,14 +4,12 @@
 
 Covers the carrier lifecycle (creation, idempotency, protection, the keep-alive
 input), the store contract (``read`` / ``write`` / ``values`` per scope and
-the inherited ``dump``), the record layer on top of it, and the retired
-channel methods for the one release they keep working.
+the inherited ``dump``), and the record layer on top of it.
 """
 
 import json
 import pathlib
 import unittest
-import warnings
 
 try:
     import maya.cmds as cmds
@@ -442,44 +440,285 @@ class TestRecords(MayaTkTestCase):
         self.assertFalse(ptk.SceneRecords.HANDOFF.is_present(DataNodes))
 
 
-# -- retired channel methods (one release) ------------------------------------------
+# -- crossings: another scene's carriers meeting this scene's -----------------------
 
 
-class TestRetiredChannelMethods(MayaTkTestCase):
-    """The pre-2026-09-18 string/JSON channel methods keep working, and warn."""
+class TestCarrierCrossings(MayaTkTestCase):
+    """``merge_carriers`` / ``discard_carriers``: an imported reference's own
+    ``data_internal`` / ``data_export`` -- read by nothing once local -- merge
+    into this scene's by each record's rule, or go; never stay behind."""
 
-    def test_string_methods_alias_the_store(self):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self.assertEqual(
-                DataNodes.set_internal_string("probe", "one"), DataNodes.INTERNAL
+    @staticmethod
+    def _carrier(kind, name, records):
+        node = cmds.createNode(kind, name=name, skipSelect=True)
+        for key, payload in records.items():
+            cmds.addAttr(node, longName=key, dataType="string")
+            cmds.setAttr(f"{node}.{key}", json.dumps(payload), type="string")
+        return node
+
+    def _foreign(self, private=None, deliverable=None):
+        """Carriers as an import leaves them: clash-renamed, holding another
+        scene's records."""
+        carriers = {}
+        if private is not None:
+            carriers[PRIVATE] = self._carrier("network", "data_internal1", private)
+        if deliverable is not None:
+            carriers[DELIVERABLE] = self._carrier(
+                "transform", "data_export1", deliverable
             )
-            self.assertEqual(DataNodes.get_internal_string("probe"), "one")
-            self.assertEqual(
-                DataNodes.set_export_string("probe", "two"), DataNodes.EXPORT
+        return carriers
+
+    def test_records_merge_by_their_rules_and_the_carriers_go(self):
+        SR = ptk.SceneRecords
+        DataNodes.ensure_internal()
+        SR.AUDIO_FILE_MAP.save(DataNodes, {"1": "mine.wav"})
+        SR.HIERARCHY_BASELINE.save(DataNodes, {"format": 1, "paths": ["mine"]})
+        carriers = self._foreign(
+            private={
+                "audio_file_map": {"1": "theirs.wav", "2": "b.wav"},
+                "hierarchy_baseline": {"format": 1, "paths": ["theirs"]},
+                "shot_store": {
+                    "shots": [
+                        {
+                            "shot_id": 1,
+                            "name": "door",
+                            "start": 0,
+                            "end": 5,
+                            "objects": ["|door"],
+                        }
+                    ]
+                },
+            }
+        )
+        ctx = DataNodes.merge_carriers(
+            carriers, rename={"|door": "|door1"}.get, source="MOD"
+        )
+        self.assertEqual(
+            SR.AUDIO_FILE_MAP.load(DataNodes), {"1": "mine.wav", "2": "b.wav"}
+        )
+        self.assertEqual(SR.HIERARCHY_BASELINE.load(DataNodes)["paths"], ["mine"])
+        (shot,) = SR.SHOT_STORE.load(DataNodes)["shots"]
+        # Its members respell to where the import put them; its name is its own.
+        self.assertEqual((shot["name"], shot["objects"]), ("door", ["|door1"]))
+        self.assertFalse(cmds.objExists("data_internal1"))
+        self.assertTrue(any("'1'" in n for n in ctx.notes), ctx.notes)
+
+    def test_the_other_carriers_keyed_attributes_move_with_their_curves(self):
+        node = DataNodes.ensure_internal()
+        cmds.addAttr(node, longName="trackB", attributeType="enum", enumName="off:on")
+        (foreign,) = self._foreign(private={}).values()
+        for attr in ("trackA", "trackB"):
+            cmds.addAttr(
+                foreign,
+                longName=attr,
+                attributeType="enum",
+                enumName="off:on",
+                keyable=True,
             )
-            self.assertEqual(DataNodes.get_export_string("probe"), "two")
+            cmds.setKeyframe(foreign, attribute=attr, t=1, v=1)
+        # A ranged double: the clone keeps its hard AND soft range.
+        cmds.addAttr(
+            foreign,
+            longName="gain",
+            attributeType="double",
+            minValue=0,
+            maxValue=10,
+            softMaxValue=5,
+            defaultValue=2,
+            keyable=True,
+        )
+        cmds.setKeyframe(foreign, attribute="gain", t=1, v=3)
+        ctx = DataNodes.merge_carriers({PRIVATE: foreign}, source="MOD")
         self.assertTrue(
-            any(issubclass(w.category, DeprecationWarning) for w in caught), "must warn"
+            cmds.listConnections(f"{node}.trackA", type="animCurve"),
+            "the keyed attr arrives with its curve",
         )
-        self.assertEqual(DataNodes.read(PRIVATE, "probe"), "one")
+        self.assertTrue(cmds.listConnections(f"{node}.gain", type="animCurve"))
+        self.assertEqual(
+            (
+                cmds.attributeQuery("gain", node=node, minimum=True),
+                cmds.attributeQuery("gain", node=node, maximum=True),
+                cmds.attributeQuery("gain", node=node, softMax=True),
+                cmds.attributeQuery("gain", node=node, listDefault=True),
+            ),
+            ([0.0], [10.0], [5.0], [2.0]),
+        )
+        self.assertFalse(cmds.objExists(foreign))
+        self.assertTrue(any("trackB" in n for n in ctx.notes), ctx.notes)
 
-    def test_json_methods_alias_the_store(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            DataNodes.set_export_json("probe", {"version": 1, "items": [1, 2]})
-            self.assertEqual(
-                json.loads(DataNodes.get_export_string("probe")),
-                {"version": 1, "items": [1, 2]},
-            )
-            self.assertIsNone(DataNodes.set_export_json("probe2", {}))
-            DataNodes.set_internal_json("rec", {"a": 1})
-            self.assertEqual(DataNodes.get_internal_json("rec"), {"a": 1})
-            self.assertEqual(DataNodes.get_internal_json("nope", default=[]), [])
-        self.assertFalse(
-            cmds.attributeQuery("probe2", node=DataNodes.EXPORT, exists=True),
-            "a falsy payload never creates the attr",
+    def test_deliverables_are_produced_again_never_merged(self):
+        """The other copy spells names as its own scene did; the merged scene
+        publishes afresh (here: no lightmap markers, so no manifest)."""
+        carriers = self._foreign(
+            deliverable={
+                "lightmap_metadata": {"version": 1, "objects": [{"name": "x"}]}
+            }
         )
+        plan = DataNodes.merge_plan(carriers)
+        self.assertTrue(plan.is_empty, "a deliverable is no question to ask")
+        DataNodes.merge_carriers(carriers, source="MOD")
+        self.assertIsNone(ptk.SceneRecords.LIGHTMAPS.load(DataNodes))
+        self.assertFalse(cmds.objExists("data_export1"))
+
+    def test_the_plan_names_what_a_merge_would_keep(self):
+        carriers = self._foreign(private={"audio_file_map": {"2": "b.wav"}})
+        plan = DataNodes.merge_plan(carriers)
+        self.assertFalse(plan.is_empty)
+        self.assertEqual(plan.summary(), ["Audio Clips: 1 entry"])
+
+    def test_a_carrier_the_import_adopted_is_merged_into_nothing(self):
+        """This scene had no carrier, so the import's IS the scene's own now."""
+        node = self._carrier("network", "data_internal", {"audio_file_map": {"2": "b"}})
+        DataNodes.merge_carriers({PRIVATE: node}, source="MOD")
+        self.assertTrue(cmds.objExists(node))
+        self.assertEqual(ptk.SceneRecords.AUDIO_FILE_MAP.load(DataNodes), {"2": "b"})
+
+    def test_discard_drops_the_records_with_their_carriers(self):
+        carriers = self._foreign(private={"audio_file_map": {"2": "b.wav"}})
+        ctx = DataNodes.discard_carriers(carriers, source="MOD")
+        self.assertIsNone(ptk.SceneRecords.AUDIO_FILE_MAP.load(DataNodes))
+        self.assertFalse(cmds.objExists("data_internal1"))
+        self.assertTrue(any("Audio Clips" in n for n in ctx.notes), ctx.notes)
+        # ...even the carrier an import adopted: dropping its data drops it.
+        node = self._carrier("network", "data_internal", {"audio_file_map": {"3": "c"}})
+        DataNodes.discard_carriers({PRIVATE: node}, source="MOD")
+        self.assertFalse(cmds.objExists(node))
+
+    def test_a_discard_leaves_none_of_its_records_in_the_session(self):
+        """This scene had no carrier, so the import's WAS the scene's own: a
+        panel that read the shot store or the key stash in between holds the
+        module's shots and clips.  A discard takes them out of the session as
+        well -- left cached, the next write would put them back."""
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, attribute="tx", t=1, v=1)
+        curve = cmds.listConnections(f"{cube}.tx", type="animCurve")[0]
+        parked = cmds.duplicate(curve, name="parked__keyStash")[0]
+        clip = {
+            "clip_id": 1,
+            "label": "a",
+            "objects": [cube],
+            "curves": [{"times": [1.0], "stash": BakeSessionStore.node_ref(parked)}],
+        }
+        shot = {"shot_id": 1, "name": "door", "start": 0, "end": 5, "objects": []}
+        node = self._carrier(
+            "network",
+            "data_internal",
+            {
+                "shot_store": {"shots": [shot], "scene_fps": 24.0},
+                "key_stash": {"schema": 1, "scene_fps": 24.0, "clips": [clip]},
+            },
+        )
+        ShotStore.clear_active()
+        KeyStash.invalidate()
+        self.assertEqual([s.name for s in ShotStore.active().shots], ["door"])
+        self.assertEqual(len(KeyStash.active().clips), 1)
+        DataNodes.discard_carriers({PRIVATE: node}, source="MOD")
+        self.assertFalse(cmds.objExists(node))
+        self.assertEqual(ShotStore.active().shots, [])
+        self.assertEqual(KeyStash.active().clips, [])
+
+    def test_a_legacy_stash_registration_moves_before_the_carrier_goes(self):
+        """A stash is never without a registration: one the other scene kept on
+        its carrier (saved before the registries moved) re-registers here."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        (foreign,) = self._foreign(private={}).values()
+        cmds.addAttr(
+            foreign,
+            longName=BakeSessionStore.STASH_REGISTRY_ATTR,
+            attributeType="message",
+            multi=True,
+            indexMatters=False,
+        )
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, attribute="tx", t=1, v=1)
+        curve = cmds.listConnections(f"{cube}.tx", type="animCurve")[0]
+        stash = cmds.duplicate(curve, name="parked")[0]
+        cmds.connectAttr(
+            f"{stash}.message",
+            f"{foreign}.{BakeSessionStore.STASH_REGISTRY_ATTR}",
+            nextAvailable=True,
+        )
+        cmds.lockNode(stash, lock=True)
+        DataNodes.merge_carriers({PRIVATE: foreign}, source="MOD")
+        self.assertFalse(cmds.objExists(foreign))
+        registry = cmds.listConnections(f"{stash}.message", plugs=True) or []
+        self.assertTrue(
+            any(BakeSessionStore.STASH_REGISTRY_ATTR in p for p in registry), registry
+        )
+
+    def test_a_discarded_key_stash_takes_its_parked_curves(self):
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        cube = cmds.polyCube()[0]
+        cmds.setKeyframe(cube, attribute="tx", t=1, v=1)
+        curve = cmds.listConnections(f"{cube}.tx", type="animCurve")[0]
+        parked = cmds.duplicate(curve, name="parked__keyStash")[0]
+        cmds.lockNode(parked, lock=True)
+        clip = {
+            "clip_id": 1,
+            "label": "a",
+            "objects": [cube],
+            "curves": [{"times": [1.0], "stash": BakeSessionStore.node_ref(parked)}],
+        }
+        carriers = self._foreign(
+            private={"key_stash": {"schema": 1, "scene_fps": 24, "clips": [clip]}}
+        )
+        DataNodes.discard_carriers(carriers, source="MOD")
+        self.assertFalse(cmds.objExists(parked))
+
+    def test_carriers_in_a_namespace(self):
+        cmds.namespace(add="MOD")
+        self._carrier("network", "MOD:data_internal", {})
+        self._carrier("transform", "MOD:data_export", {})
+        found = DataNodes.carriers_in("MOD")
+        self.assertEqual(sorted(s.value for s in found), ["deliverable", "private"])
+        self.assertEqual(DataNodes.carriers_in("NOPE"), {})
+
+
+class TestRecordHandoff(MayaTkTestCase):
+    """``transfer_sections`` / ``receive_sections``: the portable records as a
+    hand-off sidecar's sections, landed through the same engine."""
+
+    def _group_on_a_cube(self):
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        cube = cmds.polyCube(name="cube")[0]
+        EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
+        return cube
+
+    def _sections(self):
+        leaf = lambda name: str(name).split("|")[-1]  # noqa: E731 - the FBX spelling
+        return DataNodes.transfer_sections(spell=leaf)
+
+    def test_an_emissive_group_crosses_with_its_membership(self):
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        self._group_on_a_cube()
+        sections = json.loads(json.dumps(self._sections()))  # as the sidecar holds it
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="cube")[0]
+        ctx = DataNodes.receive_sections(
+            sections, resolve={"cube": f"|{cube}"}.get, source="send"
+        )
+        self.assertEqual(EmissiveGroups.list_groups()["glow"]["faces"], 2, ctx.notes)
+
+    def test_a_member_whose_face_count_changed_keeps_no_membership(self):
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        self._group_on_a_cube()
+        sections = self._sections()
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="cube", subdivisionsX=3)[0]  # 14 faces, not 6
+        ctx = DataNodes.receive_sections(sections, resolve={"cube": f"|{cube}"}.get)
+        groups = EmissiveGroups.list_groups()
+        self.assertIn("glow", groups, "the registry still merges")
+        self.assertTrue(groups["glow"]["missing"], "no set: no faces were claimed")
+        self.assertTrue(any("faces" in n for n in ctx.notes), ctx.notes)
 
 
 if __name__ == "__main__":

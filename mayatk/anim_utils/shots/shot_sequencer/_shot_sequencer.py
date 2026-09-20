@@ -845,9 +845,12 @@ class ShotSequencer:
                 # The block's own displacement when it already sat within a
                 # shot-gap of the destination -- it and the content it joins
                 # then shift as ONE run, spacing intact -- and otherwise its
-                # span plus the standard clip separation.
+                # span plus the standard clip separation.  Up, never nearest:
+                # a room short of a fractional block lands the block's last
+                # key after the first key it was put in front of.
                 room = self.store.snap(
-                    block_max - block_min + min(dest.start - block_max, separation)
+                    block_max - block_min + min(dest.start - block_max, separation),
+                    "up",
                 )
                 self.add_shot_space(dest_shot_id, room, edge="leading")
                 # Everything from the destination's start onward travelled
@@ -914,7 +917,9 @@ class ShotSequencer:
         # empty timeline -- which is also what makes the operation read as
         # non-destructive rather than as an overwrite.
         with audio_utils.batch(), self.store.batch_update():
-            room = self.store.snap(needed_end) - dest.end
+            # Up, never nearest: the destination must enclose what lands in it
+            # (fractional content would otherwise end past its end).
+            room = self.store.snap(needed_end, "up") - dest.end
             if room > 1e-6:
                 old_end = dest.end
                 # Source shots at or after the destination's end travel with
@@ -926,7 +931,7 @@ class ShotSequencer:
                     if sid is not None
                     and (self.shot_by_id(sid) or dest).start >= old_end - 1e-6
                 }
-                dest.end = self.store.snap(needed_end)
+                dest.end = self.store.snap(needed_end, "up")
                 self.ripple_downstream(dest_shot_id, old_end, room)
                 for seq, source_id, _target in placements:
                     if source_id in travelled:
@@ -1059,13 +1064,15 @@ class ShotSequencer:
             new_start = content_start
             new_end = content_end
 
-        if edge == "leading":
-            new_end = shot.end
-        elif edge == "trailing":
-            new_start = shot.start
-
-        new_start = self.store.snap(new_start)
-        new_end = self.store.snap(new_end)
+        # Outward: rounded to the NEAREST frame, a start could land past the
+        # first key and an end short of the last -- fractional content is what
+        # a retime leaves (a trim put "Step 4.1"'s start at 985 over a key at
+        # 984.556, handing that key to the neighbour's envelope).  The edge
+        # *edge* excludes is not snapped at all: it does not move.
+        new_start = (
+            shot.start if edge == "trailing" else self.store.snap(new_start, "down")
+        )
+        new_end = shot.end if edge == "leading" else self.store.snap(new_end, "up")
         head_delta = new_start - shot.start
         tail_delta = new_end - shot.end
         if abs(head_delta) < 1e-6 and abs(tail_delta) < 1e-6:
@@ -2431,6 +2438,15 @@ class ShotSequencer:
         """Scale (and optionally shift) keyframes of *obj* from
         [old_start, old_end] into [new_start, new_end].
 
+        The shot system's claims on the keys it retimes travel with them
+        (``_ShotApplyInternal._claims_follow``): a respace pin on the shot's
+        end scaled onto the new end is still the system's sample there, and
+        a gap hold stepped onto a retimed seam is still the system's to take
+        back.  Left on the frame the key left, the reconcile released each
+        one and the sample became an animator key -- measured on the
+        production assembly as one key more per pinned curve after a -6
+        duration change.
+
         Parameters:
             obj: Transform node name.
             old_start: Original first frame.
@@ -2439,6 +2455,7 @@ class ShotSequencer:
             new_end: Desired last frame.
         """
         import maya.cmds as cmds
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
 
         # Resolve to a single DAG path first — shot.objects entries may be
         # short names that turn ambiguous when the scene gains a same-named
@@ -2448,12 +2465,20 @@ class ShotSequencer:
             return
         if abs(old_end - old_start) < 1e-6:
             return
-        cmds.scaleKey(
-            self._disambiguate_matches(matches),
-            time=(old_start, old_end),
-            newStartTime=new_start,
-            newEndTime=new_end,
-        )
+        node = self._disambiguate_matches(matches)
+        ratio = (new_end - new_start) / (old_end - old_start)
+        with ShotApply._claims_follow(
+            self.ledger,
+            self._anim_curves_of(node, None),
+            (old_start, old_end),
+            lambda t: new_start + (t - old_start) * ratio,
+        ):
+            cmds.scaleKey(
+                node,
+                time=(old_start, old_end),
+                newStartTime=new_start,
+                newEndTime=new_end,
+            )
 
     # ---- ripple editing --------------------------------------------------
 
@@ -2971,7 +2996,7 @@ class ShotSequencer:
         return True
 
     def _reconcile_boundary_keys(
-        self, bounds: Optional[Dict[int, tuple]] = None
+        self, bounds: Optional[Dict[int, tuple]] = None, follow: bool = True
     ) -> tuple:
         """Make every claimed boundary sample follow — or leave — its bound.
 
@@ -2980,6 +3005,14 @@ class ShotSequencer:
         the ones the store holds — the PENDING form
         (:meth:`_reconcile_pending_bounds`), for an edit that has not written
         its new bounds yet.
+
+        *follow* ``False`` never MOVES a sample: one whose bound moved is cut
+        when provably redundant and disowned in place otherwise.  The Ctrl
+        edge drag's rule -- the bound moves and nothing else does -- where
+        following re-timed a pin's ramp (measured: 27 frames of changed
+        playback for a 3-frame grow) and, dragged past a gap key, slid the
+        pin over it.  Nothing moves in that gesture, so nothing can be in a
+        sample's way.
 
         A sample the system created exists for ONE shot bound.  Once that
         bound has moved out from under it, it is neither the animator's pose
@@ -3039,7 +3072,8 @@ class ShotSequencer:
                     bound is not None and self._key_time_at(crv, bound, eps) is not None
                 )
                 if (
-                    bound is not None
+                    follow
+                    and bound is not None
                     and not occupied
                     and not self._sample_is_redundant(crv, key_t)
                 ):
@@ -3101,17 +3135,22 @@ class ShotSequencer:
         """
         self._reconcile_boundary_keys(bounds={shot_id: (new_start, new_end)})
 
-    def reconcile_system_edits(self) -> Dict[str, int]:
+    def reconcile_system_edits(self, follow: bool = True) -> Dict[str, int]:
         """Release every shot-system write whose boundary has moved on.
 
         The single maintenance entry point, safe to call after any mutation:
         boundary samples follow their bound (or are cleaned up), then gap
         holds are released and re-applied at the current seams.
 
+        Parameters:
+            follow: ``False`` for an edit that moves a bound and NOTHING else
+                (the Ctrl edge drag): a sample whose bound moved stays where
+                it is instead of following (see :meth:`_reconcile_boundary_keys`).
+
         Returns:
             ``{"keys_moved", "keys_removed", "holds"}`` counts.
         """
-        moved, removed = self._reconcile_boundary_keys()
+        moved, removed = self._reconcile_boundary_keys(follow=follow)
         self._enforce_gap_holds()
         return {
             "keys_moved": moved,
@@ -3246,9 +3285,13 @@ class ShotSequencer:
         old_end = shot.end
         new_end = self.store.snap(shot.start + new_duration)
 
-        # Ripple first, then scale (see :meth:`resize_shot`).
-        self.ripple_downstream(shot_id, old_end, delta)
+        # A growing end ripples FIRST and a shrinking one AFTER the scale --
+        # see :meth:`resize_shot`.
+        if delta > 0:
+            self.ripple_downstream(shot_id, old_end, delta)
         self.scale_shot_keys(shot.start, old_end, shot.start, new_end)
+        if delta < 0:
+            self.ripple_downstream(shot_id, old_end, delta)
         shot.end = new_end
         self.reconcile_system_edits()
         self.store.mark_dirty()
@@ -3290,20 +3333,36 @@ class ShotSequencer:
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
 
-        # Ripple FIRST, then scale.  A neighbour's move window is read from
-        # ITS start, so a key scaled past the old end into that window rode
-        # away with the ripple: measured, doubling [0, 50] to [0, 100] beside
-        # a shot at 60 sent the key scaled to 80 on to 130.  Moving the
-        # neighbours while this shot's keys still sit inside its old span
-        # vacates the new span, and the scale lands in it.
+        # Every GROWING edge ripples FIRST, then the scale, then every
+        # SHRINKING edge ripples: the scale must write into an empty span and
+        # never reach a neighbour's keys.
+        #
+        # A grow vacates the room first.  A neighbour's move window is read
+        # from ITS start, so a key scaled past the old end into that window
+        # rode away with the ripple: measured, doubling [0, 50] to [0, 100]
+        # beside a shot at 60 sent the key scaled to 80 on to 130.
+        #
+        # A shrink closes the room AFTER.  Rippled first, the neighbours --
+        # and this shot's own trailing-gap content -- land inside the span its
+        # content still occupies whenever the shrink is wider than the gap,
+        # and the scale then retimes THEIR keys with its own.  Measured
+        # 2026-09-19 on the production assembly: a -6 duration change pulled
+        # the gap's baked keys onto the shot's own (the equal-pose merge cut
+        # 3 keys from each of 80 curves) and compressed content into the
+        # shot that belonged beyond it.
         tail_delta = new_end - old_end
-        if abs(tail_delta) > 1e-6:
-            self.ripple_downstream(shot_id, old_end, tail_delta)
         head_delta = new_start - old_start
-        if abs(head_delta) > 1e-6:
+        if tail_delta > 1e-6:
+            self.ripple_downstream(shot_id, old_end, tail_delta)
+        if head_delta < -1e-6:
             self.ripple_upstream(shot_id, old_start, head_delta)
 
         self.scale_shot_keys(old_start, old_end, new_start, new_end)
+
+        if tail_delta < -1e-6:
+            self.ripple_downstream(shot_id, old_end, tail_delta)
+        if head_delta > 1e-6:
+            self.ripple_upstream(shot_id, old_start, head_delta)
         shot.start = new_start
         shot.end = new_end
 
@@ -3399,10 +3458,12 @@ class ShotSequencer:
         on_bound: list = []
         if clamp and (new_start > old_start + 1e-6 or new_end < old_end - 1e-6):
             first, last, _o1, _o2, on_bound = self._key_extent(shot, False)
+            # Snapped OUTWARD, so the clamp never stops inside fractional
+            # content (see fit_shot_to_content).
             if new_start > old_start + 1e-6 and first is not None:
-                new_start = self.store.snap(min(new_start, first))
+                new_start = self.store.snap(min(new_start, first), "down")
             if new_end < old_end - 1e-6 and last is not None:
-                new_end = self.store.snap(max(new_end, last))
+                new_end = self.store.snap(max(new_end, last), "up")
         if abs(new_start - old_start) < 1e-6 and abs(new_end - old_end) < 1e-6:
             return
 
@@ -4386,7 +4447,9 @@ class ShotSequencer:
 
         finish = self._reconcile_boundaries(plan, retimes) if cmds is not None else None
         if retimes:
-            ShotApply.retime_gaps(retimes, content, after_move=False)
+            ShotApply.retime_gaps(
+                retimes, content, after_move=False, ledger=self.ledger
+            )
         # Every envelope moves the whole keyed content, so nothing keyed
         # inside a moving shot is left behind whatever its member list says
         # -- and the list is not written to.  It used to be BACKFILLED with
@@ -4397,7 +4460,7 @@ class ShotSequencer:
             finish()
 
         if retimes:
-            ShotApply.retime_gaps(retimes, content, after_move=True)
+            ShotApply.retime_gaps(retimes, content, after_move=True, ledger=self.ledger)
 
     def _content_objects(self) -> list:
         """Every object a whole-shot move can reach: what the movers, the pin

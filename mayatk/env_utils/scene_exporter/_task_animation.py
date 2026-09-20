@@ -51,6 +51,14 @@ class _AnimationTasksMixin(_TaskDataMixin):
         # derived per run by run_tasks (ptk.ExportRun.with_tasks, off the full
         # task dict); SmartBake resolves the token itself against
         # AnimUtils.OPTIMIZE_LEVELS.
+        level = self.run.optimize_keys_level
+        if level and self._write_resamples_layers():
+            self.logger.info(
+                "Smart bake: its own key optimization is skipped -- this FBX "
+                "write splits the declared takes, which re-samples the override "
+                "layer per frame, so reduced layer keys would never ship."
+            )
+            level = False
         baker = SmartBake(
             # `_live_objects`, not the raw set: this is the first task to walk
             # every node one at a time, so it is where a path invalidated by an
@@ -60,7 +68,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
             objects=self._live_objects(),
             sample_by=1,
             preserve_outside_keys=True,
-            optimize_keys=self.run.optimize_keys_level,
+            optimize_keys=level,
             use_override_layer=True,  # Non-destructive: bake to override layer
             delete_inputs=False,  # Keep constraints — layer overrides them
         )
@@ -129,6 +137,32 @@ class _AnimationTasksMixin(_TaskDataMixin):
         # objects.setter already invalidates the key-range cache, so no
         # explicit invalidation is needed here.
         self.objects = self._live_objects()
+
+    def _write_resamples_layers(self) -> bool:
+        """Whether this run's FBX write re-samples the bake's override layer
+        per frame, so a key reduction inside the layer could never ship: the
+        write splits the declared takes (``ExportRun.splits_takes`` over a scene
+        that declares some -- ``FbxUtils.declared_takes``, the read
+        :meth:`apply_declared_takes` realizes them from), a split forces
+        ``FBXExportBakeComplexAnimation`` over the shot union, and nothing is
+        written back to the scene.
+
+        A wrong answer costs FIDELITY, not just file size, so answering it is
+        worth the four reads: the write bakes the layer either way, but
+        reducing the layer FIRST and the scene's curves after it thins the same
+        motion twice.  Measured against the production rig itself (4 clips x 40
+        nodes x 40 frames, the frames the two exports disagree on most): with
+        this skip the shipped worst-case orientation error is 1.35 deg against
+        4.56 without it, and the sample is closer in 1040-1564 of every 1600 --
+        so the skip is the faithful path, not merely the smaller one."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        return bool(
+            self.run.splits_takes
+            and not self.run.usd
+            and not self.run.animation_write_back
+            and FbxUtils.declared_takes()
+        )
 
     def optimize_keys(self, level: Union[bool, str, None] = True):
         """Optimize baked animation keys at the requested level.
@@ -238,43 +272,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
         """
         start, end = AnimUtils.scene_animation_range()
         return math.floor(start), math.ceil(end)
-
-    @ptk.Deprecation.symbol(
-        "TaskManager.export_data_node (the clip origin is an input of the "
-        "publish: the export context's clip_span, measured from the keys)",
-        remove_in="0.18.0",
-    )
-    def publish_clip_origin(self) -> None:
-        """Republish the visibility record with the clip origin measured from
-        the keys the write will carry (:meth:`_bake_range_from_keys`, never the
-        bake range: an authored curve is written whole).
-
-        Retired 2026-09-18: :meth:`export_data_node` hands that measurement to
-        every producer as the export context's ``clip_span``, so the record is
-        produced with it instead of patched after the producers -- a second
-        producer run overwrote the patch, and three exports shipped 18 shots
-        cut 81 frames early while logging the right number.
-        """
-        self._publish_bracketed(only=[ptk.SceneRecords.VISIBILITY])
-
-    @ptk.Deprecation.symbol(
-        "TaskManager.export_data_node (the Animation Clips mode is an input of "
-        "the publish, declared on the shot record by the producer)",
-        remove_in="0.18.0",
-    )
-    def publish_clip_mode(self) -> None:
-        """Republish the shot record with this run's Animation Clips mode."""
-        self._publish_bracketed(only=[ptk.SceneRecords.SHOTS])
-
-    def _publish_bracketed(self, only) -> None:
-        """:meth:`_publish_scene_records` inside an export bracket, for the
-        retired one-record republishes: a session stager the publish prepares
-        (a preview standing down) is finished again before this returns.
-        Nested in the run's own bracket it changes nothing."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        with FbxUtils.export_prepared(stagers=()):
-            self._publish_scene_records(only=only)
 
     def set_bake_animation_range(self, mode: Union[bool, str, None] = "auto"):
         """Set the FBX bake range from the selected source, if baking is on.
@@ -474,7 +471,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         try:
             ctx = FbxUtils.export_context(
-                clip_mode=self._animation_clips_mode(self.run.animation_clips_mode),
+                clip_mode=ptk.ExportRun.clip_mode(self.run.animation_clips_mode),
                 clip_span=self._bake_range_from_keys(),
             )
             return FbxUtils.publish(ctx, only=only)
@@ -524,29 +521,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 f"data_export carrier(s) added to the export set: {len(added)}."
             )
 
-    @classmethod
-    def _animation_clips_mode(cls, mode) -> str:
-        """Resolve a row value to one of ``ANIMATION_CLIP_MODES``.
-
-        Accepts the boolean a pre-combo preset stored, the same way
-        :meth:`set_bake_animation_range` accepts the one ITS checkbox left
-        behind -- a stored preset is a contract, and a widget-type change must
-        not silently re-point it at a different deliverable. ``True`` kept the
-        whole-timeline stack beside the split takes, so it is ``both``; every
-        FALSY value (the unticked box, and the ``None`` a headless caller
-        passes for OFF) split nothing and shipped the sequence alone, so it is
-        ``full``.
-        """
-        if not mode or isinstance(mode, bool):
-            return "both" if mode else "full"
-        resolved = str(mode).strip().lower()
-        if resolved not in ptk.MeshConvert.ANIMATION_CLIP_MODES:
-            raise ValueError(
-                f"Unknown animation clips mode {mode!r}; expected one of "
-                f"{', '.join(ptk.MeshConvert.ANIMATION_CLIP_MODES)}."
-            )
-        return resolved
-
     def apply_declared_takes(self, mode: Union[bool, str, None] = "both"):
         """Ship the declared shots, the whole sequence, or both.
 
@@ -584,7 +558,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        mode = self._animation_clips_mode(mode)
+        mode = ptk.ExportRun.clip_mode(mode)
         # Read by create_glb, after the FBX is written. Set even on the paths
         # that return early: the GLB is converted whether or not a take was
         # ever realized, and it still has to know which clips to keep.

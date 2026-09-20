@@ -749,16 +749,18 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         frame_offset: float = 0.0,
         replace: bool = False,
         converted=None,
+        ctx: Optional["ptk.TransferContext"] = None,
     ) -> Optional["ShotStore"]:
         """Rebuild the scene's shots from a hand-off ``shots`` section.
 
         Decodes against this scene (names through *resolve*, claims onto the
         animCurves now driving the imported nodes, times onto the scene's
         clock), folds the result into the scene's own store
-        (:meth:`pythontk.ShotTransfer.merge`: a shot-less scene adopts it whole,
-        one with shots gains the incoming shots after its own), persists the
-        record and reloads the active store from it -- the path a scene open
-        takes, so every panel rebinds as it does then.
+        (:meth:`pythontk.ShotTransfer.merge_record`: a shot-less scene adopts
+        it whole, one with shots gains the incoming shots after its own, and
+        a shot that arrives renamed is noted in *ctx*), persists the record
+        and reloads the active store from it -- the path a scene open takes,
+        so every panel rebinds as it does then.
 
         Parameters:
             section: The manifest's ``shots`` section.
@@ -770,6 +772,8 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 through the Y-up / Z-up crossing, so its claims' Y and Z
                 channels are exchanged (``ptk.ShotTransfer.swap_up_axis``);
                 the consumers pass "is a root". Default: none was.
+            ctx: The crossing's ``ptk.TransferContext``: gains a note per shot
+                that arrives renamed and the ``shot_id`` renumbering.
 
         Returns:
             The active store after the apply, or ``None`` outside Maya.
@@ -791,7 +795,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             write_audio=cls._write_audio,
         )
         merged = (
-            decoded if replace else ptk.ShotTransfer.merge(store.to_dict(), decoded)
+            decoded
+            if replace
+            else ptk.ShotTransfer.merge_record(store.to_dict(), decoded, ctx)
         )
         if cls._persistence is None:
             cls.set_active(cls.from_dict(merged))
@@ -799,6 +805,41 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             cls._persistence.save(merged)
             cls.invalidate()
         return cls.active()
+
+    # ---- scene-record crossings (``DataNodes.OWNERS``) --------------------
+
+    @classmethod
+    def transfer_out(cls, ctx: "ptk.TransferContext") -> Optional[Dict[str, Any]]:
+        """The ``shot_store`` record's hand-off payload: :meth:`export_transfer`
+        in the carrier's spelling (``ctx.rename``), scoped to what ships."""
+        return cls.export_transfer(spell=ctx.rename, objects=ctx.objects)
+
+    @classmethod
+    def transfer_in(cls, payload: Dict[str, Any], ctx: "ptk.TransferContext") -> None:
+        """Land a received ``shots`` section: :meth:`apply_transfer`, names
+        resolved through ``ctx.rename``, with the importer's ``converted`` /
+        ``frame_offset`` adapters."""
+        cls.apply_transfer(
+            payload,
+            resolve=ctx.rename,
+            frame_offset=float(ctx.adapter("frame_offset", 0.0) or 0.0),
+            converted=ctx.adapter("converted"),
+            ctx=ctx,
+        )
+
+    @classmethod
+    def merge_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's shots merged into the record: reload the active
+        store from what the record holds now, as a scene open does."""
+        if ptk.SceneRecords.SHOT_STORE in other:
+            cls.invalidate()
+
+    @classmethod
+    def discard_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's shots were dropped with their carrier: the same
+        reload (:meth:`merge_carrier`) -- the active store may hold them, as
+        a carrier the import adopted was this scene's own until then."""
+        cls.merge_carrier(carriers, other, ctx)
 
     @classmethod
     def _register_export_preparer(cls) -> None:

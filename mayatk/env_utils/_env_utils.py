@@ -437,17 +437,29 @@ class EnvUtils(ptk.HelpMixin):
     @staticmethod
     def find_autosave_directories():
         """Search for and compile a list of existing autosave directories based on
-        predefined locations: the current workspace's autosave directory, the autosave
-        directory specified in the MAYA_AUTOSAVE_FOLDER environment variable, and the
-        user's home directory autosave folder.
+        predefined locations: the folder Maya's own autosave preference names
+        (``autoSave -folder``, when its destination is a named folder), the
+        current workspace's autosave directory, the autosave directory specified
+        in the MAYA_AUTOSAVE_FOLDER environment variable, and the user's home
+        directory autosave folder.
+
+        The named folder is where Maya WRITES once it is set -- a local temp
+        folder keeps backups out of a synced project, where they cost every
+        teammate the sync -- so the recovery tools must look there first.
 
         Returns:
-            list: A list of strings, each being a path to an existing autosave directory.
+            list: A list of strings, each being a path to an existing autosave
+            directory, each once.
         """
         import itertools
 
+        named = None
+        if cmds.autoSave(q=True, destination=True) == 1:
+            named = cmds.autoSave(q=True, folder=True) or None
+
         # Directories to check for autosave files
         potential_dirs = [
+            named,  # Maya's own autosave preference
             os.path.join(
                 cmds.workspace(q=True, rd=True), "autosave"
             ),  # Workspace autosave
@@ -455,14 +467,15 @@ class EnvUtils(ptk.HelpMixin):
             os.path.expanduser("~/maya/autosave"),  # Home directory autosave
         ]
 
-        # Split environment autosave paths and filter out non-existing paths
-        autosave_dirs = filter(
-            os.path.exists,
-            itertools.chain.from_iterable(
-                (d.split(";") if d else [] for d in potential_dirs)
-            ),
-        )
-        return list(autosave_dirs)
+        # Split environment autosave paths, filter out non-existing paths, and
+        # keep each directory once (the named folder may be one of the others).
+        found = {}
+        for directory in itertools.chain.from_iterable(
+            (d.split(";") if d else [] for d in potential_dirs)
+        ):
+            if os.path.exists(directory):
+                found.setdefault(os.path.normcase(os.path.normpath(directory)), directory)
+        return list(found.values())
 
     @classmethod
     def get_recent_autosave(

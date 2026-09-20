@@ -70,23 +70,23 @@ reader, and when the two DCCs' `FbxUtils.PRODUCERS` name different records
 outside its divergence ledger.
 
 <!-- scene-records:begin -->
-| Record | Carrier | Version | Kind | Owner | Reads | Read by | Holds |
-|---|---|---|---|---|---|---|---|
-| `shot_metadata` | `data_export` | 1 | authored | Shots | -- | unity, glb, verifier | shot definitions -- per clip its frame range ('start'/'end', the take the clip is cut from), objects, and any description and section; the scene fps and the declared clip mode; the clip name is the join key to the imported animation clip |
-| `fbx_takes` | `data_export` | 1 (bare) | authored | Shots | -- | glb, verifier | the take list an older file carries, one per shot -- superseded by shot_metadata's per-clip ranges and no longer written -- *legacy: superseded by `shot_metadata`* |
-| `audio_manifest` | `data_export` | 2 | authored | Audio Clips | `shot_metadata` | unity | audio events with the frames they fire on, scoped to their clip |
-| `lightmap_metadata` | `data_export` | 1 | authored | Lightmap Baker | -- | unity, glb | per-object baked-lightmap records: map file name, uvIndex, intensity, scaleOffset |
-| `shadow_metadata` | `data_export` | 2 | authored | Shadow Rig | -- | unity, glb | projected-shadow planes: per plane, the plane node name, its silhouette texture file name, and the authored intensity |
-| `emissive_groups` | `data_export` | 1 | authored | Emissive Groups | -- | unity | named emissive material groups and their weights |
-| `visibility_tracks` | `data_export` | 1 | derived | Render Effects | `shot_metadata` | glb, verifier | keyed visibility per node, as stepped on/off frames, with the authored opacity ramp and each take's first/last authored frame |
-| `handoff` | `data_export` | 1 | derived | Export | -- | -- | the standalone-reader contract: what each channel present on the carrier holds |
-| `shot_store` | `data_internal` | 1 (bare) | authored | Shots | -- | -- | the shot store's full app state |
-| `key_stash` | `data_internal` | 1 (bare) | authored | Key Stash | -- | -- | the clip manifest of parked keys |
-| `smart_bake_sessions` | `data_internal` | 2 (bare) | authored | SmartBake | -- | -- | LIFO stack of bake-session restore manifests |
-| `hierarchy_baseline` | `data_internal` | 1 (bare) | authored | Hierarchy check | -- | -- | the export hierarchy baseline (a HierarchyBaseline record) |
-| `emissive_groups` | `data_internal` | 1 (bare) | authored | Emissive Groups | -- | -- | the group registry: slots, defaults, encoding |
-| `render_effects_bindings` | `data_internal` | 1 (bare) | authored | Render Effects | -- | -- | the viewport material bindings a preview drives, so a suspend and rebind round-trips |
-| `audio_file_map` | `data_internal` | 1 (bare) | authored | Audio Clips | -- | -- | track id to audio file path |
+| Record | Carrier | Version | Kind | Owner | Reads | Read by | Crosses | Holds |
+|---|---|---|---|---|---|---|---|---|
+| `shot_metadata` | `data_export` | 1 | authored | Shots | -- | unity, glb, verifier | re-derived | shot definitions -- per clip its frame range ('start'/'end', the take the clip is cut from), objects, and any description and section; the scene fps and the declared clip mode; the clip name is the join key to the imported animation clip |
+| `fbx_takes` | `data_export` | 1 (bare) | authored | Shots | -- | glb, verifier | re-derived | the take list an older file carries, one per shot -- superseded by shot_metadata's per-clip ranges and no longer written -- *legacy: superseded by `shot_metadata`* |
+| `audio_manifest` | `data_export` | 2 | authored | Audio Clips | `shot_metadata` | unity | re-derived | audio events with the frames they fire on, scoped to their clip |
+| `lightmap_metadata` | `data_export` | 1 | authored | Lightmap Baker | -- | unity, glb | re-derived | per-object baked-lightmap records: map file name, uvIndex, intensity, scaleOffset |
+| `shadow_metadata` | `data_export` | 2 | authored | Shadow Rig | -- | unity, glb | re-derived | projected-shadow planes: per plane, the plane node name, its silhouette texture file name, and the authored intensity |
+| `emissive_groups` | `data_export` | 1 | authored | Emissive Groups | -- | unity | re-derived | named emissive material groups and their weights |
+| `visibility_tracks` | `data_export` | 1 | derived | Render Effects | `shot_metadata` | glb, verifier | re-derived | keyed visibility per node, as stepped on/off frames, with the authored opacity ramp and each take's first/last authored frame |
+| `handoff` | `data_export` | 1 | derived | Export | -- | -- | re-derived | the standalone-reader contract: what each channel present on the carrier holds |
+| `shot_store` | `data_internal` | 1 (bare) | authored | Shots | -- | -- | domain merge, hand-off | the shot store's full app state |
+| `key_stash` | `data_internal` | 1 (bare) | authored | Key Stash | -- | -- | domain merge | the clip manifest of parked keys |
+| `smart_bake_sessions` | `data_internal` | 2 (bare) | authored | SmartBake | -- | -- | unites | LIFO stack of bake-session restore manifests |
+| `hierarchy_baseline` | `data_internal` | 1 (bare) | authored | Hierarchy check | -- | -- | keeps its own | the export hierarchy baseline (a HierarchyBaseline record) |
+| `emissive_groups` | `data_internal` | 1 (bare) | authored | Emissive Groups | -- | -- | domain merge, hand-off | the group registry: slots, defaults, encoding |
+| `render_effects_bindings` | `data_internal` | 1 (bare) | authored | Render Effects | -- | -- | unites | the viewport material bindings a preview drives, so a suspend and rebind round-trips |
+| `audio_file_map` | `data_internal` | 1 (bare) | authored | Audio Clips | -- | -- | unites | track id to audio file path |
 <!-- scene-records:end -->
 
 Beside the records, two tool-owned attribute families live on the carriers:
@@ -148,6 +148,44 @@ longer written, and any commit in which the shots producer ran clears it, so an
 older scene loses it at its next shots publish. Until then it still reads:
 `ptk.SceneRecords.declared_takes` falls back to it when no clip carries a range.
 
+## Crossing into another scene
+
+A record also says what it becomes when **another scene's copy arrives beside
+this scene's** -- the *Crosses* column above, declared once on the record
+(`RecordSpec.merge`, `portable`) and applied by one engine,
+`ptk.RecordTransfer`, whatever the route:
+
+| Route | Entry point | What happens |
+|---|---|---|
+| A referenced module is imported | Reference Manager *Unlink and Import* (`ReferenceManager.import_references(scene_data=...)`) | The module's carriers -- read by nothing once local -- merge into this scene's (`DataNodes.merge_carriers`) or go (`discard_carriers`). The panel asks only when a merge would keep something (`DataNodes.merge_plan(...).is_empty`): **Yes** merges, **No** drops, **Cancel** leaves the reference linked. Names are respelled to where the import put each node (a clash digit, a kept namespace). |
+| A DCC hand-off | the Blender bridge's *Include Scene Data* (`INCLUDE_SCENE_DATA`; was `INCLUDE_SHOTS`) | Every `portable` record rides the sidecar -- the shot store under `shots`, the rest keyed under `records` (`DataNodes.transfer_sections`) -- and lands on the far side through the same rules (`receive_sections`). |
+| A pre-group Blender file | blendertk's fold | See [blendertk's data_nodes.md](https://github.com/m3trik/blendertk/blob/main/docs/data_nodes.md). |
+
+The rules, by `Merge`:
+
+- **re-derived** (every deliverable): never combined as data -- the other copy
+  spells names as its own scene did -- so the merged scene publishes it afresh
+  (`FbxUtils.publish(only=...)`).
+- **keeps its own** (the hierarchy baseline): it describes its own scene.
+- **unites**: entries combine by identity, this scene's winning a collision;
+  a LIFO stack keeps this scene's newest on top.
+- **domain merge**: a codec in `ptk.SceneRecords.CODECS` -- the shot store
+  renumbers incoming shots (a clashing name arrives numbered, and says so), the
+  key stash gives parked clips fresh ids and follows their shots, the emissive
+  registry re-slots a group whose slot is taken (an engine binding to the old
+  slot needs re-wiring, and the log says which).
+
+Nothing is renamed or dropped silently: each crossing returns a
+`ptk.TransferContext` whose `notes` are logged. What a record keeps **beside**
+itself -- a membership set, a parked curve, a keyed attribute, an in-memory
+store -- belongs to its DCC owner, one row in `DataNodes.OWNERS` whose optional
+hooks the engine calls: `transfer_out` / `transfer_in` (the hand-off payload:
+the emissive groups send their face membership with each member's face count),
+`merge_carrier` / `discard_carrier` (the parked curves a stash registered on an
+older carrier re-register here; a discarded stash's curves are deleted). The
+carrier's own non-record attributes -- an audio track's keyed enum, a group's
+keyed weight -- move to this scene's carrier with their curves.
+
 ## Getting it into the FBX
 
 Only **export-all** picks the carrier up automatically (`Visible` collects
@@ -183,13 +221,15 @@ ships:
 | `FbxUtils.publish_authored({spec: payload})` | commit records in hand (authoring time), handoff restamped with this scene's provenance; no stager runs |
 | `FbxUtils.publish(ctx=None, only=None)` | assemble every producer's record and commit once; returns the `ptk.ExportSnapshot` |
 | `FbxUtils.export_context(mode, clip_mode=, clip_span=)` | a context with this scene's provenance |
-| `FbxUtils.export_prepared(ctx=None, only=None, stagers=None)` / `stage(names=None)` | the bracket: stage, publish (given a context or `only`), finish after the block; `stage` alone runs every `prepare` now. A retired preparer name in `only` (`"shots"`, `"render_effects"` ...) still selects its record or stager, and warns |
+| `FbxUtils.export_prepared(ctx=None, only=None, stagers=None)` / `stage(names=None)` | the bracket: stage, publish (given a context or `only`), finish after the block; `stage` alone runs every `prepare` now. `only` takes record specs or keys; stager names go in `stagers` |
 | `FbxUtils.enable_export_producer(spec)` / `register_export_stager(name, prepare, finish)` | the session opt-ins |
 | `DataNodes.read(scope, key)` / `write(scope, key, text)` / `values(scope)` | the store contract (`ptk.SceneStoreBase`); a falsy `text` clears and never creates |
 | `DataNodes.dump(decode=True)` / `format_dump()` | every value the carriers hold, grouped by node -- the sidecar snapshot and tentacle's *Scene Metadata* viewer |
 | `DataNodes.ensure_internal()` / `ensure_export()` | get-or-create each node (idempotent, healing) |
 | `DataNodes.get_internal_node(create=True)` / `get_export_node(create=True)` / `get_export_nodes()` | resolve a carrier without creating it; the plural is for shipping |
-| `DataNodes.set_/get_internal_string/json`, `set_/get_export_string`, `set_export_json` | **retired** 2026-09-18 (warn; removed in mayatk 0.18.0) -- use the record or the store contract |
+| `DataNodes.transfer_sections(spell, objects)` / `receive_sections(manifest, resolve, **adapters)` | the portable records as a hand-off sidecar's sections, and landing them (inherited from `ptk.SceneStoreBase`) |
+| `DataNodes.carriers_in(namespace)` / `merge_plan(carriers)` / `merge_carriers(carriers, rename)` / `discard_carriers(carriers)` | another scene's carriers: find them, ask what a merge would keep, merge or drop them |
+| `DataNodes.OWNERS` | record key -> the DCC class keeping state beside it (its crossing hooks) |
 
 Legacy audio migration (pre-`DataNodes` `audio_events*` carriers and the old
 single-enum `audio_trigger` schema) lives in `mayatk.audio_utils.migrate`
@@ -235,7 +275,12 @@ never be duplicated into the sidecar.
    `FbxUtils.PRODUCERS` in each DCC that produces it. Publish at authoring time
    with `FbxUtils.publish_authored({spec: record})`.
 3. **Private?** `spec.load(DataNodes)` / `spec.save(DataNodes, payload)` is the
-   whole API.
+   whole API -- and declare how another scene's copy combines with this one's
+   (`merge=Merge.UNION` / `CODEC` / `OWN`; `merge_key` for a list, `respell=False`
+   for a payload that names no scene node). Crosses a hand-off too?
+   `portable=True`. Keeps state beside the record? One row in each DCC's
+   `DataNodes.OWNERS` with the hooks it needs ([Crossing into another
+   scene](#crossing-into-another-scene)).
 4. **Read by Unity?** Add the channel to `UnitytkSettings.cs` and `"unity"` to
    the record's `consumers`, then read it as an FBX user property on the
    `data_export` GameObject -- see

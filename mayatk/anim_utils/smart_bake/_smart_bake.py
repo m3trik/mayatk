@@ -128,6 +128,12 @@ class BakeResult:
     muted_drivers: List[str] = field(default_factory=list)
     """Driver nodes that were muted (if mute_drivers=True)."""
 
+    flattened: Dict[str, str] = field(default_factory=dict)
+    """Matrix drives whose folded local SHEARS, world-fitted under their
+    nearest shear-free ancestor instead of baked in place,
+    ``{path before: path after}``. Their keys are listed in ``baked`` under the
+    new path; the session reverses the reparent with the rest of the bake."""
+
     session_id: Optional[str] = None
     """Id of the restore-manifest session recorded for this bake (if
     restorable=True). Pass to ``SmartBake.restore()`` to reverse the bake —
@@ -1055,10 +1061,10 @@ class SmartBake(_SmartBakeInternal):
         "sz",
     ]
 
-    #: Shear past which a folded local is reported as unbakeable. The
-    #: exporter's ``check_sheared_local_transforms`` / ``flatten_sheared_chains``
-    #: pair uses 0.05 as its cosine tolerance; this is the same order, on the
-    #: shear factors a bake is about to discard.
+    #: Shear past which a folded local is world-fitted under a shear-free
+    #: ancestor instead of baked in place (``_flatten_sheared``). Tight on
+    #: purpose, on the shear factors a TRS bake would discard: the flatten is
+    #: exact, while every dropped shear compounds down a chain.
     SHEAR_TOLERANCE: float = 1e-4
 
     #: Neutralises a baked-away ``offsetParentMatrix``.
@@ -2206,28 +2212,45 @@ class SmartBake(_SmartBakeInternal):
                 local = om2.MFnMatrixData(matrix_plug.asMObject()).matrix()
                 sampled[obj][frame] = local * offset
 
-        # A folded local that SHEARS has no translate/rotate/scale form: the
-        # write below sets the shear, nothing keys it, and it is zeroed at the
-        # end -- real transform content dropped, compounding down a chain
+        # A folded local that SHEARS has no translate/rotate/scale form: a
+        # write in place sets the shear, nothing keys it, and it is zeroed at
+        # the end -- real transform content dropped, compounding down a chain
         # (measured on a production wire loom: 0.32 per link, 7.8 cm at the
         # tip of 22 joints, translate and rotate exact). The authored local of
-        # such a node is clean TRS, so only the FOLD says so. Sampled at a few
-        # frames per object rather than all of them: a chain that shears does
-        # so throughout, and a decomposition per object per frame would cost
-        # more than the pass it warns about.
-        sheared: List[str] = []
-        for obj, _, _, _ in targets:
-            probe_frames = object_frames[obj]
-            if not probe_frames:
-                continue
-            step = max(1, len(probe_frames) // 4)
-            for frame in probe_frames[::step][:5]:
-                shear = om2.MTransformationMatrix(sampled[obj][frame]).shear(
-                    om2.MSpace.kTransform
+        # such a node is clean TRS, so only the FOLD says so. EVERY sampled
+        # frame is judged, stopping at the first sheared one: the production
+        # looms shear only inside their own shot, which a handful of probe
+        # frames can step over, and the answer now decides a reparent.
+        sheared: List[str] = [
+            obj
+            for obj, _, _, _ in targets
+            if any(
+                max(
+                    abs(v)
+                    for v in om2.MTransformationMatrix(sampled[obj][frame]).shear(
+                        om2.MSpace.kTransform
+                    )
                 )
-                if max(abs(v) for v in shear) > self.SHEAR_TOLERANCE:
-                    sheared.append(obj)
-                    break
+                > self.SHEAR_TOLERANCE
+                for frame in object_frames[obj]
+            )
+        ]
+        # Relative to a shear-free ancestor every orthogonal world is exact
+        # TRS, so those drives are world-fitted there instead. The fit is
+        # SAMPLED here, from the untouched scene, before anything below
+        # neutralises a drive; the nodes MOVE only once every other pass is
+        # done (``bake`` -> ``_apply_flatten``), so each pass works on the
+        # hierarchy it analysed. What has no exact fit falls through to the
+        # in-place bake and its warning.
+        flatten = self._prepare_flatten(sheared, frames, [e[0] for e in targets])
+        if flatten:
+            for obj in flatten["objects"]:
+                # The flatten records its own cuts and values; a stash made
+                # for the in-place bake it replaces would never be reclaimed.
+                for record in pending.pop(obj, {}).get("stashes", []):
+                    BakeSessionStore.discard_stash(record)
+            targets = [e for e in targets if e[0] not in flatten["objects"]]
+            sheared = [obj for obj in sheared if obj not in flatten["objects"]]
 
         # Neutralise every drive before writing any keys -- a half-disconnected
         # set would sample-and-write against a moving target.
@@ -2373,13 +2396,170 @@ class SmartBake(_SmartBakeInternal):
         if sheared:
             cmds.warning(
                 f"SmartBake: {len(sheared)} matrix-driven object(s) fold to a "
-                "SHEARED local, which no translate/rotate/scale bake can hold "
-                "(FBX and glTF drop shear too) -- their worlds will drift, and "
-                "the drift compounds down a chain. Run the Scene Exporter's "
-                "flatten_sheared_chains first (it world-fits them onto a "
-                f"shear-free parent). First: {', '.join(sheared[:3])}"
+                "SHEARED local that could not be world-fitted exactly (no "
+                "shear-free ancestor, or a world matrix that itself shears), so "
+                "they were baked in place -- no translate/rotate/scale key can "
+                "hold the shear (FBX and glTF drop it too), their worlds will "
+                "drift, and the drift compounds down a chain. First: "
+                f"{', '.join(sheared[:3])}"
             )
         cmds.currentTime(restore_time)
+        return flatten
+
+    def _prepare_flatten(
+        self, sheared: List[str], frames: List[int], candidates: List[str]
+    ) -> Optional[dict]:
+        """Plan and sample the world-fit of the *sheared* matrix drives under
+        their nearest shear-free ancestor -- the read half of the flatten
+        :meth:`_apply_flatten` finishes once every other pass is done.
+
+        A sheared fold has no TRS form in its own hierarchy, but its WORLD is
+        orthogonal, so relative to a similarity ancestor it is exact TRS -- the
+        exporter's ``flatten_sheared_chains`` proved it on the production
+        looms (1.1e-13 at every frame). This is that flatten
+        (:meth:`WorldFitBake.prepare`), kept AS the bake, keyed over the whole
+        bake range at this bake's step like the matrix pass.
+
+        Each sheared node takes every JOINT below it along, the exporter's
+        chain rule: a joint child compensating its parent's scale
+        (segmentScaleCompensate) would start dividing out the fitted scale --
+        its parent's world content now -- and lose its own world (measured: the
+        whole stretch, 0.5 on a 1.5x chain). Exact or not at all: a node with
+        no shear-free ancestor, or whose own world shears (its fit would still
+        shear), stays where it is rather than being restructured for nothing.
+
+        Parameters:
+            sheared: The matrix-driven objects whose fold shears.
+            frames: The bake's frames.
+            candidates: Every object the matrix pass would bake in place -- the
+                ones a move takes over are reported, so no node is handled by
+                two passes.
+
+        Returns:
+            ``{"prepared": WorldFitBake.prepare(...), "paths": {every moving
+            path}, "objects": {candidate: its path}}`` for the candidates that
+            will move, or None when nothing will.
+        """
+        if not sheared:
+            return None
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        chain = {(cmds.ls(obj, long=True) or [obj])[0] for obj in sheared}
+        for path in list(chain):
+            chain.update(
+                cmds.listRelatives(path, allDescendents=True, type="joint", fullPath=True)
+                or []
+            )
+        qualifies = WorldFitBake.similarity_ancestors(chain, frames)
+        plan: List[Tuple[str, str, str, bool]] = []
+        for path in sorted(chain, key=lambda p: p.count("|")):
+            target = WorldFitBake.flatten_target(path, qualifies)
+            uuid = (cmds.ls(path, uuid=True) or [None])[0]
+            if not target or not uuid:
+                continue
+            parent = (cmds.listRelatives(path, parent=True, fullPath=True) or [None])[0]
+            plan.append((path, uuid, target, target != parent))
+        prepared = WorldFitBake.prepare(
+            plan, [float(f) for f in frames], max_residual=self.SHEAR_TOLERANCE
+        )
+        moving = {path for path, _, _, _ in prepared["plan"]}
+        if not moving:
+            return None
+        objects = {
+            obj: path
+            for obj in candidates
+            for path in [(cmds.ls(obj, long=True) or [obj])[0]]
+            if path in moving
+        }
+        return {"prepared": prepared, "paths": moving, "objects": objects}
+
+    def _apply_flatten(
+        self,
+        flatten: Optional[dict],
+        result: BakeResult,
+        session: Optional[dict],
+    ) -> Dict[str, str]:
+        """Move and key the nodes :meth:`_prepare_flatten` sampled, LAST: every
+        other pass has run on the hierarchy it analysed.
+
+        The records join the session, so :meth:`restore` (Unbake) and
+        :meth:`session` put the hierarchy, drives and values back. The moved
+        nodes -- and everything below them -- change path, so *result* is
+        re-keyed to the paths they have now; the fitted curves are reduced
+        like every other base-layer bake when key optimization is on.
+
+        Returns:
+            ``{path before: path after}`` for every node moved (what
+            :meth:`_repath` resolves a descendant's path through).
+        """
+        if not flatten:
+            return {}
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        records = session.setdefault("flatten", []) if session is not None else None
+        outcome = WorldFitBake.apply(flatten["prepared"], records=records)
+        for path, reason in outcome["failed"]:
+            cmds.warning(f"SmartBake: could not flatten '{path}' ({reason}).")
+        for warning in outcome["warnings"]:
+            cmds.warning(f"SmartBake: {warning}")
+
+        moved: Dict[str, str] = {}
+        curves: List[str] = []
+        for path, uuid, _ in outcome["baked"]:
+            now = (cmds.ls(uuid, long=True) or [None])[0]
+            if now:
+                moved[path] = now
+        result.flattened.update(moved)
+        for record in outcome["records"]:
+            if record.get("curves"):
+                curves.extend(cmds.ls(record["curves"]) or [])
+        self._repath_result(result, moved)
+        for now in moved.values():
+            # A union: the node may already report the channels an earlier
+            # pass baked on it (a driven custom attribute), re-keyed under
+            # its new path just above.
+            result.baked[now] = sorted(
+                set(result.baked.get(now, ())) | set(self.MATRIX_BAKE_CHANNELS)
+            )
+            result.object_time_ranges.setdefault(now, tuple(result.time_range))
+        if self._optimize_kwargs and curves:
+            from mayatk.anim_utils._anim_utils import AnimUtils
+
+            AnimUtils.optimize_keys(
+                curves, recursive=False, quiet=True, **self._optimize_kwargs
+            )
+            result.optimized.extend(moved.values())
+        return moved
+
+    @staticmethod
+    def _repath(path: str, moved: Dict[str, str]) -> str:
+        """*path* under the moves in *moved* (``{old path: new path}``): the
+        deepest moved ancestor-or-self decides."""
+        best = None
+        for old in moved:
+            if (path == old or path.startswith(old + "|")) and (
+                best is None or len(old) > len(best)
+            ):
+                best = old
+        return path if best is None else moved[best] + path[len(best) :]
+
+    def _repath_result(self, result: BakeResult, moved: Dict[str, str]) -> None:
+        """Re-key *result*'s per-object fields to the paths a flatten gave the
+        moved nodes and their descendants."""
+        if not moved:
+            return
+
+        def keyed(mapping: dict) -> dict:
+            return {self._repath(k, moved): v for k, v in mapping.items()}
+
+        result.baked = keyed(result.baked)
+        result.object_time_ranges = keyed(result.object_time_ranges)
+        result.skip_reasons = keyed(result.skip_reasons)
+        result.visibility_curves = keyed(result.visibility_curves)
+        result.visibility_originals = keyed(result.visibility_originals)
+        result.skipped = [self._repath(p, moved) for p in result.skipped]
+        result.optimized = [self._repath(p, moved) for p in result.optimized]
+        result._refused = {self._repath(p, moved) for p in result._refused}
 
     #: Layer-mode standard bake through :meth:`_sample_layer_channels` (one
     #: om2 timeline pass) rather than one ``bakeResults`` per channel group.
@@ -2711,6 +2891,7 @@ class SmartBake(_SmartBakeInternal):
                 "stashed_curves": [],
                 "visibility": [],
                 "matrix": [],
+                "flatten": [],
                 "ik_handles": [],
                 "muted_drivers": [],
                 "backup_path": result.backup_path,
@@ -2871,6 +3052,7 @@ class SmartBake(_SmartBakeInternal):
         # animated. The direct bake is recorded in the session manifest and
         # reversed with the rest of the restore.
         # -----------------------------------------------------------
+        flatten: Optional[dict] = None
         if matrix_objects:
             # This pass reads two matrix plugs per object per FRAME, so it
             # takes the same per-object ranges bakeResults does -- but over
@@ -2880,7 +3062,7 @@ class SmartBake(_SmartBakeInternal):
                 result.object_time_ranges.setdefault(
                     obj, object_ranges.get(obj, (start, end))
                 )
-            self._bake_matrix_drivers(
+            flatten = self._bake_matrix_drivers(
                 matrix_objects,
                 start,
                 end,
@@ -2888,6 +3070,27 @@ class SmartBake(_SmartBakeInternal):
                 session=session if session and session["restorable"] else None,
                 object_ranges=object_ranges,
             )
+            # A node the flatten will move gets its whole WORLD keyed there, so
+            # its t/r/s leave the standard pass; whatever else drives it (a
+            # custom attribute, say) is still baked below, where it is now.
+            trs = set(self.MATRIX_BAKE_CHANNELS) | {
+                f"{kind}{axis}"
+                for kind in ("translate", "rotate", "scale")
+                for axis in ("", "X", "Y", "Z")
+            }
+            moving_paths = (flatten or {}).get("paths") or set()
+            for obj in list(remaining_to_bake) if moving_paths else []:
+                if (cmds.ls(obj, long=True) or [obj])[0] not in moving_paths:
+                    continue
+                data = remaining_to_bake[obj]
+                data.driven_channels = {
+                    kind: kept
+                    for kind, channels in data.driven_channels.items()
+                    for kept in [[ch for ch in channels if ch not in trs]]
+                    if kept
+                }
+                if not data.driven_channels:
+                    del remaining_to_bake[obj]
 
         # -----------------------------------------------------------
         # Phase 2: Standard channel bake via bakeResults.
@@ -3031,15 +3234,23 @@ class SmartBake(_SmartBakeInternal):
                 prior = result.baked.get(obj, [])
                 result.baked[obj] = sorted(set(prior) | set(channels))
 
-        # Handle driver node cleanup after all baking is complete
-        if result.baked:
+        # Handle driver node cleanup after all baking is complete. A node the
+        # flatten will move counts as keyed: its world is, once it moves.
+        moving_paths = (flatten or {}).get("paths") or set()
+        moving = {
+            obj
+            for obj in to_bake
+            if moving_paths and (cmds.ls(obj, long=True) or [obj])[0] in moving_paths
+        }
+        keyed = set(result.baked) | moving
+        if result.baked or moving:
             if self.mute_drivers:
                 # Mute drivers (set nodeState=2) - keeps them recoverable. Only
                 # a keyed object's: a skipped one moves by its drivers alone.
                 skipped = set(result.skipped)
                 muted_with_states = self._mute_driver_nodes(
                     to_bake,
-                    live=[o for o in to_bake if o in skipped or o not in result.baked],
+                    live=[o for o in to_bake if o in skipped or o not in keyed],
                 )
                 result.muted_drivers = [node for node, _ in muted_with_states]
                 if session is not None:
@@ -3057,7 +3268,7 @@ class SmartBake(_SmartBakeInternal):
                 # same node.  We must NOT delete nodes that are now the
                 # baked result.  Check the current nodeType before deleting.
                 for obj, data in to_bake.items():
-                    if obj not in result.baked:
+                    if obj not in keyed:
                         continue
                     for source_type, nodes in data.source_nodes.items():
                         # Ancestor vis curves/plugs are NOT driver inputs to
@@ -3133,6 +3344,13 @@ class SmartBake(_SmartBakeInternal):
                 )
             result.optimized = list(result.baked.keys())
 
+        # The flatten moves its nodes LAST, once every pass above has run on
+        # the hierarchy it analysed (see _prepare_flatten); the result's
+        # per-object paths follow the moves.
+        moved = self._apply_flatten(
+            flatten, result, session if session and session["restorable"] else None
+        )
+
         # Persist the restore manifest — only when the bake actually
         # changed something worth reversing.
         if session is not None:
@@ -3152,7 +3370,9 @@ class SmartBake(_SmartBakeInternal):
                         bake_session.BakeSessionStore.discard_stash(entry["stash"])
 
         # An object can be skipped by more than one phase — report it once.
-        self._account_for_unbaked(result, analysis)
+        self._account_for_unbaked(
+            result, {self._repath(obj, moved): data for obj, data in analysis.items()}
+        )
         result.skipped = ptk.remove_duplicates(result.skipped)
 
         return result
@@ -3255,8 +3475,11 @@ class SmartBake(_SmartBakeInternal):
 
         result = BakeSessionStore.restore_session(session)
         # Pop only after the restore pass completes — an unexpected failure
-        # mid-restore leaves the session in place so it can be retried.
-        BakeSessionStore.pop(session.get("id"))
+        # mid-restore leaves the session in place so it can be retried, and a
+        # session this mayatk cannot read (a newer schema) stays for one that
+        # can: nothing of it was touched.
+        if not result.refused:
+            BakeSessionStore.pop(session.get("id"))
         for warning in result.warnings:
             cmds.warning(f"SmartBake restore: {warning}")
         return result

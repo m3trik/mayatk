@@ -668,12 +668,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
     def test_a_publish_with_no_keyed_visibility_clears_the_channel(self):
         """No carrier is made to hold an origin, and a stale channel does not
-        outlive its curves, whatever span the exporter measured -- the retired
-        ``restamp_stack_span`` included, which used to return early and leave
-        a stale channel standing.
+        outlive its curves, whatever span the exporter measured.
         """
-        import warnings
-
         ctx = FbxUtils.export_context(clip_span=(33, 60))
         ptk.SceneRecords.VISIBILITY.clear(DataNodes)
         FbxUtils.publish(ctx, only=[ptk.SceneRecords.VISIBILITY])
@@ -683,13 +679,6 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         ptk.SceneRecords.VISIBILITY.save(DataNodes, stale)
         FbxUtils.publish(ctx, only=[ptk.SceneRecords.VISIBILITY])
         self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
-
-        ptk.SceneRecords.VISIBILITY.save(DataNodes, stale)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self.assertFalse(RenderOpacity.restamp_stack_span(33, 60))
-        self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
-        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_a_scene_with_no_keyed_visibility_leaves_no_channel(self):
         """An empty carrier is worse than no carrier."""

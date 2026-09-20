@@ -2253,6 +2253,25 @@ class TestUnlinkNamespaceModeSelection(unittest.TestCase):
         self._unwrapped("unlink_references")(controller, ["ns_a"])
         self.assertEqual(controller.calls, [])
 
+    def test_both_entry_points_ask_about_the_scene_data(self):
+        controller = self._make_controller(state=0)
+        self._unwrapped("unlink_all")(controller)
+        self._unwrapped("unlink_references")(controller, ["ns_a"])
+        self.assertEqual(
+            [c.get("scene_data") for c in controller.calls],
+            [controller._ask_scene_data] * 2,
+        )
+
+    def test_the_scene_data_question_maps_each_answer(self):
+        """Yes merges, No drops, Cancel leaves the reference linked -- and the
+        question names what the reference brings."""
+        for answer, expected in (("Yes", "merge"), ("No", "discard"), ("Cancel", None)):
+            controller = self._make_controller(answer=answer)
+            self.assertEqual(
+                controller._ask_scene_data(["Audio Clips: 1 entry"], "MOD"), expected
+            )
+            self.assertIn("Audio Clips: 1 entry", controller.prompts[-1])
+
 
 class TestImportReferencesNamespaceModes(unittest.TestCase):
     """The three namespace modes, driven against real referenced scenes.
@@ -2446,6 +2465,164 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self._reference()
         self.manager.import_references(remove_namespace=True)
         self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+
+
+class TestImportReferencesSceneData(unittest.TestCase):
+    """An imported reference's own data nodes never stay behind, read by nothing:
+    its records merge into this scene's -- respelled to where the import put its
+    nodes -- or go with them, and a decider is asked only when a merge would keep
+    something. Live: the renames are Maya's own namespace-merge clash handling."""
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_scene_data_test", policy="scoped")
+        self.module = os.path.join(self._store.dir_path(), "module.ma")
+        self.manager = TestImportReferencesNamespaceModes._make_manager()
+
+    def tearDown(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        ref_mgr.cmds.file(new=True, force=True)
+        ShotStore.clear_active()
+        self._store.cleanup()
+
+    def _author_module(self, **records):
+        """A module with a cube named like the host's (``door``) and *records*
+        saved on its own data nodes."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds = ref_mgr.cmds
+        cmds.file(new=True, force=True)
+        cmds.polyCube(name="door")
+        for spec, payload in records.items():
+            getattr(ptk.SceneRecords, spec).save(DataNodes, payload)
+        cmds.file(rename=self.module)
+        cmds.file(save=True, type="mayaAscii")
+        cmds.file(new=True, force=True)
+
+    def _host_referencing_it(self):
+        """A host with its own ``door`` -- the module's arrives as ``door1`` -- and
+        its own audio clips."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        ref_mgr.cmds.polyCube(name="door")
+        ptk.SceneRecords.AUDIO_FILE_MAP.save(DataNodes, {"1": "a.wav"})
+        ref_mgr.cmds.file(self.module, reference=True, namespace="MOD")
+
+    def _module_with_a_shot(self):
+        self._author_module(
+            SHOT_STORE={
+                "shots": [
+                    {
+                        "shot_id": 1,
+                        "name": "Intro",
+                        "start": 0,
+                        "end": 5,
+                        "objects": ["|door"],
+                    }
+                ]
+            },
+            AUDIO_FILE_MAP={"2": "b.wav"},
+        )
+        self._host_referencing_it()
+
+    @staticmethod
+    def _load(spec):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return getattr(ptk.SceneRecords, spec).load(DataNodes)
+
+    @staticmethod
+    def _carriers():
+        return sorted(
+            ref_mgr.cmds.ls("*data_internal*", "*:*data_internal*", type="network")
+            or []
+        )
+
+    def test_a_merge_respells_the_records_and_the_carriers_go(self):
+        self._module_with_a_shot()
+        self.manager.import_references(namespace_mode="remove")
+        self.assertEqual(self._load("AUDIO_FILE_MAP"), {"1": "a.wav", "2": "b.wav"})
+        (shot,) = self._load("SHOT_STORE")["shots"]
+        self.assertEqual(shot["objects"], ["|door1"], "where the clash put it")
+        self.assertEqual(self._carriers(), ["data_internal"])
+
+    def test_a_kept_namespace_is_respelled_too(self):
+        self._module_with_a_shot()
+        self.manager.import_references(namespace_mode="keep")
+        (shot,) = self._load("SHOT_STORE")["shots"]
+        self.assertEqual(shot["objects"], ["|MOD:door"])
+        self.assertEqual(self._carriers(), ["data_internal"])
+
+    def test_discard_drops_the_records_with_the_carriers(self):
+        self._module_with_a_shot()
+        self.manager.import_references(scene_data="discard")
+        self.assertEqual(self._load("AUDIO_FILE_MAP"), {"1": "a.wav"})
+        self.assertIsNone(self._load("SHOT_STORE"))
+        self.assertEqual(self._carriers(), ["data_internal"])
+
+    def test_a_shot_the_host_has_not_written_yet_survives_either_answer(self):
+        """A GUI session writes the shot store on idle, so a script that adds
+        a shot and imports in one go still holds it unwritten -- in a scene
+        with no carrier yet, whose import therefore adopts the module's.  The
+        importer stores it first: merged, both scenes' shots are kept;
+        discarded, the host's stays and the module's goes."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        intro = {"shot_id": 1, "name": "Intro", "start": 0, "end": 5, "objects": []}
+        for scene_data, expected in (
+            ("merge", ["HostShot", "Intro"]),
+            ("discard", ["HostShot"]),
+        ):
+            with self.subTest(scene_data=scene_data):
+                self._author_module(SHOT_STORE={"shots": [intro]})
+                ShotStore.clear_active()
+                with patch.object(ShotStore, "_schedule_flush", lambda self: None):
+                    ShotStore.active().define_shot("HostShot", 10.0, 20.0)
+                    ref_mgr.cmds.file(self.module, reference=True, namespace="MOD")
+                    self.manager.import_references(
+                        namespace_mode="remove", scene_data=scene_data
+                    )
+                ShotStore.flush_pending()  # the idle write the session held
+                ShotStore.clear_active()
+                self.assertEqual(
+                    sorted(s.name for s in ShotStore.active().shots), expected
+                )
+
+    def test_the_decider_is_asked_with_what_arrives(self):
+        self._module_with_a_shot()
+        asked = []
+        self.manager.import_references(
+            scene_data=lambda summary, ns: asked.append((summary, ns)) or "merge"
+        )
+        ((summary, namespace),) = asked
+        self.assertEqual(namespace, "MOD")
+        self.assertIn("Audio Clips: 1 entry", summary)
+
+    def test_declining_leaves_the_reference_linked(self):
+        self._module_with_a_shot()
+        self.manager.import_references(scene_data=lambda summary, ns: None)
+        self.assertEqual(
+            [r.namespace for r in self.manager.current_references], ["MOD"]
+        )
+        self.assertEqual(self._load("AUDIO_FILE_MAP"), {"1": "a.wav"})
+
+    def test_a_module_holding_nothing_a_merge_keeps_is_not_asked_about(self):
+        """Its own baseline describes itself: no question, and no carrier left."""
+        self._author_module(HIERARCHY_BASELINE={"format": 1, "paths": ["door"]})
+        self._host_referencing_it()
+        self.manager.import_references(
+            scene_data=lambda *_: self.fail("nothing to ask about")
+        )
+        self.assertEqual(self._carriers(), ["data_internal"])
+        self.assertIsNone(self._load("HIERARCHY_BASELINE"))
+
+    def test_an_invalid_choice_raises_before_anything_is_imported(self):
+        self._module_with_a_shot()
+        with self.assertRaises(ValueError):
+            self.manager.import_references(scene_data="keep")
+        self.assertEqual(
+            [r.namespace for r in self.manager.current_references], ["MOD"]
+        )
 
 
 class TestUnsavedChangesPrompt(unittest.TestCase):

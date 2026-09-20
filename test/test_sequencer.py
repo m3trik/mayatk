@@ -3524,6 +3524,373 @@ class TestBoundHandleGrammar(unittest.TestCase):
         self.assertEqual(self._keys(self.b), [70.0, 90.0])
 
 
+class TestABoundEnclosesFractionalContent(unittest.TestCase):
+    """A bound snapped to a whole frame must still ENCLOSE the shot's content.
+
+    Bug: the trim, the plain shrink's content clamp, a key drag's grow and
+    Move to Shot's destination grow and head room snapped a content-derived
+    bound (or room) to the NEAREST frame, so a start could land up to half a
+    frame past the first key and an end up to half a frame short of the last
+    -- and a retime leaves keys on fractional frames.  Measured on the production assembly: a trim put "Step 4.1"'s start
+    at 985 over its fade's first key at 984.556, which then sat in the span the
+    trim gave up, carried by the NEIGHBOUR's envelope from the next edit on.
+    Content-enclosing bounds now snap outward (``ShotStore.snap`` down / up).
+    Fixed: 2026-09-19
+    """
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self.a = cmds.polyCube(name="frA")[0]
+        for t, v in ((10.6, 0), (25, 5), (40.4, 2)):
+            cmds.setKeyframe(self.a, at="translateX", t=t, v=v)
+        self.b = cmds.polyCube(name="frB")[0]
+        for t, v in ((70, 0), (90, 5)):
+            cmds.setKeyframe(self.b, at="translateX", t=t, v=v)
+        self.seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [self.a]),
+                ShotBlock(1, "B", 60, 100, [self.b]),
+            ]
+        )
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_trim_encloses_fractional_content(self):
+        self.seq.trim_shot_to_content(0, edge="both")
+        a = self.seq.shot_by_id(0)
+        self.assertEqual((a.start, a.end), (10.0, 41.0))
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_plain_shrink_stops_outside_fractional_content(self):
+        self.seq.resize_shot_bounds(0, 0, 30)  # asked past the last key, 40.4
+        self.assertEqual(self.seq.shot_by_id(0).end, 41.0)
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_key_dragged_past_the_end_is_enclosed(self):
+        # The drag landed a key at 50.4, past A's end: A grows around it.
+        cmds.setKeyframe(self.a, at="translateX", t=50.4, v=3)
+        TestBoundHandleGrammar._ctl(self)._expand_shot_range(0, 10.6, 50.4)
+        self.assertEqual(
+            [(s.start, s.end) for s in self.seq.sorted_shots()],
+            [(0.0, 51.0), (61.0, 101.0)],
+        )
+        self.assertEqual(
+            cmds.keyframe(self.b, q=True, at="translateX"),
+            [71.0, 91.0],
+            "B rode the ripple whole",
+        )
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_move_to_shot_grows_the_destination_around_what_landed(self):
+        c = cmds.polyCube(name="frMove")[0]
+        for t, v in ((110, 0), (160.4, 5)):
+            cmds.setKeyframe(c, at="translateX", t=t, v=v)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 100, 170, [c]), ShotBlock(1, "S1", 200, 240, [])]
+        )
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": c, "start": 110, "end": 160.4}],
+            dest_shot_id=1,
+        )
+        last = max(cmds.keyframe(c, q=True, attribute="translateX"))
+        self.assertAlmostEqual(last, 250.4, places=3, msg="fixture: landed at 200")
+        self.assertGreaterEqual(
+            seq.shot_by_id(1).end, last, "the destination encloses what landed"
+        )
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_move_to_shot_head_room_clears_the_whole_block(self):
+        # A block ending 0.05 before the destination, onto an object keyed
+        # 0.2 into it: the room inserted in front must clear the whole block
+        # (89.35 frames: 90, where the nearest frame is 89), or the block
+        # lands past the destination's first key, which then no longer moves
+        # with the rest of its content.
+        c = cmds.polyCube(name="frHead")[0]
+        for t, v in ((110.6, 0), (150, 5), (199.95, 2), (200.2, 7), (230, 1)):
+            cmds.setKeyframe(c, at="translateX", t=t, v=v)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 100, 200, [c]), ShotBlock(1, "S1", 200, 240, [c])]
+        )
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": c, "start": 110.6, "end": 199.95}],
+            dest_shot_id=1,
+        )
+        times = cmds.keyframe(c, q=True, attribute="translateX")
+        values = cmds.keyframe(c, q=True, attribute="translateX", valueChange=True)
+        self.assertEqual(
+            [(round(t, 3), round(v)) for t, v in zip(times, values)],
+            [(200.0, 0), (239.4, 5), (289.35, 2), (290.2, 7), (320.0, 1)],
+        )
+
+
+class TestACtrlEdgeDragMovesNoSample(unittest.TestCase):
+    """Ctrl on a shot's edge: the bound moves and NOTHING else does -- not the
+    animator's keys, and not the shot system's own samples either.
+
+    Bug: the Ctrl path reconciled with the default rule, under which a claimed
+    sample FOLLOWS its bound.  A respace pin is a shape-preserving insert on a
+    ramp, so moving it re-times the ramp: measured on a synthetic curve, a
+    Ctrl grow of 3 frames changed 27 frames of playback, and one dragged past
+    a gap key slid the pin OVER that key, reordering the curve.  Nothing moves
+    in a Ctrl drag, so nothing can be in a sample's way: it stays, disowned.
+    Fixed: 2026-09-19
+    """
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def setUp(self):
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        cmds.file(new=True, force=True)
+        self.cube = cmds.polyCube(name="ctrl_pin_cube")[0]
+        # A's content 10..40, a key in A's gap at 55, B's content 70..90.
+        for t, v in ((10, 0), (40, 5), (55, 1), (70, 2), (90, 8)):
+            cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
+        self.crv = cmds.listConnections(f"{self.cube}.translateX", type="animCurve")[0]
+        self.seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [self.cube]),
+                ShotBlock(1, "B", 60, 100, [self.cube]),
+            ]
+        )
+        # A claimed shape pin on A's end, planted as the respace plants one.
+        for crv, t in AnimUtils.insert_keys([self.crv], [50.0], report=True):
+            self.seq.ledger.record_key(crv, t, 0, "end")
+        self.seq._enforce_gap_holds()  # so only the gesture is measured
+        self.before = self._play()
+        self.ctl = TestBoundHandleGrammar._ctl(self)
+        self.ctl.widget.ctrl_held_at_press = True
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _play(self):
+        return [
+            round(cmds.keyframe(self.crv, q=True, eval=True, time=(f, f))[0], 4)
+            for f in range(0, 101)
+        ]
+
+    def _assert_nothing_moved(self, label):
+        now = self._play()
+        off = [f for f, (a, b) in enumerate(zip(self.before, now)) if a != b]
+        self.assertEqual(off, [], f"{label}: the curve plays differently")
+        self.assertIn(50.0, cmds.keyframe(self.crv, q=True), "the pin stayed")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_ctrl_grow_moves_the_bound_and_no_sample(self):
+        self.ctl.on_range_highlight_changed(0, 53)
+        self.assertEqual(self.seq.shot_by_id(0).end, 53.0)
+        self._assert_nothing_moved("ctrl grow")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_ctrl_grow_over_a_gap_key_reorders_nothing(self):
+        self.ctl.on_range_highlight_changed(0, 57)
+        self.assertEqual(self.seq.shot_by_id(0).end, 57.0)
+        self._assert_nothing_moved("ctrl grow over 55")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_ctrl_shrink_moves_the_bound_and_no_sample(self):
+        self.ctl.on_range_highlight_changed(0, 45)
+        self.assertEqual(self.seq.shot_by_id(0).end, 45.0)
+        self._assert_nothing_moved("ctrl shrink")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_ctrl_gap_edge_drag_moves_no_sample_either(self):
+        self.ctl.active_shot_id = 1
+        self.ctl.on_gap_left_resized(50, 45)  # A's end, from B's gap handle
+        self.assertEqual(self.seq.shot_by_id(0).end, 45.0)
+        self._assert_nothing_moved("ctrl gap edge")
+
+
+class TestARetimeCarriesTheSystemsClaims(unittest.TestCase):
+    """A retime moves keys the shot system claims -- a respace pin on a
+    bound, the seam key a gap hold stepped -- and each claim has to move with
+    its key, exactly as a ripple's claims do (``ledger.remap``).
+
+    Bug: every retime was a bare ``scaleKey`` -- the Shift drag's
+    ``scale_object_keys``, a sub-row clip's ``scale_attribute_keys`` and the
+    respace's ``ShotApply.retime_gaps`` -- so a claim stayed on the frame its
+    key had left.  The next reconcile found no key there and released it, and
+    the sample became an ANIMATOR key: a pin at the retimed end counted as one
+    key more on every later check (measured on the production assembly: +1 key
+    on 12 curves after one -6 duration change), and a released gap hold
+    became a step the system could never take back.
+    Fixed: 2026-09-19
+    """
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self.cube = cmds.polyCube(name="rtc_cube")[0]
+        # A's content 10..40, B's 70..90, one curve: every bound has shape.
+        for t, v in ((10, 0), (40, 5), (70, 2), (90, 8)):
+            cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
+        self.crv = cmds.listConnections(f"{self.cube}.translateX", type="animCurve")[0]
+        self.seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [self.cube]),
+                ShotBlock(1, "B", 60, 100, [self.cube]),
+            ]
+        )
+        # The respace plants and claims the pins (and steps the gap seam) the
+        # way the production assembly carries them.
+        self.seq.respace(gap=20, start_frame=0)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _keys(self):
+        return [round(t, 3) for t in cmds.keyframe(self.crv, q=True) or []]
+
+    def _claims(self):
+        return [
+            (round(t, 3), owner, edge)
+            for t, owner, edge in self.seq.ledger.key_records(self.crv)
+        ]
+
+    def _steps(self):
+        return [round(t, 3) for t in self.seq.ledger.step_times(self.crv)]
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_the_fixture_carries_a_claimed_end_pin_and_a_claimed_hold(self):
+        self.assertIn((50.0, 0, "end"), self._claims())
+        self.assertIn(50.0, self._steps(), "the gap's seam is A's end pin")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_shift_retime_carries_the_end_pin_and_its_hold(self):
+        self.seq.resize_shot(0, 0, 70)  # the Shift edge drag: A's end +20
+        self.assertEqual(self.seq.shot_by_id(0).end, 70.0)
+        self.assertIn(70.0, self._keys(), "fixture: the pin was scaled to 70")
+        self.assertIn(
+            (70.0, 0, "end"),
+            self._claims(),
+            "the retimed pin is still the system's sample on A's end",
+        )
+        self.assertIn(70.0, self._steps(), "the retimed seam's hold is still claimed")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_set_shot_duration_carries_them_too(self):
+        self.seq.set_shot_duration(0, 60)  # A [0, 50] -> [0, 60]
+        self.assertIn((60.0, 0, "end"), self._claims())
+        self.assertIn(60.0, self._steps())
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_sub_row_clip_resize_carries_them_too(self):
+        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
+            scale_attribute_keys,
+        )
+
+        scale_attribute_keys(
+            self.cube, "translateX", 0, 50, 0, 60, ledger=self.seq.ledger
+        )
+        self.assertIn(60.0, self._keys(), "fixture: the pin was scaled to 60")
+        self.assertIn((60.0, 0, "end"), self._claims())
+        self.assertIn(60.0, self._steps())
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_claim_follows_its_key_to_the_whole_frame_it_snapped_to(self):
+        """``scaleKey`` snaps to whole frames when its autoSnap is on -- a
+        GUI session's preference, off under mayapy -- so a claim has to follow
+        its key to where it LANDED, not to the linear map's fractional frame
+        (A's end pin maps to 36.6 here and lands on 37)."""
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
+
+        with ShotApply._claims_follow(
+            self.seq.ledger, [self.crv], (0, 50), lambda t: t * 0.732
+        ):
+            cmds.scaleKey(
+                self.crv,
+                time=(0, 50),
+                newStartTime=0,
+                newEndTime=36.6,
+                autoSnap=True,
+            )
+        end = [t for t, _owner, edge in self._claims() if edge == "end"]
+        self.assertEqual(len(end), 1, self._claims())
+        self.assertNotAlmostEqual(end[0], 36.6, 3, "left on the mapped frame")
+        self.assertIn(end[0], self._keys(), "the claim sits on the landed key")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_respace_retime_carries_a_gap_holds_claim(self):
+        """A seam key INSIDE a gap is retimed with the gap's content."""
+        cmds.setKeyframe(self.cube, at="translateX", t=60, v=1)  # in A's gap
+        self.seq.reconcile_system_edits()  # the hold moves onto the new seam
+        self.assertIn(60.0, self._steps(), "fixture: the gap key holds the gap")
+        self.seq.respace(gap=10, start_frame=0)  # the gap 20 -> 10: 60 -> 55
+        self.assertIn(55.0, self._keys(), "fixture: the gap key was retimed")
+        self.assertIn(55.0, self._steps(), "its hold's claim moved with it")
+
+
+class TestAShrinkingRetimeNeverScalesItsNeighbour(unittest.TestCase):
+    """A Shift retime that SHRINKS a shot scales its content into the shorter
+    span and pulls the shots beyond that edge in by the same amount -- which
+    is only safe AFTER the scale.
+
+    Bug: ``resize_shot`` and ``set_shot_duration`` rippled first whatever the
+    direction -- the order a GROW needs (vacate the room, then scale into it).
+    On a shrink wider than the gap the ripple landed the neighbour's keys, and
+    the pivot's own trailing-gap content, inside the span the pivot's content
+    still occupied, and the scale then retimed them along with it: equal
+    poses landing on the pivot's keys were merged away (a -6 duration change
+    on the production assembly cut 3 keys from each of 80 baked curves) and
+    the rest were compressed into the pivot.  A shrinking edge now scales
+    first and ripples after.
+    Fixed: 2026-09-19
+    """
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self.a = cmds.polyCube(name="srA")[0]
+        self.b = cmds.polyCube(name="srB")[0]
+        # Even frames, so halving A lands on whole frames whether or not the
+        # session's scaleKey autoSnap is on (a GUI preference; off in mayapy).
+        for t, v in ((4, 0), (20, 4), (36, 1), (48, 6)):
+            cmds.setKeyframe(self.a, at="translateX", t=t, v=v)
+        for t, v in ((62, 0), (72, 7), (90, 2)):
+            cmds.setKeyframe(self.b, at="translateX", t=t, v=v)
+        self.seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [self.a]),
+                ShotBlock(1, "B", 60, 100, [self.b]),
+            ]
+        )
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _keys(self, node):
+        return [round(t, 3) for t in cmds.keyframe(node, q=True, at="translateX")]
+
+    def _bounds(self):
+        return [(s.start, s.end) for s in self.seq.sorted_shots()]
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_tail_shrink_wider_than_the_gap_moves_the_neighbour_rigidly(self):
+        self.seq.resize_shot(0, 0, 25)  # A halved; its gap is only 10 wide
+        self.assertEqual(self._bounds(), [(0, 25), (35, 75)])
+        self.assertEqual(self._keys(self.a), [2.0, 10.0, 18.0, 24.0])
+        self.assertEqual(self._keys(self.b), [37.0, 47.0, 65.0], "B moved rigidly")
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_set_shot_duration_shrinks_the_same_way(self):
+        self.seq.set_shot_duration(0, 25)
+        self.assertEqual(self._bounds(), [(0, 25), (35, 75)])
+        self.assertEqual(self._keys(self.a), [2.0, 10.0, 18.0, 24.0])
+        self.assertEqual(self._keys(self.b), [37.0, 47.0, 65.0])
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_head_shrink_wider_than_the_gap_moves_the_shot_before_rigidly(self):
+        self.seq.resize_shot(1, 80, 100)  # B's head in by 20; the gap is 10
+        self.assertEqual(self._bounds(), [(20, 70), (80, 100)])
+        self.assertEqual(self._keys(self.b), [81.0, 86.0, 95.0])
+        self.assertEqual(
+            self._keys(self.a), [24.0, 40.0, 56.0, 68.0], "A moved rigidly"
+        )
+
+
 class TestResizeShotBounds(unittest.TestCase):
     """``resize_shot_bounds`` is the plain shot-edge drag: the boundary moves
     and the keyframes stay where the animator put them.  ``resize_shot`` (the

@@ -73,7 +73,7 @@ DEFAULTS: Dict[str, Any] = {
     "APPLY_UNIT_SCALE": True,
     "INCLUDE_ANIMATION": False,
     "INCLUDE_LIGHTS": True,
-    "INCLUDE_SHOTS": True,
+    "INCLUDE_SCENE_DATA": True,
     "TRIANGULATE": False,
     "CLEAR_SCENE": False,
     "FRAME_VIEW": False,
@@ -200,6 +200,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     # state, not a mesh file -- GLB and every other deliverable come from the
     # exporters, which read the committed bake on their own.
     save_extensions = (".blend", ".json")
+    # ``INCLUDE_SHOTS`` became ``INCLUDE_SCENE_DATA`` when every portable scene
+    # record -- not the shots alone -- started riding the sidecar.
+    param_aliases = staticmethod(
+        ptk.Deprecation.values(
+            {"INCLUDE_SHOTS": "INCLUDE_SCENE_DATA"},
+            what="BlenderBridge parameter",
+            remove_in="0.19.0",
+        )
+    )
 
     def __init__(self, blender_path: Optional[str] = None):
         super().__init__(app_path=blender_path)
@@ -298,10 +307,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     )
                 ),
                 # The bake's manifest is consumed by its own return leg, which has
-                # no use for shots; a send carries them unless the artist opts out.
-                include_shots=request.template != self._LIGHTMAP_TEMPLATE
+                # no use for scene records; a send carries them unless the artist
+                # opts out.
+                include_scene_data=request.template != self._LIGHTMAP_TEMPLATE
                 and bool(
-                    request.params.get("INCLUDE_SHOTS", DEFAULTS["INCLUDE_SHOTS"])
+                    request.params.get(
+                        "INCLUDE_SCENE_DATA", DEFAULTS["INCLUDE_SCENE_DATA"]
+                    )
                 ),
                 spell=self._manifest_spelling(self.carrier(request)),
             )
@@ -336,7 +348,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         include_materials: bool = True,
         include_lights: bool = True,
         include_environment: bool = False,
-        include_shots: bool = True,
+        include_scene_data: bool = True,
         spell=None,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
@@ -369,11 +381,18 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         *include_environment* adds ``world`` -- the scene's sky dome, lit as the
         bake's world (:meth:`_manifest_world`); only the bake asks for it.
+
+        *include_scene_data* adds the scene's portable records
+        (``DataNodes.transfer_sections``): the shots under ``shots`` and every
+        other one keyed under ``records``, memberships and ledger claims
+        scoped to the sent subtree -- neither carrier has a place for them, and
+        blendertk's ``MayaSceneImport`` lands them through the same engine.
         """
         import maya.cmds as cmds
 
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.mat_manifest import MatManifest
+        from mayatk.node_utils.data_nodes import DataNodes
 
         seeds = cmds.ls([str(o) for o in objects], long=True) or []
         if not seeds:
@@ -396,9 +415,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         lights = self._manifest_lights(transforms, _leaf) if include_lights else []
         lights = self._contributing_lights(lights)
         world = self._manifest_world(_leaf) if include_environment else None
-        shots = self._manifest_shots(transforms, _leaf) if include_shots else None
+        scene_data = (
+            DataNodes.transfer_sections(spell=_leaf, objects=transforms)
+            if include_scene_data
+            else {}
+        )
         if not include_materials:
-            self._dump_manifest(fbx_path, [], [], node_types, lights, world, shots)
+            self._dump_manifest(fbx_path, [], [], node_types, lights, world, scene_data)
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
@@ -438,25 +461,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 }
             )
         self._dump_manifest(
-            fbx_path, entries, scene_materials, node_types, lights, world, shots
-        )
-
-    @staticmethod
-    def _manifest_shots(transforms: List[str], spell=None) -> Optional[Dict[str, Any]]:
-        """The scene's shots as the sidecar's ``shots`` section, memberships and
-        ledger claims scoped to *transforms* and spelled by *spell*
-        (:meth:`_manifest_spelling`); ``None`` when the scene has no shots.
-
-        Neither carrier has a place for a shot, a marker, a locked gap or the
-        samples the sequencer planted on shot bounds, so the store rides the
-        manifest (``ShotStore.export_transfer``, the ``pythontk.ShotTransfer``
-        codec) and blendertk's ``MayaSceneImport`` rebuilds it 1:1 -- the exact
-        mirror of what ``btk.MayaBridge`` sends the other way.
-        """
-        from mayatk.anim_utils.shots._shots import ShotStore
-
-        return ShotStore.export_transfer(
-            spell=spell or BlenderBridge._manifest_spelling(), objects=transforms
+            fbx_path, entries, scene_materials, node_types, lights, world, scene_data
         )
 
     @staticmethod
@@ -886,33 +891,38 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         node_types: Dict[str, str],
         lights: Optional[List[Dict[str, Any]]] = None,
         world: Optional[Dict[str, Any]] = None,
-        shots: Optional[Dict[str, Any]] = None,
+        scene_data: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Write the sidecar (shared by the materials-on and materials-off paths)."""
-        import json
-
+        """Write the sidecar (shared by the materials-on and materials-off
+        paths) -- atomically, through ``ptk.HandoffManifest``: a send that died
+        mid-write must not leave a truncated sidecar the consumer would read
+        as a producer with nothing to say.  *scene_data* is
+        ``DataNodes.transfer_sections``' sections, merged in whole."""
+        manifest_cls = ptk.HandoffManifest
         lights = lights or []
-        if not entries and not node_types and not lights and not world and not shots:
+        scene_data = scene_data or {}
+        if not (entries or node_types or lights or world or scene_data):
             return
-        data = {
-            "version": 2,
-            "materials": entries,
-            "scene_materials": scene_materials,
-            "transforms": node_types,
-            "lights": lights,
-        }
-        if world:
-            data["world"] = world
-        if shots:
-            data["shots"] = shots
-        with open(fbx_path + ".manifest.json", "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=1)
+        manifest_cls.build(
+            **{
+                manifest_cls.VERSION_KEY: manifest_cls.VERSION,
+                manifest_cls.MATERIALS: entries,
+                manifest_cls.SCENE_MATERIALS: scene_materials,
+                manifest_cls.TRANSFORMS: node_types,
+                manifest_cls.LIGHTS: lights,
+                manifest_cls.WORLD: world or None,
+                **scene_data,
+            }
+        ).write(fbx_path)
+        carried = [key for key in scene_data if key != manifest_cls.RECORDS] + sorted(
+            scene_data.get(manifest_cls.RECORDS) or {}
+        )
         self.logger.info(
             f"Manifest: {len(entries)} textured material(s), "
             f"{len(node_types)} group/locator transform(s), "
             f"{len(lights)} light(s)"
             + (f", sky dome {world['name']} as the world" if world else "")
-            + (f", {len(shots['store']['shots'])} shot(s)" if shots else "")
+            + (f", scene data ({', '.join(carried)})" if carried else "")
             + " sidecarred."
         )
 

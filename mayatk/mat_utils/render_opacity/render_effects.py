@@ -1022,41 +1022,6 @@ class RenderEffects(ptk.LoggingMixin):
         FbxUtils.publish_authored({ptk.SceneRecords.VISIBILITY: record})
         return record
 
-    @ptk.Deprecation.symbol(
-        "FbxUtils.publish(FbxUtils.export_context(clip_span=(start, end)), "
-        "only=[ptk.SceneRecords.VISIBILITY])",
-        remove_in="0.18.0",
-    )
-    @classmethod
-    def restamp_stack_span(cls, start: float, end: float) -> bool:
-        """Republish the channel with its ``clip_span`` whole-timeline entry at
-        *(start, end)* -- or clear it when the scene has no keyed visibility.
-
-        Retired 2026-09-18 with its one caller, ``TaskManager.
-        publish_clip_origin``: the exporter now hands the span it measured
-        from the keys to the producer as the export context's ``clip_span``,
-        so the record is produced with it instead of patched after the
-        producers (a second producer run overwrote the patch, and three
-        exports shipped 18 shots cut 81 frames early while logging the
-        correct number).
-
-        Parameters:
-            start (float): First frame the exported stack carries.
-            end (float): Last frame the exported stack carries.
-
-        Returns:
-            bool: True when the channel now names that span; False when there
-            is nothing to publish (the channel is cleared).
-        """
-        return (
-            cls._publish_record(
-                ptk.ExportContext(
-                    mode=ptk.ExportContext.AUTHORING,
-                    clip_span=(float(start), float(end)),
-                )
-            )
-            is not None
-        )
 
     # ------------------------------------------------------------------
     # Internals

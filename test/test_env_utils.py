@@ -67,6 +67,39 @@ class TestEnvUtils(MayaTkTestCase):
         super().tearDown()
 
     # -------------------------------------------------------------------------
+    # Autosave
+    # -------------------------------------------------------------------------
+
+    def test_autosave_directories_include_the_folder_maya_writes_to(self):
+        """Maya's autosave preference can name a folder (destination 1) -- a
+        local temp folder keeps backups out of a synced project -- and that is
+        where it writes, so recovery must look there: the lookup only knew the
+        workspace, MAYA_AUTOSAVE_FOLDER and the home folder. Each directory is
+        reported once. Added: 2026-09-19"""
+        import shutil
+
+        named = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "temp_tests", "autosave_named"
+        )
+        os.makedirs(named, exist_ok=True)
+        self.addCleanup(shutil.rmtree, named, ignore_errors=True)
+        destination = cmds.autoSave(q=True, destination=True)
+        folder = cmds.autoSave(q=True, folder=True)
+        self.addCleanup(cmds.autoSave, destination=destination, folder=folder or "")
+
+        cmds.autoSave(destination=1, folder=named)
+        found = EnvUtils.find_autosave_directories()
+        key = os.path.normcase(os.path.normpath(named))
+        self.assertEqual(
+            [d for d in found if os.path.normcase(os.path.normpath(d)) == key],
+            [named],
+        )
+        self.assertEqual(len(found), len({os.path.normcase(os.path.normpath(d)) for d in found}))
+
+        cmds.autoSave(destination=0)
+        self.assertNotIn(named, EnvUtils.find_autosave_directories())
+
+    # -------------------------------------------------------------------------
     # Environment Info Tests
     # -------------------------------------------------------------------------
 
