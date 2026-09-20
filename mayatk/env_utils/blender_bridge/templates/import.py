@@ -38,13 +38,14 @@ Without blendertk on the target Blender the bare importer runs, with a console l
 BRIDGE_MODES = ("send_to",)
 
 # Export settings applied Maya-side before launch (read by BlenderBridge; echoed here so the panel
-# exposes them): scope=__SCOPE__ carrier=__CARRIER__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__ lights=__INCLUDE_LIGHTS__ shots=__INCLUDE_SHOTS__
+# exposes them): scope=__SCOPE__ carrier=__CARRIER__ materials=__INCLUDE_MATERIALS__ embed_textures=__EMBED_TEXTURES__ triangulate=__TRIANGULATE__ lights=__INCLUDE_LIGHTS__ scene_data=__INCLUDE_SCENE_DATA__
 #
 # ``lights`` is echoed for the same reason as the rest: it changes what the FBX carries,
 # so it needs a visible row. On, this recipe brings the scene's Maya lights across (a
 # scene transfer normally wants them); off ships geometry alone for a pure asset
-# hand-off where Blender does its own lighting. ``shots`` likewise: on, the scene's
-# shots ride the manifest and blendertk rebuilds them 1:1 in its Shot Sequencer.
+# hand-off where Blender does its own lighting. ``scene_data`` likewise: on, the scene's
+# portable records -- its shots, its emissive groups -- ride the manifest and blendertk
+# lands them 1:1 (the Shot Sequencer, the Emissive Groups panel).
 import sys
 
 import bpy

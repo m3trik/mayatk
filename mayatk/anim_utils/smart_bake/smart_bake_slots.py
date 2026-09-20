@@ -245,6 +245,13 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         details.extend(
             f"Declined {obj}: {reason}" for obj, reason in result.declined.items()
         )
+        if result.flattened:
+            details.append(
+                f"Flattened {len(result.flattened)} sheared chain node(s): they "
+                "fold to a sheared local no key can hold, so they were keyed "
+                "exactly under their nearest shear-free ancestor. Unbake returns "
+                "them to their chains."
+            )
         if result.override_layer:
             details.append(f"Override layer: {result.override_layer}")
         if result.muted_drivers:

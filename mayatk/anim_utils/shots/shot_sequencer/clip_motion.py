@@ -57,6 +57,7 @@ def scale_attribute_keys(
     old_end: float,
     new_start: float,
     new_end: float,
+    ledger=None,
 ) -> bool:
     """Scale only the curves driving *attr_name* on *obj_name*.
 
@@ -64,22 +65,35 @@ def scale_attribute_keys(
     curve on the whole object, this targets a single attribute so that
     resizing an attribute sub-row clip leaves other attributes untouched.
 
+    *ledger* (the store's ``edit_ledger``) has its claims on the retimed keys
+    carried with them, as every retime does
+    (``_ShotApplyInternal._claims_follow``); ``None`` skips that.
+
     Returns ``True`` when a scale was actually issued — a caller that
     snapshotted for undo needs to know a no-op happened so it can discard
     the snapshot instead of leaving a dead restore point.
     """
+    from mayatk.anim_utils.shots._shot_apply import ShotApply
+
     curves = curves_for_attr(obj_name, attr_name)
     if not curves:
         return False
     if abs(old_end - old_start) < FLOAT_ZERO_EPS:
         return False
+    ratio = (new_end - new_start) / (old_end - old_start)
     for crv in curves:
-        cmds.scaleKey(
-            str(crv),
-            time=(old_start, old_end),
-            newStartTime=new_start,
-            newEndTime=new_end,
-        )
+        with ShotApply._claims_follow(
+            ledger,
+            [str(crv)],
+            (old_start, old_end),
+            lambda t: new_start + (t - old_start) * ratio,
+        ):
+            cmds.scaleKey(
+                str(crv),
+                time=(old_start, old_end),
+                newStartTime=new_start,
+                newEndTime=new_end,
+            )
     return True
 
 
@@ -155,7 +169,13 @@ class ClipMotionMixin:
         attr_name = clip.data.get("attr_name")
         if attr_name:
             if not scale_attribute_keys(
-                obj_name, attr_name, orig_start, orig_end, new_start, new_end
+                obj_name,
+                attr_name,
+                orig_start,
+                orig_end,
+                new_start,
+                new_end,
+                ledger=self.sequencer.ledger,
             ):
                 return None
             return f"{obj_name}.{attr_name}"
@@ -416,8 +436,13 @@ class ClipMotionMixin:
             return
         prior_start = shot.start
         prior_end = shot.end
-        expanded_start = min(shot.start, new_start)
-        expanded_end = max(shot.end, new_end)
+        # Outward to whole frames, so the shot ENCLOSES what moved: rounded
+        # to the nearest frame, a key dragged off a whole frame (what a retime
+        # leaves) to 50.4 past an end at 50 left the end at 50 and the key
+        # outside it.
+        store = self.sequencer.store
+        expanded_start = min(shot.start, store.snap(new_start, "down"))
+        expanded_end = max(shot.end, store.snap(new_end, "up"))
         start_delta = expanded_start - prior_start
         end_delta = expanded_end - prior_end
         # One epsilon gate for the whole block: an exact != here with

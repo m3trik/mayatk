@@ -237,6 +237,49 @@ class _ReferenceManagerInternal(object):
         """
         return [_FileRef(rn) for rn in EnvUtils.list_reference_nodes()]
 
+    @staticmethod
+    def _authored_name(name: str, namespace: str) -> str:
+        """*name* (a referenced node's current long name) as the reference's
+        own file spells it: *namespace* stripped from each path component."""
+        if not name or not namespace:
+            return name
+        prefix = f"{namespace}:"
+        return "|".join(
+            part[len(prefix) :] if part.startswith(prefix) else part
+            for part in name.split("|")
+        )
+
+    @staticmethod
+    def _import_renames(authored, now):
+        """``rename(name)`` for an import: a node's name in its own file (as
+        *authored*) -> where the import put it (*now*, the same nodes in the
+        same order), for each node the import renamed -- a clash digit, a kept
+        or re-applied namespace.  A leaf spelling maps too where it named one
+        node of the reference, and a plug (``node.attr``) through its node;
+        ``None`` for a name the import left alone."""
+        full: dict = {}
+        leaves: dict = {}
+        counts: dict = {}
+        for before, after in zip(authored, now):
+            if not before:
+                continue
+            leaf = before.rsplit("|", 1)[-1]
+            counts[leaf] = counts.get(leaf, 0) + 1
+            if after and after != before:
+                full[before] = after
+                leaves[leaf] = after
+        leaves = {leaf: to for leaf, to in leaves.items() if counts[leaf] == 1}
+
+        def rename(name: str) -> Optional[str]:
+            hit = full.get(name) or leaves.get(name)
+            if hit:
+                return hit
+            node, dot, attr = str(name).partition(".")
+            hit = (full.get(node) or leaves.get(node)) if dot else None
+            return f"{hit}.{attr}" if hit else None
+
+        return rename
+
 
 class ReferenceManager(
     WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal
@@ -514,8 +557,15 @@ class ReferenceManager(
                 self.logger.warning(f"Failed to re-namespace {path}: {e}")
         return True
 
+    # What an unlink does with a reference's scene data (see import_references).
+    SCENE_DATA_MODES = ("merge", "discard")
+
     def import_references(
-        self, namespaces=None, namespace_mode="remove", remove_namespace=None
+        self,
+        namespaces=None,
+        namespace_mode="remove",
+        remove_namespace=None,
+        scene_data="merge",
     ):
         """Import referenced objects into the scene, making their data local.
 
@@ -533,6 +583,24 @@ class ReferenceManager(
                   asset stays identifiable without prefixing the whole scene.
             remove_namespace (bool): DEPRECATED bool form of *namespace_mode*
                 (True -> ``"remove"``, False -> ``"keep"``). Overrides it when given.
+            scene_data (str/callable): What becomes of each reference's scene
+                data -- the records its own tools kept on its ``data_internal`` /
+                ``data_export`` (shots, parked keys, bake sessions, emissive
+                groups). Once imported, a carrier of its own is read by nothing,
+                so it never stays behind:
+
+                - ``"merge"`` (default): each record merges into this scene's by
+                  its declared rule (``DataNodes.merge_carriers``); nothing is
+                  lost, and whatever arrives renamed or re-slotted is logged.
+                - ``"discard"``: the records go with their carriers
+                  (``DataNodes.discard_carriers``).
+                - ``decide(summary, namespace) -> "merge" | "discard" | None``:
+                  asked only for a reference that brings records a merge would
+                  keep (*summary*: one line per record); ``None`` leaves that
+                  reference referenced. A panel prompts here.
+
+                Either way the deliverables are produced again from the merged
+                scene.
         """
         if remove_namespace is not None:
             namespace_mode = "remove" if remove_namespace else "keep"
@@ -540,6 +608,11 @@ class ReferenceManager(
             raise ValueError(
                 f"Invalid namespace_mode {namespace_mode!r}; "
                 f"expected one of {self.NAMESPACE_MODES}"
+            )
+        if not callable(scene_data) and scene_data not in self.SCENE_DATA_MODES:
+            raise ValueError(
+                f"Invalid scene_data {scene_data!r}; expected one of "
+                f"{self.SCENE_DATA_MODES} or a callable"
             )
 
         all_references = self.current_references
@@ -552,12 +625,29 @@ class ReferenceManager(
             ]
 
         keep_on_root = namespace_mode == "root"
+        if all_references:
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            # What the scene's stores hold unwritten goes to ITS carrier now:
+            # once a reference's nodes land, a scene without one adopts the
+            # module's, and the idle write would land in that.
+            DataNodes.flush_owners()
         with CoreUtils.undo_chunk():
             for ref in all_references:
-                # 'root' needs the namespace AND the top transforms read BEFORE the
-                # import: importReference deletes the reference node, so the
-                # referenceQuery both come from returns nothing afterwards.
-                ns = ref.namespace if keep_on_root else ""
+                # Everything the import renames is read BEFORE it: importReference
+                # deletes the reference node, so the referenceQuery these come
+                # from returns nothing afterwards -- the namespace and top
+                # transforms 'root' needs, and the scene-data carriers.
+                try:
+                    ns = ref.namespace
+                except RuntimeError:  # too broken to have one; nothing is prefixed
+                    ns = ""
+                decision, data = self._scene_data_before_import(ref, ns, scene_data)
+                if decision is None:
+                    self.logger.info(
+                        f"Left '{ns}' referenced: its scene data was not settled."
+                    )
+                    continue
                 roots = (
                     CoreUtils.node_handles(self.get_reference_top_transforms(ref))
                     if keep_on_root
@@ -566,9 +656,7 @@ class ReferenceManager(
                 try:
                     ref.importContents(removeNamespace=namespace_mode == "remove")
                 except RuntimeError as e:
-                    self.logger.warning(
-                        f"Failed to import reference '{ref.namespace}': {e}"
-                    )
+                    self.logger.warning(f"Failed to import reference '{ns}': {e}")
                     continue
                 if keep_on_root:
                     # Scoped so one asset Maya refuses to re-namespace (a locked node,
@@ -581,6 +669,85 @@ class ReferenceManager(
                             f"Imported '{ns}' but could not keep its namespace on the "
                             f"root(s): {e}"
                         )
+                # After every rename (the namespace merge, 'root''s re-prefix):
+                # the records respell to where the nodes actually landed.
+                if data is not None:
+                    self._settle_scene_data(decision, data, ns)
+
+    def _scene_data_before_import(self, ref, namespace: str, scene_data):
+        """What to do with *ref*'s scene data, and what the import will need to
+        do it -- read while the reference still exists.
+
+        Returns ``(decision, captured)``. *decision* is ``"merge"`` /
+        ``"discard"``, or ``None`` when *scene_data*'s ``decide`` leaves the
+        reference referenced -- asked only when a merge would keep something
+        (``DataNodes.merge_plan``). *captured* is ``None`` for a reference
+        with no carriers, else the carriers' and every node's handles plus
+        the names those nodes have in the reference's own file.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        carriers = DataNodes.carriers_in(namespace)
+        if not carriers:
+            return "merge", None
+        decision = scene_data
+        if callable(scene_data):
+            plan = DataNodes.merge_plan(carriers)
+            if plan.is_empty:
+                decision = "merge"  # nothing a merge keeps: no question to ask
+            else:
+                decision = scene_data(plan.summary(), namespace)
+                if decision is None:
+                    return None, None
+                if decision not in self.SCENE_DATA_MODES:
+                    raise ValueError(
+                        f"scene_data decided {decision!r}; expected one of "
+                        f"{self.SCENE_DATA_MODES} or None"
+                    )
+        try:
+            nodes = cmds.referenceQuery(ref._ref_node, nodes=True, dagPath=True) or []
+        except RuntimeError:
+            nodes = []
+        handles = CoreUtils.node_handles(nodes)
+        return decision, {
+            "carriers": {
+                scope: CoreUtils.node_handles([node])
+                for scope, node in carriers.items()
+            },
+            "handles": handles,
+            "authored": [
+                self._authored_name(name, namespace)
+                for name in CoreUtils.resolve_handles(handles, drop_dead=False)
+            ],
+        }
+
+    def _settle_scene_data(self, decision: str, captured: dict, namespace: str):
+        """Merge (or discard) an imported reference's carriers, its records
+        respelled to where the import put each node; return the crossing's
+        ``ptk.TransferContext`` (its notes are logged)."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        carriers = {}
+        for scope, handles in captured["carriers"].items():
+            names = CoreUtils.resolve_handles(handles)
+            if names:
+                carriers[scope] = names[0]
+        rename = self._import_renames(
+            captured["authored"],
+            CoreUtils.resolve_handles(captured["handles"], drop_dead=False),
+        )
+        settle = (
+            DataNodes.merge_carriers
+            if decision == "merge"
+            else DataNodes.discard_carriers
+        )
+        ctx = settle(carriers, rename=rename, source=namespace)
+        self.logger.info(
+            f"'{namespace}': scene data "
+            + ("merged" if decision == "merge" else "discarded")
+            + (f" ({len(ctx.notes)} note(s) logged)." if ctx.notes else ".")
+        )
+        return ctx
 
     def update_references(self):
         """Update all references to reflect the latest changes from the original files."""
@@ -2109,7 +2276,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.debug("Unlink operation cancelled by user.")
             return
 
-        self.import_references(namespace_mode=mode)
+        self.import_references(namespace_mode=mode, scene_data=self._ask_scene_data)
         self.refresh_file_list()
         self.logger.info(
             f"Unlinked all references (namespace: {mode}) and refreshed file list."
@@ -2131,9 +2298,30 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         if self.sb.message_box(msg, "Yes", "No") != "Yes":
             return
 
-        self.import_references(namespaces=namespaces, namespace_mode=mode)
+        self.import_references(
+            namespaces=namespaces,
+            namespace_mode=mode,
+            scene_data=self._ask_scene_data,
+        )
         self.refresh_file_list()
         self.logger.info(f"Unlinked {count} references (namespace: {mode}).")
+
+    def _ask_scene_data(self, summary, namespace):
+        """The unlink question for a reference that brings scene data of its
+        own (``import_references``' *scene_data*): merge it, drop it, or leave
+        the reference linked.  Asked only when a merge would keep something."""
+        lines = "".join(f"<br>&nbsp;&nbsp;&bull; {line}" for line in summary)
+        answer = self.sb.message_box(
+            f"<hl>{namespace}</hl> brings scene data of its own:{lines}<br><br>"
+            "<b>Yes</b> merges it into this scene's -- nothing is lost, and anything "
+            "renamed or re-slotted on the way is logged.<br>"
+            "<b>No</b> drops it with the reference's data nodes.<br>"
+            "<b>Cancel</b> leaves this reference linked.",
+            "Yes",
+            "No",
+            "Cancel",
+        )
+        return {"Yes": "merge", "No": "discard"}.get(answer)
 
     @block_table_selection_method
     def convert_to_assembly(self):

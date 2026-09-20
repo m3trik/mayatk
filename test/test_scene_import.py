@@ -145,7 +145,7 @@ class TestSceneImportTemplate(unittest.TestCase):
             txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n")
         )
         self.assertIn(
-            "write_manifest(bpy, scene, materials, scene_materials, shots=shots, rig=rig)",
+            "bpy, scene, materials, scene_materials, scene_data=scene_data, rig=rig",
             txt,
         )
 
@@ -1082,9 +1082,10 @@ class _ShotsCase(MayaTkTestCase):
         return path
 
 
-class TestApplyShotsManifest(_ShotsCase):
-    """``_apply_shots_manifest``: names through the importer's spelling, scoped to
-    the imported nodes, claims only where the receiving curve has a key."""
+class TestApplySceneData(_ShotsCase):
+    """``_apply_scene_data``: names through the importer's spelling, scoped to
+    the imported nodes, claims only where the receiving curve has a key -- and
+    every other portable record through the same engine."""
 
     def test_names_resolve_through_the_fbx_importer_spelling(self):
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -1107,9 +1108,9 @@ class TestApplyShotsManifest(_ShotsCase):
                 ),
             }
         )
-        count = BlenderSceneImport()._apply_shots_manifest(path, [dotted, clash])
-        self.assertEqual(count, 1)
+        BlenderSceneImport()._apply_scene_data(path, [dotted, clash])
         store = ShotStore.active()
+        self.assertEqual(len(store.shots), 1)
         self.assertEqual(store.shots[0].objects, cmds.ls([dotted, clash], long=True))
         curve = cmds.listConnections(f"{dotted}.translateX", type="animCurve")[0]
         self.assertEqual(store.edit_ledger.key_times(curve), [24.0])
@@ -1138,7 +1139,7 @@ class TestApplyShotsManifest(_ShotsCase):
                 ),
             }
         )
-        BlenderSceneImport()._apply_shots_manifest(path, [root, child])
+        BlenderSceneImport()._apply_scene_data(path, [root, child])
         led = ShotStore.active().edit_ledger
         root_ty = cmds.listConnections(f"{root}.translateY", type="animCurve")[0]
         child_tz = cmds.listConnections(f"{child}.translateZ", type="animCurve")[0]
@@ -1151,8 +1152,41 @@ class TestApplyShotsManifest(_ShotsCase):
 
         chair = cmds.polyCube(name="Chair_001")[0]
         path = self._manifest({"version": 2, "shots": self._section(["Chair.001"])})
-        BlenderSceneImport()._apply_shots_manifest(path, [chair], carrier="usd")
+        BlenderSceneImport()._apply_scene_data(path, [chair], carrier="usd")
         self.assertEqual(ShotStore.active().shots[0].objects, cmds.ls(chair, long=True))
+
+    def test_an_emissive_group_lands_through_the_importer_spelling(self):
+        """Every portable record rides the generic ``records`` section; its owner
+        resolves members exactly as the shots do."""
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        dotted = cmds.polyCube(name="CubeFBXASC046001")[0]
+        path = self._manifest(
+            {
+                "version": 2,
+                "records": {
+                    "emissive_groups": {
+                        "registry": {
+                            "schema": 1,
+                            "groups": {"glow": {"slot": 0, "default": 1.0}},
+                        },
+                        "members": {"glow": {"Cube.001": [0, 2]}},
+                        "faces": {"Cube.001": 6},
+                    }
+                },
+            }
+        )
+        ctx = BlenderSceneImport()._apply_scene_data(path, [dotted])
+        self.assertEqual(EmissiveGroups.list_groups()["glow"]["faces"], 2, ctx.notes)
+
+    def test_the_earlier_name_still_lands_and_counts(self):
+        """``_apply_shots_manifest`` stays for the templates of an earlier release
+        that call it across the package boundary."""
+        chair = cmds.polyCube(name="Chair_001")[0]
+        path = self._manifest({"version": 2, "shots": self._section(["Chair.001"])})
+        self.assertEqual(
+            BlenderSceneImport()._apply_shots_manifest(path, [chair], carrier="usd"), 1
+        )
 
     def test_nothing_to_apply_is_a_silent_zero(self):
         from mayatk.anim_utils.shots._shots import ShotStore
@@ -1225,9 +1259,10 @@ class TestSceneImportShots(_ShotsCase):
 
 
 class TestConversionTemplateShots(unittest.TestCase):
-    """The Blender-side conversion templates carry the shots through blendertk."""
+    """The Blender-side conversion templates carry the scene's records -- its
+    shots, its emissive groups -- through blendertk."""
 
-    def test_render_threads_the_toolkit_roots_for_the_shots_pass(self):
+    def test_render_threads_the_toolkit_roots_for_the_scene_data_pass(self):
         eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
         for via in ("fbx", "usd"):
             with self.subTest(via=via):
@@ -1235,8 +1270,8 @@ class TestConversionTemplateShots(unittest.TestCase):
                 self.assertNotIn("__EXTRA_SYS_PATH__", script)
                 roots = ptk.HandoffBridge.import_roots("blendertk", "pythontk")
                 self.assertIn(f"EXTRA_SYS_PATH = {roots!r}", script)
-                self.assertIn("def shots_section(bpy, spell):", script)
-                self.assertIn("shots=shots", script)
+                self.assertIn("def scene_data_sections(bpy, spell):", script)
+                self.assertIn("scene_data=scene_data", script)
                 compile(script, f"_import_scene_{via}_rendered.py", "exec")
 
 
@@ -2130,7 +2165,13 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
             found = re.findall(r'"version":\s*(\d+)', text)
-            self.assertTrue(found, f"{os.path.basename(path)} writes no version")
+            # A producer building through ``HandoffManifest`` writes the class's
+            # own number (``VERSION_KEY: HandoffManifest.VERSION``) -- it cannot
+            # drift, so the spelling counts as writing the version.
+            symbolic = re.search(r"VERSION_KEY\s*:\s*[\w.]*\bVERSION\b", text)
+            self.assertTrue(
+                found or symbolic, f"{os.path.basename(path)} writes no version"
+            )
             for value in found:
                 self.assertEqual(
                     value,
@@ -2744,6 +2785,40 @@ class TestUsdPullRouteContracts(unittest.TestCase):
             loops.append(ast.dump(loop))
         self.assertEqual(len(set(loops)), 1, "locator fallback loops drifted apart")
 
+    def test_empty_group_fallback_loops_are_one_copy_across_the_send_templates(self):
+        """The FBX twin: both Maya-side send templates delegate the empty-group
+        repair to :meth:`BlenderSceneImport._restore_empty_groups` and fall back
+        to the children heuristic -- one loop, token-identical in both. The
+        interactive template used to carry a hand-kept copy of the whole repair,
+        manifest rules included, whose rename-on-clash match had already
+        diverged from the engine's (2026-09-19). Executed against the engine by
+        ``test_blender_bridge.TestPullTemplateCopiesMatchTheirSource``."""
+        import ast
+
+        templates = (
+            si._TEMPLATE_DIR.parents[4]
+            / "blendertk"
+            / "blendertk"
+            / "env_utils"
+            / "maya_bridge"
+            / "templates"
+        )
+        loops = []
+        for name in ("import.py", "_save_scene.py"):
+            path = templates / name
+            if not path.is_file():
+                self.skipTest(f"sibling checkout missing: {path}")
+            fn = self._template_function_node(
+                path.read_text(encoding="utf-8"), "restore_empty_groups"
+            )
+            self.assertIsNotNone(fn, path)
+            source = ast.unparse(fn)
+            self.assertIn("_restore_empty_groups(", source, f"{name}: no engine path")
+            loop = next((n for n in fn.body if isinstance(n, ast.For)), None)
+            self.assertIsNotNone(loop, path)
+            loops.append(ast.dump(loop))
+        self.assertEqual(len(set(loops)), 1, "empty-group fallback loops drifted apart")
+
 
 class TestRestoreUsdLocators(MayaTkTestCase):
     """The USD inverse of the FBX Empty repair: CREATE locator shapes."""
@@ -3114,7 +3189,9 @@ class TestPayloadSectionPlan(MayaTkTestCase):
     def test_a_carried_section_is_admitted_and_counted(self):
         self._sidecar({"version": 1, "shots": self._shots_section()})
         seen = self._reports()
-        self.assertEqual([m for _, _, m in seen][-1], "Rebuilding shots")
+        # The shots section lands through the scene-data step (shots and every
+        # other portable record, 2026-09-19).
+        self.assertEqual([m for _, _, m in seen][-1], "Landing the scene data")
         self.assertTrue(
             all(t == 3 for _, t, _ in seen),
             "the progress total must count the steps that will really run",
@@ -3127,8 +3204,11 @@ class TestPayloadSectionPlan(MayaTkTestCase):
 
     def test_the_option_gate_drops_a_carried_section(self):
         self._sidecar({"version": 1, "shots": self._shots_section()})
-        labels = [m for _, _, m in self._reports(shots=False)]
-        self.assertNotIn("Rebuilding shots", labels)
+        self.assertIn(
+            "Landing the scene data", [m for _, _, m in self._reports()]
+        )  # the label this gate must remove -- a vacuous check otherwise
+        labels = [m for _, _, m in self._reports(scene_data=False)]
+        self.assertNotIn("Landing the scene data", labels)
 
     def test_the_clock_is_not_section_gated(self):
         """With no ``scene`` section the applier falls back to the payload's own
@@ -3148,7 +3228,7 @@ class TestPayloadSectionPlan(MayaTkTestCase):
         labels = [m for _, _, m in self._reports(adopt_scene=True)]
         self.assertEqual(
             labels[-3:],
-            ["Adopting the scene clock", "Rebuilding shots", "Building the rig"],
+            ["Adopting the scene clock", "Landing the scene data", "Building the rig"],
             "the shots name what every step rebuilt; the rig verifies after both",
         )
 
@@ -3158,11 +3238,12 @@ class TestPayloadSectionPlan(MayaTkTestCase):
         def boom(*a, **k):
             raise RuntimeError("section blew up")
 
-        self.engine._apply_shots_manifest = boom
+        self.engine._apply_scene_data = boom
         with self.assertLogs(self.engine.logger, level=logging.WARNING) as caught:
             self.engine.import_payload(self.payload)
         self.assertTrue(
-            any("Rebuilding shots failed" in m for m in caught.output), caught.output
+            any("Landing the scene data failed" in m for m in caught.output),
+            caught.output,
         )
 
     def test_an_unreadable_sidecar_warns_once_and_imports_anyway(self):

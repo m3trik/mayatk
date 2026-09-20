@@ -647,6 +647,133 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
         return json.loads(published) if published else manifest.to_dict()
 
     # ------------------------------------------------------------------
+    # Scene-record crossings (``DataNodes.OWNERS``)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def transfer_out(cls, ctx: "ptk.TransferContext") -> Optional[dict]:
+        """The ``emissive_groups`` hand-off payload: the registry, each
+        group's membership as ``{group: {object: [face index, ...]}}`` and
+        each member object's face count -- the far side has no set to read,
+        and a face index names the same face only on a mesh whose face count
+        survived the crossing.  Objects are spelled as the carrier writes them
+        (``ctx.rename``) and scoped to ``ctx.objects``; ``None`` without
+        groups.  Mirror of blendertk's, which reads the same payload."""
+        registry = ptk.SceneRecords.EMISSIVE_REGISTRY.load(DataNodes)
+        if not registry or not registry.get("groups"):
+            return None
+        spell = ctx.rename or str
+        scope = (
+            None
+            if ctx.objects is None
+            else set(cmds.ls([str(o) for o in ctx.objects], long=True) or [])
+        )
+        members: Dict[str, Dict[str, List[int]]] = {}
+        faces: Dict[str, int] = {}
+        for name in registry["groups"]:
+            by_object: Dict[str, List[int]] = {}
+            for comp in cls._member_faces(name, flatten=True):
+                node, _, index = comp.partition(".f[")
+                transform = cls._transform(node)
+                if not transform or (scope is not None and transform not in scope):
+                    continue
+                spelled = spell(transform)
+                by_object.setdefault(spelled, []).append(int(index.rstrip("]")))
+                faces.setdefault(spelled, int(cmds.polyEvaluate(transform, face=True)))
+            if by_object:
+                members[name] = {obj: sorted(set(ix)) for obj, ix in by_object.items()}
+        return {"registry": registry, "members": members, "faces": faces}
+
+    @classmethod
+    def transfer_in(cls, payload: dict, ctx: "ptk.TransferContext") -> None:
+        """Land a received ``emissive_groups`` payload (:meth:`transfer_out`'s
+        shape, from either DCC): the registry merges by its rule -- a group
+        whose slot is taken here is re-slotted, noted -- and each group's
+        faces join its set on the object ``ctx.rename`` resolves.  An object
+        whose face count changed in the crossing keeps no membership (noted):
+        its indices would name other faces."""
+        registry = (payload or {}).get("registry")
+        if registry:
+            ptk.RecordTransfer.merge_record(
+                DataNodes, ptk.SceneRecords.EMISSIVE_REGISTRY, registry, ctx
+            )
+        counts = (payload or {}).get("faces") or {}
+        known = {g["name"] for g in cls._registry().groups()}
+        for name, by_object in ((payload or {}).get("members") or {}).items():
+            if name not in known:
+                continue  # the merge left it out (no free slot), and said so
+            comps: List[str] = []
+            for spelled, indices in by_object.items():
+                node = ctx.rename(spelled) if ctx.rename else spelled
+                if not node or not cmds.objExists(node):
+                    ctx.note(
+                        f"Emissive group {name!r}: {spelled!r} did not arrive; "
+                        "its faces were not added."
+                    )
+                    continue
+                count = int(cmds.polyEvaluate(node, face=True))
+                if counts.get(spelled) not in (None, count):
+                    ctx.note(
+                        f"Emissive group {name!r}: {spelled!r} has {count} faces "
+                        f"here and had {counts[spelled]}; its membership was not "
+                        "restored."
+                    )
+                    continue
+                comps.extend(f"{node}.f[{int(i)}]" for i in indices)
+            if comps:
+                cls.add_group(name, comps)
+
+    @classmethod
+    def merge_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's groups merged into the registry: a member set the
+        import renamed (``emissiveGroup_glow1``: this scene has that group
+        too) or left namespaced joins the canonical set -- groups merge by
+        name, members included."""
+        for set_node, canonical in cls._foreign_sets(other, ctx):
+            if cmds.objExists(canonical):
+                members = cmds.sets(set_node, q=True) or []
+                # Only with members: `sets -add` given none falls back to the
+                # live selection, which would join the group.
+                if members:
+                    cmds.sets(members, add=canonical)
+                cmds.delete(set_node)
+            else:
+                cmds.rename(set_node, canonical)
+
+    @classmethod
+    def discard_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's groups were dropped: delete the member sets it
+        brought, which no registry entry describes any more."""
+        for set_node, _canonical in cls._foreign_sets(other, ctx, renamed_only=False):
+            cmds.delete(set_node)
+
+    @classmethod
+    def _foreign_sets(cls, other, ctx, renamed_only: bool = True):
+        """``(set, canonical name)`` for each member set the other scene's
+        registry names that the import brought in: renamed or namespaced ones
+        (a clash with this scene's set), plus -- unless *renamed_only* -- those
+        that arrived under their own name (this scene had none)."""
+        registry = other.get(ptk.SceneRecords.EMISSIVE_REGISTRY) or {}
+        for name in registry.get("groups") or {}:
+            canonical = cls._set_node(name)
+            arrived = ctx.spell(canonical)
+            if not cmds.objExists(arrived) or cmds.nodeType(arrived) != "objectSet":
+                continue
+            if arrived != canonical or not renamed_only:
+                yield arrived, canonical
+
+    @staticmethod
+    def _transform(node: str) -> Optional[str]:
+        """*node*'s transform as a long name (a shape's parent), else ``None``."""
+        found = cmds.ls(node, long=True) or []
+        if not found:
+            return None
+        if cmds.nodeType(found[0]) == "transform":
+            return found[0]
+        parent = cmds.listRelatives(found[0], parent=True, fullPath=True) or []
+        return parent[0] if parent else None
+
+    # ------------------------------------------------------------------
     # Export carrier
     # ------------------------------------------------------------------
 

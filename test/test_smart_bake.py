@@ -2567,6 +2567,400 @@ class TestMatrixDrivenBake(unittest.TestCase):
         self._assert_matches(expected, self._sample(jnt, frames))
 
 
+class TestShearedMatrixFlatten(unittest.TestCase):
+    """A matrix drive whose folded local SHEARS has no TRS form in its own
+    hierarchy, but its WORLD is orthogonal -- so relative to a shear-free
+    ancestor it is exact TRS. SmartBake world-fits such nodes there AS the
+    bake (``WorldFitBake.flatten``, the exporter's own flatten), and its
+    session puts the chain back. Baked in place instead, the production wire
+    looms drifted 0.32 shear per link, 7.8 cm at the tip of 22 joints.
+    Added: 2026-09-19"""
+
+    FRAMES = list(range(1, 31))
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(
+            minTime=1, maxTime=30, animationStartTime=1, animationEndTime=30
+        )
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _stretch_chain(self, stretch=(True, True, True)):
+        """The production loom's shape: each joint's offsetParentMatrix is its
+        desired WORLD -- a stretch along its own X (where *stretch* says so)
+        and a rotation, keyed -- times its parent joint's world inverse. Every
+        world is orthogonal; every fold below the root shears. A link that
+        does not stretch has a SIMILARITY world, so the links below it can be
+        fitted under it rather than under the group."""
+        top = cmds.group(empty=True, name="asm_GRP")
+        rig = cmds.group(empty=True, name="rig_GRP", parent=top)
+        joints, parent = [], rig
+        for i, stretched in enumerate(stretch):
+            cmds.select(parent)
+            joint = cmds.joint(name=f"sh_jnt_{i + 1}")
+            cmds.setAttr(f"{joint}.translate", 0, 0, 0)
+            cmds.setAttr(f"{joint}.jointOrient", 0, 0, 0)
+            world = cmds.createNode("composeMatrix", name=f"sh_W_{i + 1}")
+            cmds.setAttr(f"{world}.inputTranslateX", 4.0 * i)
+            cmds.setKeyframe(world, attribute="inputScaleX", time=1, value=1.0)
+            cmds.setKeyframe(
+                world,
+                attribute="inputScaleX",
+                time=30,
+                value=(1.3 + 0.1 * i) if stretched else 1.0,
+            )
+            cmds.setKeyframe(world, attribute="inputRotateZ", time=1, value=10 + 20 * i)
+            cmds.setKeyframe(world, attribute="inputRotateZ", time=30, value=40 + 25 * i)
+            if parent == rig:
+                cmds.connectAttr(f"{world}.outputMatrix", f"{joint}.offsetParentMatrix")
+            else:
+                fold = cmds.createNode("multMatrix", name=f"sh_MM_{i + 1}")
+                cmds.connectAttr(f"{world}.outputMatrix", f"{fold}.matrixIn[0]")
+                cmds.connectAttr(
+                    f"{parent}.worldInverseMatrix[0]", f"{fold}.matrixIn[1]"
+                )
+                cmds.connectAttr(f"{fold}.matrixSum", f"{joint}.offsetParentMatrix")
+            joints.append(cmds.ls(joint, long=True)[0])
+            parent = joint
+        cmds.select(clear=True)
+        return cmds.ls(rig, long=True)[0], joints
+
+    def _worlds(self, uuids):
+        out = {}
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            for uuid in uuids:
+                node = cmds.ls(uuid, long=True)[0]
+                out[(uuid, frame)] = cmds.xform(node, q=True, ws=True, m=True)
+        return out
+
+    @staticmethod
+    def _drift(before, after):
+        return max(
+            max(abs(a - b) for a, b in zip(matrix, after[key]))
+            for key, matrix in before.items()
+        )
+
+    def test_a_sheared_chain_is_keyed_exactly_under_a_shear_free_ancestor(self):
+        from unittest import mock
+
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        rig, joints = self._stretch_chain()
+        uuids = cmds.ls(joints, uuid=True)
+        before = self._worlds(uuids)
+
+        with mock.patch.object(cmds, "warning") as warned:
+            result = SmartBake(objects=joints).execute()
+
+        said = " ".join(str(call) for call in warned.call_args_list)
+        self.assertNotIn("SHEAR", said.upper(), said)
+        # The chain root folds to clean TRS under rig_GRP; the two below it
+        # shear, and move there with world-fitted keys.
+        self.assertEqual(sorted(result.flattened), sorted(joints[1:]))
+        for now in result.flattened.values():
+            self.assertEqual(
+                cmds.listRelatives(now, parent=True, fullPath=True), [rig]
+            )
+            self.assertIn(now, result.baked)
+            self.assertFalse(
+                cmds.listConnections(
+                    f"{now}.offsetParentMatrix", source=True, destination=False
+                )
+            )
+        self.assertEqual(result.declined, {})
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-6)
+
+    def test_unbake_returns_the_chain_its_drives_and_nothing_else(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, joints = self._stretch_chain()
+        uuids = cmds.ls(joints, uuid=True)
+        before = self._worlds(uuids)
+
+        result = SmartBake(objects=joints).execute()
+        self.assertTrue(result.flattened)
+        restore = SmartBake.restore(result.session_id)
+
+        self.assertTrue(restore.success)
+        self.assertEqual(restore.warnings, [])
+        self.assertGreaterEqual(restore.flatten_restored, len(result.flattened))
+        self.assertEqual(cmds.ls(uuids, long=True), joints, "the chain is back")
+        for joint in joints:
+            self.assertTrue(
+                cmds.listConnections(
+                    f"{joint}.offsetParentMatrix", source=True, destination=False
+                ),
+                f"{joint} lost its drive",
+            )
+        self.assertFalse(cmds.keyframe(joints, query=True, name=True))
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-9)
+
+    def test_an_ik_handle_riding_a_moved_node_is_still_parked(self):
+        """The IK census must run BEFORE the reparents (a handle whose chain
+        loses members reports an empty jointList afterwards), so the paths it
+        returns are stale by the time the handles are disabled: one parented
+        UNDER a node that moves has to be found by UUID, or its solver keeps
+        writing the joints' locals over the fitted keys.
+        Added: 2026-09-19"""
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        rig, joints = self._stretch_chain()
+        cmds.select(joints[-1])
+        sub = []
+        for i in range(3):
+            sub.append(cmds.ls(cmds.joint(name=f"ik_jnt_{i + 1}"), long=True)[0])
+            cmds.setAttr(f"{sub[-1]}.translateX", 3.0)
+        handle = cmds.ikHandle(
+            startJoint=sub[0], endEffector=sub[-1], solver="ikRPsolver"
+        )[0]
+        # Parented under the sheared tip: the flatten moves that tip, so every
+        # path below it -- the handle's included -- is renamed by the move.
+        handle_id = cmds.ls(cmds.parent(handle, joints[-1])[0], uuid=True)[0]
+        cmds.select(clear=True)
+
+        plan = [
+            (path, cmds.ls(path, uuid=True)[0], rig, True) for path in joints[1:] + sub
+        ]
+        outcome = WorldFitBake.flatten(plan, self.FRAMES)
+
+        self.assertEqual(outcome["failed"], [])
+        self.assertEqual(outcome["warnings"], [])
+        live = cmds.ls(handle_id, long=True)[0]
+        self.assertEqual(
+            cmds.getAttr(f"{live}.ikBlend"),
+            0.0,
+            "the handle rode the reparent, so its solver still fights the keys",
+        )
+
+        restored, errors = WorldFitBake.restore(outcome["records"])
+        self.assertEqual(errors, [])
+        self.assertEqual(restored, len(outcome["records"]))
+        live = cmds.ls(handle_id, long=True)[0]
+        self.assertEqual(cmds.getAttr(f"{live}.ikBlend"), 1.0)
+
+    def test_a_target_that_itself_moves_is_found_where_it_went(self):
+        """A link that does not stretch has a similarity world, so it is the
+        nearest fit target of the links below it -- and it moves too, since
+        its own fold under a stretched parent shears. Parents move first, so
+        its planned path is stale by the time a descendant reparents to it:
+        found by UUID, or the bake raises with the chain half moved and no
+        session to undo it. Added: 2026-09-19"""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _rig, joints = self._stretch_chain(stretch=(True, False, True, True))
+        uuids = cmds.ls(joints, uuid=True)
+        before = self._worlds(uuids)
+
+        result = SmartBake(objects=joints).execute()
+
+        self.assertEqual(sorted(result.flattened), sorted(joints[1:]))
+        self.assertTrue(result.session_id)
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-6)
+        restore = SmartBake.restore(result.session_id)
+        self.assertTrue(restore.success, restore.warnings)
+        self.assertEqual(cmds.ls(uuids, long=True), joints)
+
+    def test_a_child_left_in_place_keeps_its_world_under_a_fitted_parent(self):
+        """A rotated tip under the stretched last link has a world that SHEARS
+        (the stretch seen through a rotation), so no TRS fits it anywhere and
+        the flatten leaves it where it is. Its parent moves and takes the
+        stretch INTO its scale -- where the tip's scale compensation would
+        divide it back out. Released for the bake, restored by Unbake.
+        Added: 2026-09-19"""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _rig, joints = self._stretch_chain()
+        cmds.select(joints[-1])
+        tip = cmds.ls(cmds.joint(name="sh_tip"), long=True)[0]
+        cmds.setAttr(f"{tip}.translateX", 2.0)
+        cmds.setAttr(f"{tip}.jointOrient", 0, 0, 35)
+        cmds.select(clear=True)
+        self.assertTrue(cmds.getAttr(f"{tip}.segmentScaleCompensate"))
+        tip_id = cmds.ls(tip, uuid=True)[0]
+        uuids = cmds.ls(joints, uuid=True) + [tip_id]
+        before = self._worlds(uuids)
+
+        result = SmartBake(objects=joints + [tip]).execute()
+
+        self.assertNotIn(tip, result.flattened)
+        live = cmds.ls(tip_id, long=True)[0]
+        self.assertFalse(cmds.getAttr(f"{live}.segmentScaleCompensate"))
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-6)
+
+        restore = SmartBake.restore(result.session_id)
+        self.assertTrue(restore.success, restore.warnings)
+        live = cmds.ls(tip_id, long=True)[0]
+        self.assertTrue(cmds.getAttr(f"{live}.segmentScaleCompensate"))
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-9)
+
+    def test_a_drive_through_a_unit_conversion_returns_on_restore(self):
+        """A float driving an angle arrives through the unitConversion Maya
+        inserts. The cut leaves that node an orphan (alive for the session --
+        and a utility node any clean-up removes), so the record must name
+        the driver BEHIND it with its factor, and the restore put both back:
+        the driver connected, the arithmetic as authored.
+        Added: 2026-09-19"""
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        rig, joints = self._stretch_chain()
+        twist = cmds.createNode("multiplyDivide", name="sh_twist")
+        cmds.setAttr(f"{twist}.input1X", 12.5)
+        cmds.connectAttr(f"{twist}.outputX", f"{joints[1]}.rotateY")
+        direct = cmds.listConnections(
+            f"{joints[1]}.rotateY", source=True, destination=False, plugs=True
+        )[0]
+        conversion = direct.split(".")[0]
+        self.assertEqual(cmds.nodeType(conversion), "unitConversion")
+        factor = cmds.getAttr(f"{conversion}.conversionFactor")
+
+        plan = [(p, cmds.ls(p, uuid=True)[0], rig, True) for p in joints[1:]]
+        outcome = WorldFitBake.flatten(plan, self.FRAMES)
+        self.assertEqual(outcome["failed"], [])
+        restored, errors = WorldFitBake.restore(outcome["records"])
+        self.assertEqual(errors, [])
+
+        back = cmds.listConnections(
+            f"{joints[1]}.rotateY",
+            source=True,
+            destination=False,
+            plugs=True,
+            skipConversionNodes=True,
+        )
+        self.assertEqual(back, [f"{twist}.outputX"])
+        direct = cmds.listConnections(
+            f"{joints[1]}.rotateY", source=True, destination=False, plugs=True
+        )[0]
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{direct.split('.')[0]}.conversionFactor"), factor
+        )
+
+    def test_a_session_from_a_newer_writer_is_refused_not_half_restored(self):
+        """The session schema is a promise to a READER: one that does not
+        know a bucket must say so, not restore the rest and report success
+        with the hierarchy still moved. Added: 2026-09-19"""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        session = {
+            "id": "from_the_future",
+            "version": BakeSessionStore.SCHEMA_VERSION + 1,
+            "unknown_bucket": [{"mode": "who_knows"}],
+        }
+        result = BakeSessionStore.restore_session(session)
+        self.assertFalse(result.success)
+        self.assertTrue(result.refused)
+        self.assertTrue(any("newer" in w for w in result.warnings), result.warnings)
+        # Through the store: a refused session is NOT popped -- it waits for
+        # a reader that knows its buckets, where a processed one goes.
+        BakeSessionStore.push(session)
+        result = SmartBake.restore("from_the_future")
+        self.assertTrue(result.refused)
+        self.assertIsNotNone(BakeSessionStore.peek("from_the_future"))
+        BakeSessionStore.pop("from_the_future")
+
+    def test_a_session_bake_is_exact_inside_and_gone_after(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, joints = self._stretch_chain()
+        uuids = cmds.ls(joints, uuid=True)
+        before = self._worlds(uuids)
+
+        with SmartBake.session(objects=joints) as result:
+            self.assertTrue(result.flattened)
+            self.assertLess(self._drift(before, self._worlds(uuids)), 1e-6)
+        self.assertEqual(cmds.ls(uuids, long=True), joints)
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-9)
+
+    def test_a_driven_joint_below_a_flattened_one_moves_with_the_chain(self):
+        """The production looms carry more joints below the sheared ones, some
+        with channels of their own driven (a curveInfo-driven scale). Two
+        failures, both measured: moving a flattened node changed every
+        descendant's path, and the standard pass after the matrix pass read
+        those paths from the analysis and died ("No object matches name",
+        production); and a joint child left in place compensates its parent's
+        scale (segmentScaleCompensate), which now carries the parent's fitted
+        stretch, so it lost the whole stretch (0.5 here). The flatten now takes
+        the joints below a sheared one along (the exporter's chain rule) and
+        moves everything LAST, after every pass ran where the analysis looked.
+        Added: 2026-09-19"""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, joints = self._stretch_chain()
+        cmds.select(joints[-1])
+        leaf = cmds.ls(cmds.joint(name="sh_leaf"), long=True)[0]
+        cmds.select(clear=True)
+        cmds.setAttr(f"{leaf}.translateX", 2.0)
+        driver = cmds.spaceLocator(name="leaf_driver_LOC")[0]
+        cmds.setKeyframe(driver, attribute="translateY", time=1, value=1.0)
+        cmds.setKeyframe(driver, attribute="translateY", time=30, value=1.5)
+        cmds.connectAttr(f"{driver}.translateY", f"{leaf}.scaleY")
+        uuids = cmds.ls(joints + [leaf], uuid=True)
+        before = self._worlds(uuids)
+
+        result = SmartBake(objects=joints + [leaf]).execute()
+
+        self.assertEqual(result.declined, {})
+        self.assertEqual(sorted(result.flattened), sorted(joints[1:] + [leaf]))
+        leaf_now = cmds.ls(uuids[-1], long=True)[0]
+        self.assertNotEqual(leaf_now, leaf, "the leaf moved with its chain")
+        self.assertIn(leaf_now, result.baked)
+        self.assertNotIn(leaf, result.baked)
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-6)
+
+        restore = SmartBake.restore(result.session_id)
+        self.assertTrue(restore.success)
+        self.assertEqual(restore.warnings, [])
+        self.assertEqual(cmds.ls(uuids[-1], long=True)[0], leaf)
+        self.assertLess(self._drift(before, self._worlds(uuids)), 1e-9)
+
+    def test_a_fold_whose_world_itself_shears_stays_in_place(self):
+        """A reparent helps only an orthogonal WORLD. This node sits under a
+        shear-free group, but it rotates before its offset's non-uniform scale,
+        so its own world shears and no TRS anywhere holds it: moving it would
+        restructure the rig and still drift. It keeps the in-place bake and
+        the warning."""
+        from unittest import mock
+
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        grp = cmds.group(empty=True, name="rig_GRP")
+        cube = cmds.polyCube(name="sheared_cube")[0]
+        cube = cmds.ls(cmds.parent(cube, grp)[0], long=True)[0]
+        cmds.setAttr(f"{cube}.rotateZ", 30)
+        compose = cmds.createNode("composeMatrix", name="shear_CM")
+        cmds.setAttr(f"{compose}.inputScaleX", 2.0)
+        cmds.setKeyframe(compose, attribute="inputTranslateX", time=1, value=0)
+        cmds.setKeyframe(compose, attribute="inputTranslateX", time=20, value=5)
+        cmds.connectAttr(f"{compose}.outputMatrix", f"{cube}.offsetParentMatrix")
+
+        with mock.patch.object(cmds, "warning") as warned:
+            result = SmartBake(objects=[cube]).execute()
+
+        said = " ".join(str(call) for call in warned.call_args_list)
+        self.assertEqual(result.flattened, {})
+        self.assertEqual(cmds.listRelatives(cube, parent=True), ["rig_GRP"])
+        self.assertIn("baked in place", said)
+
+
 class TestFbxMatrixOpmExport(unittest.TestCase):
     """Maya's FBX exporter freezes a CONNECTED ``offsetParentMatrix`` whose
     upstream does not translate to FBX.
@@ -3458,9 +3852,10 @@ class TestPerObjectBakeRanges(unittest.TestCase):
         SHEARS has no translate/rotate/scale form -- the bake writes the shear
         per frame, it is never keyed, and it is zeroed at the end, so the
         world drifts and the drift compounds down a chain (measured: 0.32 per
-        link, 7.8 cm at the tip of a production 22-joint wire loom). The
-        remedy is the exporter's flatten_sheared_chains, which runs before
-        smart_bake; the bake must at least say so."""
+        link, 7.8 cm at the tip of a production 22-joint wire loom). A fold
+        with an orthogonal world is world-fitted exactly instead
+        (TestShearedMatrixFlatten); this root node's world itself shears, so
+        nothing can hold it -- the bake must at least say so."""
         from unittest import mock
 
         cube = cmds.polyCube(name="sheared_cube")[0]
@@ -3476,7 +3871,8 @@ class TestPerObjectBakeRanges(unittest.TestCase):
 
         said = " ".join(str(call) for call in warned.call_args_list)
         self.assertIn("SHEAR", said.upper(), f"no shear warning; got {said!r}")
-        self.assertIn("flatten_sheared_chains", said)
+        self.assertIn("baked in place", said)
+        self.assertIn("sheared_cube", said)
 
     def test_unvetted_node_type_still_falls_back(self):
         """A node the walk has no ruling on keeps the global range. A

@@ -16,7 +16,6 @@ import os
 import sys
 import tempfile
 import unittest
-import warnings
 from unittest import mock
 
 import pythontk as ptk
@@ -363,62 +362,6 @@ class TestProducerContract(MayaTkTestCase):
         with _stub_producers({SR.SHOTS: shots}):
             FbxUtils.publish()
         self.assertEqual(order, ["stage", "produce"])
-
-    def test_the_retired_names_still_work_and_warn(self):
-        ran = []
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            FbxUtils.register_export_preparer("legacy", lambda: ran.append(True))
-            FbxUtils.run_export_preparers(include_known=False)
-            FbxUtils.unregister_export_preparer("legacy")
-        self.assertEqual(ran, [True])
-        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
-        self.assertNotIn("legacy", FbxUtils._session_stagers)
-
-    def test_the_retired_preparer_names_still_select_what_they_named(self):
-        """``run_export_preparers(only=...)`` and ``export_prepared(only=...)``
-        took the retired preparer names ("shots", "lightmap", "render_effects"
-        ...); resolved as record keys they raised KeyError, and a bracket
-        opened with no context ignored them. They map onto the records and
-        stagers they named, and the shim publishes inside a bracket, so a
-        session stager it prepares is finished too -- a preview it stood down
-        came back only if the caller also ran the retired finalizers.
-        Added: 2026-09-18
-        """
-        order = []
-        FbxUtils.register_export_stager(
-            "detach",
-            prepare=lambda: order.append("stage"),
-            finish=lambda: order.append("finish"),
-        )
-
-        def shots(ctx):
-            order.append("shots")
-            return None
-
-        def lightmaps(ctx):
-            order.append("lightmaps")
-            return None
-
-        table = {SR.SHOTS: shots, SR.LIGHTMAPS: lightmaps}
-        narrowed = staticmethod(
-            lambda only=None: {
-                s: f
-                for s, f in table.items()
-                if only is None or s.key in {SR.resolve(k).key for k in only}
-            }
-        )
-        with mock.patch.object(FbxUtils, "producers", narrowed):
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                FbxUtils.run_export_preparers(only=["shots", "render_effects"])
-                self.assertEqual(order, ["stage", "shots", "finish"])
-                del order[:]
-                with FbxUtils.export_prepared(only=["lightmap"]):
-                    order.append("write")
-                self.assertEqual(order, ["stage", "lightmaps", "write", "finish"])
-        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
-        self.assertEqual(FbxUtils._export_depth, 0)
 
 
 class TestExportHandoffBlock(MayaTkTestCase):

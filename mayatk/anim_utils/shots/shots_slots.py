@@ -77,8 +77,10 @@ class ShotsController(ptk.LoggingMixin):
                 w.setKeyboardTracking(False)
 
         # The name IS the exported clip name: the field refuses what the
-        # export would respell and says why (_show_name_error), and a refused
-        # name goes back to the shot's own on Enter / focus-out.
+        # export would respell and says why -- the store's ``name_error``
+        # through uitk's shared validator, red with the reason as its tooltip
+        # -- and a refused name goes back to the shot's own on Enter /
+        # focus-out, logged (_on_shot_name_refused), never silently.
         self._name_tooltip = (
             f"Shot name, exported as the clip name: {ptk.ShotStore.NAME_RULE}, "
             "unique ignoring case."
@@ -86,7 +88,15 @@ class ShotsController(ptk.LoggingMixin):
         txt_name = getattr(self.ui, "txt_shot_name", None)
         if txt_name is not None:
             txt_name.setToolTip(self._name_tooltip)
-            txt_name.editingFinished.connect(self._on_shot_name_committed)
+            txt_name.set_validator(
+                self._shot_name_error,
+                reasons=True,
+                debounce_ms=0,
+                empty_is_valid=False,
+                valid_tooltip=self._name_tooltip,
+                revert_on_commit=self._active_shot_name,
+            )
+            txt_name.commit_refused.connect(self._on_shot_name_refused)
 
         self._sync_from_store()
         self._bind_store_listener()
@@ -465,7 +475,9 @@ class ShotsController(ptk.LoggingMixin):
                     txt_name.blockSignals(True)
                     txt_name.setText("")
                     txt_name.blockSignals(False)
-                self._show_name_error(None)
+                    # No shot to name: nothing is refused.
+                    txt_name.reset_action_color()
+                    txt_name.setToolTip(self._name_tooltip)
                 if spn_start is not None:
                     spn_start.blockSignals(True)
                     spn_start.setValue(0)
@@ -485,8 +497,10 @@ class ShotsController(ptk.LoggingMixin):
                 txt_name.setText(shot.name)
                 txt_name.blockSignals(False)
             # A name held from before names were validated shows as refused
-            # right away -- the export would respell it (and says so).
-            self._show_name_error(store.name_error(shot.name, shot.shot_id))
+            # right away -- the export would respell it (and says so). The
+            # text went in with signals blocked, so the field checks it now.
+            if txt_name is not None:
+                txt_name.validate_now()
             if spn_start is not None:
                 spn_start.blockSignals(True)
                 spn_start.setValue(shot.start)
@@ -679,47 +693,37 @@ class ShotsController(ptk.LoggingMixin):
         store.update_shot(store.active_shot_id, **kwargs)
 
     def on_shot_name_changed(self, text: str) -> None:
-        """Push a name the store accepts; mark one it refuses, and why."""
+        """Push a name the store accepts; the field marks one it refuses, and
+        why (its validator is :meth:`_shot_name_error`)."""
         if self._refreshing_editor:
             return
         store = self._active_store()
         if store is None or store.active_shot_id is None:
             return
-        error = store.name_error(text, store.active_shot_id)
-        self._show_name_error(error)
-        if error is None:
+        if self._shot_name_error(text) is None:
             self._push_shot_field(name=text)
 
-    def _on_shot_name_committed(self) -> None:
-        """Enter / focus-out: a refused name goes back to the shot's own."""
-        txt = getattr(self.ui, "txt_shot_name", None)
+    def _shot_name_error(self, text: str):
+        """Why the store refuses *text* as the active shot's name, else
+        ``None`` -- the name field's validator (``ShotStore.name_error``).  No
+        active shot: nothing to refuse."""
         store = self._active_store()
-        if txt is None or store is None or store.active_shot_id is None:
-            return
+        if store is None or store.active_shot_id is None:
+            return None
+        return store.name_error(text, store.active_shot_id)
+
+    def _active_shot_name(self):
+        """The active shot's own name -- what a refused commit puts back."""
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return None
         shot = store.shot_by_id(store.active_shot_id)
-        if shot is None or txt.text() == shot.name:
-            return
-        error = store.name_error(txt.text(), shot.shot_id)
-        if error is None:
-            return
-        self.logger.warning(f"Shot name not changed. {error}")
-        txt.blockSignals(True)
-        txt.setText(shot.name)
-        txt.blockSignals(False)
-        self._show_name_error(store.name_error(shot.name, shot.shot_id))
+        return shot.name if shot is not None else None
 
-    def _show_name_error(self, error=None) -> None:
-        """Mark the name field refused (*error* as its tooltip) or clear it."""
-        txt = getattr(self.ui, "txt_shot_name", None)
-        if txt is None:
-            return
-        from uitk.widgets.lineEdit import LineEditFormatMixin
-
-        if error:
-            LineEditFormatMixin.set_action_color(txt, "invalid")
-        else:
-            LineEditFormatMixin.reset_action_color(txt)
-        txt.setToolTip(error or self._name_tooltip)
+    def _on_shot_name_refused(self, refused: str, reason: str) -> None:
+        """Say what a refused commit did not apply: the field has put the
+        shot's own name back."""
+        self.logger.warning(f"Shot name {refused!r} not applied. {reason}")
 
     def on_shot_start_changed(self, value: float) -> None:
         if self._refreshing_editor:

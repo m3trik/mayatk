@@ -19,10 +19,13 @@ the record's declaration (``ptk.SceneRecords.LIGHTMAPS.load(DataNodes)``,
 ``read`` / ``write`` / ``values`` per scope, plus the carrier lifecycle a Maya
 scene needs (resolution of a duplicate short name, the protection set, and a
 keep-alive input so no keyed attribute's curve is ever the carrier's last
-input).
+input) and the crossings -- another scene's records meeting this scene's
+(``ptk.RecordTransfer``): a hand-off's sidecar sections, and the carriers a
+referenced module brings along when its reference is imported.
 """
 
-from typing import Dict, List, Optional
+import logging
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 try:
@@ -36,6 +39,7 @@ import pythontk as ptk
 from mayatk.display_utils._display_utils import DisplayUtils
 
 _Scope = ptk.Scope
+logger = logging.getLogger(__name__)
 
 
 class DataNodes(ptk.SceneStoreBase):
@@ -64,7 +68,6 @@ class DataNodes(ptk.SceneStoreBase):
     #: from ``time1`` makes the rule unreachable.
     _KEEP_ALIVE_ATTR = "keepAlive"
     _KEEP_ALIVE_SOURCE = "time1.message"
-    _REMOVE_IN = "0.18.0"
 
     # ------------------------------------------------------------------
     # Name resolution
@@ -391,65 +394,182 @@ class DataNodes(ptk.SceneStoreBase):
         }
 
     # ------------------------------------------------------------------
-    # Retired channel methods -- the record layer replaced them (2026-09-18)
+    # Crossings -- another scene's records meeting this scene's
     # ------------------------------------------------------------------
 
-    @ptk.Deprecation.symbol(
-        "DataNodes.write(ptk.Scope.PRIVATE, attr, value)", remove_in=_REMOVE_IN
-    )
+    #: The record owners (``ptk.SceneStoreBase.OWNERS``: what each hook means
+    #: and when it runs) -- resolved lazily, like ``FbxUtils.PRODUCERS``.
+    OWNERS: Dict[str, Tuple[str, str]] = {
+        ptk.SceneRecords.SHOT_STORE.key: (
+            "mayatk.anim_utils.shots._shots",
+            "ShotStore",
+        ),
+        ptk.SceneRecords.KEY_STASH.key: (
+            "mayatk.anim_utils.key_stash._key_stash",
+            "KeyStash",
+        ),
+        ptk.SceneRecords.SMART_BAKE_SESSIONS.key: (
+            "mayatk.anim_utils.smart_bake.bake_session",
+            "BakeSessionStore",
+        ),
+        ptk.SceneRecords.EMISSIVE_REGISTRY.key: (
+            "mayatk.mat_utils.emissive_groups",
+            "EmissiveGroups",
+        ),
+    }
+
     @classmethod
-    def set_internal_string(cls, attr: str, value: str) -> Optional[str]:
-        return cls.write(_Scope.PRIVATE, attr, value)
+    def carriers_in(cls, namespace: str) -> Dict[ptk.Scope, str]:
+        """The carriers a referenced module keeps under *namespace*
+        (``NS:data_internal`` / ``NS:data_export``), by scope; a scope it has
+        none of is left out.  Creates nothing.  What ``merge_carriers`` /
+        ``discard_carriers`` settle once the reference is imported."""
+        ns = str(namespace or "").strip(":")
+        found: Dict[ptk.Scope, str] = {}
+        if cmds is None or not ns:
+            return found
+        for scope, name in cls.NAMES.items():
+            kind = "network" if _Scope(scope) is _Scope.PRIVATE else "transform"
+            matches = cmds.ls(f"{ns}:{name}", long=True, type=kind) or []
+            if matches:
+                found[_Scope(scope)] = matches[0]
+        return found
 
-    @ptk.Deprecation.symbol(
-        "DataNodes.read(ptk.Scope.PRIVATE, attr)", remove_in=_REMOVE_IN
-    )
+    # -- the carrier hooks of ``ptk.SceneStoreBase``'s crossings --------------
+
     @classmethod
-    def get_internal_string(cls, attr: str) -> Optional[str]:
-        return cls.read(_Scope.PRIVATE, attr)
+    def _live_carriers(cls, carriers: Mapping[Any, str]) -> Dict[ptk.Scope, str]:
+        """*carriers* (node names) that exist, by scope, as long names."""
+        found: Dict[ptk.Scope, str] = {}
+        if cmds is None:
+            return found
+        for scope, node in (carriers or {}).items():
+            live = cmds.ls(str(node), long=True) if node else []
+            if live:
+                found[_Scope(scope)] = live[0]
+        return found
 
-    @ptk.Deprecation.symbol(
-        "ptk.SceneRecords.<RECORD>.save(DataNodes, payload)", remove_in=_REMOVE_IN
-    )
     @classmethod
-    def set_internal_json(cls, attr: str, payload) -> Optional[str]:
-        return cls.write(
-            _Scope.PRIVATE, attr, _LEGACY_SPEC.encode(payload) if payload else None
-        )
+    def _foreign_carriers(cls, carriers: Mapping[Any, str]) -> Dict[ptk.Scope, str]:
+        """:meth:`_live_carriers` less this scene's own carrier of a scope --
+        an import that stripped the namespace made the module's the scene's
+        carrier when the scene had none."""
+        found: Dict[ptk.Scope, str] = {}
+        for scope, node in cls._live_carriers(carriers).items():
+            own = cls._carrier(scope)
+            if own and node == (cmds.ls(own, long=True) or [None])[0]:
+                continue
+            found[scope] = node
+        return found
 
-    @ptk.Deprecation.symbol(
-        "ptk.SceneRecords.<RECORD>.load(DataNodes)", remove_in=_REMOVE_IN
-    )
     @classmethod
-    def get_internal_json(cls, attr: str, default=None):
-        return _LEGACY_SPEC.decode(cls.read(_Scope.PRIVATE, attr), default)
+    def _carrier_values(cls, carrier: str) -> Dict[str, object]:
+        return cls._node_values(carrier)
 
-    @ptk.Deprecation.symbol(
-        "DataNodes.write(ptk.Scope.DELIVERABLE, attr, value)", remove_in=_REMOVE_IN
-    )
     @classmethod
-    def set_export_string(cls, attr: str, value: str) -> Optional[str]:
-        return cls.write(_Scope.DELIVERABLE, attr, value)
+    def _rederive(cls, specs, ctx) -> None:
+        """Produce *specs* again from the merged scene (authoring context,
+        ``FbxUtils.publish``) -- the other copy spelled names as its own
+        scene did."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
 
-    @ptk.Deprecation.symbol(
-        "DataNodes.read(ptk.Scope.DELIVERABLE, attr)", remove_in=_REMOVE_IN
-    )
+        try:
+            FbxUtils.publish(
+                FbxUtils.export_context(mode=ptk.ExportContext.AUTHORING), only=specs
+            )
+        except Exception as error:  # noqa: BLE001 - the merge stands without them
+            logger.warning("Deliverable records not re-derived.", exc_info=True)
+            ctx.note(f"Deliverable records were not produced again ({error}).")
+
     @classmethod
-    def get_export_string(cls, attr: str) -> Optional[str]:
-        return cls.read(_Scope.DELIVERABLE, attr)
+    def _delete_carrier(cls, carrier: str) -> None:
+        """Delete another scene's carrier, its name unlocked first."""
+        if not cmds.objExists(carrier):
+            return
+        try:
+            cmds.lockNode(carrier, lock=False, lockName=False)
+            cmds.delete(carrier)
+        except RuntimeError:
+            logger.warning("Could not delete the foreign carrier %s.", carrier)
 
-    @ptk.Deprecation.symbol(
-        "ptk.ExportSnapshot.publish(DataNodes, {RECORD: payload})", remove_in=_REMOVE_IN
-    )
     @classmethod
-    def set_export_json(cls, attr: str, payload) -> Optional[str]:
-        return cls.write(
-            _Scope.DELIVERABLE, attr, _LEGACY_SPEC.encode(payload) if payload else None
-        )
+    def _crossing(cls):
+        """One undo step for a settle."""
+        from mayatk.core_utils._core_utils import CoreUtils
 
+        return CoreUtils.undo_chunk()
 
-#: A shapeless declaration the retired JSON getter decodes through: no
-#: envelope, so a legacy caller's payload comes back exactly as stored.
-_LEGACY_SPEC = ptk.RecordSpec(
-    "_legacy", _Scope.PRIVATE, 0, "legacy", "", envelope=False
-)
+    #: Attribute types :meth:`_carry_attributes` can recreate on another node.
+    _MOVABLE_TYPES = (
+        "bool",
+        "long",
+        "short",
+        "byte",
+        "enum",
+        "float",
+        "double",
+        "doubleLinear",
+        "doubleAngle",
+        "time",
+    )
+
+    @classmethod
+    def _carry_attributes(cls, carrier: str, scope: ptk.Scope, ctx) -> None:
+        """Move *carrier*'s non-record user attributes -- a keyed audio-track
+        enum, a group's keyed weight -- to this scene's carrier of *scope*,
+        connections included; a name this scene's carrier already has stays
+        behind, noted.  String channels are records (merged by rule), a
+        message attribute is its owner's to carry (:attr:`OWNERS`), and a
+        compound's children travel with nothing -- none is movable alone."""
+        attrs = []
+        for attr in cmds.listAttr(carrier, userDefined=True) or []:
+            if attr == cls._KEEP_ALIVE_ATTR or cmds.attributeQuery(
+                attr, node=carrier, listParent=True
+            ):
+                continue
+            try:
+                kind = cmds.getAttr(f"{carrier}.{attr}", type=True)
+            except (RuntimeError, ValueError):
+                continue
+            if kind in cls._MOVABLE_TYPES:
+                attrs.append(attr)
+        if not attrs:
+            return
+        target = str(cls._carrier(scope, create=True))
+        for attr in attrs:
+            if cmds.attributeQuery(attr, node=target, exists=True):
+                ctx.note(
+                    f"{cls.name(scope)}.{attr}: this scene's own was kept; the "
+                    "other scene's was not moved."
+                )
+                continue
+            cls._clone_attribute(carrier, target, attr)
+            cmds.copyAttr(
+                carrier, target, attribute=[attr], values=True, inConnections=True
+            )
+
+    @staticmethod
+    def _clone_attribute(src: str, dst: str, attr: str) -> None:
+        """Add *attr* to *dst* shaped like *src*'s: type, enum names, hard and
+        soft range, default and keyability."""
+        plug = f"{src}.{attr}"
+        kind = cmds.getAttr(plug, type=True)
+        kwargs: Dict[str, Any] = {"longName": attr, "attributeType": kind}
+        if kind == "enum":
+            kwargs["enumName"] = ":".join(
+                cmds.attributeQuery(attr, node=src, listEnum=True) or []
+            )
+        for exists, value, key in (
+            ("minExists", "minimum", "minValue"),
+            ("maxExists", "maximum", "maxValue"),
+            ("softMinExists", "softMin", "softMinValue"),
+            ("softMaxExists", "softMax", "softMaxValue"),
+        ):
+            if cmds.attributeQuery(attr, node=src, **{exists: True}):
+                kwargs[key] = cmds.attributeQuery(attr, node=src, **{value: True})[0]
+        default = cmds.attributeQuery(attr, node=src, listDefault=True)
+        if default:
+            kwargs["defaultValue"] = default[0]
+        kwargs["keyable"] = bool(cmds.getAttr(plug, keyable=True))
+        cmds.addAttr(dst, **kwargs)
+

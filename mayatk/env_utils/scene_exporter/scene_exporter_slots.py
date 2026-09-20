@@ -113,11 +113,11 @@ class SceneExporterSlots(SceneExporter):
             lambda scope: scope != "visible",
         )
         # A USD deliverable: the FBX preset, the takes and the bake range set
-        # FBX flags only (the engine reports them inert), and the verifier
-        # has no FBX/GLB to open.
+        # FBX flags only (the engine reports them inert), the verifier has no
+        # FBX/GLB to open, and the rig-helper pass edits a written FBX.
         sb.show_when(
             ui,
-            "cmb000,animation_clips,bake_range,verify_deliverables",
+            "cmb000,animation_clips,bake_range,verify_deliverables,drop_rig_apparatus",
             "cmb004",
             lambda fmt: fmt != "usd",
         )
@@ -460,6 +460,7 @@ class SceneExporterSlots(SceneExporter):
                 "export_visible_objects",
                 "ignore_groups",
                 "exclude_hdr",
+                "drop_rig_apparatus",
                 "export_data_node",
             ),
         ),

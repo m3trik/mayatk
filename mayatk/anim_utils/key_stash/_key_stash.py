@@ -40,6 +40,7 @@ try:
 except Exception:
     cmds = mel = None
 
+import pythontk as ptk
 from pythontk.core_utils.engines.key_stash.key_stash_model import (
     KeyStash as _KeyStashCore,
     StashChanged,
@@ -331,6 +332,36 @@ class KeyStash(_KeyStashCore, _KeyStashInternal):
             self.mark_dirty()
             self._notify(StashChanged("reloaded"))
         return gone
+
+    # ---- scene-record crossings (``DataNodes.OWNERS``) -----------------
+
+    @classmethod
+    def merge_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's parked clips merged into the record: reload the
+        active stash from it (their curves came along with the import)."""
+        if ptk.SceneRecords.KEY_STASH in other:
+            cls.invalidate()
+
+    @classmethod
+    def discard_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's parked clips were dropped: delete their parked
+        curves, which nothing references any more, and reload the active
+        stash, which may hold the clips -- a carrier the import adopted was
+        this scene's own until the discard."""
+        if ptk.SceneRecords.KEY_STASH not in other:
+            return
+        stash = other.get(ptk.SceneRecords.KEY_STASH) or {}
+        deleted = sum(
+            1
+            for clip in stash.get("clips") or []
+            for rec in clip.get("curves") or []
+            if cls._delete_stash(rec)
+        )
+        if deleted:
+            ctx.note(
+                f"Key Stash: {deleted} parked curve(s) of the other scene deleted."
+            )
+        cls.invalidate()
 
     # ---- operations ----------------------------------------------------
 

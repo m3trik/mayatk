@@ -255,7 +255,7 @@ class _SceneTasksMixin(_TaskDataMixin):
                 frames = [float(f) for f in range(start, end + 1)]
             else:
                 frames = [float(cmds.currentTime(query=True))]
-        qualifies = self._similarity_ancestors(offenders, frames, tolerance)
+        qualifies = WorldFitBake.similarity_ancestors(offenders, frames, tolerance)
         # The scan above may stride past its sample cap; the BAKE below may
         # not. A world-fitted key every OTHER frame leaves the frames between
         # to interpolation, and a fast-moving basis does not interpolate:
@@ -274,7 +274,7 @@ class _SceneTasksMixin(_TaskDataMixin):
             uuid = (cmds.ls(path, uuid=True) or [None])[0]
             if not uuid:
                 continue
-            target = self._flatten_target(path, qualifies)
+            target = WorldFitBake.flatten_target(path, qualifies)
             current_parent = (
                 cmds.listRelatives(path, parent=True, fullPath=True) or [None]
             )[0]
@@ -309,77 +309,29 @@ class _SceneTasksMixin(_TaskDataMixin):
             "flatten_sheared_chains",
             lambda recs=records: self._restore_flattened(recs),
         )
+        # Census, pristine samples, reparent + fitted keys, and the IK handles
+        # the moves would break -- WorldFitBake.flatten, the same reversible
+        # flatten SmartBake runs on its own sheared matrix drives. A locked or
+        # referenced node refuses the reparent and is left for the check to
+        # report rather than aborting the export.
+        outcome = WorldFitBake.flatten(plan, bake_frames, records=records)
         per_target: Dict[str, int] = {}
-        failed: List[str] = []
-        # IK handle census BEFORE any mutation (WorldFitBake.ik_handles_touching:
-        # a handle whose chain loses members reports an empty jointList after).
-        handle_chains: Dict[str, set] = (
-            WorldFitBake.ik_handles_touching(path for path, _, _, _ in plan)
-            if plan
-            else {}
-        )
-
-        baked_uuids: List[str] = []
-        baked_paths: set = set()
-        if plan:
-            samples = WorldFitBake.sample_locals(plan, bake_frames)
-            for path, uuid, target, reparent in plan:
-                node = (cmds.ls(uuid, long=True) or [None])[0]
-                if not node or (path, target) not in samples:
-                    continue
-                try:
-                    records.append(
-                        self._flatten_bake_node(
-                            node,
-                            target,
-                            bake_frames,
-                            samples[(path, target)],
-                            reparent=reparent,
-                        )
-                    )
-                    baked_uuids.append(uuid)
-                    baked_paths.add(path)
-                except RuntimeError as e:
-                    # A locked or referenced node refuses the reparent --
-                    # leave it for the check to report rather than aborting
-                    # the export.
-                    failed.append(path)
-                    self.logger.warning(f"Could not flatten '{node}': {e}")
-                    continue
-                per_target[target] = per_target.get(target, 0) + 1
-
-        if baked_uuids:
-            # An IK solver writes its joints' locals with NO plug
-            # connections, so cutting connections does not detach it -- and
-            # a handle whose chain lost members to the reparent now solves
-            # a different rig. Disable every handle whose PRE-move chain
-            # touched a node that actually BAKED (a handle serving only
-            # failed/skipped nodes keeps solving; recorded; the restore
-            # re-enables it).
-            for handle, chain in handle_chains.items():
-                if not chain.intersection(baked_paths):
-                    continue
-                try:
-                    prior = cmds.getAttr(f"{handle}.ikBlend")
-                    cmds.setAttr(f"{handle}.ikBlend", 0.0)
-                except RuntimeError as e:
-                    self.logger.warning(f"Could not disable IK handle '{handle}': {e}")
-                    continue
-                records.append(
-                    {
-                        "mode": "ikblend",
-                        "handle": (cmds.ls(handle, uuid=True) or [None])[0],
-                        "value": prior,
-                    }
-                )
+        for _, _, target in outcome["baked"]:
+            per_target[target] = per_target.get(target, 0) + 1
+        failed: List[str] = [path for path, _ in outcome["failed"]]
+        for path, reason in outcome["failed"]:
+            self.logger.warning(f"Could not flatten '{path}': {reason}")
+        for warning in outcome["warnings"]:
+            self.logger.warning(warning)
+        baked_uuids: List[str] = [uuid for _, uuid, _ in outcome["baked"]]
 
         verdict["flattened"] = list(baked_uuids)
         verdict["unplaced"] = list(unplaced)
         verdict["failed"] = list(failed)
-        if records:
+        if baked_uuids:
             self.objects = self._repath_renamed(self.objects, object_uuids)
             log_messages.append(
-                f"Flattened {len(records)} transform(s) whose parent-relative "
+                f"Flattened {len(baked_uuids)} transform(s) whose parent-relative "
                 f"matrices shear (> {tolerance:g}): reparented under a clean "
                 f"ancestor with world-fitted TRS keys baked at {len(bake_frames)} "
                 "frame(s) sampled from the untouched scene. The hierarchy, "
@@ -406,181 +358,17 @@ class _SceneTasksMixin(_TaskDataMixin):
                 log_messages.append(f"        {path.rsplit('|', 1)[-1]}")
         return True, log_messages
 
-    def _similarity_ancestors(
-        self, offenders, frames, tolerance: float
-    ) -> Dict[str, bool]:
-        """``{ancestor path: qualifies}`` for every ancestor of *offenders*.
-
-        A qualifying flatten target is a similarity transform at every
-        sampled frame: orthogonal world axes AND uniform axis lengths --
-        relative to such a node, an orthogonal world matrix decomposes to
-        TRS exactly. A zero-scale sample frame disqualifies a candidate:
-        the rewrap references its worldInverseMatrix, which a degenerate
-        matrix cannot supply. Precomputed in one time pass over all
-        candidates so the flatten loop never touches the timeline.
-        """
-        from mayatk.core_utils.diagnostics.transform_diag import (
-            TransformDiagnostics,
-        )
-
-        candidates = set()
-        for node in offenders:
-            parts = node.split("|")
-            for i in range(2, len(parts)):
-                candidates.add("|".join(parts[:i]))
-        verdict = {c: True for c in candidates}
-        if not candidates:
-            return verdict
-
-        import maya.api.OpenMaya as om2
-
-        # DAG paths resolved ONCE; the per-frame read is the same world matrix
-        # ``xform -q -ws -m`` returns, without a command per node per frame. A
-        # path that no longer resolves cannot be a flatten target.
-        dag_paths = {}
-        selection = om2.MSelectionList()
-        for candidate in candidates:
-            try:
-                selection.clear()
-                selection.add(candidate)
-                dag_paths[candidate] = selection.getDagPath(0)
-            except RuntimeError:
-                verdict[candidate] = False
-
-        restore_time = cmds.currentTime(query=True)
-        try:
-            for frame in list(frames) if frames else [None]:
-                if frame is not None:
-                    cmds.currentTime(frame)
-                for candidate, ok in verdict.items():
-                    if not ok:
-                        continue
-                    world = dag_paths[candidate].inclusiveMatrix()
-                    m = [world[i] for i in range(16)]
-                    axes = (m[0:3], m[4:7], m[8:11])
-                    lengths = [math.sqrt(sum(v * v for v in a)) for a in axes]
-                    longest = max(lengths)
-                    if longest < 1e-6:
-                        # Degenerate at this frame: it can't be judged AND the
-                        # rewrap can't invert it -- disqualify outright. (Maya
-                        # hides via .visibility, which never touches scale; a
-                        # zero here is a scale-keyed pop-in.)
-                        verdict[candidate] = False
-                        continue
-                    if (longest - min(lengths)) / longest > 0.01:
-                        verdict[candidate] = False
-                        continue
-                    if TransformDiagnostics._matrix_skew(m) > tolerance:
-                        verdict[candidate] = False
-        finally:
-            cmds.currentTime(restore_time)
-        return verdict
-
-    @staticmethod
-    def _flatten_target(node: str, qualifies: Dict[str, bool]) -> Optional[str]:
-        """Deepest qualifying ancestor of *node* (by its pre-flatten path).
-
-        Nearest-first keeps the node inside its own rig group -- and inside
-        any visibility-toggled subtree above it, so an animated hide keeps
-        applying to it exactly as before.
-        """
-        parts = node.split("|")
-        for i in range(len(parts) - 1, 1, -1):
-            candidate = "|".join(parts[:i])
-            if qualifies.get(candidate):
-                return candidate
-        return None
-
-    #: TRS channels the baked flatten writes, in xform order.
-    def _flatten_bake_node(
-        self,
-        node: str,
-        target: str,
-        frames: List[float],
-        rows: List[List[float]],
-        reparent: bool = True,
-    ) -> dict:
-        """Reparent *node* under *target* and key the pre-sampled locals
-        (:meth:`WorldFitBake.bake_node`); returns the restore record for
-        :meth:`_restore_flattened`. A bake that fails AFTER moving the node is
-        rolled back through its own record here -- a moved node without a
-        record would be invisible to the deferred restore."""
-        try:
-            return WorldFitBake.bake_node(node, target, frames, rows, reparent=reparent)
-        except WorldFitBake.Failed as error:
-            self._restore_baked_flatten(error.record)
-            raise RuntimeError(str(error)) from error
-
     def _restore_flattened(self, records: List[dict]) -> None:
-        """Deferred restore: reverse every flatten record (LIFO)."""
-        restored = 0
-        for record in reversed(records):
-            try:
-                if self._restore_baked_flatten(record):
-                    restored += 1
-            except RuntimeError as e:
-                self.logger.warning(f"Flatten restore failed for one node: {e}")
+        """Deferred restore: reverse every flatten record (LIFO) --
+        :meth:`WorldFitBake.restore`."""
+        restored, errors = WorldFitBake.restore(records)
+        for error in errors:
+            self.logger.warning(f"Flatten restore failed for one node: {error}")
         if restored:
             self.logger.info(
                 f"Restored {restored} flattened transform(s) to their original "
                 "parents -- the flatten was staged for the write only."
             )
-
-    def _restore_baked_flatten(self, record: dict) -> bool:
-        """Reverse one :meth:`_flatten_bake_node` record."""
-
-        def _resolve(uuid):
-            return (cmds.ls(uuid, long=True) or [None])[0] if uuid else None
-
-        if record.get("mode") == "ikblend":
-            handle = _resolve(record.get("handle"))
-            if handle:
-                try:
-                    cmds.setAttr(f"{handle}.ikBlend", record.get("value", 1.0))
-                except RuntimeError:
-                    return False
-                return True
-            return False
-        node = _resolve(record.get("node"))
-        old_parent = _resolve(record.get("old_parent"))
-        for curve_uuid in record.get("curves", []):
-            curve = _resolve(curve_uuid)
-            if curve:
-                cmds.delete(curve)
-        if not node or not old_parent:
-            return False
-        if record.get("reparented", True):
-            # relative=True for the same buffer-insertion reason as the
-            # bake; the recorded values/wiring restore the true local.
-            moved = cmds.parent(node, old_parent, relative=True)[0]
-            node = (cmds.ls(moved, long=True) or [moved])[0]
-        joint = record.get("joint") or {}
-        if joint:
-            cmds.setAttr(f"{node}.jointOrient", *joint["jointOrient"])
-            cmds.setAttr(f"{node}.rotateAxis", *joint["rotateAxis"])
-            cmds.setAttr(
-                f"{node}.segmentScaleCompensate",
-                joint["segmentScaleCompensate"],
-            )
-        for attr, value in (record.get("originals") or {}).items():
-            try:
-                cmds.setAttr(f"{node}.{attr}", value)
-            except RuntimeError:
-                pass
-        for src_plug, attr in record.get("cut", []):
-            try:
-                cmds.connectAttr(src_plug, f"{node}.{attr}", force=True)
-            except RuntimeError:
-                pass
-        opm_plug = f"{node}.offsetParentMatrix"
-        if record.get("opm_source"):
-            try:
-                cmds.connectAttr(record["opm_source"], opm_plug, force=True)
-            except RuntimeError:
-                pass
-        elif record.get("opm_value") is not None:
-            cmds.setAttr(opm_plug, record["opm_value"], type="matrix")
-        return True
 
     def ignore_groups(self, names: str, case_sensitive: bool = False) -> None:
         """Exclude top-level groups matching *names* and all their descendants

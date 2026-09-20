@@ -292,6 +292,77 @@ class FbxUtils(ptk.HelpMixin):
         logger.info(f"Exported FBX: {file_path}")
         return file_path
 
+    @staticmethod
+    def drop_rig_apparatus(
+        file_path: str,
+        scope: Optional[Iterable[str]] = None,
+        logger: Optional[logging.Logger] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Remove the apparatus of the rigs a written FBX baked, in place.
+
+        A carrier ships every node of the scene, so a baked rig arrives twice:
+        its motion on the joints and meshes, and the controls, IK, constraint
+        helpers, dead joints and the groups holding only those -- each still
+        animated, and each baked again by FBX2glTF at every frame (measured on a
+        production assembly: ~600 of ~2480 GLB nodes, half its animation data).
+        This is the FBX half of the rule the Blender bridge applies after its
+        import: :meth:`RigGraphExtractor.machinery` names what this scene's rigs
+        left inert, and ``ptk.FbxMedia.drop_apparatus`` removes what the file
+        agrees on -- refusing, by name, anything it can see is still
+        load-bearing (a mesh below, a live skin influence, a scene-record
+        carrier). The Scene Exporter's Exclude Rig Helpers row and the WebXR
+        preview both run it between their write and the GLB conversion.
+
+        The scene is never touched: the apparatus still drives the motion the
+        write sampled, and the next export needs it again. Never raises -- a
+        failure is a warning and the file stays as written: a cleanup never
+        costs the deliverable.
+
+        Parameters:
+            file_path: The FBX just written from this scene.
+            scope: The export's DAG roots -- what was selected for the write;
+                ``None`` reads the whole scene.
+            logger: Where the outcome is said; this module's otherwise.
+
+        Returns:
+            ``ptk.FbxMedia.drop_apparatus``'s report (``"models"``, ``"kinds"``,
+            ``"refused"``, ``"objects"``, ``"connections"``) plus ``"kept"``:
+            the apparatus kept because a surviving node shares its short name.
+            ``None`` when the pass failed. The file is not rewritten when
+            nothing qualifies.
+        """
+        from mayatk.rig_utils.rig_graph_extract import RigGraphExtractor
+
+        log = logger or logging.getLogger(__name__)
+        try:
+            section, kept = RigGraphExtractor().machinery(
+                scope=None if scope is None else list(scope)
+            )
+            report = ptk.FbxMedia.drop_apparatus(file_path, section=section)
+        except Exception as error:  # noqa: BLE001 -- a cleanup, never the export
+            log.warning(f"Rig helpers: the FBX keeps them -- the pass failed: {error}")
+            log.debug("Rig-helper pass failed.", exc_info=True)
+            return None
+        report["kept"] = list(kept)
+        if report["models"]:
+            kinds = ", ".join(f"{n} {kind}" for kind, n in report["kinds"].items())
+            log.info(
+                f"Rig helpers: excluded {report['models']} node(s) from the FBX "
+                f"({kinds}); their motion is already on what they drove."
+            )
+        else:
+            log.debug("Rig helpers: the export carries none.")
+        spared = sorted(set(report["refused"]) | set(report["kept"]))
+        if spared:
+            log.info(
+                f"Rig helpers: kept {len(spared)} node(s) something still needs "
+                "(a mesh below, a live skin, scene data, or a name a kept node "
+                "shares): "
+                + ", ".join(spared[:10])
+                + (" …" if len(spared) > 10 else "")
+            )
+        return report
+
     @classmethod
     def import_scene(
         cls,
@@ -643,6 +714,22 @@ class FbxUtils(ptk.HelpMixin):
         return len(norm)
 
     @staticmethod
+    def declared_takes() -> list:
+        """The takes the scene's records declare -- each ``shot_metadata``
+        clip's range, else a legacy ``fbx_takes`` list
+        (``ptk.SceneRecords.declared_takes`` over the carrier): what
+        :meth:`apply_takes_from_node` realizes by default, and so what an
+        export will split.  ``[]`` when nothing is declared."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return (
+            ptk.SceneRecords.declared_takes(
+                lambda key: ptk.SceneRecords.resolve(key).load(DataNodes)
+            )
+            or []
+        )
+
+    @staticmethod
     def apply_takes_from_node(
         node: Optional[str] = None, attr: Optional[str] = None
     ) -> int:
@@ -662,9 +749,7 @@ class FbxUtils(ptk.HelpMixin):
         from mayatk.node_utils.data_nodes import DataNodes
 
         if node is None and attr is None:
-            defs = ptk.SceneRecords.declared_takes(
-                lambda key: ptk.SceneRecords.resolve(key).load(DataNodes)
-            )
+            defs = FbxUtils.declared_takes()
         else:
             node = node or DataNodes.get_export_node(create=False)
             attr = attr or ptk.SceneRecords.FBX_TAKES.key
@@ -763,21 +848,6 @@ class FbxUtils(ptk.HelpMixin):
     #: by every bracket AND by the session hook (a preview that must detach
     #: before the write registers here).
     _session_stagers: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
-    _REMOVE_IN = "0.18.0"
-
-    #: The retired preparer names (the ``_KNOWN_PRODUCERS`` keys an ``only=``
-    #: spelled before 2026-09-18) -> the record each one produced.  Read only
-    #: where a caller may still spell them (:meth:`_records_and_stagers`); a
-    #: name in :attr:`STAGERS` or the session stagers selects that stager.
-    _LEGACY_PRODUCER_NAMES: Dict[str, Any] = {
-        "shots": ptk.SceneRecords.SHOTS,
-        "visibility": ptk.SceneRecords.VISIBILITY,
-        "audio": ptk.SceneRecords.AUDIO,
-        "shadow": ptk.SceneRecords.SHADOWS,
-        "lightmap": ptk.SceneRecords.LIGHTMAPS,
-        "emissive_groups": ptk.SceneRecords.EMISSIVE_GROUPS,
-    }
-
     @staticmethod
     def _resolve_row(
         label: str, module_path: str, cls_name: str, *methods: str
@@ -999,10 +1069,8 @@ class FbxUtils(ptk.HelpMixin):
 
         *only* narrows the publish to those records (specs or keys); given
         without a *ctx* it publishes with a pipeline context for this scene,
-        which is what ``only`` meant before the bracket took a context.  A
-        retired preparer name in it (``"shots"``, ``"render_effects"`` ...)
-        still selects the record or stager it named, and warns
-        (:meth:`_records_and_stagers`).
+        which is what ``only`` meant before the bracket took a context.  Stager
+        names belong in *stagers*, not here.
 
         Returns:
             The snapshot published here, or ``None``.
@@ -1013,9 +1081,7 @@ class FbxUtils(ptk.HelpMixin):
             if isinstance(ctx, (list, tuple, set, frozenset)):
                 ctx, only = None, ctx  # the pre-2026-09-18 positional ``only``
             if only is not None:
-                only, named = cls._records_and_stagers(only)
-                if named and stagers is not None:
-                    stagers = tuple(dict.fromkeys((*stagers, *named)))
+                only = list(only)
                 ctx = ctx or cls.export_context()
             cls._bracket_state()["stager_table"] = cls.stage(stagers)
             return cls.publish(ctx, only) if ctx is not None else None
@@ -1037,40 +1103,6 @@ class FbxUtils(ptk.HelpMixin):
         if cls._bracket_depth_add(-1) == 0:
             table = cls._bracket_state().pop("stager_table", None)
             cls._run_stagers("finish", table if table is not None else cls.stagers())
-
-    @classmethod
-    def _records_and_stagers(cls, names: Iterable[Any]) -> Tuple[List[Any], List[str]]:
-        """*names* split into ``(records, stager names)`` for a bracket.
-
-        A record spec or key passes through (the publish resolves it, and
-        refuses an unknown one); a retired preparer name maps onto its record
-        (:attr:`_LEGACY_PRODUCER_NAMES`); a stager's name -- known or session
-        -- selects that stager.  The retired spellings warn.
-        """
-        records: List[Any] = []
-        stagers: List[str] = []
-        retired: List[str] = []
-        for item in names:
-            if isinstance(item, str) and (
-                item in cls.STAGERS or item in cls._session_stagers
-            ):
-                stagers.append(item)
-                retired.append(item)
-            elif isinstance(item, str) and item in cls._LEGACY_PRODUCER_NAMES:
-                spec = cls._LEGACY_PRODUCER_NAMES[item]
-                records.append(spec)
-                if spec.key != item:
-                    retired.append(item)
-            else:
-                records.append(item)
-        if retired:
-            ptk.Deprecation.warn(
-                "FbxUtils.export_prepared(only=<preparer names>)",
-                "record specs in only=, stager names in stagers=",
-                remove_in=cls._REMOVE_IN,
-                reason=f"Given: {', '.join(retired)}.",
-            )
-        return records, stagers
 
     @classmethod
     @contextlib.contextmanager
@@ -1207,53 +1239,6 @@ class FbxUtils(ptk.HelpMixin):
         if FbxUtils._export_depth:
             return
         FbxUtils._run_stagers("finish", dict(FbxUtils._session_stagers))
-
-    # -- retired names (2026-09-18) --------------------------------------------
-
-    @ptk.Deprecation.symbol(
-        "FbxUtils.register_export_stager(name, prepare=...) or "
-        "FbxUtils.enable_export_producer(spec)",
-        remove_in=_REMOVE_IN,
-    )
-    @classmethod
-    def register_export_preparer(cls, name: str, prepare: Callable[[], Any]) -> None:
-        cls.register_export_stager(name, prepare=prepare)
-
-    @ptk.Deprecation.symbol("FbxUtils.unregister_export_stager", remove_in=_REMOVE_IN)
-    @classmethod
-    def unregister_export_preparer(cls, name: str) -> None:
-        cls.unregister_export_stager(name)
-
-    @ptk.Deprecation.symbol(
-        "FbxUtils.register_export_stager(name, finish=...)", remove_in=_REMOVE_IN
-    )
-    @classmethod
-    def register_export_finalizer(cls, name: str, finish: Callable[[], Any]) -> None:
-        cls.register_export_stager(name, finish=finish)
-
-    @ptk.Deprecation.symbol("FbxUtils.unregister_export_stager", remove_in=_REMOVE_IN)
-    @classmethod
-    def unregister_export_finalizer(cls, name: str) -> None:
-        cls.unregister_export_stager(name)
-
-    @ptk.Deprecation.symbol("FbxUtils.publish", remove_in=_REMOVE_IN)
-    @classmethod
-    def run_export_preparers(
-        cls, include_known: bool = True, only: Optional[Iterable[str]] = None
-    ) -> None:
-        # Inside a bracket, so a session stager it prepares (a preview that
-        # stands down) is finished before it returns; *only* may still spell
-        # the retired preparer names (``begin_export`` maps them).
-        if not include_known:
-            only = sorted(cls._session_producers)
-        with cls.export_prepared(cls.export_context(), only, stagers=()):
-            pass
-
-    @ptk.Deprecation.symbol("FbxUtils.end_export", remove_in=_REMOVE_IN)
-    @classmethod
-    def run_export_finalizers(cls, include_known: bool = True) -> None:
-        table = cls.stagers() if include_known else dict(cls._session_stagers)
-        cls._run_stagers("finish", table)
 
     #: Depth of :meth:`export_prepared` / :meth:`scratch_export` brackets.
     #: While one is open it owns the stage/finish lifecycle, and the

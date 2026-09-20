@@ -74,20 +74,22 @@ class MayaExportMixin:
     #: full refresh wiped a lightmap manifest and previewed the asset unlit).
     export_stagers: Tuple[str, ...] = ()
 
+    #: Drop the baked rig's apparatus from the FBX payload after the write
+    #: (:meth:`FbxUtils.drop_rig_apparatus` -- what the Scene Exporter's
+    #: Exclude Rig Helpers row does to its own FBX). A bridge whose consumer
+    #: plays only the baked motion opts in: the GLB route, where each helper is
+    #: an animated node the converter bakes at every frame. Off by default: a
+    #: DCC hand-off may rebuild the rig from those very nodes, and a bake or
+    #: texturing target never receives animation to begin with.
+    drop_rig_apparatus: bool = False
+
     def _export_stagers(self) -> Tuple[str, ...]:
-        """:attr:`export_stagers`, plus what a subclass still spells through
-        the retired ``refresh_producers`` tuple (its stager names honoured, its
-        record names ignored -- the context decides those now)."""
-        legacy = getattr(self, "refresh_producers", None)
-        if not legacy:
-            return tuple(self.export_stagers)
-        ptk.Deprecation.warn(
-            f"{type(self).__name__}.refresh_producers",
-            "export_stagers (records refresh by kind under a HANDOFF context)",
-            remove_in="0.18.0",
-        )
-        stagers = tuple(n for n in legacy if n in FbxUtils.STAGERS)
-        return tuple(dict.fromkeys((*self.export_stagers, *stagers)))
+        """:attr:`export_stagers` as a tuple: the stagers this bridge runs.
+
+        Records refresh by kind under a HANDOFF context, so a bridge names only
+        stagers here.
+        """
+        return tuple(self.export_stagers)
 
     def lightmap_search_dirs(self) -> List[str]:
         """Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
@@ -404,6 +406,10 @@ class MayaExportMixin:
                         options=options,
                         selection_only=True,
                     )
+                    if self.drop_rig_apparatus:
+                        FbxUtils.drop_rig_apparatus(
+                            fbx_path, list(transforms) + carrier, logger=self.logger
+                        )
                 else:
                     with CoreUtils.undo_chunk("Handoff: strip materials"):
                         duplicates = []

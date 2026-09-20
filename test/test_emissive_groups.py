@@ -80,6 +80,31 @@ class TestAuthoring(_GroupsCase):
         self.assertEqual(EmissiveGroups.list_groups()["front"]["default"], 0.25)
 
 
+class TestCarrierMerge(_GroupsCase):
+    """Another scene's member sets joining this scene's on a reference merge."""
+
+    def test_an_empty_foreign_set_never_joins_the_selection_to_the_group(self):
+        """``sets -add`` given no members falls back to the live selection --
+        a reference merge from the panel runs with one. Added: 2026-09-19"""
+        import pythontk as ptk
+
+        EmissiveGroups.add_group("front", [f"{self.cube}.f[0]"])
+        canonical = EmissiveGroups._set_node("front")
+        stray = cmds.sets(empty=True, name=f"{canonical}1")
+        bystander = cmds.polySphere(name="eg_bystander")[0]
+        cmds.select(bystander)
+
+        other = {ptk.SceneRecords.EMISSIVE_REGISTRY: {"groups": {"front": {"slot": 0}}}}
+        ctx = ptk.TransferContext(rename={canonical: stray}.get)
+        EmissiveGroups.merge_carrier({}, other, ctx)
+
+        members = cmds.sets(canonical, q=True) or []
+        self.assertFalse(
+            any(bystander in m for m in members), f"selection joined the group: {members}"
+        )
+        self.assertFalse(cmds.objExists(stray))
+
+
 class TestSlotStability(_GroupsCase):
     def test_removed_slot_is_retired_not_reused(self):
         self._add_two()  # front=0, top=1

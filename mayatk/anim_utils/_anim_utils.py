@@ -1817,7 +1817,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         export concern and is skipped when a scope is given, so only the keys
         left facing a vanished run are re-typed.  This is what makes the pass
         safe to offer on a key SELECTION (the shot sequencer's Simplify) as
-        well as on a scene.
+        well as on a scene.  A per-frame-dense curve (a ``sample_by=1`` bake)
+        gets the same boundary-only freeze unscoped: every other survivor
+        keeps neighbours one frame away, where no tangent algorithm can move
+        a frame.
 
         Removal goes through ``MFnAnimCurve``, recorded on the undo queue by
         :class:`~mayatk.core_utils.undo_recorder.UndoRecorder`, so one undo
@@ -1920,21 +1923,27 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
                 try:
                     # 1) Freeze auto tangents to 'fixed' (locks each key's
-                    # current angle).  Unscoped: EVERY key, not just the
-                    # boundary ones — downstream FBX export reinterprets
-                    # 'auto' tangents with its own algorithm, corrupting the
-                    # curve shape, so no survivor may remain auto.  Contiguous
-                    # runs are edited with one index-range call (a baked curve
-                    # is typically a single run).
+                    # current angle).  Unscoped, on a sparse curve: EVERY
+                    # key, not just the boundary ones — downstream FBX export
+                    # reinterprets 'auto' tangents with its own algorithm,
+                    # corrupting the curve shape between sparse keys, so no
+                    # survivor may remain auto.  Contiguous runs are edited
+                    # with one index-range call.
                     #
-                    # SCOPED: only the two keys left facing each vanished
+                    # Otherwise only the two keys left facing each vanished
                     # block.  An auto tangent re-solves from its neighbours,
                     # so those two would shift when the run between them goes
                     # — every other key keeps both neighbours and cannot
-                    # move.  Freezing the rest would re-type tangents OUTSIDE
-                    # the user's selection, which is the whole thing a scoped
-                    # edit promises not to do.
-                    if scoped:
+                    # move.  SCOPED: freezing the rest would re-type tangents
+                    # OUTSIDE the user's selection, which is the whole thing a
+                    # scoped edit promises not to do.  PER-FRAME DENSE (a
+                    # sample_by=1 bake): every survivor but those two keeps
+                    # neighbours one frame away, where no tangent algorithm
+                    # can move a frame, so the whole-curve freeze was pure
+                    # cost -- two keyTangent edits across every key of every
+                    # baked curve (measured: the same removal, the same
+                    # drift in Maya and through an FBX round trip).
+                    if scoped or cls._is_per_frame_dense(times):
                         for s, e in seg_pairs:
                             for idx, tt_in, tt_out in (
                                 (s, in_types, out_types),
@@ -2541,8 +2550,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 remove=True,
             )
             flat_keys_deleted += sum(len(keys) for _, keys in redundant_keys_to_delete)
-            # The rebuild approach already freezes all auto tangents on
-            # rebuilt curves — track them so Phase 3 can skip them.
+            # The flat pass froze what these curves need for export -- every
+            # survivor of a sparse curve, a per-frame-dense one's holds'
+            # boundaries -- so Phase 3 skips them unless the key reducer runs.
             rebuilt_curves.update(c for c, keys in redundant_keys_to_delete if keys)
 
         # Phase 3: Freeze auto tangent types to fixed.
@@ -2568,8 +2578,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         auto_tangents_frozen = 0
         freeze_dense = simplify_keys and not extremes
         for curve in anim_curves:
-            if curve in rebuilt_curves:
-                continue  # Already frozen during rebuild
+            if curve in rebuilt_curves and not freeze_dense:
+                # Frozen during rebuild.  Before the reducer a dense one's
+                # interior is still 'auto', and the keys it keeps would face
+                # the gaps it opens with an auto angle.
+                continue
             if not cmds.objExists(curve):
                 continue
             times = cmds.keyframe(curve, q=True, timeChange=True) or []

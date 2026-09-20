@@ -173,6 +173,35 @@ class _TaskDefinitionsMixin:
                 ),
                 "setChecked": True,
             },
+            # A mode, not a task: ``ExportRun.from_tasks`` pops it into the flag
+            # that arms the POST-write pass (``TaskManager.drop_rig_apparatus``),
+            # the idiom Verify The Written File rides -- the file has to exist
+            # before its helpers can be dropped from it.
+            "drop_rig_apparatus": {
+                "widget_type": "QCheckBox",
+                "panel": "settings",
+                "setText": "Exclude Rig Helpers",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Exclude Rig Helpers",
+                    body="Drop the parts of a rig that only drove the animation — "
+                    "controls, IK handles, up-vector locators, driver and proxy "
+                    "joints, and the groups holding only those — from the written "
+                    "FBX, and so from the GLB built from it.",
+                    notes=[
+                        "The bake has already put their motion on the joints and "
+                        "meshes they drove; in the file they draw nothing and "
+                        "drive nothing, yet each ships animated, and the GLB "
+                        "conversion bakes every one of them at every frame.",
+                        "A rig node is kept when anything still needs it: a mesh "
+                        "below it, a skin bound to it, or scene data on it. A "
+                        "scene's own groups and locators are never touched — "
+                        "only what a rig's graph names.",
+                        "The scene is not changed; only the written file is.",
+                        "No effect on a USD export.",
+                    ],
+                ),
+                "setChecked": True,
+            },
             "reassign_duplicate_materials": {
                 "widget_type": "QCheckBox",
                 "group": "Materials",

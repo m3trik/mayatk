@@ -466,8 +466,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             "SRC_PATH": str(src_path).replace("\\", "/"),
             "INCLUDE_ANIMATION": repr(bool(include_animation)),
             "TEX_DIR": str(texture_dir or "").replace("\\", "/"),
-            # Roots for the templates' one OPTIONAL toolkit pass (the shots
-            # section). Blender ignores PYTHONPATH, so they ride the script as the
+            # Roots for the templates' one OPTIONAL toolkit pass (the scene-data
+            # sections). Blender ignores PYTHONPATH, so they ride the script as the
             # bridge's do -- never the parent's whole sys.path (Maya's 3.11
             # site-packages would shadow Blender's stdlib). Not part of the
             # conversion's cache identity: the same scene converts the same.
@@ -607,6 +607,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         )
 
     # ------------------------------------------------------------------ import
+    @ptk.Deprecation.parameter("shots", new="scene_data", remove_in="0.19.0")
     def import_scene(
         self,
         src_path: str,
@@ -618,7 +619,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         fbx_options: Optional[Dict[str, Any]] = None,
         shader_type: str = "stingray",
         scene_settings: Any = "auto",
-        shots: bool = True,
+        scene_data: bool = True,
         progress: Optional[Callable[..., Optional[bool]]] = None,
         rig_mode: str = "auto",
         **script_opts: Any,
@@ -692,9 +693,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 import; returning ``False`` stops the conversion (the child is
                 killed) or the import between steps, with
                 :class:`pythontk.OperationCancelled`.
-            shots: Rebuild the source scene's shots from the conversion's
-                ``shots`` section (:meth:`_apply_shots_manifest`; on by default,
-                the conversion decides whether one travels).
+            scene_data: Land the source scene's records -- its shots, its
+                emissive groups -- from the conversion's ``shots`` / ``records``
+                sections (:meth:`_apply_scene_data`; on by default, the
+                conversion decides what travels). Was ``shots``.
             rig_mode: How the source's rig logic travels, on EITHER route
                 (:data:`pythontk.RIG_MODES`). Both Blender exporters sample
                 the EVALUATED scene, so driven motion always arrives as keys
@@ -774,7 +776,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 fbx_options=fbx_options,
                 shader_type=shader_type,
                 adopt_scene=adopt_scene,
-                shots=shots,
+                scene_data=scene_data,
                 step=lambda done, total, text: self._step(
                     relay, 1, done, total, "Maya: " + text
                 ),
@@ -791,6 +793,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
         return imported
 
+    @ptk.Deprecation.parameter("shots", new="scene_data", remove_in="0.19.0")
     def import_payload(
         self,
         payload_path: str,
@@ -799,7 +802,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         fbx_options: Optional[Dict[str, Any]] = None,
         shader_type: str = "stingray",
         adopt_scene: bool = False,
-        shots: bool = True,
+        scene_data: bool = True,
         step: Optional[Callable[[int, int, str], Any]] = None,
     ) -> List[str]:
         """Import the conversion payload at *payload_path* -- the FBX or USD plus
@@ -809,7 +812,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         The ONE consumer of a conversion's payload: :meth:`import_scene` calls it
         in-process and the bake template (``_bake_scene.py``) calls it in a
         headless mayapy, so both routes rebuild empties, instances, materials,
-        the scene clock, the shots and the rig the same way whichever way the
+        the scene clock, the scene records and the rig the same way whichever way the
         scene comes in (the mirror of blendertk's ``MayaSceneImport.import_payload``).
 
         Parameters:
@@ -819,7 +822,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 :meth:`import_scene` refuses before touching the scene).
             via: ``"fbx"`` / ``"usd"`` -- which importer runs, and how the
                 sidecar's names are spelled.
-            fbx_options, shader_type, shots: As :meth:`import_scene`.
+            fbx_options, shader_type, scene_data: As :meth:`import_scene`.
             adopt_scene: Adopt the source scene's time setup -- the caller's
                 decision (:meth:`import_scene`'s ``scene_settings`` policy;
                 always, for a fresh bake).
@@ -853,12 +856,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             lambda: self._apply_scene_manifest(manifest_path, payload_path),
             when=bool(adopt_scene),
         )
-        # Memberships and claims name what every step above rebuilt.
+        # Memberships and claims name what every step above rebuilt. Gated on
+        # either section the records ride (``pythontk.RecordTransfer``).
         plan.add(
-            manifest.SHOTS,
-            "Rebuilding shots",
-            lambda: self._apply_shots_manifest(manifest_path, imported, carrier=via),
-            when=bool(shots),
+            None,
+            "Landing the scene data",
+            lambda: self._apply_scene_data(manifest, imported, carrier=via),
+            when=bool(scene_data)
+            and (
+                manifest.carries(manifest.SHOTS) or manifest.carries(manifest.RECORDS)
+            ),
             best_effort=True,
         )
         # After the clock and the shots: the build verifies at source frames.
@@ -985,8 +992,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
     # templates' ``scene_settings`` and ``EnvUtils.SCENE_SETTINGS_KEYS``).
     SCENE_SECTION = ptk.HandoffManifest.SCENE
     # Manifest section carrying the source scene's shot store (the
-    # ``pythontk.ShotTransfer`` codec; written by blendertk's bridge send and by
-    # the Blender-side conversion templates' ``shots_section``).
+    # ``pythontk.ShotTransfer`` codec); every other portable record rides
+    # ``HandoffManifest.RECORDS``. Both are written by blendertk's bridge send and
+    # the Blender-side conversion templates' ``scene_data_sections`` and landed by
+    # :meth:`_apply_scene_data`.
     SHOTS_SECTION = ptk.HandoffManifest.SHOTS
     # Manifest section carrying the source rig's logic (RigGraph, schema section
     # 15.3): the graph the Blender side extracted, its plan against THIS package's
@@ -1047,42 +1056,37 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             logger=self.logger,
         )
 
-    def _apply_shots_manifest(
-        self, manifest_path: Optional[str], nodes: List[str], carrier: str = "fbx"
-    ) -> int:
-        """Rebuild the source scene's shots from the manifest's ``shots`` section
-        onto this scene's store; returns the shots the store holds afterwards
-        (``0`` when there is no manifest or it carries none).
+    def _apply_scene_data(
+        self, manifest: Any, nodes: List[str], carrier: str = "fbx"
+    ) -> "ptk.TransferContext":
+        """Land the source scene's records from the manifest -- the ``shots``
+        section and the generic ``records`` one -- in this scene
+        (``DataNodes.receive_sections`` over ``pythontk.RecordTransfer``);
+        return the crossing's context, whose notes name what arrived renamed,
+        re-slotted or not at all.
 
-        Mirror of blendertk's ``MayaSceneImport._apply_shots_manifest``. Neither
-        carrier has a place for a shot, a marker, a locked gap or the samples the
-        sequencer planted on shot bounds, so the store crosses as data
-        (``ShotStore.apply_transfer`` over ``pythontk.ShotTransfer``). Names
-        resolve against *nodes* only, through the importer's spelling for
-        *carrier* (``FBXASC`` off an FBX, the sanitized prim off a USD) and
-        modulo Maya's clash-rename digit -- the texture manifest's convention --
-        so a pre-existing node of the same name is never claimed. Ledger claims
-        land on the animCurves now driving those nodes, and only where a key
-        sits. A scene that already has shots keeps them and gains these after
-        them. Best-effort by contract: a bad section never costs the import.
+        Mirror of blendertk's ``MayaSceneImport._apply_scene_data``. Neither
+        carrier has a place for a shot or an emissive group's membership, so
+        they cross as data. Names resolve against *nodes* only, through the
+        importer's spelling for *carrier* (``FBXASC`` off an FBX, the sanitized
+        prim off a USD) and modulo Maya's clash-rename digit -- the texture
+        manifest's convention -- so a pre-existing node of the same name is
+        never claimed. Ledger claims land on the animCurves now driving those
+        nodes, and only where a key sits. A scene that already has shots or
+        groups keeps them and gains these beside them. Best-effort by
+        contract: a bad record never costs the import.
+
+        Parameters:
+            manifest: The ``ptk.HandoffManifest``, or its payload / sidecar path.
+            nodes: What the import created.
+            carrier: ``"fbx"`` / ``"usd"`` -- how the sidecar spells names.
         """
-        import json
-
         import maya.cmds as cmds
 
-        if not manifest_path or not os.path.isfile(manifest_path):
-            return 0
-        try:
-            with open(manifest_path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError) as e:
-            self.logger.warning(f"Unreadable manifest {manifest_path}: {e}")
-            return 0
-        section = data.get(self.SHOTS_SECTION) if isinstance(data, dict) else None
-        if not section:
-            return 0
-        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.node_utils.data_nodes import DataNodes
 
+        if not isinstance(manifest, Mapping):
+            manifest = ptk.HandoffManifest.read(manifest) if manifest else {}
         spell = self._carrier_spelling(carrier)
         by_leaf: Dict[str, List[str]] = {}
         for node in cmds.ls(nodes, long=True, type="transform") or []:
@@ -1111,10 +1115,35 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # routes -- see ``ptk.ShotTransfer.UP_AXIS_SWAP``).
             return not cmds.listRelatives(node, parent=True)
 
-        store = ShotStore.apply_transfer(section, resolve=resolve, converted=converted)
-        count = len(store.shots) if store is not None else 0
-        self.logger.info(f"Rebuilt the source scene's shots: {count} in the store.")
-        return count
+        payload = getattr(manifest, "payload_path", None) or ""
+        ctx = DataNodes.receive_sections(
+            manifest,
+            resolve=resolve,
+            source=os.path.basename(payload),
+            converted=converted,
+        )
+        self.logger.info(
+            "Landed the source scene's data"
+            + (f" ({len(ctx.notes)} note(s) above)." if ctx.notes else ".")
+        )
+        return ctx
+
+    def _apply_shots_manifest(
+        self, manifest_path: Optional[str], nodes: List[str], carrier: str = "fbx"
+    ) -> int:
+        """:meth:`_apply_scene_data` for a caller that predates it -- blendertk's
+        ``import`` / ``_save_scene`` templates of an earlier release call this
+        name across the package boundary.  Returns the shots the store holds
+        afterwards, ``0`` when the manifest carries no scene data."""
+        if not manifest_path or not os.path.isfile(manifest_path):
+            return 0
+        manifest = ptk.HandoffManifest.read(manifest_path)
+        if not (manifest.carries(manifest.SHOTS) or manifest.carries(manifest.RECORDS)):
+            return 0
+        self._apply_scene_data(manifest, nodes, carrier=carrier)
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        return len(ShotStore.active().shots)
 
     def _apply_scene_manifest(
         self, manifest_path: Optional[str], intermediate: Optional[str] = None
@@ -1553,9 +1582,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         Scoped to *new_nodes* so a pre-existing user locator is never touched.
         Skips transforms with any non-locator shape (not a null translation).
-        Returns the number of shapes stripped. Kept in step by hand with the
-        dependency-free copies in blendertk's ``maya_bridge/templates/``
-        (the send direction's Maya-side scripts).
+        Returns the number of shapes stripped. blendertk's ``maya_bridge``
+        send templates (the send direction's Maya-side scripts) delegate here,
+        falling back to the children heuristic alone without mayatk; that loop
+        is pinned identical across both templates and executed against this
+        method (``test_scene_import``, ``test_blender_bridge``).
         """
         import maya.cmds as cmds
 
@@ -1606,9 +1637,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         childless one gets it by the heuristic; a group stays a plain transform.
 
         Scoped to *new_nodes* (shapeless transforms among them only). Returns the
-        number of shapes created. Kept in step by hand with the dependency-free
-        fallback in blendertk's ``maya_bridge/templates/`` (the send direction's
-        Maya-side scripts).
+        number of shapes created. blendertk's ``maya_bridge`` send templates
+        delegate here, falling back to the children heuristic without mayatk;
+        that loop is pinned token-identical across the three templates carrying
+        it (``test_scene_import``).
         """
         import maya.cmds as cmds
 

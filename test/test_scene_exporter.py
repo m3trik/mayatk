@@ -1364,9 +1364,10 @@ class TestSceneExporter(MayaTkTestCase):
             by_target["texture_write_back"][0], ["texture_optimize", "cmb005"]
         )
         self.assertEqual(by_target["exclude_hdr"][0], "export_visible_objects")
-        # A USD deliverable: the FBX-only knobs and the FBX/GLB verifier go.
+        # A USD deliverable: the FBX-only knobs, the FBX/GLB verifier and the
+        # rig-helper pass (it edits a written FBX) go.
         trigger, usd = by_target[
-            "cmb000,animation_clips,bake_range,verify_deliverables"
+            "cmb000,animation_clips,bake_range,verify_deliverables,drop_rig_apparatus"
         ]
         self.assertEqual(trigger, "cmb004")
         self.assertEqual((usd("fbx"), usd("glb"), usd("usd")), (True, True, False))
@@ -3530,6 +3531,53 @@ class TestSceneExporter(MayaTkTestCase):
                 "SmartBake must receive optimize_keys=False; standalone task handles optimization",
             )
 
+    def test_smart_bake_skips_its_layer_reduction_where_the_write_resamples_it(self):
+        """A write that splits the declared takes forces
+        ``FBXExportBakeComplexAnimation`` over the shot union, re-sampling the
+        override layer per frame, so a key reduction inside the layer never
+        ships: ~50 s of a production run for ``static``/``flat``, up to 1 %
+        injected error for ``extremes``/``simplify``. Everywhere else the level
+        reaches SmartBake. Added: 2026-09-19
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes,
+            {"shots": [{"clip": "Shot_1", "start": 1, "end": 10, "objects": []}]},
+        )
+
+        def level_reaching_the_baker(run):
+            tm.run = run
+            with patch(
+                "mayatk.anim_utils.smart_bake._smart_bake.SmartBake"
+            ) as MockBaker:
+                MockBaker.return_value.analyze.return_value = {}
+                tm.smart_bake()
+            return MockBaker.call_args[1]["optimize_keys"]
+
+        run = ptk.ExportRun.from_tasks({"optimize_keys": "extremes"})[0]
+        splits = run.with_tasks(
+            {"optimize_keys": "extremes", "apply_declared_takes": "shots"}
+        )
+        whole = run.with_tasks(
+            {"optimize_keys": "extremes", "apply_declared_takes": "full"}
+        )
+        self.assertFalse(level_reaching_the_baker(splits))
+        self.assertEqual(level_reaching_the_baker(whole), "extremes")
+        self.assertEqual(
+            level_reaching_the_baker(splits.replace(animation_write_back=True)),
+            "extremes",
+            "a write-back keeps the layer's keys in the scene",
+        )
+        ptk.SceneRecords.SHOTS.clear(DataNodes)
+        self.assertEqual(
+            level_reaching_the_baker(splits),
+            "extremes",
+            "a scene that declares no takes splits nothing",
+        )
+
     def test_smart_bake_stages_its_own_restore(self):
         """The bake session unwinds through the deferred registry, staged by
         the task right after the bake -- LIFO then puts it FIRST, before the
@@ -4302,12 +4350,12 @@ class TestExportDataNodeOption(MayaTkTestCase):
         deliverable: ticked kept the sequence beside the shots, unticked split
         nothing and shipped the sequence alone.
         """
-        self.assertEqual(self.tm._animation_clips_mode(True), "both")
-        self.assertEqual(self.tm._animation_clips_mode(False), "full")
-        self.assertEqual(self.tm._animation_clips_mode(None), "full")
-        self.assertEqual(self.tm._animation_clips_mode("shots"), "shots")
+        self.assertEqual(ptk.ExportRun.clip_mode(True), "both")
+        self.assertEqual(ptk.ExportRun.clip_mode(False), "full")
+        self.assertEqual(ptk.ExportRun.clip_mode(None), "full")
+        self.assertEqual(ptk.ExportRun.clip_mode("shots"), "shots")
         with self.assertRaises(ValueError):
-            self.tm._animation_clips_mode("everything")
+            ptk.ExportRun.clip_mode("everything")
 
     def test_every_offered_mode_is_one_the_converter_accepts(self):
         """The row's values and pythontk's vocabulary are one contract.
@@ -4742,6 +4790,95 @@ class TestExcludeHdrOption(MayaTkTestCase):
 
         self.assertIn(cube_long, self.tm.objects)
         self.assertNotIn(skydome_transform, self.tm.objects)
+
+
+class TestExcludeRigHelpersOption(MayaTkTestCase):
+    """The 'Exclude Rig Helpers' row drops a baked rig's apparatus from the FBX.
+
+    Feature (2026-09-19): a production assembly shipped ~600 of ~2480 GLB nodes
+    that drove nothing a skin references and held no mesh -- half its
+    animation data, each node baked again by FBX2glTF at every frame. The row
+    is a post-write mode (like Verify The Written File): the census names the
+    rig's apparatus in the scene (``RigGraphExtractor.machinery``) and
+    ``FbxUtils.drop_rig_apparatus`` removes it from the written file, before
+    the GLB conversion reads it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from test_rig_graph_extract import _apparatus_scene
+
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        _apparatus_scene()
+        self.exporter = SceneExporter(log_level="WARNING")
+        self.temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+
+    def _export(self, name, **tasks):
+        roots = cmds.ls(
+            ["skel_root", "body", "rig", "artist_null", "marker_loc"], long=True
+        )
+        self.assertTrue(
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=roots,
+                output_name=name,
+                tasks=tasks,
+            )
+        )
+        path = os.path.join(self.temp_dir, f"{name}.fbx")
+        return set(ptk.FbxFile.load(path, raw_payloads=False).object_names("Model"))
+
+    def test_the_row_is_a_default_on_settings_mode(self):
+        spec = self.exporter.task_manager.task_definitions["drop_rig_apparatus"]
+        self.assertEqual(spec["widget_type"], "QCheckBox")
+        self.assertEqual(spec["panel"], "settings")
+        self.assertTrue(spec["setChecked"])
+        # A mode, popped before dispatch -- never a task the pipeline orders.
+        self.assertNotIn("drop_rig_apparatus", self.exporter.task_manager.TASK_ORDER)
+        self.assertIn("drop_rig_apparatus", ptk.ExportRun.MODE_KEYS)
+
+    def test_the_written_file_ships_without_the_rig(self):
+        kept = self._export("with_rig")
+        dropped = self._export("without_rig", drop_rig_apparatus=True)
+        helpers = {"rig", "ctrl_GRP", "ctrl", "driver_jnt", "ik_curve", "up_loc"}
+        self.assertLessEqual(helpers, kept, "off: the file is what the scene is")
+        self.assertTrue(helpers.isdisjoint(dropped), sorted(dropped))
+        self.assertLessEqual(
+            {"skel_root", "skel_tip", "body", "artist_null", "marker_loc"}, dropped
+        )
+        # The scene is never edited: the next export needs the rig again.
+        self.assertTrue(cmds.objExists("|rig|ctrl_GRP|ctrl"))
+
+    def test_a_usd_run_leaves_it_inert(self):
+        run, _tasks, notes = ptk.ExportRun.from_tasks(
+            {"output_format": "usd", "drop_rig_apparatus": True}
+        )
+        self.assertFalse(run.drop_rig_apparatus)
+        self.assertTrue(any("Exclude Rig Helpers" in m for _l, m in notes), notes)
+
+    def test_the_preview_payload_drops_what_the_row_drops(self):
+        """The row is on by default, so the WebXR preview's payload drops the
+        same helpers: the page shows the nodes the deliverable ships. Opt-in on
+        the mixin -- a DCC hand-off may rebuild the rig from those very nodes."""
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        self.assertFalse(MayaExportMixin.drop_rig_apparatus)
+        preview = WebXrPreview()
+        fbx = os.path.join(self.temp_dir, "preview.fbx")
+        preview._export_fbx(
+            cmds.ls(["skel_root", "body", "rig"], long=True),
+            fbx,
+            dict(preview.params_defaults()),
+        )
+        names = set(ptk.FbxFile.load(fbx, raw_payloads=False).object_names("Model"))
+        self.assertTrue({"rig", "ctrl", "driver_jnt"}.isdisjoint(names), sorted(names))
+        self.assertLessEqual({"skel_root", "skel_tip", "body"}, names)
 
 
 class TestTaskStateHygiene(MayaTkTestCase):
@@ -9649,18 +9786,6 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.tm._publish_scene_records()
 
         self.assertEqual(seen.get("span"), (10, 200))
-
-    def test_the_retired_clip_origin_call_republishes_with_the_span_and_warns(self):
-        """``publish_clip_origin`` shipped in 0.15; it now republishes through
-        the same context, inside a bracket, and warns until 0.18.0."""
-        import warnings
-
-        seen = self._published_origin()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self.tm.publish_clip_origin()
-        self.assertEqual(seen.get("span"), (10, 200))
-        self.assertTrue(any(issubclass(w.category, DeprecationWarning) for w in caught))
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):

@@ -45,7 +45,7 @@ import itertools
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import pythontk as ptk
 
@@ -296,7 +296,7 @@ class _BakeSessionStoreInternal(object):
             )
 
     @staticmethod
-    def _migrate_stash_registries() -> int:
+    def _migrate_stash_registries(node: Optional[str] = None) -> int:
         """Move every stash a saved scene registers on ``data_internal`` onto the
         registry node; return how many moved.
 
@@ -306,12 +306,17 @@ class _BakeSessionStoreInternal(object):
         the undo queue: undoing it would put the hazard back. Each stash is
         registered on the new node BEFORE it leaves the old one, so it is never
         without a registration.
+
+        Parameters:
+            node: The carrier to empty; this scene's ``data_internal`` by
+                default. A merge passes an imported module's carrier, whose
+                stashes must be registered here before that carrier goes.
         """
         from mayatk.core_utils._core_utils import CoreUtils
         from mayatk.node_utils.data_nodes import DataNodes
 
-        internal = DataNodes.get_internal_node(create=False)
-        if not internal:
+        internal = node or DataNodes.get_internal_node(create=False)
+        if not internal or not cmds.objExists(str(internal)):
             return 0
         internal = str(internal)
         legacy = [
@@ -391,7 +396,9 @@ class BakeSessionStore(_BakeSessionStoreInternal):
     #: The network node the stash registries live on (never ``data_internal``;
     #: see ``_ensure_stash_registry``).
     REGISTRY_NODE = "stash_registry"
-    SCHEMA_VERSION = 2  # 2: adds the 'matrix' (offsetParentMatrix) bucket
+    SCHEMA_VERSION = 3  # 2: adds the 'matrix' (offsetParentMatrix) bucket;
+    # 3: adds 'flatten' (sheared matrix drives world-fitted under a shear-free
+    # ancestor -- WorldFitBake records)
 
     @classmethod
     def load(cls) -> List[dict]:
@@ -455,6 +462,50 @@ class BakeSessionStore(_BakeSessionStoreInternal):
     @classmethod
     def list_ids(cls) -> List[str]:
         return [s.get("id") for s in cls.load() if s.get("id")]
+
+    # ---- scene-record crossings (``DataNodes.OWNERS``) -----------------
+
+    @classmethod
+    def merge_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's carriers merged here: the stashes a scene saved
+        before the registries moved still registers on its ``data_internal``
+        move to this scene's stash registry before that carrier is deleted
+        (a stash is never without a registration)."""
+        node = carriers.get(ptk.Scope.PRIVATE)
+        if node:
+            _BakeSessionStoreInternal._migrate_stash_registries(node)
+
+    @classmethod
+    def discard_carrier(cls, carriers, other, ctx) -> None:
+        """Another scene's bake sessions were dropped: delete the curves they
+        parked, which no session can restore any more."""
+        deleted = 0
+        for session in other.get(ptk.SceneRecords.SMART_BAKE_SESSIONS) or []:
+            for record in cls._stash_records(session):
+                if BakeSessionStore.resolve_ref(record.get("stash")):
+                    cls.discard_stash(record)
+                    deleted += 1
+        if deleted:
+            ctx.note(
+                f"SmartBake: {deleted} parked curve(s) of the other scene deleted."
+            )
+
+    @staticmethod
+    def _stash_records(value: Any) -> List[dict]:
+        """Every stash record in a session, wherever its bucket keeps it
+        (``stashed_curves``, a visibility entry's, a matrix entry's): a dict
+        whose ``stash`` is a node reference."""
+        found: List[dict] = []
+        if isinstance(value, dict):
+            stash = value.get("stash")
+            if isinstance(stash, dict) and "uuid" in stash:
+                found.append(value)
+            for item in value.values():
+                found.extend(BakeSessionStore._stash_records(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(BakeSessionStore._stash_records(item))
+        return found
 
     @classmethod
     def new_session_id(cls) -> str:
@@ -687,6 +738,32 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         )
 
     @staticmethod
+    def trace_source(plug: str) -> Tuple[Optional[str], Optional[float]]:
+        """The driver feeding *plug* as ``(source plug, conversion factor)``,
+        looking THROUGH a unitConversion -- the plug a restore reconnects, and
+        the factor it pins (Maya sizes a re-inserted conversion from the
+        working unit at connect time, see :meth:`reconnect`).  ``(None,
+        None)`` for a plug nothing drives.  The one answer every recorder of a
+        cut connection should take: recording the conversion node itself
+        leaves a dangling name once the cut orphans it."""
+        direct = (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True)
+            or [None]
+        )[0]
+        if not direct:
+            return None, None
+        return (
+            _BakeSessionStoreInternal._trace_out_of_conversion(direct),
+            _BakeSessionStoreInternal._conversion_factor(direct),
+        )
+
+    @staticmethod
+    def reconnect(src: str, dst: str, factor: Optional[float] = None) -> None:
+        """Connect *src* to *dst* and put the recorded conversion *factor*
+        back (:meth:`trace_source`'s) -- ``None`` leaves Maya's choice."""
+        _BakeSessionStoreInternal._reconnect(src, dst, factor)
+
+    @staticmethod
     def snapshot_connections(plug: str) -> List[List[dict]]:
         """Record incoming connection pairs for *plug* (and its parent compound).
 
@@ -753,6 +830,22 @@ class BakeSessionStore(_BakeSessionStoreInternal):
     def restore_session(session: dict) -> "RestoreResult":
         """Reverse everything recorded in *session*. See module docstring."""
         result = RestoreResult(session_id=session.get("id"))
+
+        # A newer writer's session holds buckets this reader does not know
+        # (schema 3 added the flatten -- reparented, re-wired nodes): silently
+        # skipping them would report success with the hierarchy still moved.
+        written = int(session.get("version") or 1)
+        if written > BakeSessionStore.SCHEMA_VERSION:
+            msg = (
+                f"Bake session '{result.session_id}' was written by a newer "
+                f"mayatk (session schema {written}, this one reads up to "
+                f"{BakeSessionStore.SCHEMA_VERSION}); restoring it here would "
+                "leave part of the bake in place. Update mayatk to restore it."
+            )
+            result.refused = True
+            result.warnings.append(msg)
+            logger.warning(msg)
+            return result
 
         if not session.get("restorable", True):
             msg = (
@@ -867,6 +960,17 @@ class BakeSessionStore(_BakeSessionStoreInternal):
             except RuntimeError as e:
                 result.warnings.append(f"Could not reconnect '{src}' -> '{dst}': {e}")
 
+        # 2c. Flattened drives -- sheared folds the bake world-fitted under a
+        # shear-free ancestor (WorldFitBake records, reversed LIFO): the fitted
+        # curves go, each node returns to its parent, and its orients, values
+        # and wiring (offsetParentMatrix included) come back.
+        flatten = session.get("flatten") or []
+        if flatten:
+            from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+            result.flatten_restored, errors = WorldFitBake.restore(flatten)
+            result.warnings.extend(f"Could not unflatten a node: {e}" for e in errors)
+
         # 3. Reconnect the recorded driver network (constraints, expressions,
         # motion paths — anything bake disconnected).
         for src_ref, dst_ref in session.get("connections", []):
@@ -969,6 +1073,11 @@ class RestoreResult:
     success: bool = False
     """True if the session was found, restorable, and processed."""
 
+    refused: bool = False
+    """True when the session was not attempted at all -- written by a newer
+    mayatk than this reader -- so it must stay in the store for one that can
+    read it, where a processed session (success or not) is popped."""
+
     session_id: Optional[str] = None
     """The session that was restored (or attempted)."""
 
@@ -982,6 +1091,9 @@ class RestoreResult:
     unstashed: List[str] = field(default_factory=list)
     visibility_restored: List[str] = field(default_factory=list)
     matrix_restored: List[str] = field(default_factory=list)
+    flatten_restored: int = 0
+    """How many flatten records (world-fitted nodes, parked IK handles) found
+    their node and were reversed."""
     ik_restored: List[str] = field(default_factory=list)
 
 

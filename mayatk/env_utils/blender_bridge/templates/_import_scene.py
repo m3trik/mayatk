@@ -32,7 +32,7 @@ user-pickable send recipe; it belongs to the pull engine).
 
 # Dependency-free Blender Python at module scope: no mayatk/blendertk/pythontk imports
 # (only Blender's own bundled modules are guaranteed in the child process). blendertk
-# is imported OPTIONALLY, inside ``shots_section``, and its absence is never fatal.
+# is imported OPTIONALLY, inside ``scene_data_sections``, and its absence is never fatal.
 import glob
 import json
 import os
@@ -46,8 +46,8 @@ EMBED_TEXTURES = __EMBED_TEXTURES__
 INCLUDE_ANIMATION = __INCLUDE_ANIMATION__
 TEX_DIR = r"__TEX_DIR__"
 # Roots for blendertk + pythontk, resolved in the parent Maya. Blender ignores
-# PYTHONPATH, so the one OPTIONAL toolkit pass below (``shots_section``) could not
-# import otherwise; the core conversion never needs them.
+# PYTHONPATH, so the one OPTIONAL toolkit pass below (``scene_data_sections``) could
+# not import otherwise; the core conversion never needs them.
 EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 # Rig transfer (schema section 15): the mode, and the CONSUMER's capability
 # manifest (JSON; empty unless the mode is "rig") this side plans against.
@@ -480,12 +480,13 @@ def scene_settings(bpy):
 
 
 def write_texture_manifest(
-    entries, scene_materials, empties, scene, path, shots=None, rig=None
+    entries, scene_materials, empties, scene, path, scene_data=None, rig=None
 ):
     """Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
     materials / empties, and ``scene`` = the time setup (fps / ranges / current
     frame -- Maya's FBX importer leaves the scene's clock alone). Always
-    written: every scene has a time setup.
+    written: every scene has a time setup. *scene_data* is
+    ``scene_data_sections``' sections (``shots``, ``records``), merged in.
 
     File-less entries are written too: a textured material whose image paths
     never resolved (packed-only, or broken links) must surface as a NAMED
@@ -499,12 +500,69 @@ def write_texture_manifest(
         "empties": empties,
         "scene": scene,
     }
-    if shots:  # absent = nothing to say; the consumer gates on presence
-        data["shots"] = shots
+    # Absent = nothing to say; the consumer gates on presence.
+    data.update(scene_data or {})
     if rig:  # rig mode only: the graph, its plan and the verify samples
         data["rig"] = rig
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1)
+
+
+#: Object types Blender's FBX exporter writes no node for at all (measured on
+#: 5.1). Hair-type ``CURVES`` is what its USD importer makes of a NurbsCurves
+#: prim, so every control curve a Maya scene pulled into Blender is one. (A
+#: ``CURVE`` still ships, as a mesh.)
+FBX_DROPPED_TYPES = ("CURVES",)
+
+
+def stand_in_dropped_objects(bpy):
+    """Give every object the FBX exporter would drop an Empty that ships instead.
+
+    The exporter writes no node for a ``FBX_DROPPED_TYPES`` object, so it
+    vanished from the Maya side with its keys and its place in the hierarchy
+    (measured: 14 pulled control curves, none arrived). The stand-in is an Empty
+    of the SAME name under the same parent, following the original's world
+    transform through a Copy Transforms constraint -- so the bake samples exactly
+    the motion the object had, keys, constraints and drivers alike, and whatever
+    targeted the original still does. The original's children move under the
+    stand-in with their offsets (the two share a world matrix at every frame).
+    Its custom properties come along, as the exporter would have written them.
+    The curve's SHAPE is lost -- the Maya -> Blender direction loses a control's
+    shape the same way. This session is throwaway; nothing here is saved.
+
+    Returns:
+        list: The names that got a stand-in.
+    """
+    replaced = []
+    for obj in list(bpy.context.scene.objects):
+        if obj.type not in FBX_DROPPED_TYPES:
+            continue
+        name = obj.name
+        obj.name = name + "__fbx_stand_in_source"
+        stand_in = bpy.data.objects.new(name, None)
+        for collection in obj.users_collection:
+            collection.objects.link(stand_in)
+        stand_in.parent = obj.parent
+        stand_in.parent_type = obj.parent_type
+        stand_in.parent_bone = obj.parent_bone
+        stand_in.matrix_parent_inverse = obj.matrix_parent_inverse.copy()
+        for key in obj.keys():
+            try:
+                stand_in[key] = obj[key]
+            except (TypeError, ValueError):  # a property an Empty cannot hold
+                pass
+        stand_in.constraints.new("COPY_TRANSFORMS").target = obj
+        for child in list(obj.children):
+            child.parent = stand_in
+        replaced.append(name)
+    if replaced:
+        bpy.context.view_layer.update()
+        print(
+            "fbx: {} object(s) the exporter drops ship as Empties: {}".format(
+                len(replaced), ", ".join(replaced)
+            )
+        )
+    return replaced
 
 
 def export_fbx(bpy):
@@ -554,30 +612,30 @@ def _extend_sys_path():
             sys.path.insert(0, entry)
 
 
-def shots_section(bpy, spell):
-    """The scene's shots as the manifest's ``shots`` section, or ``None``.
+def scene_data_sections(bpy, spell):
+    """The scene's portable records as manifest sections (``shots``,
+    ``records``), or ``{}``.
 
-    Neither carrier has a place for a shot, a marker, a locked gap or the samples
-    the sequencer planted on shot bounds, so the store crosses as data and
-    ``mtk.BlenderSceneImport`` rebuilds it 1:1. blendertk's store encodes it
-    (``BlenderShotStore.export_transfer`` over ``pythontk.ShotTransfer``), names
-    spelled by *spell* as the carrier will write them -- the ONE optional toolkit
-    import in this otherwise dependency-free script, guarded like the mayapy
-    twins' mayatk pre-passes: without blendertk the shots are not carried, and a
-    printed line says so.
+    Neither carrier has a place for a shot, an emissive group's membership or
+    any other tool record, so they cross as data and ``mtk.BlenderSceneImport``
+    lands them 1:1. blendertk writes them (``DataNodes.transfer_sections`` over
+    ``pythontk.RecordTransfer``), names spelled by *spell* as the carrier will
+    write them -- the ONE optional toolkit import in this otherwise
+    dependency-free script, guarded like the mayapy twins' mayatk pre-passes:
+    without blendertk nothing is carried, and a printed line says so.
     """
     _extend_sys_path()
     try:
-        from blendertk.anim_utils.shots._shots import BlenderShotStore
+        from blendertk.node_utils.data_nodes import DataNodes
     except Exception as error:  # noqa: BLE001 -- degrade, never fail the conversion
-        print("shots: blendertk unavailable ({}); not carried.".format(error))
-        return None
+        print("scene data: blendertk unavailable ({}); not carried.".format(error))
+        return {}
     try:
-        return BlenderShotStore.export_transfer(spell=spell)
+        return DataNodes.transfer_sections(spell=spell) or {}
     except Exception:  # noqa: BLE001
-        print("shots: could not read the scene's shots; not carried:")
+        print("scene data: could not read the scene's records; not carried:")
         traceback.print_exc()
-        return None
+        return {}
 
 
 def _transfer_rig(bpy, frames):
@@ -712,17 +770,21 @@ def main():
 
     _progress(0, 4, "Opening the scene")
     open_source(bpy)
-    # Read first: the section describes the artist's scene, before any pass
+    # Read first: the sections describe the artist's scene, before any pass
     # below touches it. FBX writes object names as they are.
-    shots = shots_section(bpy, lambda name: name)
+    scene_data = scene_data_sections(bpy, lambda name: name)
     _progress(1, 5, "Collecting materials")
     manifest_entries, scene_materials = collect_texture_manifest(bpy)
-    empties = collect_empties(bpy)
     rig = {}
     if RIG_MODE == "rig":
         _progress(2, 5, "Carrying the rig")
         scene = bpy.context.scene
         rig = _transfer_rig(bpy, (scene.frame_start, scene.frame_end))
+    # After every reader of the artist's scene (the rig graph must not see the
+    # stand-ins' constraints), before the collector that records the Empties
+    # the FBX will carry -- the stand-ins among them.
+    stand_in_dropped_objects(bpy)
+    empties = collect_empties(bpy)
     _progress(3, 5, "Writing the FBX")
     export_fbx(bpy)
     # Written only after a successful export (a manifest implies its FBX).
@@ -733,7 +795,7 @@ def main():
         empties,
         scene_settings(bpy),
         OUT_FBX + ".manifest.json",
-        shots=shots,
+        scene_data=scene_data,
         rig=rig,
     )
     _progress(5, 5, "Converted")

@@ -595,18 +595,19 @@ class SceneExporter(ptk.LoggingMixin):
             # install aborts with the install URL. Abort idiom, not a
             # raise: the panel's export button reads the return value and
             # the log.
-            try:
-                if not ptk.ImgUtils.ktx2_available():
-                    self.logger.info(
-                        "KTX2 delivery needs KTX-Software's toktx, which is "
-                        "not installed: offering the managed install."
-                    )
-                installed = ptk.ImgUtils.ensure_ktx2_encoder(prompt=self.confirm)
-            except FileNotFoundError as e:
-                self.logger.error(f"Export aborted: {e}")
+            if not ptk.ImgUtils.ktx2_available():
+                self.logger.info(
+                    "KTX2 delivery needs KTX-Software's toktx, which is "
+                    "not installed: offering the managed install."
+                )
+            if not ptk.ImgUtils.settle_ktx2_encoder(
+                prompt=self.confirm,
+                refused=lambda why: self.logger.error(f"Export aborted: {why}"),
+                installed=lambda path: self.logger.info(
+                    f"Installed KTX-Software (toktx): {path}"
+                ),
+            ):
                 return False
-            if installed:
-                self.logger.info(f"Installed KTX-Software (toktx): {installed}")
         # The Max Texture Size row's limit goes to the post-write pass: the
         # GLB's embedded images are measured against it (glb_image_bytes),
         # which is the only place a GLB-only export's textures can be -- its
@@ -616,6 +617,7 @@ class SceneExporter(ptk.LoggingMixin):
         )
         glb_only, create_glb_enabled, usd = run.glb_only, run.create_glb, run.usd
         verify_deliverables = run.verify_deliverables
+        drop_rig_apparatus = run.drop_rig_apparatus  # already off for a USD run
 
         # Resolve the export path. A {n} counter in the name takes the next
         # version among the files this format ships.
@@ -643,12 +645,16 @@ class SceneExporter(ptk.LoggingMixin):
 
         export_succeeded = False
         self._overridden_checks = []  # per-run; see the attribute's __init__ note
-        # Progress: the pipeline's entries, then the write, a GLB conversion,
-        # the sidecar and an opt-in verification -- one count for the run.
+        # Progress: the pipeline's entries, then the write, the rig-helper
+        # pass, a GLB conversion, the sidecar and an opt-in verification -- one
+        # count for the run.
         self._progress_begin(
             progress_callback,
             tasks,
-            phases=2 + int(create_glb_enabled) + int(verify_deliverables),
+            phases=2
+            + int(drop_rig_apparatus)
+            + int(create_glb_enabled)
+            + int(verify_deliverables),
         )
         # The run walks the timeline thousands of times (the shear scans, the
         # flatten's sampling, the bake), and in an interactive session every
@@ -822,6 +828,17 @@ class SceneExporter(ptk.LoggingMixin):
                             options="v=0;",
                             type=file_format,
                             exportSelected=True,
+                        )
+                    if drop_rig_apparatus:
+                        # Before the GLB conversion reads the file, so both
+                        # deliverables ship the same nodes and FBX2glTF --
+                        # whose cost is nodes x baked frames -- never bakes the
+                        # helpers. The selection is the set the write just read.
+                        self._progress_step("Excluding rig helpers…")
+                        FbxUtils.drop_rig_apparatus(
+                            fbx_write_path,
+                            cmds.ls(selection=True, long=True) or [],
+                            logger=self.logger,
                         )
                 export_succeeded = True
 

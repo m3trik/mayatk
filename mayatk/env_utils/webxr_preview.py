@@ -66,6 +66,11 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
     #: into the pointer channels the page plays -- exactly what the Scene
     #: Exporter's FBX carries.
     export_stagers = ("render_effects",)
+    #: The page plays only the baked motion, so the payload drops the rig
+    #: helpers the Scene Exporter's Exclude Rig Helpers row drops (on by
+    #: default there): the preview shows the nodes the deliverable ships, and
+    #: the converter, whose cost is nodes x baked frames, never bakes them.
+    drop_rig_apparatus = True
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the FBX, then attach the scene sidecar the FBX can't carry.

@@ -765,11 +765,14 @@ class TestBlenderBridgeTextureManifest(MayaTkTestCase):
 
 
 class TestBlenderBridgeShotManifest(MayaTkTestCase):
-    """The send sidecars the scene's shots so Blender's sequencer shows the same ones.
+    """The send sidecars the scene's portable records so Blender shows the same
+    shots and emissive groups.
 
-    Neither carrier holds a shot; the ``shots`` section (``ShotStore.export_transfer``
-    over pythontk's ``ShotTransfer``) rides the same manifest the materials and
-    lights do, scoped to what is sent and spelled the way the carrier spells names.
+    Neither carrier holds a shot or a group's membership; the ``shots`` section
+    (``ShotStore.export_transfer`` over pythontk's ``ShotTransfer``) and the generic
+    ``records`` one (``DataNodes.transfer_sections``) ride the same manifest the
+    materials and lights do, scoped to what is sent and spelled the way the carrier
+    spells names.
     """
 
     def setUp(self):
@@ -834,7 +837,42 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
 
     def test_the_artist_can_opt_out(self):
         cube, _shot = self._scene_with_a_shot()
-        self.assertIsNone(self._manifest(objects=[cube], include_shots=False))
+        self.assertIsNone(self._manifest(objects=[cube], include_scene_data=False))
+
+    def test_the_retired_parameter_name_still_opts_out(self):
+        """``INCLUDE_SHOTS`` became ``INCLUDE_SCENE_DATA``; a caller or saved preset
+        spelling it the old way keeps its value (with a notice) -- the new key's
+        default must not shadow it."""
+        with self.assertWarns(DeprecationWarning):
+            merged = BlenderBridge().merge_params({"INCLUDE_SHOTS": False})
+        self.assertIs(merged["INCLUDE_SCENE_DATA"], False)
+        self.assertNotIn("INCLUDE_SHOTS", merged)
+
+    def test_every_portable_record_rides_the_records_section(self):
+        """An emissive group crosses with its registry, its membership (scoped to
+        the send, spelled by the carrier) and each member's face count."""
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+
+        cube, _shot = self._scene_with_a_shot()
+        EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
+        EmissiveGroups.add_group("rim", ["stayed.f[0]"])  # not sent
+        records = self._manifest(objects=[cube])["records"]
+        payload = records["emissive_groups"]
+        self.assertEqual(sorted(payload["registry"]["groups"]), ["glow", "rim"])
+        self.assertEqual(payload["members"], {"glow": {"ref:sent_cube": [1, 3]}})
+        self.assertEqual(payload["faces"], {"ref:sent_cube": 6})
+        # A record bound to Maya's constructs never rides a hand-off.
+        self.assertEqual(list(records), ["emissive_groups"])
+
+    def test_the_sidecar_is_written_atomically(self):
+        """Through ``HandoffManifest.write``: a send that died mid-write must not
+        leave a truncated sidecar the consumer would read as 'nothing to say'."""
+        cube, _shot = self._scene_with_a_shot()
+        with mock.patch.object(
+            ptk.FileUtils, "write_json", wraps=ptk.FileUtils.write_json
+        ) as write:
+            self.assertIsNotNone(self._manifest(objects=[cube]))
+        self.assertEqual(write.call_count, 1)
 
 
 class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
@@ -3081,6 +3119,53 @@ class TestPullTemplateCopiesMatchTheirSource(MayaTkTestCase):
             namespace,
         )
         return namespace[name]
+
+    def test_the_send_templates_heuristic_matches_the_engine_on_unmarked_empties(self):
+        """blendertk's SEND templates (they run in Maya too) repair Empties through
+        :meth:`BlenderSceneImport._restore_empty_groups` and fall back to the
+        children heuristic when mayatk is missing. For an Empty no manifest marks,
+        the fallback must decide exactly what the engine decides: a parent Empty
+        loses its locator shape, a childless one keeps it, and a transform with a
+        second shape is not an Empty at all. The two templates' loops are pinned
+        token-identical by ``test_scene_import``; this runs one of them."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        fallback = self._template_function("_save_scene.py", "restore_empty_groups")
+
+        def scene():
+            cmds.file(new=True, force=True)
+            nodes = []
+            for name, parent in (
+                ("grp", None),
+                ("leaf", "grp"),
+                ("point", None),
+                ("mixed", None),
+            ):
+                transform = cmds.createNode("transform", name=name, parent=parent)
+                cmds.createNode("locator", name=name + "Shape", parent=transform)
+                nodes.append(transform)
+            mesh = cmds.polyCube(constructionHistory=False)[0]
+            cmds.parent(
+                cmds.listRelatives(mesh, shapes=True)[0],
+                "mixed",
+                shape=True,
+                relative=True,
+            )
+            cmds.delete(mesh)
+            return cmds.ls(nodes, long=True, dag=True)
+
+        def with_locators():
+            return sorted(
+                cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+                for shape in cmds.ls(type="locator", long=True)
+            )
+
+        fallback(cmds, None, scene())  # engine=None: the dependency-free branch
+        by_template = with_locators()
+        BlenderSceneImport._restore_empty_groups(scene())  # no manifest: heuristic
+        by_engine = with_locators()
+        self.assertEqual(by_template, by_engine)
+        self.assertEqual(by_engine, ["|grp|leaf", "|mixed", "|point"])
 
     def test_scene_node_types_copy_matches_the_bridge_collector(self):
         """Four nodes, two of which the copy used to get wrong.
