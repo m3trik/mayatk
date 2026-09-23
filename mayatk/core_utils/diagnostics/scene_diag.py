@@ -1001,6 +1001,8 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
     MANGLED_NAME_RE = re.compile(r"__uninst|__RZTMP|FBXASC\d{3}|_{3,}")
 
     _SCRATCH_TOKEN_RE = re.compile(r"__uninst(?:_tmp)?\d*|__RZTMP\d*")
+    #: An importer's own escape, and nothing else (see ``decode_only``).
+    _FBX_ESCAPE_RE = re.compile(r"FBXASC\d{3}")
     _INVALID_NAME_CHAR_RE = re.compile(r"[^A-Za-z0-9_]")
     _UNDERSCORE_RUN_RE = re.compile(r"_{2,}")
 
@@ -1022,10 +1024,25 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
         return name
 
     @classmethod
+    def _decoded_leaf_name(cls, leaf: str) -> str:
+        """*leaf* with its ``FBXASC###`` escapes decoded, and nothing else touched.
+
+        A decoded character Maya cannot hold becomes ``_``; the rest is the
+        author's -- ``DEF__spine`` keeps its double underscore, where
+        :meth:`_clean_leaf_name` (the exporter's scratch-token cleanup)
+        collapses runs and strips the ends.
+        """
+        name = cls._INVALID_NAME_CHAR_RE.sub("_", cls._unescape_fbx_ascii(leaf))
+        name = name or "node"
+        return "_" + name if name[0].isdigit() else name
+
+    @classmethod
     def repair_mangled_names(
         cls,
         objects: Optional[List[str]] = None,
         dry_run: bool = False,
+        descend: bool = True,
+        decode_only: bool = False,
     ) -> Dict[str, Any]:
         """Repair scratch/mangled node names, then conform shape names.
 
@@ -1044,6 +1061,14 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
                 set must not fall back to the whole scene).
             dry_run: Report without renaming.  Shape conforming is skipped
                 in a dry run; mangled shape leaves are listed instead.
+            descend: Include the roots' descendants (default).  False
+                repairs exactly the nodes given -- an import that knows which
+                nodes its carrier escaped must not rename the authored names
+                beneath them.
+            decode_only: Repair the ``FBXASC###`` escape alone, by decoding
+                it (:meth:`_decoded_leaf_name`), rather than every mangled
+                signature by cleaning it (:meth:`_clean_leaf_name`, which also
+                collapses underscore runs an artist may have authored).
 
         Returns:
             dict: ``{"renamed": [(old_leaf, new_leaf), ...],
@@ -1063,8 +1088,12 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
                 return result
             root_uuids = cmds.ls(roots, uuid=True) or []
             scope = roots + (
-                cmds.listRelatives(roots, allDescendents=True, fullPath=True) or []
+                (cmds.listRelatives(roots, allDescendents=True, fullPath=True) or [])
+                if descend
+                else []
             )
+        pattern = cls._FBX_ESCAPE_RE if decode_only else cls.MANGLED_NAME_RE
+        clean = cls._decoded_leaf_name if decode_only else cls._clean_leaf_name
 
         offenders = []
         seen: Set[str] = set()
@@ -1073,7 +1102,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
                 continue
             seen.add(node)
             leaf = node.split("|")[-1].split(":")[-1]
-            if not cls.MANGLED_NAME_RE.search(leaf):
+            if not pattern.search(leaf):
                 continue
             if cmds.ls(node, shapes=True):
                 result["mangled_shapes"].append(leaf)
@@ -1084,7 +1113,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
 
         # Deepest first: a parent rename never dangles a pending child path.
         for _depth, uuid, leaf in sorted(offenders, reverse=True):
-            want = cls._clean_leaf_name(leaf)
+            want = clean(leaf)
             if want == leaf:
                 continue
             if dry_run:

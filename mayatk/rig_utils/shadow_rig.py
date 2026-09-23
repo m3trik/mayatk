@@ -85,8 +85,6 @@ class ShadowRig(ptk.LoggingMixin):
     """
 
     MODES = ("orbit",)
-    # Retired modes accepted for one release, mapped to their replacement.
-    _DEPRECATED_MODES = {"stretch": "orbit"}
     DEFAULT_SOURCE_NAME = "shadow_source"
     # Lift above the ground plane to avoid z-fighting (build + expression).
     GROUND_OFFSET = 0.01
@@ -282,16 +280,8 @@ class ShadowRig(ptk.LoggingMixin):
 
     @classmethod
     def _resolve_mode(cls, mode):
-        """The live mode for *mode*, warning once per build on a retired alias."""
+        """The live mode for *mode*: one of :attr:`MODES`, else ``"orbit"``."""
         mode = str(mode or "orbit").lower()
-        if mode in cls._DEPRECATED_MODES:
-            live = cls._DEPRECATED_MODES[mode]
-            cls.logger.warning(
-                f"ShadowRig mode '{mode}' is retired and builds as '{live}': the "
-                "axis-aligned plane placed the silhouette upside down for any "
-                "light on the +Z side."
-            )
-            return live
         return mode if mode in cls.MODES else "orbit"
 
     # ------------------------------------------------------------- measure
@@ -1482,9 +1472,6 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         rig.rig_type = cls.plane_type(plane)
         rig.horizon_path = cls._plane_horizon_path(plane)
         return rig
-
-    # Retained for one release: the pre-public spelling.
-    _from_plane = from_plane
 
     @classmethod
     def planes_for_nodes(cls, nodes):
@@ -2833,8 +2820,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                          source; one plane is built per source, so call
                          :meth:`create_for_sources` for several.
             recursive: If True, include descendant meshes in shadow.
-            mode: ``"orbit"`` (the plane rotates to face away from the light).
-                  ``"stretch"`` is retired and builds as orbit with a warning.
+            mode: ``"orbit"`` (the plane rotates to face away from the light),
+                  the only mode; any other value builds as orbit.
             ground_height: World Y of the ground plane the shadow lies on
                 (editable afterwards on the plane's ``groundHeight`` attr).
             shader_type: ``"standard"`` (default) or the retired ``"stingray"``

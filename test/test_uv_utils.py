@@ -966,6 +966,12 @@ class TestUvUtils(MayaTkTestCase):
         mirrored_uvs = cmds.polyEditUV(f"{self.cube}.map[*]", q=True)
         self.assertNotEqual(initial_uvs, mirrored_uvs)
 
+    def test_retired_flip_uvs_alias_stays_removed(self):
+        """``flip_uvs`` warned "deprecated" from 2025-12-17 through 50 releases
+        on a channel no gate could read, and was retired 2026-09-21 with no
+        caller. The call is ``mirror_uvs``."""
+        self.assertFalse(hasattr(UvUtils, "flip_uvs"))
+
     # def test_mirror_uvs_preserve_position(self):
     #     """Test mirroring UVs with position preservation."""
     #     # Note: This test requires scipy which might not be available in all Maya environments.

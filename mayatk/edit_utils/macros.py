@@ -1673,7 +1673,8 @@ class EditMacros:
     def m_group(objects=None):
         """Group the given objects (or selection), center the pivot, and rename the group.
 
-        DEPRECATED: Use EditUtils.group_objects instead.
+        The hotkey-bindable macro over :meth:`EditUtils.group_objects`, which
+        scripts call directly.
         """
         return EditUtils.group_objects(objects)
 

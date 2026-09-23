@@ -15,7 +15,6 @@ Companion modules provide orthogonal concerns:
 - :mod:`.segments` — segment discovery for sequencer / manifest
 """
 
-import maya.mel as mel
 import logging
 import re
 import wave
@@ -45,10 +44,11 @@ class TrackEvent:
     stop: Optional[float] = None
 
 
-try:
+try:  # guarded like every mayatk module: the surface must import without Maya
     import maya.cmds as cmds
+    import maya.mel as mel
 except ImportError:
-    cmds = None
+    cmds = mel = None
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +212,30 @@ class AudioUtils(ptk.HelpMixin):
         same channel, as every other track method honors *carrier*.  Returns
         an empty dict when the carrier or the map does not exist (or holds no
         readable map).
+
+        A path under the project root is STORED relative to it (see
+        :meth:`set_path`); what this returns is resolved to absolute, so no
+        caller sees the stored spelling.  A map written before that rule
+        holds absolute paths, which read unchanged.
+        """
+        data = AudioUtils._load_stored_file_map(carrier)
+        if not data:
+            return {}
+        base = AudioUtils._file_map_base()
+        return {
+            tid: ptk.FileUtils.resolve_portable_path(path, base)
+            if isinstance(path, str)
+            else path
+            for tid, path in data.items()
+        }
+
+    @staticmethod
+    def _load_stored_file_map(carrier: Optional[str] = None) -> Dict[str, str]:
+        """*carrier*'s map exactly as STORED -- what every writer edits.
+
+        A write re-spells only the entry it writes.  Re-spelling the rest would
+        re-base each one onto whatever project this session has set, so an
+        entry read under the wrong project would be saved wrong for good.
         """
         if cmds is None:
             return {}
@@ -222,6 +246,22 @@ class AudioUtils(ptk.HelpMixin):
             plug = f"{carrier}.{FILE_MAP_ATTR}"
             data = spec.decode(cmds.getAttr(plug) if cmds.objExists(plug) else None)
         return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _file_map_base() -> str:
+        """The folder the file map's paths are stored relative to: the
+        project root -- the base texture paths and lightmap markers use,
+        read through the same primitive they read it through."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        return EnvUtils.get_env_info("workspace") or ""
+
+    @classmethod
+    def _stored_spelling(cls, path: str) -> str:
+        """*path* as the map stores it: relative to the project root when the
+        file lies under it, absolute otherwise (``ptk.FileUtils.portable_path``
+        -- no machine's drive layout, and no ``../`` chain to mis-resolve)."""
+        return ptk.FileUtils.portable_path(path, cls._file_map_base())
 
     @classmethod
     def add_clip(
@@ -262,8 +302,8 @@ class AudioUtils(ptk.HelpMixin):
         carrier = carrier or CARRIER_NODE
         if carrier == CARRIER_NODE or not cmds.objExists(carrier):
             DataNodes.ensure_internal()  # the keep-alive (see ensure_track_attr)
-        data = cls.load_file_map(carrier)
-        data[track_id] = path.replace("\\", "/")
+        data = cls._load_stored_file_map(carrier)
+        data[track_id] = cls._stored_spelling(path)
         cls._save_file_map(carrier, data)
 
     @classmethod
@@ -281,7 +321,7 @@ class AudioUtils(ptk.HelpMixin):
         carrier = carrier or CARRIER_NODE
         if not cmds.objExists(carrier):
             return False
-        data = cls.load_file_map(carrier)
+        data = cls._load_stored_file_map(carrier)
         if track_id not in data:
             return False
         del data[track_id]
@@ -290,8 +330,9 @@ class AudioUtils(ptk.HelpMixin):
 
     @classmethod
     def _save_file_map(cls, carrier: Optional[str], data: Dict[str, str]) -> None:
-        """Overwrite *carrier*'s file map (see :meth:`load_file_map`); an empty
-        map clears it rather than storing ``{}``."""
+        """Overwrite *carrier*'s file map with *data* AS GIVEN -- stored
+        spellings (see :meth:`_load_stored_file_map`); an empty map clears it
+        rather than storing ``{}``."""
         spec = ptk.SceneRecords.AUDIO_FILE_MAP
         if carrier in (None, CARRIER_NODE):
             spec.save(DataNodes, data)
@@ -822,7 +863,7 @@ class AudioUtils(ptk.HelpMixin):
         cmds.renameAttr(f"{carrier}.{old_attr}", new_attr)
         cmds.addAttr(f"{carrier}.{new_attr}", edit=True, enumName="off:on")
 
-        data = cls.load_file_map(carrier)
+        data = cls._load_stored_file_map(carrier)  # the spelling moves unchanged
         if old_id in data:
             data[new_id] = data.pop(old_id)
             cls._save_file_map(carrier, data)

@@ -96,8 +96,9 @@ class TaskManager(
         preview publishes through -- handed this run's dials: the scene sidecar
         built from the export set (:class:`~mayatk.env_utils.scene_state.SceneState`,
         the readers the preview shares), where the maps live NOW
-        (:meth:`_lightmap_search_dirs`) and the GLB's half of the panel's two
-        texture dials (:meth:`_glb_texture_params`). Neither producer has a
+        (:meth:`_lightmap_search_dirs`) and the GLB's half of the panel's
+        texture rows (:meth:`pythontk.ExportRun.glb_texture_params`, the method the
+        preview resolves the same rows with). Neither producer has a
         chain of its own, so the preview cannot show a channel the deliverable
         drops. A sidecar read failure degrades to a bare conversion rather than
         costing the deliverable; a failed conversion or texture pass fails it
@@ -120,6 +121,9 @@ class TaskManager(
             lambda: SceneState.read(self._live_objects()),
             source=SceneState.source(),
             asset=os.path.basename(src),
+            # The lighting recipe with this run's choices (Baked Reflections):
+            # decided by the export, carried by the deliverable.
+            rendering=self.run.rendering,
             logger=self.logger,
         )
         try:
@@ -133,7 +137,7 @@ class TaskManager(
                 lightmap_dirs=self._lightmap_search_dirs(),
                 # The panel's texture dials resolved against the shared
                 # web-delivery policy: this GLB IS the web deliverable.
-                texture_params=self._glb_texture_params(),
+                texture_params=self.run.glb_texture_params(logger=self.logger),
                 # GLB Key Tolerance: the deviation bound, or None for the
                 # converter's per-frame keys.
                 key_tolerance=self.run.glb_key_tolerance,

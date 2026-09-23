@@ -119,5 +119,100 @@ class TestStaticAnalysis(unittest.TestCase):
         return real
 
 
+def module_source(raw: bytes):
+    """*raw* module bytes as text with any BOM stripped; ``None`` if undecodable.
+
+    ``utf-8-sig``, not ``utf-8``: PowerShell 5.1 writes UTF-8 WITH a BOM, and
+    ``ast.parse`` rejects a leading U+FEFF -- decoded as plain utf-8, such a
+    module would fall to the SyntaxError skip and pass unscanned.
+    """
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return None
+
+
+def windows_only_openers(source: str):
+    """``[(line, what)]`` for each Windows-only file-manager launch in *source*.
+
+    ``os.startfile`` does not exist off Windows, and an ``["explorer", ...]``
+    command runs nothing there -- so either one is an AttributeError (or a
+    silent no-op) the day the panel opens on a macOS or Linux Maya. The shared
+    openers, ``ptk.FileUtils.open_explorer`` and ``reveal_in_file_manager``,
+    dispatch per platform. Parsed rather than grepped, so a comment that names
+    the old call is not a finding.
+    """
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "startfile"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+        ):
+            found.append((node.lineno, "os.startfile"))
+        elif (
+            isinstance(node, ast.List)
+            and node.elts
+            and isinstance(node.elts[0], ast.Constant)
+            and str(node.elts[0].value).lower() == "explorer"
+        ):
+            found.append((node.lineno, '["explorer", ...]'))
+    return found
+
+
+class TestPortableFileOpeners(unittest.TestCase):
+    """No mayatk module opens a folder with a Windows-only call.
+
+    Found 2026-09-22 on the Lightmap Baker's *Open Sourceimages Folder*, with
+    three sibling copies (the Scene Exporter's two open-folder buttons, the
+    Reference Manager's *Open File Location*): mayatk targets Maya 2025+ on
+    every platform, and each of those items raised on a Mac.
+    """
+
+    def test_the_scanner_finds_both_shapes(self):
+        """The guard below proves nothing if the scanner is blind."""
+        source = (
+            "import os, subprocess\n"
+            "os.startfile(p)  # os.startfile in a comment is not a finding\n"
+            'subprocess.Popen(["explorer", "/select,", p])\n'
+        )
+        self.assertEqual(
+            [what for _line, what in windows_only_openers(source)],
+            ["os.startfile", '["explorer", ...]'],
+        )
+
+    def test_a_module_saved_with_a_bom_is_still_scanned(self):
+        """The guard's own decode step, not a codec check: were it plain
+        utf-8, the U+FEFF would reach ast.parse and raise here."""
+        source = module_source(b"\xef\xbb\xbfimport os\nos.startfile(p)\n")
+        self.assertEqual(len(windows_only_openers(source)), 1)
+
+    def test_no_module_launches_a_windows_only_opener(self):
+        findings = []
+        for path in sorted(MAYATK_ROOT.rglob("*.py")):
+            rel = path.relative_to(MAYATK_ROOT).as_posix()
+            if any(rel.startswith(d + "/") for d in EXCLUDED_DIRS):
+                continue
+            try:
+                source = module_source(path.read_bytes())
+            except OSError:
+                continue
+            if source is None:
+                continue
+            try:
+                hits = windows_only_openers(source)
+            except SyntaxError:
+                continue  # the undefined-name guard owns unparsable files
+            findings.extend(f"{rel}:{line} {what}" for line, what in hits)
+        self.assertFalse(
+            findings,
+            "Windows-only file opener(s); use ptk.FileUtils.open_explorer or "
+            "ptk.FileUtils.reveal_in_file_manager:\n  " + "\n  ".join(findings),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

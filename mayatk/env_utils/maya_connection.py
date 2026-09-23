@@ -1421,26 +1421,6 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
         self.mode = None
         print("[OK] Maya session closed")
 
-    def disconnect(self):
-        """Disconnect from Maya.
-
-        .. deprecated::
-            Use :meth:`shutdown` or the context-manager protocol instead.
-            ``disconnect`` resets connection state but does **not** close
-            the Maya process in port mode.
-        """
-        if self.mode == "standalone":
-            try:
-                import maya.standalone
-
-                maya.standalone.uninitialize()
-            except Exception:
-                pass
-
-        self.is_connected = False
-        self.mode = None
-        print("[OK] Disconnected from Maya")
-
 
 # The port helpers are the canonical ``MayaConnection.open_command_ports`` /
 # ``toggle_command_ports`` / ``open_available_command_ports`` staticmethods
@@ -1456,4 +1436,4 @@ if __name__ == "__main__":
     if conn.connect(mode="auto"):
         output = conn.execute('print("Hello from Maya!")', capture_output=True)
         print("Maya Output:", output)
-        conn.disconnect()
+        conn.shutdown()

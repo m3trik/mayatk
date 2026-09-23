@@ -6,14 +6,14 @@ import maya.cmds as cmds
 import maya.mel as mel
 import pythontk as ptk
 from pythontk import MeshConvert
-from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
 from base_test import MayaTkTestCase
 
 
 class TestRenderOpacityExport(MayaTkTestCase):
-    """Verify that RenderOpacity attributes export correctly for Unity."""
+    """Verify that RenderEffects attributes export correctly for Unity."""
 
     def setUp(self):
         super().setUp()
@@ -39,7 +39,7 @@ class TestRenderOpacityExport(MayaTkTestCase):
 
     def test_attribute_exports_to_fbx(self):
         """Verify 'opacity' attribute appears in FBX user properties."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Select object to export
         cmds.select(self.cube)
@@ -84,7 +84,7 @@ class TestRenderOpacityExport(MayaTkTestCase):
 
     def test_animated_attribute_exports_curves(self):
         """Verify animated 'opacity' exports as animation curve."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Keyframe it
         cmds.setAttr(f"{self.cube}.opacity", 1.0)
@@ -153,7 +153,7 @@ class TestSharedMaterialExport(MayaTkTestCase):
 
     def _export_fbx(self, objects, animate=False):
         """Apply opacity, optionally keyframe, export selected, return content."""
-        RenderOpacity.create(objects=objects, mode="attribute")
+        RenderEffects.create(objects=objects, mode="attribute")
 
         if animate:
             for i, obj in enumerate(objects):
@@ -307,7 +307,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         """
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Key opacity 1→0→1
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=1.0)
@@ -342,7 +342,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         """
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Apply the fade_in behavior (template targets 'visibility')
         Behaviors.apply_behavior(self.cube, "fade_in", start=1, end=30)
@@ -385,7 +385,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
         """
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
-        # No RenderOpacity.create — start from a plain object
+        # No RenderEffects.create — start from a plain object
         self.assertFalse(
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
         )
@@ -459,9 +459,9 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
     def test_a_stepped_fade_publishes_both_channels(self):
         """``key_fade`` writes a linear opacity ramp and a stepped vis mirror."""
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
 
-        tracks = RenderOpacity.visibility_tracks()
+        tracks = RenderEffects.visibility_tracks()
 
         self.assertEqual(len(tracks), 1)
         self.assertEqual(tracks[0]["node"], "GATE_LOC")
@@ -473,18 +473,18 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         reads: the channel published before ``prepare_for_export`` must equal
         the one published after it and its ``finish_export``. A hand-keyed
         opacity is the case a visibility repair used to change."""
-        RenderOpacity.create(objects=[self.grp], mode="attribute")
+        RenderEffects.create(objects=[self.grp], mode="attribute")
         cmds.setKeyframe(self.grp, attribute="opacity", time=8, value=0.0)
         cmds.setKeyframe(self.grp, attribute="opacity", time=23, value=1.0)
 
-        RenderOpacity.refresh_export_metadata()
-        before = self._carrier(RenderOpacity.DATA_CHANNEL)
+        RenderEffects.refresh_export_metadata()
+        before = self._carrier(RenderEffects.DATA_CHANNEL)
         try:
-            RenderOpacity.prepare_for_export()
+            RenderEffects.prepare_for_export()
         finally:
-            RenderOpacity.finish_export()
-        RenderOpacity.refresh_export_metadata()
-        after = self._carrier(RenderOpacity.DATA_CHANNEL)
+            RenderEffects.finish_export()
+        RenderEffects.refresh_export_metadata()
+        after = self._carrier(RenderEffects.DATA_CHANNEL)
 
         self.assertTrue(before and before["tracks"], "a vacuous comparison")
         self.assertEqual(after, before)
@@ -496,8 +496,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         counts visibility keys when sizing a take but emits no channel for
         them, so the shipped clip cannot report where its own zero is.
         """
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
-        RenderOpacity.key_fade([self.grp], start=1000, end=1015, direction="out")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=1000, end=1015, direction="out")
         self._publish_shots(
             [
                 {"name": "Shot_1", "start": 7, "end": 100},
@@ -505,10 +505,10 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             ]
         )
 
-        RenderOpacity.refresh_export_metadata()
-        published = self._carrier(RenderOpacity.DATA_CHANNEL)
+        RenderEffects.refresh_export_metadata()
+        published = self._carrier(RenderEffects.DATA_CHANNEL)
 
-        self.assertEqual(published["version"], RenderOpacity.SCHEMA_VERSION)
+        self.assertEqual(published["version"], RenderEffects.SCHEMA_VERSION)
         self.assertEqual(published["fps"], 30.0)
         # Shot_1's window opens at 7, but its first authored key is at 8.
         self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
@@ -518,16 +518,16 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         """A scene published before the ranges moved onto the clips holds its
         take list in ``fbx_takes`` beside a range-less shot record; the spans
         come out the same (``ptk.SceneRecords.declared_takes`` falls back)."""
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
         ptk.SceneRecords.SHOTS.save(DataNodes, {"fps": 30.0, "shots": []})
         ptk.SceneRecords.FBX_TAKES.save(
             DataNodes, [{"name": "Shot_1", "start": 7, "end": 100}]
         )
 
-        RenderOpacity.refresh_export_metadata()
+        RenderEffects.refresh_export_metadata()
 
         self.assertEqual(
-            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["Shot_1"],
+            self._carrier(RenderEffects.DATA_CHANNEL)["clip_span"]["Shot_1"],
             [8.0, 23.0],
         )
 
@@ -538,7 +538,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         key times and opened this take at 7.5 instead of 8 (2026-09-14). The
         driven key rides along because its inputs are driver values, not
         frames: a seek over the curves has to skip it, not misread it."""
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
         holder = cmds.createNode("transform", name="span_holder")
         cmds.setKeyframe(holder, attribute="translateX", time=7.5, value=0)
         stash = cmds.keyframe(f"{holder}.translateX", query=True, name=True)[0]
@@ -553,10 +553,10 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             )
         self._publish_shots([{"name": "Shot_1", "start": 7, "end": 100}])
 
-        RenderOpacity.refresh_export_metadata()
+        RenderEffects.refresh_export_metadata()
 
         self.assertEqual(
-            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["Shot_1"],
+            self._carrier(RenderEffects.DATA_CHANNEL)["clip_span"]["Shot_1"],
             [8.0, 23.0],
         )
 
@@ -575,8 +575,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         90 cm of apparent mesh 'distortion' with the geometry itself exact
         (a -33 frame offset restored a 0.0001 cm match).
         """
-        RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
-        RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
+        RenderEffects.key_fade([self.grp], start=0, end=4, direction="in")
+        RenderEffects.key_fade([self.grp], start=40, end=60, direction="out")
         self._publish_shots([{"name": "Shot_A", "start": 33, "end": 60}])
         # What set_bake_animation_range leaves behind before this publishes:
         # the FBX plugin's BAKE range, not the playback range (the playback
@@ -588,8 +588,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         mel.eval("FBXExportBakeComplexEnd -v 60")
         self.addCleanup(mel.eval, "FBXResetExport")
 
-        RenderOpacity.refresh_export_metadata()
-        published = self._carrier(RenderOpacity.DATA_CHANNEL)
+        RenderEffects.refresh_export_metadata()
+        published = self._carrier(RenderEffects.DATA_CHANNEL)
 
         self.assertEqual(
             published["clip_span"]["*"],
@@ -612,8 +612,8 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         the producer reads it, and producing the record again with the same
         decision yields the same record.
         """
-        RenderOpacity.key_fade([self.grp], start=0, end=4, direction="in")
-        RenderOpacity.key_fade([self.grp], start=40, end=60, direction="out")
+        RenderEffects.key_fade([self.grp], start=0, end=4, direction="in")
+        RenderEffects.key_fade([self.grp], start=40, end=60, direction="out")
         self._publish_shots([{"name": "Shot_A", "start": 33, "end": 60}])
         if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
             cmds.loadPlugin("fbxmaya", quiet=True)
@@ -624,9 +624,9 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         mel.eval("FBXExportBakeComplexEnd -v 10000")
         self.addCleanup(mel.eval, "FBXResetExport")
 
-        RenderOpacity.refresh_export_metadata()
+        RenderEffects.refresh_export_metadata()
         self.assertEqual(
-            self._carrier(RenderOpacity.DATA_CHANNEL)["clip_span"]["*"],
+            self._carrier(RenderEffects.DATA_CHANNEL)["clip_span"]["*"],
             [0.0, 10000.0],
             "precondition: with no measurement the seed is the preset's range",
         )
@@ -646,7 +646,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
         for attempt in ("the publish", "a second publish with the same decision"):
             tm._publish_scene_records(only=[ptk.SceneRecords.VISIBILITY])
-            published = self._carrier(RenderOpacity.DATA_CHANNEL)
+            published = self._carrier(RenderEffects.DATA_CHANNEL)
             self.assertEqual(
                 published["clip_span"]["*"],
                 [0.0, 60.0],
@@ -682,7 +682,7 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
     def test_a_scene_with_no_keyed_visibility_leaves_no_channel(self):
         """An empty carrier is worse than no carrier."""
-        self.assertIsNone(RenderOpacity.refresh_export_metadata())
+        self.assertIsNone(RenderEffects.refresh_export_metadata())
         self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
 
     def test_a_stepped_hold_is_published_as_a_hold_not_a_ramp(self):
@@ -696,12 +696,12 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         then played that invented fade for seven frames of Shot_9.
         """
         plug = f"{self.grp}.opacity"
-        RenderOpacity.create([self.grp], mode="attribute")
+        RenderEffects.create([self.grp], mode="attribute")
         for frame, value in ((8, 0.0), (23, 1.0), (1968, 1.0), (1983, 0.0)):
             cmds.setKeyframe(plug, time=frame, value=value)
         cmds.keyTangent(plug, edit=True, time=(23, 1968), outTangentType="step")
 
-        ramp = RenderOpacity._linear_ramp(plug)
+        ramp = RenderEffects._linear_ramp(plug)
 
         by_frame = {round(f, 3): v for f, v in ramp}
         self.assertEqual(by_frame[8.0], 0.0)
@@ -715,9 +715,9 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
 
     def test_a_linear_ramp_is_published_unchanged(self):
         """Nothing is added where Maya already agrees with the consumer."""
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
         self.assertEqual(
-            RenderOpacity._linear_ramp(f"{self.grp}.opacity"),
+            RenderEffects._linear_ramp(f"{self.grp}.opacity"),
             [[8.0, 0.0], [23.0, 1.0]],
         )
 
@@ -740,13 +740,13 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
             plug, time=20, value=0, inTangentType="linear", outTangentType="linear"
         )
 
-        track = RenderOpacity.visibility_tracks()[0]["visibility"]
+        track = RenderEffects.visibility_tracks()[0]["visibility"]
 
         self.assertEqual(track, [[10.0, 1.0], [20.0, 0.0]])
 
     def test_the_export_hook_reaches_this_producer(self):
         """Registered in ``FbxUtils.PRODUCERS``, so an export's publish refreshes it."""
-        RenderOpacity.key_fade([self.grp], start=8, end=23, direction="in")
+        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
         ptk.SceneRecords.VISIBILITY.clear(DataNodes)
 
         FbxUtils.publish()
@@ -776,7 +776,7 @@ class TestVisibilityChannelFrameRate(MayaTkTestCase):
         OpacityAttributeMode.sync_visibility_from_opacity([loc])
         self.assertIsNone(ptk.SceneRecords.SHOTS.read_text(DataNodes))
 
-        raw = RenderOpacity.refresh_export_metadata()
+        raw = RenderEffects.refresh_export_metadata()
         self.assertTrue(raw)
         channel = json.loads(raw)
         self.assertAlmostEqual(channel["fps"], AudioUtils.get_fps(), places=3)
@@ -798,10 +798,10 @@ class TestRenderEffectsExport(MayaTkTestCase):
 
     def test_a_highlight_only_node_publishes_its_ramp_and_colour(self):
         """No visibility keys at all -- highlighted but never hidden -- still ships."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=8, end=108, period=50, color=(0.2, 0.5, 1.0)
         )
-        tracks = RenderOpacity.visibility_tracks()
+        tracks = RenderEffects.visibility_tracks()
         self.assertEqual(len(tracks), 1)
         track = tracks[0]
         self.assertEqual(track["node"], "glow")
@@ -815,9 +815,9 @@ class TestRenderEffectsExport(MayaTkTestCase):
         )
 
     def test_a_faded_and_highlighted_node_publishes_both_on_one_track(self):
-        RenderOpacity.key_fade([self.cube], start=8, end=23, direction="in")
-        RenderOpacity.key_pulse([self.cube], start=8, end=108, period=50)
-        tracks = RenderOpacity.visibility_tracks()
+        RenderEffects.key_fade([self.cube], start=8, end=23, direction="in")
+        RenderEffects.key_pulse([self.cube], start=8, end=108, period=50)
+        tracks = RenderEffects.visibility_tracks()
         self.assertEqual(len(tracks), 1)
         self.assertEqual(
             set(tracks[0]) >= {"node", "visibility", "opacity", "highlight"}, True
@@ -825,7 +825,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
 
     def test_the_export_bracket_stages_a_curve_proxy_that_reaches_the_fbx(self):
         """One child per keyed channel, marked, with the curve on scale.x -- and gone after."""
-        RenderOpacity.key_pulse([self.cube], start=1, end=10, period=10)
+        RenderEffects.key_pulse([self.cube], start=1, end=10, period=10)
         fbx = self.temp_path("render_effects_proxy.fbx")
         cmds.select(self.cube, replace=True)
         with FbxUtils.export_prepared():
@@ -834,7 +834,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
             proxies = cmds.ls("glow__highlight", long=True)
             self.assertEqual(len(proxies), 1)
             proxy = proxies[0]
-            self.assertTrue(cmds.getAttr(f"{proxy}.{RenderOpacity.PROXY_MARKER}"))
+            self.assertTrue(cmds.getAttr(f"{proxy}.{RenderEffects.PROXY_MARKER}"))
             self.assertEqual(
                 cmds.keyframe(f"{proxy}.scaleX", q=True, kc=True),
                 cmds.keyframe(f"{self.cube}.highlight", q=True, kc=True),
@@ -849,7 +849,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
         with open(fbx, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
         self.assertIn('"Model::glow__highlight"', text)
-        self.assertIn(f'P: "{RenderOpacity.PROXY_MARKER}"', text)
+        self.assertIn(f'P: "{RenderEffects.PROXY_MARKER}"', text)
 
     def test_a_hand_keyed_opacity_is_gated_in_the_preview_and_never_mirrored(self):
         """Opacity keyed by hand, no visibility anywhere, through the WebXR
@@ -859,7 +859,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
         import pythontk as ptk
         from mayatk.env_utils.webxr_preview import WebXrPreview
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         for frame, value in ((1, 0.0), (15, 1.0), (40, 1.0), (55, 0.0)):
             cmds.setKeyframe(self.cube, attribute="opacity", time=frame, value=value)
         plug = f"{cmds.ls(self.cube, long=True)[0]}.visibility"
@@ -896,7 +896,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
         mat = cmds.shadingNode("standardSurface", asShader=True, name="glowMat")
         cmds.setAttr(f"{mat}.emission", 0.5)  # an AUTHORED emission to preserve
         MatUtils.assign_mat([self.cube], mat)
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=1, end=100, period=50, color=(1.0, 0.0, 0.0)
         )
         # Keying never touches the material (the viewport binding that did was
@@ -978,7 +978,7 @@ class TestRenderEffectsExport(MayaTkTestCase):
         }
         seen = {}
         for tag, colors in looks.items():
-            overlay = RenderOpacity.preview_channels(
+            overlay = RenderEffects.preview_channels(
                 [self.cube], channel="highlight", keys=keys, colors=colors, fps=30.0
             )
             glb = self.temp_path(f"preview_overlay_{tag}.glb")

@@ -756,7 +756,7 @@ class SceneExporterSlots(SceneExporter):
         GLB-only writes the FBX to a temp dir and keeps only the converted
         ``.glb``; FBX + GLB keeps both side by side. The container its embedded
         textures are written in is the general ``texture_file_type`` row (a
-        GLB carries what glTF accepts — see ``TaskManager._glb_texture_params``).
+        GLB carries what glTF accepts — see ``ptk.ExportRun.glb_texture_params``).
         USD writes a ``.usd`` layer through mayaUSDExport (UsdPreviewSurface
         materials; the FBX preset / takes / GLB rows do not apply and say so).
         Items are APPEND-ONLY: the combo persists by index.
@@ -926,9 +926,8 @@ class SceneExporterSlots(SceneExporter):
 
     def b006(self) -> None:
         """Open Output Directory"""
-        output_dir = self.ui.txt000.text()
-        if os.path.exists(output_dir):
-            os.startfile(output_dir)
+        # The shared opener, not os.startfile (Windows-only).
+        ptk.FileUtils.open_explorer(self.ui.txt000.text(), logger=self.logger)
 
     def b007(self) -> None:
         """Open Preset Directory.
@@ -942,8 +941,7 @@ class SceneExporterSlots(SceneExporter):
         if not preset_dir:
             self.logger.error("Maya's user preset directory was not found.")
             return
-        os.makedirs(preset_dir, exist_ok=True)
-        os.startfile(preset_dir)
+        ptk.FileUtils.open_explorer(preset_dir, create_dir=True, logger=self.logger)
 
     def b008(self) -> None:
         """Edit Preset"""

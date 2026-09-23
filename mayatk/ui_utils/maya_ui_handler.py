@@ -66,6 +66,36 @@ class MayaUiHandler(UiHandler):
         except Exception:  # never let a wiring hiccup block UI-handler startup
             pass
 
+        # Same runtime init point, same reason: show deprecation notices in the
+        # Script Editor (see _install_deprecation_sink).
+        self._install_deprecation_sink()
+
+    @staticmethod
+    def _install_deprecation_sink() -> bool:
+        """Route ``ptk.Deprecation`` notices to Maya's Script Editor, once.
+
+        ``DeprecationWarning`` is hidden outside ``__main__`` -- which is every
+        Maya session -- so without a sink no artist ever sees that a call they
+        rely on is going away (``CODE_STANDARD.md`` s5). The sink is additive
+        (``warnings.warn`` still fires, so tests and ``-W error`` keep working)
+        and announces each record once per session. A sink a host already set
+        is left alone.
+
+        Returns:
+            bool: True when this call installed the sink.
+        """
+        try:
+            import pythontk as ptk
+            import maya.api.OpenMaya as om
+
+            deprecation = ptk.Deprecation
+            if deprecation.sink is not None:
+                return False
+            deprecation.sink = om.MGlobal.displayWarning
+            return True
+        except Exception:  # never let a wiring hiccup block UI-handler startup
+            return False
+
     @classmethod
     def instance(cls, switchboard: Switchboard = None, **kwargs) -> "MayaUiHandler":
         """Return the MayaUiHandler singleton, bootstrapping if needed.

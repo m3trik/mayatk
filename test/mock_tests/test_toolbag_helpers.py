@@ -521,9 +521,10 @@ class TestSplitHighLow(unittest.TestCase):
         h, _lo, _ot = helpers.split_source_target([mesh], "_high", "_low")
         self.assertEqual(self._names(h), ["block"])
 
-    def test_split_high_low_alias_is_the_same_callable(self):
-        """The pre-rename name stays wired for one release."""
-        self.assertIs(helpers.split_high_low, helpers.split_source_target)
+    def test_retired_split_high_low_alias_stays_removed(self):
+        """The pre-rename name shipped 27 releases with no caller and was
+        retired 2026-09-21, in all three vendored copies at once."""
+        self.assertFalse(hasattr(helpers, "split_high_low"))
 
     def test_walks_grandparent_when_immediate_parent_unsuffixed(self):
         """Hierarchy: ``vehicle_high > engine > block_mesh``. The walk

@@ -22,7 +22,6 @@ from mayatk.mat_utils.substance_bridge._substance_bridge import (
     SubstanceBridge,
     SEND_TO,
     ROUND_TRIP,
-    ROUNDTRIP,
     TARGET_AUTO,
     TARGET_NEW,
     TARGET_CURRENT,
@@ -42,7 +41,6 @@ __all__ = [
     "SubstanceBridge",
     "SEND_TO",
     "ROUND_TRIP",
-    "ROUNDTRIP",  # deprecated alias for ROUND_TRIP
     "TARGET_AUTO",
     "TARGET_NEW",
     "TARGET_CURRENT",

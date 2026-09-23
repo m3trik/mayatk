@@ -2696,26 +2696,26 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         return (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
 
     @staticmethod
-    def _baker():
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+    def _records():
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
-        return LightmapBaker()
+        return LightmapRecords
 
     def _lit_cube(self, name, map_path):
         cube = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
-        self._baker().commit_lightmap({cube: map_path})
+        self._records().commit({cube: map_path})
         return cube
 
     @staticmethod
     def _marker_dir(cube):
         import json
 
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
-        info = json.loads(cmds.getAttr(f"{cube}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
+        info = json.loads(cmds.getAttr(f"{cube}.{LightmapRecords.LIGHTMAP_INFO_ATTR}"))
         # The marker stores the portable spelling; compare what it resolves to.
         return os.path.normcase(
-            os.path.abspath(LightmapBaker._resolved_dir(info["dir"], info["map"]))
+            os.path.abspath(LightmapRecords._resolved_dir(info["dir"], info["map"]))
         )
 
     def _norm(self, path):
@@ -2784,7 +2784,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
     def test_lightmaps_are_copied_and_their_markers_repointed(self):
         node = self._make_file_node("tex_lm", self._write(self.ext_dir, "wall.png"))
         cube = self._lit_cube("lit", self._write(self.ext_dir, "lit_LightMap.exr"))
-        deps = self._baker().lightmap_dependencies()
+        deps = self._records().lightmap_dependencies()
 
         self._run([node], lightmaps=deps)
 
@@ -2808,7 +2808,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
             "optout", self._write(self.ext_dir, "optout_LightMap.exr")
         )
 
-        self._run([node], lightmaps=self._baker().lightmap_dependencies())
+        self._run([node], lightmaps=self._records().lightmap_dependencies())
 
         names = [f["name"] for f in self.panel_calls[0]["fields"]]
         self.assertNotIn("include_lightmaps", names)
@@ -2823,7 +2823,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
             "lost", os.path.join(self.tmp_root, "gone", "lost_LightMap.exr")
         )
         self._write(os.path.join(self.ext_dir, "deep"), "lost_LightMap.exr")
-        deps = self._baker().lightmap_dependencies()
+        deps = self._records().lightmap_dependencies()
         self.assertIsNone(deps[0]["path"])
 
         self._run([], lightmaps=deps, source_dir=self.ext_dir)
@@ -2837,7 +2837,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         self._lit_cube("nowhere", os.path.join(self.tmp_root, "gone", "nowhere.exr"))
 
         self._run(
-            [], lightmaps=self._baker().lightmap_dependencies(), source_dir=self.ext_dir
+            [], lightmaps=self._records().lightmap_dependencies(), source_dir=self.ext_dir
         )
 
         missing = [m for m in self._messages("warning") if "found nowhere" in m]
@@ -2850,7 +2850,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         before = self._marker_dir(cube)
 
         apply_call = self._run(
-            [], lightmaps=self._baker().lightmap_dependencies(), dry_run=True
+            [], lightmaps=self._records().lightmap_dependencies(), dry_run=True
         )
 
         self.assertFalse(
@@ -2873,7 +2873,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         fields = {
             f["name"]: f
             for f in self.slot._find_and_copy_fields(
-                [], [], self.si_dir, lightmaps=self._baker().lightmap_dependencies()
+                [], [], self.si_dir, lightmaps=self._records().lightmap_dependencies()
             )
         }
 
@@ -2896,7 +2896,7 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         fields = {
             f["name"]: f
             for f in self.slot._find_and_copy_fields(
-                [], [], self.si_dir, lightmaps=self._baker().lightmap_dependencies()
+                [], [], self.si_dir, lightmaps=self._records().lightmap_dependencies()
             )
         }
 

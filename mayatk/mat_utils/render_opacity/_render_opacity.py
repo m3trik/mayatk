@@ -4,13 +4,17 @@
 
 The per-object opacity tool grew into the per-object render-effects tool
 (``opacity`` is its first channel, ``highlight`` its second), and the class
-moved to :mod:`mayatk.mat_utils.render_opacity.render_effects`. This alias
-holds for ONE release so existing call sites keep working; import
-``RenderEffects`` for new code.
+moved to :mod:`mayatk.mat_utils.render_opacity.render_effects`. Reaching
+``RenderOpacity`` here -- or as ``mtk.RenderOpacity`` -- still returns that
+class, but warns through ``ptk.Deprecation.attributes`` and stops working in
+mayatk 0.20.0 (it resolved silently from 2026-09-05 to 2026-09-21). Import
+``RenderEffects``.
 """
 
-from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+import pythontk as ptk
 
-RenderOpacity = RenderEffects
-
-__all__ = ["RenderOpacity", "RenderEffects"]
+ptk.Deprecation.attributes(
+    globals(),
+    {"RenderOpacity": "mayatk.mat_utils.render_opacity.render_effects.RenderEffects"},
+    remove_in="0.20.0",
+)

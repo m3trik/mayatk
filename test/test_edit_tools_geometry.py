@@ -232,9 +232,7 @@ class TestCutOnAxis(MayaTkTestCase):
     def test_one_cut_increases_geometry(self):
         cube = cmds.polyCube(name="cut_one", sx=1, sy=1, sz=1)[0]
         before = cmds.polyEvaluate(cube, face=True)
-        CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="center", use_object_axes=True
-        )
+        CutOnAxis.perform_cut_on_axis([cube], axis="x", cuts=1, pivot="center")
         after = cmds.polyEvaluate(cube, face=True)
         # A single cut through the middle of the cube splits the +X and -X
         # faces in half each: 6 → 8 faces.
@@ -247,9 +245,7 @@ class TestCutOnAxis(MayaTkTestCase):
         cube = cmds.polyCube(name="cut_manip")[0]
         cmds.select(cube)
         # Should complete without raising.
-        CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="manip", use_object_axes=True
-        )
+        CutOnAxis.perform_cut_on_axis([cube], axis="x", cuts=1, pivot="manip")
         self.assertTrue(cmds.objExists(cube))
 
     def test_manip_pivot_falls_back_to_rotate_pivot_on_moved_cube(self):
@@ -268,7 +264,6 @@ class TestCutOnAxis(MayaTkTestCase):
             cuts=1,
             pivot="manip",
             delete=True,
-            use_object_axes=True,
         )
         # The cut should be at the cube's center (world X=5), so deleting the
         # +X half leaves a cube spanning [4, 5] in X — not a slice through
@@ -286,9 +281,7 @@ class TestCutOnAxis(MayaTkTestCase):
             with self.subTest(axis=axis):
                 cube = cmds.polyCube(name=f"cut_{axis.replace('-', 'n')}")[0]
                 before = cmds.polyEvaluate(cube, face=True)
-                CutOnAxis.perform_cut_on_axis(
-                    [cube], axis=axis, cuts=1, pivot="center", use_object_axes=True
-                )
+                CutOnAxis.perform_cut_on_axis([cube], axis=axis, cuts=1, pivot="center")
                 after = cmds.polyEvaluate(cube, face=True)
                 self.assertGreater(after, before, f"Cut along {axis} failed")
 
@@ -299,7 +292,7 @@ class TestCutOnAxis(MayaTkTestCase):
         # the +X face is removed and the cap from the cut closes the body, so
         # final face count should be < initial.
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=1, pivot="center", delete=True, use_object_axes=True
+            [cube], axis="x", cuts=1, pivot="center", delete=True
         )
         bbox = cmds.exactWorldBoundingBox(cube)
         # +X half deleted, so the cube extent should be only on the -X side.
@@ -311,7 +304,7 @@ class TestCutOnAxis(MayaTkTestCase):
     def test_delete_negative_axis_removes_other_half(self):
         cube = cmds.polyCube(name="cut_del_neg", w=2, h=2, d=2)[0]
         CutOnAxis.perform_cut_on_axis(
-            [cube], axis="-x", cuts=1, pivot="center", delete=True, use_object_axes=True
+            [cube], axis="-x", cuts=1, pivot="center", delete=True
         )
         bbox = cmds.exactWorldBoundingBox(cube)
         self.assertGreater(
@@ -322,9 +315,7 @@ class TestCutOnAxis(MayaTkTestCase):
     def test_multi_cuts_evenly_spaced(self):
         cube = cmds.polyCube(name="cut_multi", w=4, h=1, d=1)[0]
         before = cmds.polyEvaluate(cube, face=True)
-        CutOnAxis.perform_cut_on_axis(
-            [cube], axis="x", cuts=3, pivot="center", use_object_axes=True
-        )
+        CutOnAxis.perform_cut_on_axis([cube], axis="x", cuts=3, pivot="center")
         after = cmds.polyEvaluate(cube, face=True)
         # 3 cuts split each of the +X and -X faces into 4 strips: net +6 faces.
         self.assertGreater(after, before + 4, "3 cuts should add several faces")
@@ -341,7 +332,6 @@ class TestCutOnAxis(MayaTkTestCase):
             pivot="center",
             cut_offset=0.0,
             delete=True,
-            use_object_axes=True,
         )
         # Cut+delete with positive offset
         CutOnAxis.perform_cut_on_axis(
@@ -351,7 +341,6 @@ class TestCutOnAxis(MayaTkTestCase):
             pivot="center",
             cut_offset=0.3,
             delete=True,
-            use_object_axes=True,
         )
         bbox_a = cmds.exactWorldBoundingBox(cube_a)
         bbox_b = cmds.exactWorldBoundingBox(cube_b)
@@ -371,7 +360,6 @@ class TestCutOnAxis(MayaTkTestCase):
             cuts=1,
             pivot="object",
             delete=True,
-            use_object_axes=True,
         )
         # After deleting the +local-X half (which is world -Z), the remaining
         # half should sit on the +world-Z side (zmax > 0, zmin ≈ 0).
@@ -382,7 +370,7 @@ class TestCutOnAxis(MayaTkTestCase):
         self.assertGreater(bbox[2], -0.01, f"Expected zmin≈0, got {bbox[2]}")
 
     def test_rotated_cube_world_axis_cut(self):
-        """With use_object_axes=False, cut should follow world axis even on
+        """With axis_frame="world", the cut follows the world axis even on
         a rotated object.
         """
         cube = cmds.polyCube(name="cut_rotated_world", w=2, h=1, d=1)[0]
@@ -394,7 +382,7 @@ class TestCutOnAxis(MayaTkTestCase):
             cuts=1,
             pivot="world",
             delete=True,
-            use_object_axes=False,
+            axis_frame="world",
         )
         # World X cut at world origin removes everything with X > 0. After 90°
         # Y rotation, the cube spans X in [-0.5, 0.5] (since local Z=±0.5
@@ -417,7 +405,7 @@ class TestCutOnAxis(MayaTkTestCase):
             cuts=1,
             pivot="world",
             delete=True,
-            use_object_axes=False,
+            axis_frame="world",
         )
         # +X half (relative to world origin) deleted: keep [-0.7, 0]
         bbox = cmds.exactWorldBoundingBox(cube)
@@ -441,7 +429,7 @@ class TestCutOnAxis(MayaTkTestCase):
                     pivot="center",
                     cut_spacing=spacing,
                     delete=True,
-                    use_object_axes=False,
+                    axis_frame="world",
                 )
                 bbox = cmds.exactWorldBoundingBox(cube)
                 self.assertAlmostEqual(
@@ -464,7 +452,7 @@ class TestCutOnAxis(MayaTkTestCase):
                     pivot="center",
                     distribution=mode,
                     weight_curve=3.0,
-                    use_object_axes=False,
+                    axis_frame="world",
                 )
                 after = cmds.polyEvaluate(cube, face=True)
                 self.assertGreater(after, before, f"{mode} produced no cuts")
@@ -620,7 +608,6 @@ class _CutPreviewOp:
             cut_offset=0,
             delete=False,
             mirror=False,
-            use_object_axes=True,
         )
         self.params.update(params)
 
@@ -1274,10 +1261,10 @@ class TestMirrorPivotFidelity(MayaTkTestCase):
                 for got, want in zip(resolved, expected):
                     self.assertAlmostEqual(got, want, places=4)
 
-    def test_object_pivot_unaffected_by_use_object_axes_flag(self):
-        """Both flag states must land the plane on the same pivot."""
+    def test_object_pivot_unaffected_by_the_axis_frame(self):
+        """Both frames must land the plane on the same pivot."""
         planes = []
-        for i, uoa in enumerate((True, False)):
+        for i, frame in enumerate((None, "world")):
             cube = cmds.polyCube(name=f"piv_flag_{i}", w=1, h=1, d=1)[0]
             cmds.xform(cube, ws=True, t=(5, 0, 0))
             cmds.xform(cube, ws=True, piv=(7, 0, 0))
@@ -1286,7 +1273,7 @@ class TestMirrorPivotFidelity(MayaTkTestCase):
                 axis="x",
                 pivot="object",
                 mergeMode=0,
-                use_object_axes=uoa,
+                axis_frame=frame,
             )
             planes.append(self._plane(cube))
 
@@ -1308,7 +1295,7 @@ class TestMirrorPivotFidelity(MayaTkTestCase):
 
 
 class TestMirrorObjectAxes(MayaTkTestCase):
-    """``use_object_axes`` must actually tilt the mirror plane.
+    """The object frame must actually tilt the mirror plane.
 
     Regression: the flag was accepted but never reached the plane — the mirror
     was always world-axis-aligned (``polyMirrorFace`` was hard-coded to
@@ -1406,7 +1393,7 @@ class TestMirrorObjectAxes(MayaTkTestCase):
             "space polyMirrorFace uses disagrees with the world-matrix frame",
         )
 
-    def test_use_object_axes_false_forces_world(self):
+    def test_axis_frame_world_forces_world(self):
         cube = self._asymmetric_cube("oax_world")
         m = self._frame(cube)
         origin = (m[12], m[13], m[14])
@@ -1414,7 +1401,7 @@ class TestMirrorObjectAxes(MayaTkTestCase):
         want_world = [self._reflect(p, (1, 0, 0), origin) for p in before]
 
         EditUtils.mirror(
-            cube, axis="x", pivot="object", mergeMode=0, use_object_axes=False
+            cube, axis="x", pivot="object", mergeMode=0, axis_frame="world"
         )
 
         self.assertTrue(self._covered_by(want_world, self._points(cube)))
@@ -1433,10 +1420,10 @@ class TestMirrorObjectAxes(MayaTkTestCase):
         """No regression for the common case: an axis-aligned object must give
         the same result through the object-space and world-space paths."""
         results = []
-        for i, uoa in enumerate((True, False)):
+        for i, frame in enumerate((None, "world")):
             cube = self._asymmetric_cube(f"oax_same_{i}", rotation=(0, 0, 0))
             EditUtils.mirror(
-                cube, axis="x", pivot="object", mergeMode=0, use_object_axes=uoa
+                cube, axis="x", pivot="object", mergeMode=0, axis_frame=frame
             )
             results.append(sorted(cmds.exactWorldBoundingBox(cube)))
         for a, b in zip(*results):

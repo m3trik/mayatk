@@ -217,11 +217,13 @@ class Migrate(_MigrateInternal):
         # 6. Rewrite file_map with ONLY migrated tids (prune orphan legacy keys).
         #    Preserve paths that are already on the canonical carrier under a
         #    valid tid (not touched by this migration).
-        current = AudioUtils.load_file_map(carrier)
+        #    Kept entries keep their STORED spelling; only a migrated path is
+        #    spelled the way the map stores a path it writes.
+        current = AudioUtils._load_stored_file_map(carrier)
         merged: Dict[str, str] = {}
         for tid in AudioUtils.list_tracks(carrier):
             if tid in tid_paths:
-                merged[tid] = tid_paths[tid]
+                merged[tid] = AudioUtils._stored_spelling(tid_paths[tid])
             elif tid in current:
                 merged[tid] = current[tid]
         AudioUtils._save_file_map(carrier, merged)

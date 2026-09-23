@@ -192,8 +192,28 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             protected.add(str(mat))
 
             to_delete = [n for n in island if n not in protected and cmds.objExists(n)]
+            # ...and a shading group the bridge shader drives as its OWN
+            # surfaceShader: bridges made before _setup_nodes stopped minting
+            # one left it empty and unassigned. The base material's group
+            # (fed through aiSurfaceShader) and any group with members stay.
+            for plug in (
+                cmds.listConnections(
+                    f"{ai_node}.outColor", plugs=True, source=False, destination=True
+                )
+                or []
+            ):
+                sg, attr = plug.split(".", 1)
+                if (
+                    attr == "surfaceShader"
+                    and cmds.nodeType(sg) == "shadingEngine"
+                    and not cmds.sets(sg, query=True)
+                ):
+                    to_delete.append(sg)
+                    to_delete += (
+                        cmds.listConnections(f"{sg}.message", type="materialInfo") or []
+                    )
             if to_delete:
-                cmds.delete(to_delete)
+                cmds.delete(list(dict.fromkeys(to_delete)))
             removed.append(mat)
             self.logger.success(f"{CoreUtils.short_name(mat)}: Arnold bridge removed.")
 
@@ -382,8 +402,14 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         ``cmds.ls(materials=True)`` reports, so they surfaced as materials in
         Hypershade and in every materials list built on it.
         """
+        # No shading group of its own: the bridge rides the base material's
+        # group (its aiSurfaceShader slot). One made here was never assigned
+        # and outlived remove() -- a production room held three generations of
+        # empty ``<mat>_aiSG`` from the texture baker's translation guard.
         ai_node = NodeUtils.create_render_node(
-            "aiStandardSurface", name=name + "_ai" if name else ""
+            "aiStandardSurface",
+            name=name + "_ai" if name else "",
+            create_shading_group=False,
         )
         aiMult_node = NodeUtils.create_render_node("aiMultiply")
         bump_node = NodeUtils.create_render_node("bump2d")

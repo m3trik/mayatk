@@ -820,8 +820,8 @@ class FbxUtils(ptk.HelpMixin):
             "export_record",
         ),
         ptk.SceneRecords.LIGHTMAPS: (
-            "mayatk.light_utils.lightmap_baker.lightmap_baker",
-            "LightmapBaker",
+            "mayatk.light_utils.lightmap_baker.lightmap_records",
+            "LightmapRecords",
             "export_record",
         ),
     }

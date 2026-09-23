@@ -2287,6 +2287,34 @@ class TestFindTextureFilesByName(MayaTkTestCase):
             "gets repathed onto the wrong image",
         )
 
+    def test_move_mode_into_the_same_folder_by_another_name_keeps_the_file(self):
+        """A junction (or a subst / mapped drive) naming the source's own folder
+        is the SAME folder. Compared as strings it read as a second one, the
+        file there was "proven identical" -- it was the file itself -- and Move
+        removed the redundant source: the only copy."""
+        src_dir = os.path.join(self.root, "junction_src")
+        os.makedirs(src_dir, exist_ok=True)
+        src = os.path.join(src_dir, "only.png")
+        with open(src, "wb") as fh:
+            fh.write(b"the only copy")
+        alias = os.path.join(self.root, "junction_alias")
+        try:
+            if os.name == "nt":
+                import _winapi
+
+                _winapi.CreateJunction(src_dir, alias)
+            else:
+                os.symlink(src_dir, alias, target_is_directory=True)
+        except (OSError, AttributeError, NotImplementedError):
+            self.skipTest("no junction or symlink can be made here")
+
+        copied = MatUtils.move_texture_files([src], alias, delete_old=True)
+
+        self.assertTrue(os.path.isfile(src), "Move deleted the only copy")
+        with open(src, "rb") as fh:
+            self.assertEqual(fh.read(), b"the only copy")
+        self.assertEqual([os.path.basename(d) for _s, d in copied], ["only.png"])
+
     def test_move_mode_removes_a_source_proven_identical(self):
         """The short-circuit still earns its keep when content really matches."""
         dest = os.path.join(self.root, "dest_same")

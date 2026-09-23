@@ -21,7 +21,6 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
-from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 
 
 class SceneExporter(ptk.LoggingMixin):
@@ -1020,8 +1019,8 @@ class SceneExporter(ptk.LoggingMixin):
     #: Stamped by ``perform_export`` from the panel's fields. Class-level
     #: defaults so a name can be resolved before the first run -- the panel's
     #: live tooltip preview resolves one on every hover. ``timestamp`` is the
-    #: retired Timestamp checkbox, honoured for one release
-    #: (``ptk.ExportProfile.fold_legacy_naming``).
+    #: retired Timestamp checkbox, still honoured -- no removal release is set
+    #: yet (``ptk.ExportProfile.fold_legacy_naming``).
     output_name: Optional[str] = None
     name_regex: Optional[str] = None
     timestamp: bool = False
@@ -1074,9 +1073,11 @@ class SceneExporter(ptk.LoggingMixin):
         # what a blank field and ``*`` resolve to (``ExportProfile.NAME_KEY``).
         scene = basename or "untitled"
         return ptk.StrUtils.name_pattern_context(
-            # DEPRECATED alias, honoured for one release and deliberately absent
-            # from NAME_TOKENS: a saved pattern spelling the name {name} keeps
-            # resolving instead of baking a literal "{name}" into a filename.
+            # DEPRECATED alias (``ExportProfile.NAME_KEY_ALIASES``), still
+            # honoured -- no removal release is set yet -- and deliberately
+            # absent from NAME_TOKENS: a saved pattern spelling the name {name}
+            # keeps resolving instead of baking a literal "{name}" into a
+            # filename.
             name=scene,
             scene=scene,
             folder=os.path.basename(os.path.dirname(scene_path)),
@@ -1107,7 +1108,8 @@ class SceneExporter(ptk.LoggingMixin):
             name_regex: Overrides :attr:`name_regex` (see :meth:`name_context`).
             report: Log what the pattern hit. The tooltip passes False: it
                 resolves on every hover and shows the diagnostics itself.
-            version_format: DEPRECATED -- the retired Version pattern.
+            version_format: DEPRECATED -- the retired Version pattern (a
+                headless ``tasks["version"]``).
             timestamp: DEPRECATED -- the retired Timestamp checkbox.
 
         Returns:
@@ -1129,9 +1131,7 @@ class SceneExporter(ptk.LoggingMixin):
         )
         if report:
             for level, message in ptk.ExportProfile.naming_report(
-                resolved,
-                self.NAME_TOKENS,
-                version_suffix=SceneDataSidecar.VERSION_SUFFIX_RE,
+                resolved, self.NAME_TOKENS
             ):
                 getattr(self.logger, level)(message)
         return dict(resolved, context=context)
@@ -1309,9 +1309,12 @@ class SceneExporter(ptk.LoggingMixin):
           that it looks the same in a viewer nobody here controls.
 
         Cameras and lights are dropped **for a GLB only**, matching the mixin
-        that writes the preview: glTF has no light slot at all, and the viewer
-        owns its own camera (``handoff.rendering`` records the lighting the
-        asset was approved under, precisely because the asset carries none).
+        that writes the preview. glTF can carry lights (``KHR_lights_punctual``,
+        which FBX2glTF writes unless told not to) and three.js's loader switches
+        them on, so shipped lights would land ON TOP of the recipe the file
+        publishes (``handoff.rendering``, the lighting the asset was approved
+        under) -- and, on a baked material, on top of the light already in its
+        lightmap. The viewer owns its camera the same way.
         Measured on a production assembly, this was the LAST difference between
         the two deliverables -- a scene camera called ``USER_POS_GEO`` reached
         the exporter's GLB and not the preview's, so an asset the artist
@@ -1334,7 +1337,7 @@ class SceneExporter(ptk.LoggingMixin):
         Parameters:
             glb_deliverable: Whether this run writes a ``.glb`` (``glb`` or
                 ``fbx_glb``), which is what makes embedded media mandatory and
-                cameras/lights dead weight.
+                cameras/lights unwanted.
 
         Returns:
             ``{FBXExport* command: value}`` for :meth:`FbxUtils.set_fbx_options`.
@@ -1509,15 +1512,3 @@ class SceneExporter(ptk.LoggingMixin):
             self.logger.log_group("FBX Export Settings", lines)
 
         return results
-
-
-def __getattr__(name):
-    """``SceneExporterSlots`` lives in ``scene_exporter_slots`` (2026-09-13,
-    the layout blendertk already had); this alias holds for one release."""
-    if name == "SceneExporterSlots":
-        from mayatk.env_utils.scene_exporter.scene_exporter_slots import (
-            SceneExporterSlots,
-        )
-
-        return SceneExporterSlots
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -44,12 +44,17 @@ class TestNamingPanel(unittest.TestCase):
         from uitk import Switchboard
         from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
 
-        cls.sb = Switchboard()
-        cls.handler = MayaUiHandler(switchboard=cls.sb)
+        cls.handler = MayaUiHandler(switchboard=Switchboard())
         cls.ui = cls.handler.get("naming")
         for _ in range(5):
             cls.app.processEvents()
         cls.slots = cls.ui.slots
+        # The switchboard the SLOTS hold, not the one constructed above: the
+        # handler is a per-process singleton and keeps the first Switchboard
+        # made in it, so a second panel test in the same run leaves this one
+        # patching a switchboard nothing calls (the browse stubs below then
+        # miss and a real QFileDialog runs).
+        cls.sb = cls.slots.sb
         # The offscreen load skips header_init; drive the init entry points.
         cls.slots.header_init(cls.ui.header)
         for w in ("txt000", "txt001", "tb000", "tb001", "tb002", "tb003"):

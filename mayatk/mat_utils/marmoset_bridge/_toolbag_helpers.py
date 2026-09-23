@@ -537,9 +537,6 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
                 others.append(o)
         return sources, targets, others
 
-    #: Back-compat alias -- shipped one release under the high/low name.
-    split_high_low = split_source_target
-
     @staticmethod
     def collect_mesh_objects(root):
         """Recursively gather ``mset.MeshObject`` descendants of *root*.

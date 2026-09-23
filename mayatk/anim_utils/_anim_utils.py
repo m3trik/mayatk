@@ -919,11 +919,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     #: levels existed, so a bool keeps behaving exactly as it did.
     DEFAULT_OPTIMIZE_LEVEL: str = "flat"
 
-    #: Level names accepted for one release after a rename, mapped to the
-    #: canonical key. ``"unbake"`` (until 2026-09-02) read as reversing a
-    #: bake -- which is ``SmartBake.restore`` -- when the level only thins a
-    #: bake to its extremes; saved templates and headless callers still say it.
-    _OPTIMIZE_LEVEL_ALIASES = {"unbake": "extremes"}
+    #: Retired level names -> the canonical key, warning until they go.
+    #: ``"unbake"`` (until 2026-09-02) read as reversing a bake -- which is
+    #: ``SmartBake.restore`` -- when the level only thins a bake to its
+    #: extremes; a saved template or preset may still say it.
+    _resolve_retired_level = staticmethod(
+        ptk.Deprecation.values(
+            {"unbake": "extremes"},
+            what="AnimUtils optimize level",
+            remove_in="0.20.0",
+        )
+    )
 
     @staticmethod
     def scene_animation_range() -> Tuple[float, float]:
@@ -964,8 +970,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             return None  # branch: "" is a falsy config value, not a bad level
         if not isinstance(level, str):  # True, or a legacy truthy bool flag
             return cls.DEFAULT_OPTIMIZE_LEVEL
-        key = level.strip().lower()
-        key = cls._OPTIMIZE_LEVEL_ALIASES.get(key, key)
+        key = cls._resolve_retired_level(level.strip().lower())
         if key not in cls.OPTIMIZE_LEVELS:
             raise ValueError(
                 f"Unknown optimize level {level!r}; expected one of "
@@ -1251,6 +1256,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return results
 
     @staticmethod
+    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
     def objects_to_curves(
         objects: Union[str, List[str]],
         recursive: bool = False,
@@ -1264,7 +1270,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         Parameters:
             objects: Single object name or list of names (keyed objects or curves).
             recursive: Whether to recursively search through children of objects for curves.
-            as_strings: Deprecated, no effect — results are always name strings.
+            as_strings: Deprecated (warns; removed in 0.20.0) and has no
+                effect -- results are always name strings.
             through_blends: Also return the curves a layered, constrained or
                 unit-converted channel hides behind an animBlendNode / pairBlend /
                 unitConversion (the default). A direct connection query sees
@@ -1678,6 +1685,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             cmds.rename(node, target, uuid=True)
 
     @classmethod
+    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
     def get_static_curves(
         cls,
         objects: List[str],
@@ -1699,7 +1707,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             objects: List of nodes (curves or objects).
             value_tolerance: The value tolerance to consider for static curves (difference between keyframe values).
             recursive: Whether to recursively search through children of objects for curves.
-            as_strings: Deprecated, no effect — results are always name strings.
+            as_strings: Deprecated (warns; removed in 0.20.0) and has no
+                effect -- results are always name strings.
 
         Returns:
             A list of static curves that are safe to delete.
@@ -1781,6 +1790,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return static_curves
 
     @classmethod
+    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
     @CoreUtils.undoable
     def get_redundant_flat_keys(
         cls,
@@ -1804,7 +1814,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             value_tolerance: The value tolerance to consider for redundant flat keys.
             remove: If True, the redundant keys are deleted.
             recursive: Whether to recursively search through children of objects for curves.
-            as_strings: Deprecated, no effect — curve names are always strings.
+            as_strings: Deprecated (warns; removed in 0.20.0) and has no
+                effect -- curve names are always strings.
             time_range: ``(start, end)`` window a key must fall inside to be
                 removable; None considers every interior key.
             selected_only: Only keys selected in the Graph Editor are removable.
@@ -2024,6 +2035,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return redundant
 
     @classmethod
+    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
     def simplify_curve(
         cls,
         objects: List[str],
@@ -2056,7 +2068,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 a key.  Maps to ``filterCurve -precision``.
             time_tolerance: Unused (kept for API compatibility).
             recursive: Whether to recursively search children for curves.
-            as_strings: Deprecated, no effect — curve names are always strings.
+            as_strings: Deprecated (warns; removed in 0.20.0) and has no
+                effect -- curve names are always strings.
             time_range: ``(start, end)`` to reduce within; None is the whole
                 curve.  The two ends survive the pass.
             selected_only: Reduce only the currently selected keys
@@ -2313,11 +2326,6 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 }
             )
         return reduced
-
-    #: Deprecated alias (2026-09-02): the method was renamed because "unbake"
-    #: read as reversing a bake (that is ``SmartBake.restore``) when it only
-    #: thins one. Remove in the release after.
-    unbake_keys = reduce_to_extremes
 
     @classmethod
     @CoreUtils.undoable
@@ -6207,7 +6215,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         if not wanted:
             return [] if report else 0
         curves = _AnimUtilsInternal._filter_time_curves(
-            AnimUtils.objects_to_curves(objects, as_strings=True) or []
+            AnimUtils.objects_to_curves(objects) or []
         )
         inserted = []
         for curve in curves:

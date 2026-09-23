@@ -529,5 +529,132 @@ class TestDualQuaternionImportGuard(MayaTkTestCase):
                 )
 
 
+class TestUsdLiveRead(MayaTkTestCase):
+    """A reference or an open reads the layer LIVE -- from its path, on every load.
+
+    Two consequences, both measured on Maya 2025 / mayaUsd 0.30. The translator must
+    be NAMED: left to pick one by extension, Maya reads with ``readAnimData`` at its
+    OFF default, and a keyed stage referenced static. And a skin the reader crashes on
+    cannot be neutralized the way :meth:`UsdUtils.import_scene` does it -- that
+    overlay is a session temp file, which a saved scene would go on pointing at -- so
+    a live read of one is refused (a raw reference took mayapy down with an access
+    violation, exactly like the import).
+    """
+
+    def setUp(self):
+        super().setUp()
+        UsdUtils.load_plugin()
+        self.tempdir = tempfile.mkdtemp(prefix="usd_live_")
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+        shutil.rmtree(self.tempdir, ignore_errors=True)
+        super().tearDown()
+
+    def _skinned_stage(self, name, **methods):
+        """``<name>.usda`` holding one mesh prim ``/grp/<prim>`` per ``prim=method``."""
+        from pxr import Usd, UsdGeom, UsdSkel
+
+        path = os.path.join(self.tempdir, f"{name}.usda")
+        stage = Usd.Stage.CreateNew(path)
+        for prim_name, method in methods.items():
+            prim = UsdGeom.Mesh.Define(stage, f"/grp/{prim_name}").GetPrim()
+            UsdSkel.BindingAPI.Apply(prim)
+            UsdSkel.BindingAPI(prim).CreateSkinningMethodAttr().Set(method)
+        stage.GetRootLayer().Save()
+        return path
+
+    def test_file_options_name_a_registered_reader(self):
+        self.assertEqual(
+            UsdUtils.file_options(),
+            {
+                "type": UsdUtils.IMPORT_TRANSLATOR,
+                "options": UsdUtils.options_string(UsdUtils.INTERCHANGE_IMPORT_OPTIONS),
+            },
+        )
+        self.assertTrue(
+            cmds.translator(UsdUtils.IMPORT_TRANSLATOR, q=True, readSupport=True)
+        )
+
+    def test_file_options_honor_the_animation_flag_and_explicit_entries(self):
+        self.assertIn(
+            "readAnimData=0", UsdUtils.file_options(read_animation=False)["options"]
+        )
+        # An explicit entry wins over the flag -- import_scene's contract.
+        self.assertIn(
+            "readAnimData=0",
+            UsdUtils.file_options({"readAnimData": False}, read_animation=True)[
+                "options"
+            ],
+        )
+        self.assertIn(
+            "primPath=/grp", UsdUtils.file_options({"primPath": "/grp"})["options"]
+        )
+
+    def test_crashing_skins_names_only_the_dual_quaternion_prims(self):
+        mixed = self._skinned_stage(
+            "mixed", b_dq="dualQuaternion", a_lin="classicLinear", c_dq="dualQuaternion"
+        )
+        self.assertEqual(UsdUtils.crashing_skins(mixed), ["/grp/b_dq", "/grp/c_dq"])
+        safe = self._skinned_stage("safe", limb="classicLinear")
+        self.assertEqual(UsdUtils.crashing_skins(safe), [])
+
+    def test_live_read_options_refuse_a_stage_the_reader_crashes_on(self):
+        from mayatk.env_utils.usd import UsdReadRefused
+
+        path = self._skinned_stage("dq", limb="dualQuaternion")
+        with self.assertRaises(UsdReadRefused) as ctx:
+            UsdUtils.live_read_options(path)
+        self.assertEqual(ctx.exception.prims, ["/grp/limb"])
+        self.assertIn("/grp/limb", str(ctx.exception))
+        self.assertIn("import", str(ctx.exception).lower(), "no way forward named")
+
+    def test_live_read_options_refuse_a_layer_pxr_cannot_read(self):
+        """Measured: handed to the translator, a damaged or empty layer does not fail
+        -- it leaves an EMPTY reference node behind. Refused instead, as a plain
+        failure (not UsdReadRefused: the import cannot read it either), with pxr's
+        C++ source location stripped from the reason."""
+        from mayatk.env_utils.usd import UsdReadRefused
+
+        for name, data in (
+            ("garbage.usda", b"#usda 1.0\n(\n this is not usd {{{\n"),
+            ("empty.usd", b""),
+        ):
+            with self.subTest(layer=name):
+                path = os.path.join(self.tempdir, name)
+                with open(path, "wb") as fh:
+                    fh.write(data)
+                with self.assertRaises(RuntimeError) as ctx:
+                    UsdUtils.live_read_options(path)
+                self.assertNotIsInstance(ctx.exception, UsdReadRefused)
+                message = str(ctx.exception)
+                self.assertIn(f"{name} is not a readable USD layer", message)
+                self.assertNotIn("Error in '", message)
+
+    def test_live_read_options_pass_a_safe_stage_through(self):
+        path = self._skinned_stage("linear", limb="classicLinear")
+        self.assertEqual(UsdUtils.live_read_options(path), UsdUtils.file_options())
+
+    def test_live_read_options_missing_file_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            UsdUtils.live_read_options(os.path.join(self.tempdir, "ghost.usda"))
+
+    def test_a_reference_read_through_them_keeps_its_animation(self):
+        cube = cmds.polyCube(name="usd_live_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=24, v=3)
+        cmds.select(cube)
+        path = os.path.join(self.tempdir, "live.usda")
+        cmds.mayaUSDExport(file=path, selection=True, frameRange=(1, 24))
+        cmds.file(new=True, force=True)
+        cmds.file(
+            path, reference=True, namespace="live", **UsdUtils.live_read_options(path)
+        )
+        self.assertTrue(
+            cmds.keyframe("live:usd_live_cube", q=True, timeChange=True),
+            "the referenced stage arrived static",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

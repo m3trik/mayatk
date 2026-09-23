@@ -496,35 +496,6 @@ class UvUtils(ptk.HelpMixin):
                 u, v = orig_slots[slot_idx]
                 cmds.polyEditUV(uv_list[uv_idx], u=u, v=v, relative=False)
 
-    @classmethod
-    @CoreUtils.undoable
-    def flip_uvs(
-        cls,
-        objects,
-        axis: str = "u",
-        pivot: tuple | None = None,
-        per_shell: bool = True,
-        preserve_position: bool = True,
-    ):
-        """Backward-compatible alias for :meth:`mirror_uvs`.
-
-        Note: this operation is *not* a standard geometric flip when
-        `preserve_position=True`.
-        """
-        try:
-            cmds.warning(
-                "UvUtils.flip_uvs is deprecated; use UvUtils.mirror_uvs instead."
-            )
-        except Exception:
-            pass
-        return cls.mirror_uvs(
-            objects,
-            axis=axis,
-            pivot=pivot,
-            per_shell=per_shell,
-            preserve_position=preserve_position,
-        )
-
     @staticmethod
     def get_uv_shell_sets(objects=None, returned_type="shell", whole_shells=False):
         """Get UV shells and their corresponding sets of faces.

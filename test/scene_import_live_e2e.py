@@ -515,5 +515,8 @@ finally:
 for line in lines:
     print(line)
 print(f"===RESULT: {'PASS' if ok else 'FAIL'}===")
-sys.stdout.flush()
-os._exit(0 if ok else 1)
+# Not os._exit: on Windows it still runs every DLL's detach, where Maya's
+# destructors fault and file a crash dump plus a [Recovered] scene per run.
+from pythontk import ProcessExit
+
+ProcessExit.hard_exit(0 if ok else 1)

@@ -6,10 +6,12 @@ Covers:
 - ``tracks_on_at_frame`` — playhead sampling
 - ``bake_events`` — the game-export event primitive
 - ``rename_track`` — attr + enum + file_map rename
+- the file map's stored spelling — project-relative, resolved on read
 - ``migrate_legacy_triggers`` — one-shot schema migration
 """
 
 import json
+import os
 import unittest
 
 try:
@@ -19,9 +21,11 @@ except ImportError as exc:
         "These tests must run inside a Maya session (standalone or GUI)."
     ) from exc
 
+import pythontk as ptk
 from base_test import MayaTkTestCase
 from mayatk.audio_utils import migrate as _migrate
 from mayatk.audio_utils._audio_utils import AudioUtils
+from mayatk.node_utils.data_nodes import DataNodes
 
 _events = _schema = _file_map = AudioUtils
 
@@ -180,6 +184,93 @@ class TestRenameTrack(MayaTkTestCase):
 # ---------------------------------------------------------------------------
 # migrate_legacy_triggers
 # ---------------------------------------------------------------------------
+
+
+class TestFileMapStoresProjectRelative(MayaTkTestCase):
+    """No machine's drive layout in scene data (maintainer rule, 2026-09-19):
+    a path under the project root is STORED relative to it, so a teammate's
+    synced project resolves the same file, and every reader still gets an
+    absolute path back.  A path outside the root stays absolute (the texture
+    and lightmap-marker rule), and a write re-spells only its own entry."""
+
+    def setUp(self):
+        super().setUp()
+        store = ptk.TempArtifacts("mtk_audio_file_map_test", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.root = store.dir_path().replace("\\", "/")
+        self.proj = f"{self.root}/proj"
+        os.makedirs(self.proj, exist_ok=True)
+        original = cmds.workspace(q=True, rootDirectory=True)
+        self.addCleanup(lambda: cmds.workspace(original, openWorkspace=True))
+        cmds.workspace(self.proj, openWorkspace=True)
+        _events.ensure_track_attr("vo")
+
+    @staticmethod
+    def _stored():
+        return ptk.SceneRecords.AUDIO_FILE_MAP.load(DataNodes, {})
+
+    def test_a_path_in_the_project_is_stored_root_relative(self):
+        path = f"{self.proj}/sound/vo.wav"
+        _file_map.set_path("vo", path)
+        self.assertEqual(self._stored(), {"vo": "sound/vo.wav"})
+        self.assertEqual(_file_map.get_path("vo"), path)
+
+    def test_a_path_outside_the_project_stays_absolute(self):
+        """Never a ``../`` chain: a reader resolves against whatever project
+        its session has set, and a chain walks off the drive root there."""
+        path = f"{self.root}/library/vo.wav"
+        _file_map.set_path("vo", path)
+        self.assertEqual(self._stored(), {"vo": path})
+        self.assertEqual(_file_map.get_path("vo"), path)
+
+    def test_a_write_under_another_project_leaves_the_other_entries_alone(self):
+        """Review 2026-09-22: every write re-spelled the WHOLE map against the
+        session's project.  An absolute entry that happens to lie under THAT
+        project came back relative to it -- and read under its own project it
+        named a different file, for good.  (A relative entry re-based and
+        re-spelled reads back as the same string, so it cannot show this.)"""
+        elsewhere = f"{self.root}/other_proj"
+        os.makedirs(elsewhere, exist_ok=True)
+        inside = f"{self.proj}/sound/vo.wav"
+        hit = f"{elsewhere}/sound/hit.wav"  # outside this project: absolute
+        _events.ensure_track_attr("hit")
+        _file_map.set_path("vo", inside)
+        _file_map.set_path("hit", hit)
+        before = self._stored()
+        self.assertEqual(before, {"vo": "sound/vo.wav", "hit": hit})
+        cmds.workspace(elsewhere, openWorkspace=True)
+        _events.ensure_track_attr("sfx")
+        _file_map.set_path("sfx", f"{elsewhere}/sound/sfx.wav")
+        stored = self._stored()
+        self.assertEqual(
+            {k: stored[k] for k in before}, before, "untouched entries kept"
+        )
+        cmds.workspace(self.proj, openWorkspace=True)
+        self.assertEqual(_file_map.get_path("vo"), inside)
+        self.assertEqual(_file_map.get_path("hit"), hit)
+
+    def test_an_explicit_carrier_stores_the_same_spelling(self):
+        other = cmds.createNode("network", name="other_audio_carrier")
+        _events.ensure_track_attr("vo", other)
+        path = f"{self.proj}/sound/vo.wav"
+        _file_map.set_path("vo", path, other)
+        raw = ptk.SceneRecords.AUDIO_FILE_MAP.decode(
+            cmds.getAttr(f"{other}.{_schema.FILE_MAP_ATTR}")
+        )
+        self.assertEqual(raw, {"vo": "sound/vo.wav"})
+        self.assertEqual(_file_map.get_path("vo", other), path)
+
+    def test_a_map_written_before_the_rule_still_reads(self):
+        """An absolute entry reads unchanged, and it is re-spelled only when
+        its own path is written again."""
+        legacy = f"{self.proj}/sound/old.wav"
+        ptk.SceneRecords.AUDIO_FILE_MAP.save(DataNodes, {"vo": legacy})
+        self.assertEqual(_file_map.get_path("vo"), legacy)
+        _events.ensure_track_attr("sfx")
+        _file_map.set_path("sfx", f"{self.proj}/sound/sfx.wav")
+        self.assertEqual(self._stored(), {"vo": legacy, "sfx": "sound/sfx.wav"})
+        _file_map.set_path("vo", legacy)
+        self.assertEqual(self._stored()["vo"], "sound/old.wav")
 
 
 class TestMigrateLegacyTriggers(MayaTkTestCase):

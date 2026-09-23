@@ -839,14 +839,12 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
         cube, _shot = self._scene_with_a_shot()
         self.assertIsNone(self._manifest(objects=[cube], include_scene_data=False))
 
-    def test_the_retired_parameter_name_still_opts_out(self):
-        """``INCLUDE_SHOTS`` became ``INCLUDE_SCENE_DATA``; a caller or saved preset
-        spelling it the old way keeps its value (with a notice) -- the new key's
-        default must not shadow it."""
-        with self.assertWarns(DeprecationWarning):
-            merged = BlenderBridge().merge_params({"INCLUDE_SHOTS": False})
-        self.assertIs(merged["INCLUDE_SCENE_DATA"], False)
-        self.assertNotIn("INCLUDE_SHOTS", merged)
+    def test_the_retired_parameter_name_is_gone(self):
+        """``INCLUDE_SHOTS`` became ``INCLUDE_SCENE_DATA`` and warned until 0.19.0,
+        where it goes: the old spelling no longer resolves (drift guard)."""
+        self.assertIsNone(BlenderBridge.param_aliases)
+        merged = BlenderBridge().merge_params({"INCLUDE_SHOTS": False})
+        self.assertIsNot(merged.get("INCLUDE_SCENE_DATA"), False)
 
     def test_every_portable_record_rides_the_records_section(self):
         """An emissive group crosses with its registry, its membership (scoped to
@@ -1841,7 +1839,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """The shared shape gets the layout ONCE; each transform gets its own rect."""
         import json
 
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         src, copy = self._instanced_pair()
         shape = cmds.listRelatives(src, shapes=True, fullPath=True)[0]
@@ -1871,16 +1869,15 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             )
             wired = BlenderBridge().reassemble_lightmaps(manifest, [src, copy])
         self.assertEqual(set(wired), {src, copy})
-        baker = LightmapBaker()
-        self.assertEqual(baker._marker_info(src)["scaleOffset"], rect_a)
-        self.assertEqual(baker._marker_info(copy)["scaleOffset"], rect_b)
+        self.assertEqual(LightmapRecords._marker_info(src)["scaleOffset"], rect_a)
+        self.assertEqual(LightmapRecords._marker_info(copy)["scaleOffset"], rect_b)
         # The layout landed on the SHARED shape (once), as the lightmap set.
         sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
         self.assertIn("lightmap", sets)
         # And the publisher carries one record per instance.
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.read(ptk.Scope.DELIVERABLE, LightmapBaker.LIGHTMAP_METADATA)
+        raw = DataNodes.read(ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA)
         recs = {o["name"]: o for o in json.loads(raw)["objects"]}
         self.assertEqual(set(recs), {"bb_inst_src", "bb_inst_copy"})
         self.assertEqual(recs["bb_inst_src"]["scaleOffset"], rect_a)
@@ -1890,7 +1887,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """Legacy inline-layout manifests keep working (identity rects)."""
         import json
 
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         solo = cmds.ls(cmds.polyCube(name="bb_v1_solo")[0], long=True)[0]
         shape = cmds.listRelatives(solo, shapes=True, fullPath=True)[0]
@@ -1915,8 +1912,56 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             )
             wired = BlenderBridge().reassemble_lightmaps(manifest, [solo])
         self.assertEqual(set(wired), {solo})
-        info = LightmapBaker()._marker_info(solo)
+        info = LightmapRecords._marker_info(solo)
         self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
+
+    def test_a_legacy_marker_is_settled_before_the_returned_layout_lands(self):
+        """``commit`` carries a LEGACY marker's ``uvRect`` forward: the squeeze it
+        records is still in the UVs until something restores it. The return leg
+        REPLACES those UVs with Blender's layout, so the record is settled first
+        (``LightmapRecords.migrate_legacy``, as every bake does). Carried onto the
+        new layout, a later revert or migration would invert a squeeze that is no
+        longer there, over the layout the map was baked on."""
+        import json
+
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        solo = cmds.ls(cmds.polyCube(name="bb_legacy_solo")[0], long=True)[0]
+        shape = cmds.listRelatives(solo, shapes=True, fullPath=True)[0]
+        layout = self._layout_from(shape)  # what Blender hands back
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        rect = [0.5, 0.5, 0.25, 0.25]
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.path.join(tmp, "old_atlas.exr")
+            exr = os.path.join(tmp, "bb_legacy_solo_Lightmap.exr")
+            for path in (old, exr):
+                open(path, "wb").close()
+            # A commit from before rect binding: the UVs squeezed into the
+            # object's atlas cell, and the squeeze recorded as uvRect.
+            LightmapRecords._transform_lightmap_uvs(shape, "lightmap", rect)
+            LightmapRecords.commit({solo: old})
+            LightmapRecords._stamp_uv_rect(solo, rect)
+            self.assertEqual(LightmapRecords._marker_info(solo)["uvRect"], rect)
+            manifest = os.path.join(tmp, "x.lightmaps.json")
+            Path(manifest).write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "mode": "separated",
+                        "lighting": {},
+                        "meshes": {"Mesh": layout},
+                        "objects": {"bb_legacy_solo": {"map": exr, "mesh": "Mesh"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            wired = BlenderBridge().reassemble_lightmaps(manifest, [solo])
+        self.assertEqual(set(wired), {solo})
+        info = LightmapRecords._marker_info(solo)
+        self.assertNotIn("uvRect", info)
+        self.assertEqual(info["map"], "bb_legacy_solo_Lightmap.exr")
+        self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
+        self.assertEqual(LightmapRecords.migrate_legacy([solo]), [])
 
     def test_ingest_owns_the_return_leg_and_never_the_browser(self):
         """One return leg for panel and API: _ingest reassembles, and stops there.
@@ -2191,10 +2236,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.node_utils.data_nodes import DataNodes
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
-        DataNodes.write(ptk.Scope.DELIVERABLE, LightmapBaker.LIGHTMAP_METADATA, '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA, '{"version": 1}')
         # Resolve the carrier the way the product does. The export set now folds
         # in EVERY carrier (a referenced module publishes onto its own namespaced
         # one), and that plural resolver returns unambiguous LONG paths.
@@ -2335,14 +2380,14 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         what an export ships.
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
-        from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
         from mayatk.node_utils.data_nodes import DataNodes
 
         self.addCleanup(self._drop_carrier)
         grp = cmds.group(cmds.polyCube()[0], name="PREVIEW_GATE")
-        RenderOpacity.key_fade([grp], start=5, end=20, direction="in")
-        DataNodes.write(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL, "")
-        self.assertFalse(DataNodes.read(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL))
+        RenderEffects.key_fade([grp], start=5, end=20, direction="in")
+        DataNodes.write(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL, "")
+        self.assertFalse(DataNodes.read(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL))
 
         with (
             mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
@@ -2355,7 +2400,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             [n for n in shipped if DataNodes.EXPORT in n],
             f"the carrier itself must still ship: {shipped}",
         )
-        published = DataNodes.read(ptk.Scope.DELIVERABLE, RenderOpacity.DATA_CHANNEL)
+        published = DataNodes.read(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL)
         self.assertTrue(published, "the derived channel was not refreshed")
         self.assertIn("PREVIEW_GATE", published)
 

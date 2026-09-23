@@ -209,9 +209,13 @@ class TestShadowRig(MayaTkTestCase):
         # A shadow reflects nothing.
         self.assertEqual(cmds.getAttr(f"{shader}.specular"), 0.0)
 
-    def test_stretch_mode_is_an_orbit_alias(self):
-        """The retired axis-aligned mode builds an orbit rig: the plane's
-        local +Z points away from the light."""
+    def test_the_retired_stretch_mode_builds_as_orbit(self):
+        """``"stretch"`` (the axis-aligned mode) was an alias with a logger
+        notice from 2026-09-05 and was retired 2026-09-21: it is now an unknown
+        mode, which builds orbit like any other -- the plane's local +Z points
+        away from the light -- with no alias table left to consult."""
+        self.assertFalse(hasattr(ShadowRig, "_DEPRECATED_MODES"))
+        self.assertNotIn("stretch", ShadowRig.MODES)
         rig = self._make(mode="stretch")
         self.assertEqual(rig.mode, "orbit")
         self.assertAlmostEqual(
@@ -655,7 +659,8 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(again.texture_path, rig.texture_path)
         self.assertEqual(again.canvas, rig.canvas)
         self.assertAlmostEqual(again.footprint_radius, rig.footprint_radius, places=5)
-        self.assertIs(ShadowRig._from_plane.__func__, ShadowRig.from_plane.__func__)
+        # The pre-public ``_from_plane`` spelling was retired 2026-09-21.
+        self.assertFalse(hasattr(ShadowRig, "_from_plane"))
 
     def test_for_node_resolves_from_any_rig_node(self):
         """for_node re-attaches the rig from the plane, its group, a target,

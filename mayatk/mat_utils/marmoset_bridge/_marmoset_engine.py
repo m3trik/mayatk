@@ -63,9 +63,6 @@ _TOOLBAG_APP_NAMES = APP.app_names
 # it to the canon on the way in (``script_template._MODE_ALIASES``).
 SEND_TO = script_template.SEND_TO
 ROUND_TRIP = script_template.ROUND_TRIP
-#: Deprecated alias for :data:`ROUND_TRIP`, kept because it was a public export. Bound to
-#: the canonical value, so the two cannot drift apart.
-ROUNDTRIP = ROUND_TRIP
 _MODES = (SEND_TO, ROUND_TRIP)
 
 

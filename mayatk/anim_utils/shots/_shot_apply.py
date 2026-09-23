@@ -352,9 +352,7 @@ class ShotApply(_ShotApplyInternal):
         # movers carry and every sequencer pass that owns a pin reads. A layered
         # channel's base and layer curves sit behind its blend node, where a pin
         # is claimed in the ledger and then moved, retired and shown by nothing.
-        curves = AnimUtils.objects_to_curves(
-            targets, as_strings=True, through_blends=False
-        )
+        curves = AnimUtils.objects_to_curves(targets, through_blends=False)
         if not curves:
             return [] if report else 0
         return AnimUtils.insert_keys(curves, bounds, report=report)

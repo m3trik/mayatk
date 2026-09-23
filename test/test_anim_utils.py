@@ -2113,7 +2113,7 @@ class TestAnimUtils(MayaTkTestCase):
         """step_keys with a dict of curve→times steps only those times."""
 
         plug = f"{self.cube}.translateX"
-        curves = AnimUtils.objects_to_curves([self.cube], as_strings=True)
+        curves = AnimUtils.objects_to_curves([self.cube])
         tx_curve = [c for c in curves if "translateX" in c][0]
 
         cmds.keyTangent(plug, edit=True, outTangentType="auto")
@@ -2595,7 +2595,7 @@ class TestAnimUtils(MayaTkTestCase):
         keys_before = cmds.keyframe(curve, q=True, timeChange=True)
 
         # Remove redundant flat keys
-        AnimUtils.get_redundant_flat_keys([self.cube], remove=True, as_strings=True)
+        AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
 
         keys_after = cmds.keyframe(curve, q=True, timeChange=True)
         out_types = cmds.keyTangent(curve, q=True, outTangentType=True)
@@ -3251,7 +3251,7 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertIsNotNone(curve_name, "No anim curve found on translateX")
 
         # Remove redundant flat keys
-        AnimUtils.get_redundant_flat_keys([self.cube], remove=True, as_strings=True)
+        AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
 
         # After removal, only frames 1, 10, and 20 should remain
         keys = cmds.keyframe(curve_name, query=True, timeChange=True)
@@ -3652,7 +3652,7 @@ class TestAnimUtils(MayaTkTestCase):
             f: cmds.getAttr(f"{self.cube}.translateX", time=f) for f in sample_frames
         }
 
-        AnimUtils.get_redundant_flat_keys([self.cube], remove=True, as_strings=True)
+        AnimUtils.get_redundant_flat_keys([self.cube], remove=True)
 
         # All flat-region samples must remain exactly 0 (no tangent coupling drift)
         for f in sample_frames:
@@ -5962,6 +5962,45 @@ class TestUndoContract(MayaTkTestCase):
         self.assertEqual(self._curve(recorded), self._curve(silent))
 
 
+class TestDeprecatedAsStrings(MayaTkTestCase):
+    """``as_strings`` has had no effect since 2026-07-08 -- results are always
+    name strings -- and was deprecated in four docstrings that nothing
+    enforced. Since 2026-09-21 the keyword warns through
+    ``ptk.Deprecation.parameter`` and names the release it goes in; the call
+    is otherwise unchanged. Added: 2026-09-21
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="as_strings_cube")[0]
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=5)
+
+    def test_the_keyword_warns_and_the_result_is_unchanged(self):
+        expected = AnimUtils.objects_to_curves([self.cube])
+        with self.assertWarns(DeprecationWarning) as caught:
+            got = AnimUtils.objects_to_curves([self.cube], as_strings=True)
+        self.assertEqual(got, expected)
+        self.assertIn("'as_strings'", str(caught.warning))
+        self.assertIn("mayatk 0.20.0", str(caught.warning))
+
+    def test_every_method_that_took_it_warns(self):
+        calls = {
+            "get_static_curves": lambda: AnimUtils.get_static_curves(
+                [self.cube], as_strings=True
+            ),
+            "get_redundant_flat_keys": lambda: AnimUtils.get_redundant_flat_keys(
+                [self.cube], as_strings=True
+            ),
+            "simplify_curve": lambda: AnimUtils.simplify_curve(
+                [self.cube], as_strings=True
+            ),
+        }
+        for name, call in calls.items():
+            with self.subTest(method=name), self.assertWarns(DeprecationWarning):
+                call()
+
+
 class TestOptimizeLevelResolution(MayaTkTestCase):
     """``AnimUtils.OPTIMIZE_LEVELS`` -- the one table every consumer reads.
 
@@ -6025,31 +6064,36 @@ class TestOptimizeLevelResolution(MayaTkTestCase):
 
     def test_case_and_whitespace_are_tolerated(self):
         self.assertEqual(
-            mtk.AnimUtils.resolve_optimize_level("  Unbake "),
+            mtk.AnimUtils.resolve_optimize_level("  Extremes "),
             mtk.AnimUtils.resolve_optimize_level("extremes"),
         )
 
-    def test_unbake_alias_still_resolves(self):
+    def test_retired_unbake_level_warns_and_resolves(self):
         """``"unbake"`` was the level's name until 2026-09-02 -- it read as
         reversing a bake, which is SmartBake.restore, when it only thins one.
-        Saved templates and headless callers keep working through the alias
-        for one release; the method keeps its old name the same way."""
-        self.assertEqual(mtk.AnimUtils.normalize_optimize_level("unbake"), "extremes")
-        self.assertEqual(
-            mtk.AnimUtils.resolve_optimize_level("unbake"),
-            mtk.AnimUtils.resolve_optimize_level("extremes"),
-        )
+        A saved template or preset may still say it, so it resolves to
+        ``"extremes"`` -- through ``ptk.Deprecation.values`` since 2026-09-21,
+        which warns and names the release it stops working in (it resolved
+        silently before). The method's old name, ``unbake_keys``, had no
+        caller and is gone."""
+        with self.assertWarns(DeprecationWarning) as caught:
+            level = mtk.AnimUtils.normalize_optimize_level("  Unbake ")
+        self.assertEqual(level, "extremes")
+        message = str(caught.warning)
+        self.assertIn("'unbake'", message)
+        self.assertIn("mayatk 0.20.0", message)
+        self.assertIn("'extremes'", message)
+        with self.assertWarns(DeprecationWarning):
+            kwargs = mtk.AnimUtils.resolve_optimize_level("unbake")
+        self.assertEqual(kwargs, mtk.AnimUtils.resolve_optimize_level("extremes"))
         self.assertNotIn("unbake", mtk.AnimUtils.OPTIMIZE_LEVELS)
-        self.assertIs(
-            mtk.AnimUtils.unbake_keys.__func__,
-            mtk.AnimUtils.reduce_to_extremes.__func__,
-        )
+        self.assertFalse(hasattr(mtk.AnimUtils, "unbake_keys"))
 
     def test_normalize_reports_the_canonical_key(self):
         """A caller LOGGING the level must name what actually ran, not echo the
         caller's spacing and case back at the user."""
         self.assertEqual(
-            mtk.AnimUtils.normalize_optimize_level("  Unbake "), "extremes"
+            mtk.AnimUtils.normalize_optimize_level("  Extremes "), "extremes"
         )
         self.assertEqual(
             mtk.AnimUtils.normalize_optimize_level(True),

@@ -35,6 +35,21 @@ import pythontk as ptk
 logger = logging.getLogger(__name__)
 
 
+class UsdReadRefused(RuntimeError):
+    """A stage refused for a LIVE read -- a reference or an open -- because its
+    skins crash mayaUsd's reader (:meth:`UsdUtils.live_read_options`).
+
+    Raised instead of handing Maya the stage: Maya dies on it, so there is nothing
+    to catch afterwards. The stage itself is readable -- :meth:`UsdUtils.import_scene`
+    brings it in safely -- which is what a caller can offer instead. *prims* are
+    the crashing skins' prim paths.
+    """
+
+    def __init__(self, message: str, prims: List[str]):
+        super().__init__(message)
+        self.prims = list(prims)
+
+
 class UsdUtils(ptk.HelpMixin):
     """Low-level USD import/export utilities over the ``mayaUsd`` plugin.
 
@@ -129,6 +144,10 @@ class UsdUtils(ptk.HelpMixin):
         "readAnimData": True,
         "remapUVSetsTo": [["st", "map1"]],
     }
+
+    #: The ``cmds.file`` translator mayaUsd registers for READING a layer: an import,
+    #: a reference and an open all go through it (:meth:`file_options`).
+    IMPORT_TRANSLATOR = "USD Import"
 
     #: Node types whose motion is not derivable from key times: their presence
     #: makes :meth:`sampling_frame_range` fall back to the full playback range.
@@ -462,11 +481,40 @@ class UsdUtils(ptk.HelpMixin):
 
         return ";".join(f"{key}={spell(value)}" for key, value in options.items())
 
+    @classmethod
+    def file_options(
+        cls, options: Optional[Dict[str, Any]] = None, read_animation: bool = True
+    ) -> Dict[str, str]:
+        """The ``cmds.file`` keywords that read a USD layer the interchange way --
+        ``{"type": IMPORT_TRANSLATOR, "options": ...}`` -- for an import, a reference
+        or an open alike.
+
+        Name the translator on every read: left to pick one by extension, Maya reads
+        with the translator's own defaults, and ``readAnimData`` defaults OFF --
+        measured, an untyped reference of a keyed stage arrived static. A reference
+        or an open also STORES both (the saved scene records ``-typ`` / ``-op``), so
+        every reload reads the stage the same way.
+
+        Parameters:
+            options: Translator options merged over
+                :attr:`INTERCHANGE_IMPORT_OPTIONS`; an explicit ``readAnimData``
+                entry wins over *read_animation*.
+            read_animation: Read the stage's time samples as keys.
+
+        Returns:
+            The keywords to splat into ``cmds.file``.
+        """
+        merged = dict(cls.INTERCHANGE_IMPORT_OPTIONS, readAnimData=bool(read_animation))
+        merged.update(options or {})
+        return {"type": cls.IMPORT_TRANSLATOR, "options": cls.options_string(merged)}
+
     @staticmethod
     def skinning_methods(usd_path: str) -> Dict[str, str]:
         """``{prim path: skinning method}`` for every prim of the stage that authors
         one -- ``"dualQuaternion"`` or ``"classicLinear"`` (``UsdSkelBindingAPI``'s
-        ``skinningMethod``). ``{}`` when the stage cannot be opened.
+        ``skinningMethod``). ``{}`` when the stage opens to nothing; a layer pxr
+        cannot read raises its ``Tf.ErrorException`` (a ``RuntimeError``) --
+        measured on damaged, truncated and empty layers alike.
 
         The mirror of ``btk.UsdUtils.skinning_methods``, and the pull side of the
         same contract: mayaUsd WRITES this attribute for a dual-quaternion
@@ -491,6 +539,98 @@ class UsdUtils(ptk.HelpMixin):
     _CRASHING_SKINNING_METHOD = "dualQuaternion"
 
     @classmethod
+    def _crashing_prims(cls, methods: Dict[str, str]) -> List[str]:
+        """The prim paths in *methods* (``{prim path: method}``) whose skin crashes
+        the reader, sorted."""
+        return sorted(
+            path
+            for path, method in methods.items()
+            if method == cls._CRASHING_SKINNING_METHOD
+        )
+
+    @classmethod
+    def crashing_skins(cls, usd_path: str) -> List[str]:
+        """Prim paths of the stage whose skin mayaUsd 0.30's reader crashes on
+        (``skinningMethod = dualQuaternion`` -- see :meth:`dq_safe_source`).
+
+        Parameters:
+            usd_path: The layer to scan.
+
+        Returns:
+            The prim paths, sorted; ``[]`` when there are none.
+
+        Raises:
+            RuntimeError: pxr cannot read the layer (:meth:`skinning_methods`).
+        """
+        return cls._crashing_prims(cls.skinning_methods(usd_path))
+
+    @classmethod
+    def live_read_options(
+        cls,
+        file_path: str,
+        options: Optional[Dict[str, Any]] = None,
+        read_animation: bool = True,
+    ) -> Dict[str, str]:
+        """:meth:`file_options` for reading *file_path* LIVE -- a reference or an
+        open -- once the stage is proven safe to hand the reader. Loads the plugin.
+
+        Two stages are refused, both measured. One whose skins crash the reader:
+        a live read has no way around them -- the overlay :meth:`import_scene`
+        composes instead (:meth:`dq_safe_source`) is a session temp file, and a
+        reference or an open is read again from its path on every load -- and a
+        plain reference of a DQ-skinned layer took mayapy down with an access
+        violation, exactly as the import does. And a layer pxr cannot read at all:
+        the translator does not fail on it, it leaves an EMPTY reference node
+        behind (damaged, truncated and empty layers alike).
+
+        Parameters:
+            file_path: The USD layer or package.
+            options, read_animation: As :meth:`file_options`.
+
+        Returns:
+            The ``cmds.file`` keywords for the read.
+
+        Raises:
+            FileNotFoundError: *file_path* does not exist.
+            UsdReadRefused: The stage authors a skin the reader crashes on; the
+                message names the prims, and :meth:`import_scene` reads it safely.
+            RuntimeError: pxr cannot read the layer (damaged, empty, not fully
+                synced) -- an import cannot either.
+        """
+        path = os.path.abspath(os.path.expandvars(os.path.expanduser(str(file_path))))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"USD file not found: {path}")
+        name = os.path.basename(path)
+        cls.load_plugin()
+        try:
+            crashing = cls.crashing_skins(path)
+        except RuntimeError as error:  # pxr's Tf.ErrorException
+            raise RuntimeError(
+                f"{name} is not a readable USD layer -- damaged, empty or not fully "
+                f"synced? ({cls._error_detail(error)})"
+            ) from error
+        if crashing:
+            shown = ", ".join(crashing[:3])
+            if len(crashing) > 3:
+                shown += f" and {len(crashing) - 3} more"
+            raise UsdReadRefused(
+                f"{name} authors {len(crashing)} dual-quaternion skin(s) ({shown}), "
+                "which crash mayaUsd's USD reader, so it cannot be referenced or "
+                "opened. Import it instead: the import neutralizes those skins and "
+                "restores dual quaternion afterwards.",
+                crashing,
+            )
+        return cls.file_options(options, read_animation)
+
+    @staticmethod
+    def _error_detail(error: Exception) -> str:
+        """The readable part of a pxr error: its first line, less the C++ source
+        location pxr prefixes (``Error in '<function>' at line N in file X : 'why'``)."""
+        lines = [ln.strip() for ln in str(error).splitlines() if ln.strip()]
+        first = lines[0] if lines else type(error).__name__
+        return first.split(" : ", 1)[-1].strip("'")
+
+    @classmethod
     def dq_safe_source(cls, usd_path: str) -> Tuple[str, Dict[str, str]]:
         """``(path safe to hand mayaUsd, {prim path: real skinning method})``.
 
@@ -511,7 +651,7 @@ class UsdUtils(ptk.HelpMixin):
         path allocates nothing.
         """
         methods = cls.skinning_methods(usd_path)
-        risky = [p for p, m in methods.items() if m == cls._CRASHING_SKINNING_METHOD]
+        risky = cls._crashing_prims(methods)
         if not risky:
             return usd_path, methods
         from pxr import Sdf, Usd, UsdSkel
@@ -647,10 +787,7 @@ class UsdUtils(ptk.HelpMixin):
             raise FileNotFoundError(f"USD file not found: {file_path}")
 
         cls.load_plugin()
-
-        merged = dict(cls.INTERCHANGE_IMPORT_OPTIONS, readAnimData=bool(read_animation))
-        merged.update(options or {})
-        options_string = cls.options_string(merged)
+        read = cls.file_options(options, read_animation)
 
         usd_path = file_path.replace("\\", "/")
         # BEFORE the namespace is touched: this reads the file and can raise on a
@@ -670,10 +807,9 @@ class UsdUtils(ptk.HelpMixin):
             new_nodes = cmds.file(
                 source,
                 i=True,
-                type="USD Import",
                 returnNewNodes=return_new_nodes,
                 ignoreVersion=True,
-                options=options_string,
+                **read,
             )
         finally:
             if restore_ns is not None:

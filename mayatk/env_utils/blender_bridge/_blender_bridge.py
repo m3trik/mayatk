@@ -200,15 +200,6 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     # state, not a mesh file -- GLB and every other deliverable come from the
     # exporters, which read the committed bake on their own.
     save_extensions = (".blend", ".json")
-    # ``INCLUDE_SHOTS`` became ``INCLUDE_SCENE_DATA`` when every portable scene
-    # record -- not the shots alone -- started riding the sidecar.
-    param_aliases = staticmethod(
-        ptk.Deprecation.values(
-            {"INCLUDE_SHOTS": "INCLUDE_SCENE_DATA"},
-            what="BlenderBridge parameter",
-            remove_in="0.19.0",
-        )
-    )
 
     def __init__(self, blender_path: Optional[str] = None):
         super().__init__(app_path=blender_path)
@@ -957,7 +948,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         materials** -- full PBR material and UV0 untouched, lightmap on UV1, undone by the
         same ``revert_lightmap`` the Maya-native bakes use. After that, the bake targets no
         platform: FBX -> Unity and GLB -> web each read the committed state on their own
-        (see ``LightmapBaker.commit_lightmap`` / ``ptk.MeshConvert.apply_glb_lightmaps``).
+        (see ``LightmapRecords.commit`` / ``ptk.MeshConvert.apply_glb_lightmaps``).
         The Maya **viewport shows nothing** -- deliberately, since the commit builds no
         file node and leaves the material untouched; the scene gains a lightmap UV set on
         channel 1 and a marker per transform, and the map is inspected on disk or in a
@@ -1514,7 +1505,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         The return leg of :meth:`bake_lightmaps`: Blender owned the whole lightmap job, so
         this writes the layout it produced onto the Maya meshes
         (:meth:`~mayatk.UvUtils.apply_uv_layout`) and then records the maps
-        (:meth:`~mayatk.LightmapBaker.commit_lightmap`) so they sit **alongside the
+        (:meth:`~mayatk.LightmapRecords.commit`) so they sit **alongside the
         existing maps** -- full PBR material and UV0 untouched, lightmap on UV1, undone by
         the same ``revert_lightmap`` the Maya-native bakes use.
 
@@ -1635,7 +1626,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 f"selection; not wired: {', '.join(sorted(unmatched)[:5])}"
             )
 
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
         from mayatk.uv_utils._uv_utils import UvUtils
 
         # Vet each entry BEFORE touching a mesh: an entry that cannot be committed must
@@ -1652,6 +1643,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 self.logger.warning(f"{maya}: lightmap missing at {path!r}; skipped.")
             else:
                 usable[maya] = (path, layout, entry.get("rect"))
+
+        # A LEGACY marker's squeeze (``uvRect``) is still in the UVs, which is why
+        # ``commit`` carries its record forward. The layout below REPLACES those UVs,
+        # so the record is settled first -- restored and folded into the binding, as
+        # every bake does on its way in (lossless, so an entry whose layout is then
+        # rejected loses nothing). Carried onto Blender's layout, a later revert or
+        # migration would invert a squeeze that is no longer there.
+        LightmapRecords.migrate_legacy(list(usable))
 
         # One UV write per shared shape: instance siblings wear the same shape, so the
         # (identical) layout is applied through one representative and the result fans
@@ -1678,9 +1677,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
             return {}
 
-        baker = LightmapBaker()
         rects = {m: usable[m][2] for m in wired if usable[m][2]}
-        recorded = baker.commit_lightmap(mapping, scale_offsets=rects)
+        recorded = LightmapRecords.commit(mapping, scale_offsets=rects)
         maps_dir = os.path.dirname(next(iter(mapping.values()), ""))
         self.logger.info(
             f"Wired {len(recorded)} lightmap(s) from {maps_dir} into the scene "

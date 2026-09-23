@@ -1341,6 +1341,198 @@ class TestFlattenInfluences(MayaTkTestCase):
         with self.assertRaises(ValueError):
             SkinUtils.flatten_influences(frames=self.FRAMES, root_parent="elsewhere")
 
+    def _dag_census(self):
+        """``{node type: count}`` over the whole DAG -- what a second pass must
+        not grow."""
+        out = {}
+        for node in cmds.ls(dag=True, long=True) or []:
+            kind = cmds.nodeType(node)
+            out[kind] = out.get(kind, 0) + 1
+        return out
+
+    def test_a_root_the_carrier_bound_is_still_recognised_as_ours(self):
+        """The production shape, which a same-session re-run does NOT reproduce.
+
+        A flatten root deforms nothing, but Blender's FBX exporter writes EVERY
+        bone of an armature into the skin's deformer set, so the root comes back
+        from a round trip bound as influence 0
+        (``connectAttr "|..._skeleton_GRP|..._skeleton.wm" "skinCluster1.ma[0]"``,
+        measured on the module). Recognising a wrapper by "is it in the influence
+        list" therefore fails on exactly the scenes this exists for -- it has to
+        ask whether the joint carries WEIGHT.
+        """
+        tube, sc, chain, anchor, assy = self._build()
+        first = SkinUtils.flatten_influences(frames=self.FRAMES, root_parent="world")
+        root = next(iter(first))
+        # What the carrier does on the way back: bind the weightless root.
+        cmds.skinCluster(sc, edit=True, addInfluence=root, weight=0.0)
+        self.assertIn(
+            root.rsplit("|", 1)[-1],
+            [
+                j.rsplit("|", 1)[-1]
+                for j in SkinUtils.get_influences(sc, long_names=True)
+            ],
+            "fixture: the root is now an influence",
+        )
+        census = self._dag_census()
+
+        second = SkinUtils.flatten_influences(frames=self.FRAMES, root_parent="world")
+
+        self.assertEqual(next(iter(second)), root, "the bound root was reused")
+        self.assertEqual(
+            self._dag_census(), census, "the second pass created no DAG node"
+        )
+
+    def test_a_weighted_chain_root_is_never_mistaken_for_a_wrapper(self):
+        """The other side of that rule: a joint the skin actually deforms from is
+        an authored chain root and must get a fresh wrapper, not be reused."""
+        tube = _make_cylinder("wr_tube")
+        chain = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)], "wr_jnt")
+        plug = cmds.group(empty=True, name="wr_PLUG")
+        cmds.select(clear=True)
+        anchor = cmds.joint(p=(9, 0, 0), name="wr_anchor")
+        cmds.parent(anchor, plug)
+        sc = cmds.skinCluster(
+            cmds.ls(chain, long=True) + [anchor],
+            tube,
+            toSelectedBones=True,
+            maximumInfluences=2,
+        )[0]
+        influences = SkinUtils.get_influences(sc, long_names=True)
+        weighted = cmds.skinCluster(sc, query=True, weightedInfluence=True) or []
+        self.assertIn(
+            "wr_jnt1",
+            [w.rsplit("|", 1)[-1] for w in weighted],
+            "fixture: the chain root carries weight",
+        )
+        self.assertEqual(
+            SkinUtils._reusable_flatten_root(influences, "world", [sc]),
+            "",
+            "a weighted chain root must not be reused as a flatten wrapper",
+        )
+
+    def test_a_second_flatten_reuses_the_root_it_already_made(self):
+        """Idempotence. Every foreign-scene conversion flattens, so a scene that
+        has been converted once and is converted AGAIN (the Reference Manager's
+        re-bake, a ``.ma -> .blend -> .ma`` round trip) must not grow a second
+        skeleton beside the first.
+
+        Measured on the production module before this: each round trip left the
+        previous ``<mesh>_skeleton_GRP`` behind EMPTY, built ``_GRP1`` then
+        ``_GRP2`` next to it, and carried the superseded root along as an inert
+        extra bone -- +7 joints and +7 transforms per round trip. It is NOT why a
+        round trip loses skins: that survived this fix unchanged, 7 -> 4 either
+        way (BACKLOG 2026-09-20).
+        """
+        for route in ("world", "ancestor"):
+            with self.subTest(route=route):
+                self.tearDown()
+                self.setUp()
+                tube, sc, chain, anchor, assy = self._build()
+                first = SkinUtils.flatten_influences(
+                    frames=self.FRAMES, root_parent=route
+                )
+                root_a = next(iter(first))
+                census = self._dag_census()
+                worlds = self._worlds(next(iter(first.values())))
+
+                second = SkinUtils.flatten_influences(
+                    frames=self.FRAMES, root_parent=route
+                )
+
+                root_b = next(iter(second))
+                self.assertEqual(
+                    root_a,
+                    root_b,
+                    "the second pass reused the first pass's root joint",
+                )
+                self.assertEqual(
+                    self._dag_census(),
+                    census,
+                    "the second pass created no DAG node at all",
+                )
+                # ...and it did not move anything while proving it.
+                after = self._worlds(next(iter(second.values())))
+                worst = max(
+                    abs(a - b)
+                    for frame in self.FRAMES
+                    for uuid, matrix in worlds[frame].items()
+                    for a, b in zip(matrix, after[frame][uuid])
+                )
+                self.assertLess(worst, 1e-4, f"world matrices drifted by {worst}")
+
+    def test_two_skins_whose_meshes_share_a_short_name_stay_separate_and_settle(self):
+        """The production shape that seeded a whole cascade.
+
+        Maya does not require a short name to be unique -- the module carried two
+        ``WIRE_LOOM_A`` transforms under different parents -- and the flatten
+        names its wrapper after ``short_name(meshes[0])``. ``cmds.group``
+        uniquified the clash to ``_GRP1``, Blender saw ``_GRP`` and ``_GRP1``, and
+        coming back the twin picked up a ``.001`` the FBX importer spelled
+        ``FBXASC046001``. Two passes then built ``_GRP2`` beside both. The ROOT
+        JOINTS collided too, which `cmds.joint` does not uniquify, and carriers
+        resolve a skin's deformers by name.
+
+        So: the two skins must get SEPARATE roots with DISTINCT short names (never
+        merged, never spelled alike), and a second pass must add nothing. This is
+        name hygiene the carriers require, not a cure for the skins a round trip
+        loses -- that one is Blender's importer (BACKLOG 2026-09-20).
+        """
+        cmds.currentUnit(time="film")
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=10, minTime=1, maxTime=10
+        )
+        roots = []
+        for side in ("L", "R"):
+            grp = cmds.group(empty=True, name=f"twin_{side}_GRP")
+            tube = _make_cylinder("twin_mesh")
+            tube = cmds.ls(cmds.parent(tube, grp, relative=True)[0], long=True)[0]
+            chain = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)], f"twin_{side}_jnt")
+            cmds.parent(chain[0], grp, relative=True)
+            # A second root, so the flatten has something to do at all.
+            plug = cmds.group(empty=True, name=f"twin_{side}_PLUG")
+            cmds.select(clear=True)
+            anchor = cmds.joint(p=(9, 0, 0), name=f"twin_{side}_anchor")
+            cmds.parent(anchor, plug)
+            cmds.skinCluster(
+                cmds.ls(chain, long=True) + [anchor],
+                tube,
+                toSelectedBones=True,
+                maximumInfluences=2,
+            )
+            roots.append(tube)
+        # Fixture: the two meshes really do share a leaf name.
+        self.assertEqual(
+            len({p.rsplit("|", 1)[-1] for p in cmds.ls(roots, long=True)}),
+            1,
+            "fixture: both meshes are named twin_mesh",
+        )
+
+        first = SkinUtils.flatten_influences(frames=self.FRAMES, root_parent="world")
+        self.assertEqual(len(first), 2, "each skin keeps its OWN skeleton")
+        self.assertEqual(len(set(first)), 2, "the two roots must not be the same node")
+        # ...and their SHORT names differ. Maya allows duplicates under different
+        # parents, but FBX/USD resolve a skin's deformers by name, so two roots
+        # spelled alike make both skins claim the first armature and the twin's
+        # mesh arrives unbound (measured: 3 of 7 production skins lost per hop).
+        leaves = [p.rsplit("|", 1)[-1] for p in first]
+        self.assertEqual(
+            len(set(leaves)), 2, f"the two root joints share a short name: {leaves}"
+        )
+        groups = [
+            cmds.listRelatives(p, parent=True, fullPath=True)[0].rsplit("|", 1)[-1]
+            for p in first
+        ]
+        self.assertEqual(len(set(groups)), 2, f"the two wrappers collide: {groups}")
+        census = self._dag_census()
+
+        second = SkinUtils.flatten_influences(frames=self.FRAMES, root_parent="world")
+
+        self.assertEqual(set(second), set(first), "the second pass reused both roots")
+        self.assertEqual(
+            self._dag_census(), census, "the second pass created no DAG node"
+        )
+
     def test_the_exporter_now_writes_the_skin(self):
         """The contract: mayaUSDExport writes NO skin for a two-root skinCluster
         (control, the production defect) and a dual-quaternion UsdSkel binding

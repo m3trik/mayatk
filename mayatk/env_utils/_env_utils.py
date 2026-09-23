@@ -29,7 +29,7 @@ class EnvUtils(ptk.HelpMixin):
 
     #: Glob patterns that make a workspace "non-empty" for :meth:`find_workspaces`
     #: (also the default scan set for :meth:`get_workspace_scenes`). A consumer
-    #: referencing more formats overrides it — the Reference Manager adds "*.fbx".
+    #: referencing more formats overrides it — the Reference Manager adds FBX and USD.
     SCENE_FILE_TYPES: ClassVar[tuple] = ("*.ma", "*.mb")
 
     #: Maya's own scene formats: extension -> the ``cmds.file(save=True, type=...)`` string.
@@ -474,7 +474,9 @@ class EnvUtils(ptk.HelpMixin):
             (d.split(";") if d else [] for d in potential_dirs)
         ):
             if os.path.exists(directory):
-                found.setdefault(os.path.normcase(os.path.normpath(directory)), directory)
+                found.setdefault(
+                    os.path.normcase(os.path.normpath(directory)), directory
+                )
         return list(found.values())
 
     @classmethod
@@ -917,15 +919,29 @@ class EnvUtils(ptk.HelpMixin):
 
     @staticmethod
     def reference_scene(file_path):
-        """Reference a Maya scene.
+        """Reference a scene file — a Maya scene, an FBX, or a USD layer.
+
+        A USD layer reads through mayaUsd's translator, named, and only once the stage
+        is proven safe to read live (:meth:`UsdUtils.live_read_options`): left to pick
+        the translator by extension, Maya reads it with animation off.
 
         Parameters:
-            file_path (str): The path to the Maya scene file to reference.
+            file_path (str): The path to the file to reference.
+
+        Raises:
+            FileNotFoundError: *file_path* does not exist.
+            UsdReadRefused: A USD stage whose skins would crash mayaUsd's reader
+                (``UsdUtils.import_scene`` reads it safely).
+            RuntimeError: A USD layer pxr cannot read at all.
         """
-        if os.path.exists(file_path):
-            cmds.file(file_path, reference=True)
-        else:
+        if not os.path.exists(file_path):
             raise FileNotFoundError(f"No such file: '{file_path}'")
+        read = {}
+        if os.path.splitext(file_path)[1].lower() in ptk.USD_EXTENSIONS:
+            from mayatk.env_utils.usd import UsdUtils
+
+            read = UsdUtils.live_read_options(file_path)
+        cmds.file(file_path, reference=True, **read)
 
     @staticmethod
     def remove_reference(file_path):
@@ -975,7 +991,7 @@ class EnvUtils(ptk.HelpMixin):
         return []
 
     @staticmethod
-    def list_reference_nodes(top_level: bool = True) -> list:
+    def list_reference_nodes(top_level: bool = True, file_less: bool = False) -> list:
         """The scene's reference nodes, screened to the ones Maya can answer for.
 
         ``cmds.ls(type="reference")`` is scene-wide, and two kinds of node it hands
@@ -998,23 +1014,33 @@ class EnvUtils(ptk.HelpMixin):
         Parameters:
             top_level (bool): Exclude nested references. False lists every reference
                 node with a file behind it, nested ones included.
+            file_less (bool): List the nodes the ``-filename`` probe REJECTS instead
+                (screened by *top_level* the same way) -- for a caller that clears
+                them up. Maya's bookkeeping nodes are never listed either way:
+                ``sharedReferenceNode``, and ``_UNKNOWN_REF_NODE_``, which holds the
+                edits of references Maya could not identify.
 
         Returns:
             (list): Reference node names.
         """
         result = []
         for rn in cmds.ls(type="reference") or []:
-            if rn == "sharedReferenceNode":  # Maya's bookkeeping, not a file reference
-                continue
+            if rn == "sharedReferenceNode" or rn.startswith("_UNKNOWN_REF_NODE_"):
+                continue  # Maya's bookkeeping, not a file reference
             try:
                 # -isNodeReferenced is the one flag a file-less node still answers, so
                 # it leads; -filename then proves a file is behind everything else.
                 if top_level and cmds.referenceQuery(rn, isNodeReferenced=True):
                     continue
-                cmds.referenceQuery(rn, filename=True)
             except RuntimeError:
                 continue
-            result.append(rn)
+            try:
+                cmds.referenceQuery(rn, filename=True)
+                has_file = True
+            except RuntimeError:
+                has_file = False
+            if has_file != file_less:
+                result.append(rn)
         return result
 
     @classmethod

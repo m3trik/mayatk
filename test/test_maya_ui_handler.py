@@ -87,5 +87,38 @@ class TestMayaUiHandlerLogLinkRegistration(unittest.TestCase):
             registry[:] = saved
 
 
+class TestMayaUiHandlerDeprecationSink(unittest.TestCase):
+    """``MayaUiHandler.__init__`` points ``ptk.Deprecation.sink`` at the Script
+    Editor (``om.MGlobal.displayWarning``), once per session.
+
+    ``DeprecationWarning`` is hidden outside ``__main__`` -- every Maya
+    session -- so without the sink no artist sees a deprecated call before it
+    is removed (``CODE_STANDARD.md`` s5). Exercised through the staticmethod
+    ``__init__`` calls, as the log-link test above is.
+    """
+
+    def setUp(self):
+        import pythontk as ptk
+
+        self.deprecation = ptk.Deprecation
+        self.saved = self.deprecation.sink
+        self.addCleanup(setattr, self.deprecation, "sink", self.saved)
+
+    def test_installs_the_script_editor_sink(self):
+        import maya.api.OpenMaya as om
+
+        self.deprecation.sink = None
+        self.assertTrue(MayaUiHandler._install_deprecation_sink())
+        self.assertIs(self.deprecation.sink, om.MGlobal.displayWarning)
+
+    def test_leaves_a_host_sink_alone(self):
+        def host_sink(message):
+            pass
+
+        self.deprecation.sink = host_sink
+        self.assertFalse(MayaUiHandler._install_deprecation_sink())
+        self.assertIs(self.deprecation.sink, host_sink)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -182,11 +182,10 @@ class TestShadowRigConstruction(QuickTestCase):
         self.assertEqual(rig.mode, "orbit")
 
     def test_retired_stretch_mode_builds_as_orbit(self):
-        """'stretch' is accepted for one release and maps to its replacement.
-
-        Nothing else covers `_DEPRECATED_MODES`, so retiring the alias for real
-        must break a test rather than silently changing what a caller gets.
+        """'stretch' was retired 2026-09-21 (an alias since 2026-09-05): it
+        falls back to orbit like any unknown mode, and the alias table is gone.
         """
+        self.assertFalse(hasattr(ShadowRig, "_DEPRECATED_MODES"))
         rig = ShadowRig(mode="stretch")
         self.assertEqual(rig.mode, "orbit")
 

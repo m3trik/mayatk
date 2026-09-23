@@ -235,7 +235,11 @@ class WorldFitBake:
         # the fitted keys are relative to TARGET, not target x buffer. Local
         # values are overwritten by the keys.
         if reparent:
-            moved = cmds.parent(node, target, relative=True)[0]
+            # ``cmds.parent`` returns None when the node is ALREADY the target's
+            # child -- Maya's no-op, not a failure. It is the normal case on a
+            # re-run over a scene this already flattened (SkinUtils reuses the
+            # root it made), so the node simply keeps the path it has.
+            moved = (cmds.parent(node, target, relative=True) or [node])[0]
             node = (cmds.ls(moved, long=True) or [moved])[0]
         try:
             for _src_plug, attr, _factor in record["cut"]:
@@ -475,8 +479,7 @@ class WorldFitBake:
                 prepared["kept"][path] = {
                     "uuid": uuid,
                     "parent": (
-                        cmds.listRelatives(path, parent=True, fullPath=True)
-                        or [None]
+                        cmds.listRelatives(path, parent=True, fullPath=True) or [None]
                     )[0],
                     "ssc": bool(
                         cmds.attributeQuery(
@@ -536,7 +539,9 @@ class WorldFitBake:
             node = (cmds.ls(uuid, long=True) or [None])[0]
             # The target by its UUID: a target that is itself a chain node has
             # already moved (parents first), and its planned path with it.
-            live_target = (cmds.ls(targets.get(target) or target, long=True) or [None])[0]
+            live_target = (cmds.ls(targets.get(target) or target, long=True) or [None])[
+                0
+            ]
             if not node or not live_target or (path, target) not in samples:
                 continue
             try:

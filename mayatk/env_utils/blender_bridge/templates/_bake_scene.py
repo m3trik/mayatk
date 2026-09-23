@@ -23,7 +23,7 @@ clock, shots, the rig).
 
 Runs under ``mayapy`` via ``pythontk.run_script_to_artifact``, which judges success by the
 saved ``.ma``'s existence -- NOT the exit code (standalone teardown is a known crasher,
-hence the ``os._exit`` below, which skips it entirely).
+hence the hard exit below, ``_exit``, which skips it).
 
 Materials (FBX branch only): FBX carries only the classic model, so the conversion's
 ``.manifest.json`` sidecar is replayed through the SAME engine the direct-import path uses

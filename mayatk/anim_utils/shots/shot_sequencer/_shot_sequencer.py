@@ -191,9 +191,7 @@ class ShotSequencer:
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        curves = AnimUtils.objects_to_curves(
-            [node], as_strings=True, through_blends=True
-        )
+        curves = AnimUtils.objects_to_curves([node], through_blends=True)
         if not curves:
             return []
         standard = Detection._map_standard_curves_to_transforms(curves)
@@ -1206,7 +1204,7 @@ class ShotSequencer:
             lo, hi = shot.start, shot.end
         eps = _BATCH_MOVE_EPS
         curves = AnimUtils.objects_to_curves(
-            self._shot_nodes(shot), as_strings=True, through_blends=False
+            self._shot_nodes(shot), through_blends=False
         )
         for crv in sorted(set(curves or [])):
             if not Detection.curve_moves_in(crv, lo, hi):
@@ -2640,8 +2638,9 @@ class ShotSequencer:
         keys away on every baked curve of the production assembly).  A
         WHOLE-SHOT move already carries its gap inside its own envelope
         (:meth:`_move_shot_content`) and passes ``carry_gap=False``, or the
-        same keys would move twice.  The sample ON *after_frame* is the
-        pivot's closing pose and stays with it either way.
+        same keys would move twice.  A sample ON *after_frame* in the gap
+        stays with the pivot; the carry never cuts into a shot it moves, so a
+        bound on or past the neighbour's start moves the neighbour whole.
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
 
@@ -2656,8 +2655,9 @@ class ShotSequencer:
         """Shift all shots ending at or before *before_frame* by *delta*.
 
         Routes through the plan/executor pair; see :meth:`ripple_downstream`
-        for *carry_gap* (here: the last moved shot's window is capped at
-        *before_frame*, so the pivot keeps the sample on its bound).
+        for *carry_gap* (here: the last moved shot's window is capped at a
+        *before_frame* in its trailing gap, so the pivot keeps the sample on
+        its bound; a bound on or before that shot's end moves it whole).
         """
         from mayatk.anim_utils.shots._shot_plan import ShotPlanner
 
@@ -2720,9 +2720,7 @@ class ShotSequencer:
         # -- an object posed once in a shot is not listed there, while its
         # curve still interpolates across the gap toward its next key.
         curves = (
-            AnimUtils.objects_to_curves(
-                self._content_objects(), as_strings=True, through_blends=False
-            )
+            AnimUtils.objects_to_curves(self._content_objects(), through_blends=False)
             if len(sorted_s) > 1
             else []
         )
@@ -3760,9 +3758,7 @@ class ShotSequencer:
 
         names = self._shot_nodes(shot)
         curves = (
-            AnimUtils.objects_to_curves(names, as_strings=True, through_blends=False)
-            if names
-            else []
+            AnimUtils.objects_to_curves(names, through_blends=False) if names else []
         )
         cut = 0
         led = self.ledger
@@ -4150,12 +4146,7 @@ class ShotSequencer:
                 names.update(self._shot_nodes(shot))
         if not names:
             return {}
-        curves = (
-            AnimUtils.objects_to_curves(
-                sorted(names), as_strings=True, through_blends=False
-            )
-            or []
-        )
+        curves = AnimUtils.objects_to_curves(sorted(names), through_blends=False) or []
         out: dict = {}
         for crv in sorted(set(curves)):
             times = cmds.keyframe(crv, q=True, timeChange=True) or []
@@ -4259,9 +4250,7 @@ class ShotSequencer:
                 continue
             names = self._shot_nodes(shot)
             curves = (
-                AnimUtils.objects_to_curves(
-                    names, as_strings=True, through_blends=False
-                )
+                AnimUtils.objects_to_curves(names, through_blends=False)
                 if names
                 else []
             )
