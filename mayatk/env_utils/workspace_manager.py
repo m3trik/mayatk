@@ -14,7 +14,7 @@ class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin):
     """Shared workspace management utilities for UI components."""
 
     # Glob patterns the workspace-file cache scans for. A subclass widens this to list more
-    # than the two native scene formats (the Reference Manager adds "*.fbx", which Maya
+    # than the two native scene formats (the Reference Manager adds FBX and USD, which Maya
     # references natively) without reimplementing the scan.
     SCENE_FILE_TYPES: tuple[str, ...] = EnvUtils.SCENE_FILE_TYPES
 

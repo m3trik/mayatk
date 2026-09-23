@@ -1366,20 +1366,6 @@ class ShotsSlots(ptk.LoggingMixin):
         """Add empty room before the selected shot."""
         self.controller.on_add_space("leading")
 
-    # -- deprecated one-release aliases -----------------------------------
-    # The option-box actions these named moved into the All Shots group as
-    # ``btn_delete_all`` / ``btn_trim_all``.  Kept for one release per the
-    # public-API contract; the Switchboard binds by objectName, so nothing
-    # calls these once the .ui no longer carries those names.
-
-    def btn_delete_all_shots(self):
-        """Deprecated alias for :meth:`btn_delete_all`."""
-        self.btn_delete_all()
-
-    def btn_trim_all_shots(self):
-        """Deprecated alias for :meth:`btn_trim_all`."""
-        self.btn_trim_all()
-
     def btn_add_trailing_space(self):
         """Add empty room after the selected shot."""
         self.controller.on_add_space("trailing")

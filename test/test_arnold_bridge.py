@@ -245,25 +245,23 @@ class ArnoldBridgeTest(unittest.TestCase):
             self.assertEqual(owners.get(fn), shader)
 
     def test_bridge_discoverable_via_arnold_sg_slot(self):
-        """The bridge must stay hideable after its own empty SG is cleaned up.
+        """The bridge is found through the base SG's ``aiSurfaceShader`` slot alone.
 
-        ``create_render_node`` gives the aiStandardSurface a shading group of
-        its own, which has no members — exactly what "Delete All Unused
-        Materials" removes. Once it's gone, the only link from a shading group
-        to the bridge is the SG's ``aiSurfaceShader`` slot, so shader discovery
-        has to read that slot too.
+        The bridge shader has no shading group of its own. It once got one from
+        ``create_render_node`` -- member-less, exactly what "Delete All Unused
+        Materials" removes, and one more per bake through the texture baker's
+        translation guard -- so the only link from a shading group to the bridge
+        is that slot, and shader discovery has to read it.
         """
         shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
         self.bridge.add(materials=shader)
         ai = self.bridge.get_bridge(shader)
         bridge_files = self._bridge_file_nodes(shader)
 
-        # Drop the bridge's own member-less shading group.
         own_sgs = [
             s for s in (cmds.listConnections(ai, type="shadingEngine") or []) if s != sg
         ]
-        self.assertTrue(own_sgs, "expected an auto-created SG on the bridge shader")
-        cmds.delete(own_sgs)
+        self.assertEqual(own_sgs, [], "the bridge shader must not mint its own SG")
         self.assertEqual(
             cmds.listConnections(
                 f"{sg}.aiSurfaceShader", source=True, destination=False
@@ -331,6 +329,40 @@ class ArnoldBridgeTest(unittest.TestCase):
         for fn in base_files:
             self.assertTrue(cmds.objExists(fn))
         self.assertEqual(_file_count(), base_file_count)
+
+    def test_a_bridge_mints_no_shading_group_and_leaves_none(self):
+        """REGRESSION (2026-09-22): the bridge shader came with a shading group
+        of its own that nothing was assigned to and remove() never deleted --
+        the texture baker's translation guard adds and removes bridges on every
+        bake, and a production room held three generations of empty
+        ``<mat>_aiSG``. The bridge rides the base material's group only."""
+        shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        before = set(cmds.ls(type="shadingEngine"))
+        self.bridge.add(materials=shader)
+        self.assertEqual(set(cmds.ls(type="shadingEngine")), before)
+        self.bridge.remove(materials=shader)
+        self.assertEqual(set(cmds.ls(type="shadingEngine")), before)
+
+    def test_remove_clears_the_empty_group_an_older_bridge_left(self):
+        """A bridge made before the fix still has its empty ``_aiSG``; removing
+        it takes that group too -- but never the base material's own group,
+        which the bridge feeds through aiSurfaceShader and which has members."""
+        shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        cube = cmds.polyCube(name="bridgeMember")[0]
+        cmds.sets(cube, edit=True, forceElement=sg)
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        legacy = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{ai}SG"
+        )
+        cmds.connectAttr(f"{ai}.outColor", f"{legacy}.surfaceShader")
+        self.bridge.remove(materials=shader)
+        self.assertFalse(cmds.objExists(legacy))
+        self.assertTrue(cmds.objExists(sg))
+        self.assertIn(
+            cmds.listRelatives(cube, shapes=True, fullPath=True)[0],
+            cmds.ls(cmds.sets(sg, query=True) or [], long=True),
+        )
 
     def test_remove_without_bridge_is_noop(self):
         shader, _, _ = self._make_base_material("matA", ["model_BaseColor.png"])

@@ -12,7 +12,7 @@ standalone helpers:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Optional
 
 
 try:
@@ -20,13 +20,9 @@ try:
 except ImportError:
     cmds = None
 
-from mayatk.anim_utils.segment_keys import SegmentKeys
 from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
-
-if TYPE_CHECKING:
-    pass
 
 # Near-zero guard for floating-point comparisons.
 FLOAT_ZERO_EPS = 1e-6
@@ -254,23 +250,37 @@ class ClipMotionMixin:
             track_id = clip.data.get("audio_track_id")
             if orig_start is None or orig_end is None or not track_id:
                 return False
-            delta = new_start - orig_start
+            # The widget draws only the part of the segment inside its shot and
+            # reports where THAT landed, so the move is measured from it: from
+            # the segment's own start it was off by however much of the
+            # segment began before the shot.
+            delta = new_start - clip.data.get("vis_start", orig_start)
             if abs(delta) < FLOAT_ZERO_EPS:
                 return False
+
+            def move(lo, hi, d):
+                audio_utils.shift_keys_in_range(lo, hi, d, track_ids=[track_id])
+
+            first = min((f for f, _v in audio_utils.read_keys(track_id)), default=None)
             with audio_utils.batch() as b:
-                audio_utils.shift_keys_in_range(
-                    orig_start, orig_end, delta, track_ids=[track_id]
+                self._lift_make_room_land(
+                    clip,
+                    orig_start,
+                    orig_end,
+                    delta,
+                    first,
+                    move,
+                    shown_from=clip.data.get("vis_start"),
                 )
                 b.mark_dirty([track_id])
-            full_dur = orig_end - orig_start
-            new_end = new_start + full_dur
-            clip.data["orig_start"] = new_start
-            clip.data["orig_end"] = new_end
+            clip.data["orig_start"] = orig_start + delta
+            clip.data["orig_end"] = orig_end + delta
+            if "vis_start" in clip.data:
+                clip.data["vis_start"] += delta
             # The audio segment cache still holds the pre-move span —
             # the immediate rebuild would snap the clip back to its old
             # position until the keyframe debounce fires.
             self._audio_segments_cache = None
-            self._expand_shot_for_clip(clip, new_start, new_end)
             return True
 
         # Sub-row attribute clip move
@@ -286,26 +296,36 @@ class ClipMotionMixin:
             delta = new_start - orig_start
             if abs(delta) < FLOAT_ZERO_EPS:
                 return False
+            if self.sequencer is None:
+                return True
+            curves = curves_for_attr(obj_name, attr_name)
             if clip.data.get("is_stepped"):
                 # Stepped sub-row clip: delete-and-recreate.
                 # Note: shift-out tracking is omitted here because sub-rows
                 # are built from live Maya data (_provide_sub_rows), not from
                 # the cached segments that _shifted_out_keys filters.
-                if self.sequencer is not None:
+
+                def move(lo, _hi, d):
                     self.sequencer.move_stepped_keys(
-                        obj_name, orig_start, new_start, attr_name=attr_name
+                        obj_name, lo, lo + d, attr_name=attr_name
                     )
+
+            elif curves:
+                # Move to Shot's key-level primitive, not a plain relative
+                # ``keyframe`` edit: that one refuses to slide a key past
+                # another (the lift below the curve's first key did nothing)
+                # and leaves the edit ledger's claims behind.
+
+                def move(lo, hi, d):
+                    self.sequencer.move_attribute_keys(
+                        obj_name, attr_name, d, window=(lo, hi)
+                    )
+
             else:
-                curves = curves_for_attr(obj_name, attr_name)
-                if curves:
-                    SegmentKeys.shift_curves(
-                        curves,
-                        delta,
-                        time_range=(orig_start, orig_end),
-                        remove_flat_at_dest=False,
-                    )
-            new_end = new_start + (orig_end - orig_start)
-            self._expand_shot_for_clip(clip, new_start, new_end)
+                return True
+            self._lift_make_room_land(
+                clip, orig_start, orig_end, delta, self._first_key(curves), move
+            )
             return True
 
         # Animation clip move — per-object within a shot
@@ -335,7 +355,16 @@ class ClipMotionMixin:
                 shot_id,
                 getattr(widget, "shift_held_at_press", False),
             )
-            self.sequencer.move_stepped_keys(obj_name, orig_start, new_start)
+            self._lift_make_room_land(
+                clip,
+                orig_start,
+                orig_start,
+                delta,
+                self._first_key(cmds.keyframe(obj_name, q=True, name=True) or []),
+                lambda lo, _hi, d: self.sequencer.move_stepped_keys(
+                    obj_name, lo, lo + d
+                ),
+            )
             shift_held = getattr(widget, "shift_held_at_press", False)
             if shift_held:
                 shot = self.sequencer.shot_by_id(shot_id)
@@ -344,7 +373,6 @@ class ClipMotionMixin:
             else:
                 # Normal move clears any shift-out exclusions for this object
                 self._shifted_out_keys.pop(obj_name, None)
-            self._expand_shot_for_clip(clip, new_start, new_start)
             return True
 
         shot = self.sequencer.shot_by_id(shot_id)
@@ -406,6 +434,60 @@ class ClipMotionMixin:
         """
         self._expand_shot_range(clip.data.get("shot_id"), new_start, new_end)
 
+    def _lift_make_room_land(
+        self, clip, lo, hi, delta, lowest, move, shown_from=None
+    ) -> None:
+        """Move a clip's content ``[lo, hi]`` by *delta*, its shot grown to
+        enclose the landing, without the ripple ever touching that content.
+
+        Making room ripples every envelope beyond the grown bound, and a clip's
+        own content can sit inside one: an audio segment is track-wide (its
+        clip draws only the part inside the shot) and a sub-row run can outlast
+        its shot.  Rippled first it was swept along with the neighbour; landed
+        first it stacked on the neighbour's pose.  So it is LIFTED below every
+        shot's start -- no ripple window reaches there, since every envelope
+        opens at its own shot's start -- and below *lowest*, the earliest key
+        it could meet; then the room is made, then it lands.  A refused
+        expansion lands it back where it was.  *move(lo, hi, delta)* shifts
+        the content inside ``[lo, hi]``.
+
+        The lift also clears where the ripple can LAND: growing the shot's
+        head ripples the shots before it back by as far, and a long enough
+        drag back carried the previous shot onto the lifted content.
+
+        *shown_from* is where the clip's SHOWN part starts when that is later
+        than *lo*: an audio clip draws only the part of its segment inside its
+        shot, and the shot grows to enclose what was dragged, never the part
+        of the segment that already lay before it -- enclosing that grew the
+        shot backward and rippled the previous shot the other way.
+        """
+        seq = self.sequencer
+        shots = seq.sorted_shots() if seq is not None else []
+        grow_lo = lo if shown_from is None else max(lo, shown_from)
+        shot = seq.shot_by_id(clip.data.get("shot_id")) if seq is not None else None
+        head_growth = max(0.0, shot.start - (grow_lo + delta)) if shot else 0.0
+        floors = (
+            [lo] + [s.start for s in shots] + ([lowest] if lowest is not None else [])
+        )
+        park = (min(floors) - head_growth - 1000.0) - hi
+        move(lo, hi, park)
+        try:
+            self._expand_shot_for_clip(clip, grow_lo + delta, hi + delta)
+        except Exception:
+            move(lo + park, hi + park, -park)  # declined: back where it was
+            raise
+        move(lo + park, hi + park, delta - park)
+
+    @staticmethod
+    def _first_key(curves) -> Optional[float]:
+        """The earliest key time across *curves*, or ``None`` with no keys."""
+        times = [
+            cmds.findKeyframe(str(c), which="first")
+            for c in curves or ()
+            if cmds.keyframe(str(c), q=True, keyframeCount=True)
+        ]
+        return min(times) if times else None
+
     def _expand_shot_range(self, shot_id, new_start: float, new_end: float) -> None:
         """Grow *shot_id* so ``[new_start, new_end]`` fits inside it.
 
@@ -414,6 +496,11 @@ class ClipMotionMixin:
         it a key dragged onto the next shot's first frame ends up owned by
         that shot while its siblings stay behind, which is what splits one
         dragged selection across two shots at zero gap.
+
+        Call it BEFORE the moved content lands.  The ripple moves every
+        envelope beyond the grown bound, so content that has already landed
+        there is swept a second time, and a landing on the neighbour's keyed
+        boundary stacks on the pose the ripple was about to carry away.
 
         Skipped when shift is held — shift means "move freely across shot
         boundaries without changing them".
@@ -461,9 +548,11 @@ class ClipMotionMixin:
                 # neighbour's start, and the planner then "split" a shared
                 # sample that never was one -- re-keying the neighbour's
                 # opening pose at its new start (measured 2026-09-05: every
-                # FAILED_CMPT_LOC curve gained a key).  Rippling from the NEW
-                # bound keeps the dragged key on the seam as this shot's
-                # (the planner's carry rule) and leaves the neighbour whole.
+                # FAILED_CMPT_LOC curve gained a key).  From the NEW bound the
+                # gap's content beyond it rides and what the shot grew over
+                # stays; the planner never cuts into the neighbour, so a bound
+                # on its keyed start (or inside it) moves it whole, boundary
+                # pose included, and the dragged key lands on a free frame.
                 if abs(start_delta) > 1e-6:
                     self.sequencer.ripple_upstream(shot_id, expanded_start, start_delta)
                 if abs(end_delta) > 1e-6:
@@ -497,9 +586,10 @@ class ClipMotionMixin:
         of a mouse drag, where a traceback is the worst possible reply.
 
         The restore point is deliberately KEPT (unlike ``_add_shot_space``,
-        which discards it): the planner declines before writing, but the
-        clip's own keys have already moved by then, so the scene did change
-        and the user must still be able to undo it.
+        which discards it). Each ripple declines before it writes, and a clip
+        makes its room before it lands, but :meth:`_expand_shot_range` ripples
+        the head before the tail: a refused tail can follow a head that
+        already moved the scene, and the user must still be able to undo it.
         """
         self.logger.warning(str(exc))
         self._set_footer(str(exc))
@@ -527,7 +617,7 @@ class ClipMotionMixin:
             with self.sequencer.store.scene_edit("clip"):
                 applied = self._apply_clip_move(clip_id, new_start)
         except ShotBoundaryConflict as exc:
-            applied, refused = True, exc  # the keys moved; the ripple did not
+            applied, refused = True, exc  # a ripple may have run (see the report)
         finally:
             self._syncing = was_syncing
         if refused is not None:

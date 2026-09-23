@@ -684,16 +684,19 @@ class TexturePathEditorSlots:
     # folder it was baked into), never by a file node, so every file-node
     # command here was blind to it: a migration that copied every texture
     # left the EXRs behind and the export shipped unlit. The engine is
-    # ``LightmapBaker`` (list / heal / relocate + repoint); the panel shows the
-    # records as rows and hands the relocation half to Find & Copy.
+    # ``LightmapRecords`` (list / heal / relocate + repoint); the panel shows
+    # the records as rows and hands the relocation half to Find & Copy.
 
     @staticmethod
-    def _lightmap_baker():
-        """The lightmap engine, imported on use -- it drags the Arnold texture
-        baker in, which a panel listing file nodes should not pay for."""
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+    def _lightmap_records():
+        """The lightmap record (a class used as a namespace), imported on use:
+        a panel listing file nodes should not load the lightmap package until a
+        lightmap row is asked for."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
 
-        return LightmapBaker()
+        return LightmapRecords
 
     def _show_lightmaps_enabled(self) -> bool:
         """The header's "Show Lightmap Dependencies" toggle (default on)."""
@@ -706,7 +709,7 @@ class TexturePathEditorSlots:
         if not self._show_lightmaps_enabled():
             return []
         try:
-            return self._lightmap_baker().lightmap_dependencies()
+            return self._lightmap_records().lightmap_dependencies()
         except Exception as e:  # noqa: BLE001
             cmds.warning(f"Lightmap dependencies not listed: {e}")
             return []
@@ -771,7 +774,7 @@ class TexturePathEditorSlots:
         if not lightmaps:
             return 0
         try:
-            count = self._lightmap_baker().normalize_lightmap_paths(
+            count = self._lightmap_records().normalize_lightmap_paths(
                 self._lightmap_objects(lightmaps), relative=relative
             )
         except Exception as e:  # noqa: BLE001 — the texture half already ran
@@ -796,7 +799,7 @@ class TexturePathEditorSlots:
             cmds.warning("A lightmap path needs a folder.")
             return False
         try:
-            count = self._lightmap_baker().repath_lightmaps(
+            count = self._lightmap_records().repath_lightmaps(
                 {dep["map"].lower(): folder}, dep.get("objects")
             )
         except Exception as e:  # noqa: BLE001
@@ -2366,7 +2369,7 @@ class TexturePathEditorSlots:
         return True
 
     # -- lightmaps through Find & Copy ------------------------------------
-    # The engine does the work (LightmapBaker.relocate_lightmaps: search,
+    # The engine does the work (LightmapRecords.relocate_lightmaps: search,
     # copy, repoint the markers, republish the manifest); the panel scopes it
     # to the captured records and reports through the same pane.
 
@@ -2382,7 +2385,7 @@ class TexturePathEditorSlots:
         if not lightmaps:
             return None
         try:
-            return self._lightmap_baker().relocate_lightmaps(
+            return self._lightmap_records().relocate_lightmaps(
                 dest_dir,
                 source_dir=source_dir,
                 mode=relocate_mode,
@@ -2431,7 +2434,7 @@ class TexturePathEditorSlots:
     def _relocate_lightmaps(self, lightmaps, source_dir, dest_dir, relocate_mode):
         """Relocate *lightmaps* for real and report; returns whether any landed."""
         try:
-            result = self._lightmap_baker().relocate_lightmaps(
+            result = self._lightmap_records().relocate_lightmaps(
                 dest_dir,
                 source_dir=source_dir,
                 mode=relocate_mode,

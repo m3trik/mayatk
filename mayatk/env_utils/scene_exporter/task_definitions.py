@@ -53,6 +53,9 @@ class _TaskDefinitionsMixin:
     _glb_key_reduction_options: Dict[str, Any] = (
         ptk.ExportProfile.GLB_KEY_REDUCTION_OPTIONS
     )
+    _baked_reflections_options: Dict[str, Any] = (
+        ptk.ExportProfile.BAKED_REFLECTIONS_OPTIONS
+    )
 
     @property
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
@@ -373,7 +376,8 @@ class _TaskDefinitionsMixin:
                     "ceiling: larger maps are downsampled, smaller ones "
                     "never grown.",
                     bullets=[
-                        "<b>OFF</b> — ship every map as it is.",
+                        "<b>OFF</b> — ship every map as it is: a GLB's "
+                        "embedded copies keep their own resolution too.",
                         "<b>Optimize</b> — the pass without resampling (a "
                         "template's size budget is only reported).",
                         "<b>Optimize + Max 512 … 8192</b> — the pass plus a "
@@ -394,7 +398,9 @@ class _TaskDefinitionsMixin:
                         "per-map-type pass and each map keeps its container.",
                         "The ceiling also caps a GLB deliverable's embedded "
                         "copies — one size policy for everything the export "
-                        "ships.",
+                        "ships. A plain <b>Optimize</b> names no ceiling, so a "
+                        "GLB takes the web delivery ceiling, 2048 px; "
+                        "<b>OFF</b> resizes nothing.",
                         "Where the optimized maps go — export copies or the "
                         "scene's own files — is <b>Texture Output</b>.",
                         "Already-optimal maps are left untouched; the paired "
@@ -447,8 +453,9 @@ class _TaskDefinitionsMixin:
                         "Each destination clamps what it cannot carry: a "
                         "scene file node and an FBX cannot read KTX2, so the "
                         "scene keeps its own container there, and a GLB falls "
-                        "back to PNG for anything glTF cannot embed "
-                        "(PNG/JPEG/WebP/KTX2 are the ones it can).",
+                        "back to the web default (WebP) for anything glTF "
+                        "cannot embed (PNG/JPEG/WebP/KTX2 are the ones it "
+                        "can).",
                         "Applied by <b>Optimize Textures</b> for scene maps; "
                         "a GLB deliverable is re-encoded whether or not that "
                         "pass runs.",
@@ -518,6 +525,45 @@ class _TaskDefinitionsMixin:
                 ),
                 "restore_by": "text",
                 "add": self._uastc_rdo_options,
+            },
+            "baked_reflections": {
+                "widget_type": "ComboBox",
+                "group": "Lighting",
+                "set_row_label": "Baked Reflections",
+                "setToolTip": TooltipFormat.fmt(
+                    title="Baked Reflections",
+                    body="How strongly a lightmapped material reflects the "
+                    "viewer's environment. Published in the deliverable's "
+                    "lighting recipe, so any reader -- the WebXR preview "
+                    "included -- lights it the way it was approved.",
+                    bullets=[
+                        "<b>Off (Pure Bake)</b> — the bake alone: no "
+                        "reflection or gloss on a baked surface.",
+                        "<b>Quarter</b> — the default: the bake keeps its "
+                        "contrast, and gloss and normal maps still read.",
+                        "<b>Half / Full</b> — stronger reflections; Full "
+                        "lifts every dark glossy baked surface.",
+                    ],
+                    notes=[
+                        "A lightmap already holds the surface's diffuse "
+                        "light, so a baked material only ever takes the "
+                        "environment's specular; this sets how much. The "
+                        "viewer's environment is a bright studio, not the room "
+                        "the bake lit: measured on a production room, the "
+                        "darkest baked surfaces read 0.06 of display baked "
+                        "alone, 0.22 at Full and 0.11 at Quarter.",
+                        "Only lightmapped materials; everything else takes the "
+                        "environment whole.",
+                        "Decided here and carried by the deliverable (GLB and "
+                        "FBX alike): the WebXR Preview's Baked Reflections row "
+                        "is this row, and nothing it does is read back.",
+                    ],
+                ),
+                "restore_by": "text",
+                "add": self._baked_reflections_options,
+                "setCurrentIndex": list(self._baked_reflections_options.values()).index(
+                    ptk.ExportProfile.baked_reflections_default()
+                ),
             },
             # -- Animation group: the Animation Output gate FIRST, then the
             # rows it governs, the same way the Textures group reads.

@@ -41,6 +41,37 @@ from mayatk.env_utils.blender_bridge._scene_import import (
 from base_test import MayaTkTestCase
 
 
+def _template_function(path, name, deps=()):
+    """*name* lifted out of a conversion template and executed in isolation.
+
+    The templates carry ``__PLACEHOLDER__`` tokens at module scope, so they cannot be
+    imported at all; a drift guard over one of their definitions has to compile just
+    that definition (plus the *deps* it closes over) into a namespace of its own.
+    """
+    src = path.read_text(encoding="utf-8")
+    wanted = set(deps) | {name}
+    picked = [
+        node
+        for node in ast.parse(src).body
+        if (isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in wanted)
+        or (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id in wanted for t in node.targets)
+        )
+    ]
+    missing = wanted - {
+        getattr(n, "name", None) or n.targets[0].id
+        for n in picked  # type: ignore[union-attr]
+    }
+    if missing:
+        raise AssertionError(f"{path.name} no longer defines {sorted(missing)}")
+    namespace = {"re": re}
+    exec(
+        compile(ast.Module(body=picked, type_ignores=[]), str(path), "exec"), namespace
+    )
+    return namespace[name]
+
+
 class TestSceneImportTemplate(unittest.TestCase):
     """Template hygiene -- text-level pins on the Blender-side conversion script."""
 
@@ -144,10 +175,21 @@ class TestSceneImportTemplate(unittest.TestCase):
         self.assertLess(
             txt.index("scene = scene_settings(bpy)"), txt.index("export_usd(bpy)\n")
         )
-        self.assertIn(
-            "bpy, scene, materials, scene_materials, scene_data=scene_data, rig=rig",
-            txt,
+        # ...and that record is what the manifest gets. By AST, not by text: the
+        # call's layout changes whenever it gains a section.
+        main = next(
+            n
+            for n in ast.parse(txt).body
+            if isinstance(n, ast.FunctionDef) and n.name == "main"
         )
+        call = next(
+            n
+            for n in ast.walk(main)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "write_manifest"
+        )
+        self.assertEqual(ast.unparse(call.args[1]), "scene")
 
     def test_bake_template_adopts_the_clock_and_reads_usd_animation(self):
         txt = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
@@ -898,12 +940,1180 @@ class TestFbxNameMatching(unittest.TestCase):
         self.assertEqual(BlenderSceneImport._fbx_safe_name("1digit"), "FBXASC049digit")
         self.assertEqual(BlenderSceneImport._fbx_safe_name("Clean_Name"), "Clean_Name")
 
+    def test_the_encoder_and_the_repair_agree_on_what_mangling_is(self):
+        """Drift guard. Three places each know half of this escaping and none of
+        them checks the others: ``_fbx_safe_name`` models it to MATCH names
+        during a manifest replay, ``SceneDiagnostics.MANGLED_NAME_RE`` detects it
+        so the Scene Exporter can refuse a scene carrying it, and
+        ``_unescape_fbx_ascii`` decodes it so ``repair_mangled_names`` can undo
+        it. If a future importer changes the spelling and only one of them is
+        updated, the bridge goes back to shipping names its own exporter rejects
+        -- silently, which is how 13 063 escaped occurrences reached a production
+        round trip while every test passed.
+        """
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        for authored in ("dotted.001", "spa ced", "dash-y", "1digit", "a.b c-d"):
+            with self.subTest(authored=authored):
+                escaped = BlenderSceneImport._fbx_safe_name(authored)
+                self.assertNotEqual(escaped, authored, "fixture: needs escaping")
+                self.assertTrue(
+                    SceneDiagnostics.MANGLED_NAME_RE.search(escaped),
+                    f"the exporter's check does not recognise {escaped!r}",
+                )
+                self.assertEqual(
+                    SceneDiagnostics._unescape_fbx_ascii(escaped),
+                    authored,
+                    "the repair does not decode what the encoder produces",
+                )
+        # ...and a legal name is untouched by all three.
+        for clean in ("Clean_Name", "WIRE_LOOM_A", "_leading"):
+            with self.subTest(clean=clean):
+                self.assertEqual(BlenderSceneImport._fbx_safe_name(clean), clean)
+                self.assertIsNone(SceneDiagnostics.MANGLED_NAME_RE.search(clean))
+                self.assertEqual(SceneDiagnostics._unescape_fbx_ascii(clean), clean)
+
+    def test_the_producer_sanitizer_leaves_the_encoder_nothing_to_escape(self):
+        """Maya's FBX importer breaks mesh SHARING on Blender's ``.NNN`` suffix -- the
+        first Model it meets for a shared Geometry becomes a unique, materialless
+        shape when its own name carries one (105 of 1111 shared Models on a
+        production module, and a ``Default_Material`` invented for their bare faces
+        one hop later). The conversion template therefore renames at the SOURCE, so
+        the payload carries nothing to escape.
+
+        Two copies of that fold exist -- the template's, which runs in a Blender with
+        no mayatk on its path, and this class's ``_maya_safe_name`` -- so they are
+        held to the same answers here, and the encoder is checked to be a no-op on
+        what they produce. That last assertion is the property the fix rests on.
+        """
+        template = _template_function(
+            si._IMPORT_TEMPLATE, "_maya_safe_name", deps=("_ILLEGAL_NAME_CHARS",)
+        )
+        for authored in (
+            "dotted.001",
+            "spa ced",
+            "dash-y",
+            "1digit",
+            "a.b c-d",
+            "Clean_Name",
+        ):
+            with self.subTest(authored=authored):
+                safe = template(authored)
+                self.assertEqual(
+                    safe,
+                    BlenderSceneImport._maya_safe_name(authored),
+                    "the template's copy of the fold has drifted from the class's",
+                )
+                self.assertEqual(
+                    BlenderSceneImport._fbx_safe_name(safe),
+                    safe,
+                    f"{safe!r} still carries something the importer escapes",
+                )
+
+    def test_the_two_name_folds_in_the_template_agree(self):
+        """``sanitize_names`` renames with ``_maya_safe_name`` and the shared
+        ``collect_instance_groups`` records members through ``_sanitize_prim_name``.
+        They are pinned to different external contracts -- what MAYA can hold in a
+        node name, and what Blender's USD exporter writes as a prim name -- and the
+        section only matches because the two folds agree today. If either contract
+        moves, the instance replay starts missing members silently, so pin them here.
+        """
+        maya_fold = _template_function(
+            si._IMPORT_TEMPLATE, "_maya_safe_name", deps=("_ILLEGAL_NAME_CHARS",)
+        )
+        prim_fold = _template_function(si._IMPORT_TEMPLATE, "_sanitize_prim_name")
+        for authored in (
+            "dotted.001",
+            "spa ced",
+            "dash-y",
+            "1digit",
+            "a.b c-d",
+            "Clean_Name",
+            "WIRE_LOOM_A",
+        ):
+            with self.subTest(authored=authored):
+                self.assertEqual(maya_fold(authored), prim_fold(authored))
+
+    def test_the_rename_resolves_collisions_and_reports_what_it_did(self):
+        """``sanitize_names`` returns ``{was: is}`` because that map is what the
+        manifest's ``spell`` consults: a record that stored the ORIGINAL name has to
+        keep resolving to the node it names, and a collision means the new name is
+        not simply the fold of the old one.
+        """
+        sanitize = _template_function(
+            si._IMPORT_TEMPLATE,
+            "sanitize_names",
+            deps=("_maya_safe_name", "_ILLEGAL_NAME_CHARS"),
+        )
+        objects = [
+            SimpleNamespace(name=n) for n in ("CABINET.001", "CABINET_001", "clean")
+        ]
+        bpy = SimpleNamespace(data=SimpleNamespace(objects=objects, materials=[]))
+
+        renamed = sanitize(bpy)
+
+        self.assertEqual(renamed, {"CABINET.001": "CABINET_001_1"})
+        self.assertEqual(
+            [o.name for o in objects], ["CABINET_001_1", "CABINET_001", "clean"]
+        )
+
+    def test_an_object_and_a_material_sharing_a_name_keep_their_own_renames(self):
+        """``spell`` resolves RECORDS, which name objects. With one map for both
+        collections, a material named like an object overwrote the object's entry
+        whenever the two folded apart (here the object takes a collision tail),
+        and the object's records went to another object."""
+        sanitize = _template_function(
+            si._IMPORT_TEMPLATE,
+            "sanitize_names",
+            deps=("_maya_safe_name", "_ILLEGAL_NAME_CHARS"),
+        )
+        objects = [SimpleNamespace(name=n) for n in ("Crate.001", "Crate_001")]
+        materials = [SimpleNamespace(name="Crate.001")]
+        bpy = SimpleNamespace(data=SimpleNamespace(objects=objects, materials=materials))
+
+        renamed = sanitize(bpy)
+
+        self.assertEqual(renamed, {"Crate.001": "Crate_001_1"})
+        self.assertEqual(materials[0].name, "Crate_001", "the material is renamed too")
+
+    def test_the_rename_walks_a_snapshot_of_a_name_ordered_collection(self):
+        """``bpy.data`` collections are name-ORDERED, so renaming while iterating one
+        live reorders it under the cursor and skips datablocks -- the same shape of
+        bug as the importer's own armature walk. Every dotted name must be renamed.
+        """
+        sanitize = _template_function(
+            si._IMPORT_TEMPLATE,
+            "sanitize_names",
+            deps=("_maya_safe_name", "_ILLEGAL_NAME_CHARS"),
+        )
+        objects = [SimpleNamespace(name=f"obj.{i:03d}") for i in range(1, 9)]
+        bpy = SimpleNamespace(data=SimpleNamespace(objects=objects, materials=[]))
+
+        sanitize(bpy)
+
+        self.assertEqual(
+            [o.name for o in objects], [f"obj_{i:03d}" for i in range(1, 9)]
+        )
+
     def test_matches_with_clash_suffix(self):
         self.assertTrue(BlenderSceneImport._matches_fbx_name("M_test", "M_test"))
         # Maya's rename-on-clash appends digits.
         self.assertTrue(BlenderSceneImport._matches_fbx_name("M_test1", "M_test"))
         self.assertFalse(BlenderSceneImport._matches_fbx_name("M_test_extra", "M_test"))
         self.assertFalse(BlenderSceneImport._matches_fbx_name("Other", "M_test"))
+
+
+class TestReturnLegVisibility(MayaTkTestCase):
+    """The return leg's ``visibility`` section: Blender -> Maya show/hide.
+
+    Blender's FBX exporter bakes only Lcl Translation / Rotation / Scaling, so a
+    keyed show/hide crosses as NOTHING. Measured on a production module: 54 objects
+    carried ``hide_viewport`` keys and every one arrived in Maya static -- 39 of them
+    with no animation at all, which is how the loss first read (the plug and
+    failed-component toggles, i.e. the content of the training module). The producer
+    writes them to the sidecar and ``_apply_visibility_manifest`` lands them, the
+    mirror of the send direction's pair.
+    """
+
+    def _manifest(self, visibility):
+        path = self.temp_path("return_visibility.fbx.manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "visibility": visibility}, fh)
+        return path
+
+    def test_the_producer_writes_mayas_own_convention(self):
+        """Blender hides on TRUE and Maya shows on 1, so the producer inverts; keys
+        come out frame-ordered whatever order Blender holds them in."""
+        collect = _template_function(
+            si._IMPORT_TEMPLATE, "collect_visibility", deps=("_action_fcurves",)
+        )
+
+        def key(frame, hidden):
+            return SimpleNamespace(co=(frame, 1.0 if hidden else 0.0))
+
+        fcurve = SimpleNamespace(
+            data_path="hide_viewport", keyframe_points=[key(5, True), key(1, False)]
+        )
+        obj = SimpleNamespace(
+            name="plug",
+            parent=None,
+            animation_data=SimpleNamespace(action=SimpleNamespace(fcurves=[fcurve])),
+        )
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=SimpleNamespace(objects=[obj]))
+        )
+
+        self.assertEqual(collect(bpy), {"plug": [[1.0, 1.0], [5.0, 0.0]]})
+
+    def test_a_track_an_ancestor_already_says_is_left_out(self):
+        """Maya inherits visibility down the DAG and Blender does not, so the send
+        direction bakes an ancestor's show/hide onto every descendant. Writing those
+        copies back would key in Maya what Maya derives itself, and the next send
+        would bake a level deeper again -- the module went 65 -> 85 animated objects
+        in one round trip before this. Only what an ancestor does not already say
+        travels; the gap in the chain must be walked through, not stopped at.
+        """
+        collect = _template_function(
+            si._IMPORT_TEMPLATE, "collect_visibility", deps=("_action_fcurves",)
+        )
+
+        def obj(name, hidden_at, parent=None):
+            keys = [SimpleNamespace(co=(frame, 1.0)) for frame in hidden_at]
+            action = SimpleNamespace(
+                fcurves=[
+                    SimpleNamespace(data_path="hide_viewport", keyframe_points=keys)
+                ]
+            )
+            return SimpleNamespace(
+                name=name,
+                parent=parent,
+                animation_data=SimpleNamespace(action=action) if keys else None,
+            )
+
+        root = obj("GRP", [4])
+        # Same track as GRP: Maya hides it along with its parent.
+        echo = obj("ECHO", [4], parent=root)
+        # An unkeyed link in the chain must not hide the ancestor behind it.
+        gap = SimpleNamespace(name="GAP", parent=root, animation_data=None)
+        deep = obj("DEEP", [4], parent=gap)
+        # Its own show/hide: authored, and nobody else says it.
+        own = obj("OWN", [9], parent=root)
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(
+                scene=SimpleNamespace(objects=[root, echo, gap, deep, own])
+            )
+        )
+
+        self.assertEqual(collect(bpy), {"GRP": [[4.0, 0.0]], "OWN": [[9.0, 0.0]]})
+
+    def test_an_unanimated_object_contributes_nothing(self):
+        collect = _template_function(
+            si._IMPORT_TEMPLATE, "collect_visibility", deps=("_action_fcurves",)
+        )
+        moved = SimpleNamespace(
+            data_path="location", keyframe_points=[SimpleNamespace(co=(1.0, 0.0))]
+        )
+        objects = [
+            SimpleNamespace(name="static", parent=None, animation_data=None),
+            SimpleNamespace(
+                name="slotless",
+                parent=None,
+                animation_data=SimpleNamespace(action=None),
+            ),
+            SimpleNamespace(
+                name="moved_only",
+                parent=None,
+                animation_data=SimpleNamespace(action=SimpleNamespace(fcurves=[moved])),
+            ),
+        ]
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=SimpleNamespace(objects=objects))
+        )
+
+        self.assertEqual(collect(bpy), {})
+
+    def test_the_keys_land_stepped_on_the_maya_side(self):
+        node = cmds.polyCube(name="vis_cube")[0]
+        path = self._manifest({"vis_cube": [[1.0, 1.0], [5.0, 0.0], [9.0, 1.0]]})
+
+        keyed = BlenderSceneImport()._apply_visibility_manifest(path, [node])
+
+        plug = f"{node}.visibility"
+        self.assertEqual(keyed, 1)
+        self.assertEqual(
+            cmds.keyframe(plug, query=True, timeChange=True), [1.0, 5.0, 9.0]
+        )
+        # Boolean: Maya's default tangents would RAMP the toggle and leave the
+        # object part-drawn between the keys.
+        self.assertEqual(
+            set(cmds.keyTangent(plug, query=True, outTangentType=True) or []), {"step"}
+        )
+        cmds.currentTime(6)
+        self.assertEqual(cmds.getAttr(plug), 0.0)
+        cmds.currentTime(9)
+        self.assertEqual(cmds.getAttr(plug), 1.0)
+
+    def test_no_frame_offset_is_applied(self):
+        """The send direction shifts by the importer's ``anim_offset``; Maya's
+        importer shifts nothing, so these frames land where the producer read them."""
+        node = cmds.polyCube(name="vis_offset")[0]
+        path = self._manifest({"vis_offset": [[12.0, 0.0]]})
+
+        BlenderSceneImport()._apply_visibility_manifest(path, [node])
+
+        self.assertEqual(
+            cmds.keyframe(f"{node}.visibility", query=True, timeChange=True), [12.0]
+        )
+
+    def test_a_payload_written_before_the_rename_still_matches(self):
+        """Older payloads carry Blender's dotted spelling, which the importer
+        escaped -- the replay matches through ``_carrier_spelling`` for that."""
+        node = cmds.polyCube(name="visFBXASC046001")[0]
+        path = self._manifest({"vis.001": [[2.0, 0.0]]})
+
+        self.assertEqual(
+            BlenderSceneImport()._apply_visibility_manifest(path, [node]), 1
+        )
+
+    def test_a_node_renamed_on_a_clash_still_gets_its_keys(self):
+        """An import into a scene that already holds the name lands the node
+        with Maya's clash digit (``vis_door1``); the other replays tolerate that
+        digit, and this one dropped the object's show/hide keys silently."""
+        cmds.polyCube(name="vis_door")  # the scene's own, not this import's
+        node = cmds.polyCube(name="vis_door")[0]
+        self.assertEqual(node, "vis_door1")
+        path = self._manifest({"vis_door": [[3.0, 0.0]]})
+
+        self.assertEqual(
+            BlenderSceneImport()._apply_visibility_manifest(path, [node]), 1
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{node}.visibility", query=True, timeChange=True), [3.0]
+        )
+
+    def test_a_missing_empty_or_malformed_section_is_a_quiet_no_op(self):
+        node = cmds.polyCube(name="vis_quiet")[0]
+        engine = BlenderSceneImport()
+        for section in ({}, None, "nonsense", {"absent_node": [[1.0, 0.0]]}):
+            with self.subTest(section=section):
+                path = self._manifest(section)
+                self.assertEqual(engine._apply_visibility_manifest(path, [node]), 0)
+        self.assertIsNone(
+            cmds.keyframe(f"{node}.visibility", query=True, timeChange=True)
+        )
+        # An unreadable sidecar must not break an import whose geometry landed.
+        self.assertEqual(
+            engine._apply_visibility_manifest(
+                self.temp_path("no_such_manifest.json"), [node]
+            ),
+            0,
+        )
+
+
+class TestInstanceReplayOnTheFbxRoute(MayaTkTestCase):
+    """The ``instances`` section on the FBX route, where the carrier already shares.
+
+    Maya's FBX importer honours most of a shared mesh's users and breaks the rest:
+    measured on a production module, 105 of 1111 Models on a shared Geometry arrived
+    as unique shapes carrying no shading at all. The payload was symmetric and clean
+    names did not help, so the section is the fix -- which means the replay now meets
+    transforms that ALREADY carry the master's shape, and must leave them be. Its
+    "delete the transform's own shape" step would otherwise remove the shared
+    instance and leave that transform with no geometry at all.
+    """
+
+    def _manifest(self, groups):
+        path = self.temp_path("instances.fbx.manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "format": "names", "instances": groups}, fh)
+        return path
+
+    def test_a_payload_with_no_instances_section_is_not_warned_about(self):
+        """The replay refuses a sidecar whose `format` is not the spelling it reads,
+        and every payload written before this route carried instances has no
+        `format` at all. The import must gate on the SECTION, so those scenes see no
+        warning about a missing spelling they were never going to use -- while a
+        payload that DOES carry the section and spells it wrongly still fails.
+        """
+        path = self.temp_path("no_instances.fbx.manifest.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump({"version": 2, "materials": []}, fh)
+        manifest = ptk.HandoffManifest.read(path.replace(".manifest.json", ""))
+
+        self.assertFalse(manifest.carries(manifest.INSTANCES))
+        with self.assertRaises(RuntimeError):
+            # Ungated, this is what the import would have reported every time.
+            BlenderSceneImport()._apply_instance_manifest(path, [])
+
+    def test_a_member_that_already_shares_is_left_alone(self):
+        master = cmds.polyCube(name="inst_master")[0]
+        shape = cmds.listRelatives(master, shapes=True, fullPath=True)[0]
+        follower = cmds.group(empty=True, name="inst_follower")
+        cmds.parent(shape, follower, add=True, shape=True)
+        path = self._manifest([["inst_master", "inst_follower"]])
+
+        rebuilt = BlenderSceneImport()._apply_instance_manifest(
+            path, [master, follower, shape]
+        )
+
+        self.assertEqual(rebuilt, 0, "nothing needed rebuilding")
+        kept = cmds.listRelatives(follower, shapes=True, fullPath=True) or []
+        self.assertEqual(len(kept), 1, "the follower kept exactly its one shape")
+        self.assertEqual(
+            cmds.ls(kept[0], uuid=True),
+            cmds.ls(shape, uuid=True),
+            "and it is still the master's shape, not a copy",
+        )
+
+    def test_a_de_shared_member_is_re_instanced_onto_the_master(self):
+        master = cmds.polyCube(name="inst_master")[0]
+        shape = cmds.listRelatives(master, shapes=True, fullPath=True)[0]
+        # What Maya's importer produces for the members it breaks: an independent
+        # shape of its own, and no shading assignment.
+        stray = cmds.polyCube(name="inst_stray")[0]
+        stray_shape = cmds.listRelatives(stray, shapes=True, fullPath=True)[0]
+        path = self._manifest([["inst_master", "inst_stray"]])
+
+        rebuilt = BlenderSceneImport()._apply_instance_manifest(
+            path, [master, stray, shape, stray_shape]
+        )
+
+        self.assertEqual(rebuilt, 1)
+        self.assertFalse(cmds.objExists(stray_shape), "its own shape is gone")
+        shapes = cmds.listRelatives(stray, shapes=True, fullPath=True) or []
+        self.assertEqual(len(shapes), 1)
+        self.assertEqual(cmds.ls(shapes[0], uuid=True), cmds.ls(shape, uuid=True))
+
+    def test_every_member_of_a_rebuilt_group_keeps_its_shading(self):
+        """An instanced shape is shaded per instance PATH, and adding an instance
+        renumbers those entries -- so the members that arrived CORRECTLY shared are
+        the ones at risk, not just the one being rebuilt. Measured on the production
+        module: 105 rebuilt instances stranded 321 paths with no shading at all, and
+        Maya's exporter then covered them with a `Default_Material` that compounded
+        one material per round trip.
+        """
+        master = cmds.polyCube(name="inst_master")[0]
+        shape = cmds.listRelatives(master, shapes=True, fullPath=True)[0]
+        sg = cmds.sets(
+            name="inst_SG", renderable=True, noSurfaceShader=True, empty=True
+        )
+        shader = cmds.shadingNode("lambert", asShader=True, name="inst_shader")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(master, edit=True, forceElement=sg)
+        # A member the carrier already shared, shaded through its own instance entry.
+        shared = cmds.group(empty=True, name="inst_shared")
+        cmds.parent(shape, shared, add=True, shape=True)
+        cmds.sets(shared, edit=True, forceElement=sg)
+        # And one the importer de-shared: its own shape, and no shading at all.
+        stray = cmds.polyCube(name="inst_stray")[0]
+        path = self._manifest([["inst_master", "inst_shared", "inst_stray"]])
+
+        BlenderSceneImport()._apply_instance_manifest(
+            path, cmds.ls(type="transform") + cmds.ls(type="mesh")
+        )
+
+        for transform in (master, shared, stray):
+            with self.subTest(transform=transform):
+                shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+                self.assertEqual(len(shapes), 1)
+                self.assertTrue(
+                    cmds.listSets(object=shapes[0], type=1),
+                    f"{transform} lost its shading to the rebuild",
+                )
+
+    def test_the_master_is_the_shape_the_most_instances_already_use(self):
+        """The sidecar's member order is just an order. On this route the carrier has
+        already shared most of a group, so the first member may be one the importer
+        DE-shared -- it has neither the shape the others use nor any shading to give
+        them, and treating it as master re-parents every member that arrived correct
+        (measured: one hop listed `ASSET_001` first and the next `ASSET_001_001`,
+        which left 105 transforms with no shading at all).
+        """
+        kept = cmds.polyCube(name="inst_kept")[0]
+        shape = cmds.listRelatives(kept, shapes=True, fullPath=True)[0]
+        sg = cmds.sets(
+            name="inst_SG", renderable=True, noSurfaceShader=True, empty=True
+        )
+        shader = cmds.shadingNode("lambert", asShader=True, name="inst_shader")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(kept, edit=True, forceElement=sg)
+        for name in ("inst_share_a", "inst_share_b"):
+            other = cmds.group(empty=True, name=name)
+            cmds.parent(shape, other, add=True, shape=True)
+            cmds.sets(other, edit=True, forceElement=sg)
+        # The de-shared one, and FIRST in the group -- unshaded, its own shape.
+        stray = cmds.polyCube(name="inst_aaa_stray")[0]
+        stray_shape = cmds.listRelatives(stray, shapes=True, fullPath=True)[0]
+        path = self._manifest(
+            [["inst_aaa_stray", "inst_kept", "inst_share_a", "inst_share_b"]]
+        )
+
+        rebuilt = BlenderSceneImport()._apply_instance_manifest(
+            path, cmds.ls(type="transform") + cmds.ls(type="mesh")
+        )
+
+        self.assertEqual(rebuilt, 1, "only the de-shared member needed rebuilding")
+        self.assertFalse(cmds.objExists(stray_shape))
+        for transform in (stray, kept, "inst_share_a", "inst_share_b"):
+            with self.subTest(transform=transform):
+                shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+                self.assertEqual(len(shapes), 1)
+                self.assertEqual(
+                    cmds.ls(shapes[0], uuid=True), cmds.ls(shape, uuid=True)
+                )
+                self.assertTrue(
+                    cmds.listSets(object=shapes[0], type=1),
+                    f"{transform} has no shading after the rebuild",
+                )
+
+    def test_replaying_twice_changes_nothing_the_second_time(self):
+        cmds.polyCube(name="inst_master")
+        stray = cmds.polyCube(name="inst_stray")[0]
+        path = self._manifest([["inst_master", "inst_stray"]])
+        engine = BlenderSceneImport()
+
+        first = engine._apply_instance_manifest(path, cmds.ls(type="transform"))
+        second = engine._apply_instance_manifest(path, cmds.ls(type="transform"))
+
+        self.assertEqual((first, second), (1, 0))
+        self.assertEqual(len(cmds.listRelatives(stray, shapes=True) or []), 1)
+
+
+class TestUsdWrapperCollapse(MayaTkTestCase):
+    """The inert transform a USD round trip nests around an object.
+
+    A Maya transform and its shape cross to Blender as one object and come back as
+    a transform INSIDE a transform. Measured on a production module, the same four
+    lights nested one level deeper on EVERY round trip, so it is unbounded rather
+    than cosmetic.
+    """
+
+    def _nested(self, name, inner_identity=True):
+        """``<name>/<name>/shape`` -- what the round trip produces.
+
+        Long paths throughout: the whole point of the fixture is two nodes that
+        share a short name, so every query here has to say which one it means.
+        """
+        outer = cmds.ls(cmds.group(empty=True, name=name), long=True)[0]
+        cmds.setAttr(f"{outer}.translateX", 5)
+        inner = cmds.ls(
+            cmds.group(empty=True, name=name + "__inner", parent=outer), long=True
+        )[0]
+        if not inner_identity:
+            cmds.setAttr(f"{inner}.translateY", 3)
+        cube = cmds.polyCube(name="tmp_geo")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cmds.parent(shape, inner, add=True, shape=True)
+        cmds.delete(cube)
+        cmds.rename(inner, name)
+        return outer, f"{outer}|{name}"
+
+    def test_the_inert_inner_level_is_removed_and_the_shape_lifted(self):
+        outer, _ = self._nested("rt_light")
+        before = cmds.xform(outer, query=True, matrix=True, worldSpace=True)
+
+        removed = BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform"))
+
+        self.assertEqual(removed, 1)
+        kids = cmds.listRelatives(outer, children=True, fullPath=True) or []
+        self.assertEqual(len(kids), 1)
+        self.assertTrue(cmds.ls(kids[0], shapes=True), "the shape was lifted")
+        self.assertEqual(
+            cmds.xform(outer, query=True, matrix=True, worldSpace=True),
+            before,
+            "an identity level cannot move anything",
+        )
+
+    def test_an_inert_parent_is_removed_without_moving_or_rekeying_its_child(self):
+        """The other branch: the OUTER level is the inert one. Reparenting is
+        RELATIVE because the parent is identity, so the child's own local values
+        are already world-correct under the grandparent -- a non-relative reparent
+        would recompute and write them, which fights a keyed channel for no gain.
+        """
+        grandparent = cmds.ls(cmds.group(empty=True, name="rt_gp"), long=True)[0]
+        cmds.setAttr(f"{grandparent}.translateZ", 7)
+        wrapper = cmds.ls(
+            cmds.group(empty=True, name="rt_wrap", parent=grandparent), long=True
+        )[0]
+        inner = cmds.ls(
+            cmds.group(empty=True, name="rt_wrap__inner", parent=wrapper), long=True
+        )[0]
+        cmds.setAttr(f"{inner}.translateX", 4)
+        cmds.setKeyframe(inner, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(inner, attribute="translateY", time=24, value=9)
+        cmds.rename(inner, "rt_wrap")
+        inner = f"{wrapper}|rt_wrap"
+        before = cmds.xform(inner, query=True, matrix=True, worldSpace=True)
+        # By UUID: the child ends up at the path the WRAPPER held, so a name or
+        # path check cannot tell which of the two survived.
+        child_id = cmds.ls(inner, uuid=True)
+        wrapper_id = cmds.ls(wrapper, uuid=True)
+
+        removed = BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform"))
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(cmds.ls(wrapper_id), [], "the inert level is gone")
+        moved = f"{grandparent}|rt_wrap"
+        self.assertEqual(
+            cmds.ls(moved, uuid=True),
+            child_id,
+            "and the child took its own name back",
+        )
+        self.assertEqual(
+            cmds.xform(moved, query=True, matrix=True, worldSpace=True),
+            before,
+            "the child must not move",
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{moved}.translateY", query=True, valueChange=True),
+            [0.0, 9.0],
+            "and must keep its keys, unrewritten",
+        )
+
+    def test_the_flatten_group_around_a_skeleton_root_is_left_alone(self):
+        """The FBX export flatten deliberately builds ``<mesh>_skeleton_GRP``
+        holding ``<mesh>_skeleton``; collapsing that would delete a real group. The
+        names differ by more than a ``_NNN``, which is what keeps it out."""
+        group = cmds.ls(cmds.group(empty=True, name="rt_skeleton_GRP"), long=True)[0]
+        cmds.select(clear=True)
+        joint = cmds.joint(name="rt_skeleton")
+        cmds.parent(joint, group)
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+        self.assertTrue(cmds.objExists(group))
+
+    def _skeleton_wrapper(self, name, wrapper_motion=0.0):
+        """``<name>`` (transform) holding ``<name>`` (root joint) holding a bound
+        chain -- what the USD return leg makes of a Blender armature OBJECT and its
+        root bone. Both levels keyed, as measured on the production module: the
+        wrapper with float noise (``+-3e-5`` cm over the range, scale
+        ``1.0000001``), the root joint with a constant pose off its default.
+        *wrapper_motion* > 0 gives the wrapper REAL motion instead.
+        """
+        grandparent = cmds.ls(cmds.group(empty=True, name="rt_looms"), long=True)[0]
+        cmds.setAttr(f"{grandparent}.translateZ", 7)
+        wrapper = cmds.ls(
+            cmds.group(empty=True, name=name, parent=grandparent), long=True
+        )[0]
+        cmds.setAttr(f"{wrapper}.scaleX", 1.0000001192092896)
+        for time, value in ((1, -3.05e-5), (12, 3.05e-5), (24, wrapper_motion)):
+            cmds.setKeyframe(wrapper, attribute="translateX", time=time, value=value)
+        cmds.select(clear=True)
+        root = cmds.joint(name=name + "_j")
+        root = cmds.ls(cmds.parent(root, wrapper, relative=True)[0], long=True)[0]
+        for time in (1, 24):
+            cmds.setKeyframe(root, attribute="translateX", time=time, value=-47.37)
+        cmds.select(clear=True)
+        leaf = cmds.joint(name=name + "_jnt_1", position=(0, 2, 0))
+        cmds.parent(leaf, root, relative=True)
+        mesh = cmds.polyCube(name=name + "_geo")[0]
+        skin = cmds.skinCluster([root + "|" + leaf, root], mesh, toSelectedBones=True)[
+            0
+        ]
+        root = cmds.ls(cmds.rename(root, name), long=True)[0]
+        return grandparent, wrapper, root, skin
+
+    def test_an_import_keeps_the_armature_transform_around_its_root_joint(self):
+        """A Blender armature OBJECT lands as a transform holding its same-named
+        root joint, and the return leg's rig ids (``<armature>/<bone>``) resolve
+        through that transform (``TestUsdContainerSkeletons``) -- so the IMPORT's
+        pass leaves the pair alone, however inert the transform is."""
+        grandparent, wrapper, root, _ = self._skeleton_wrapper("rt_kept_skeleton")
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+        self.assertEqual(cmds.nodeType(f"{wrapper}|rt_kept_skeleton"), "joint")
+
+    def test_the_pull_folds_a_noise_keyed_wrapper_around_a_skeleton_root(self):
+        """The skeleton half of the round-trip accretion (BACKLOG 2026-09-21, S1),
+        folded where it is CREATED: the pull's scratch scene (``joints=True``).
+        Blender's importer would turn the pair into an Empty holding an armature
+        renamed ``.001``, one level deeper every round trip. The wrapper's keys
+        are float noise, not motion (measured on the production module: translate
+        within 3e-5 cm, rotate within 3.4e-6 deg), so removing it moves nothing --
+        no bake needed.
+        """
+        grandparent, wrapper, root, skin = self._skeleton_wrapper("rt_loom_skeleton")
+        wrapper_id = cmds.ls(wrapper, uuid=True)
+        root_id = cmds.ls(root, uuid=True)
+        wrapper_curves = cmds.listConnections(wrapper, type="animCurve") or []
+        cmds.currentTime(12)
+        before = cmds.xform(root, query=True, matrix=True, worldSpace=True)
+
+        removed = BlenderSceneImport.collapse_nested_levels(
+            cmds.ls(type="transform"), joints=True
+        )
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(cmds.ls(wrapper_id), [], "the noise-keyed level is gone")
+        moved = f"{grandparent}|rt_loom_skeleton"
+        self.assertEqual(cmds.ls(moved, uuid=True), root_id)
+        self.assertEqual(cmds.nodeType(moved), "joint")
+        after = cmds.xform(moved, query=True, matrix=True, worldSpace=True)
+        for a, b in zip(before, after):
+            self.assertAlmostEqual(a, b, places=3)
+        self.assertEqual(
+            cmds.keyframe(f"{moved}.translateX", query=True, valueChange=True),
+            [-47.37, -47.37],
+            "the root joint keeps its own keys",
+        )
+        self.assertEqual(
+            [c for c in wrapper_curves if cmds.objExists(c)],
+            [],
+            "the wrapper's noise curves go with it, not left as orphans",
+        )
+        self.assertIn(
+            "rt_loom_skeleton",
+            cmds.skinCluster(skin, query=True, influence=True),
+            "the skin is still bound to the root",
+        )
+
+    def test_a_hidden_level_is_never_inert(self):
+        """A statically hidden level hides its whole subtree -- that is a
+        contribution, not nothing. The USD route stamps a hidden object's prim
+        ``invisible`` and mayaUsd lands it as ``.visibility`` off, so removing
+        such a level would UNHIDE what it holds: the parent branch (a hidden
+        wrapper around a same-named joint) and the child branch (a hidden
+        identity level holding a shape) alike."""
+        _, wrapper, root, _ = self._skeleton_wrapper("rt_hidden_skeleton")
+        cmds.setAttr(f"{wrapper}.visibility", False)
+        outer, inner = self._nested("rt_hidden_light")
+        cmds.setAttr(f"{inner}.visibility", False)
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            0,
+        )
+        self.assertFalse(cmds.getAttr(f"{wrapper}.visibility"))
+        self.assertTrue(cmds.objExists(inner), "the hidden inner level stays")
+
+    def test_a_level_placed_by_anything_but_its_keys_is_left_alone(self):
+        """``xform -m -os`` reads the local TRS alone: a level zeroed through its
+        offset parent matrix, one that ignores its parent, or one an expression
+        drives passed as inert -- and removing it MOVED what it held."""
+        cases = {
+            "rt_opm": lambda n: cmds.setAttr(
+                f"{n}.offsetParentMatrix",
+                [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1],
+                type="matrix",
+            ),
+            "rt_world": lambda n: cmds.setAttr(f"{n}.inheritsTransform", False),
+            # The object flag names it: its short name is shared with its parent.
+            "rt_driven": lambda n: cmds.expression(string="translateY = 0;", object=n),
+        }
+        for name, place in cases.items():
+            with self.subTest(case=name):
+                outer, inner = self._nested(name)
+                place(inner)
+                self.assertEqual(
+                    BlenderSceneImport.collapse_nested_levels(
+                        cmds.ls(type="transform"), joints=True
+                    ),
+                    0,
+                )
+                self.assertTrue(cmds.objExists(inner), f"{name}: the level went")
+                cmds.delete(outer)
+
+    def test_a_wrapper_with_real_motion_around_a_skeleton_root_is_left_alone(self):
+        """Motion past the noise floor has to be composed, not dropped."""
+        self._skeleton_wrapper("rt_moving_skeleton", wrapper_motion=2.0)
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            0,
+        )
+
+    def test_an_inert_root_joint_is_never_dissolved_into_its_wrapper(self):
+        """Only the WRAPPER may go. Removing the joint instead would lift the
+        chain under a transform and take the skeleton's root with it."""
+        grandparent = cmds.ls(cmds.group(empty=True, name="rt_bare"), long=True)[0]
+        wrapper = cmds.ls(
+            cmds.group(empty=True, name="rt_bare_skeleton", parent=grandparent),
+            long=True,
+        )[0]
+        cmds.setAttr(f"{wrapper}.translateX", 3)
+        cmds.select(clear=True)
+        root = cmds.joint(name="rt_bare_skeleton_j")
+        cmds.parent(root, wrapper, relative=True)
+        cmds.rename(f"{wrapper}|{root}", "rt_bare_skeleton")
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            0,
+        )
+        self.assertEqual(cmds.nodeType(f"{wrapper}|rt_bare_skeleton"), "joint")
+
+    def _keyed_visibility(self, node, hidden_at):
+        for frame in (1, 24):
+            cmds.setKeyframe(
+                node,
+                attribute="visibility",
+                time=frame,
+                value=0 if frame in hidden_at else 1,
+            )
+
+    def test_a_wrappers_show_hide_track_moves_to_its_joint(self):
+        """The visibility replay keys the armature transform; its joint inherits
+        that show/hide, so folding the wrapper hands the TRACK down rather than
+        refusing -- a keyed wrapper would otherwise never fold."""
+        grandparent, wrapper, root, _ = self._skeleton_wrapper("rt_blink_skeleton")
+        self._keyed_visibility(wrapper, hidden_at=(24,))
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            1,
+        )
+        joint = f"{grandparent}|rt_blink_skeleton"
+        self.assertEqual(
+            cmds.keyframe(f"{joint}.visibility", query=True, valueChange=True),
+            [1.0, 0.0],
+            "the joint carries the wrapper's show/hide now",
+        )
+
+    def test_a_constant_visible_track_is_not_handed_down(self):
+        """A show/hide that never hides is noise like any static-at-default
+        curve: it goes with the wrapper instead of landing on the joint."""
+        grandparent, wrapper, root, _ = self._skeleton_wrapper("rt_steady_skeleton")
+        self._keyed_visibility(wrapper, hidden_at=())
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            1,
+        )
+        self.assertIsNone(
+            cmds.listConnections(
+                f"{grandparent}|rt_steady_skeleton.visibility",
+                source=True,
+                destination=False,
+            ),
+            "nothing to hand down",
+        )
+
+    def test_an_identical_track_on_the_joint_lets_the_wrapper_go(self):
+        """The replay keys EVERY node of a name, so the pair usually arrives with
+        the same track twice: the wrapper's copy goes with it."""
+        grandparent, wrapper, root, _ = self._skeleton_wrapper("rt_twin_skeleton")
+        self._keyed_visibility(wrapper, hidden_at=(24,))
+        self._keyed_visibility(root, hidden_at=(24,))
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            1,
+        )
+        self.assertEqual(
+            cmds.keyframe(
+                f"{grandparent}|rt_twin_skeleton.visibility",
+                query=True,
+                valueChange=True,
+            ),
+            [1.0, 0.0],
+        )
+
+    def test_a_different_track_on_the_joint_keeps_the_wrapper(self):
+        """Two different show/hides compose (both must be on); dropping either
+        would change what is drawn."""
+        grandparent, wrapper, root, _ = self._skeleton_wrapper("rt_split_skeleton")
+        self._keyed_visibility(wrapper, hidden_at=(24,))
+        self._keyed_visibility(root, hidden_at=(1,))
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            0,
+        )
+        self.assertTrue(cmds.objExists(wrapper))
+
+    def test_a_level_that_is_not_inert_is_left_alone(self):
+        """Neither side identity means removing one would have to COMPOSE their
+        transforms, which is a bake rather than a reparent."""
+        self._nested("rt_moved", inner_identity=False)
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+
+    def test_a_keyed_inner_level_is_left_alone(self):
+        """Keys that MOVE it. A curve held at the channel's default within the
+        noise floor moves nothing and does not count (see the skeleton tests)."""
+        outer, inner = self._nested("rt_keyed")
+        cmds.setKeyframe(inner, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(inner, attribute="translateX", time=24, value=5)
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+
+    def test_differently_named_levels_are_left_alone(self):
+        outer = cmds.group(empty=True, name="rt_outer")
+        cmds.group(empty=True, name="rt_unrelated", parent=outer)
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+
+    def test_running_twice_changes_nothing_the_second_time(self):
+        self._nested("rt_twice")
+        engine = BlenderSceneImport()
+
+        first = engine._collapse_usd_wrappers(cmds.ls(type="transform"))
+        second = engine._collapse_usd_wrappers(cmds.ls(type="transform"))
+
+        self.assertEqual((first, second), (1, 0))
+
+
+class TestImportedNameCleanup(MayaTkTestCase):
+    """``_clean_import_residue``: what Maya's FBX importer escapes, undone.
+
+    Measured over a production ``.ma -> .blend -> .ma`` round trip, where the
+    source scene contained no ``FBXASC`` at all: 786 DAG nodes came back spelled
+    ``<name>FBXASC046001`` (Blender's duplicate-suffix dot) and every mesh gained
+    three keyable ``FBXASC032`` render-stat attributes -- 13 063 occurrences after
+    one round trip, 13 683 after two, so it compounds.
+    """
+
+    def test_the_three_carrier_render_stats_are_stripped(self):
+        node = cmds.polyCube(name="rt_cube")[0]
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+        for attr in (
+            "PrimaryFBXASC032Visibility",
+            "CastsFBXASC032Shadows",
+            "ReceiveFBXASC032Shadows",
+        ):
+            cmds.addAttr(shape, ln=attr, at="bool", keyable=True)
+        # An attribute an artist DID author must survive the sweep.
+        cmds.addAttr(shape, ln="myFBXASC032prop", at="bool", keyable=True)
+
+        BlenderSceneImport()._clean_import_residue([node], [node, shape])
+
+        for attr in (
+            "PrimaryFBXASC032Visibility",
+            "CastsFBXASC032Shadows",
+            "ReceiveFBXASC032Shadows",
+        ):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=shape, exists=True), f"{attr} survived"
+            )
+        self.assertTrue(
+            cmds.attributeQuery("myFBXASC032prop", node=shape, exists=True),
+            "an authored custom property must not be swept with them",
+        )
+
+    def test_escaped_names_are_repaired_and_the_paths_come_back_fresh(self):
+        parent = cmds.group(empty=True, name="rt_GRP")
+        node = cmds.polyCube(name="tmp_cube")[0]
+        node = cmds.ls(cmds.parent(node, parent)[0], long=True)[0]
+        node = cmds.ls(cmds.rename(node, "WIRE_LOOMSFBXASC046001"), long=True)[0]
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+
+        out = BlenderSceneImport()._clean_import_residue([node], [parent, node, shape])
+
+        self.assertFalse(cmds.objExists(node), "the escaped path is gone")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].rsplit("|", 1)[-1], "WIRE_LOOMS_001")
+        self.assertEqual(
+            cmds.listRelatives(out[0], shapes=True)[0],
+            # Maya's own spelling (``pCube1`` -> ``pCubeShape1``): the trailing
+            # digits stay last, which is what ``Naming.conform_shape_names`` writes.
+            "WIRE_LOOMS_Shape001",
+            "the shape is conformed off the repaired transform",
+        )
+
+    def test_dead_remap_nodes_the_import_created_are_swept(self):
+        """The 478 ``_purge_orphans`` provably cannot reach: born reaching no
+        shader, so they are in no material's history."""
+        dead = cmds.shadingNode("setRange", asUtility=True, name="rt_dead")
+        live = cmds.shadingNode("setRange", asUtility=True, name="rt_live")
+        sink = cmds.shadingNode("multiplyDivide", asUtility=True, name="rt_sink")
+        cmds.connectAttr(f"{live}.outValueX", f"{sink}.input1X")
+        node = cmds.polyCube(name="rt_swept")[0]
+
+        BlenderSceneImport()._clean_import_residue([node], [node, dead, live, sink])
+
+        self.assertFalse(cmds.objExists(dead), "the orphaned remap survived")
+        self.assertTrue(cmds.objExists(live), "a wired remap must not be swept")
+
+    def test_all_zero_shear_curves_the_carrier_cannot_have_sent_are_removed(self):
+        """FBX has no shear channel, so a shear CURVE on an FBX import was made by
+        decomposing a sampled matrix downstream. One that never leaves zero is that
+        decomposition's denormal residue: measured, 9 curves of 4742 keys each at
+        -3.7e-30, appearing on some conversions and not others, which is what kept
+        an otherwise-settled round trip from reaching a fixed point.
+        """
+        node = cmds.polyCube(name="shear_cube")[0]
+        for frame, value in ((1, -3.6977854932234942e-30), (24, -3.69e-30)):
+            cmds.setKeyframe(node, attribute="shearXY", time=frame, value=value)
+        # A shear curve carrying a real value came from somewhere else and stays.
+        for frame, value in ((1, 0.0), (24, 0.5)):
+            cmds.setKeyframe(node, attribute="shearYZ", time=frame, value=value)
+
+        removed = BlenderSceneImport()._strip_fabricated_shear([node])
+
+        self.assertEqual(removed, 1)
+        self.assertIsNone(
+            cmds.keyframe(f"{node}.shearXY", query=True, timeChange=True),
+            "the all-zero curve survived",
+        )
+        self.assertEqual(
+            cmds.keyframe(f"{node}.shearYZ", query=True, timeChange=True),
+            [1.0, 24.0],
+            "a shear curve with a real value must not be swept with it",
+        )
+
+    def test_a_curve_that_also_drives_something_else_is_left_alone(self):
+        """One animCurve can drive more than one plug. Deleting it because ONE of
+        them is shear would take the other channel's animation with it."""
+        node = cmds.polyCube(name="shear_shared")[0]
+        for frame, value in ((1, 0.0), (24, 0.0)):
+            cmds.setKeyframe(node, attribute="shearXY", time=frame, value=value)
+        curve = cmds.listConnections(
+            f"{node}.shearXY", source=True, destination=False, type="animCurve"
+        )[0]
+        cmds.connectAttr(f"{curve}.output", f"{node}.translateX", force=True)
+
+        self.assertEqual(BlenderSceneImport()._strip_fabricated_shear([node]), 0)
+        self.assertTrue(cmds.objExists(curve), "it drives translateX too")
+
+    def test_an_unanimated_shear_channel_is_not_touched(self):
+        node = cmds.polyCube(name="shear_static")[0]
+        self.assertEqual(BlenderSceneImport()._strip_fabricated_shear([node]), 0)
+
+    def test_render_stats_are_stripped_inside_a_namespace_too(self):
+        """The strip finds its attributes by PLUG PATTERN, and ``*`` matches the root
+        namespace only unless ``ls`` is asked recursively. An import that landed in a
+        namespace would otherwise keep every one of them -- silently, and faster,
+        which is how a sweep that stopped working looks like one with nothing to do.
+        """
+        cmds.namespace(add="rt_ns")
+        cmds.namespace(set="rt_ns")
+        node = cmds.polyCube(name="ns_cube")[0]
+        cmds.namespace(set=":")
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+        for attr in (
+            "PrimaryFBXASC032Visibility",
+            "CastsFBXASC032Shadows",
+            "ReceiveFBXASC032Shadows",
+        ):
+            cmds.addAttr(shape, ln=attr, at="bool", keyable=True)
+
+        BlenderSceneImport()._clean_import_residue([node], [node, shape])
+
+        for attr in (
+            "PrimaryFBXASC032Visibility",
+            "CastsFBXASC032Shadows",
+            "ReceiveFBXASC032Shadows",
+        ):
+            self.assertFalse(
+                cmds.attributeQuery(attr, node=shape, exists=True),
+                f"{attr} survived inside a namespace",
+            )
+
+    def test_a_same_named_attribute_outside_the_import_is_left_alone(self):
+        """The plug query is scene-wide, so the result is intersected with what the
+        import created. A node that was already in the scene keeps its attribute."""
+        mine = cmds.polyCube(name="rt_mine")[0]
+        theirs = cmds.polyCube(name="rt_theirs")[0]
+        for node in (mine, theirs):
+            cmds.addAttr(node, ln="PrimaryFBXASC032Visibility", at="bool", keyable=True)
+
+        BlenderSceneImport()._clean_import_residue([mine], [mine])
+
+        self.assertFalse(
+            cmds.attributeQuery("PrimaryFBXASC032Visibility", node=mine, exists=True)
+        )
+        self.assertTrue(
+            cmds.attributeQuery("PrimaryFBXASC032Visibility", node=theirs, exists=True),
+            "a node this import did not create must not be swept",
+        )
+
+    def test_authored_names_the_repair_could_rename_are_left_alone(self):
+        """Scope. ``MANGLED_NAME_RE`` also matches ``_{3,}`` (and Maya's own
+        ``__uninst`` / ``__RZTMP`` scratch tokens), because the Scene Exporter's
+        check wants all of them gone before a deliverable ships. An IMPORT owes
+        the opposite: a Blender object an artist named ``FOO___BAR`` is content,
+        not carrier damage, and must come through spelled as authored. Only the
+        importer's own ``FBXASC`` escape is the bridge's business.
+        """
+        authored = cmds.group(empty=True, name="FOO___BAR")
+        mangled = cmds.group(empty=True, name="BAZFBXASC046001")
+        shape_owner = cmds.polyCube(name="tmp")[0]
+        shape_owner = cmds.ls(cmds.rename(shape_owner, "QUXFBXASC046001"), long=True)[0]
+        shape = cmds.listRelatives(shape_owner, shapes=True, fullPath=True)[0]
+
+        BlenderSceneImport()._clean_import_residue(
+            [authored, mangled, shape_owner], [authored, mangled, shape_owner, shape]
+        )
+
+        self.assertTrue(
+            cmds.objExists("FOO___BAR"), "an authored name was rewritten by an import"
+        )
+        self.assertFalse(cmds.objExists("BAZFBXASC046001"), "the escape survived")
+        self.assertTrue(cmds.objExists("BAZ_001"))
+        self.assertTrue(
+            cmds.objExists("QUX_001"), "a mangled node is repaired via its transform"
+        )
+
+    def test_the_repair_never_reaches_below_or_beyond_the_escape(self):
+        """Handed the escaped nodes as ROOTS, the repair walked every descendant
+        with the full mangled-name pattern and cleaned what it renamed: an
+        authored ``Sword___Blade`` under an escaped bone became ``Sword_Blade``,
+        and an escaped ``DEF__spine.001`` came back ``DEF_spine_001``."""
+        bone = cmds.group(empty=True, name="handFBXASC046L")
+        blade = cmds.group(empty=True, name="Sword___Blade", parent=bone)
+        spine = cmds.group(empty=True, name="DEF__spineFBXASC046001")
+        nodes = cmds.ls([bone, blade, spine], long=True)
+
+        BlenderSceneImport()._clean_import_residue(nodes, nodes)
+
+        self.assertTrue(cmds.objExists("hand_L"), "the escape survived")
+        self.assertTrue(
+            cmds.objExists("Sword___Blade"), "an authored child name was rewritten"
+        )
+        self.assertTrue(
+            cmds.objExists("DEF__spine_001"), "the author's own __ was collapsed"
+        )
+
+    def test_a_clean_import_is_left_alone(self):
+        node = cmds.polyCube(name="already_clean")[0]
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+        before = cmds.ls(dag=True, long=True)
+        out = BlenderSceneImport()._clean_import_residue([node], [node, shape])
+        self.assertEqual(cmds.ls(dag=True, long=True), before)
+        self.assertEqual([p.rsplit("|", 1)[-1] for p in out], ["already_clean"])
+
+
+class TestPurgeOrphanedUtilityNodes(MayaTkTestCase):
+    """``_purge_orphans``: a replaced network's utility nodes go with it.
+
+    Maya's FBX importer builds one ``setRange`` per imported mesh to remap a
+    roughness map onto specular power. The manifest rebuild drops the phong that
+    consumed it, and the remap was immortal: its one surviving connection is the
+    ``.message`` plug Maya wires into ``defaultRenderUtilityList1`` for every
+    utility node, which the purge read as "still in use". 486 of them survived a
+    single production round trip.
+    """
+
+    def test_message_only_connections_do_not_count_as_wired(self):
+        node = cmds.shadingNode("setRange", asUtility=True, name="rt_setRange")
+        self.assertFalse(
+            BlenderSceneImport._is_wired(node),
+            "a utility node wired only into the default render list is unused",
+        )
+        target = cmds.shadingNode("multiplyDivide", asUtility=True, name="rt_mult")
+        cmds.connectAttr(f"{node}.outValueX", f"{target}.input1X")
+        self.assertTrue(BlenderSceneImport._is_wired(node))
+
+    def test_an_unassigned_replaced_network_takes_its_remap_with_it(self):
+        phong = cmds.shadingNode("phong", asShader=True, name="rt_phong")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="rt_phongSG"
+        )
+        cmds.connectAttr(f"{phong}.outColor", f"{sg}.surfaceShader", force=True)
+        rough = cmds.shadingNode("file", asTexture=True, name="rt_rough")
+        rng = cmds.shadingNode("setRange", asUtility=True, name="rt_range")
+        cmds.connectAttr(f"{rough}.outAlpha", f"{rng}.valueX")
+        cmds.connectAttr(f"{rng}.outValueX", f"{phong}.cosinePower")
+
+        BlenderSceneImport()._purge_orphans([phong])
+
+        self.assertFalse(cmds.objExists(phong))
+        self.assertFalse(cmds.objExists(rng), "the orphaned remap survived the purge")
+        self.assertFalse(cmds.objExists(rough))
 
 
 class _StubbedImport(BlenderSceneImport):
@@ -1254,7 +2464,9 @@ class TestSceneImportShots(_ShotsCase):
             "shots": self._section(["objS"]),
         }
         _StubbedImport.calls["import_result"] = self._keyed_import
-        _StubbedImport().import_scene(self.src, via="fbx", use_cache=False, shots=False)
+        _StubbedImport().import_scene(
+            self.src, via="fbx", use_cache=False, scene_data=False
+        )
         self.assertEqual(ShotStore.active().shots, [])
 
 
@@ -2408,7 +3620,7 @@ class TestUsdPullRouteContracts(unittest.TestCase):
             '"export_global_forward_selection": "NEGATIVE_Z"',
             '"export_global_up_selection": "Y"',
             '"convert_scene_units": "CENTIMETERS"',
-            "hidden = hidden_objects(bpy)",
+            "hidden = [o for o in hidden_objects(bpy) if not hide_is_animated(o)]",
             "obj.hide_render = False",  # the exporter's RENDER evaluation skips these
             "mark_invisible(OUT_USD, hidden)",
         ):
@@ -2472,6 +3684,292 @@ class TestUsdPullRouteContracts(unittest.TestCase):
 
         self.assertEqual(vis("/grp/part_001"), "invisible")
         self.assertEqual(vis("/grp/visible"), "inherited")
+
+    def test_the_visibility_section_rides_the_usd_manifest(self):
+        """BACKLOG 2026-09-21: the USD route lost every show/hide on its return leg.
+
+        Blender's USD exporter writes no visibility samples for ``hide_*`` keys, so
+        on the production module 83 objects whose only animation was a show/hide
+        (plug and failed-component toggles) reached Maya static -- ``hop2.ma``
+        carried no visibility curve at all -- and the next pull had nothing to
+        bake. The FBX route has carried them in the manifest since 2026-09-20 and
+        the Maya consumer is carrier-agnostic; only this producer never wrote the
+        section. Same collector, byte for byte (the shared-definitions guard)."""
+        collect = _template_function(
+            self.TEMPLATE, "collect_visibility", deps=("_action_fcurves",)
+        )
+        fcurve = SimpleNamespace(
+            data_path="hide_viewport",
+            keyframe_points=[
+                SimpleNamespace(co=(5, 1.0)),
+                SimpleNamespace(co=(1, 0.0)),
+            ],
+        )
+        plug = SimpleNamespace(
+            name="plug",
+            parent=None,
+            animation_data=SimpleNamespace(action=SimpleNamespace(fcurves=[fcurve])),
+        )
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=SimpleNamespace(objects=[plug]))
+        )
+        visibility = collect(bpy)
+        self.assertEqual(visibility, {"plug": [[1.0, 1.0], [5.0, 0.0]]})
+
+        write = _template_function(self.TEMPLATE, "write_manifest")
+        out = os.path.join(self.tmp, "payload.usd")
+        write.__globals__.update(
+            OUT_USD=out,
+            collect_instance_groups=lambda bpy: [],
+            collect_empties=lambda bpy: {},
+        )
+        write(None, {"fps": 30}, visibility=visibility)
+        with open(out + ".manifest.json", encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["visibility"], visibility)
+        write(None, {"fps": 30})
+        with open(out + ".manifest.json", encoding="utf-8") as fh:
+            self.assertNotIn(
+                "visibility", json.load(fh), "absent = nothing to say, as on FBX"
+            )
+
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        main = text[text.index("def main(") : text.index("def _withhold(")]
+        self.assertIn("visibility = collect_visibility(bpy)", main)
+        self.assertLess(
+            main.index("collect_visibility(bpy)"),
+            main.index("export_usd(bpy)"),
+            "collected from the artist's scene, before the export touches it",
+        )
+        self.assertIn("visibility=visibility", main)
+
+    def test_a_shared_action_gives_each_object_only_its_own_slot(self):
+        """Blender 4.4+ lets one action drive several objects through SLOTS, and
+        5.x keeps keys only in per-slot channelbags. Read slot-blind, every
+        object sharing the action would take whichever ``hide_*`` curve came
+        last -- another object's show/hide. Both templates, one collector."""
+
+        def fc(path, *frames):
+            return SimpleNamespace(
+                data_path=path,
+                keyframe_points=[SimpleNamespace(co=(f, 1.0)) for f in frames],
+            )
+
+        bags = {"A": SimpleNamespace(fcurves=[fc("hide_viewport", 3)])}
+        bags["B"] = SimpleNamespace(fcurves=[fc("location", 1)])
+        strip = SimpleNamespace(
+            channelbags=list(bags.values()), channelbag=lambda slot: bags.get(slot)
+        )
+        action = SimpleNamespace(layers=[SimpleNamespace(strips=[strip])])
+
+        def obj(name, slot):
+            data = SimpleNamespace(action=action, action_slot=slot)
+            return SimpleNamespace(name=name, parent=None, animation_data=data)
+
+        a, b = obj("plug_a", "A"), obj("plug_b", "B")
+        bpy = SimpleNamespace(
+            context=SimpleNamespace(scene=SimpleNamespace(objects=[a, b]))
+        )
+        for template in (si._IMPORT_TEMPLATE, self.TEMPLATE):
+            with self.subTest(template=template.name):
+                collect = _template_function(
+                    template, "collect_visibility", deps=("_action_fcurves",)
+                )
+                self.assertEqual(collect(bpy), {"plug_a": [[3.0, 0.0]]})
+        animated = _template_function(
+            self.TEMPLATE, "hide_is_animated", deps=("_action_fcurves",)
+        )
+        self.assertTrue(animated(a))
+        self.assertFalse(animated(b), "plug_a's show/hide is not plug_b's")
+
+    def test_an_animated_show_hide_is_not_also_stamped_static(self):
+        """A keyed show/hide travels as keys; stamping the prim ``invisible`` as
+        well would pin it. Worse for a child whose track the collector leaves out
+        because an ancestor already says it: Maya derives that child from the
+        ancestor's keys, and a static ``invisible`` on the child itself would hide
+        it for good."""
+        animated = _template_function(
+            self.TEMPLATE, "hide_is_animated", deps=("_action_fcurves",)
+        )
+
+        def obj(*paths):
+            curves = [SimpleNamespace(data_path=p) for p in paths]
+            action = SimpleNamespace(fcurves=curves) if curves else None
+            return SimpleNamespace(animation_data=SimpleNamespace(action=action))
+
+        self.assertTrue(animated(obj("hide_viewport")))
+        self.assertTrue(animated(obj("location", "hide_render")))
+        self.assertFalse(animated(obj("location")))
+        self.assertFalse(animated(obj()))
+        self.assertFalse(animated(SimpleNamespace(animation_data=None)))
+
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        body = text[text.index("def export_usd(") : text.index("def hidden_objects(")]
+        self.assertIn(
+            "hidden = [o for o in hidden_objects(bpy) if not hide_is_animated(o)]",
+            body,
+        )
+
+    def test_template_mark_orthographic_authors_the_camera(self):
+        """BACKLOG 2026-09-21: Blender's USD writer supports perspective cameras
+        only -- an ORTHO one leaves a bare Xform -- so the production module's one
+        authored camera never reached Maya. The copy of
+        ``btk.UsdUtils.mark_orthographic`` re-authors the camera the template
+        exported as perspective: merged or nested under its Xform, per-frame
+        samples cleared (they outrank a default), width as both apertures."""
+        try:
+            from pxr import Usd, UsdGeom
+        except ImportError:
+            self.skipTest("pxr not bundled with this Maya")
+        import re
+
+        ns = {}
+        for name in ("sanitize_prim_name", "export_prim_path", "mark_orthographic"):
+            fn, _ = self._template_function(self.TEMPLATE, name)
+            self.assertIsNotNone(fn, f"template lost {name}")
+            ns[name] = fn
+        for fn in ns.values():
+            fn.__globals__.update(ns, re=re)
+
+        path = os.path.join(self.tmp, "ortho.usda")
+        stage = Usd.Stage.CreateNew(path)
+        merged = UsdGeom.Camera.Define(stage, "/back")
+        aperture = merged.CreateHorizontalApertureAttr()
+        aperture.Set(36.0, 1)
+        aperture.Set(36.0, 2)
+        UsdGeom.Xform.Define(stage, "/grp")
+        UsdGeom.Xform.Define(stage, "/grp/side")
+        UsdGeom.Camera.Define(stage, "/grp/side/side")
+        UsdGeom.Xform.Define(stage, "/lost")  # an Xform with no camera under it
+        stage.GetRootLayer().Save()
+        del stage
+
+        def cam(name, width, parent=None):
+            return SimpleNamespace(
+                name=name, parent=parent, data=SimpleNamespace(ortho_scale=width)
+            )
+
+        grp = SimpleNamespace(name="grp", parent=None)
+        cameras = [
+            cam("back", 668.92),
+            cam("side", 7.5, parent=grp),
+            cam("lost", 3.0),
+            cam("ghost", 1.0),
+        ]
+        self.assertEqual(ns["mark_orthographic"](path, cameras), 2)
+
+        stage = Usd.Stage.Open(path)
+        for prim_path, width in (("/back", 668.92), ("/grp/side/side", 7.5)):
+            with self.subTest(prim=prim_path):
+                camera = UsdGeom.Camera(stage.GetPrimAtPath(prim_path))
+                self.assertEqual(
+                    camera.GetProjectionAttr().Get(), UsdGeom.Tokens.orthographic
+                )
+                horizontal = camera.GetHorizontalApertureAttr()
+                self.assertEqual(horizontal.GetNumTimeSamples(), 0)
+                self.assertAlmostEqual(horizontal.Get(1), width, places=3)
+                self.assertAlmostEqual(
+                    camera.GetVerticalApertureAttr().Get(), width, places=3
+                )
+        self.assertFalse(stage.GetPrimAtPath("/lost").IsA(UsdGeom.Camera))
+
+    def test_template_flips_ortho_cameras_for_the_writer(self):
+        """Flipped to perspective BEFORE the export (the writer skips anything
+        else), re-authored after the passes that rename prims."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        body = text[text.index("def export_usd(") : text.index("def hidden_objects(")]
+        flip = body.index("ortho = _as_perspective(bpy.data.objects)")
+        self.assertLess(flip, body.index("bpy.ops.wm.usd_export(**kwargs)"))
+        self.assertLess(
+            body.index("fold_single_mesh_xforms(OUT_USD)"),
+            body.index("mark_orthographic(OUT_USD, ortho)"),
+        )
+
+    def test_template_holds_static_transforms_on_an_animated_export(self):
+        """An animated export samples every object holding an action, so a
+        show/hide-only object ships a per-frame copy of a static transform, and
+        mayaUsd keyed the noise in it: flat +-90/180 deg rotation curves that
+        flickered pass to pass on the production round trip (+11/-2, then -9/+1)
+        and kept ``census(hop2) == census(hop4)`` red. Held after the fold, which
+        renames the prims."""
+        text = self.TEMPLATE.read_text(encoding="utf-8")
+        body = text[text.index("def export_usd(") : text.index("def hidden_objects(")]
+        self.assertIn("held = collapse_static_xforms(OUT_USD)", body)
+        self.assertLess(
+            body.index("fold_single_mesh_xforms(OUT_USD)"),
+            body.index("collapse_static_xforms(OUT_USD)"),
+        )
+
+    #: ``(template name, blendertk module, class, blendertk name)`` for every copy
+    #: this template carries of a blendertk function it cannot import.
+    COPIES = (
+        ("mark_orthographic", "env_utils/usd.py", "UsdUtils", "mark_orthographic"),
+        (
+            "collapse_static_xforms",
+            "env_utils/usd.py",
+            "UsdUtils",
+            "collapse_static_xforms",
+        ),
+        ("_as_perspective", "env_utils/usd.py", "_UsdUtilsInternal", "_as_perspective"),
+        (
+            "_action_fcurves",
+            "anim_utils/_anim_utils.py",
+            "_AnimUtilsInternal",
+            "_slot_fcurves",
+        ),
+    )
+
+    def test_the_copies_are_blendertk_s_source(self):
+        """AST identity with the blendertk originals, docstrings and the class
+        qualifier aside (a copy calls its sibling copies by bare name): a change
+        on EITHER side fails here, not only a drift in the copy."""
+        package = si._TEMPLATE_DIR.parents[4] / "blendertk" / "blendertk"
+        if not package.is_dir():
+            self.skipTest(f"sibling blendertk checkout missing: {package}")
+
+        class Unqualify(ast.NodeTransformer):
+            def visit_Attribute(self, node):
+                self.generic_visit(node)
+                if isinstance(node.value, ast.Name) and node.value.id in (
+                    "UsdUtils",
+                    "_UsdUtilsInternal",
+                ):
+                    return ast.copy_location(ast.Name(id=node.attr, ctx=node.ctx), node)
+                return node
+
+        def code(fn):
+            body = list(fn.body)
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]  # the docstrings differ by design
+            module = Unqualify().visit(ast.Module(body=body, type_ignores=[]))
+            # Names and defaults, not annotations: the public method is typed,
+            # the template's copies are not -- neither changes what runs.
+            args = [a.arg for a in fn.args.args]
+            defaults = [ast.dump(d) for d in fn.args.defaults]
+            return ast.dump(module), args, defaults
+
+        for name, module, cls_name, source_name in self.COPIES:
+            with self.subTest(copy=name):
+                _, copy = self._template_function(self.TEMPLATE, name)
+                self.assertIsNotNone(copy, f"template lost {name}")
+                source = next(
+                    (
+                        fn
+                        for cls in ast.parse(
+                            (package / module).read_text(encoding="utf-8")
+                        ).body
+                        if isinstance(cls, ast.ClassDef) and cls.name == cls_name
+                        for fn in cls.body
+                        if isinstance(fn, ast.FunctionDef) and fn.name == source_name
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(source, f"{cls_name} lost {source_name}")
+                self.assertEqual(code(copy), code(source))
 
     def test_template_exports_unmerged_when_animated_and_folds_back(self):
         """Blender 5.1 drops an animated object's Mesh when merge_parent_xform and

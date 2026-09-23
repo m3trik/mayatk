@@ -9,7 +9,7 @@ Tests for the non-animating Channels-based implementation.
 import unittest
 from unittest.mock import patch
 import maya.cmds as cmds
-from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 from base_test import MayaTkTestCase
 
 
@@ -37,7 +37,7 @@ class TestOpacityAttributeMode(MayaTkTestCase):
 
     def test_create_adds_fade_attribute(self):
         """create(mode='attribute') adds the 'opacity' float attribute."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         self.assertTrue(
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
@@ -59,19 +59,19 @@ class TestOpacityAttributeMode(MayaTkTestCase):
 
     def test_create_does_not_add_keys(self):
         """create(mode='attribute') should NOT add animation keys."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         anim = cmds.listConnections(self.cube, type="animCurve")
         self.assertFalse(anim, "Attribute mode should not create animation curves")
 
     def test_remove_deletes_attribute(self):
         """remove(mode='attribute') deletes the attribute."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         self.assertTrue(
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True)
         )
 
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
+        RenderEffects.remove(objects=[self.cube], mode="attribute")
         self.assertFalse(
             cmds.attributeQuery("opacity", node=str(self.cube), exists=True),
             "Attribute should be removed",
@@ -96,7 +96,7 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         MatUtils.assign_mat([cube], skin)
         # The channel first: create() heals legacy leftovers before it adds
         # the attribute, so the duplicate has to be built AFTER it.
-        RenderOpacity.create([cube], channel="highlight")
+        RenderEffects.create([cube], channel="highlight")
         dup = cmds.shadingNode("standardSurface", asShader=True, name="Skin_Highlight")
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="SkinSG_Copy"
@@ -121,7 +121,7 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         cube, skin, dup = self._legacy_scene()
         self.assertEqual(_get_assigned_mat(cube), dup)
 
-        RenderOpacity.remove([cube], channel="highlight")
+        RenderEffects.remove([cube], channel="highlight")
 
         self.assertEqual(_get_assigned_mat(cube), skin)
         self.assertFalse(cmds.objExists(dup), "the orphaned duplicate is deleted")
@@ -149,7 +149,7 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         mat = cmds.shadingNode("standardSurface", asShader=True, name="Own")
         cmds.setAttr(f"{mat}.emission", 0.25)
         MatUtils.assign_mat([cube], mat)
-        RenderOpacity.create([cube], channel="highlight")
+        RenderEffects.create([cube], channel="highlight")
         cmds.connectAttr(f"{cube}.highlight", f"{mat}.emission", force=True)
         ptk.SceneRecords.RENDER_EFFECTS_BINDINGS.save(
             DataNodes,
@@ -165,7 +165,7 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         cmds.setAttr(f"{cube}.highlight", 1.0)
         self.assertEqual(cmds.getAttr(f"{mat}.emission"), 1.0, "driven before")
 
-        RenderOpacity.remove([cube], channel="highlight")
+        RenderEffects.remove([cube], channel="highlight")
 
         self.assertEqual(_get_assigned_mat(cube), mat, "never a duplicate to leave")
         self.assertFalse(
@@ -173,25 +173,64 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         )
         self.assertEqual(cmds.getAttr(f"{mat}.emission"), 0.25, "authored value back")
 
-    def test_the_material_mode_is_the_attribute_mode_now(self):
-        """``mode="material"`` (one release) creates the attribute and touches
-        no material: the authored one stays assigned and unconnected."""
+    def test_the_retired_material_mode_is_refused_before_touching_anything(self):
+        """``mode="material"`` was the attribute mode with a warning from
+        2026-09-05; it was retired 2026-09-21 with no caller, together with
+        ``preview()`` and the ``preview=`` keyword. It is an unknown mode now,
+        and an unknown mode is refused BEFORE ``create`` clears the objects'
+        existing channel -- the old order logged "Unknown mode" only after
+        removing it, so a typo wiped what it was pointed at."""
         from mayatk.mat_utils._mat_utils import MatUtils
 
         cube = cmds.polyCube(name="plain_cube")[0]
         mat = cmds.shadingNode("standardSurface", asShader=True, name="Plain")
         MatUtils.assign_mat([cube], mat)
+        RenderEffects.create([cube], mode="attribute", channel="highlight")
 
-        RenderOpacity._preview_warned = False  # the notice is once per session
-        with self.assertLogs(RenderOpacity.logger, level="WARNING"):
-            RenderOpacity.create([cube], mode="material", channel="highlight")
+        with self.assertLogs(RenderEffects.logger, level="ERROR"):
+            result = RenderEffects.create([cube], mode="material", channel="highlight")
 
-        self.assertTrue(cmds.attributeQuery("highlight", node=cube, exists=True))
+        self.assertEqual(result, {})
+        self.assertTrue(
+            cmds.attributeQuery("highlight", node=cube, exists=True),
+            "the refused call must leave the existing channel alone",
+        )
         self.assertEqual(_get_assigned_mat(cube), mat)
         self.assertFalse(
             cmds.listConnections(f"{mat}.emission", source=True, destination=False)
         )
-        self.assertEqual(cmds.ls("*_Highlight"), [])
+        self.assertFalse(hasattr(RenderEffects, "preview"))
+        with self.assertRaises(TypeError):
+            RenderEffects.key_fade([cube], start=1, end=10, preview=True)
+
+    def test_setup_is_a_deprecated_alias_of_create(self):
+        """``setup`` was a silent alias of ``create`` from 2026-02-13 with
+        callers outside mayatk (unitytk's Maya-side fixtures), so it warns
+        through ``ptk.Deprecation.symbol`` until mayatk 0.20.0 and forwards."""
+        cube = cmds.polyCube(name="setup_cube")[0]
+        with self.assertWarns(DeprecationWarning) as caught:
+            RenderEffects.setup(objects=[cube], mode="attribute")
+        self.assertTrue(cmds.attributeQuery("opacity", node=cube, exists=True))
+        self.assertIn("RenderEffects.create", str(caught.warning))
+        self.assertIn("mayatk 0.20.0", str(caught.warning))
+
+    def test_the_render_opacity_import_path_warns_and_forwards(self):
+        """``RenderOpacity`` resolved silently to ``RenderEffects`` from
+        2026-09-05; since 2026-09-21 the old path still resolves but warns
+        (``ptk.Deprecation.attributes``) and names the release it goes in."""
+        import importlib
+
+        legacy = importlib.import_module(
+            "mayatk.mat_utils.render_opacity._render_opacity"
+        )
+        with self.assertWarns(DeprecationWarning) as caught:
+            alias = legacy.RenderOpacity
+        self.assertIs(alias, RenderEffects)
+        self.assertIn("mayatk 0.20.0", str(caught.warning))
+        import mayatk as mtk
+
+        with self.assertWarns(DeprecationWarning):
+            self.assertIs(mtk.RenderOpacity, RenderEffects)
 
 
 class TestOpacityVisibilityDriver(MayaTkTestCase):
@@ -212,7 +251,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         The old condition-node approach broke FBX export because the
         DG graph doesn't survive the export round-trip.
         """
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         conds = [
@@ -226,7 +265,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """sync_visibility_from_opacity copies opacity keys to visibility."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Set opacity keyframes
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
@@ -247,7 +286,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """Visibility mirror should use stepped 0/1 values, not raw opacity."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.7)
         cmds.setKeyframe(self.cube, attribute="opacity", time=10, value=0.0)
 
@@ -271,7 +310,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         fallback (``ptk.MeshConvert._presence_keys``) applies too."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         for frame, value in ((1, 0.0), (10, 0.001), (20, 0.5), (30, 1.0)):
             cmds.setKeyframe(self.cube, attribute="opacity", time=frame, value=value)
 
@@ -293,7 +332,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
         cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
@@ -310,7 +349,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """Calling sync_visibility_from_opacity twice doesn't duplicate keys."""
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
         cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
@@ -344,8 +383,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         """
         from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
+        RenderEffects.key_fade(objects=[self.cube], start=1, end=15, direction="in")
 
         before = self._vis_curve_uuid()
         self.assertIsNotNone(before, "key_fade must leave a visibility curve")
@@ -369,8 +408,8 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         unselectable for the rest of the session.
         Fixed: 2026-09-03
         """
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
+        RenderEffects.key_fade(objects=[self.cube], start=1, end=15, direction="in")
 
         vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
         before = self._vis_curve_uuid()
@@ -382,7 +421,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
             "pre-condition: one visibility key selected",
         )
 
-        RenderOpacity.ensure_connections([self.cube])
+        RenderEffects.ensure_connections([self.cube])
 
         self.assertEqual(
             self._vis_curve_uuid(),
@@ -402,13 +441,13 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         replacing an authored curve there also destroys the sparse
         ``windows=True`` encoding ShadowRig writes.
         """
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
-        RenderOpacity.key_fade(objects=[self.cube], start=1, end=15, direction="in")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
+        RenderEffects.key_fade(objects=[self.cube], start=1, end=15, direction="in")
 
         vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
         cmds.keyframe(vis_plug, edit=True, time=(15, 15), timeChange=20)
 
-        RenderOpacity.ensure_connections([self.cube])
+        RenderEffects.ensure_connections([self.cube])
 
         self.assertEqual(
             cmds.keyframe(vis_plug, q=True, tc=True),
@@ -418,7 +457,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
 
     def test_ensure_connections_mirrors_when_visibility_unkeyed(self):
         """The repair case still works: no visibility keys at all -> mirror."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
         cmds.setKeyframe(self.cube, attribute="opacity", time=1, value=0.0)
         cmds.setKeyframe(self.cube, attribute="opacity", time=15, value=1.0)
 
@@ -428,15 +467,15 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
             "pre-condition: visibility unkeyed",
         )
 
-        RenderOpacity.ensure_connections([self.cube])
+        RenderEffects.ensure_connections([self.cube])
 
         self.assertEqual(cmds.keyframe(vis_plug, q=True, tc=True), [1.0, 15.0])
 
     def test_remove_restores_visibility(self):
         """Removing opacity should reset visibility to True with no drivers."""
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
+        RenderEffects.remove(objects=[self.cube], mode="attribute")
 
         self.assertTrue(
             cmds.getAttr(f"{self.cube}.visibility"), "Visibility should reset to True"
@@ -465,7 +504,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         cmds.connectAttr(f"{cond}.outColorR", f"{self.cube}.visibility", force=True)
 
         # Now create opacity (new code) — should clean up the legacy node
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         vis_inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
         conds = [
@@ -484,7 +523,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         cmds.setAttr(f"{foreign}.colorIfFalseR", 0.0)
         cmds.connectAttr(f"{foreign}.outColorR", f"{self.cube}.visibility", force=True)
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Foreign condition should still be there
         inputs = cmds.listConnections(f"{self.cube}.visibility", source=True)
@@ -496,7 +535,7 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         )
 
         # Cleanup
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
+        RenderEffects.remove(objects=[self.cube], mode="attribute")
         if cmds.objExists(foreign):
             cmds.delete(foreign)
 
@@ -506,13 +545,13 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
         Bug: visibility.set(True) threw RuntimeError when attr was locked.
         Fixed: 2026-02-20
         """
-        RenderOpacity.create(objects=[self.cube], mode="attribute")
+        RenderEffects.create(objects=[self.cube], mode="attribute")
 
         # Lock visibility between create and remove
         cmds.setAttr(f"{self.cube}.visibility", lock=True)
 
         # Should not raise
-        RenderOpacity.remove(objects=[self.cube], mode="attribute")
+        RenderEffects.remove(objects=[self.cube], mode="attribute")
 
         # Attribute should be gone regardless
         self.assertFalse(
@@ -663,25 +702,25 @@ class TestPrepareForExport(MayaTkTestCase):
 
     def test_hand_keyed_opacity_gets_no_visibility_mirror(self):
         cube = cmds.polyCube(name="manual_keyed_cube")[0]
-        RenderOpacity.create(objects=[cube], mode="attribute")
+        RenderEffects.create(objects=[cube], mode="attribute")
         for frame, value in ((1, 0.0), (30, 1.0), (60, 0.0)):
             cmds.setKeyframe(cube, attribute="opacity", time=frame, value=value)
         vis_plug = f"{cmds.ls(str(cube), l=True)[0]}.visibility"
 
         try:
-            self.assertEqual(RenderOpacity.prepare_for_export(objects=[cube]), [])
+            self.assertEqual(RenderEffects.prepare_for_export(), [])
             self.assertEqual(cmds.keyframe(vis_plug, q=True, keyframeCount=True), 0)
             self.assertEqual(
                 len(cmds.ls("manual_keyed_cube__opacity")), 1, "the proxy is staged"
             )
         finally:
-            RenderOpacity.finish_export()
+            RenderEffects.finish_export()
         self.assertEqual(cmds.ls("manual_keyed_cube__opacity"), [], "and removed after")
 
     def test_preserves_manual_visibility_keys(self):
         """Authored visibility, however many keys, is left exactly as authored."""
         cube = cmds.polyCube(name="manual_vis_cube")[0]
-        RenderOpacity.create(objects=[cube], mode="attribute")
+        RenderEffects.create(objects=[cube], mode="attribute")
         cmds.setKeyframe(cube, attribute="opacity", time=1, value=0.0)
         cmds.setKeyframe(cube, attribute="opacity", time=100, value=1.0)
         # Long-name plug path: attribute= by kwarg also keys the shape.
@@ -690,9 +729,9 @@ class TestPrepareForExport(MayaTkTestCase):
             cmds.setKeyframe(vis_plug, time=t, value=v)
 
         try:
-            self.assertEqual(RenderOpacity.prepare_for_export(objects=[cube]), [])
+            self.assertEqual(RenderEffects.prepare_for_export(), [])
         finally:
-            RenderOpacity.finish_export()
+            RenderEffects.finish_export()
         self.assertEqual(
             sorted(set(cmds.keyframe(vis_plug, q=True, tc=True))), [1, 25, 50, 100]
         )
@@ -701,11 +740,11 @@ class TestPrepareForExport(MayaTkTestCase):
         """key_fade's authoring mirror survives prepare_for_export untouched
         (the canonical happy path)."""
         cube = cmds.polyCube(name="key_fade_cube")[0]
-        RenderOpacity.create(objects=[cube], mode="attribute")
-        RenderOpacity.key_fade(objects=[cube], start=1, end=30, direction="in")
+        RenderEffects.create(objects=[cube], mode="attribute")
+        RenderEffects.key_fade(objects=[cube], start=1, end=30, direction="in")
 
         vis_before = cmds.keyframe(cube, attribute="visibility", q=True, tc=True)
-        synced = RenderOpacity.prepare_for_export(objects=[cube])
+        synced = RenderEffects.prepare_for_export()
         vis_after = cmds.keyframe(cube, attribute="visibility", q=True, tc=True)
 
         self.assertEqual(synced, [])
@@ -740,7 +779,7 @@ class TestPrepareForExport(MayaTkTestCase):
         self.assertLess(len(authored), 24, "the fixture must be the sparse encoding")
         uuid = cmds.ls(cmds.keyframe(plug, q=True, name=True)[0], uuid=True)[0]
 
-        synced = RenderOpacity.prepare_for_export(objects=[loc])
+        synced = RenderEffects.prepare_for_export()
 
         self.assertEqual(synced, [])
         self.assertEqual(
@@ -755,19 +794,33 @@ class TestPrepareForExport(MayaTkTestCase):
         curve = cmds.keyframe(plug, q=True, name=True)[0]
         self.assertEqual(cmds.ls(curve, uuid=True)[0], uuid, "the node was rebuilt")
 
-    def test_object_without_opacity_attr_silently_skipped(self):
-        """Plain objects (no opacity attr) must not trigger errors when
-        passed to prepare_for_export — common case during scene-wide
-        operations that pass mixed selections."""
+    def test_the_ignored_objects_argument_warns(self):
+        """``objects`` has been ignored since 2026-09-15 -- the staging covers
+        every keyed channel -- and callers outside mayatk still pass it. It
+        warns through ``ptk.Deprecation`` until mayatk 0.20.0, by name or by
+        position, and changes nothing: a plain object in it is still skipped
+        without error."""
         plain = cmds.polyCube(name="plain_cube")[0]
         opacity_obj = cmds.polyCube(name="opacity_cube")[0]
-        RenderOpacity.create(objects=[opacity_obj], mode="attribute")
+        RenderEffects.create(objects=[opacity_obj], mode="attribute")
         cmds.setKeyframe(opacity_obj, attribute="opacity", time=1, value=0.0)
         cmds.setKeyframe(opacity_obj, attribute="opacity", time=30, value=1.0)
 
-        synced = RenderOpacity.prepare_for_export(objects=[plain, opacity_obj])
-
-        self.assertEqual(synced, [])
+        for label, call in (
+            ("keyword", lambda: RenderEffects.prepare_for_export(objects=[plain])),
+            ("positional", lambda: RenderEffects.prepare_for_export([plain])),
+        ):
+            with self.subTest(form=label):
+                try:
+                    with self.assertWarns(DeprecationWarning) as caught:
+                        synced = call()
+                    self.assertEqual(synced, [])
+                    self.assertIn("mayatk 0.20.0", str(caught.warning))
+                    self.assertEqual(
+                        len(cmds.ls("opacity_cube__opacity")), 1, "still staged"
+                    )
+                finally:
+                    RenderEffects.finish_export()
         self.assertFalse(cmds.attributeQuery("opacity", node=str(plain), exists=True))
 
 
@@ -1167,7 +1220,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         """Opacity's Revise rewrites keys, which is the whole of what a fade
         is -- but it must not give the channel to anything new."""
         plain = cmds.polyCube(name="slot_never_faded")[0]
-        RenderOpacity.create([self.cube], mode="attribute", channel="opacity")
+        RenderEffects.create([self.cube], mode="attribute", channel="opacity")
         cmds.select([self.cube, plain], replace=True)
         self._set_mode(self.res.REVISE)
 
@@ -1187,7 +1240,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         from unittest.mock import MagicMock
 
         plain = cmds.polyCube(name="slot_gate_plain")[0]
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select([self.cube, plain], replace=True)
         self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = True
         action = MagicMock()
@@ -1204,7 +1257,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         objects cost a scene read and a per-object query four times over."""
         from unittest.mock import MagicMock
 
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select(self.cube, replace=True)
         self.slot._remove_actions = {"highlight": MagicMock()}
         self.slot._mode_menus = {"highlight": MagicMock()}
@@ -1225,7 +1278,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
         menu = MagicMock()
         self.slot._mode_menus["highlight"] = menu
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         plain = cmds.polyCube(name="slot_plain")[0]
         cmds.select([self.cube, plain], replace=True)
 
@@ -1247,7 +1300,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         menu = MagicMock()
         self.slot._mode_menus["opacity"] = menu
         self._set_mode(self.res.REVISE)
-        RenderOpacity.create([self.cube], mode="attribute", channel="opacity")
+        RenderEffects.create([self.cube], mode="attribute", channel="opacity")
         cmds.select(self.cube, replace=True)
 
         self.slot._update_apply_readout(self.res.OPACITY)
@@ -1257,7 +1310,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     def test_revise_reaches_only_objects_that_already_carry_the_channel(self):
         """The point of the mode: change this, do not spread it."""
         plain = cmds.polyCube(name="slot_unkeyed")[0]
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select([self.cube, plain], replace=True)
         self._set_mode(self.res.REVISE)
 
@@ -1275,8 +1328,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     def test_revise_seeds_the_row_from_what_is_authored(self):
         """Seeding from the authored value is what makes this a revision
         rather than a guess -- and the same read decides the before/after."""
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
         cmds.select(self.cube, replace=True)
         self._set_mode(self.res.REVISE)
 
@@ -1291,9 +1344,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         """Picking one of them to show would be a lie about what is there."""
         other = cmds.polyCube(name="slot_other3")[0]
         for node in (self.cube, other):
-            RenderOpacity.create([node], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
-        RenderOpacity.set_channel_color([other], color=(0.0, 1.0, 0.0))
+            RenderEffects.create([node], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        RenderEffects.set_channel_color([other], color=(0.0, 1.0, 0.0))
         cmds.select([self.cube, other], replace=True)
         self._set_mode(self.res.REVISE)
 
@@ -1305,8 +1358,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         """The hole this closes: with no selection the row showed colours
         nobody had read off these objects, and Apply -- whose scope here is
         every highlighted object -- would have written them over all of them."""
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
         cmds.select(clear=True)
         self._set_mode(self.res.REVISE)
 
@@ -1318,7 +1371,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     def test_the_selection_path_never_scans_the_scene(self):
         """That scan is one pass over every object; on the selection-changed
         signal it would make picking objects cost a pass per click."""
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select(clear=True)
         self._set_mode(self.res.REVISE)
 
@@ -1329,8 +1382,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     def test_create_does_not_reseed_the_row(self):
         """Those colours are what the next pulse will be keyed with. An artist
         who picked one must not have it replaced by clicking an object."""
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
         cmds.select(self.cube, replace=True)
         self._set_mode(self.res.CREATE)
         self.slot._pulse_ramp.editors = ()
@@ -1341,7 +1394,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self.assertIsNone(self.slot._pulse_ramp.set_reference.call_args.args[0])
 
     def test_revise_writes_the_selection(self):
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select(self.cube, replace=True)
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = ((0.02, 0.17, 0.43), None)
@@ -1356,7 +1409,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self.slot.sb.message_box.assert_not_called()
 
     def test_revise_confirms_before_the_whole_scene(self):
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select(clear=True)
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
@@ -1381,9 +1434,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     def test_the_editor_is_seeded_from_the_authored_colour(self):
         """Opening on the last PICK rather than what the objects carry would make
         this a guess; the revision has to start from the authored value."""
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
-        RenderOpacity.set_channel_color([self.cube], color=(0.5, 0.0, 0.0), stop="lo")
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
+        RenderEffects.set_channel_color([self.cube], color=(0.5, 0.0, 0.0), stop="lo")
 
         (bright, dim), mixed = self.slot._authored_stops([self.cube])
 
@@ -1396,9 +1449,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         showed ONE object's colour and the first drag wrote it to all of them."""
         other = cmds.polyCube(name="slot_other")[0]
         for node in (self.cube, other):
-            RenderOpacity.create([node], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
-        RenderOpacity.set_channel_color([other], color=(0.0, 1.0, 0.0))
+            RenderEffects.create([node], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        RenderEffects.set_channel_color([other], color=(0.0, 1.0, 0.0))
 
         _seeds, mixed = self.slot._authored_stops([self.cube, other])
 
@@ -1409,8 +1462,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         """An artist who only touched Bright must not flatten every Dim."""
         other = cmds.polyCube(name="slot_other2")[0]
         for node in (self.cube, other):
-            RenderOpacity.create([node], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(0.1, 0.1, 0.1), stop="lo")
+            RenderEffects.create([node], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.1, 0.1, 0.1), stop="lo")
         cmds.select([self.cube, other], replace=True)
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
@@ -1434,8 +1487,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         if QtWidgets.QApplication.instance() is None:
             self.skipTest("the colour row is a real widget; no QApplication here")
 
-        RenderOpacity.create([self.cube], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
         cmds.select(self.cube, replace=True)
 
         pulse = MagicMock()
@@ -1458,9 +1511,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         flatten a disagreement into whatever the row happened to show."""
         other = cmds.polyCube(name="slot_other4")[0]
         for node in (self.cube, other):
-            RenderOpacity.create([node], mode="attribute", channel="highlight")
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
-        RenderOpacity.set_channel_color([other], color=(0.0, 1.0, 0.0))
+            RenderEffects.create([node], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        RenderEffects.set_channel_color([other], color=(0.0, 1.0, 0.0))
         cmds.select([self.cube, other], replace=True)
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = (None, None)
@@ -1509,7 +1562,7 @@ class TestHighlightChannel(MayaTkTestCase):
         self.cube = cmds.polyCube(name="hl_cube")[0]
 
     def test_create_adds_intensity_and_colour_attributes(self):
-        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
         self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
         self.assertTrue(
             cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
@@ -1530,7 +1583,7 @@ class TestHighlightChannel(MayaTkTestCase):
         nothing else would catch it."""
         from mayatk.mat_utils.render_opacity import render_effects_slots as res
 
-        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
 
         for attr, seed in (
             ("highlightColor", res.RenderEffectsSlots.DEFAULT_BRIGHT),
@@ -1544,7 +1597,7 @@ class TestHighlightChannel(MayaTkTestCase):
 
     def test_key_pulse_writes_linear_holds_and_ramps_and_the_colour(self):
         """Four linear keys per cycle -- the published ramp is read linearly."""
-        keyed = RenderOpacity.key_pulse(
+        keyed = RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=200,
@@ -1578,7 +1631,7 @@ class TestHighlightChannel(MayaTkTestCase):
         before it -- measured on a production board (frames 725-845 of a 3468
         frame scene): blue from frame 1. The pulse is bracketed by dim keys at
         both ends, so the hold in each direction is 'not highlighted'."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=100, end=300, period=50, bright_fraction=0.5
         )
         plug = f"{self.cube}.highlight"
@@ -1598,7 +1651,7 @@ class TestHighlightChannel(MayaTkTestCase):
         import pythontk as ptk
 
         kwargs = dict(period=86, bright_fraction=0.59, lead_in=12, lead_out=30)
-        RenderOpacity.key_pulse([self.cube], start=10, end=400, **kwargs)
+        RenderEffects.key_pulse([self.cube], start=10, end=400, **kwargs)
         plug = f"{self.cube}.highlight"
         keys = list(
             zip(
@@ -1612,7 +1665,7 @@ class TestHighlightChannel(MayaTkTestCase):
         """Default lead-in / lead-out: the ends are shaped exactly like every
         interior transition, so the first bright hold sits one ramp in and the
         pulse reads as periodic from its very first cycle."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=200,
@@ -1634,7 +1687,7 @@ class TestHighlightChannel(MayaTkTestCase):
     def test_the_two_pulse_gaps_can_be_set_apart(self):
         """The gaps are independent when the caller says so: a slow open and a
         hard cut are both askable for."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=200,
@@ -1662,7 +1715,7 @@ class TestHighlightChannel(MayaTkTestCase):
     def test_pulse_gaps_that_cannot_fit_are_scaled_to_the_window(self):
         """Asked for more gap than there is pulse: the shape degrades, the keys
         stay inside the authored window and ordered."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=0, end=100, period=50, lead_in=400, lead_out=400
         )
         plug = f"{self.cube}.highlight"
@@ -1675,16 +1728,16 @@ class TestHighlightChannel(MayaTkTestCase):
         """Live-Maya regression (2026-09-05): a key left ``data_internal`` (or a
         duplicated material) selected, so the user's next tool acted on it."""
         cmds.select(self.cube, replace=True)
-        RenderOpacity.key_fade([self.cube], start=0, end=10)
+        RenderEffects.key_fade([self.cube], start=0, end=10)
         self.assertEqual(cmds.ls(selection=True), [self.cube])
-        RenderOpacity.key_pulse([self.cube], start=0, end=100, period=50)
+        RenderEffects.key_pulse([self.cube], start=0, end=100, period=50)
         self.assertEqual(cmds.ls(selection=True), [self.cube])
 
     def test_key_fade_can_clear_visibility_keys_before_creating(self):
         cmds.setKeyframe(f"{self.cube}.visibility", time=5, value=0)
         cmds.setKeyframe(f"{self.cube}.visibility", time=50, value=1)
 
-        RenderOpacity.key_fade(
+        RenderEffects.key_fade(
             [self.cube], start=10, end=20, direction="in", delete_visibility_keys=True
         )
 
@@ -1694,13 +1747,13 @@ class TestHighlightChannel(MayaTkTestCase):
         )
 
     def test_a_pulse_does_not_touch_visibility(self):
-        RenderOpacity.key_pulse([self.cube], start=0, end=100, period=50)
+        RenderEffects.key_pulse([self.cube], start=0, end=100, period=50)
         self.assertFalse(cmds.keyframe(f"{self.cube}.visibility", q=True, kc=True))
 
     def test_remove_one_channel_leaves_the_other(self):
-        RenderOpacity.create([self.cube], channel="opacity")
-        RenderOpacity.create([self.cube], channel="highlight")
-        RenderOpacity.remove([self.cube], channel="highlight")
+        RenderEffects.create([self.cube], channel="opacity")
+        RenderEffects.create([self.cube], channel="highlight")
+        RenderEffects.remove([self.cube], channel="highlight")
         self.assertFalse(cmds.attributeQuery("highlight", node=self.cube, exists=True))
         self.assertFalse(
             cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
@@ -1719,10 +1772,10 @@ class TestChannelColourRevision(MayaTkTestCase):
         super().setUp()
         self.cube = cmds.polyCube(name="revise_cube")[0]
         self.plain = cmds.polyCube(name="plain_cube")[0]
-        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
 
     def test_set_channel_color_writes_the_named_objects(self):
-        written = RenderOpacity.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
+        written = RenderEffects.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
         self.assertEqual(written, ["revise_cube"])
         self.assertEqual(
             [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
@@ -1730,18 +1783,18 @@ class TestChannelColourRevision(MayaTkTestCase):
         )
 
     def test_set_channel_color_leaves_the_keys_alone(self):
-        RenderOpacity.key_pulse([self.cube], start=0, end=100)
+        RenderEffects.key_pulse([self.cube], start=0, end=100)
         before = cmds.keyframe(
             f"{self.cube}.highlight", q=True, timeChange=True, valueChange=True
         )
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
         after = cmds.keyframe(
             f"{self.cube}.highlight", q=True, timeChange=True, valueChange=True
         )
         self.assertEqual(before, after, "a recolour must not touch the pulse")
 
     def test_objects_without_the_channel_are_skipped(self):
-        written = RenderOpacity.set_channel_color(
+        written = RenderEffects.set_channel_color(
             [self.cube, self.plain], color=(1.0, 0.0, 0.0)
         )
         self.assertEqual(written, ["revise_cube"])
@@ -1751,10 +1804,10 @@ class TestChannelColourRevision(MayaTkTestCase):
 
     def test_empty_selection_falls_back_to_every_object_with_the_channel(self):
         other = cmds.polyCube(name="revise_other")[0]
-        RenderOpacity.create(objects=[other], mode="attribute", channel="highlight")
+        RenderEffects.create(objects=[other], mode="attribute", channel="highlight")
         cmds.select(clear=True)
 
-        written = RenderOpacity.set_channel_color(color=(0.045, 0.39, 1.0))
+        written = RenderEffects.set_channel_color(color=(0.045, 0.39, 1.0))
 
         self.assertEqual(sorted(written), ["revise_cube", "revise_other"])
         for node in (self.cube, other):
@@ -1764,23 +1817,23 @@ class TestChannelColourRevision(MayaTkTestCase):
             )
 
     def test_objects_with_channel_finds_only_the_carriers(self):
-        found = RenderOpacity.objects_with_channel("highlight")
+        found = RenderEffects.objects_with_channel("highlight")
         self.assertEqual([n.split("|")[-1] for n in found], ["revise_cube"])
 
     def test_channel_colors_reads_back_what_was_written(self):
-        RenderOpacity.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
-        colors = RenderOpacity.channel_colors()
+        RenderEffects.set_channel_color([self.cube], color=(0.045, 0.39, 1.0))
+        colors = RenderEffects.channel_colors()
         self.assertEqual(len(colors), 1)
         (rgb,) = colors.values()
         self.assertEqual([round(c, 3) for c in rgb], [0.045, 0.39, 1.0])
 
     def test_a_missing_colour_is_refused(self):
         with self.assertRaises(ValueError):
-            RenderOpacity.set_channel_color([self.cube])
+            RenderEffects.set_channel_color([self.cube])
 
     def test_a_channel_without_a_colour_is_refused(self):
         with self.assertRaises(ValueError):
-            RenderOpacity.set_channel_color(
+            RenderEffects.set_channel_color(
                 [self.cube], color=(1.0, 0.0, 0.0), channel="opacity"
             )
 
@@ -1796,7 +1849,7 @@ class TestHighlightColourStops(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self.cube = cmds.polyCube(name="stops_cube")[0]
-        RenderOpacity.create(objects=[self.cube], mode="attribute", channel="highlight")
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
 
     def _rgb(self, attr):
         # 6 decimals, the precision the tool states and compares colours to.
@@ -1815,27 +1868,27 @@ class TestHighlightColourStops(MayaTkTestCase):
         self.assertEqual(self._rgb("highlightColorDim"), [0.0, 0.0, 0.0])
 
     def test_writing_one_end_leaves_the_other_alone(self):
-        RenderOpacity.set_channel_color([self.cube], color=(1.0, 0.0, 0.0), stop="lo")
+        RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0), stop="lo")
         self.assertEqual(self._rgb("highlightColorDim"), [1.0, 0.0, 0.0])
         self.assertEqual(self._rgb("highlightColor"), [0.0, 0.088656, 0.723055])
 
     def test_the_default_end_is_still_the_bright_one(self):
         """Every call site written before the dim end existed passes no stop."""
-        RenderOpacity.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
+        RenderEffects.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
         self.assertEqual(self._rgb("highlightColor"), [0.9, 0.1, 0.1])
         self.assertEqual(self._rgb("highlightColorDim"), [0.0, 0.0, 0.0])
 
     def test_channel_color_stops_reads_both_ends_in_one_pass(self):
-        RenderOpacity.set_channel_color([self.cube], color=(0.1, 0.2, 0.3))
-        RenderOpacity.set_channel_color([self.cube], color=(0.4, 0.5, 0.6), stop="lo")
-        stops = RenderOpacity.channel_color_stops([self.cube])
+        RenderEffects.set_channel_color([self.cube], color=(0.1, 0.2, 0.3))
+        RenderEffects.set_channel_color([self.cube], color=(0.4, 0.5, 0.6), stop="lo")
+        stops = RenderEffects.channel_color_stops([self.cube])
         (pair,) = stops.values()
         self.assertEqual(len(pair), 2)
         self.assertEqual([round(c, 3) for c in pair[0]], [0.1, 0.2, 0.3])
         self.assertEqual([round(c, 3) for c in pair[1]], [0.4, 0.5, 0.6])
 
     def test_key_pulse_writes_both_ends(self):
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=100,
@@ -1846,8 +1899,8 @@ class TestHighlightColourStops(MayaTkTestCase):
         self.assertEqual(self._rgb("highlightColorDim"), [0.0, 0.0, 0.5])
 
     def test_key_pulse_without_a_dim_colour_leaves_it_untouched(self):
-        RenderOpacity.set_channel_color([self.cube], color=(0.0, 0.9, 0.0), stop="lo")
-        RenderOpacity.key_pulse([self.cube], start=0, end=100, color=(1.0, 0.0, 0.0))
+        RenderEffects.set_channel_color([self.cube], color=(0.0, 0.9, 0.0), stop="lo")
+        RenderEffects.key_pulse([self.cube], start=0, end=100, color=(1.0, 0.0, 0.0))
         self.assertEqual(
             self._rgb("highlightColorDim"),
             [0.0, 0.9, 0.0],
@@ -1855,7 +1908,7 @@ class TestHighlightColourStops(MayaTkTestCase):
         )
 
     def test_remove_strips_both_ends(self):
-        RenderOpacity.remove(objects=[self.cube], channel="highlight")
+        RenderEffects.remove(objects=[self.cube], channel="highlight")
         for attr in ("highlightColor", "highlightColorDim"):
             self.assertFalse(
                 cmds.attributeQuery(attr, node=self.cube, exists=True), attr
@@ -1863,7 +1916,7 @@ class TestHighlightColourStops(MayaTkTestCase):
 
     def test_both_ends_publish_under_their_own_track_keys(self):
         """The join the drift guard only checks by NAME, checked by value."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=60,
@@ -1871,7 +1924,7 @@ class TestHighlightColourStops(MayaTkTestCase):
             color=(0.2, 0.5, 1.0),
             dim_color=(0.4, 0.0, 0.0),
         )
-        tracks = RenderOpacity.visibility_tracks()
+        tracks = RenderEffects.visibility_tracks()
         track = next(t for t in tracks if t.get("node", "").endswith("stops_cube"))
         self.assertEqual(
             [round(c, 3) for c in track["highlight_color"]], [0.2, 0.5, 1.0]
@@ -1886,7 +1939,7 @@ class TestHighlightColourStops(MayaTkTestCase):
         exactly where a renamed key would have gone unnoticed."""
         from pythontk.file_utils.mesh_convert.glb_fades import CHANNELS as GLTF
 
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube],
             start=0,
             end=60,
@@ -1894,7 +1947,7 @@ class TestHighlightColourStops(MayaTkTestCase):
             color=(0.2, 0.5, 1.0),
             dim_color=(0.4, 0.0, 0.0),
         )
-        tracks = RenderOpacity.visibility_tracks()
+        tracks = RenderEffects.visibility_tracks()
         track = next(t for t in tracks if t.get("node", "").endswith("stops_cube"))
 
         spec = GLTF["highlight"]
@@ -1909,7 +1962,7 @@ class TestHighlightColourStops(MayaTkTestCase):
 
     def test_an_unknown_stop_is_refused(self):
         with self.assertRaises(ValueError):
-            RenderOpacity.set_channel_color(
+            RenderEffects.set_channel_color(
                 [self.cube], color=(1.0, 0.0, 0.0), stop="middle"
             )
 
@@ -2002,13 +2055,13 @@ class TestWholeFrameKeys(MayaTkTestCase):
         return cmds.keyframe(f"{self.cube}.{attr}", q=True, tc=True) or []
 
     def test_a_fade_snaps_its_window_and_its_visibility_mirror(self):
-        RenderOpacity.key_fade([self.cube], start=10.4, end=25.6, direction="in")
+        RenderEffects.key_fade([self.cube], start=10.4, end=25.6, direction="in")
 
         self.assertEqual(self._times("opacity"), [10.0, 26.0])
         self.assertEqual(self._times("visibility"), [10.0, 26.0])
 
     def test_a_fractional_pulse_keys_whole_frames_only(self):
-        RenderOpacity.key_pulse([self.cube], start=10.4, end=110.6, period=self.PERIOD)
+        RenderEffects.key_pulse([self.cube], start=10.4, end=110.6, period=self.PERIOD)
 
         times = self._times()
         self.assertTrue(times, "the pulse keyed nothing")
@@ -2019,7 +2072,7 @@ class TestWholeFrameKeys(MayaTkTestCase):
         """Only each key snaps -- the cycle itself still advances by the exact
         period, so a long train stays within a frame of the asked-for cadence
         instead of accumulating the rounding error cycle by cycle."""
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=0, end=1800, period=self.PERIOD, bright_fraction=0.5
         )
 
@@ -2039,7 +2092,7 @@ class TestWholeFrameKeys(MayaTkTestCase):
         )
 
     def test_the_exact_cadence_is_still_askable_for(self):
-        RenderOpacity.key_pulse(
+        RenderEffects.key_pulse(
             [self.cube], start=0, end=400, period=self.PERIOD, whole_frames=False
         )
 

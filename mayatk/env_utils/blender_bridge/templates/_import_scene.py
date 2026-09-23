@@ -428,6 +428,269 @@ def collect_texture_manifest(bpy):
     return entries, scene_materials
 
 
+#: Everything Maya cannot hold in a node name. Blender allows ``.``, spaces and a
+#: leading digit in a datablock name; Maya's FBX importer escapes each as
+#: ``FBXASC`` + the character's 3-digit ASCII code.
+_ILLEGAL_NAME_CHARS = re.compile(r"[^0-9A-Za-z_]")
+
+
+def _maya_safe_name(name):
+    """*name* with every character Maya cannot hold folded to ``_``.
+
+    Dependency-free copy of ``BlenderSceneImport._maya_safe_name`` (the consumer's
+    spelling for nodes it builds itself); ``test_scene_import`` holds the two to the
+    same answers, so neither can drift alone.
+
+    ``_sanitize_prim_name`` below is the same fold pinned to a DIFFERENT contract
+    (what Blender's USD exporter writes as a prim name, which happens to agree), and
+    the same test pins the pair -- so the shared ``collect_instance_groups`` records
+    exactly the names this pass produced.
+    """
+    safe = _ILLEGAL_NAME_CHARS.sub("_", name)
+    return ("_" + safe) if safe[:1].isdigit() else safe
+
+
+def sanitize_names(bpy):
+    """Rename objects and materials to names Maya can hold; return ``{was: is}``
+    for the OBJECTS that changed.
+
+    Blender's duplicate suffix is a DOT (``CABINET.001``), which Maya's FBX importer
+    escapes as ``CABINETFBXASC046001``. Two things follow, both measured on a
+    production module:
+
+    - Maya breaks mesh SHARING on those names. The FIRST Model it meets for a shared
+      Geometry becomes a unique, MATERIALLESS shape when that Model's own name
+      carries the suffix, and the next clean Model becomes the master everything else
+      instances -- 105 of 1111 shared Models arrived as separate shapes with no
+      shader, and Maya's own exporter then invented a ``Default_Material`` for their
+      bare faces on the following hop.
+    - 786 nodes came back spelled ``...FBXASC046001``, which the consumer then has to
+      repair by name after every replay has matched on the escaped spelling.
+
+    Renaming at the SOURCE removes both: the payload carries no character Maya has to
+    escape. The USD route already does exactly this with its sanitized prim names.
+    ``main`` runs it before every collector, so each section records the name the
+    carrier really writes.
+
+    This Blender session is throwaway -- opened from the source and never saved -- so
+    a rename here cannot reach the artist's file. Collisions take a numeric tail, and
+    the returned map is what ``spell`` consults, so a record that stored the ORIGINAL
+    name still resolves to the node it names. Objects only: records name objects, and
+    an object and a material sharing a name (common after a glTF import) fold apart
+    once either takes a collision tail -- one map let the material's entry overwrite
+    the object's, and the object's records then went to another object.
+    """
+    renamed = {}
+    changed = 0
+    for collection in (bpy.data.objects, bpy.data.materials):
+        objects = collection is bpy.data.objects
+        taken = {db.name for db in collection}
+        # Snapshot: ``bpy.data`` collections are name-ORDERED, so renaming while
+        # iterating one live would reorder it under the cursor and skip datablocks.
+        for db in list(collection):
+            original = db.name
+            safe = _maya_safe_name(original)
+            if safe == original:
+                continue
+            unique, n = safe, 1
+            while unique in taken:
+                unique, n = "{}_{}".format(safe, n), n + 1
+            taken.discard(original)
+            taken.add(unique)
+            db.name = unique
+            if db.name != unique:  # Blender re-suffixed it: report, never guess
+                print(
+                    "fbx: rename of {} landed as {}, not {}.".format(
+                        original, db.name, unique
+                    )
+                )
+            changed += 1
+            if objects:
+                renamed[original] = db.name
+    if changed:
+        print(
+            "fbx: {} name(s) sanitized for Maya (Blender's '.NNN' suffix).".format(
+                changed
+            )
+        )
+    return renamed
+
+
+def _sanitize_prim_name(name):
+    """Mirror of Blender's USD prim-name rewrite (probe-verified on 5.1): every
+    char outside ``[A-Za-z0-9_]`` becomes ``_``, and a leading digit is PREFIXED
+    with ``_`` -- unlike ``TfMakeValidIdentifier``, which would REPLACE it. The
+    sidecar must record what the exporter actually writes, so match the DCC,
+    not Tf. Keep identical to the blendertk twin.
+    """
+    if not name:
+        return "_"
+    name = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    if name[0].isdigit():
+        name = "_" + name
+    return name
+
+
+def collect_instance_groups(bpy):
+    """Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
+
+    The mirror of the Maya-side collector. The export is flat (see
+    ``use_instancing``), so the sharing relationship travels as data and
+    ``_apply_instance_manifest`` rebuilds real Maya instances from it -- without
+    this, a .blend whose props are linked duplicates arrives as N independent
+    shapes and the scene's memory profile is wrong (the FBX route preserves it
+    for free, so USD has to match that to be a usable alternative).
+
+    Names are recorded SANITIZED -- what the exporter writes as prim names --
+    so the Maya side matches them 1:1 (``Chair.001`` exports as ``Chair_001``;
+    raw names would silently miss). Two objects whose names sanitize to the
+    SAME prim name are renamed apart unpredictably by the exporter
+    (``a_b``/``a_b_001``, probe-verified), so a collision touching a recorded
+    member fails the export loudly rather than shipping a sidecar that cannot
+    match.
+
+    Recorded, never inferred: matching by geometry would also fuse
+    coincidentally-identical meshes, making an edit to one silently change
+    another.
+
+    Each group is SORTED. ``scene.objects`` iterates in insertion order, so the same
+    scene converted twice recorded its members in different orders -- which made the
+    sidecar unreproducible and, on the FBX route, handed the replay a different
+    "first" member each time (measured: one hop listed ``ASSET_001`` first and the
+    next ``ASSET_001_001``). The replay picks its own master regardless, but a
+    deterministic sidecar is what makes two conversions comparable at all.
+    """
+    sanitized = {}
+    for ob in bpy.context.scene.objects:
+        sanitized.setdefault(_sanitize_prim_name(ob.name), []).append(ob.name)
+
+    groups = {}
+    for ob in bpy.context.scene.objects:
+        if ob.type != "MESH" or ob.data is None:
+            continue
+        groups.setdefault(ob.data.name, []).append(ob.name)
+    recorded = [names for names in groups.values() if len(names) > 1]
+
+    colliding = {}
+    for names in recorded:
+        for name in names:
+            key = _sanitize_prim_name(name)
+            if len(sanitized[key]) > 1:
+                colliding[key] = sanitized[key]
+    if colliding:
+        raise RuntimeError(
+            "Object names collide after USD prim sanitization -- the exporter "
+            "renames them apart unpredictably, so their linked duplicates could "
+            "not be matched on the Maya side. Rename to distinct prim-safe "
+            "names or pull via FBX: "
+            + "; ".join("{} <- {}".format(k, v) for k, v in sorted(colliding.items()))
+        )
+    return [sorted(_sanitize_prim_name(n) for n in names) for names in recorded]
+
+
+def _action_fcurves(action, slot=None):
+    """The fcurves of *action* -- *slot*'s own when given, else every slot's -- on
+    any Blender.
+
+    Dependency-free copy of ``btk.AnimUtils._slot_fcurves`` (pinned by AST
+    identity): 4.4+ actions are layered and 5.x drops the flat ``action.fcurves``
+    entirely, so keys live in per-slot channelbags. Pass the object's
+    ``action_slot``: one action can drive several objects through slots, and a
+    slot-blind read hands each of them every other object's curves.
+    """
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        return list(legacy)
+    out = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            if slot is not None:
+                cb = strip.channelbag(slot)
+                if cb is not None:
+                    out.extend(cb.fcurves)
+            else:
+                out.extend(fc for cb in strip.channelbags for fc in cb.fcurves)
+    return out
+
+
+def collect_visibility(bpy):
+    """``{object name: [[frame, visibility], ...]}`` -- the manifest's ``visibility``
+    section, in MAYA's convention (``1`` = visible). Shared verbatim by the FBX and
+    USD conversion templates.
+
+    Neither Blender exporter carries a show/hide. The FBX one bakes only Lcl
+    Translation / Rotation / Scaling: measured on a production module, 54 objects
+    carried ``hide_viewport`` keys and every one arrived in Maya static -- 39 of them
+    with no animation whatsoever, which is how the loss first read. The USD one
+    writes no visibility samples for them either: the same module's USD return leg
+    delivered 83 show/hide-only objects static and not one visibility curve
+    (2026-09-21). These are the plug and failed-component toggles, i.e. the content
+    of the training module.
+
+    The mirror of the send direction, which puts Maya's baked ``.visibility`` in this
+    same section for ``btk.MayaSceneImport`` to replay as ``hide_*`` keys: same
+    section, same value convention, opposite direction. ``hide_viewport`` is
+    preferred over ``hide_render`` because the send direction writes both from one
+    Maya plug and it is the one the artist sees.
+
+    What an ancestor already says is left OUT. Maya inherits visibility down the DAG
+    and Blender's ``hide_*`` does not, so the send direction BAKES an ancestor's
+    show/hide onto every descendant to make the scene look right there. Writing those
+    copies back would key in Maya what Maya derives for itself, and the next send
+    would bake one level deeper again: measured, the module's animated-object count
+    went 65 -> 85 in a single round trip, which is a fixed-point failure that
+    compounds. A track identical to the nearest keyed ancestor's is therefore
+    dropped -- 44 of this module's 54 -- leaving the ~10 an artist actually authored,
+    and the evaluated result is unchanged because Maya re-derives the rest.
+
+    Collected before the export touches the scene -- on the FBX route before
+    ``stand_in_dropped_objects``, which renames an object the exporter would drop and
+    gives its name to the Empty that ships instead: the keys then travel under the
+    name the payload really carries.
+    """
+    tracks = {}
+    for obj in bpy.context.scene.objects:
+        data = getattr(obj, "animation_data", None)
+        action = getattr(data, "action", None)
+        if action is None:
+            continue
+        slot = getattr(data, "action_slot", None)
+        curves = {fc.data_path: fc for fc in _action_fcurves(action, slot)}
+        fcurve = curves.get("hide_viewport") or curves.get("hide_render")
+        if fcurve is None:
+            continue
+        keys = sorted(
+            # Blender hides on TRUE; Maya's .visibility shows on 1.
+            (float(key.co[0]), 0.0 if key.co[1] else 1.0)
+            for key in fcurve.keyframe_points
+        )
+        if keys:
+            tracks[obj.name] = keys
+
+    def inherited(obj):
+        """The nearest ancestor's track -- what Maya applies to *obj* on its own."""
+        parent = obj.parent
+        while parent is not None:
+            if parent.name in tracks:
+                return tracks[parent.name]
+            parent = parent.parent
+        return None
+
+    visibility = {}
+    for obj in bpy.context.scene.objects:
+        keys = tracks.get(obj.name)
+        if not keys or inherited(obj) == keys:
+            continue
+        visibility[obj.name] = [[frame, value] for frame, value in keys]
+    if visibility:
+        print(
+            "visibility keys for {} object(s) written to the manifest.".format(
+                len(visibility)
+            )
+        )
+    return visibility
+
+
 def collect_empties(bpy):
     """``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
 
@@ -480,13 +743,25 @@ def scene_settings(bpy):
 
 
 def write_texture_manifest(
-    entries, scene_materials, empties, scene, path, scene_data=None, rig=None
+    entries,
+    scene_materials,
+    empties,
+    scene,
+    path,
+    scene_data=None,
+    rig=None,
+    visibility=None,
+    instances=None,
 ):
     """Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
     materials / empties, and ``scene`` = the time setup (fps / ranges / current
     frame -- Maya's FBX importer leaves the scene's clock alone). Always
     written: every scene has a time setup. *scene_data* is
-    ``scene_data_sections``' sections (``shots``, ``records``), merged in.
+    ``scene_data_sections``' sections (``shots``, ``records``), merged in;
+    *visibility* is ``collect_visibility``'s show/hide keys, which the exporter
+    bakes for nothing, and *instances* is ``collect_instance_groups``' linked-duplicate
+    sets, which Maya's FBX importer partly de-shares (see the collector). Both ride
+    the ``format`` the consumer's instance replay gates on.
 
     File-less entries are written too: a textured material whose image paths
     never resolved (packed-only, or broken links) must surface as a NAMED
@@ -495,6 +770,9 @@ def write_texture_manifest(
     """
     data = {
         "version": 2,
+        # How the instance members below are spelled; the consumer's replay
+        # REQUIRES it and refuses a sidecar written for the other direction.
+        "format": "names",
         "materials": entries,
         "scene_materials": scene_materials,
         "empties": empties,
@@ -504,6 +782,10 @@ def write_texture_manifest(
     data.update(scene_data or {})
     if rig:  # rig mode only: the graph, its plan and the verify samples
         data["rig"] = rig
+    if visibility:  # only scenes that key a show/hide carry the section
+        data["visibility"] = visibility
+    if instances:  # only scenes that share a mesh datablock carry the section
+        data["instances"] = instances
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1)
 
@@ -768,13 +1050,23 @@ def _exit(code):
 def main():
     import bpy
 
-    _progress(0, 4, "Opening the scene")
+    _progress(0, 5, "Opening the scene")
     open_source(bpy)
+    # Names Maya can hold, before ANY reader: every section below then records the
+    # spelling the carrier really writes, and the payload carries nothing Maya has
+    # to escape (see sanitize_names).
+    renames = sanitize_names(bpy)
+
+    def spell(name):
+        """*name* as this payload spells it: the rename, else the same fold."""
+        return renames.get(name, _maya_safe_name(name))
+
     # Read first: the sections describe the artist's scene, before any pass
-    # below touches it. FBX writes object names as they are.
-    scene_data = scene_data_sections(bpy, lambda name: name)
+    # below touches it.
+    scene_data = scene_data_sections(bpy, spell)
     _progress(1, 5, "Collecting materials")
     manifest_entries, scene_materials = collect_texture_manifest(bpy)
+    visibility = collect_visibility(bpy)
     rig = {}
     if RIG_MODE == "rig":
         _progress(2, 5, "Carrying the rig")
@@ -785,6 +1077,7 @@ def main():
     # the FBX will carry -- the stand-ins among them.
     stand_in_dropped_objects(bpy)
     empties = collect_empties(bpy)
+    instances = collect_instance_groups(bpy)
     _progress(3, 5, "Writing the FBX")
     export_fbx(bpy)
     # Written only after a successful export (a manifest implies its FBX).
@@ -797,6 +1090,8 @@ def main():
         OUT_FBX + ".manifest.json",
         scene_data=scene_data,
         rig=rig,
+        visibility=visibility,
+        instances=instances,
     )
     _progress(5, 5, "Converted")
 

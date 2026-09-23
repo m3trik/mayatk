@@ -145,7 +145,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_keys_tangent_dragged, on_key_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_keys_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -155,7 +155,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ShotsController(ptk.LoggingMixin)`
   - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
 - `class ShotsSlots(ptk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_delete_all_shots, btn_trim_all_shots, btn_add_trailing_space
+  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
@@ -484,7 +484,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 - constants: SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
 - `class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`
-  - methods: blender_path, require_blender, find_scenes, scene_has_complex_animation, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source
+  - methods: blender_path, require_blender, find_scenes, scene_has_complex_animation, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source, collapse_nested_levels
 
 ### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
 - `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
@@ -505,9 +505,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend / glTF headlessly (blender --background) and export it as FBX for a Maya import.
 - `open_source(bpy)`
 - `collect_texture_manifest(bpy)`
+- `sanitize_names(bpy)`
+- `collect_instance_groups(bpy)`
+- `collect_visibility(bpy)`
 - `collect_empties(bpy)`
 - `scene_settings(bpy)`
-- `write_texture_manifest(entries, scene_materials, empties, scene, path, scene_data=None, rig=None)`
+- `write_texture_manifest(entries, scene_materials, empties, scene, path, scene_data=None, rig=None, visibility=None, instances=None)`
 - `stand_in_dropped_objects(bpy)`
 - `export_fbx(bpy)`
 - `scene_data_sections(bpy, spell)`
@@ -524,12 +527,16 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `mark_skinning_methods(bpy, filepath, objects=None, root_prim_path='')`
 - `mark_container_skeletons(filepath)`
 - `mark_invisible(filepath, objects, root_prim_path='')`
+- `collapse_static_xforms(filepath, tolerance=0.0001, distance=1e-05)`
+- `mark_orthographic(filepath, cameras, root_prim_path='')`
 - `fold_single_mesh_xforms(filepath)`
+- `collect_visibility(bpy)`
+- `hide_is_animated(obj)`
 - `collect_empties(bpy)`
 - `collect_texture_manifest(bpy)`
 - `collect_instance_groups(bpy)`
 - `scene_settings(bpy)`
-- `write_manifest(bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None)`
+- `write_manifest(bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None, visibility=None)`
 - `scene_data_sections(bpy, spell)`
 - `main()`
 - constants: SRC_PATH, OUT_USD, INCLUDE_ANIMATION, TEX_DIR, EXTRA_SYS_PATH, RIG_MODE, RIG_CAPABILITY
@@ -604,7 +611,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/maya_connection.py` — Maya Connection Module
 - `class MayaConnection`
-  - methods: get_instance, open_command_ports, close_command_ports, open_available_command_ports, toggle_command_ports, reload_modules, connect, get_pid_from_port, get_port_from_pid, close_instance, get_available_port, ensure_connection, execute, get_script_editor_output, execute_and_capture_editor_output, clear_script_editor, shutdown, disconnect
+  - methods: get_instance, open_command_ports, close_command_ports, open_available_command_ports, toggle_command_ports, reload_modules, connect, get_pid_from_port, get_port_from_pid, close_instance, get_available_port, ensure_connection, execute, get_script_editor_output, execute_and_capture_editor_output, clear_script_editor, shutdown
 
 ### `env_utils/namespace_sandbox.py`
 - `class FBXImporter`
@@ -640,7 +647,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/task_manager.py` — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
-  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_locator_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
+  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -664,8 +671,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: params_module, template_dir, make_bridge, list_template_modes, default_output_dir, b000
 
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
+- `class UsdReadRefused(RuntimeError)`
 - `class UsdUtils(ptk.HelpMixin)`
-  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, skinning_methods, dq_safe_source, apply_skinning_methods, import_scene
+  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, file_options, skinning_methods, crashing_skins, live_read_options, dq_safe_source, apply_skinning_methods, import_scene
 
 ### `env_utils/webxr_preview.py` — Push the Maya selection to a live browser / WebXR preview.
 - `class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`
@@ -693,10 +701,18 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
+- `class LightmapBakeResult`
+  - methods: files, folders
 - `class LightmapBaker(ptk.LoggingMixin)`
-  - methods: device, preset_store, from_preset, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, normalize_lightmap_paths, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, export_record, refresh_export_metadata, revert_lightmap, revert
+  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, normalize_lightmap_paths, export_record, refresh_export_metadata
+
+### `light_utils/lightmap_baker/lightmap_baker_slots.py` — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - `class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`
-  - methods: header_init, cmb000_init, cmb000, cmb002_init, cmb_scope_init, cmb_resolution_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
+
+### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
+- `class LightmapRecords(ptk.LoggingMixin)`
+  - methods: baked_objects, commit, revert, migrate_legacy, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
@@ -708,9 +724,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, b000, b001, select_bridged
 
-### `mat_utils/bake_sets.py` — Scene-stored bake-source set shared by the hand-off bridges.
-- `class BakeSourceSet`
-  - methods: companion_path, exists, members, define, clear
+### `mat_utils/bake_sets.py` — Scene-stored bake sets: named object sets the bake tools read.
+- `class BakeSet`
+  - methods: exists, members, meshes, define, clear
+- `class BakeSourceSet(BakeSet)`
+  - methods: companion_path
+- `class LightmapExcludeSet(BakeSet)`
 
 ### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
 - `class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin)`
@@ -737,7 +756,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: toolbag_path, params_defaults, render_template, source_model_path_for, baked_texture_dir, source_material_name, baked_material_name, texture_set_aliases, build_bake_pairs_manifest
 
 ### `mat_utils/marmoset_bridge/_marmoset_engine.py` — Drive Marmoset Toolbag from the outside -- launch + templated automation.
-- constants: APP, SEND_TO, ROUND_TRIP, ROUNDTRIP
+- constants: APP, SEND_TO, ROUND_TRIP
 - `class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`
   - methods: toolbag_path, toolbag_log_path, preflight, deliver, send, render_template, list_templates, template_modes, list_template_modes
 
@@ -832,7 +851,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `spec_for(channel) -> ChannelSpec`
 - constants: CHANNELS, OPACITY, HIGHLIGHT, PRESENCE
 - `class ChannelSpec`
-  - methods: color_attr, stop_attr, track_color_stops, track_color_key, attrs
+  - methods: stop_attr, track_color_stops, attrs
 
 ### `mat_utils/render_opacity/material_mode.py` — Clean up what the retired viewport "material mode" left in a scene.
 - `class OpacityMaterialMode(ptk.LoggingMixin)`
@@ -840,7 +859,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(ptk.LoggingMixin)`
-  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, preview, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
+  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, setup, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
 
 ### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - `class RenderEffectsSlots`
@@ -867,7 +886,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
-- constants: SEND_TO, ROUND_TRIP, ROUNDTRIP, TARGET_AUTO, TARGET_NEW, TARGET_CURRENT
+- constants: SEND_TO, ROUND_TRIP, TARGET_AUTO, TARGET_NEW, TARGET_CURRENT
 - `class SubstanceBridge(ptk.HandoffBridge)`
   - methods: painter_path, painter_log_path, instances, find_live_managed, send, ensure_rpc_plugin, mesh_map_files, source_model_path_for, list_templates, parse_template, list_template_modes, resolve_painter_log_path
 
@@ -943,7 +962,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(ptk.LoggingMixin)`
-  - methods: arnold_available, default_output_dir, resolve_meshes, bake, arnold_translation_guard, assign_to_diffuse, restore_diffuse_connections
+  - methods: arnold_available, ensure_arnold, default_output_dir, resolve_meshes, bake, arnold_translation_guard, gpu_available, assign_to_diffuse, restore_diffuse_connections
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
@@ -1130,7 +1149,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, flip_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP

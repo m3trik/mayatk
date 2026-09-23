@@ -24,7 +24,6 @@ class CutOnAxis:
         mirror=False,
         pivot="manip",
         axis_frame=None,
-        use_object_axes=None,
     ):
         """Iterates over provided objects and performs cut or delete operations based on the axis specified.
 
@@ -46,7 +45,6 @@ class CutOnAxis:
                 (default) derives it from the pivot, ``"world"`` forces world
                 axes, a frame name forces that frame. See
                 ``EditUtils.cut_along_axis``.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``.
         """
         if cuts:
             axis = axis.lower()  # Assure lower case.
@@ -64,7 +62,6 @@ class CutOnAxis:
                 weight_curve=weight_curve,
                 delete=delete,
                 axis_frame=axis_frame,
-                use_object_axes=use_object_axes,
             )
 
             cmds.select(objects)

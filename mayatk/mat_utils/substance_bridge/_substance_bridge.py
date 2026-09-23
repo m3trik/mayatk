@@ -56,9 +56,6 @@ _TEMPLATE_DIR = _PKG_DIR / "templates"
 # it to the canon on the way in (``script_template._MODE_ALIASES``).
 SEND_TO = script_template.SEND_TO
 ROUND_TRIP = script_template.ROUND_TRIP
-#: Deprecated alias for :data:`ROUND_TRIP`, kept because it is a public export
-#: (``substance_bridge.__init__``). Bound to the canonical value, so the two cannot drift.
-ROUNDTRIP = ROUND_TRIP
 _MODES = (SEND_TO, ROUND_TRIP)
 
 # Allowed values for a template's ``TARGET_INSTANCE`` field and the
@@ -177,11 +174,10 @@ _TEMPLATE_TYPES: Dict[str, type] = {
 }
 
 
-# -- High-poly membership --------------------------------------------------
-# The scene's high-poly bake source is a cross-tool concept (the Marmoset
-# bake consumes the same set), so the class lives in the shared
-# :mod:`mayatk.mat_utils.bake_sets`; re-exported here for back-compat.
-from mayatk.mat_utils.bake_sets import BakeSourceSet, HighPolySet  # noqa: F401,E402
+# -- Bake-source membership ------------------------------------------------
+# The scene's bake source is a cross-tool concept (the Marmoset bake consumes
+# the same set), so the class lives in the shared :mod:`mayatk.mat_utils.bake_sets`.
+from mayatk.mat_utils.bake_sets import BakeSourceSet  # noqa: E402
 
 
 # -- Painter log resolution (mirror of marmoset's version-aware resolver) --
@@ -1120,9 +1116,6 @@ class SubstanceBridge(ptk.HandoffBridge):
         to the shared convention on :class:`BakeSourceSet`.
         """
         return BakeSourceSet.companion_path(fbx_path)
-
-    #: Back-compat alias -- shipped one release under the high-poly name.
-    high_poly_path_for = source_model_path_for
 
     def _export_bake_source(
         self,

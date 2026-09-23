@@ -137,8 +137,8 @@ class TestEditUtils(MayaTkTestCase):
         world-space TUPLE pivot (it has to: the tuple carries the exact cut
         position, pivot + offset). `_mirror_frame` gated the object frame on
         `isinstance(pivot, str) and pivot in OBJECT_FRAME_PIVOTS`, so that tuple
-        always fell through to WORLD axes -- `use_object_axes=True` was passed
-        down and could not take effect. On a rotated object the cut plane tilts
+        always fell through to WORLD axes -- the object frame asked for upstream
+        could not take effect. On a rotated object the cut plane tilts
         with the object and the mirror plane does not, so the halves disagree.
 
         The fix names the frame instead of inferring it: a name survives the
@@ -245,23 +245,36 @@ class TestEditUtils(MayaTkTestCase):
         )
 
     def test_axis_frame_forces_world_on_an_object_pivot(self):
-        """`axis_frame="world"` replaces `use_object_axes=False`, and stays
-        meaningful for a pivot that would otherwise be object-framed. An
-        explicit frame outranks the deprecated boolean, so no combination of
-        the two leaves a parameter with nothing to say."""
+        """`axis_frame="world"` stays meaningful for a pivot that would
+        otherwise be object-framed."""
         cmds.polyCube(name="worldFrameCube")
         cmds.rotate(0, 45, 0, "worldFrameCube")
         _pt, frame = EditUtils._mirror_frame(
-            "worldFrameCube", "object", True, axis_frame="world"
+            "worldFrameCube", "object", axis_frame="world"
         )
         self.assertIsNone(frame, "axis_frame='world' must force world axes")
 
-    def test_use_object_axes_still_maps_onto_axis_frame(self):
-        """The deprecated boolean keeps working for one release."""
-        cmds.polyCube(name="legacyFrameCube")
-        cmds.rotate(0, 45, 0, "legacyFrameCube")
-        _pt, frame = EditUtils._mirror_frame("legacyFrameCube", "object", False)
-        self.assertIsNone(frame, "use_object_axes=False must still force world")
+    def test_the_retired_use_object_axes_flag_is_gone(self):
+        """`use_object_axes` (`False` == `axis_frame="world"`) shipped 17
+        releases past its 2026-08-22 notice with no caller outside these tests,
+        and was retired 2026-09-21 from all seven signatures (blendertk's
+        `_resolve_axis_frame` never took it)."""
+        import inspect
+
+        from mayatk.edit_utils.cut_on_axis import CutOnAxis
+
+        for fn in (
+            EditUtils.get_all_faces_on_axis,
+            EditUtils.cut_along_axis,
+            EditUtils.delete_along_axis,
+            EditUtils.mirror,
+            EditUtils.mirror_instance,
+            EditUtils._mirror_frame,
+            EditUtils._resolve_axis_frame,
+            CutOnAxis.perform_cut_on_axis,
+        ):
+            with self.subTest(fn=fn.__qualname__):
+                self.assertNotIn("use_object_axes", inspect.signature(fn).parameters)
 
     def test_unknown_axis_frame_is_rejected(self):
         """A misspelled frame must fail loudly, not fall back to world axes."""
@@ -309,12 +322,12 @@ class TestEditUtils(MayaTkTestCase):
         for r in results:
             self.assertTrue(cmds.objExists(r))
 
-    def test_mirror_use_object_axes(self):
-        """mirror with use_object_axes on a rotated object must tilt the plane.
+    def test_mirror_axis_frame_tilts_the_plane(self):
+        """mirror in the object frame on a rotated object must tilt the plane.
 
         This assertion used to be "the call returned something and the cube
         still exists", which is true no matter what plane is used — so it
-        certified a use_object_axes implementation that never affected the
+        certified an object-frame implementation that never affected the
         mirror at all. Compare the two frames instead: on a 45-degree object
         they give measurably different footprints. The full plane-level
         coverage lives in test_edit_tools_geometry.TestMirrorObjectAxes.
@@ -324,7 +337,7 @@ class TestEditUtils(MayaTkTestCase):
         a no-op either way and cannot tell them apart.
         """
         widths = []
-        for i, use_object_axes in enumerate((True, False)):
+        for i, axis_frame in enumerate((None, "world")):
             cube = cmds.polyCube(name=f"rotated_cube_{i}", w=10, h=10, d=10)[0]
             cmds.move(5, 0, 0, cube)
             cmds.rotate(0, 45, 0, cube)
@@ -335,7 +348,7 @@ class TestEditUtils(MayaTkTestCase):
                 axis="x",
                 pivot="object",
                 mergeMode=1,
-                use_object_axes=use_object_axes,
+                axis_frame=axis_frame,
             )
             self.assertTrue(result)
             self.assertTrue(cmds.objExists(cube))
@@ -345,7 +358,7 @@ class TestEditUtils(MayaTkTestCase):
         self.assertNotEqual(
             widths[0],
             widths[1],
-            "use_object_axes made no difference on a rotated object — the "
+            "the axis frame made no difference on a rotated object — the "
             "mirror plane is ignoring the object frame again",
         )
 
@@ -537,7 +550,6 @@ class TestEditUtils(MayaTkTestCase):
             amount=1,
             delete=True,
             mirror=True,
-            use_object_axes=True,
         )
         self.assertTrue(cmds.objExists(cube))  # symmetrize works in place (no separate)
         bb = cmds.exactWorldBoundingBox(cube)

@@ -109,7 +109,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # The ceiling in pixels, 0 for none: the resolution the GLB pass takes,
         # which also reads the budget sentinel under an unbudgeted template as
         # no ceiling at all.
-        ceiling = self._glb_max_size()
+        ceiling = self.run.glb_max_size(logger=self.logger)
         if not ceiling:
             return (
                 "Optimize Textures ran with no size ceiling, and without one the "
@@ -1082,14 +1082,6 @@ class _TaskChecksMixin(_TaskDataMixin):
             for name, paths in sorted(collisions.items())
         ]
         return False, log_messages + self._truncate_obj_entries(entries)
-
-    def check_duplicate_locator_names(self, enabled=True) -> tuple:
-        """Deprecated alias for ``check_duplicate_names("locators")``.
-
-        Kept for one release: headless callers (and presets saved before the
-        check grew its scope dial) still pass this key as a bool.
-        """
-        return self.check_duplicate_names("locators" if enabled else None)
 
     def check_duplicate_materials(self) -> tuple:
         """Check if any duplicate materials are present in the scene."""

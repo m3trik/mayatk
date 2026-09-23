@@ -31,36 +31,30 @@ class RenderEffects(ptk.LoggingMixin):
 
     Adds a keyable float per effect (``opacity``, ``highlight``, ...) to
     object transforms -- one channel table
-    (:mod:`~mayatk.mat_utils.render_opacity.channels`), one transport -- and
-    optionally binds each object's material for live viewport feedback.
+    (:mod:`~mayatk.mat_utils.render_opacity.channels`), one transport. The
+    authored material is never bound or duplicated; lookdev is the WebXR push.
     ``opacity`` is the first channel and the one that drives *presence*
     (mirrors to ``visibility`` and gates the GLB); ``highlight`` is an
     additive emissive intensity with a per-object colour.
 
     .. note:: Use :meth:`key_fade` to animate an opacity fade with
               automatic visibility mirroring and :meth:`key_pulse` for a
-              repeating highlight.  :meth:`create` sets up the mechanism
-              (Attribute or Material binding) without keying.
+              repeating highlight.  :meth:`create` adds (or removes) the
+              channel without keying.
               :meth:`prepare_for_export` runs before every FBX export
               (the ``FbxUtils.STAGERS`` bracket) and :meth:`finish_export`
               after it; call them yourself only around a raw ``cmds.file``.
               :meth:`export_record` is the ``visibility_tracks`` producer
               (``FbxUtils.PRODUCERS``).
 
-    Two modes of operation:
+    :meth:`create`'s ``mode="attribute"`` adds the channel's custom float
+    (0-1) to object transforms, for per-object control in game engines;
+    ``mode="remove"`` takes it off. The viewport material binding
+    (``mode="material"``) was retired 2026-09-05 and removed 2026-09-21.
 
-    **mode="attribute"** (Recommended):
-        Adds the channel's custom float (0-1) to object transforms.
-        Use for per-object control in Game Engines.
-
-    **mode="material"**:
-        Also binds each object's material to the channel for viewport
-        lookdev (the transparent StingrayPBS graph for opacity; the native
-        emissive weight for a highlight). Bindings are suspended for the
-        duration of an export so the deliverable carries the authored
-        material, and re-bound after.
-
-    ``RenderOpacity`` is this class under its previous name (one release).
+    ``RenderOpacity`` is this class's previous name, still importable from
+    ``mat_utils.render_opacity._render_opacity`` with a deprecation warning
+    until mayatk 0.20.0.
     """
 
     ATTR_NAME = OpacityAttributeMode.ATTR_NAME
@@ -252,9 +246,8 @@ class RenderEffects(ptk.LoggingMixin):
             objects: Objects to process. If None, uses selection.
             mode: ``"attribute"`` — Adds the channel attribute (Game Engine friendly).
                   ``"remove"``   — Removes the channel's artifacts from the objects.
-                  ``"material"`` — DEPRECATED (2026-09-05, one release): the viewport
-                  binding replaced the authored material; it is now the attribute
-                  mode with a warning. Lookdev is the WebXR push.
+                  Anything else is refused (logged, ``{}`` returned) BEFORE any
+                  object is touched -- including the retired ``"material"``.
             delete_visibility_keys: Presence channel only. If ``True``, existing
                 visibility keyframes are deleted before creating the opacity
                 setup.  If ``False`` (default), objects that have visibility
@@ -269,6 +262,12 @@ class RenderEffects(ptk.LoggingMixin):
                 or more objects have visibility keyframes.
         """
         spec = spec_for(channel)
+        if mode not in ("attribute", "remove"):
+            # Refused up front: past this point the objects' existing channel
+            # (and, with delete_visibility_keys, their visibility keys) is
+            # cleared, so a typo'd -- or retired -- mode must never get here.
+            cls.logger.error(f"Unknown mode: {mode}")
+            return {}
         if objects is None:
             objects = cmds.ls(selection=True) or []
         if not objects:
@@ -296,51 +295,19 @@ class RenderEffects(ptk.LoggingMixin):
                 )
                 raise RuntimeError(msg)
 
-        if mode == "material":
-            cls._warn_preview_retired()
-            mode = "attribute"
         # Always clean existing state first (legacy material-mode artifacts
         # before the attribute: the disconnect needs the attribute to exist).
         with CoreUtils.preserved_selection():
             cls.remove(objects, channel=spec)
             if mode == "remove":
                 return {}
-            elif mode == "attribute":
-                return OpacityAttributeMode.create(objects, spec)
-        cls.logger.error(f"Unknown mode: {mode}")
-        return {}
+            return OpacityAttributeMode.create(objects, spec)
 
     @classmethod
-    def _warn_preview_retired(cls) -> None:
-        """One line, once per session: the in-scene preview is gone, and why."""
-        if getattr(cls, "_preview_warned", False):
-            return
-        cls._preview_warned = True
-        cls.logger.warning(
-            "The viewport material preview was retired (2026-09-05): it replaced "
-            "the authored material and cost every export a restore step. Keys are "
-            "written as before; preview the deliverable with the WebXR push."
-        )
-
-    @classmethod
-    def preview(cls, objects=None, channel="highlight", enabled: bool = True) -> Dict:
-        """DEPRECATED (one release). ``enabled=False`` heals a scene saved with the
-        old preview on (``OpacityMaterialMode.remove``); ``True`` warns and does
-        nothing -- the attribute and its keys are the whole authoring now."""
-        spec = spec_for(channel)
-        if objects is None:
-            objects = cmds.ls(selection=True) or []
-        if not objects:
-            return {}
-        if enabled:
-            cls._warn_preview_retired()
-            return {}
-        with CoreUtils.preserved_selection():
-            OpacityMaterialMode.remove(objects, spec)
-        return {}
-
-    # Legacy alias support
-    setup = create
+    @ptk.Deprecation.symbol("RenderEffects.create", remove_in="0.20.0")
+    def setup(cls, *args, **kwargs) -> Dict[str, Dict]:
+        """Deprecated alias of :meth:`create` (warns until mayatk 0.20.0)."""
+        return cls.create(*args, **kwargs)
 
     @classmethod
     def ensure_connections(cls, objects=None) -> None:
@@ -389,7 +356,6 @@ class RenderEffects(ptk.LoggingMixin):
         direction: str = "in",
         auto_create: bool = True,
         tangent: str = "linear",
-        preview: Optional[bool] = None,
         delete_visibility_keys: bool = False,
         channel="opacity",
         whole_frames: bool = True,
@@ -407,8 +373,6 @@ class RenderEffects(ptk.LoggingMixin):
             direction: ``"in"`` (0→1), ``"out"`` (1→0), or ``"auto"``.
             auto_create: Create the channel on objects that lack it.
             tangent: Tangent type for the channel's keys (default ``"linear"``).
-            preview: DEPRECATED, ignored (one release) -- the viewport binding
-                was retired 2026-09-05; ``True`` logs why, once.
             delete_visibility_keys: Presence channel, objects being created
                 only -- clear their existing visibility keys first. Otherwise
                 the mirror is written over them.
@@ -423,7 +387,7 @@ class RenderEffects(ptk.LoggingMixin):
         objects = cls._selection_or(objects)
         if not objects:
             return []
-        cls._ensure_channel(objects, spec, auto_create, preview, delete_visibility_keys)
+        cls._ensure_channel(objects, spec, auto_create, delete_visibility_keys)
         return OpacityAttributeMode.key_fade(
             objects,
             start=start,
@@ -450,7 +414,6 @@ class RenderEffects(ptk.LoggingMixin):
         objects,
         spec: ChannelSpec,
         auto_create: bool,
-        preview: Optional[bool],
         delete_visibility_keys: bool,
     ) -> None:
         """Give *objects* the channel before keying.
@@ -458,11 +421,8 @@ class RenderEffects(ptk.LoggingMixin):
         Objects lacking the attribute get it; with *delete_visibility_keys* the
         presence channel's create path clears their visibility keys first
         (:meth:`create`'s guard), otherwise the unguarded attribute-mode create
-        runs and the keying mirror writes over whatever is there. *preview* is
-        the retired viewport binding's kwarg: honoured as a warning, nothing more.
+        runs and the keying mirror writes over whatever is there.
         """
-        if preview:
-            cls._warn_preview_retired()
         # The attribute-mode create touches ``data_internal``; the selection
         # must not end up on it -- the next tool would act on that node.
         with CoreUtils.preserved_selection():
@@ -495,13 +455,24 @@ class RenderEffects(ptk.LoggingMixin):
         ran first, and keyed the artist's scene during an export.
 
         Parameters:
-            objects: Ignored, kept for API compatibility for one release -- the
-                staging covers every keyed channel in the scene.
+            objects: Deprecated and ignored -- the staging covers every keyed
+                channel in the scene. Passing it warns until mayatk 0.20.0.
 
         Returns:
             An empty list, kept for API compatibility for one release (it named
             the objects whose visibility was re-synced).
         """
+        if objects is not None:
+            # A body notice rather than ``Deprecation.parameter``: callers pass
+            # it positionally as often as by name, and only this sees both.
+            ptk.Deprecation.warn(
+                "RenderEffects.prepare_for_export(objects)",
+                "RenderEffects.prepare_for_export()",
+                remove_in="0.20.0",
+                kind="parameter",
+                reason="The staging always covers every keyed channel.",
+                stacklevel=2,
+            )
         # Nor the materials: keying never binds them (the viewport preview that
         # did was retired 2026-09-05), so the FBX and the sidecar read the scene
         # as authored with no restore step.
@@ -624,7 +595,6 @@ class RenderEffects(ptk.LoggingMixin):
         dim_color=None,
         auto_create: bool = True,
         channel="highlight",
-        preview: Optional[bool] = None,
         delete_visibility_keys: bool = False,
         whole_frames: bool = True,
     ) -> List[str]:
@@ -656,7 +626,6 @@ class RenderEffects(ptk.LoggingMixin):
                 fades to unlit exactly as it did before this end existed.
             auto_create: Create the channel on objects that lack it.
             channel: The channel name or spec; ``"highlight"``.
-            preview: DEPRECATED, ignored (one release) -- see :meth:`key_fade`.
             delete_visibility_keys: See :meth:`key_fade`; no effect unless the
                 channel drives presence.
             whole_frames: Snap every key to a whole frame (the default); see
@@ -669,7 +638,7 @@ class RenderEffects(ptk.LoggingMixin):
         objects = cls._selection_or(objects)
         if not objects:
             return []
-        cls._ensure_channel(objects, spec, auto_create, preview, delete_visibility_keys)
+        cls._ensure_channel(objects, spec, auto_create, delete_visibility_keys)
         return OpacityAttributeMode.key_pulse(
             objects,
             start=start,
@@ -1021,7 +990,6 @@ class RenderEffects(ptk.LoggingMixin):
         record = cls.export_record(ctx)
         FbxUtils.publish_authored({ptk.SceneRecords.VISIBILITY: record})
         return record
-
 
     # ------------------------------------------------------------------
     # Internals

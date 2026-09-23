@@ -10,7 +10,7 @@
     <x>0</x>
     <y>0</y>
     <width>240</width>
-    <height>237</height>
+    <height>340</height>
    </rect>
   </property>
   <property name="tabShape">
@@ -107,14 +107,80 @@
         <property name="toolTip">
          <string>Scope — which objects Bake Lightmaps acts on.
 
-Selected (default) — the current selection.
+Selected (default) — the selected meshes.
 Visible — every visible mesh in the scene.
-Scene — every mesh in the scene, hidden or not.</string>
+Scene — every visible mesh in the scene (Arnold renders no hidden object, so a hidden one is skipped and named).
+
+Objects in the Exclude set are skipped whatever the scope.
+
+The light button beside the field takes the scene's environment (HDRI skydome) in or out of the bake.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
         </property>
        </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="exclude_layout">
+        <property name="spacing">
+         <number>1</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="lbl_exclude">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Exclude — objects that get no lightmap of their own but still light the bake: they cast shadows and bounce light onto everything that does bake.
+
+Stored in the scene (the lightmapBaker_exclude set), so every bake of this scene skips them — from this panel or a script — and a re-bake leaves a map they already have alone.</string>
+          </property>
+          <property name="text">
+           <string>Exclude:</string>
+          </property>
+          <property name="caption" stdset="0">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="set_exclusions">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>1</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Make the current selection the Exclude set (replacing it). A selected group excludes every mesh under it; with nothing selected, the set is cleared.</string>
+          </property>
+          <property name="text">
+           <string>Set From Selection</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       <item>
        <widget class="ComboBox" name="cmb002">
@@ -133,9 +199,35 @@ Scene — every mesh in the scene, hidden or not.</string>
         <property name="toolTip">
          <string>Packing — how the baked maps are laid out.
 
-Per-Object (default) — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.
+Atlas by Material (default) — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. The layout is planned up front, so each object bakes at 4x the size it will occupy (never above a full map) instead of a full map per object: the downscale into the atlas is what averages Arnold's sampling noise.
 
-Atlas by Material — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. The layout is planned up front, so each object bakes at the size it will occupy instead of rendering a full map that is then downscaled away.</string>
+Per-Object — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.</string>
+        </property>
+        <property name="frame">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_device">
+        <property name="minimumSize">
+         <size>
+          <width>180</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>999</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Which processor Arnold renders the bake on. A machine setting, not a quality one — it is never stored in a preset.
+
+Auto — the GPU wherever Arnold has one, else the CPU. At the same quality the GPU is the fast one: measured on a production floor, 3.4s on the GPU against 24.2s on the CPU for the same ray budget.
+GPU — force it, with no fallback.
+CPU — force it. Use this if a GPU bake ever disagrees with a CPU one: Arnold's GPU renderer does not support every shader feature.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -170,28 +262,6 @@ Atlas by Material — objects sharing a primary material are consolidated into o
           <number>0</number>
          </property>
          <item>
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>180</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>999</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Quality preset. Selecting one fills in Resolution / Samples below; you can still override them for a custom bake.</string>
-           </property>
-           <property name="frame">
-            <bool>false</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
           <widget class="ComboBox" name="cmb_resolution">
            <property name="minimumSize">
             <size>
@@ -206,7 +276,9 @@ Atlas by Material — objects sharing a primary material are consolidated into o
             </size>
            </property>
            <property name="toolTip">
-            <string>Output lightmap resolution (square, px). Drives gutter / seam-margin width too. Filled by the Quality preset; override here.</string>
+            <string>Lightmap resolution (square, px): each object's map, or the shared atlas. Drives the gutter / seam-margin width too.
+
+The filter button beside the field denoises every map at the size it ships at.</string>
            </property>
            <property name="frame">
             <bool>false</bool>
@@ -228,7 +300,9 @@ Atlas by Material — objects sharing a primary material are consolidated into o
             </size>
            </property>
            <property name="toolTip">
-            <string>Arnold AA samples per texel. Higher = cleaner GI, slower bake.</string>
+            <string>Arnold camera (AA) samples per texel, squared. On the CPU each one traces GI Samples diffuse rays. Arnold's GPU ignores GI samples, so a GPU bake gives every texel these samples and, with Adaptive Sampling on, adds more — up to Samples × GI Samples — only where the noise needs them (the shadows). Higher = cleaner, slower.
+
+The button beside the field is Adaptive Sampling. It greys out on a CPU bake, which spends its samples the other way.</string>
            </property>
            <property name="prefix">
             <string>Samples:	</string>
@@ -245,7 +319,173 @@ Atlas by Material — objects sharing a primary material are consolidated into o
           </widget>
          </item>
          <item>
-          <widget class="ComboBox" name="cmb_device">
+          <widget class="QSpinBox" name="spn_gi_samples">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>GI (indirect diffuse) samples, squared. On the CPU: the bounce-light rays each camera sample traces. On the GPU, which ignores them, they set the budget instead: Samples × GI Samples is Adaptive Sampling's ceiling, or what every texel gets with it off. Higher = smoother bounce light and shadows, slower.</string>
+           </property>
+           <property name="prefix">
+            <string>GI Samples:	</string>
+           </property>
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>32</number>
+           </property>
+           <property name="value">
+            <number>4</number>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="spn_bounces">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Diffuse bounces (Arnold's GI Diffuse Depth): how many times light bounces between surfaces before the bake stops following it. 0 = direct light only; 2–3 lights a room's corners and ceiling. The biggest quality lever for interiors — each bounce adds render time.</string>
+           </property>
+           <property name="prefix">
+            <string>Bounces:	</string>
+           </property>
+           <property name="minimum">
+            <number>0</number>
+           </property>
+           <property name="maximum">
+            <number>16</number>
+           </property>
+           <property name="value">
+            <number>2</number>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="output_group">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+          <horstretch>0</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="title">
+         <string>Output</string>
+        </property>
+        <layout class="QVBoxLayout" name="output_layout">
+         <property name="spacing">
+          <number>1</number>
+         </property>
+         <property name="leftMargin">
+          <number>0</number>
+         </property>
+         <property name="topMargin">
+          <number>0</number>
+         </property>
+         <property name="rightMargin">
+          <number>0</number>
+         </property>
+         <property name="bottomMargin">
+          <number>0</number>
+         </property>
+         <item>
+          <widget class="LineEdit" name="txt_output_dir">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Where the baked lightmaps are written (optional).
+
+Empty — the project's sourceimages folder.
+Relative (e.g. 'lightmaps' or 'bake/lm') — resolved under sourceimages, so the path stays portable across projects.
+Absolute (e.g. 'D:/bakes') — used as-is.
+
+The folder is created if it doesn't exist. Browsing to a folder inside sourceimages stores it as a relative path. The image button saves each map beside its material's texture maps instead; this folder then takes only the objects whose material has none.</string>
+           </property>
+           <property name="placeholderText">
+            <string>sourceimages</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="LineEdit" name="txt000">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Name affix for the baked lightmap (file + shader). A leading '_' (e.g. '_Lightmap') is treated as a suffix → &amp;lt;object&amp;gt;_Lightmap; a trailing '_' (e.g. 'LM_') as a prefix. Empty uses the placeholder default.&lt;br/&gt;&lt;br/&gt;The button beside the field cycles Auto / Suffix / Prefix.</string>
+           </property>
+           <property name="placeholderText">
+            <string>_Lightmap</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="grp_process">
+        <property name="title">
+         <string/>
+        </property>
+        <layout class="QVBoxLayout" name="process_layout">
+         <property name="spacing">
+          <number>1</number>
+         </property>
+         <property name="leftMargin">
+          <number>2</number>
+         </property>
+         <property name="topMargin">
+          <number>2</number>
+         </property>
+         <property name="rightMargin">
+          <number>2</number>
+         </property>
+         <property name="bottomMargin">
+          <number>2</number>
+         </property>
+         <item>
+          <widget class="ComboBox" name="cmb000">
            <property name="minimumSize">
             <size>
              <width>180</width>
@@ -259,113 +499,70 @@ Atlas by Material — objects sharing a primary material are consolidated into o
             </size>
            </property>
            <property name="toolTip">
-            <string>Which device Arnold renders the bake on.
+            <string>Preset — this panel's bake settings under a name: Packing, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Environment, Denoise and Beside Material Textures.
 
-Auto — the GPU, falling back to the CPU when there isn't a usable one. Measured on a production room, 4 objects at 256px, alternating so warm-up cancels: 7.5s on the GPU against 192.8s on the CPU (25.9x), with the baked levels matching (0.527 vs 0.511, inside GI noise).
-GPU — force it, with no fallback.
-CPU — force it. Use this if a GPU bake ever disagrees with a CPU one: Arnold's GPU renderer does not support every shader feature.</string>
+   The built-ins (italic, read-only) — preview, quest, desktop — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
+
+   Not saved: Scope, Exclude, Processor, Output Directory and Name — they belong to a scene or a machine. A headless bake reads the same presets: LightmapBaker.from_preset(name).</string>
            </property>
            <property name="frame">
             <bool>false</bool>
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="btn_reset_defaults">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Restore every setting on this panel to its default.</string>
+           </property>
+           <property name="text">
+            <string>Reset to Defaults</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="b000">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Bake a lightmap for every object in Scope (minus the Exclude set) and wire it for the engine: pack lightmap UVs, Arnold-bake white-card lighting into them, dilate the seams, denoise, then record it on the mesh. The material and its texture UVs are untouched — the engine composites albedo × lightmap.
+
+   Re-baking replaces the previous maps; Revert to Source (header menu) removes the wiring.</string>
+           </property>
+           <property name="text">
+            <string>Bake Lightmaps</string>
+           </property>
+          </widget>
+         </item>
         </layout>
-       </widget>
-      </item>
-      <item>
-       <widget class="QCheckBox" name="chk_environment">
-        <property name="toolTip">
-         <string>Bake the scene's environment (HDRI skydome) along with its lights.
-
-Off bakes the room's own lights only: the aiSkyDomeLight is hidden for the bake and restored afterwards. An HDRI is often a backdrop or a look-dev convenience rather than the room's real lighting, and baking it in is a flat ambient lift that cannot be taken back out of the map.</string>
-        </property>
-        <property name="text">
-         <string>Include Environment</string>
-        </property>
-        <property name="checked">
-         <bool>true</bool>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="LineEdit" name="txt_output_dir">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>Where the baked lightmaps are written (optional).
-
-Empty — the project's sourceimages folder.
-Relative (e.g. 'lightmaps' or 'bake/lm') — resolved under sourceimages, so the path stays portable across projects.
-Absolute (e.g. 'D:/bakes') — used as-is.
-
-The folder is created if it doesn't exist. Browsing to a folder inside sourceimages stores it as a relative path.</string>
-        </property>
-        <property name="placeholderText">
-         <string>sourceimages</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="LineEdit" name="txt000">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>Name affix for the baked lightmap (file + shader). A leading '_' (e.g. '_Lightmap') is treated as a suffix → &amp;lt;object&amp;gt;_Lightmap; a trailing '_' (e.g. 'LM_') as a prefix. Empty uses the placeholder default.&lt;br/&gt;&lt;br/&gt;The button beside the field cycles Auto / Suffix / Prefix.</string>
-        </property>
-        <property name="placeholderText">
-         <string>_Lightmap</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QPushButton" name="b000">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-          <horstretch>0</horstretch>
-          <verstretch>0</verstretch>
-         </sizepolicy>
-        </property>
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>30</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>Bake a lightmap per selected object and wire it up: pack lightmap UVs, Arnold-bake white-card lighting into the lightmap channel, dilate seams, then record it. The full PBR material is kept — the engine composites albedo × lightmap.
-
-Non-destructive — Revert to Source from the header menu.</string>
-        </property>
-        <property name="text">
-         <string>Bake Lightmaps</string>
-        </property>
        </widget>
       </item>
       <item>

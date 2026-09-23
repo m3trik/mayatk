@@ -4145,9 +4145,13 @@ class MatUtils(_MatUtilsInternal):
             thread -- ``cmds`` is not thread-safe.
             """
             dst_path = os.path.join(new_dir, filename)
-            if os.path.exists(dst_path) and os.path.normcase(
-                os.path.abspath(dst_path)
-            ) != os.path.normcase(os.path.abspath(src_path)):
+            if ptk.FileUtils.is_same_file(src_path, dst_path):
+                # The destination IS the source, however it is spelled -- a
+                # junction, a subst or mapped drive naming the same folder.
+                # Nothing to copy, and nothing to delete: in Move mode the
+                # "redundant source" below was the only copy.
+                return src_path, dst_path, "uptodate"
+            if os.path.exists(dst_path):
                 # Size is a cheap NEGATIVE only. Two different textures of the
                 # same name routinely share a byte count -- uncompressed TGA/DDS/
                 # EXR/BMP at a fixed resolution always do -- and in Move mode the

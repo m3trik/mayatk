@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import contextlib
+import html
 import os
 import re
 from functools import wraps
@@ -16,6 +17,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.env_utils.usd import UsdReadRefused, UsdUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 
 # Scratch twins of foreign scenes opened "as new" (see ReferenceManagerController
@@ -179,6 +181,13 @@ class _ReferenceManagerInternal(object):
         )
 
     @staticmethod
+    def _is_usd(path) -> bool:
+        """True if *path* is a USD layer or package -- read through mayaUsd's translator."""
+        return (
+            bool(path) and os.path.splitext(str(path))[1].lower() in UsdUtils.EXTENSIONS
+        )
+
+    @staticmethod
     def _display_name(path: str, hide_extension: bool, hide_suffix: str) -> str:
         """The table label for *path* — its basename, less the extension and/or a
         TRAILING ``hide_suffix``.
@@ -236,6 +245,43 @@ class _ReferenceManagerInternal(object):
         :attr:`_FileRef.path` on the latter raises outright).
         """
         return [_FileRef(rn) for rn in EnvUtils.list_reference_nodes()]
+
+    def _remove_promoted_file_less(self, standing) -> list:
+        """Delete the file-less reference nodes an import promoted to top level.
+
+        A reference Maya could not form -- a scene referencing the file that is
+        ALREADY open -- survives inside its parent as a node with no file, and
+        importing the parent promotes it to a top-level node that the scene then
+        saves, and that Maya's Reference Editor shows as a broken reference. It is
+        debris the import itself made, so the import removes it (reference nodes
+        are locked, hence the unlock). *standing* are
+        :meth:`CoreUtils.node_handles` for the file-less nodes that were already
+        top level before the import; those are not its to touch. Called inside
+        the import's undo chunk, so one undo brings the nodes back.
+
+        Returns:
+            (list): The names of the nodes removed.
+        """
+        keep = set(CoreUtils.resolve_handles(standing))
+        removed = []
+        for rn in EnvUtils.list_reference_nodes(file_less=True):
+            if rn in keep:
+                continue
+            try:
+                cmds.lockNode(rn, lock=False)
+                cmds.delete(rn)
+            except RuntimeError as e:
+                self.logger.warning(
+                    f"Could not remove broken reference node '{rn}': {e}"
+                )
+                continue
+            removed.append(rn)
+        if removed:
+            self.logger.info(
+                f"Removed {len(removed)} broken reference node(s) the import "
+                f"promoted: {', '.join(removed)}"
+            )
+        return removed
 
     @staticmethod
     def _authored_name(name: str, namespace: str) -> str:
@@ -296,9 +342,12 @@ class ReferenceManager(
     For UI integration, use ReferenceManagerController and ReferenceManagerSlots.
     """
 
-    # Widen the workspace-file scan to every natively referenceable type. The panel's
-    # Include Types row filters this cached superset, so toggling a type never re-scans disk.
-    SCENE_FILE_TYPES = ("*.ma", "*.mb", "*.fbx")
+    # Widen the workspace-file scan to every natively referenceable type -- FBX through the
+    # FBX plugin, every USD spelling through mayaUsd's translator. The panel's Include Types
+    # row filters this cached superset, so toggling a type never re-scans disk.
+    SCENE_FILE_TYPES = ("*.ma", "*.mb", "*.fbx") + tuple(
+        f"*{ext}" for ext in ptk.USD_EXTENSIONS
+    )
 
     def __init__(self, log_level="WARNING"):
         super().__init__()
@@ -375,21 +424,6 @@ class ReferenceManager(
                 strip_patterns.append(pattern)
 
         return strip_patterns
-
-    def _extract_strip_pattern(self, filter_text: str) -> str:
-        """Extract the core pattern to strip from wildcard filter text.
-
-        DEPRECATED: Use _extract_strip_patterns() for multi-pattern support.
-
-        For example:
-        - '*_v001*' -> '_v001'
-        - 'character_*' -> 'character_'
-        - '*' -> '' (empty string)
-        - 'literal_text' -> 'literal_text'
-        - 'test_*_rig' -> 'test_' and '_rig' (but we'll take the longest contiguous part)
-        """
-        patterns = self._extract_strip_patterns(filter_text, delimiter=(",", ";"))
-        return patterns[0] if patterns else ""
 
     @staticmethod
     def _text_matches_filter(
@@ -501,11 +535,22 @@ class ReferenceManager(
             if os.path.normcase(os.path.normpath(ref.path)) == normalized_file_path:
                 return True  # Exit the method if the file is already referenced
 
+        # A USD layer reads through mayaUsd's translator, NAMED -- left to pick one by
+        # extension, Maya reads it with animation off -- and only once the stage is
+        # proven safe to read live: a skin the reader crashes on takes Maya with it,
+        # and a layer pxr cannot read leaves an empty reference node behind.
+        read = {}
+        if self._is_usd(file_path):
+            try:
+                read = UsdUtils.live_read_options(file_path)
+            except RuntimeError as e:
+                return self._refuse_live_read(file_path, e)
+
         # Sanitize the namespace to ensure it contains only valid characters
         sanitized_namespace = self.sanitize_namespace(namespace)
 
         try:
-            cmds.file(file_path, reference=True, namespace=sanitized_namespace)
+            cmds.file(file_path, reference=True, namespace=sanitized_namespace, **read)
             # Validate that a reference node was actually created
             rn = cmds.file(file_path, q=True, referenceNode=True)
             if not rn or cmds.nodeType(rn) != "reference":
@@ -521,6 +566,13 @@ class ReferenceManager(
             else:
                 raise
             return False
+
+    def _refuse_live_read(self, file_path: str, error: Exception) -> bool:
+        """Report why *file_path* cannot be read live -- referenced or opened -- and
+        return False, the caller's result for it. A hook: the panel's controller also
+        puts *error* in front of the user."""
+        cmds.warning(str(error))
+        return False
 
     # What an unlink does with the imported reference's namespace.
     NAMESPACE_MODES = ("remove", "keep", "root")
@@ -564,7 +616,6 @@ class ReferenceManager(
         self,
         namespaces=None,
         namespace_mode="remove",
-        remove_namespace=None,
         scene_data="merge",
     ):
         """Import referenced objects into the scene, making their data local.
@@ -581,8 +632,6 @@ class ReferenceManager(
                 - ``"root"``: keep the prefix on the reference's top-level
                   transform(s) only and merge everything below into the root, so the
                   asset stays identifiable without prefixing the whole scene.
-            remove_namespace (bool): DEPRECATED bool form of *namespace_mode*
-                (True -> ``"remove"``, False -> ``"keep"``). Overrides it when given.
             scene_data (str/callable): What becomes of each reference's scene
                 data -- the records its own tools kept on its ``data_internal`` /
                 ``data_export`` (shots, parked keys, bake sessions, emissive
@@ -602,8 +651,6 @@ class ReferenceManager(
                 Either way the deliverables are produced again from the merged
                 scene.
         """
-        if remove_namespace is not None:
-            namespace_mode = "remove" if remove_namespace else "keep"
         if namespace_mode not in self.NAMESPACE_MODES:
             raise ValueError(
                 f"Invalid namespace_mode {namespace_mode!r}; "
@@ -633,6 +680,11 @@ class ReferenceManager(
             # module's, and the idle write would land in that.
             DataNodes.flush_owners()
         with CoreUtils.undo_chunk():
+            # File-less nodes already at the top level are not this import's to
+            # touch; what the loop promotes there is (see the end of the chunk).
+            standing = CoreUtils.node_handles(
+                EnvUtils.list_reference_nodes(file_less=True)
+            )
             for ref in all_references:
                 # Everything the import renames is read BEFORE it: importReference
                 # deletes the reference node, so the referenceQuery these come
@@ -673,6 +725,7 @@ class ReferenceManager(
                 # the records respell to where the nodes actually landed.
                 if data is not None:
                     self._settle_scene_data(decision, data, ns)
+            self._remove_promoted_file_less(standing)
 
     def _scene_data_before_import(self, ref, namespace: str, scene_data):
         """What to do with *ref*'s scene data, and what the import will need to
@@ -1644,7 +1697,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Include Types — the native scan caches every NATIVE_EXTENSIONS type, so a toggle
         # only re-filters (no cache invalidation). Unchecking .mb replaces the old
-        # "Hide Binary Files" checkbox; .fbx is native (referenced via the FBX plugin).
+        # "Hide Binary Files" checkbox; .fbx and USD are native (referenced through the
+        # FBX plugin / mayaUsd's translator).
         header_menu = self.slot.ui.header.menu
         included = self.slot._included_extensions()
         file_list = [f for f in file_list if os.path.splitext(f)[1].lower() in included]
@@ -2081,6 +2135,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
     def open_scene(self, file_path: str, set_workspace: bool = True):
         """Open a scene file, optionally setting the workspace to match the file.
 
+        A USD row opens through mayaUsd's translator, read the way ``add_reference``
+        reads it (:meth:`UsdUtils.live_read_options`) — a stage the reader would crash on
+        is refused before the session is touched.
+
         Parameters:
             file_path (str): Path to the scene file to open
             set_workspace (bool): If True, sets the Maya workspace to the workspace
@@ -2120,8 +2178,15 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Scene file not found:<br>{file_path}")
             return False
 
+        read = {}
+        if self._is_usd(file_path):
+            try:
+                read = UsdUtils.live_read_options(file_path)
+            except RuntimeError as e:
+                return self._refuse_live_read(file_path, e)
+
         try:
-            cmds.file(file_path, open=True, force=True)
+            cmds.file(file_path, open=True, force=True, **read)
             # Loading a scene that carries references resolves/applies reference edits during
             # the open, which leaves Maya's scene 'modified' flag set even though the user made
             # no edits. That stale flag makes an immediate close/reference toggle falsely prompt
@@ -2172,6 +2237,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         return True
 
+    def _refuse_live_read(self, file_path, error):
+        """The engine's report, plus a message box: a click did nothing, so the user
+        must learn why. Escaped — pxr's errors quote prim paths like ``</>``, which the
+        box would read as markup — and naming Unlink and Import only for a stage the
+        import CAN read (:class:`UsdReadRefused`); a damaged layer reads for neither."""
+        super()._refuse_live_read(file_path, error)
+        text = html.escape(str(error))
+        if isinstance(error, UsdReadRefused):
+            text += (
+                "<br><br>Right-click the row and choose <b>Unlink and Import</b> "
+                "to bring it in as local data instead."
+            )
+        self.sb.message_box(text)
+        return False
+
     def new_scene(self):
         """Discard the current file and start an empty scene (Maya's ``file -new``).
 
@@ -2186,7 +2266,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return True
         except Exception as e:
             self.logger.error(f"Failed to start a new scene: {e}")
-            self.sb.message_box(f"Failed to close the scene:<br>{e}")
+            self.sb.message_box(f"Failed to close the scene:<br>{html.escape(str(e))}")
             return False
 
     @block_table_selection_method
@@ -2415,7 +2495,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     suffix=suffix,
                 )
             except ValueError as e:
-                self.sb.message_box(f"Invalid folder structure pattern: {e}")
+                self.sb.message_box(
+                    f"Invalid folder structure pattern: {html.escape(str(e))}"
+                )
                 return
             target_dir = os.path.join(workspace, resolved_path)
 
@@ -2423,7 +2505,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 try:
                     os.makedirs(target_dir)
                 except OSError as e:
-                    self.sb.message_box(f"Failed to create directory: {e}")
+                    self.sb.message_box(
+                        f"Failed to create directory: {html.escape(str(e))}"
+                    )
                     return
 
         new_path = os.path.join(target_dir, formatted_name + ".ma")
@@ -2443,7 +2527,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.info(f"Saved scene to: {new_path}")
             self.refresh_file_list(invalidate=True)
         except Exception as e:
-            self.sb.message_box(f"Failed to save scene: {e}")
+            self.sb.message_box(f"Failed to save scene: {html.escape(str(e))}")
 
     def _save_open_scene(self, path):
         """Flush the open scene to *path* so its unsaved edits reach disk.
@@ -2462,7 +2546,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             return True
         except Exception as e:
             self.logger.error(f"Failed to save the open scene: {e}")
-            self.sb.message_box(f"Failed to save the open scene:<br>{e}")
+            self.sb.message_box(
+                f"Failed to save the open scene:<br>{html.escape(str(e))}"
+            )
             return False
 
     def _rename_scene_file(self, old_path, new_path, folder=None):
@@ -2482,9 +2568,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         itself was. ``OSError`` from the file rename propagates; a failed sidecar / increments
         move is logged and the file rename stands.
         """
-        # Only Maya's own scene types round-trip through save-then-reopen. An .fbx row can also
-        # be the open scene (Maya opens one directly), but saving it would write Maya scene data
-        # over the .fbx — that one renames on disk only.
+        # Only Maya's own scene types round-trip through save-then-reopen. An .fbx or USD row
+        # can also be the open scene (Maya opens both through their translators), but saving
+        # it would write Maya scene data over it — those rename on disk only.
         ext = os.path.splitext(old_path)[1].lower()
         is_open = ext in EnvUtils.SCENE_SAVE_TYPES and self.slot._is_current(old_path)
         if is_open and not self._save_open_scene(old_path):
@@ -2611,7 +2697,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             if self._rename_scene_file(old_path, new_path, folder=new_folder_name):
                 self.refresh_file_list(invalidate=True)
         except Exception as e:
-            self.sb.message_box(f"Rename failed: {e}")
+            self.sb.message_box(f"Rename failed: {html.escape(str(e))}")
 
     @classmethod
     def _delete_prompt(cls, paths) -> str:
@@ -2777,13 +2863,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     """
 
     # File-type classification for this panel (mirror of blendertk, inverted). NATIVE types
-    # list + reference directly (Maya references .ma/.mb/.fbx natively); FOREIGN types are
-    # cross-DCC rows baked through the blender_bridge before they can be referenced. The
-    # header's Include Types row toggles each extension; _INCLUDE_TYPES is the column order
-    # (shared across both panels).
-    _INCLUDE_TYPES = ("ma", "mb", "fbx", "blend")
-    NATIVE_EXTENSIONS = (".ma", ".mb", ".fbx")
+    # list + reference directly — exactly what the engine's workspace scan covers (Maya
+    # references .ma/.mb natively, .fbx through the FBX plugin, USD through mayaUsd's
+    # translator); FOREIGN types are cross-DCC rows baked through the blender_bridge before
+    # they can be referenced. The header's Include Types row toggles each type;
+    # _INCLUDE_TYPES is the column order (shared across both panels).
+    _INCLUDE_TYPES = ("ma", "mb", "fbx", "usd", "blend")
+    NATIVE_EXTENSIONS = tuple(t.lstrip("*") for t in ReferenceManager.SCENE_FILE_TYPES)
     FOREIGN_EXTENSIONS = (".blend",)
+    # An include type that lists more than its own spelling: a USD layer or package is any
+    # of .usd/.usda/.usdc/.usdz. Every other type lists just ``.<type>``.
+    _INCLUDE_TYPE_EXTENSIONS = {"usd": ptk.USD_EXTENSIONS}
+    # Rows Unlink and Import brings in with no reference behind them: a foreign row
+    # converts; a USD row imports natively — the one way in for a stage whose skins a live
+    # read refuses (UsdUtils.live_read_options).
+    _IMPORT_EXTENSIONS = (*FOREIGN_EXTENSIONS, *ptk.USD_EXTENSIONS)
     # Default-checked include types for this panel — its own native scene types.
     _INCLUDE_DEFAULTS = (".ma", ".mb")
 
@@ -2991,10 +3085,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # No Rig setting: how a scene's rig logic travels is asked per scene, and
         # only when it has some (controller._resolve_rig_mode).
 
-        # Include Types — a single horizontal row of per-extension toggles (mirror across both
+        # Include Types — a single horizontal row of per-type toggles (mirror across both
         # panels). Replaces the old "Hide Binary Files" + "Include Blender Scenes" checkboxes:
-        # .ma/.mb/.fbx list + reference natively; .blend lists as a foreign row baked through
-        # the blender_bridge before it can be referenced.
+        # .ma/.mb/.fbx/USD list + reference natively; .blend lists as a foreign row baked
+        # through the blender_bridge before it can be referenced.
         self._add_include_types_row(widget.menu)
 
         # --- Operations: bulk reference actions ------------------------------
@@ -3035,10 +3129,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                             "<b>Filter by Suffix / Folder Structure</b> narrow the list; "
                             "<b>Hide Suffix / Extension</b> shorten the displayed name; "
                             "<b>Show Notes Column</b> reveals Notes.",
-                            "<b>Include Types</b> (ma / mb / fbx / blend) picks which file types "
-                            "list; .ma/.mb/.fbx reference natively, a foreign (Blender) row's "
-                            "reference icon bakes it to a cached .ma and references that — "
-                            "right-click <b>Import Scene</b> for a local copy instead.",
+                            "<b>Include Types</b> (ma / mb / fbx / usd / blend) picks which file "
+                            "types list; .ma/.mb/.fbx/USD reference natively, a foreign (Blender) "
+                            "row's reference icon bakes it to a cached .ma and references that — "
+                            "right-click <b>Unlink and Import</b> for a local copy instead (a "
+                            "USD row too).",
                             "<b>Operations</b>: <b>Convert to Assembly</b>, <b>Unlink and Import "
                             "All</b>; <b>Un-Reference All</b> is on the footer. The button beside Unlink cycles what "
                             "an unlink does with the reference's namespace — remove it, keep it "
@@ -3065,14 +3160,16 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         separator (mirror across both panels). Uses ``Menu.add_row`` so the single-column menu is
         not reflowed; each checkbox is exposed as ``menu.chk_include_<type>`` and re-filters on toggle.
 
-        This panel's native scene types (.ma/.mb) default on; .fbx is native but off by default
-        (a workspace's FBX exports are usually noise in a scene list), and the foreign .blend
-        type is off.
+        This panel's native scene types (.ma/.mb) default on; .fbx and USD are native but off
+        by default (a workspace's FBX / USD exports are usually noise in a scene list), and the
+        foreign .blend type is off.
         """
         tooltip = {
             "ma": "List the workspace's Maya ASCII scenes (.ma) — referenced natively.",
             "mb": "List the workspace's Maya binary scenes (.mb) — referenced natively.",
             "fbx": "List the workspace's FBX files (.fbx) — referenced natively via the FBX plugin.",
+            "usd": "List the workspace's USD layers and packages (.usd / .usda / .usdc / .usdz) — "
+            "referenced natively via mayaUsd.",
             "blend": "List the workspace's Blender scenes (.blend) — foreign rows bake via a headless Blender.",
         }
         items = [
@@ -3081,7 +3178,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 {
                     "setObjectName": f"chk_include_{t}",
                     "setText": t,
-                    "setChecked": f".{t}" in self._INCLUDE_DEFAULTS,
+                    "setChecked": bool(
+                        set(self._type_extensions(t)) & set(self._INCLUDE_DEFAULTS)
+                    ),
                     "setToolTip": tooltip[t],
                 },
             )
@@ -3089,6 +3188,22 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         ]
         for cb in menu.add_row(items, title="Include Types:", justify="expand"):
             cb.toggled.connect(lambda *_: self.controller.refresh_file_list())
+
+    @classmethod
+    def _type_extensions(cls, include_type):
+        """Every extension the Include Types toggle *include_type* lists (``usd`` -> the
+        four USD spellings; any other type -> ``.<type>``). Mirror of blendertk's."""
+        return tuple(
+            cls._INCLUDE_TYPE_EXTENSIONS.get(include_type, (f".{include_type}",))
+        )
+
+    @classmethod
+    def _is_importable(cls, path):
+        """True if Unlink and Import can bring *path*'s row in with no reference behind it
+        (:attr:`_IMPORT_EXTENSIONS`)."""
+        return (
+            bool(path) and os.path.splitext(path)[1].lower() in cls._IMPORT_EXTENSIONS
+        )
 
     def _included_extensions(self):
         """The set of extensions (``.ma`` … ``.blend``) whose Include Types checkbox is checked.
@@ -3104,7 +3219,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         for t in self._INCLUDE_TYPES:
             chk = getattr(menu, f"chk_include_{t}", None)
             if chk is not None and chk.isChecked():
-                included.add(f".{t}")
+                included.update(self._type_extensions(t))
         return included
 
     def tbl000_init(self, widget):
@@ -3192,7 +3307,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setText="Unlink and Import",
                 setObjectName="btn_unlink_import",
                 setToolTip="Make an active reference's data local, or, for a foreign (Blender)\n"
-                "row, convert + import its contents via a headless-Blender FBX conversion.\n"
+                "row, convert + import its contents via a headless-Blender FBX conversion\n"
+                "(a USD row with no reference imports natively).\n"
                 "Namespaces are handled per the namespace button beside the header\n"
                 "menu's Unlink and Import All.",
             )
@@ -3425,7 +3541,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self.controller.refresh_file_list(invalidate=True)
             except Exception as e:
                 self.logger.error(f"Inline rename failed: {e}")
-                self.sb.message_box(f"Rename failed:<br>{e}")
+                self.sb.message_box(f"Rename failed:<br>{html.escape(str(e))}")
                 self.controller.restore_item_display(item)
 
         elif item.column() == 4:  # Notes column
@@ -3733,10 +3849,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         except ptk.OperationCancelled:
             self._footer_status(f"Stopped converting {name}.")
         except FileNotFoundError as e:
-            self.sb.message_box(f"Can't reference — Blender not found:<br>{e}")
+            # The error names what is missing -- Blender, or the scene itself.
+            self._error_box("Can't reference", name, e)
         except Exception as e:  # noqa: BLE001 — surface the bake error to the user
             self.logger.warning(f"Foreign scene bake failed for {path}: {e}")
-            self.sb.message_box(f"Reference failed for <hl>{name}</hl>:<br>{e}")
+            self._error_box("Reference failed for", name, e)
         return None
 
     # off -> reference -> template -> off
@@ -3889,9 +4006,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         disk; both paths report their own failures, so the caller only has to honor the result.
 
         'Cannot be written in place' covers a scene that has never been saved AND one opened
-        from a non-Maya format — an ``.fbx`` row opens through the translator and keeps the
-        ``.fbx`` as its scene name, which ``EnvUtils.SCENE_SAVE_TYPES`` (``.ma`` / ``.mb``)
-        has no save type for.
+        from a non-Maya format — an ``.fbx`` or USD row opens through its translator and
+        keeps that file as its scene name, which ``EnvUtils.SCENE_SAVE_TYPES`` (``.ma`` /
+        ``.mb``) has no save type for.
         """
         current = cmds.file(q=True, sceneName=True) or ""
         if os.path.splitext(current)[1].lower() in EnvUtils.SCENE_SAVE_TYPES:
@@ -3929,28 +4046,47 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self._discard_stale_scratches()
         return True
 
-    # ------------------------------------------------------------------ cross-DCC import
-    def _import_foreign_paths(self, paths):
-        """Convert + import each Blender scene in *paths* via the headless-Blender bridge (blocking).
+    # ------------------------------------------------------------------ import (no reference)
+    def _error_box(self, lead: str, name: str, error) -> None:
+        """Report *error* for the scene file *name*, in a message box.
 
-        Delegates to ``mtk.BlenderSceneImport().import_scene`` — a fresh headless Blender converts
-        the scene to FBX (default) or USD per the header-menu route, which is imported (FBX:
-        materials rebuilt from the manifest; USD: native) and cleaned up (the same bridge the
-        Scene menu's 'Import Blender Scene' uses). A conversion reports into the footer
-        (:meth:`_conversion_progress`, Esc-hold stops it), and a missing Blender install
-        surfaces as a clear message, not a raw traceback.
+        Escaped: the box renders rich text, and an error's own text is not
+        markup -- pxr quotes prim paths as ``</>``, a repr reads ``<...>`` --
+        so unescaped, the part that named the problem vanished.
         """
-        paths = [p for p in (paths or []) if p and self.controller._is_foreign(p)]
+        self.sb.message_box(
+            f"{lead} <hl>{html.escape(name)}</hl>:<br>{html.escape(str(error))}"
+        )
+
+    def _import_paths(self, paths):
+        """Import each row in *paths* as LOCAL data, with no reference behind it (blocking).
+
+        Delegates to ``mtk.BlenderSceneImport().import_scene``. A foreign (Blender) scene
+        converts there — a fresh headless Blender writes FBX (default) or USD per the
+        header-menu route, which is imported (FBX: materials rebuilt from the manifest;
+        USD: native) and cleaned up (the same bridge the Scene menu's 'Import Blender
+        Scene' uses). A USD row needs no conversion: the same engine imports it natively
+        (``UsdUtils.import_scene``, which neutralizes a skin the reader would crash on and
+        restores it after — the way in for a stage a live reference refuses for its skins,
+        :class:`UsdReadRefused`). A conversion
+        reports into the footer (:meth:`_conversion_progress`, Esc-hold stops it), and a
+        missing Blender install surfaces as a clear message, not a raw traceback.
+        """
+        paths = [p for p in (paths or []) if self._is_importable(p)]
         if not paths:
-            self.sb.message_box("Select a Blender scene (.blend) row to import.")
+            self.sb.message_box("Select a Blender scene (.blend) or USD row to import.")
             return
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
         # Decide per scene (may prompt) BEFORE any progress starts, so every question
         # comes up front rather than between minutes-long conversions; a cancelled
-        # scene is dropped from the batch. Mirror of blendertk's.
+        # scene is dropped from the batch. A USD row converts nothing, so asks nothing.
+        # Mirror of blendertk's.
         plan = []
         for path in paths:
+            if self.controller._is_usd(path):
+                plan.append((path, {}))
+                continue
             conv = self._resolve_conversion(path)
             if conv is not None:
                 plan.append((path, conv))
@@ -3969,12 +4105,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 self._footer_status(f"Stopped importing {name}.")
                 break
             except FileNotFoundError as e:
-                self.sb.message_box(f"Can't import — Blender not found:<br>{e}")
+                # The error names what is missing. A missing Blender fails every
+                # conversion after this one, so stop; a USD import needs no Blender,
+                # so all it can be missing is its own file -- carry on.
+                self._error_box("Can't import", name, e)
+                if self.controller._is_usd(path):
+                    continue
                 return
             except Exception as e:  # noqa: BLE001 — surface the conversion error to the user
-                self.logger.warning(f"Blender scene import failed for {path}: {e}")
-                self.sb.message_box(f"Import failed for <hl>{name}</hl>:<br>{e}")
-        self.logger.info(f"Imported {total} object(s) from {done} Blender scene(s).")
+                self.logger.warning(f"Scene import failed for {path}: {e}")
+                self._error_box("Import failed for", name, e)
+        self.logger.info(f"Imported {total} object(s) from {done} scene(s).")
         self.controller.refresh_file_list(invalidate=False)
 
     def btn_open_file_location(self):
@@ -3993,18 +4134,14 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             self.sb.message_box("Scene file path not found.")
             return
 
-        import subprocess
-
-        target = os.path.normpath(file_path)
-        if os.path.exists(target):
-            subprocess.Popen(["explorer", "/select,", target])
-        else:
-            # File doesn't exist; open the parent directory instead
-            parent = os.path.dirname(target)
-            if os.path.isdir(parent):
-                os.startfile(parent)
-            else:
-                self.sb.message_box(f"Directory not found:<br>{parent}")
+        # Selects the file where it exists, else opens its folder -- on every
+        # platform. ``explorer /select`` and ``os.startfile`` were Windows-only:
+        # the item raised on a macOS or Linux Maya.
+        try:
+            ptk.FileUtils.reveal_in_file_manager(file_path)
+        except FileNotFoundError:
+            parent = os.path.dirname(os.path.normpath(file_path))
+            self.sb.message_box(f"Directory not found:<br>{parent}")
 
     def txt000_init(self, widget):
         """Initialize the text input for the current working directory with pin values."""
@@ -4354,7 +4491,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
         An active reference has its data made local (unlink + import); a foreign (Blender) row
         with no active reference is converted and its contents imported via the headless-Blender
-        bridge (the old 'Import (convert)' behaviour, folded in here).
+        bridge (the old 'Import (convert)' behaviour, folded in here), and a USD row with none is
+        imported natively (:meth:`_import_paths`).
         """
         row = self._context_row()
         if row is None:
@@ -4366,10 +4504,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             return
         # No DIRECT reference. A foreign (Blender) row references its BAKE, so its namespace
         # isn't found by a path match — resolve it through the bake source (same as the toggle
-        # path). If it IS referenced, make that reference local; otherwise convert + import fresh.
+        # path). If it IS referenced, make that reference local; otherwise import it fresh.
         item = self.ui.tbl000.item(row, 0)
         path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
-        if not (path and self.controller._is_foreign(path)):
+        if not (path and self._is_importable(path)):
             self.sb.message_box("No active reference selected.")
             return
         norm_fp = os.path.normcase(os.path.normpath(path))
@@ -4385,7 +4523,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if bake_ns:
             self.controller.unlink_references(bake_ns)
         else:
-            self._import_foreign_paths([path])
+            self._import_paths([path])
 
     def btn_save_scene(self):
         """Save the current scene to the workspace."""

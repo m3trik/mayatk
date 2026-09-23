@@ -325,7 +325,7 @@ class _TextureTasksMixin(_TaskDataMixin):
         names match by pattern and rebind with the token preserved.
 
         The same hunt heals the lightmap markers first
-        (:meth:`LightmapBaker.heal_lightmap_paths`): a committed lightmap is
+        (:meth:`LightmapRecords.heal_lightmap_paths`): a committed lightmap is
         a texture dependency with no file node -- its marker records the
         folder the bake was committed FROM -- so a project reorganised since
         leaves the FBX manifest pointing at nothing while the EXR sits one
@@ -422,27 +422,27 @@ class _TextureTasksMixin(_TaskDataMixin):
             self.logger.debug("All texture paths are valid.")
 
     # -- lightmap dependencies -------------------------------------------
-    # The engine is LightmapBaker (mayatk.light_utils); these three are the
+    # The engine is LightmapRecords (mayatk.light_utils); these three are the
     # exporter's thin reads of it, scoped to the live export set. Imported
-    # lazily: the baker pulls in the Arnold texture baker, which a headless
-    # export that never baked anything should not pay for at import time.
+    # lazily: a headless export that never baked anything should not load the
+    # lightmap package at import time.
 
     def _lightmap_dependencies(self) -> List[Dict[str, Any]]:
         """The lightmaps the export set's markers name, resolved on disk NOW
-        (:meth:`LightmapBaker.lightmap_dependencies`); ``[]`` when none."""
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        (:meth:`LightmapRecords.lightmap_dependencies`); ``[]`` when none."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         objects = self._live_objects()
         if not objects:
             return []
-        return LightmapBaker().lightmap_dependencies(objects)
+        return LightmapRecords.lightmap_dependencies(objects)
 
     def _lightmap_search_dirs(self) -> List[str]:
         """Folders the GLB applier joins the manifest's basenames against
-        (:meth:`LightmapBaker.search_dirs`, scoped to the export set)."""
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        (:meth:`LightmapRecords.search_dirs`, scoped to the export set)."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
-        return LightmapBaker.search_dirs(self._live_objects() or None)
+        return LightmapRecords.search_dirs(self._live_objects() or None)
 
     def _heal_lightmap_hints(self) -> None:
         """Rewrite stale lightmap marker hints to where the maps were found.
@@ -451,12 +451,12 @@ class _TextureTasksMixin(_TaskDataMixin):
         a guess the user should be able to audit -- and what stays missing is
         named, since the exporter's path check is about to fail on it.
         """
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         objects = self._live_objects()
         if not objects:
             return
-        report = LightmapBaker().heal_lightmap_paths(objects)
+        report = LightmapRecords.heal_lightmap_paths(objects)
         if report["healed"]:
             self.record_kept_edit("re-pointed lightmap folders")
         for basename, old_dir, new_dir in report["healed"]:

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -167,7 +167,8 @@ DEFAULT_INCLUDE = {
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",
     "mat_utils.render_opacity.render_effects": "RenderEffects",
-    # One-release alias of RenderEffects (deprecated import path).
+    # Deprecated import path of RenderEffects: resolves with a warning until its
+    # ``remove_in`` (``ptk.Deprecation.attributes`` in the module), then goes.
     "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
@@ -191,8 +192,10 @@ DEFAULT_INCLUDE = {
     "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
-    # Light utils
+    # Light utils. The Lightmap Baker panel (``LightmapBakerSlots``) is
+    # discovered by MayaUiHandler, not registered here.
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
+    "light_utils.lightmap_baker.lightmap_records": "LightmapRecords",
     # UI utils
     "ui_utils.cancel_provider": "MayaCancelProvider",
     "ui_utils.channel_box": "ChannelBox",

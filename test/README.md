@@ -15,6 +15,7 @@ default; the GUI pass launches a **new** Maya).
 | `test/test_*.py` | Main suite | `run_tests.py`, auto-discovered by glob |
 | `test/extended/` | Needs real scene assets on disk | `run_tests.py --extended` (opt-in; skips cleanly if assets are missing) |
 | `test/mock_tests/` | `maya.cmds` mocked, no Maya needed | plain `pytest test/mock_tests/` |
+| `test/*_live_e2e.py` | Gated live checks — need another DCC installed and a Maya license, and take minutes | run by hand; NOT `test_*`-named, so `run_tests.py` never picks them up. `scene_import_live_e2e.py` is the Blender→Maya pull (mirrored in blendertk); `scene_roundtrip_live_e2e.py` is the `.ma → .blend → .ma → .blend` **fixed-point** check and has ONE home, since a round trip is not a per-direction thing |
 | `test/temp_tests/` | Gitignored scratch (repro/probe/verify scripts) | ad hoc; swept freely, never promoted without review |
 | `test/test_assets/` | Fixture files (images, `.fbx`, …) | read-only inputs |
 

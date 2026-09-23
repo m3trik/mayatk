@@ -50,7 +50,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Mapping, Any, Callable, Dict, List, Optional, Sequence
+from typing import Mapping, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pythontk as ptk
 from pythontk.core_utils import script_template as _templates
@@ -106,6 +106,78 @@ BAKE_SOURCE_SUFFIX = ".source.json"
 # USD sources short-circuit the whole pipeline: both DCCs speak USD natively,
 # so there is no conversion (and no Blender install) involved at all.
 USD_EXTENSIONS = ptk.USD_EXTENSIONS
+
+# FBX Model properties Blender's exporter writes for EVERY mesh it ships
+# (``export_fbx_bin.py``: ``Primary Visibility`` / ``Casts Shadows`` /
+# ``Receive Shadows``, unconditional and not artist data). Maya's importer has no
+# template for them, so it materializes each as a KEYABLE user attribute with the
+# space FBXASC-escaped -- measured on the production module, 3 057 junk channels
+# on the transforms of 1 019 meshes after ONE round trip (an FBX Model is the
+# transform), all of them in the Channel Box.
+# Stripped by exact name: a Blender custom property an artist DID author is content
+# and must survive, so this is a denylist of the three, never a FBXASC032 sweep.
+_BLENDER_FBX_RENDER_STAT_ATTRS = (
+    "PrimaryFBXASC032Visibility",
+    "CastsFBXASC032Shadows",
+    "ReceiveFBXASC032Shadows",
+)
+
+# Utility node types the FBX import creates that are safe to sweep ANYWHERE in the
+# payload once they drive nothing (``_clean_import_residue``). Maya's importer builds
+# one ``setRange`` per imported mesh to remap a roughness map onto specular power, and
+# a remap with no consumer is unambiguously the importer's leftover -- unlike a ``file``
+# node reaching no shader, which may be an artist's unassigned texture.
+_IMPORT_UTILITY_NODE_TYPES = ("setRange",)
+
+#: A transform's local matrix as Maya reports an untouched one -- what makes a
+#: nested level provably free to remove (see ``_collapse_usd_wrappers``).
+_IDENTITY_MATRIX = (
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+)
+
+#: How far from identity, per matrix element and per key value, a nested level may
+#: sit and still count as inert. The carriers round-trip through float32, so a level
+#: that moves nothing still comes back carrying noise: measured on a production
+#: module, a Blender armature object's keys at +-3e-5 cm / 3.4e-6 deg and a static
+#: scale of 1.0000001. Two orders below anything visible (1e-4 cm = 1 micron).
+_INERT_TOLERANCE = 1e-4
+#: The plugs whose inputs place (or show) what a transform holds -- anything but
+#: an animCurve driving one means the level is not inert (see
+#: ``collapse_nested_levels``). A prefix match: ``rotate`` covers the pivots,
+#: the axis and the order too.
+_PLACEMENT_PLUGS = (
+    "translate",
+    "rotate",
+    "scale",
+    "shear",
+    "visibility",
+    "offsetParentMatrix",
+    "inheritsTransform",
+)
+
+# Node types that belong to a shading network the manifest REPLACED, and so go with
+# it once nothing is left wired to them (see ``_purge_orphans``). A superset: inside a
+# network that is being torn down, the texture nodes go too.
+_REPLACED_NETWORK_NODE_TYPES = (
+    "file",
+    "place2dTexture",
+    "bump2d",
+) + _IMPORT_UTILITY_NODE_TYPES
 
 # Child-process argv for the conversion Blender: headless, factory settings (no
 # user addons/config -- deterministic AND skips any startup toolkit the user's
@@ -607,7 +679,6 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         )
 
     # ------------------------------------------------------------------ import
-    @ptk.Deprecation.parameter("shots", new="scene_data", remove_in="0.19.0")
     def import_scene(
         self,
         src_path: str,
@@ -793,7 +864,6 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         self.logger.info(f"Imported {len(imported)} object(s) from {src_path}.")
         return imported
 
-    @ptk.Deprecation.parameter("shots", new="scene_data", remove_in="0.19.0")
     def import_payload(
         self,
         payload_path: str,
@@ -855,6 +925,14 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             "Adopting the scene clock",
             lambda: self._apply_scene_manifest(manifest_path, payload_path),
             when=bool(adopt_scene),
+        )
+        # Before the records: a claim names the curves this replay creates (an
+        # opacity fade is encoded as the gap between two ``.visibility`` keys).
+        plan.add(
+            manifest.VISIBILITY,
+            "Replaying visibility",
+            lambda: self._apply_visibility_manifest(manifest_path, imported, via),
+            best_effort=True,
         )
         # Memberships and claims name what every step above rebuilt. Gated on
         # either section the records ride (``pythontk.RecordTransfer``).
@@ -931,6 +1009,22 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             except Exception:
                 cmds.namespace(removeNamespace=ns, deleteNamespaceContent=True)
                 raise
+            # Before the materials, and before anything matches by name: the round
+            # trip nests an inert transform around an object every pass, without
+            # bound (see the method).
+            from mayatk.core_utils._core_utils import CoreUtils
+
+            imported_handles = CoreUtils.node_handles(imported)
+            merged_handles = CoreUtils.node_handles(merged)
+            self._best_effort(
+                "Collapsing nested transform levels",
+                lambda: self._collapse_usd_wrappers(imported),
+            )
+            # The collapse deletes levels and lifts what they held: captured
+            # before it, the list this returns (and every "Imported N object(s)"
+            # count built on it) named deleted nodes and stale paths.
+            imported = self._transforms(CoreUtils.resolve_handles(imported_handles))
+            merged = CoreUtils.resolve_handles(merged_handles)
             # Materials: the native usdPreviewSurface networks are the baseline;
             # the manifest (the FBX route's) rebuilds the textured ones as the
             # requested SHADER_TYPE -- Blender's exporter writes only
@@ -951,6 +1045,30 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             )
         else:
             if has_manifest:
+                # Before the materials: re-instancing routes shading through
+                # instObjGroups, and the replay re-asserts each member's own
+                # assignment once the group is rebuilt.
+                #
+                # Gated on the SECTION, not just the sidecar: the replay's first
+                # act is to refuse a sidecar whose `format` is not the spelling it
+                # reads, and every payload written before this route carried
+                # instances has no `format` at all -- so an ungated call would warn
+                # about a missing spelling on scenes that simply have nothing to
+                # replay. A payload that DOES carry the section and spells it
+                # wrongly still fails, which is the point of the gate there.
+                #
+                # Best-effort HERE, where the USD route rolls the import back and
+                # raises. That guarantee rests on the isolation namespace, which
+                # makes prim->node names exact AND the rollback atomic; this route
+                # has neither, so a member Maya renamed on clash (importing into a
+                # populated scene) would abort an import whose geometry already
+                # landed. Under-delivering is never silent: the replay logs what it
+                # rebuilt and what the carrier had already shared.
+                if manifest.carries(manifest.INSTANCES):
+                    self._best_effort(
+                        "Instance rebuild (keeping the carrier's own sharing)",
+                        lambda: self._apply_instance_manifest(manifest_path, new_nodes),
+                    )
                 # Structurally non-fatal: a bad sidecar must never abort an
                 # import whose FBX already landed (materials just stay classic).
                 self._best_effort(
@@ -961,7 +1079,229 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 )
             imported = self._transforms(new_nodes)
         plan.run(progress=lambda done, _total, text: report(2 + done, text))
+        # LAST, and deliberately: every replay above matches nodes by the
+        # importer's spelling (``_carrier_spelling`` / ``_matches_fbx_name``), so
+        # the names may only be repaired once none of them will look again. FBX
+        # only -- both residues are that importer's, and a USD prim name arrives
+        # already sanitized (running the repair there would rename on signatures
+        # the USD route never produces).
+        if via != "usd":
+            imported = (
+                self._best_effort(
+                    "Import name/attribute cleanup",
+                    lambda: self._clean_import_residue(imported, new_nodes),
+                )
+                or imported
+            )
         return imported
+
+    def _clean_import_residue(
+        self, imported: List[str], new_nodes: List[str]
+    ) -> List[str]:
+        """Undo what Maya's FBX importer escaped in *new_nodes*; return *imported*
+        re-resolved (the renames invalidate the paths handed in). FBX route only
+        (see the call site).
+
+        Three kinds of residue, all measured on the production module over a
+        ``.ma -> .blend -> .ma`` round trip, and the first two COMPOUNDING (the
+        source scene contained no ``FBXASC`` at all; one round trip produced
+        13 063 occurrences and two produced 13 683):
+
+        * **Names.** Blender's duplicate suffix is a dot, which Maya's FBX importer
+          spells ``FBXASC046`` -- ``WIRE_LOOMS`` came back as
+          ``WIRE_LOOMSFBXASC046001`` on 786 DAG nodes. The repair is the one the
+          Scene Exporter's ``check_mangled_names`` already demands
+          (:meth:`mayatk.core_utils.diagnostics.SceneDiagnostics.repair_mangled_names`,
+          whose ``MANGLED_NAME_RE`` matches ``FBXASC\\d{3}``) -- so without this the
+          bridge was handing the exporter scenes its own check rejects. Scoped to
+          the escape, NOT to everything that repair can rename (see below).
+        * **Attributes.** :data:`_BLENDER_FBX_RENDER_STAT_ATTRS` -- see there.
+        * **Dead utility nodes.** Maya's importer builds a ``setRange`` per
+          imported mesh to remap roughness onto specular power, and most are born
+          reaching no shader at all -- so they are in NO material's history and
+          ``_purge_orphans`` (which walks the REPLACED materials) provably cannot
+          see them: it cleared 8 of 486 on the production module. Swept here
+          instead, scoped to this import's own nodes and only where
+          :meth:`_is_wired` says nothing is left downstream.
+
+        Best-effort by contract: a scene whose geometry landed must never be lost
+        to cosmetics.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+
+        # ONE walk of the payload: a production pull carries thousands of nodes and
+        # both questions below are asked of each of them.
+        #
+        # The rename scope is what the CARRIER mangled, not everything the repair CAN
+        # rename. ``MANGLED_NAME_RE`` also matches ``__uninst`` / ``__RZTMP`` (Maya
+        # scratch tokens a Blender payload cannot contain) and ``_{3,}`` -- and that
+        # last one is authored content: a Blender object an artist named ``FOO___BAR``
+        # is not mangled, and an import must not quietly rewrite it. So only nodes
+        # carrying the importer's own escape are handed over, a mangled shape through
+        # its TRANSFORM (the repair derives shape names from there).
+        ours = cmds.ls(new_nodes, long=True) or []
+
+        # Names the importer escaped. A string walk: the Maya calls below are asked
+        # only of the few that match.
+        offenders, seen = [], set()
+        for node in ours:
+            if "FBXASC" not in node.rsplit("|", 1)[-1]:
+                continue
+            owner = node
+            if cmds.ls(node, shapes=True):
+                owner = (
+                    cmds.listRelatives(node, parent=True, fullPath=True) or [node]
+                )[0]
+            if owner not in seen:
+                seen.add(owner)
+                offenders.append(owner)
+
+        # The render-stat attributes, found by PLUG PATTERN rather than by asking
+        # every node about every one of them: three `ls` calls instead of one
+        # `attributeQuery` per node per attribute. Measured on the production
+        # payload, which carries 3 057 of them across 4 742 new nodes: 14 226 calls
+        # and 1.178s became 3 calls and 0.031s, for the identical set of plugs.
+        # Scene-wide, so the result is intersected with what this import created --
+        # a pre-existing node wearing the same attribute is not ours to strip.
+        stripped = 0
+        imported_nodes = set(ours)
+        for attr in _BLENDER_FBX_RENDER_STAT_ATTRS:
+            # ``recursive`` is what makes ``*`` reach into namespaces: without it the
+            # pattern matches the root namespace only, so an import that landed in
+            # one (a caller with a current namespace set, a payload imported under
+            # its own) would keep every attribute -- silently, and faster, which is
+            # how a sweep that stops working looks exactly like one that had nothing
+            # to do. The per-node check this replaced had no such blind spot.
+            for plug in cmds.ls(f"*.{attr}", long=True, recursive=True) or []:
+                if plug.rsplit(".", 1)[0] not in imported_nodes:
+                    continue
+                try:
+                    cmds.setAttr(plug, lock=False)
+                    cmds.deleteAttr(plug)
+                    stripped += 1
+                except RuntimeError as e:  # locked/referenced -- never fatal
+                    self.logger.debug(f"Could not strip {plug}: {e}")
+        if stripped:
+            self.logger.info(
+                f"Stripped {stripped} FBX render-stat attribute(s) the carrier added."
+            )
+
+        self._strip_fabricated_shear(imported)
+
+        dead = [
+            n
+            for n in (cmds.ls(new_nodes, type=_IMPORT_UTILITY_NODE_TYPES) or [])
+            if not self._is_wired(n)
+        ]
+        if dead:
+            try:
+                cmds.delete(dead)
+                self.logger.info(
+                    f"Removed {len(dead)} utility node(s) the importer left driving "
+                    "nothing."
+                )
+            except RuntimeError as e:  # referenced/locked -- never fatal
+                self.logger.debug(f"Could not remove dead utility nodes: {e}")
+
+        # UUIDs: the repair renames deepest-first, so every path handed in is stale
+        # on the way out. Re-resolved in the SAME spelling ``_transforms`` returns
+        # (shortest-unique, not long) -- this is the value callers get back.
+        uuids = cmds.ls(imported, uuid=True) or []
+        # Exactly the escaped nodes, decoded rather than cleaned: as roots with
+        # descendants the repair renamed an authored ``Sword___Blade`` under an
+        # escaped bone, and cleaning collapsed ``DEF__spine`` to ``DEF_spine``.
+        repaired = SceneDiagnostics.repair_mangled_names(
+            offenders, descend=False, decode_only=True
+        )
+        if repaired.get("renamed"):
+            self.logger.info(
+                f"Repaired {len(repaired['renamed'])} name(s) the FBX importer "
+                f"escaped, and conformed {repaired.get('shapes_conformed', 0)} shape(s)."
+            )
+        return (cmds.ls(uuids) or []) if uuids else imported
+
+    def _strip_fabricated_shear(self, imported: List[str]) -> int:
+        """Delete shear animation the carrier cannot have sent; return the count.
+
+        FBX has no shear channel -- Blender's exporter writes Lcl Translation,
+        Rotation and Scaling and nothing else -- so a shear CURVE on an FBX import
+        was fabricated downstream by decomposing a sampled matrix. One whose
+        values never leave zero is the denormal residue of that decomposition:
+        measured on a production module, 9 curves of 4742 keys each, every value
+        ``-3.7e-30``, on 3 of ~1800 objects. They are invisible in the viewport and
+        cost ~42 000 keys, and they appear on some conversions and not others --
+        which is what kept an otherwise-settled round trip from reaching a fixed
+        point (`anim_curves` 1801 -> 1828 -> 1819 with every other channel stable).
+
+        Only all-but-zero curves go. A shear curve carrying a real value is left
+        alone: it cannot have come from this carrier, so something else authored it
+        and this is not the pass to second-guess that.
+
+        Deliberately not ``AnimUtils.get_static_curves``, which finds curves that are
+        merely CONSTANT: a constant translate curve an artist keyed is not junk, while
+        the question here is narrower -- constant AT ZERO, on a channel the carrier
+        cannot send at all.
+
+        Asked of the three CHILD plugs, not the ``shear`` compound:
+        ``listConnections`` on a compound reports the compound's own connections and
+        says nothing about its children, so the compound form silently found nothing.
+        """
+        import maya.cmds as cmds
+
+        # Long and short: a plug listConnections hands back is not promised to
+        # spell its attribute either way.
+        shear_plugs = ("shearXY", "shearXZ", "shearYZ", "shxy", "shxz", "shyz")
+        transforms = cmds.ls(imported, type="transform", long=True) or []
+        # ONE query for the whole payload, filtered to the shear channels here:
+        # asked per node and per plug it was ~5 400 calls on a production pull,
+        # in the release that removed 14 000 per-node queries from this path.
+        pairs = (
+            cmds.listConnections(
+                transforms,
+                source=True,
+                destination=False,
+                type="animCurve",
+                connections=True,
+                plugs=True,
+            )
+            if transforms
+            else None
+        ) or []
+        driving = list(
+            dict.fromkeys(
+                source.split(".", 1)[0]
+                for plug, source in zip(pairs[::2], pairs[1::2])
+                if plug.rsplit(".", 1)[-1] in shear_plugs
+            )
+        )
+        removed: List[str] = []
+        for curve in driving:
+            # One curve can drive more than one plug. Deleting it because ONE of
+            # them is shear would take the other channels' animation with it.
+            driven = (
+                cmds.listConnections(
+                    f"{curve}.output", source=False, destination=True, plugs=True
+                )
+                or []
+            )
+            if any(d.rsplit(".", 1)[-1] not in shear_plugs for d in driven):
+                continue
+            values = cmds.keyframe(curve, query=True, valueChange=True) or []
+            if values and max(abs(v) for v in values) < 1e-12:
+                removed.append(curve)
+        if removed:
+            try:
+                cmds.delete(removed)
+                self.logger.info(
+                    f"Removed {len(removed)} all-zero shear curve(s) a matrix "
+                    "decomposition left behind (FBX carries no shear)."
+                )
+            except RuntimeError as e:  # referenced/locked -- never fatal
+                self.logger.debug(f"Could not remove fabricated shear: {e}")
+                return 0
+        return len(removed)
 
     def _section_failed(self, what: str, error: BaseException) -> None:
         """Report a fidelity step's failure -- logged, never fatal.
@@ -1258,10 +1598,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             {
                 "SRC_FILE": str(src_path).replace("\\", "/"),
                 "OUT_MA": str(out_path).replace("\\", "/"),
-                # The child is the same Maya version, so the parent's sys.path entries
-                # are valid there -- this is what makes the shared manifest replay
+                # The child is the same Maya build, so the parent's importable set
+                # is valid there -- this is what makes the shared manifest replay
                 # (mayatk in the child) reliable rather than best-effort.
-                "EXTRA_SYS_PATH": repr(list(sys.path)),
+                #
+                # Minus the parent's OWN interpreter directories: that assumption
+                # holds only while the parent IS this app, and driven from a
+                # workspace venv the parent's stdlib would land AHEAD of the
+                # child's (measured: a bake dying on `ModuleNotFoundError:
+                # _sha512`). Dropping them is inert in production -- the child has
+                # its own copies -- so one call serves both cases.
+                # Roots FIRST, then the rest of the parent's set: the parent may
+                # only be able to import mayatk through its own site-packages
+                # (an editable install contributing to a namespace package), which
+                # the filter below drops -- so the roots are named explicitly.
+                "EXTRA_SYS_PATH": repr(
+                    ptk.HandoffBridge.import_roots("mayatk", "pythontk")
+                    + ptk.HandoffBridge.child_sys_path()
+                ),
             },
         )
 
@@ -1672,16 +2026,353 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 created += 1
         return created
 
+    def _apply_visibility_manifest(
+        self, manifest_path: str, imported: List[str], carrier: str = "fbx"
+    ) -> int:
+        """Replay the manifest's ``visibility`` section as stepped ``.visibility``
+        keys on the imported transforms; return the number of objects keyed.
+
+        Blender's FBX exporter bakes only Lcl Translation / Rotation / Scaling, so a
+        show/hide crosses as NOTHING. Measured on a production module: 54 objects
+        carried ``hide_viewport`` keys and every one arrived static -- 39 of them with
+        no animation at all, which is how the loss first read. The producer therefore
+        writes them to the sidecar (``collect_visibility`` in the conversion
+        template) and they land here. The exact mirror of the send direction's pair,
+        where ``btk.MayaSceneImport._apply_visibility_manifest`` replays Maya's baked
+        ``.visibility`` as ``hide_*`` keys from this same section.
+
+        No frame offset, unlike that twin: Blender's importer shifts every FBX curve
+        by ``anim_offset`` and Maya's importer shifts nothing, so these frames land
+        where the producer read them.
+
+        Values are Maya's own convention (``1`` = visible) and the curves are forced
+        to STEP tangents through
+        :meth:`~mayatk.core_utils.diagnostics.AnimCurveDiagnostics.repair_visibility_tangents`
+        -- the one existing engine for it, reused: visibility is boolean, and an
+        interpolated toggle leaves an object part-drawn between keys. Objects match by
+        importer-spelled short name, the convention every by-name replay here shares
+        (``_carrier_spelling``), so a payload whose producer predates the name
+        sanitizing still matches on the escaped spelling.
+
+        Best-effort by contract: a failed replay must never break an import whose
+        geometry and transform animation already landed.
+        """
+        import json
+
+        import maya.cmds as cmds
+
+        from mayatk.core_utils.diagnostics.animation_diag import AnimCurveDiagnostics
+
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as e:
+            self.logger.warning(f"Visibility manifest unreadable ({e}); skipped.")
+            return 0
+        vis = data.get("visibility") if isinstance(data, dict) else None
+        if not isinstance(vis, dict) or not vis:
+            return 0
+        spell = _BlenderSceneImportInternal._carrier_spelling(carrier)
+        by_short: Dict[str, List[str]] = {}
+        for node in cmds.ls(imported, type="transform") or []:
+            short = node.split("|")[-1].split(":")[-1]
+            by_short.setdefault(spell(short), []).append(node)
+
+        keyed: List[str] = []
+        for name, keys in vis.items():
+            want = spell(str(name))
+            nodes = by_short.get(want)
+            if nodes is None:
+                # Maya's rename-on-clash digit -- an import into a populated
+                # scene, or the USD namespace merge -- as the scene-data replay
+                # already tolerates: a UNIQUE hit, never a guess.
+                hits = [k for k in by_short if self._matches_fbx_name(k, want)]
+                nodes = by_short[hits[0]] if len(hits) == 1 else []
+            for node in nodes:
+                try:
+                    for frame, value in keys:
+                        cmds.setKeyframe(
+                            node,
+                            attribute="visibility",
+                            time=float(frame),
+                            value=float(value),
+                        )
+                    keyed.append(node)
+                except Exception as e:  # noqa: BLE001
+                    self.logger.debug(f"Visibility replay skipped for {node}: {e}")
+        if keyed:
+            # Only the curves this replay just made: a scene-wide sweep would also
+            # restep visibility the payload itself carried.
+            AnimCurveDiagnostics.repair_visibility_tangents(
+                keyed, recursive=False, quiet=True
+            )
+            self.logger.info(f"Replayed visibility onto {len(keyed)} object(s).")
+        return len(keyed)
+
+    def _collapse_usd_wrappers(self, imported: List[str]) -> int:
+        """The import's pass of :meth:`collapse_nested_levels`, joints KEPT: a
+        Blender armature object lands as its transform holding its root joint, and
+        the return leg's rig ids (``<armature>/<bone>``) resolve through that
+        transform (``TestUsdContainerSkeletons``)."""
+        return self.collapse_nested_levels(imported, joints=False)
+
+    @classmethod
+    def collapse_nested_levels(cls, nodes: List[str], joints: bool = False) -> int:
+        """Remove the redundant level a round trip nests around a node; return how
+        many levels went.
+
+        A Maya transform and its shape cross to Blender as one object and come
+        back as a transform INSIDE a transform: the pair reaches Maya as
+        ``LIGHT_A_areaLight/LIGHT_A_areaLight/areaLightShape`` where the scene
+        authored ``LIGHT_A_areaLight/areaLightShape``. Left alone it is not a
+        cosmetic extra level, it is UNBOUNDED -- measured on a production module,
+        the same four lights nested one level deeper on every round trip
+        (``LIGHT_A_areaLight`` -> ``..._001`` -> ``...``), and the scene's object
+        count rose with it on every pass.
+
+        Skeletons accrete one step removed, and on the OTHER leg. A Blender armature
+        OBJECT lands in Maya as a transform holding its same-named root joint --
+        deliberately: the return leg's rig ids (``<armature>/<bone>``) resolve
+        through that transform, so an import keeps it (*joints* False). It is the
+        next PULL that nests: Blender's importer turns the pair into an Empty holding
+        an armature renamed ``.001``, and the next return lands one level deeper --
+        measured +7 levels per round trip on the production module. The pull
+        therefore folds the pair on its scratch scene (*joints* True, blendertk's
+        ``_import_scene_usd``) before anything reads it, so every pull sees the shape
+        the first one saw.
+
+        What qualifies is narrow, and every clause is load-bearing:
+
+        * the parent carries NO shape of its own and has exactly ONE child,
+        * that child is a ``transform`` -- or, with *joints*, a ``joint``, which only
+          ever loses its WRAPPER: dissolving the joint instead would lift its chain
+          under a transform and take the skeleton's root with it,
+        * the two share a base name modulo a trailing ``_NNN`` -- which also keeps
+          out the group the FBX export flatten deliberately builds
+          (``<mesh>_skeleton_GRP`` holding ``<mesh>_skeleton``), and
+        * the one removed is INERT: its local matrix within ``_INERT_TOLERANCE`` of
+          identity, every key held at its channel's default within the same
+          tolerance (the carriers' float noise), no user attributes, not hidden. A
+          removed WRAPPER may carry a show/hide track: its single child inherits it
+          anyway, so the track moves onto the child -- or goes, when the child
+          already carries the same one (the visibility replay keys every node of a
+          name) -- and a child with a different track, or a hidden or otherwise
+          driven one, keeps its wrapper.
+
+        So this cannot move, reveal or hide anything. Idempotent: a scene with
+        nothing nested is untouched, so it is safe to run on every import.
+        """
+        import re
+
+        import maya.cmds as cmds
+
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        base = re.compile(r"^(?P<base>.+?)(?:_\d+)?$")
+
+        def visibility_curve(node: str) -> Optional[str]:
+            curves = cmds.listConnections(
+                f"{node}.visibility", source=True, destination=False, type="animCurve"
+            )
+            return curves[0] if curves else None
+
+        def keys(curve: str) -> List[Tuple[float, float]]:
+            times = cmds.keyframe(curve, query=True, timeChange=True) or []
+            values = cmds.keyframe(curve, query=True, valueChange=True) or []
+            return [(round(t, 6), round(v, 6)) for t, v in zip(times, values)]
+
+        def identity(values) -> bool:
+            return len(values or []) == 16 and all(
+                abs(a - b) <= _INERT_TOLERANCE for a, b in zip(values, _IDENTITY_MATRIX)
+            )
+
+        def placed_elsewhere(node: str) -> bool:
+            """Whether something past its local TRS keys places what it holds.
+
+            ``xform -m -os`` reads the local TRS alone, so a level zeroed through
+            its offset parent matrix (the OPM idiom), one that ignores its parent
+            (``inheritsTransform`` off -- ``pin_world_matrix``), or one driven by
+            an expression or a constraint passed as inert, and removing it MOVED
+            its children.
+            """
+            if not cmds.getAttr(f"{node}.inheritsTransform"):
+                return True
+            if cmds.attributeQuery("offsetParentMatrix", node=node, exists=True):
+                if not identity(cmds.getAttr(f"{node}.offsetParentMatrix")):
+                    return True
+            links = (
+                cmds.listConnections(
+                    node,
+                    source=True,
+                    destination=False,
+                    connections=True,
+                    plugs=True,
+                    skipConversionNodes=True,
+                )
+                or []
+            )
+            for plug, source in zip(links[::2], links[1::2]):
+                attr = plug.split(".", 1)[-1]
+                if attr.startswith(_PLACEMENT_PLUGS) and not cmds.objectType(
+                    source.split(".", 1)[0], isAType="animCurve"
+                ):
+                    return True
+            return False
+
+        def inert(node: str, spare_visibility: bool = False) -> bool:
+            matrix = cmds.xform(node, query=True, matrix=True, objectSpace=True) or []
+            if not identity(matrix) or placed_elsewhere(node):
+                return False
+            # Keys held at the channel's default are the carriers' float noise; any
+            # other curve moves the node -- except, when asked, a show/hide track,
+            # which the caller hands down instead (:func:`hand_down_visibility`).
+            curves = set(AnimUtils.objects_to_curves([node]))
+            moving = curves - set(
+                AnimUtils.get_static_curves([node], value_tolerance=_INERT_TOLERANCE)
+            )
+            spared = visibility_curve(node) if spare_visibility else None
+            if moving - {spared}:
+                return False
+            # A hidden level hides its subtree: removing it would UNHIDE what it
+            # holds (the USD route lands a hidden object's prim as visibility off).
+            if spared not in moving and not cmds.getAttr(f"{node}.visibility"):
+                return False
+            return not (cmds.listAttr(node, userDefined=True) or [])
+
+        def hand_down_visibility(wrapper: str, child: str) -> bool:
+            """Give *child* the wrapper's show/hide track; False when it cannot. A
+            track that never hides is noise and goes with the wrapper."""
+            curve = visibility_curve(wrapper)
+            if curve is None or AnimUtils.get_static_curves(
+                [curve], value_tolerance=_INERT_TOLERANCE
+            ):
+                return True
+            own = visibility_curve(child)
+            if own is not None:
+                return keys(own) == keys(curve)  # the same track: the wrapper's goes
+            if cmds.listConnections(
+                f"{child}.visibility", source=True, destination=False
+            ) or not cmds.getAttr(f"{child}.visibility"):
+                return False  # driven by something else, or hidden in its own right
+            cmds.connectAttr(f"{curve}.output", f"{child}.visibility", force=True)
+            return True
+
+        def delete_level(level: str) -> None:
+            # Its noise curves go with it rather than lingering as orphans -- but
+            # only a curve that drove nothing else (a handed-down track survives).
+            curves = AnimUtils.objects_to_curves([level])
+            cmds.delete(level)
+            orphans = [
+                curve
+                for curve in curves
+                if cmds.objExists(curve)
+                and not cmds.listConnections(curve, source=False, destination=True)
+            ]
+            if orphans:
+                cmds.delete(orphans)
+
+        child_types = ("transform", "joint") if joints else ("transform",)
+        removed = 0
+        # Deepest first: collapsing an inner level leaves the outer pair intact and
+        # still addressable, where the reverse invalidates the paths below it.
+        for node in sorted(
+            cmds.ls(nodes, type="transform", long=True) or [],
+            key=lambda path: -path.count("|"),
+        ):
+            if not cmds.objExists(node) or cmds.nodeType(node) != "transform":
+                continue
+            # One query, not two: a transform carrying a shape either has more than
+            # one child or its single child IS that shape, so both are refused below
+            # without asking separately.
+            children = cmds.listRelatives(node, children=True, fullPath=True) or []
+            if len(children) != 1:
+                continue
+            child = children[0]
+            child_type = cmds.nodeType(child)
+            if child_type not in child_types:
+                continue
+            leaf, child_leaf = node.rsplit("|", 1)[-1], child.rsplit("|", 1)[-1]
+            if base.match(leaf).group("base") != base.match(child_leaf).group("base"):
+                continue
+            try:
+                if child_type == "transform" and inert(child):
+                    # The child adds nothing: lift ITS children into the parent.
+                    for grandchild in (
+                        cmds.listRelatives(child, children=True, fullPath=True) or []
+                    ):
+                        shape = bool(cmds.ls(grandchild, shapes=True))
+                        cmds.parent(grandchild, node, relative=True, shape=shape)
+                    delete_level(child)
+                elif inert(node, spare_visibility=True) and hand_down_visibility(
+                    node, child
+                ):
+                    # The parent adds nothing: lift the child out of it. RELATIVE,
+                    # like the branch above: the parent being identity makes the
+                    # child's own local values already world-correct under the
+                    # grandparent, and a non-relative reparent would RECOMPUTE and
+                    # write them -- which fights a keyed channel for no gain.
+                    #
+                    # The wrapper still HOLDS the child's name at this moment, so
+                    # Maya uniquifies the child on the way out ("X" -> "X1"). It
+                    # takes its own name back once the wrapper is gone -- without
+                    # this the collapse silently renames the very objects it is
+                    # meant to leave untouched, and every later by-name replay
+                    # misses them.
+                    wanted = child.rsplit("|", 1)[-1]
+                    parents = cmds.listRelatives(node, parent=True, fullPath=True)
+                    if parents:
+                        moved = cmds.parent(child, parents[0], relative=True)
+                    else:
+                        moved = cmds.parent(child, world=True, relative=True)
+                    moved = (cmds.ls(moved[0], long=True) or moved)[0]
+                    delete_level(node)
+                    if moved.rsplit("|", 1)[-1] != wanted:
+                        cmds.rename(moved, wanted)
+                else:
+                    continue
+                removed += 1
+            except RuntimeError as error:  # locked/referenced -- never fatal
+                cls.logger.debug(f"Wrapper collapse skipped for {node}: {error}")
+        if removed:
+            cls.logger.info(
+                f"Collapsed {removed} redundant transform level(s) the USD round "
+                "trip nested around an object."
+            )
+        return removed
+
     def _apply_instance_manifest(self, manifest_path: str, new_nodes: List[str]) -> int:
         """Rebuild real Maya instances from Blender's linked-duplicate groups.
 
-        Mirror of blendertk's method. The USD export is flat, so the sharing
-        relationship travels in the sidecar and is replayed here: for each
-        group, one transform's shape is instanced under the others (Maya's
-        shared-shape model) and their own shapes are deleted. Without this a
-        .blend whose props are linked duplicates would land as N independent
-        shapes -- the FBX route preserves sharing natively, so the USD route
-        must reach the same result to be a usable alternative.
+        Mirror of blendertk's method. The sharing relationship travels in the
+        sidecar and is replayed here: for each group, one transform's shape is
+        instanced under the others (Maya's shared-shape model) and their own
+        shapes are deleted. Without it a .blend whose props are linked duplicates
+        lands as N independent shapes and the scene's memory profile is wrong.
+
+        BOTH carriers need it, for different reasons. The USD export is flat, so
+        every transform arrives with its own shape. The FBX export carries the
+        sharing natively and Maya's importer then honours MOST of it and breaks the
+        rest: measured on a production module, 105 of 1111 Models on a shared
+        Geometry arrived as unique shapes with no shading assigned at all, and
+        Maya's own exporter invented a ``Default_Material`` for their bare faces on
+        the next hop. The payload was symmetric (identical Model properties, same
+        Geometry, same Material connection on both the member that shared and the
+        one that did not), and the loss is not the names either -- it survives a
+        payload sanitized to carry nothing Maya has to escape -- so there is nothing
+        to fix on the producer side and the section is the fix.
+
+        Idempotent, which the FBX route requires: a member already carrying the
+        master's shape is left alone, because the "delete its own shape" step would
+        otherwise remove the shared instance and leave that transform empty, and a
+        group nothing changed in keeps its shading untouched.
+
+        Shading is re-asserted for every member of a group that DID change, from
+        assignments captured before the first re-parent. An instanced shape is shaded
+        per instance PATH and adding an instance renumbers those entries, so the
+        members that arrived correctly shaded are the ones at risk: on the production
+        module, 105 rebuilt instances stranded 321 paths, and Maya's own exporter
+        covered them with a ``Default_Material`` on the next hop -- a loss that
+        compounded, 8 materials becoming 9 then 10.
 
         The v2 sidecar records SANITIZED prim names -- what Blender's exporter
         actually writes (probe-verified: ``Chair.001`` -> ``Chair_001``) -- and
@@ -1763,7 +2454,17 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                         sgs.append(sg)
             return sgs
 
+        def instance_paths(transform: str) -> int:
+            """How many transforms already share *transform*'s shape (-1: none)."""
+            shapes = cmds.listRelatives(transform, shapes=True, fullPath=True) or []
+            return (
+                len(cmds.listRelatives(shapes[0], allParents=True) or [])
+                if shapes
+                else -1
+            )
+
         rebuilt = 0
+        shared_already = 0
         failures: List[str] = []
         for group in groups:
             if len(group) < 2:
@@ -1771,35 +2472,78 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                     f"Malformed instance sidecar group (needs >= 2 members): {group}"
                 )
             members = [by_name[n] for n in group]
-            master, rest = members[0], members[1:]
+            # Whose shape the rest take. NOT the sidecar's first member: that is just
+            # an order, and on the FBX route the carrier has already shared most of
+            # the group, so the first member is as likely as any to be one the
+            # importer DE-shared -- which has neither the shape the others use nor
+            # any shading to give them. Prefer the member the most instances already
+            # point at, so the replay rebuilds only what is actually broken.
+            master = max(members, key=instance_paths)
+            rest = [member for member in members if member != master]
             master_shapes = cmds.listRelatives(master, shapes=True, fullPath=True) or []
             if not master_shapes:
                 raise RuntimeError(f"Instance master has no shape to share: {master}")
             shape = master_shapes[0]
+            shape_id = cmds.ls(shape, uuid=True)
+            # Every member's shading, read BEFORE any re-parenting. An instanced
+            # shape is shaded PER INSTANCE PATH (``instObjGroups[i]``), and adding an
+            # instance renumbers those entries -- so this has to be captured up front
+            # and re-asserted below, or members that arrived correctly shaded lose it.
+            wanted_sg = {}
+            for transform in members:
+                sgs = shading_groups(transform)
+                if sgs:
+                    wanted_sg[transform] = sgs[0]
+            # What a member that arrived with NO shading takes: any member's, not the
+            # master's, because the master is chosen for its geometry and may itself
+            # be one the importer left unshaded.
+            group_sg = next((wanted_sg[t] for t in members if t in wanted_sg), None)
+            changed = False
             for transform in rest:
                 try:
                     own = (
                         cmds.listRelatives(transform, shapes=True, fullPath=True) or []
                     )
-                    sgs = shading_groups(transform)
+                    # Already carrying the master's shape (what the FBX route gets
+                    # for the members its importer did honour): there is nothing to
+                    # rebuild, and deleting "its own" shape below would remove the
+                    # instance itself and leave the transform with no geometry.
+                    if any(cmds.ls(o, uuid=True) == shape_id for o in own):
+                        shared_already += 1
+                        continue
                     # Instance the master's shape under this transform, then drop
                     # the transform's own geometry.
                     cmds.parent(shape, transform, add=True, shape=True)
                     if own:
                         cmds.delete(own)
-                    # Re-assign per-instance shading (instObjGroups), so a
-                    # follower keeps its own material instead of the master's.
-                    if sgs:
-                        cmds.sets(transform, edit=True, forceElement=sgs[0])
                     rebuilt += 1
+                    changed = True
                 except Exception as error:  # noqa: BLE001 -- collect, then fail loud
                     failures.append(f"{transform}: {error}")
+            if not changed:
+                continue
+            # Last, and for EVERY member: the inserts above renumbered this shape's
+            # per-instance shading, so a member that arrived shaded can be left
+            # pointing at nothing -- measured, 105 rebuilt instances stranded 321
+            # paths, which Maya's own exporter then covered with a Default_Material
+            # on the next hop. A member that arrived with no shading at all (exactly
+            # the ones the importer de-shared) takes the GROUP's; the texture
+            # manifest replay that follows still overrides by material -> objects.
+            for transform in members:
+                sg = wanted_sg.get(transform) or group_sg
+                if not sg or not cmds.objExists(sg):
+                    continue
+                try:
+                    cmds.sets(transform, edit=True, forceElement=sg)
+                except Exception as error:  # noqa: BLE001 -- collect, then fail loud
+                    failures.append(f"{transform}: shading re-assign: {error}")
         if failures:
             raise RuntimeError("Instance rebuild failed for: " + "; ".join(failures))
-        if rebuilt:
+        if rebuilt or shared_already:
             self.logger.info(
                 f"Instances rebuilt: {rebuilt} transform(s) re-instanced across "
-                f"{len(groups)} Blender linked-duplicate set(s)."
+                f"{len(groups)} Blender linked-duplicate set(s) "
+                f"({shared_already} already shared by the carrier)."
             )
         return rebuilt
 
@@ -2267,6 +3011,31 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         sgs = cmds.listConnections(node, type="shadingEngine") or []
         return sgs[0] if sgs else None
 
+    @staticmethod
+    def _is_wired(node: str) -> bool:
+        """True when *node* still DRIVES something.
+
+        ``.message`` does not count. Maya wires every utility node's message plug
+        into a default list (``defaultRenderUtilityList1``) purely so the Hypershade
+        can enumerate it, and reading that as "still in use" is what kept the
+        replaced networks' remap nodes alive: measured on the production module,
+        486 orphan ``setRange`` nodes -- all fed by two roughness files, none of them
+        reaching a shader -- survived every purge after one round trip.
+        """
+        import maya.cmds as cmds
+
+        # connections=True pairs them up as [own_plug, other_plug, ...]; the node
+        # is wired when any of ITS OWN plugs driving something is not `.message`.
+        paired = (
+            cmds.listConnections(
+                node, source=False, destination=True, connections=True, plugs=True
+            )
+            or []
+        )
+        return any(
+            paired[i].split(".", 1)[-1] != "message" for i in range(0, len(paired), 2)
+        )
+
     def _purge_orphans(self, materials: List[str]) -> None:
         """Remove replaced materials (their emptied shading groups and
         now-exclusive texture nodes included) once unused.
@@ -2286,14 +3055,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 textures = [
                     n
                     for n in (cmds.listHistory(mat) or [])
-                    if n != mat
-                    and cmds.nodeType(n) in ("file", "place2dTexture", "bump2d")
+                    if n != mat and cmds.nodeType(n) in _REPLACED_NETWORK_NODE_TYPES
                 ]
                 cmds.delete(list(set(sgs)) + [mat])
                 for node in textures:
-                    if cmds.objExists(node) and not cmds.listConnections(
-                        node, source=False, destination=True
-                    ):
+                    if cmds.objExists(node) and not self._is_wired(node):
                         cmds.delete(node)
             except Exception as e:  # noqa: BLE001
                 self.logger.debug(f"Orphan purge skipped: {e}")

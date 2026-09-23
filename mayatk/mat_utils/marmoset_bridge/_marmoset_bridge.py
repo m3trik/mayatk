@@ -371,9 +371,6 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         """``.../asset.fbx`` -> ``.../asset_source.fbx`` (shared convention)."""
         return BakeSourceSet.companion_path(fbx_path)
 
-    #: Back-compat alias -- shipped one release under the high-poly name.
-    high_poly_path_for = source_model_path_for
-
     def _split_bake_objects(self, objects) -> Tuple[List[str], List[str]]:
         """Split the export scope into (targets, sources) via the scene's Bake Source set.
 

@@ -3199,12 +3199,17 @@ class TestAKeyDraggedOntoTheSeamSplitsNothing(unittest.TestCase):
     made the store read the two shots as contiguous for a moment, and the
     planner then "split" a shared sample that never was one -- re-keying the
     neighbour's opening pose at its new start.  Measured 2026-09-05: every
-    FAILED_CMPT_LOC curve gained one key (31 -> 32)."""
+    FAILED_CMPT_LOC curve gained one key (31 -> 32).
+
+    The handlers expand BEFORE the dragged keys land, so the key on B's start
+    is B's own opening pose.  (Until 2026-09-22 this fixture modelled the
+    dragged key as already landed there, which pinned that pose staying
+    behind while B moved away -- see the class below.)"""
 
     def setUp(self):
         cmds.file(new=True, force=True)
         self.loc = cmds.spaceLocator(name="seam_loc")[0]
-        # 60 is the key the user just dragged onto B's start
+        # 60 is B's opening pose; the dragged key has not landed yet
         for t, v in ((10, 0), (40, 5), (60, 7), (70, 9), (90, 9)):
             cmds.setKeyframe(self.loc, at="translateX", t=t, v=v)
         self.seq = ShotSequencer(
@@ -3248,8 +3253,297 @@ class TestAKeyDraggedOntoTheSeamSplitsNothing(unittest.TestCase):
         )
         self.assertEqual(
             cmds.keyframe(self.loc, q=True, at="translateX"),
-            [10.0, 40.0, 60.0, 80.0, 100.0],
-            "the dragged key is A's; B moved whole and gained nothing",
+            [10.0, 40.0, 70.0, 80.0, 100.0],
+            "B moved whole, its opening pose included, and gained nothing",
+        )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestADragOntoAKeyedNeighbourLeavesItWhole(unittest.TestCase):
+    """A drag that grows a shot ONTO a keyed neighbour's boundary, or into
+    the neighbour, ripples that neighbour away WHOLE: its boundary pose goes
+    with it.
+
+    Measured 2026-09-22 (BACKLOG 2026-09-05): the handlers ripple before the
+    dragged keys land, but the planner's carried window treated the sample on
+    the new bound as the dragged shot's, so the neighbour's own pose stayed
+    behind -- nudged a frame into the gap by the landing key -- and the
+    neighbour opened on nothing.  On the production chain it read as
+    ``FAILED_CMPT_LOC_opacity`` 16 -> 15 keys.  The clip paths landed FIRST
+    and expanded after, which stacked the landed key and the pose on one
+    frame instead."""
+
+    _Clip = TestKeysBatchAuditRegressions._Clip
+    _Widget = TestKeysBatchAuditRegressions._Widget
+    _host = TestKeysBatchAuditRegressions._host
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    @staticmethod
+    def _keys(node):
+        t = cmds.keyframe(node, q=True, at="translateX") or []
+        v = cmds.keyframe(node, q=True, at="translateX", valueChange=True) or []
+        return [(round(a, 3), round(b, 3)) for a, b in zip(t, v)]
+
+    def _scene(self, shots, keys):
+        node = cmds.polyCube(name="seamNb")[0]
+        for t, v in keys:
+            cmds.setKeyframe(node, at="translateX", t=t, v=v)
+        seq = ShotSequencer(
+            [ShotBlock(i, n, s, e, [node]) for i, (n, s, e) in enumerate(shots)]
+        )
+        return node, seq
+
+    def _drag_keys(self, shots, keys, shot_id, changes):
+        node, seq = self._scene(shots, keys)
+        clips = {
+            1: self._Clip({"obj": node, "attr_name": "translateX", "shot_id": shot_id})
+        }
+        self._host(clips, seq).on_keys_batch_moved([(1, changes)])
+        return seq, self._keys(node)
+
+    def test_a_key_onto_the_next_shot_s_keyed_start(self):
+        seq, got = self._drag_keys(
+            [("A", 0, 50), ("B", 65, 100)],
+            ((10, 0), (40, 1), (65, 1), (80, 2)),
+            0,
+            [(40.0, 65.0)],
+        )
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0.0, 65.0), (80.0, 115.0)],
+        )
+        self.assertEqual(got, [(10.0, 0.0), (65.0, 1.0), (80.0, 1.0), (95.0, 2.0)])
+
+    def test_an_unequal_opening_pose_stays_on_the_neighbour_s_start(self):
+        _seq, got = self._drag_keys(
+            [("A", 0, 50), ("B", 65, 100)],
+            ((10, 0), (40, 1), (65, 7), (80, 2)),
+            0,
+            [(40.0, 65.0)],
+        )
+        self.assertEqual(
+            got,
+            [(10.0, 0.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
+            "B opens on its own pose at its new start",
+        )
+
+    def test_a_key_onto_the_previous_shot_s_keyed_end(self):
+        seq, got = self._drag_keys(
+            [("P", 0, 35), ("A", 50, 100)],
+            ((5, 0), (35, 4), (60, 2), (90, 3)),
+            1,
+            [(60.0, 35.0)],
+        )
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(-15.0, 20.0), (35.0, 100.0)],
+        )
+        self.assertEqual(
+            got,
+            [(-10.0, 0.0), (20.0, 4.0), (35.0, 2.0), (90.0, 3.0)],
+            "P closes on its own pose at its new end",
+        )
+
+    def test_a_key_dragged_inside_the_next_shot_moves_it_whole(self):
+        _seq, got = self._drag_keys(
+            [("A", 0, 50), ("B", 65, 100)],
+            ((10, 0), (40, 1), (65, 1), (70, 2), (80, 3)),
+            0,
+            [(40.0, 70.0)],
+        )
+        self.assertEqual(
+            got,
+            [(10.0, 0.0), (70.0, 1.0), (85.0, 1.0), (90.0, 2.0), (100.0, 3.0)],
+            "the keys the bound now covers are B's, not A's to keep",
+        )
+
+    def test_a_sub_row_clip_landing_on_the_keyed_start(self):
+        node, seq = self._scene(
+            [("A", 0, 50), ("B", 65, 100)],
+            ((10, 0), (30, 5), (40, 1), (65, 7), (80, 2)),
+        )
+        clips = {
+            1: self._Clip(
+                {
+                    "obj": node,
+                    "attr_name": "translateX",
+                    "shot_id": 0,
+                    "orig_start": 30.0,
+                    "orig_end": 40.0,
+                }
+            )
+        }
+        host = self._host(clips, seq)
+        host._shifted_out_keys = {}
+        host.on_clip_moved(1, 55.0)
+        self.assertEqual(
+            self._keys(node),
+            [(10.0, 0.0), (55.0, 5.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
+            "the clip lands after B has moved: nothing stacks on 65",
+        )
+
+    def test_a_stepped_clip_landing_on_the_keyed_start(self):
+        node, seq = self._scene(
+            [("A", 0, 50), ("B", 65, 100)], ((10, 0), (40, 1), (65, 7), (80, 2))
+        )
+        # A stepped clip is a held key: move_stepped_keys moves only those.
+        cmds.keyTangent(node, at="translateX", time=(40, 40), outTangentType="step")
+        clips = {
+            1: self._Clip(
+                {
+                    "obj": node,
+                    "shot_id": 0,
+                    "orig_start": 40.0,
+                    "orig_end": 40.0,
+                    "is_stepped": True,
+                }
+            )
+        }
+        host = self._host(clips, seq)
+        host._shifted_out_keys = {}
+        host.on_clip_moved(1, 65.0)
+        self.assertEqual(
+            self._keys(node),
+            [(10.0, 0.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
+            "the stepped key lands after B has moved: B's pose is not overwritten",
+        )
+
+    def _clip_host(self, seq, data):
+        host = self._host({1: self._Clip(data)}, seq)
+        host._shifted_out_keys = {}
+        host._audio_segments_cache = None
+        return host
+
+    def test_a_sub_row_clip_reaching_into_the_neighbour_moves_as_one(self):
+        """Review 2026-09-22: a sub-row run can outlast its shot.  Made room
+        for before it moved, the part inside the neighbour's envelope rode the
+        neighbour's ripple (+17) instead of the drag (+2); the clip is now
+        lifted out of every ripple window first."""
+        node, seq = self._scene(
+            [("A", 0, 50), ("B", 60, 100)],
+            ((10, 0), (45, 1), (65, 2), (80, 3)),
+        )
+        data = {
+            "obj": node,
+            "attr_name": "translateX",
+            "shot_id": 0,
+            "orig_start": 45.0,
+            "orig_end": 65.0,
+        }
+        self._clip_host(seq, data).on_clip_moved(1, 47.0)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0.0, 67.0), (77.0, 117.0)],
+        )
+        self.assertEqual(
+            self._keys(node), [(10.0, 0.0), (47.0, 1.0), (67.0, 2.0), (97.0, 3.0)]
+        )
+
+    def test_a_clip_dragged_far_back_is_not_met_by_the_ripple(self):
+        """Dragged back past its shot's start, a clip grows the shot's head,
+        and that ripples the shots before it back as far.  Lifted only below
+        every shot's start, the clip sat where a long enough drag rippled the
+        previous shot onto it -- the planner refused that ripple, and the drag
+        came back declined."""
+        node, seq = self._scene(
+            [("A", 0, 50), ("B", 60, 100)], ((10, 0), (40, 1), (70, 5), (90, 6))
+        )
+        data = {
+            "obj": node,
+            "attr_name": "translateX",
+            "shot_id": 1,
+            "orig_start": 70.0,
+            "orig_end": 90.0,
+        }
+        self._clip_host(seq, data).on_clip_moved(1, -980.0)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(-1040.0, -990.0), (-980.0, 100.0)],
+        )
+        self.assertEqual(
+            self._keys(node),
+            [(-1030.0, 0.0), (-1000.0, 1.0), (-980.0, 5.0), (-960.0, 6.0)],
+        )
+
+    def test_a_sub_row_clip_carries_its_keys_claims(self):
+        """A claim is a (curve, time) pair, so it moves with its key -- as the
+        key drag's always did.  The sub-row move shifted the keys alone, and
+        the system could no longer find its own sample where it now sits."""
+        node, seq = self._scene(
+            [("A", 0, 50), ("B", 60, 100)], ((10, 0), (30, 5), (40, 1), (80, 2))
+        )
+        crv = cmds.listConnections(f"{node}.translateX", type="animCurve")[0]
+        seq.ledger.record_key(crv, 40.0)
+        data = {
+            "obj": node,
+            "attr_name": "translateX",
+            "shot_id": 0,
+            "orig_start": 30.0,
+            "orig_end": 40.0,
+        }
+        self._clip_host(seq, data).on_clip_moved(1, 32.0)
+        self.assertEqual(
+            self._keys(node), [(10.0, 0.0), (32.0, 5.0), (42.0, 1.0), (80.0, 2.0)]
+        )
+        self.assertEqual(seq.ledger.key_times(crv), [42.0])
+
+    def _audio_scene(self, shots, keys, track="vo"):
+        seq = ShotSequencer(
+            [ShotBlock(i, n, s, e, []) for i, (n, s, e) in enumerate(shots)]
+        )
+        AudioUtils.ensure_track_attr(track)
+        for frame, value in keys:
+            AudioUtils.write_key(track, frame, value=value)
+        return seq
+
+    def test_an_audio_clip_reaching_into_the_neighbour_moves_as_one(self):
+        """Review 2026-09-22: an audio segment is track-wide -- its clip shows
+        only the part inside the shot -- so its stop key can sit in the next
+        shot's envelope, where the ripple moved it +17 while the drag was +2."""
+        seq = self._audio_scene([("A", 0, 50), ("B", 60, 100)], ((45, 1), (65, 0)))
+        data = {
+            "is_audio": True,
+            "audio_track_id": "vo",
+            "shot_id": 0,
+            "orig_start": 45.0,
+            "orig_end": 65.0,
+            "vis_start": 45.0,
+        }
+        self._clip_host(seq, data).on_clip_moved(1, 47.0)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0.0, 67.0), (77.0, 117.0)],
+        )
+        self.assertEqual(AudioUtils.read_keys("vo"), [(47.0, 1.0), (67.0, 0.0)])
+
+    def test_an_audio_clip_moves_by_what_its_visible_part_moved(self):
+        """The clip draws the segment's part inside its shot and a drag
+        reports where THAT landed; measured from the segment's own start the
+        move was off by the part before the shot (+7 for a +2 drag here).  Nor
+        does the shot grow back over that earlier part: enclosing the
+        segment's own start (57) rippled the previous shot the other way."""
+        seq = self._audio_scene(
+            [("A", 0, 50), ("B", 60, 100)], ((55, 1), (70, 0)), track="sfx"
+        )
+        data = {
+            "is_audio": True,
+            "audio_track_id": "sfx",
+            "shot_id": 1,
+            "orig_start": 55.0,
+            "orig_end": 70.0,
+            "vis_start": 60.0,
+        }
+        self._clip_host(seq, data).on_clip_moved(1, 62.0)
+        self.assertEqual(AudioUtils.read_keys("sfx"), [(57.0, 1.0), (72.0, 0.0)])
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0.0, 50.0), (60.0, 100.0)],
+            "no shot moved",
         )
 
 
@@ -4766,10 +5060,10 @@ class TestRenderEffectKeysAreShotContent(unittest.TestCase):
 
     @staticmethod
     def _pulsed_board():
-        from mayatk.mat_utils.render_opacity._render_opacity import RenderOpacity
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 
         board = cmds.polyCube(name="pulse_board")[0]
-        RenderOpacity.key_pulse([board], start=10, end=100)
+        RenderEffects.key_pulse([board], start=10, end=100)
         return board
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -10510,14 +10804,14 @@ class TestKeyTangentDrag(unittest.TestCase):
 
     def test_an_out_drag_sets_the_out_angle(self):
         ctl = self._ctl()
-        ctl.on_key_tangent_dragged(1, 10.0, "out", 3.0, 3.0)
+        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
         self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
         self.assertEqual(self._tangent(10, outTangentType=True), "fixed")
 
     def test_an_in_drag_sets_the_in_angle(self):
         ctl = self._ctl()
         cmds.keyTangent(self.crv, edit=True, time=(10, 10), lock=False)
-        ctl.on_key_tangent_dragged(1, 10.0, "in", -4.0, 4.0)
+        ctl.on_keys_tangent_dragged([(1, [(10.0, -4.0, 4.0)])], "in", False)
         self.assertAlmostEqual(self._tangent(10, inAngle=True), -45.0, places=3)
 
     def test_the_preview_reports_whether_handle_LENGTHS_mean_anything(self):
@@ -10549,7 +10843,7 @@ class TestKeyTangentDrag(unittest.TestCase):
     def test_a_weighted_curve_takes_the_handle_length_as_weight(self):
         cmds.keyTangent(self.crv, edit=True, weightedTangents=True)
         ctl = self._ctl()
-        ctl.on_key_tangent_dragged(1, 10.0, "out", 3.0, 4.0)
+        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 4.0)])], "out", False)
         self.assertAlmostEqual(self._tangent(10, outWeight=True), 5.0, places=3)
         self.assertTrue(any("handle dragged" in f for f in ctl.footers))
 
@@ -10585,11 +10879,13 @@ class TestKeyTangentDrag(unittest.TestCase):
         )
         self.assertTrue(any("handle broken" in f for f in ctl.footers))
 
-    def test_the_deprecated_single_form_still_lands(self):
-        """``on_key_tangent_dragged`` is the one-key spelling of the new
-        handler -- a host still wired to the old signal keeps working."""
+    def test_the_retired_single_key_handler_stays_removed(self):
+        """``on_key_tangent_dragged`` answered uitk's single-key signal, which
+        nothing connected; both were retired 2026-09-21. One handler takes
+        every tangent drag, a lone key included."""
         ctl = self._ctl()
-        ctl.on_key_tangent_dragged(1, 10.0, "out", 3.0, 3.0)
+        self.assertFalse(hasattr(type(ctl), "on_key_tangent_dragged"))
+        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
         self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
         self.assertTrue(self._tangent(10, lock=True), "unbroken: the key stays unified")
 
@@ -10686,7 +10982,7 @@ class TestARefusedDragReportsInsteadOfRaising(unittest.TestCase):
     def _clip_data(self, obj, shot_id):
         return {
             "obj": obj,
-            "attr_name": "translateX",  # the sub-row path, which expands last
+            "attr_name": "translateX",  # the sub-row path
             "orig_start": 10.0,
             "orig_end": 20.0,
             "shot_id": shot_id,
@@ -10718,8 +11014,10 @@ class TestARefusedDragReportsInsteadOfRaising(unittest.TestCase):
         self.assertEqual(ctl.footers[-1], str(ctl.raised[0]), f"{ctl.footers}")
 
     def test_the_keys_that_already_moved_are_still_undoable(self):
-        """The planner declines before IT writes, but the clip's own keys
-        moved first -- so the restore point must survive the refusal."""
+        """Each ripple declines before IT writes and a clip makes room before
+        it lands (2026-09-22), but ``_expand_shot_range`` ripples the head
+        before the tail -- a refused tail can follow a head that already
+        moved the scene, so the restore point must survive the refusal."""
         a = self._cube("refuseC", {10: 0, 20: 1})
         shot = self.seq.define_shot("A", 10, 20, objects=[a])
         ctl = self._ctl(self._clip_data(a, shot.shot_id))

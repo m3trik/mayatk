@@ -162,18 +162,17 @@ class TestSceneExporter(MayaTkTestCase):
         finally:
             self.exporter.close_file_handlers()
 
-    def test_assigning_export_path_lands_in_the_run_for_one_release(self):
-        """``TaskManager.export_path`` was a plain attribute in 0.14.20 and reads
-        the run in flight now. Assigning it still works for one release -- the
-        run is frozen, so it is replaced -- and says what to write instead
-        (2026-09-15)."""
+    def test_export_path_is_read_only(self):
+        """``TaskManager.export_path`` reads the run in flight. Assigning it was
+        a deprecated alias for ``run.replace(export_path=...)`` from 2026-09-15
+        and was retired 2026-09-21 with no caller, matching blendertk's
+        read-only property; the run carries the path."""
         tm = self.exporter.task_manager
         path = os.path.join(self.temp_dir, "assigned.fbx")
-        with self.assertLogs(tm.logger, level="WARNING") as caught:
+        with self.assertRaises(AttributeError):
             tm.export_path = path
-        self.assertEqual(tm.run.export_path, path)
+        tm.run = tm.run.replace(export_path=path)
         self.assertEqual(tm.export_path, path)
-        self.assertIn("run.replace(export_path=", "\n".join(caught.output))
 
     # ------------------------------------------------------------------
     # Export path generation
@@ -1102,6 +1101,33 @@ class TestSceneExporter(MayaTkTestCase):
                 name, defs, f"{name} should be removed from task_definitions"
             )
 
+    def test_the_glb_rows_are_the_ones_the_preview_mirrors(self):
+        """The WebXR preview offers these rows by the label and table pythontk
+        declares (``ExportProfile.GLB_ROWS`` / the combo tables), so a row
+        renamed or re-tabled here without it would leave the two panels naming
+        the same setting differently. Baked Reflections also starts where the
+        lighting recipe itself stands, so an untouched row publishes it
+        unchanged. Added: 2026-09-21
+        """
+        defs = self.exporter.task_manager.task_definitions
+        tables = {
+            "texture_file_type": ptk.ExportProfile.texture_file_type_options(),
+            "optimize_textures": ptk.ExportProfile.optimize_textures_options(),
+            "secondary_max_size": ptk.ExportProfile.SECONDARY_MAX_SIZE_OPTIONS,
+            "uastc_rdo": ptk.ExportProfile.UASTC_RDO_OPTIONS,
+            "baked_reflections": ptk.ExportProfile.BAKED_REFLECTIONS_OPTIONS,
+        }
+        self.assertEqual(set(tables), set(ptk.ExportProfile.GLB_ROWS))
+        for row, label in ptk.ExportProfile.GLB_ROWS.items():
+            with self.subTest(row=row):
+                self.assertEqual(defs[row]["set_row_label"], label)
+                self.assertEqual(defs[row]["add"], tables[row])
+        reflections = defs["baked_reflections"]
+        self.assertEqual(
+            list(reflections["add"].values())[reflections["setCurrentIndex"]],
+            ptk.ExportProfile.baked_reflections_default(),
+        )
+
     def test_deleted_tasks_not_in_task_order(self):
         """Verify removed tasks are absent from TASK_ORDER.
 
@@ -1284,7 +1310,9 @@ class TestSceneExporter(MayaTkTestCase):
         rows = slots._definition_rows(self.exporter.task_manager.task_definitions)
         labels = [label for _w, label in rows]
         seps = [w.attrs["title"] for w, _l in rows if isinstance(w, _Separator)]
-        self.assertEqual(seps, ["Materials", "Textures", "Animation", "Hierarchy"])
+        self.assertEqual(
+            seps, ["Materials", "Textures", "Lighting", "Animation", "Hierarchy"]
+        )
         self.assertEqual(labels[0], "Materials")  # a group opens with its caption
         self.assertNotIn("export_visible_objects", labels)  # settings-tagged
         self.assertIn("smart_bake", labels)
@@ -5377,13 +5405,16 @@ class TestExportSetStalePaths(MayaTkTestCase):
     def test_checks_tolerate_a_stale_path(self):
         """Read-side guard: a path that vanished must not abort the run."""
         self.tm.objects = [self.clean, "|STATIC|DELETED_BY_A_TASK"]
-        for check in (
-            self.tm.check_duplicate_locator_names,
-            self.tm.check_mangled_names,
-            self.tm.check_geometry_lod_suffix,
-            self.tm.check_hidden_geometry,
+        for name, check in (
+            (
+                "check_duplicate_names",
+                lambda: self.tm.check_duplicate_names("locators"),
+            ),
+            ("check_mangled_names", self.tm.check_mangled_names),
+            ("check_geometry_lod_suffix", self.tm.check_geometry_lod_suffix),
+            ("check_hidden_geometry", self.tm.check_hidden_geometry),
         ):
-            with self.subTest(check=check.__name__):
+            with self.subTest(check=name):
                 ok, messages = check()
                 self.assertTrue(ok, messages)
 
@@ -5441,8 +5472,9 @@ class TestDuplicateNameScope(MayaTkTestCase):
         # Both colliding paths are named, so the row says WHICH pair collided.
         self.assertTrue(any("%7CA%7CSNAP" in m for m in messages), messages)
         self.assertTrue(any("%7CB%7CSNAP" in m for m in messages), messages)
-        # The pre-dial key still dispatches, at the scope it always had.
-        self.assertFalse(self.tm.check_duplicate_locator_names()[0])
+        # The pre-dial key (``check_duplicate_locator_names``) shipped its
+        # one-release window 13 times over and was retired 2026-09-21.
+        self.assertFalse(hasattr(self.tm, "check_duplicate_locator_names"))
 
     def test_joint_collision_needs_the_joints_tier(self):
         self.tm.objects = self._twin(lambda n: cmds.joint(name=n), "SPINE")
@@ -5496,8 +5528,6 @@ class TestDuplicateNameScope(MayaTkTestCase):
         for scope in (None, False, "", "OFF"):
             with self.subTest(scope=scope):
                 self.assertEqual(self.tm.check_duplicate_names(scope), (True, []))
-        # The pre-dial key's falsy form is the same skip.
-        self.assertEqual(self.tm.check_duplicate_locator_names(False), (True, []))
 
     def test_an_unknown_scope_fails_loudly_instead_of_narrowing(self):
         """The resolver's widest branch is its fallthrough, so a typo'd scope
@@ -6537,7 +6567,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
                 (
                     self.tm.run.texture_file_type,
                     self.tm.run.ktx2_fallback,
-                    self.tm._glb_texture_params()["ktx2_fallback"],
+                    self.tm.run.glb_texture_params()["ktx2_fallback"],
                 )
             )
         self.assertEqual(
@@ -6578,6 +6608,10 @@ class TestTexturePathPipeline(MayaTkTestCase):
         fake_glb = os.path.join(self.temp_dir, "lightmapped.glb")
         with open(fake_glb, "wb") as fh:
             fh.write(b"GLBDATA")
+        # A REAL folder: the search list keeps existing folders only
+        # (``ptk.FileDependencies.search_dirs``), so a made-up drive is dropped.
+        maps = os.path.join(self.temp_dir, "maps")
+        os.makedirs(maps, exist_ok=True)
         import mayatk as mtk
 
         seen = {}
@@ -6588,10 +6622,10 @@ class TestTexturePathPipeline(MayaTkTestCase):
 
         with (
             patch.object(ptk.MeshConvert, "fbx_to_glb", side_effect=fake_convert),
-            patch.object(mtk.EnvUtils, "texture_search_dirs", return_value=["D:/maps"]),
+            patch.object(mtk.EnvUtils, "texture_search_dirs", return_value=[maps]),
         ):
             self.tm.create_glb(fbx_path="ignored.fbx")
-        self.assertEqual(seen.get("lightmap_dirs"), ["D:/maps"])
+        self.assertEqual(seen.get("lightmap_dirs"), [maps])
 
     def test_create_glb_runs_texture_delivery_last(self):
         """The stamped format overrides the shared web-delivery container while
@@ -6620,8 +6654,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertEqual(delivered["path"], fake_glb)
         self.assertEqual(
             delivered["max_size"],
-            ptk.MeshConvert.WEB_DELIVERY_MAX_SIZE,
-            "Optimize Textures off takes the shared ceiling, not 'never resample'",
+            0,
+            "Optimize Textures OFF resizes nothing (2026-09-21)",
         )
         self.assertEqual(delivered["image_format"], "WEBP")
 
@@ -6637,10 +6671,11 @@ class TestTexturePathPipeline(MayaTkTestCase):
         ):
             self.assertIsNone(self.tm.create_glb(fbx_path="ignored.fbx"))
 
-        # Original + no optimize STILL runs the pass, on the shared policy:
-        # this panel's GLB is the web deliverable, and the byte-stable default
-        # it used to have shipped 280.13 MB where the preview showed 8.71 MB of
-        # the same production assembly.
+        # Original + no optimize STILL runs the pass, in the shared policy's
+        # container: this panel's GLB is the web deliverable, and the
+        # byte-stable default it used to have shipped 280.13 MB of PNG where
+        # the preview showed 8.71 MB of the same production assembly. OFF
+        # keeps every pixel (2026-09-21): it resizes nothing.
         self.tm.run = self.tm.run.replace(texture_file_type=None)
         delivered.clear()
         with (
@@ -6650,7 +6685,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
             ),
         ):
             self.assertEqual(self.tm.create_glb(fbx_path="ignored.fbx"), fake_glb)
-        policy = ptk.MeshConvert.web_delivery_texture_params()
+        policy = ptk.MeshConvert.web_delivery_texture_params(max_size=0)
         self.assertEqual({key: delivered.get(key) for key in policy}, policy)
 
     # -- SDK (unitless) curve exclusion ----------------------------------
@@ -7103,8 +7138,9 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
     def test_a_loose_media_fbx_run_keeps_its_content_choices(self):
         """An FBX deliverable legitimately ships its maps beside itself -- that
         is what ``convert_to_relative_paths`` is for -- and its cameras are
-        ordinary content. Only the GLB, whose viewer owns the camera and whose
-        format has no light slot, makes those losses rather than choices."""
+        ordinary content. Only the GLB, whose viewer owns the camera and lights
+        the asset by its published recipe rather than by scene lights, makes
+        those losses rather than choices."""
         options = self.exporter._default_fbx_options(glb_deliverable=False)
         self.assertIs(options["FBXExportEmbeddedTextures"], False)
         self.assertIs(options["FBXExportInstances"], True)
@@ -7620,24 +7656,26 @@ class TestGeneralTextureFileType(MayaTkTestCase):
 
     # -- the GLB half ----------------------------------------------------
 
-    def test_untouched_dials_ship_the_shared_web_delivery_policy(self):
+    def test_untouched_dials_ship_the_web_container_at_full_resolution(self):
         """CONTRACT CHANGE (2026-08-29): this used to run no pass at all.
 
         Measured through every leg on one production assembly in one session:
         the WebXR preview published 8.71 MB of WebP and this path published
         280.13 MB of full-resolution PNG from the same scene, with nothing in
         either log saying they differed. A GLB written by this panel is the WEB
-        deliverable -- the FBX and USD formats beside it are the interchange
-        ones -- so untouched dials now mean "what the preview showed you", read
-        from the one policy both producers share.
+        deliverable, so untouched dials take the shared policy's container.
+
+        CONTRACT CHANGE (2026-09-21): and not its ceiling. Optimize Textures at
+        OFF resizes nothing -- the preview now runs these same rows, so the
+        parity the 2048 ceiling once bought no longer needs it.
         """
         result, seen = self._run_create_glb(file_type=None, optimize=False)
         self.assertEqual(result, self.fake_glb)
-        policy = ptk.MeshConvert.web_delivery_texture_params()
+        expected = ptk.MeshConvert.web_delivery_texture_params(max_size=0)
         self.assertEqual(
-            {key: seen.get(key) for key in policy},
-            policy,
-            "the default must BE the shared policy, not a second copy of it",
+            {key: seen.get(key) for key in expected},
+            expected,
+            "the default must BE the shared policy's container, every pixel kept",
         )
 
     def test_file_type_alone_overrides_only_the_container(self):
@@ -7645,8 +7683,8 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         self.assertEqual(seen.get("image_format"), "WEBP")
         self.assertEqual(
             seen.get("max_size"),
-            ptk.MeshConvert.WEB_DELIVERY_MAX_SIZE,
-            "naming a container must not silently drop the ceiling",
+            0,
+            "naming a container leaves Optimize Textures OFF: nothing resampled",
         )
 
     def test_optimize_alone_overrides_only_the_ceiling(self):
@@ -7676,6 +7714,35 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             "a dial naming no ceiling takes the policy's, never 'keep every "
             "pixel' -- that resolution is how Optimize Textures + WEBP still "
             "shipped 22.06 MB against the preview's 8.71 on a real assembly",
+        )
+
+    def test_the_glb_publishes_the_runs_lighting_choices(self):
+        """The Baked Reflections row reaches the GLB's lighting recipe: an input
+        to the envelope the build embeds, so the deliverable carries the look
+        it was approved in wherever it is opened. Added: 2026-09-21"""
+        self.tm.run = self.tm.run.replace(baked_reflections=0.5)
+        seen = {}
+
+        def fake_build(src, **kwargs):
+            seen.update(kwargs)
+            raise RuntimeError("captured")
+
+        with patch.object(ptk.GlbPipeline, "build", side_effect=fake_build):
+            self.tm.create_glb(fbx_path="ignored.fbx")
+        recipe = seen["sidecar"]["handoff"]["rendering"]["lightmappedMaterials"]
+        self.assertEqual(recipe["envMapIntensity"], 0.5)
+
+    def test_the_fbx_handoff_publishes_the_runs_lighting_choices(self):
+        """And the FBX's handoff record, through the run's export context: one
+        decision, both carriers. Added: 2026-09-21"""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.tm.run = self.tm.run.replace(baked_reflections=0.0)
+        with patch.object(FbxUtils, "publish", return_value=None) as publish:
+            self.tm._publish_scene_records()
+        ctx = publish.call_args[0][0]
+        self.assertEqual(
+            ctx.rendering, {"lightmappedMaterials": {"envMapIntensity": 0.0}}
         )
 
     def test_jpg_is_handed_to_the_encoder_as_jpeg(self):
@@ -7752,7 +7819,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         maps in its FBX — a model whose textures bind nowhere, with nothing in
         the log saying so. Same clamp as KTX2: the scene's own map keeps its
         container. The GLB half still carries webp — that is
-        :meth:`_glb_texture_params`, already pinned by
+        :meth:`pythontk.ExportRun.glb_texture_params`, already pinned by
         ``test_file_type_alone_is_container_only``.
         """
         self.tm.run = self.tm.run.replace(texture_file_type="webp")
@@ -7802,9 +7869,10 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             "a run with no tasks must not inherit the prior run's texture pass",
         )
         self.assertEqual(
-            self.tm._glb_texture_params(),
-            ptk.MeshConvert.web_delivery_texture_params(),
-            "and so falls back to the shared policy, not to the prior ceiling",
+            self.tm.run.glb_texture_params(),
+            ptk.MeshConvert.web_delivery_texture_params(max_size=0),
+            "and so falls back to the untouched rows (the policy's container, "
+            "every pixel kept), not to the prior ceiling",
         )
 
     def test_the_glb_optimisation_dials_reach_the_pipeline(self):
@@ -7814,7 +7882,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         self.tm.run = self.tm.run.replace(
             secondary_max_size=2048, uastc_rdo=1.0, glb_key_tolerance=1e-4
         )
-        params = self.tm._glb_texture_params()
+        params = self.tm.run.glb_texture_params()
         self.assertEqual(
             (params["secondary_max_size"], params["uastc_rdo"]), (2048, 1.0)
         )
@@ -7829,7 +7897,7 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         self.tm.run = self.tm.run.replace(
             secondary_max_size=None, uastc_rdo=None, glb_key_tolerance=None
         )
-        params = self.tm._glb_texture_params()
+        params = self.tm.run.glb_texture_params()
         self.assertEqual((params["secondary_max_size"], params["uastc_rdo"]), (0, None))
 
     def test_the_template_carrier_follows_the_selected_template(self):
@@ -8665,9 +8733,9 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
 
     @staticmethod
     def _commit(obj, path):
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
-        LightmapBaker().commit_lightmap({obj: path})
+        LightmapRecords.commit({obj: path})
 
     def _touch(self, *parts):
         path = os.path.join(self.temp_dir, *parts)
@@ -8728,7 +8796,7 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
     def test_the_resolve_task_heals_a_stale_hint(self):
         import json
 
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         self._commit(self.cube, self._gone("LitCube_LightMap.exr"))
         found = self._touch("sourceimages", "lm", "LitCube_LightMap.exr")
@@ -8736,7 +8804,7 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         self.tm.resolve_invalid_texture_paths()
 
         marker = json.loads(
-            cmds.getAttr(f"{self.cube}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
+            cmds.getAttr(f"{self.cube}.{LightmapRecords.LIGHTMAP_INFO_ATTR}")
         )
         # Stored in the portable spelling (inside the project -> relative);
         # compare what it resolves to on this machine.
@@ -8744,7 +8812,7 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         self.assertEqual(
             os.path.normcase(
                 os.path.abspath(
-                    LightmapBaker._resolved_dir(marker["dir"], marker["map"])
+                    LightmapRecords._resolved_dir(marker["dir"], marker["map"])
                 )
             ),
             os.path.normcase(os.path.abspath(os.path.dirname(found))),
@@ -10170,7 +10238,7 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
         """
         from types import SimpleNamespace
 
-        from mayatk.env_utils.scene_exporter._scene_exporter import (
+        from mayatk.env_utils.scene_exporter.scene_exporter_slots import (
             SceneExporterSlots,
         )
 

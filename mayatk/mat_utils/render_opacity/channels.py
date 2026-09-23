@@ -38,16 +38,6 @@ class ChannelSpec:
     #: scene saved with that preview on. New code never creates one.
     material_suffix: str = ""
 
-    @property
-    def color_attr(self) -> Optional[str]:
-        """Deprecated read-through of the HIGH stop's attribute.
-
-        Kept for one release. A caller that wants every stop wants
-        ``color_stops.keys``; one that wants a specific end wants
-        :meth:`stop_attr`.
-        """
-        return self.color_stops.hi if self.color_stops else None
-
     def stop_attr(self, stop: str = "hi") -> Optional[str]:
         """The Maya attribute holding one end of this channel's colour ramp.
 
@@ -85,12 +75,6 @@ class ChannelSpec:
             f"{self.name}_color",
             f"{self.name}_color_dim" if self.color_stops.lo else None,
         )
-
-    @property
-    def track_color_key(self) -> Optional[str]:
-        """Deprecated read-through of the HIGH stop's published key."""
-        stops = self.track_color_stops
-        return stops.hi if stops else None
 
     @property
     def attrs(self) -> Tuple[str, ...]:

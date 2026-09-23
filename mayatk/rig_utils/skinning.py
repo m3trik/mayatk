@@ -1345,10 +1345,22 @@ class SkinUtils(ptk.HelpMixin):
         plans: List[Tuple[str, List[str], List[Tuple[str, str, str, bool]]]] = []
         orient: Dict[str, List[float]] = {}
         for group in groups:
-            root = cls._skeleton_root(group["meshes"], root_suffix, root_parent)
+            root = cls._skeleton_root(
+                group["meshes"],
+                root_suffix,
+                root_parent,
+                group["influences"],
+                group["skins"],
+            )
+            # ``path != root``: a REUSED root is itself one of the influences (the
+            # carrier binds it coming back), and it cannot be reparented under, or
+            # keyed relative to, itself. Leaving it out is not a loss -- every other
+            # influence is fitted RELATIVE to it, so its own motion is already in
+            # their keys, and it keeps the animation it arrived with.
             plan = [
                 (path, uuid, root, True)
                 for path in group["influences"]
+                if path != root
                 for uuid in (cmds.ls(path, uuid=True) or [None])[:1]
                 if uuid
             ]
@@ -1509,12 +1521,106 @@ class SkinUtils(ptk.HelpMixin):
         return bool(writes)
 
     @staticmethod
-    def _skeleton_root(meshes: List[str], suffix: str, root_parent: str) -> str:
-        """A new root joint: for ``"world"`` under a new top-level
-        ``<mesh><suffix>_GRP``; else under the first mesh's parent -- what the
-        un-pinned mesh rides is exactly what its skeleton must ride (a relative
-        importer cancels the shared motion), and mayaUsd roots its SkelRoot at the
-        top the two share. A top-level mesh gets the root under itself.
+    def _reusable_flatten_root(
+        influences: List[str], root_parent: str, skins: Optional[List[str]] = None
+    ) -> str:
+        """A PREVIOUS flatten's root joint for this influence set, or ``""``.
+
+        The flatten must be idempotent: a scene that has already been through it
+        (every foreign-scene conversion runs it, so any re-converted scene has)
+        must reuse the root it already has instead of growing a second one beside
+        it. Measured on the production module before this existed -- a
+        ``.ma -> .blend -> .ma`` round trip left ``WIRE_LOOM_A_skeleton_GRP`` empty
+        and added ``_GRP1``, then ``_GRP2``, with the superseded root joint riding
+        along as an inert extra bone: +7 joints and +7 transforms per round trip.
+        It does NOT explain the skins a round trip loses -- with this in, objects
+        converged 1617 -> 1610 and bones 189 -> 182 while the skinClusters still
+        went 7 -> 4 (that one is Blender's importer; BACKLOG 2026-09-20).
+
+        Recognised STRUCTURALLY, not by name or by a tag: after a flatten every
+        influence is a direct child of one joint that is not itself an influence,
+        which is precisely this shape. A name would be the wrong key (the wrapper
+        is named for the mesh's SHORT name, which Maya does not require to be
+        unique -- two ``WIRE_LOOM_A`` transforms under different parents is what
+        seeded the ``_GRP1`` spelling in the first place) and a stamped attribute
+        would have to survive a carrier that need not carry it.
+
+        An authored rig fails the test on its first pass (a chain's influences
+        have different parents), so it still gets a fresh root. The ``"world"``
+        route additionally requires the found root to sit under a TOP-LEVEL group,
+        which is the placement Blender's FBX importer needs; anything nested is
+        refused and rebuilt.
+
+        The root comes back BOUND. Blender's FBX exporter writes every bone of an
+        armature into the skin's deformer set, so a root that deforms nothing is
+        nonetheless influence 0 by the time the scene returns
+        (``connectAttr "|..._skeleton_GRP|..._skeleton.wm" "skinCluster1.ma[0]"``,
+        measured). Being LISTED is therefore not the test -- carrying WEIGHT is,
+        which is the same rule blendertk's ``_place_skeleton_roots`` applies from
+        the other side. A weighted parent is a real chain root and is refused;
+        a weightless one is a previous flatten's root and is reused, and the
+        caller must then leave it out of its own reparent plan.
+        """
+        if not influences:
+            return ""
+        parents = {path.rsplit("|", 1)[0] for path in influences}
+        if len(parents) == 1:
+            root = parents.pop()
+            if root in set(influences):
+                return ""  # its own parent: a cycle, not a shape we made
+        else:
+            # The root is itself one of the influences: every OTHER influence is
+            # its direct child, and nothing else.
+            candidates = [
+                path
+                for path in influences
+                if parents == {path, path.rsplit("|", 1)[0]}
+                and all(
+                    other.rsplit("|", 1)[0] == path
+                    for other in influences
+                    if other != path
+                )
+            ]
+            if len(candidates) != 1:
+                return ""
+            root = candidates[0]
+            # By LONG path, never by leaf: this whole branch exists for scenes
+            # carrying duplicate short names, so a leaf comparison would read the
+            # TWIN's root as weighted and refuse the reuse on exactly the skins
+            # this is here to settle.
+            weighted = set()
+            for skin in skins or []:
+                names = cmds.skinCluster(skin, query=True, weightedInfluence=True) or []
+                weighted.update(cmds.ls(names, long=True) or [])
+            if (cmds.ls(root, long=True) or [root])[0] in weighted:
+                return ""  # deforms something: a real chain root, not a wrapper
+        # ``not root``: a world-level influence has no parent path to reuse.
+        if not root or cmds.nodeType(root) != "joint":
+            return ""
+        # "|GRP|root" -- for the world route the group holding it has to be top
+        # level, which is the placement Blender's FBX importer needs.
+        if root_parent == "world" and root.count("|") != 2:
+            return ""
+        return root
+
+    @staticmethod
+    def _skeleton_root(
+        meshes: List[str],
+        suffix: str,
+        root_parent: str,
+        influences: Optional[List[str]] = None,
+        skins: Optional[List[str]] = None,
+    ) -> str:
+        """The root joint this skin's influences flatten under.
+
+        A previous flatten's root is REUSED where the influences still hang off
+        one (:meth:`_reusable_flatten_root`), which is what makes a re-converted
+        scene stop growing a skeleton per pass. Otherwise a new one: for
+        ``"world"`` under a new top-level ``<mesh><suffix>_GRP``; else under the
+        first mesh's parent -- what the un-pinned mesh rides is exactly what its
+        skeleton must ride (a relative importer cancels the shared motion), and
+        mayaUsd roots its SkelRoot at the top the two share. A top-level mesh gets
+        the root under itself.
 
         It sits ON that parent's origin, and deliberately. Moving it to the middle
         of the chain -- so it does not arrive as a lone bone metres from its own
@@ -1531,7 +1637,27 @@ class SkinUtils(ptk.HelpMixin):
         Maya and equally wrong in the payload. So the bone is placed by the
         IMPORTER, where a bone nothing is weighted to provably cannot move a skin
         -- blendertk's ``MayaSceneImport._place_skeleton_roots``."""
-        name = CoreUtils.short_name(meshes[0]) + suffix
+        reused = SkinUtils._reusable_flatten_root(
+            list(influences or []), root_parent, list(skins or [])
+        )
+        if reused:
+            return reused
+        # A SHORT name Maya does not already hold. Maya allows duplicate short
+        # names under different parents, and ``cmds.joint`` takes the name as
+        # given -- so two meshes sharing a leaf name (``WIRE_LOOM_A`` twice, the
+        # production norm) produced two root joints both called
+        # ``WIRE_LOOM_A_skeleton``. The carriers resolve a skin's deformers BY
+        # NAME: both skins then claimed the first armature and the twin's mesh
+        # would arrive claiming the wrong one. A real hazard, fixed here on its
+        # own merits -- but NOT the cause of the skins a round trip loses: with
+        # every root name unique the count stayed 7 -> 4 and merely moved which
+        # twin lost its binding (BACKLOG 2026-09-20). ``cmds.group``
+        # uniquifies on its own, but taking the suffix from the SAME resolved base
+        # keeps the group and the joint reading as one pair.
+        base = CoreUtils.short_name(meshes[0]) + suffix
+        name, index = base, 1
+        while cmds.ls(name) or cmds.ls(name + "_GRP"):
+            name, index = f"{base}{index}", index + 1
         if root_parent == "world":
             ancestor = cmds.group(empty=True, world=True, name=name + "_GRP")
         else:

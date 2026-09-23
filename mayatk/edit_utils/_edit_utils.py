@@ -165,9 +165,7 @@ class _EditUtilsInternal(object):
     AXIS_FRAMES = frozenset({"auto", "world"} | set(OBJECT_FRAME_PIVOTS))
 
     @classmethod
-    def _resolve_axis_frame(
-        cls, pivot, use_object_axes=None, axis_frame=None, tuple_is_object=False
-    ):
+    def _resolve_axis_frame(cls, pivot, axis_frame=None, tuple_is_object=False):
         """The frame name the axes come from, or ``None`` for world axes.
 
         ONE parameter answers "which axes", so every value stays meaningful
@@ -186,11 +184,8 @@ class _EditUtilsInternal(object):
           no longer says which frame the cut was resolved in, so the mirror
           silently fell back to world axes and tilted differently to the cut.
 
-        ``use_object_axes=False`` is the deprecated spelling of
-        ``axis_frame="world"``.  It applies only where the frame is still being
-        derived — a named frame is explicit and always wins — and only an
-        explicit ``False`` applies at all: the parameter now defaults to
-        ``None`` (unset) so an untouched boolean can never override one.
+        (The boolean ``use_object_axes`` this replaced -- ``False`` meant
+        ``"world"`` -- was retired 2026-09-21.)
 
         *tuple_is_object* is the face-selection convention: ``delete_along_axis``
         and ``get_all_faces_on_axis`` read a tuple pivot in the object's frame,
@@ -204,8 +199,6 @@ class _EditUtilsInternal(object):
                     f"got {axis_frame!r}"
                 )
             return None if axis_frame == "world" else axis_frame
-        if use_object_axes is False:
-            return None
         if isinstance(pivot, str) and pivot in cls.OBJECT_FRAME_PIVOTS:
             return pivot
         if tuple_is_object and isinstance(pivot, (tuple, list)) and len(pivot) == 3:
@@ -302,7 +295,7 @@ class _EditUtilsInternal(object):
         return inverse * cls._reflection_matrix(axis_index, local) * frame_matrix
 
     @classmethod
-    def _mirror_frame(cls, obj, pivot, use_object_axes=None, axis_frame=None):
+    def _mirror_frame(cls, obj, pivot, axis_frame=None):
         """``(world_point, frame_matrix)`` defining the mirror plane for *obj*.
 
         ``frame_matrix`` is ``None`` when the plane is world-axis-aligned, and
@@ -315,7 +308,7 @@ class _EditUtilsInternal(object):
         so both resolve the plane identically.
         """
         point = cls._mirror_pivot_point(obj, pivot)
-        frame = cls._resolve_axis_frame(pivot, use_object_axes, axis_frame)
+        frame = cls._resolve_axis_frame(pivot, axis_frame)
         if frame is None:
             return point, None
         return point, cls._axis_frame_matrix(obj, frame)
@@ -1444,9 +1437,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         return objects
 
     @staticmethod
-    def get_all_faces_on_axis(
-        obj, axis="x", pivot="center", use_object_axes=None, axis_frame=None
-    ):
+    def get_all_faces_on_axis(obj, axis="x", pivot="center", axis_frame=None):
         """Get all faces on the specified axis of an object.
 
         Parameters:
@@ -1473,8 +1464,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 ``"manip"`` / ``"baked"`` force that frame whatever the pivot is —
                 which is how ``cut_along_axis`` keeps its cutting frame across the
                 handoff, where the pivot has become a bare world tuple.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``. ``False`` is
-                ``axis_frame="world"``; ``True``/``None`` leave the frame derived.
 
         Returns:
             list: A list of faces on the specified axis.
@@ -1492,7 +1481,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         # everything else (world, center, bbox keys) stays in world space.
         is_tuple_pivot = isinstance(pivot, (tuple, list)) and len(pivot) == 3
         frame = _EditUtilsInternal._resolve_axis_frame(
-            pivot, use_object_axes, axis_frame, tuple_is_object=True
+            pivot, axis_frame, tuple_is_object=True
         )
         use_object_space = frame is not None
 
@@ -1643,7 +1632,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         delete=False,
         mirror=False,
         axis_frame=None,
-        use_object_axes=None,
     ):
         """Cut objects along the specified axis.
 
@@ -1692,8 +1680,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 Whatever it resolves to is passed on to the ``delete`` / ``mirror``
                 follow-up, so the surviving half is mirrored about the plane that
                 was actually cut.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``. ``False`` is
-                ``axis_frame="world"``; ``True``/``None`` leave the frame derived.
         """
         axis = XformUtils.convert_axis(axis, invert=invert, ortho=ortho)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
@@ -1704,7 +1690,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         # deletion and the mirror all operate in the same frame -- the deletion
         # is handed a world tuple pivot (it carries the exact cut position), and
         # a tuple cannot say which frame produced it.
-        frame = cls._resolve_axis_frame(pivot, use_object_axes, axis_frame)
+        frame = cls._resolve_axis_frame(pivot, axis_frame)
         use_object_space = frame is not None
 
         for node in cmds.ls(
@@ -1838,7 +1824,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         delete_history=True,
         mirror=False,
         axis_frame=None,
-        use_object_axes=None,
     ):
         """Delete faces along the specified axis and optionally mirror the result.
 
@@ -1855,16 +1840,12 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 frame name forces that frame. The SAME frame is used for both
                 halves of the operation, so the mirror plane always matches the
                 one the faces were selected against.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``. ``False`` is
-                ``axis_frame="world"``; ``True``/``None`` leave the frame derived.
         """
         axis = XformUtils.convert_axis(axis)
         axis_index = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}[axis]
         # One frame for the whole operation: the faces are selected against it
         # and the mirror plane is built from it, so the two cannot disagree.
-        frame = cls._resolve_axis_frame(
-            pivot, use_object_axes, axis_frame, tuple_is_object=True
-        )
+        frame = cls._resolve_axis_frame(pivot, axis_frame, tuple_is_object=True)
 
         for node in cmds.ls(
             CoreUtils.as_strings(objects), type="transform", flatten=True, long=True
@@ -1927,7 +1908,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         pivot: Union[str, tuple] = "object",
         mergeMode: int = -1,
         axis_frame: Optional[str] = None,
-        use_object_axes: Optional[bool] = None,
         delete_original: bool = False,
         center_pivot: bool = True,
         **kwargs,
@@ -1957,8 +1937,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 ``"world"`` forces world axes; a frame name forces that frame
                 whatever the pivot is, which is what lets a caller mirror about
                 an object frame while giving the plane an exact world position.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``. ``False`` is
-                ``axis_frame="world"``; ``True``/``None`` leave the frame derived.
             delete_original (bool): If True, deletes the original half after mirroring
                 (only applies to ``mergeMode=-1``).
             center_pivot (bool): If True (default), give each mirror result a pivot on its
@@ -2010,9 +1988,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             if uninstanced_result:
                 obj = uninstanced_result[0]
 
-            pivot_point, frame_matrix = cls._mirror_frame(
-                obj, pivot, use_object_axes, axis_frame
-            )
+            pivot_point, frame_matrix = cls._mirror_frame(obj, pivot, axis_frame)
             if frame_matrix is None:
                 kwargs["worldSpace"] = True
                 kwargs["pivot"] = tuple(pivot_point)
@@ -2074,7 +2050,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         axis: str = "x",
         pivot: Union[str, tuple] = "object",
         axis_frame: Optional[str] = None,
-        use_object_axes: Optional[bool] = None,
     ) -> list:
         """Mirror as **instances**: each object gets a linked copy reflected
         across the mirror plane, still sharing the source's shape.
@@ -2105,8 +2080,6 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 OWN axis, matching :meth:`mirror` and :meth:`cut_along_axis`.
                 Unlike :meth:`mirror` this path honors ``"original"``'s pre-freeze
                 frame exactly — the reflection matrix accepts any plane normal.
-            use_object_axes (bool): DEPRECATED, use ``axis_frame``. ``False`` is
-                ``axis_frame="world"``; ``True``/``None`` leave the frame derived.
 
         Returns:
             list: The newly created mirrored instances.
@@ -2124,9 +2097,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
 
         results = []
         for obj in original_objects:
-            point, frame_matrix = cls._mirror_frame(
-                obj, pivot, use_object_axes, axis_frame
-            )
+            point, frame_matrix = cls._mirror_frame(obj, pivot, axis_frame)
             reflection = cls._mirror_reflection(axis_index, point, frame_matrix)
             instance = cmds.instance(obj)[0]
             matrix = om.MMatrix(cmds.xform(instance, q=True, m=True, ws=True))

@@ -473,6 +473,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
             ctx = FbxUtils.export_context(
                 clip_mode=ptk.ExportRun.clip_mode(self.run.animation_clips_mode),
                 clip_span=self._bake_range_from_keys(),
+                # The FBX's handoff record publishes the same lighting recipe
+                # the GLB's envelope does, with this run's choices.
+                rendering=self.run.rendering,
             )
             return FbxUtils.publish(ctx, only=only)
         except Exception:  # noqa: BLE001 - the write goes on; say what ships

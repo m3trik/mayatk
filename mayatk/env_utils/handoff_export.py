@@ -100,14 +100,14 @@ class MayaExportMixin:
         previews as an unlit push and reads as a broken bake. Supplied here, on
         the mixin every Maya-originating bridge already carries, so it is one
         answer rather than one per bridge; the exporter's GLB conversion reaches
-        the same :meth:`LightmapBaker.search_dirs` -- the workspace's texture
+        the same :meth:`LightmapRecords.search_dirs` -- the workspace's texture
         folders plus wherever the markers' maps were actually found, so a map
         the walk had to go looking for still reaches a consumer that can only
         join a basename against a list.
         """
-        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
-        return LightmapBaker.search_dirs()
+        return LightmapRecords.search_dirs()
 
     #: What the USD carrier does with an instanced selection. USD leaves Maya FLAT
     #: (``exportInstances`` off -- see :class:`UsdUtils`: the native instancing

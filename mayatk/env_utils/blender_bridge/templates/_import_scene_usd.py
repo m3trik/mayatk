@@ -419,7 +419,13 @@ def export_usd(bpy):
     # (probed on 5.1 -- a hidden bake-source set arrived in Maya VISIBLE), so
     # every hide flag is cleared for the call and the viewport-hidden set's
     # prims are stamped invisible afterwards (btk.UsdUtils.export's contract).
-    hidden = hidden_objects(bpy)
+    # A KEYED show/hide travels as keys (the manifest's visibility section).
+    hidden = [o for o in hidden_objects(bpy) if not hide_is_animated(o)]
+    # Blender's USD camera writer supports perspective only -- an ORTHO camera
+    # leaves a bare Xform (probed on 5.1), which is how a production module's one
+    # authored camera never reached Maya. Written as perspective, re-authored
+    # orthographic below.
+    ortho = _as_perspective(bpy.data.objects)
     for obj in bpy.data.objects:  # this Blender is disposable: no state to restore
         obj.hide_viewport = False
         obj.hide_render = False
@@ -436,12 +442,22 @@ def export_usd(bpy):
             pinned = pin_primvar_indices(OUT_USD)
             if pinned:
                 print("USD export: pinned {} primvar index array(s)".format(pinned))
+            if fold:  # an animated export: every object holding an action is sampled
+                held = collapse_static_xforms(OUT_USD)
+                if held:
+                    print("USD export: held {} static transform(s)".format(held))
             marked = mark_skinning_methods(bpy, OUT_USD)
             if marked:
                 print("USD export: stamped {} skinning method(s)".format(marked))
             containers = mark_container_skeletons(OUT_USD)
             if containers:
                 print("USD export: marked {} container skeleton(s)".format(containers))
+            if ortho:
+                print(
+                    "USD export: {} orthographic camera(s) re-authored".format(
+                        mark_orthographic(OUT_USD, ortho)
+                    )
+                )
             if hidden:
                 print(
                     "USD export: {} hidden object(s) stamped invisible".format(
@@ -642,6 +658,116 @@ def mark_invisible(filepath, objects, root_prim_path=""):
     return count
 
 
+def _as_perspective(objects):
+    """Flip every ORTHO camera among *objects* to PERSP for the writer; return the
+    camera objects flipped. Dependency-free copy of
+    ``btk.UsdUtils._as_perspective`` (pinned by AST identity); this Blender is
+    disposable, so nothing flips back. Collected before anything flips: a
+    datablock shared by two objects would otherwise read PERSP for the second."""
+    cameras = [
+        o
+        for o in objects
+        if getattr(o, "type", None) == "CAMERA" and o.data.type == "ORTHO"
+    ]
+    for data in {o.data for o in cameras}:
+        data.type = "PERSP"
+    return cameras
+
+
+def collapse_static_xforms(filepath, tolerance=1e-4, distance=1e-5):
+    """Hold every prim whose LOCAL transform never changes at one static value
+    (its xform ops lose their time samples). Dependency-free copy of
+    ``btk.UsdUtils.collapse_static_xforms`` (pinned by AST identity): Blender
+    samples the whole transform of any object holding an action, so a
+    show/hide-only object ships per-frame noise that mayaUsd keys. Translation
+    is judged in metres (*distance*), through the parent's world scale and the
+    stage's metersPerUnit; the rotation/scale block by *tolerance*."""
+    import os
+
+    if os.path.splitext(str(filepath))[1].lower() == ".usdz":
+        return 0
+    from pxr import Sdf, Usd, UsdGeom
+
+    layer = Sdf.Layer.FindOrOpen(str(filepath))
+    if layer is None:
+        raise FileNotFoundError(f"USD layer not found: {filepath}")
+    stage = Usd.Stage.Open(layer)
+    metres = UsdGeom.GetStageMetersPerUnit(stage) or 1.0
+    count = 0
+    for prim in stage.Traverse():
+        xformable = UsdGeom.Xformable(prim)
+        if not xformable:
+            continue
+        ops = xformable.GetOrderedXformOps()
+        times = sorted({t for op in ops for t in op.GetAttr().GetTimeSamples()})
+        if not times:
+            continue
+        first = xformable.GetLocalTransformation(times[0])
+        parent = xformable.ComputeParentToWorldTransform(times[0])
+        scale = max(parent.GetRow3(i).GetLength() for i in range(3)) or 1.0
+        reach = distance / (metres * scale)  # *distance* in local numbers
+        if any(
+            abs(a - b) > (reach if row == 3 else tolerance)
+            for t in times[1:]
+            for row, (row_a, row_b) in enumerate(
+                zip(xformable.GetLocalTransformation(t), first)
+            )
+            for a, b in zip(row_a, row_b)
+        ):
+            continue
+        for op in ops:
+            value = op.Get(times[0])
+            attr = op.GetAttr()
+            attr.Clear()
+            if value is not None:
+                attr.Set(value)
+        count += 1
+    if count:
+        layer.Save()
+    return count
+
+
+def mark_orthographic(filepath, cameras, root_prim_path=""):
+    """Author each of *cameras* (ORTHO camera objects, exported as perspective) as
+    an orthographic Camera prim; return the count. Dependency-free copy of
+    ``btk.UsdUtils.mark_orthographic`` (pinned by AST identity): ``ortho_scale``
+    goes in as both apertures, the inverse of Blender's own USD reader, which
+    mayaUsd reads as ``orthographicWidth`` = aperture / 10."""
+    from pxr import Sdf, Usd, UsdGeom
+
+    layer = Sdf.Layer.FindOrOpen(filepath)
+    if layer is None:
+        raise FileNotFoundError(f"USD layer not found: {filepath}")
+    stage = Usd.Stage.Open(layer)
+    count = 0
+    for obj in cameras:
+        prim = stage.GetPrimAtPath(export_prim_path(obj, root_prim_path))
+        if not prim or not prim.IsValid():
+            continue
+        camera = next(
+            (
+                UsdGeom.Camera(candidate)
+                for candidate in [prim] + list(prim.GetChildren())
+                if candidate.IsA(UsdGeom.Camera)
+            ),
+            None,
+        )
+        if camera is None:
+            continue
+        width = float(obj.data.ortho_scale)
+        for attr, value in (
+            (camera.CreateProjectionAttr(), UsdGeom.Tokens.orthographic),
+            (camera.CreateHorizontalApertureAttr(), width),
+            (camera.CreateVerticalApertureAttr(), width),
+        ):
+            attr.Clear()
+            attr.Set(value)
+        count += 1
+    if count:
+        layer.Save()
+    return count
+
+
 def fold_single_mesh_xforms(filepath):
     """Fold every Xform whose only child is a Mesh into one Mesh prim carrying the
     Xform's ops -- the shape ``merge_parent_xform=True`` would have written.
@@ -691,6 +817,125 @@ def fold_single_mesh_xforms(filepath):
         layer.Save()
     print("USD export: folded {} animated Xform+Mesh pair(s)".format(len(targets)))
     return len(targets)
+
+
+def _action_fcurves(action, slot=None):
+    """The fcurves of *action* -- *slot*'s own when given, else every slot's -- on
+    any Blender.
+
+    Dependency-free copy of ``btk.AnimUtils._slot_fcurves`` (pinned by AST
+    identity): 4.4+ actions are layered and 5.x drops the flat ``action.fcurves``
+    entirely, so keys live in per-slot channelbags. Pass the object's
+    ``action_slot``: one action can drive several objects through slots, and a
+    slot-blind read hands each of them every other object's curves.
+    """
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        return list(legacy)
+    out = []
+    for layer in action.layers:
+        for strip in layer.strips:
+            if slot is not None:
+                cb = strip.channelbag(slot)
+                if cb is not None:
+                    out.extend(cb.fcurves)
+            else:
+                out.extend(fc for cb in strip.channelbags for fc in cb.fcurves)
+    return out
+
+
+def collect_visibility(bpy):
+    """``{object name: [[frame, visibility], ...]}`` -- the manifest's ``visibility``
+    section, in MAYA's convention (``1`` = visible). Shared verbatim by the FBX and
+    USD conversion templates.
+
+    Neither Blender exporter carries a show/hide. The FBX one bakes only Lcl
+    Translation / Rotation / Scaling: measured on a production module, 54 objects
+    carried ``hide_viewport`` keys and every one arrived in Maya static -- 39 of them
+    with no animation whatsoever, which is how the loss first read. The USD one
+    writes no visibility samples for them either: the same module's USD return leg
+    delivered 83 show/hide-only objects static and not one visibility curve
+    (2026-09-21). These are the plug and failed-component toggles, i.e. the content
+    of the training module.
+
+    The mirror of the send direction, which puts Maya's baked ``.visibility`` in this
+    same section for ``btk.MayaSceneImport`` to replay as ``hide_*`` keys: same
+    section, same value convention, opposite direction. ``hide_viewport`` is
+    preferred over ``hide_render`` because the send direction writes both from one
+    Maya plug and it is the one the artist sees.
+
+    What an ancestor already says is left OUT. Maya inherits visibility down the DAG
+    and Blender's ``hide_*`` does not, so the send direction BAKES an ancestor's
+    show/hide onto every descendant to make the scene look right there. Writing those
+    copies back would key in Maya what Maya derives for itself, and the next send
+    would bake one level deeper again: measured, the module's animated-object count
+    went 65 -> 85 in a single round trip, which is a fixed-point failure that
+    compounds. A track identical to the nearest keyed ancestor's is therefore
+    dropped -- 44 of this module's 54 -- leaving the ~10 an artist actually authored,
+    and the evaluated result is unchanged because Maya re-derives the rest.
+
+    Collected before the export touches the scene -- on the FBX route before
+    ``stand_in_dropped_objects``, which renames an object the exporter would drop and
+    gives its name to the Empty that ships instead: the keys then travel under the
+    name the payload really carries.
+    """
+    tracks = {}
+    for obj in bpy.context.scene.objects:
+        data = getattr(obj, "animation_data", None)
+        action = getattr(data, "action", None)
+        if action is None:
+            continue
+        slot = getattr(data, "action_slot", None)
+        curves = {fc.data_path: fc for fc in _action_fcurves(action, slot)}
+        fcurve = curves.get("hide_viewport") or curves.get("hide_render")
+        if fcurve is None:
+            continue
+        keys = sorted(
+            # Blender hides on TRUE; Maya's .visibility shows on 1.
+            (float(key.co[0]), 0.0 if key.co[1] else 1.0)
+            for key in fcurve.keyframe_points
+        )
+        if keys:
+            tracks[obj.name] = keys
+
+    def inherited(obj):
+        """The nearest ancestor's track -- what Maya applies to *obj* on its own."""
+        parent = obj.parent
+        while parent is not None:
+            if parent.name in tracks:
+                return tracks[parent.name]
+            parent = parent.parent
+        return None
+
+    visibility = {}
+    for obj in bpy.context.scene.objects:
+        keys = tracks.get(obj.name)
+        if not keys or inherited(obj) == keys:
+            continue
+        visibility[obj.name] = [[frame, value] for frame, value in keys]
+    if visibility:
+        print(
+            "visibility keys for {} object(s) written to the manifest.".format(
+                len(visibility)
+            )
+        )
+    return visibility
+
+
+def hide_is_animated(obj):
+    """True when *obj*'s show/hide is keyed. Its keys travel in the manifest's
+    ``visibility`` section (``collect_visibility``), so the static ``invisible``
+    stamp must leave it out: the stamp would pin a prim the keys switch, and a child
+    whose track the collector drops because an ancestor already says it would stay
+    hidden in Maya for good, whatever that ancestor's keys do."""
+    data = getattr(obj, "animation_data", None)
+    action = getattr(data, "action", None)
+    if action is None:
+        return False
+    return any(
+        fc.data_path in ("hide_viewport", "hide_render")
+        for fc in _action_fcurves(action, getattr(data, "action_slot", None))
+    )
 
 
 def collect_empties(bpy):
@@ -869,6 +1114,13 @@ def collect_instance_groups(bpy):
     Recorded, never inferred: matching by geometry would also fuse
     coincidentally-identical meshes, making an edit to one silently change
     another.
+
+    Each group is SORTED. ``scene.objects`` iterates in insertion order, so the same
+    scene converted twice recorded its members in different orders -- which made the
+    sidecar unreproducible and, on the FBX route, handed the replay a different
+    "first" member each time (measured: one hop listed ``ASSET_001`` first and the
+    next ``ASSET_001_001``). The replay picks its own master regardless, but a
+    deterministic sidecar is what makes two conversions comparable at all.
     """
     sanitized = {}
     for ob in bpy.context.scene.objects:
@@ -895,7 +1147,7 @@ def collect_instance_groups(bpy):
             "names or pull via FBX: "
             + "; ".join("{} <- {}".format(k, v) for k, v in sorted(colliding.items()))
         )
-    return [[_sanitize_prim_name(n) for n in names] for names in recorded]
+    return [sorted(_sanitize_prim_name(n) for n in names) for names in recorded]
 
 
 def scene_settings(bpy):
@@ -927,7 +1179,13 @@ def scene_settings(bpy):
 
 
 def write_manifest(
-    bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None
+    bpy,
+    scene,
+    materials=None,
+    scene_materials=None,
+    scene_data=None,
+    rig=None,
+    visibility=None,
 ):
     """Sidecar beside the USD carrying what the flat export cannot: instance
     groups, and the scene's time setup (*scene* -- read BEFORE the export, since
@@ -940,6 +1198,8 @@ def write_manifest(
     judged-by-artifact contract reports a failed conversion instead of shipping
     a payload that would import silently flattened. *scene_data* is
     ``scene_data_sections``' sections (``shots``, ``records``), merged in.
+    *visibility* is ``collect_visibility``'s show/hide keys, which neither
+    exporter carries; only a scene that keys one writes the section.
     """
     import json
 
@@ -963,6 +1223,8 @@ def write_manifest(
     data.update(scene_data or {})
     if rig:  # rig mode only: the graph, its plan and the verify samples
         data["rig"] = rig
+    if visibility:  # only scenes that key a show/hide carry the section
+        data["visibility"] = visibility
     with open(OUT_USD + ".manifest.json", "w", encoding="utf-8") as fh:
         json.dump(data, fh)
     print(
@@ -1141,6 +1403,8 @@ def main():
     # Read first too: the sections describe the artist's scene. Names spelled as
     # the exporter writes the prims (the instance section's own spelling).
     scene_data = scene_data_sections(bpy, _sanitize_prim_name)
+    # Before the export too, which clears every hide flag for the writer.
+    visibility = collect_visibility(bpy)
     _progress(1, 5, "Collecting materials")
     materials, scene_materials = collect_texture_manifest(bpy)
     rig = {}
@@ -1155,7 +1419,13 @@ def main():
     # from. A failure in either withholds both (`_withhold`): a USD without its
     # sidecar would import silently flattened.
     write_manifest(
-        bpy, scene, materials, scene_materials, scene_data=scene_data, rig=rig
+        bpy,
+        scene,
+        materials,
+        scene_materials,
+        scene_data=scene_data,
+        rig=rig,
+        visibility=visibility,
     )
     _progress(5, 5, "Converted")
 

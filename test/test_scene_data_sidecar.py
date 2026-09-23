@@ -765,15 +765,17 @@ class FormatDiffReportTest(unittest.TestCase):
         self.assertIn("Reparented: 'grp' moved under 'root' (1 nodes)", report)
 
 
-class CompatShimTest(unittest.TestCase):
-    """The deprecated hierarchy_sidecar module aliases the new class."""
+class RetiredShimTest(unittest.TestCase):
+    """``hierarchy_sidecar`` aliased :class:`SceneDataSidecar` from 2026-07-29
+    for thirty-one releases with no caller, and was retired 2026-09-21. It
+    must stay gone: the class is ``SceneDataSidecar``, imported from
+    ``scene_data_sidecar``."""
 
-    def test_hierarchy_sidecar_alias(self):
-        from mayatk.env_utils.hierarchy_sync.hierarchy_sidecar import (
-            HierarchySidecar,
-        )
+    def test_the_hierarchy_sidecar_module_stays_removed(self):
+        import importlib
 
-        self.assertIs(HierarchySidecar, SceneDataSidecar)
+        with self.assertRaises(ImportError):
+            importlib.import_module("mayatk.env_utils.hierarchy_sync.hierarchy_sidecar")
 
 
 if __name__ == "__main__":

@@ -607,29 +607,123 @@ class TestReferenceManager(unittest.TestCase):
         )
 
     def test_is_foreign_classifies_blend_only(self):
-        """_is_foreign flags .blend (the cross-DCC row) and nothing else — .fbx is NATIVE
-        on this side (Maya references it directly), so it must not classify as foreign."""
+        """_is_foreign flags .blend (the cross-DCC row) and nothing else — .fbx and USD are
+        NATIVE on this side (Maya references both directly, through their translators), so
+        neither may classify as foreign."""
         C = ref_mgr.ReferenceManagerController
         self.assertTrue(C._is_foreign("C:/proj/mesh.blend"))
         self.assertFalse(C._is_foreign("C:/proj/scene.ma"))
         self.assertFalse(C._is_foreign("C:/proj/scene.mb"))
         self.assertFalse(C._is_foreign("C:/proj/prop.fbx"))
+        for ext in ptk.USD_EXTENSIONS:
+            self.assertFalse(C._is_foreign(f"C:/proj/set{ext}"), ext)
         self.assertFalse(C._is_foreign(""))
 
     def test_include_type_classification_is_the_inverse_of_blendertk(self):
         """The panel's file-type split is the mirror of the Blender panel's: this side's
-        natives are .ma/.mb/.fbx and its only foreign type is .blend, and every include
-        toggle names one of the four shared types."""
+        natives are .ma/.mb/.fbx plus every USD spelling and its only foreign type is
+        .blend, and every include toggle lists one of the five shared types."""
         S = ref_mgr.ReferenceManagerSlots
-        self.assertEqual(S._INCLUDE_TYPES, ("ma", "mb", "fbx", "blend"))
-        self.assertEqual(S.NATIVE_EXTENSIONS, (".ma", ".mb", ".fbx"))
+        self.assertEqual(S._INCLUDE_TYPES, ("ma", "mb", "fbx", "usd", "blend"))
+        self.assertEqual(
+            S.NATIVE_EXTENSIONS, (".ma", ".mb", ".fbx", *ptk.USD_EXTENSIONS)
+        )
         self.assertEqual(S.FOREIGN_EXTENSIONS, (".blend",))
         self.assertEqual(S._INCLUDE_DEFAULTS, (".ma", ".mb"))
         self.assertEqual(
-            set(f".{t}" for t in S._INCLUDE_TYPES),
+            {ext for t in S._INCLUDE_TYPES for ext in S._type_extensions(t)},
             set(S.NATIVE_EXTENSIONS) | set(S.FOREIGN_EXTENSIONS),
             "every include toggle must classify as native or foreign",
         )
+
+    def test_the_usd_toggle_lists_every_usd_spelling(self):
+        """One 'usd' toggle, four extensions: a layer or package is any of
+        .usd/.usda/.usdc/.usdz, and the checkbox is off by default like 'fbx'
+        (deliverables, not this panel's own scenes)."""
+        S = ref_mgr.ReferenceManagerSlots
+        self.assertEqual(S._type_extensions("usd"), ptk.USD_EXTENSIONS)
+        self.assertEqual(S._type_extensions("fbx"), (".fbx",))
+
+        class _Check:
+            def __init__(self, on):
+                self._on = on
+
+            def isChecked(self):
+                return self._on
+
+        menu = type(
+            "M", (), {f"chk_include_{t}": _Check(t == "usd") for t in S._INCLUDE_TYPES}
+        )()
+        slot = S.__new__(S)
+        slot.ui = type("U", (), {"header": type("H", (), {"menu": menu})()})()
+        self.assertEqual(slot._included_extensions(), set(ptk.USD_EXTENSIONS))
+        self.assertFalse(set(ptk.USD_EXTENSIONS) & set(S._INCLUDE_DEFAULTS))
+
+    def test_unlink_and_import_brings_in_an_unreferenced_usd_row(self):
+        """A USD row with no reference behind it imports natively (the way in for a
+        stage a live read refuses); a native Maya row still says there is nothing to
+        unlink."""
+        S = ref_mgr.ReferenceManagerSlots
+        for path, imports in (("C:/proj/set.usdc", True), ("C:/proj/shot.ma", False)):
+            with self.subTest(path=path):
+                slot = S.__new__(S)
+                slot.ui = MockUI()
+                slot.ui.tbl000 = QtWidgets.QTableWidget()
+                slot.ui.tbl000.setRowCount(1)
+                item = QtWidgets.QTableWidgetItem("row")
+                item.setData(MockQt.UserRole, path)
+                slot.ui.tbl000.setItem(0, 0, item)
+                slot.sb = MockSB()
+                slot.sb.message_box = MagicMock()
+                slot.controller = MagicMock(current_references=[])
+                slot.controller._is_foreign = (
+                    ref_mgr.ReferenceManagerController._is_foreign
+                )
+                slot.controller._bake_source_key = lambda _p: None
+                slot._context_row = lambda: 0
+                slot._get_row_reference_namespaces = lambda _row: []
+                slot._import_paths = MagicMock()
+
+                slot.btn_unlink_import()
+
+                if imports:
+                    slot._import_paths.assert_called_once_with([path])
+                    slot.sb.message_box.assert_not_called()
+                else:
+                    slot._import_paths.assert_not_called()
+                    slot.sb.message_box.assert_called_once()
+
+    def test_an_import_error_reaches_the_message_box_as_text_not_markup(self):
+        """The box renders rich text, and pxr quotes prim paths as ``</...>``:
+        unescaped, the part of the error that named the problem vanished (a
+        file name's ``&`` too)."""
+        import contextlib
+
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        S = ref_mgr.ReferenceManagerSlots
+        slot = S.__new__(S)
+        shown = []
+        slot.sb = type(
+            "SB", (), {"message_box": lambda _s, text, *b: shown.append(text)}
+        )()
+        slot.controller = MagicMock()
+        slot.controller._is_usd = lambda _p: True
+        slot._is_importable = lambda _p: True
+        slot._conversion_progress = lambda _text: contextlib.nullcontext()
+        with patch.object(
+            BlenderSceneImport,
+            "import_scene",
+            side_effect=RuntimeError(
+                "layer </World/Crate> could not be read & skipped"
+            ),
+        ):
+            slot._import_paths(["C:/proj/R&D set.usda"])
+
+        self.assertEqual(len(shown), 1, shown)
+        self.assertIn("&lt;/World/Crate&gt;", shown[0])
+        self.assertIn("read &amp; skipped", shown[0])
+        self.assertIn("<hl>R&amp;D set.usda</hl>", shown[0])
 
     def test_included_extensions_falls_back_to_defaults_without_a_menu(self):
         """An early refresh (header menu not built yet) must still list this panel's own
@@ -2455,16 +2549,233 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
             [r.namespace for r in self.manager.current_references], ["ASSET"]
         )
 
-    def test_deprecated_bool_form_still_maps_to_the_old_behaviour(self):
-        """``remove_namespace`` predates the modes; a pinned caller must not break."""
+    def test_the_retired_bool_form_is_gone(self):
+        """``remove_namespace`` (the bool the modes replaced 2026-08-11) had no
+        caller left and was retired 2026-09-21: ``namespace_mode="keep"`` is
+        the old ``False``, ``"remove"`` the old ``True``."""
         self._reference()
-        self.manager.import_references(remove_namespace=False)
+        with self.assertRaises(TypeError):
+            self.manager.import_references(remove_namespace=False)
+        self.manager.import_references(namespace_mode="keep")
         self.assertEqual(self._transforms(), ["ASSET:asset_child", "ASSET:asset_root"])
 
+
+class TestImportReferencesClearsWhatItPromoted(unittest.TestCase):
+    """An import leaves no broken reference behind (BACKLOG 2026-08-29).
+
+    A reference Maya could not form -- a scene referencing the file that is
+    ALREADY open -- survives inside its parent as a node with no file.
+    Importing the parent promoted it to a top-level file-less node that the
+    scene then saved and Maya's Reference Editor listed as broken. It is
+    debris the import itself made, so the import removes it inside its own
+    undo chunk (the maintainer's call of 2026-09-10); nothing else is touched.
+    """
+
+    def setUp(self):
+        cmds = ref_mgr.cmds
+        self._store = ptk.TempArtifacts("mtk_rm_file_less_test", policy="scoped")
+        root = self._store.dir_path()
+        self.child = os.path.join(root, "fl_child.ma")
+        self.parent = os.path.join(root, "fl_parent.ma")
+        self.healthy = os.path.join(root, "fl_healthy.ma")
+        for path, build in (
+            (self.child, lambda: cmds.polyCube(name="child_cube")),
+            (self.healthy, lambda: cmds.polyCube(name="healthy_cube")),
+            (
+                self.parent,
+                lambda: cmds.file(self.child, reference=True, namespace="CHILD"),
+            ),
+        ):
+            cmds.file(new=True, force=True)
+            build()
+            cmds.file(rename=path)
+            cmds.file(save=True, type="mayaAscii", force=True)
+        # The child IS the open scene, so the parent's reference to it cannot form.
+        cmds.file(self.child, open=True, force=True)
+        self.manager = TestImportReferencesNamespaceModes._make_manager()
+
+    def tearDown(self):
         ref_mgr.cmds.file(new=True, force=True)
-        self._reference()
-        self.manager.import_references(remove_namespace=True)
-        self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
+        self._store.cleanup()
+
+    @staticmethod
+    def _file_less():
+        return ref_mgr.EnvUtils.list_reference_nodes(file_less=True)
+
+    def test_the_node_the_import_promoted_is_removed(self):
+        cmds = ref_mgr.cmds
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+        cmds.file(self.healthy, reference=True, namespace="KEEP")
+
+        self.manager.import_references(namespaces="PARENT")
+
+        self.assertEqual(self._file_less(), [], "no broken reference is left")
+        self.assertEqual(
+            [ref.namespace for ref in self.manager.current_references],
+            ["KEEP"],
+            "a healthy reference is never caught by the probe",
+        )
+
+    def test_debris_an_earlier_import_left_is_not_this_one_s(self):
+        cmds = ref_mgr.cmds
+        cmds.file(self.parent, reference=True, namespace="EARLIER")
+        cmds.file(referenceNode="EARLIERRN", importReference=True)  # a raw import
+        earlier = self._file_less()
+        self.assertEqual(len(earlier), 1, "the fixture must hold older debris")
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+
+        self.manager.import_references(namespaces="PARENT")
+
+        self.assertEqual(self._file_less(), earlier)
+
+    def test_one_undo_brings_the_removed_node_back(self):
+        cmds = ref_mgr.cmds
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+        self.manager.import_references(namespaces="PARENT")
+        self.assertEqual(self._file_less(), [])
+        cmds.undo()
+        self.assertEqual(len(self._file_less()), 1)
+
+
+class TestUsdRowsAgainstRealMaya(unittest.TestCase):
+    """USD rows reference and open NATIVELY, through mayaUsd's translator -- the way an
+    .fbx row goes through the FBX plugin -- driven against a real Maya.
+
+    Measured first (Maya 2025 / mayaUsd 0.30): the translator is a real reference
+    reader -- reference node, namespace, unload/reload and importReference all work,
+    and the saved scene records ``-typ`` / ``-op`` so a reopen reads the stage the same
+    way. Left to pick the translator by extension, though, Maya reads with
+    ``readAnimData`` at its OFF default (the keyed stage arrived static), and a
+    dual-quaternion skin crashes the reader outright (an access violation) -- so a live
+    read of one is refused rather than attempted.
+    """
+
+    def setUp(self):
+        from mayatk.env_utils.usd import UsdUtils
+
+        UsdUtils.load_plugin()
+        self._store = ptk.TempArtifacts("mtk_rm_usd_test", policy="scoped")
+        self.root = self._store.dir_path()
+        self.usd = os.path.join(self.root, "crate.usda")
+        cmds = ref_mgr.cmds
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="crate")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=10, v=5)
+        cmds.select(cube)
+        cmds.mayaUSDExport(file=self.usd, selection=True, frameRange=(1, 10))
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ref_mgr.cmds.file(new=True, force=True)
+        self._store.cleanup()
+
+    def _dual_quaternion_stage(self):
+        """A stage authoring the one skinning method mayaUsd 0.30's reader crashes on."""
+        from pxr import Usd, UsdGeom, UsdSkel
+
+        path = os.path.join(self.root, "limb_dq.usda")
+        stage = Usd.Stage.CreateNew(path)
+        prim = UsdGeom.Mesh.Define(stage, "/rig/limb").GetPrim()
+        UsdSkel.BindingAPI.Apply(prim)
+        UsdSkel.BindingAPI(prim).CreateSkinningMethodAttr().Set("dualQuaternion")
+        stage.GetRootLayer().Save()
+        return path
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(os.path.normpath(path))
+
+    def test_add_reference_reads_a_usd_through_its_translator(self):
+        manager = TestImportReferencesNamespaceModes._make_manager()
+        self.assertTrue(manager.add_reference("crate", self.usd))
+
+        refs = manager.current_references
+        self.assertEqual([self._norm(r.path) for r in refs], [self._norm(self.usd)])
+        self.assertTrue(
+            ref_mgr.cmds.keyframe(
+                f"{refs[0].namespace}:crate", q=True, timeChange=True
+            ),
+            "the referenced stage arrived static",
+        )
+        # Stored on the reference itself, so a reopen reads the stage the same way.
+        host = os.path.join(self.root, "host.ma")
+        ref_mgr.cmds.file(rename=host)
+        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        with open(host, encoding="utf-8", errors="ignore") as fh:
+            text = fh.read()
+        self.assertIn('-typ "USD Import"', text)
+        self.assertIn("readAnimData=1", text)
+
+    def test_add_reference_refuses_a_usd_the_reader_crashes_on(self):
+        manager = TestImportReferencesNamespaceModes._make_manager()
+        with patch.object(ref_mgr.cmds, "warning") as warned:
+            self.assertFalse(
+                manager.add_reference("limb", self._dual_quaternion_stage())
+            )
+        self.assertEqual(manager.current_references, [])
+        self.assertIn("/rig/limb", warned.call_args[0][0])
+
+    def test_open_scene_opens_a_usd_through_its_translator(self):
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+        self.assertTrue(controller.open_scene(self.usd, set_workspace=False))
+        self.assertEqual(
+            self._norm(ref_mgr.cmds.file(q=True, sceneName=True)), self._norm(self.usd)
+        )
+        self.assertTrue(
+            ref_mgr.cmds.keyframe("crate", q=True, timeChange=True),
+            "the opened stage arrived static",
+        )
+
+    def test_open_scene_refuses_a_usd_the_reader_crashes_on(self):
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+        shown = []
+        controller.sb.message_box = lambda msg, *buttons: shown.append(msg)
+        dq = self._dual_quaternion_stage()
+        with patch.object(ref_mgr.cmds, "warning"):
+            self.assertFalse(controller.open_scene(dq, set_workspace=False))
+        self.assertNotEqual(
+            self._norm(ref_mgr.cmds.file(q=True, sceneName=True) or "x"),
+            self._norm(dq),
+        )
+        self.assertTrue(shown and "/rig/limb" in shown[0], shown)
+        self.assertIn("Unlink and Import", shown[0])
+
+    def _garbage_layer(self):
+        """A layer pxr cannot parse -- its error quotes the prim path ``</>``."""
+        path = os.path.join(self.root, "damaged.usda")
+        with open(path, "wb") as fh:
+            fh.write(b"#usda 1.0\n(\n this is not usd {{{\n")
+        return path
+
+    def test_add_reference_refuses_an_unreadable_usd(self):
+        """Measured: the translator does not fail on a layer pxr cannot read -- it
+        leaves an EMPTY reference node behind, which reads as referenced in the table
+        while holding nothing."""
+        manager = TestImportReferencesNamespaceModes._make_manager()
+        with patch.object(ref_mgr.cmds, "warning") as warned:
+            self.assertFalse(manager.add_reference("damaged", self._garbage_layer()))
+        self.assertEqual(manager.current_references, [])
+        self.assertEqual(
+            [r for r in ref_mgr.cmds.ls(type="reference") or [] if "shared" not in r],
+            [],
+        )
+        self.assertIn("not a readable USD layer", warned.call_args[0][0])
+
+    def test_open_scene_refuses_an_unreadable_usd_without_offering_the_import(self):
+        """A damaged layer reads for neither path, so the box must not send the user
+        to Unlink and Import; and pxr's ``</>`` must reach the box escaped, not as
+        markup that swallows the rest of the message."""
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+        shown = []
+        controller.sb.message_box = lambda msg, *buttons: shown.append(msg)
+        with patch.object(ref_mgr.cmds, "warning"):
+            self.assertFalse(
+                controller.open_scene(self._garbage_layer(), set_workspace=False)
+            )
+        self.assertTrue(shown and "not a readable USD layer" in shown[0], shown)
+        self.assertNotIn("Unlink and Import", shown[0])
+        self.assertNotIn("</>", shown[0])
 
 
 class TestImportReferencesSceneData(unittest.TestCase):

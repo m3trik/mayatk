@@ -94,7 +94,9 @@ class TestEnvUtils(MayaTkTestCase):
             [d for d in found if os.path.normcase(os.path.normpath(d)) == key],
             [named],
         )
-        self.assertEqual(len(found), len({os.path.normcase(os.path.normpath(d)) for d in found}))
+        self.assertEqual(
+            len(found), len({os.path.normcase(os.path.normpath(d)) for d in found})
+        )
 
         cmds.autoSave(destination=0)
         self.assertNotIn(named, EnvUtils.find_autosave_directories())
@@ -553,6 +555,22 @@ class TestListReferenceNodes(MayaTkTestCase):
         )
         self.assertEqual(EnvUtils.list_reference_nodes(), [])
 
+    def test_file_less_lists_exactly_what_the_filename_probe_rejects(self):
+        """The same screen inverted, for a caller that clears the debris up:
+        nesting still screens (a nested node goes with its parent), and a
+        healthy reference is never listed."""
+        cmds.file(self.child, open=True, force=True)
+        cmds.file(self.parent, reference=True, namespace="PARENT")
+        self.assertEqual(EnvUtils.list_reference_nodes(file_less=True), [])
+        self.assertEqual(
+            EnvUtils.list_reference_nodes(top_level=False, file_less=True),
+            ["PARENT:CHILDRN"],
+        )
+        cmds.file(referenceNode="PARENTRN", importReference=True)
+        self.assertEqual(
+            EnvUtils.list_reference_nodes(file_less=True), ["PARENT:CHILDRN"]
+        )
+
     def test_list_references_returns_openable_paths(self):
         """Maya tags the second reference to a file with a copy number — 'scene.ma{1}'
         is not a path anything can open, so the query has to drop it."""
@@ -565,10 +583,6 @@ class TestListReferenceNodes(MayaTkTestCase):
         for path in paths:
             self.assertNotIn("{", path)
             self.assertTrue(os.path.exists(path), path)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestExportSceneAsObj(MayaTkTestCase):
@@ -725,3 +739,76 @@ class TestSavedScenePath(MayaTkTestCase):
             self.assertEqual(EnvUtils.saved_scene_path(), "")
         finally:
             os.remove(raw)
+
+
+class TestReferenceScene(MayaTkTestCase):
+    """``reference_scene`` reads a USD layer the way the Reference Manager does:
+    through mayaUsd's translator, NAMED -- Maya's extension guess references a keyed
+    stage static -- and never a stage whose skins crash the reader."""
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.usd import UsdUtils
+
+        UsdUtils.load_plugin()
+        self.paths = []
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)  # release the layers before deleting
+        for path in self.paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        super().tearDown()
+
+    def _path(self, name):
+        path = self.temp_path(name)
+        if os.path.exists(path):  # a killed run's leftover
+            os.remove(path)
+        self.paths.append(path)
+        return path
+
+    def test_a_usd_layer_references_with_its_animation(self):
+        path = self._path("_reference_scene_keyed.usda")
+        cube = cmds.polyCube(name="ref_scene_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(cube, attribute="translateX", t=10, v=4)
+        cmds.select(cube)
+        cmds.mayaUSDExport(file=path, selection=True, frameRange=(1, 10))
+        cmds.file(new=True, force=True)
+
+        EnvUtils.reference_scene(path)
+
+        # Through the reference itself: with no namespace given, Maya PREFIXES the
+        # node names rather than namespacing them (measured: ``<file>_ref_scene_cube``).
+        ref_node = cmds.file(path, q=True, referenceNode=True)
+        nodes = cmds.ls(
+            cmds.referenceQuery(ref_node, nodes=True) or [], type="transform"
+        )
+        self.assertTrue(nodes, cmds.ls(type="transform"))
+        self.assertTrue(
+            cmds.keyframe(nodes[0], q=True, timeChange=True),
+            "the referenced stage arrived static",
+        )
+
+    def test_a_usd_stage_the_reader_crashes_on_is_refused(self):
+        from pxr import Usd, UsdGeom, UsdSkel
+
+        from mayatk.env_utils.usd import UsdReadRefused
+
+        path = self._path("_reference_scene_dq.usda")
+        stage = Usd.Stage.CreateNew(path)
+        prim = UsdGeom.Mesh.Define(stage, "/rig/limb").GetPrim()
+        UsdSkel.BindingAPI.Apply(prim)
+        UsdSkel.BindingAPI(prim).CreateSkinningMethodAttr().Set("dualQuaternion")
+        stage.GetRootLayer().Save()
+        del stage
+
+        with self.assertRaises(UsdReadRefused):
+            EnvUtils.reference_scene(path)
+        self.assertEqual(EnvUtils.list_reference_nodes(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
