@@ -17,6 +17,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import warnings
 from unittest import mock
 
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
@@ -462,6 +463,44 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         mean = float(out.mean())
         self.assertGreater(mean, 0.28, f"lightmap too dark: {mean:.4f}")
         self.assertLess(mean, 0.35, f"lightmap too bright: {mean:.4f}")
+
+    def test_an_excluded_object_still_shadows_the_objects_that_bake(self):
+        """The Exclude set's promise, rendered: an excluded object gets no map,
+        but it stays in the render. A box excluded over a floor darkens the
+        floor's map where its shadow falls; with the box gone, it does not."""
+        _, np = _cv2()
+        floor = cmds.ls(
+            cmds.polyPlane(name="exFloor", w=2, h=2, sx=1, sy=1)[0], long=True
+        )[0]
+        box = cmds.ls(cmds.polyCube(name="exBox", w=1, h=0.2, d=1)[0], long=True)[0]
+        cmds.setAttr(f"{box}.translateY", 1.0)
+        light = cmds.directionalLight(intensity=1.0)
+        cmds.setAttr(f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90)
+        LightmapExcludeSet.define([box])
+
+        def bake_floor():
+            result = LightmapBaker(resolution=32, samples=2).bake(
+                cmds.ls(floor, box), packing="per_object", output_dir=self.tmp
+            )
+            self.assertEqual(list(result.maps), [floor], result.refused)
+            lum = _read(result.maps[floor]).astype(np.float64).mean(axis=2)
+            return result, np.percentile(lum, 5), np.percentile(lum, 95)
+
+        result, shadowed_dark, shadowed_lit = bake_floor()
+        self.assertEqual(result.excluded, [box], "the Exclude set left the box out")
+
+        cmds.delete(box)
+        _, open_dark, open_lit = bake_floor()
+
+        self.assertLess(
+            shadowed_dark,
+            0.5 * open_dark,
+            f"no shadow from the excluded box: darkest texels {shadowed_dark:.4f} "
+            f"with it, {open_dark:.4f} without",
+        )
+        # Where no shadow falls the two bakes agree: the box took light away
+        # only where it stands between the light and the floor.
+        self.assertAlmostEqual(shadowed_lit / open_lit, 1.0, delta=0.2)
 
     def test_lightmap_is_albedo_independent(self):
         # The composite invariant that survives the fused removal: the engine
@@ -2257,8 +2296,8 @@ class TestDenoise(unittest.TestCase):
         )
 
     def test_the_preset_carries_the_setting(self):
-        self.assertTrue(LightmapBaker.from_preset("quest").denoise)
-        self.assertFalse(LightmapBaker.from_preset("quest", denoise=False).denoise)
+        self.assertTrue(LightmapBaker.from_preset("mobile").denoise)
+        self.assertFalse(LightmapBaker.from_preset("mobile", denoise=False).denoise)
 
 
 class TestDilateRingScalesWithTheMap(unittest.TestCase):
@@ -2379,10 +2418,10 @@ class TestIncludeEnvironment(MayaTkTestCase):
 
     def test_from_preset_carries_the_non_numeric_overrides(self):
         # Filtering the overrides to the int keys silently DROPPED these, so
-        # from_preset("quest", device="GPU") built a baker on the scene's own
+        # from_preset("mobile", device="GPU") built a baker on the scene's own
         # device and said nothing.
         baker = LightmapBaker.from_preset(
-            "quest", device="CPU", include_environment=False
+            "mobile", device="CPU", include_environment=False
         )
         self.assertEqual(baker.device, "CPU")
         self.assertFalse(baker.include_environment)
@@ -2500,7 +2539,7 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         """The assembler's INTER_AREA resize into the cell is the only noise
         filter an Arnold atlas gets: RTT ignores imagers, so nothing denoises
         the map. Tiles rendered AT their cell kept every sample's noise --
-        measured on a production room at quest (1024 / 4 samples), the floor
+        measured on a production room at mobile (1024 / 4 samples), the floor
         cells shipped 2.3x the shadow noise of the pre-plan-first full-size
         bake and read as splotches in the WebXR preview. A tile renders at a
         multiple of its cell, never above the full map."""
@@ -2646,7 +2685,7 @@ class TestLightmapPresets(unittest.TestCase):
 
     def test_builtin_tiers_listed(self):
         names = LightmapBaker.preset_store().list()
-        for tier in ("preview", "quest", "desktop"):
+        for tier in ("preview", "mobile", "desktop"):
             self.assertIn(tier, names)
 
     def test_from_preset_sets_resolution_and_samples(self):
@@ -2669,7 +2708,7 @@ class TestLightmapPresets(unittest.TestCase):
         )
 
     def test_overrides_win_over_preset(self):
-        baker = LightmapBaker.from_preset("quest", resolution=1536, gi_depth=5)
+        baker = LightmapBaker.from_preset("mobile", resolution=1536, gi_depth=5)
         self.assertEqual(baker.resolution, 1536)  # override
         self.assertEqual(baker.samples, 4)  # from preset
         self.assertEqual(baker.gi_depth, 5)  # override
@@ -2678,6 +2717,27 @@ class TestLightmapPresets(unittest.TestCase):
     def test_unknown_preset_raises(self):
         with self.assertRaises(ValueError):
             LightmapBaker.from_preset("does_not_exist")
+
+    def test_the_renamed_quest_tier_still_builds_mobile_with_a_notice(self):
+        """``quest`` was renamed ``mobile``: a script that names the old tier
+        keeps baking at the same dials, and is told the new name."""
+        with self.assertWarns(DeprecationWarning) as caught:
+            baker = LightmapBaker.from_preset("quest", resolution=1536)
+        self.assertIn("mobile", str(caught.warning))
+        mobile = LightmapBaker.from_preset("mobile")
+        self.assertEqual(baker.resolution, 1536)  # an override still wins
+        self.assertEqual(
+            (baker.samples, baker.gi_depth, baker.gi_samples),
+            (mobile.samples, mobile.gi_depth, mobile.gi_samples),
+        )
+
+    def test_a_user_preset_named_like_a_renamed_tier_shadows_the_alias(self):
+        """The alias only stands in for a name the store no longer has."""
+        self._store_with("quest", {"resolution": 512, "samples": 3})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            baker = LightmapBaker.from_preset("quest")
+        self.assertEqual((baker.resolution, baker.samples), (512, 3))
 
     def _store_with(self, name, data):
         """Point the preset store at a scratch user tier holding *data* as *name*.
@@ -2797,6 +2857,65 @@ class TestExcludeSet(MayaTkTestCase):
         self.assertTrue(
             any("tgtHidden" in m and "tgtUnder" in m for m in caught.output)
         )
+
+    def test_a_templated_mesh_is_left_out_like_a_hidden_one(self):
+        """Arnold renders no templated object either -- "not exported to Arnold
+        world", by the attribute or by a Template display layer -- so its bake
+        wrote no map and stopped the bake exactly as a hidden one did. The
+        production room's Scene scope held a templated rig of 23 meshes."""
+        shown = self._cube("tgtShownT")
+        by_attr = self._cube("tgtTemplated")
+        cmds.setAttr(f"{by_attr}.template", True)
+        by_layer = self._cube("tgtLayerTemplated")
+        layer = cmds.createDisplayLayer(by_layer, name="tgtTemplate", noRecurse=True)
+        cmds.setAttr(f"{layer}.displayType", 1)
+
+        with self.assertLogs(LightmapBaker.logger, level="WARNING") as caught:
+            targets = LightmapBaker.bake_targets([shown, by_attr, by_layer])
+
+        self.assertEqual(targets, [shown])
+        self.assertTrue(
+            any("tgtTemplated" in m and "tgtLayerTemplated" in m for m in caught.output)
+        )
+
+    def test_a_mesh_hidden_at_its_shape_is_left_out_too(self):
+        """Hidden or templated at its SHAPE under a shown transform (Hide with
+        the shape picked in the Outliner, an import that hid it), a mesh
+        renders nothing either. The gate walked up from the transform and
+        never read the shape, so its bake stopped the bake as a hidden
+        transform's did."""
+        shown = self._cube("tgtShownS")
+        hidden = self._cube("tgtShapeHidden")
+        templated = self._cube("tgtShapeTemplated")
+        shape = cmds.listRelatives(hidden, shapes=True, fullPath=True)[0]
+        cmds.setAttr(f"{shape}.visibility", False)
+        shape = cmds.listRelatives(templated, shapes=True, fullPath=True)[0]
+        cmds.setAttr(f"{shape}.template", True)
+
+        with self.assertLogs(LightmapBaker.logger, level="WARNING") as caught:
+            targets = LightmapBaker.bake_targets([shown, hidden, templated])
+
+        self.assertEqual(targets, [shown])
+        self.assertTrue(
+            any(
+                "tgtShapeHidden" in m and "tgtShapeTemplated" in m
+                for m in caught.output
+            )
+        )
+
+    def test_each_instance_is_read_through_its_own_path(self):
+        """One shape under a hidden transform and a shown one: the shown copy
+        bakes, the hidden one is left out. The shape is a single node, so the
+        answer comes from the path each copy is reached by -- a walk that took
+        the shape's FIRST parent would leave the shown copy out too."""
+        source = self._cube("tgtInstSrc")
+        copy = cmds.ls(cmds.instance(source, name="tgtInstCopy")[0], long=True)[0]
+        cmds.setAttr(f"{source}.visibility", False)
+
+        with self.assertLogs(LightmapBaker.logger, level="WARNING"):
+            targets = LightmapBaker.bake_targets([source, copy])
+
+        self.assertEqual(targets, [copy])
 
     def test_faces_exclude_their_mesh_not_the_children_under_it(self):
         parent = self._cube("faceParent")
@@ -2994,9 +3113,7 @@ class TestNeverWritesOverAnotherObjectsMap(MayaTkTestCase):
             [hero, room], output_dir=self.tmp
         )
         self.assertEqual(list(out), [room])
-        self.assertEqual(
-            fake.called_claims, {"crate_lightmap.exr": frozenset({hero})}
-        )
+        self.assertEqual(fake.called_claims, {"crate_lightmap.exr": frozenset({hero})})
 
     @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
     def test_an_object_whose_rebake_fails_keeps_its_map(self):
@@ -3037,7 +3154,8 @@ class TestNeverWritesOverAnotherObjectsMap(MayaTkTestCase):
             mock.patch.object(TextureBaker, "ensure_arnold", return_value=True),
             mock.patch.object(TextureBaker, "_resolve_backend", return_value="arnold"),
             mock.patch.object(
-                baker.baker, "_pinned_render_settings",
+                baker.baker,
+                "_pinned_render_settings",
                 return_value=contextlib.nullcontext(),
             ),
             mock.patch.object(baker.baker, "_bake_with_arnold", side_effect=render),
@@ -3251,6 +3369,39 @@ class TestBakeWorkflow(MayaTkTestCase):
         self.assertFalse(refused)
         self.assertIn("Exclude set", refused.refused)
 
+    def test_a_hidden_mesh_is_named_hidden_not_excluded(self):
+        """``excluded`` is the Exclude set's, and a hidden mesh is left out for
+        a reason of its own. Counted together, a Scene bake of the production
+        room reported "14 excluded" against a set of 12 -- its two hidden
+        props counted in."""
+        kept, left_out = self._cube("wfKeptH"), self._cube("wfOutH")
+        hidden = self._cube("wfHiddenH")
+        cmds.setAttr(f"{hidden}.visibility", False)
+        LightmapExcludeSet.define([left_out])
+
+        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
+            [kept, left_out, hidden], packing="per_object", output_dir=self.tmp
+        )
+
+        self.assertEqual(list(result.maps), [kept])
+        self.assertEqual(result.excluded, [left_out])
+        self.assertEqual(result.hidden, [hidden])
+
+    def test_a_bake_of_nothing_visible_says_so(self):
+        """Refused for what it is: the Exclude set was not why."""
+        hidden = self._cube("wfOnlyHidden")
+        cmds.setAttr(f"{hidden}.visibility", False)
+        refused = LightmapBaker(baker=_FakeBaker()).bake([hidden])
+        self.assertFalse(refused)
+        self.assertIn("hidden", refused.refused)
+        self.assertNotIn("Exclude set", refused.refused)
+
+        left_out = self._cube("wfOnlyOut")
+        LightmapExcludeSet.define([left_out])
+        both = LightmapBaker(baker=_FakeBaker()).bake([hidden, left_out])
+        self.assertIn("hidden", both.refused)
+        self.assertIn("Exclude set", both.refused)
+
     # -- preflight: Arnold, the lights ----------------------------------------
 
     def test_without_arnold_nothing_in_the_scene_changes(self):
@@ -3369,7 +3520,11 @@ class TestBakeWorkflow(MayaTkTestCase):
 
         cube = self._cube("wfIntensity")
         result = LightmapBaker(resolution=64, baker=_Flat()).bake(
-            [cube], packing="per_object", output_dir=self.tmp, intensity=2.0, dilate=False
+            [cube],
+            packing="per_object",
+            output_dir=self.tmp,
+            intensity=2.0,
+            dilate=False,
         )
         path = result.maps[cube]
         self.assertAlmostEqual(float(_read(path).mean()), 0.5, places=3)
@@ -3470,6 +3625,158 @@ class TestBakeWorkflow(MayaTkTestCase):
         # The workflow verbs are delegates, not deprecations.
         self.assertEqual(baker.baked_objects(), [cube])
         self.assertEqual(baker.revert(), [cube])
+
+
+@unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+class TestSupersededMaps(MayaTkTestCase):
+    """A re-bake deletes the maps it superseded -- and only its own.
+
+    Changing where or how maps are written (the folder, the name affix, the
+    packing) gave the objects new files and left the old ones on disk, read by
+    nobody: the production project held a leftover ``_1`` atlas no scene
+    named. Every keep rule below is a reader a delete would have stranded.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="lm_superseded_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def _cube(name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    @staticmethod
+    def _paths(paths):
+        return sorted(os.path.normcase(os.path.abspath(p)) for p in paths)
+
+    def _bake(self, objects, folder="out", suffix="_Lightmap", packing="per_object"):
+        folder = os.path.join(self.tmp, folder)
+        # The fake writes with cv2, which makes no folder: none, no file.
+        os.makedirs(folder, exist_ok=True)
+        return LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
+            objects, packing=packing, output_dir=folder, suffix=suffix
+        )
+
+    def _save_as(self, name, write=True):
+        path = os.path.join(self.tmp, name)
+        cmds.file(rename=path)
+        if write:
+            cmds.file(save=True, type="mayaAscii")
+        return path
+
+    # -- what a re-bake leaves behind ---------------------------------------
+
+    def test_a_rebake_under_another_affix_deletes_the_old_map(self):
+        cube = self._cube("supAffix")
+        old = self._bake([cube]).maps[cube]
+
+        result = self._bake([cube], suffix="_LM")
+
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(result.maps[cube]))
+        self.assertEqual(self._paths(result.retired), self._paths([old]))
+
+    def test_a_rebake_into_another_folder_deletes_the_old_map(self):
+        cube = self._cube("supFolder")
+        old = self._bake([cube], folder="first").maps[cube]
+        new = self._bake([cube], folder="second").maps[cube]
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(new))
+
+    def test_per_object_maps_folded_into_an_atlas_are_deleted(self):
+        a, b = self._cube("supAtlasA"), self._cube("supAtlasB")
+        per_object = self._bake([a, b]).maps
+
+        atlas = self._bake([a, b], packing="atlas")
+
+        self.assertEqual(len(set(atlas.maps.values())), 1)
+        self.assertEqual(self._paths(atlas.retired), self._paths(per_object.values()))
+        for path in per_object.values():
+            self.assertFalse(os.path.exists(path), path)
+
+    def test_a_same_place_rebake_deletes_nothing(self):
+        cube = self._cube("supSame")
+        path = self._bake([cube]).maps[cube]
+        result = self._bake([cube])
+        self.assertEqual(result.retired, [])
+        self.assertTrue(os.path.exists(path))
+
+    # -- the readers a delete would strand ------------------------------------
+
+    def test_a_map_another_object_still_reads_is_kept(self):
+        a, b = self._cube("supSharedA"), self._cube("supSharedB")
+        shared = self._bake([a]).maps[a]
+        LightmapRecords.commit({b: shared})
+
+        self._bake([a], suffix="_LM")
+        self.assertTrue(os.path.exists(shared), "b still reads it")
+
+        self._bake([b], suffix="_LM")
+        self.assertFalse(os.path.exists(shared), "now nothing does")
+
+    def test_the_maps_a_save_as_copys_source_reads_are_kept(self):
+        """A copy carries its source's markers and records, and the source
+        still reads the maps it wrote."""
+        cube = self._cube("supCopy")
+        self._save_as("source.ma")
+        old = self._bake([cube]).maps[cube]
+        self._save_as("copy.ma", write=False)
+
+        self._bake([cube], suffix="_LM")
+
+        self.assertTrue(os.path.exists(old))
+
+    def test_a_renamed_scenes_own_maps_are_still_its_own(self):
+        """Saved under a new name with the old file gone: nothing else can
+        open it to read the maps it wrote."""
+        cube = self._cube("supRenamed")
+        source = self._save_as("before.ma")
+        old = self._bake([cube]).maps[cube]
+        self._save_as("after.ma", write=False)
+        os.remove(source)
+
+        self._bake([cube], suffix="_LM")
+
+        self.assertFalse(os.path.exists(old))
+
+    def test_a_map_committed_before_writers_were_recorded_is_kept(self):
+        """Nobody's to delete: it may be another scene's (a folder lifted off
+        a legacy marker lands in the record the same way)."""
+        cube = self._cube("supUnstamped")
+        old = self._bake([cube]).maps[cube]
+        LightmapRecords._save_writers({})
+
+        self._bake([cube], suffix="_LM")
+
+        self.assertTrue(os.path.exists(old))
+
+    def test_a_map_a_referenced_object_reads_is_kept(self):
+        """Its own file may name the same map."""
+        cube = self._cube("supReferenced")
+        old = self._bake([cube]).maps[cube]
+        with mock.patch.object(LightmapRecords, "_referenced", return_value=True):
+            self._bake([cube], suffix="_LM")
+        self.assertTrue(os.path.exists(old))
+
+    def test_a_block_that_raises_deletes_nothing(self):
+        cube = self._cube("supRaise")
+        old = self._bake([cube]).maps[cube]
+        new = os.path.join(self.tmp, "new_Lightmap.exr")
+        shutil.copy(old, new)
+
+        with self.assertRaises(RuntimeError):
+            with LightmapRecords.superseding([cube]):
+                LightmapRecords.commit({cube: new})
+                raise RuntimeError("the bake failed after its commit")
+
+        self.assertTrue(os.path.exists(old))
+
+    def test_a_revert_deletes_nothing(self):
+        cube = self._cube("supRevert")
+        path = self._bake([cube]).maps[cube]
+        LightmapRecords.revert([cube])
+        self.assertTrue(os.path.exists(path))
 
 
 class TestRevertIsOneUndo(MayaTkTestCase):
@@ -3857,17 +4164,16 @@ class _FakeWorkflow:
         on_progress=None,
         **kwargs,
     ):
-        targets = self.bake_targets(objects)
-        result = lmb_module.LightmapBakeResult(
-            excluded=[o for o in objects if o not in targets]
-        )
+        # The engine's own sort and refusal, as bake() applies them.
+        targets, hidden, excluded = LightmapBaker._partition(objects)
+        result = lmb_module.LightmapBakeResult(excluded=excluded, hidden=hidden)
         self.calls.append(("bake", tuple(targets), packing))
         self.bake_output_dir = output_dir
         self.bake_prefix = prefix
         self.bake_suffix = suffix
         self.last_result = result
         if not targets:
-            result.refused = "Nothing to bake: all objects are in the Exclude set."
+            result.refused = LightmapBaker._nothing_to_bake(hidden, excluded)
             return result
         if self.refusal:
             result.refused = self.refusal
@@ -4437,6 +4743,71 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(baker.calls, [("bake", (kept,), "per_object")])
         self.assertIn("1 excluded", ui.footer.text)
 
+    def test_b000_reports_a_hidden_mesh_as_hidden_not_excluded(self):
+        kept = self._select_cube("keptCubeH")
+        left_out = self._select_cube("leftOutCubeH")
+        hidden = self._select_cube("hiddenCubeH")
+        cmds.setAttr(f"{hidden}.visibility", False)
+        LightmapExcludeSet.define([left_out])
+        cmds.select([kept, left_out, hidden], replace=True)
+        ui = _SlotUi()
+
+        self._slots(ui).b000()
+
+        self.assertEqual(
+            _FakeWorkflow.instances[0].calls, [("bake", (kept,), "per_object")]
+        )
+        self.assertIn("1 excluded", ui.footer.text)
+        self.assertIn("1 hidden", ui.footer.text)
+
+    def test_the_footer_counts_the_superseded_maps_it_deleted(self):
+        s = self._slots(_SlotUi())
+        result = lmb_module.LightmapBakeResult(
+            maps={"|a": "C:/out/a_Lightmap.exr"},
+            retired=["C:/out/old_Lightmap.exr", "C:/out/old_Lightmap_1.exr"],
+        )
+        self.assertIn("Deleted 2 superseded maps", s._bake_report(result))
+
+    def test_scene_scope_reaches_every_instance(self):
+        """An instanced shape is ONE node under several transforms, and a
+        listing of mesh nodes names it once: the Scene scope reached only each
+        shape's first copy -- 40 of the production room's walls and props
+        would have gone unbaked, and unreported."""
+        cmds.instance(cmds.polyCube(name="scnInstSrc")[0], name="scnInstCopy")
+        group = cmds.group(cmds.polyCube(name="scnGrpChild")[0], name="scnGrp")
+        cmds.instance(group, name="scnGrpCopy")
+
+        pool = self._slots(_SlotUi(scope="Scene"))._scope_objects()
+
+        for path in (
+            "|scnInstSrc",
+            "|scnInstCopy",
+            "|scnGrp|scnGrpChild",
+            "|scnGrpCopy|scnGrpChild",
+        ):
+            self.assertIn(path, pool)
+
+    def test_visible_scope_reaches_every_instance_it_can_see(self):
+        cmds.instance(cmds.polyCube(name="visInstSrc")[0], name="visInstCopy")
+        group = cmds.group(cmds.polyCube(name="visGrpChild")[0], name="visGrp")
+        cmds.instance(group, name="visGrpCopy")
+        hidden = cmds.polyCube(name="visHiddenCube")[0]
+        cmds.setAttr(f"{hidden}.visibility", False)
+        templated = cmds.polyCube(name="visTemplatedCube")[0]
+        cmds.setAttr(f"{templated}.template", True)
+
+        pool = self._slots(_SlotUi(scope="Visible"))._scope_objects()
+
+        for path in (
+            "|visInstSrc",
+            "|visInstCopy",
+            "|visGrp|visGrpChild",
+            "|visGrpCopy|visGrpChild",
+        ):
+            self.assertIn(path, pool)
+        self.assertNotIn("|visHiddenCube", pool)
+        self.assertNotIn("|visTemplatedCube", pool)
+
     def test_b000_with_everything_excluded_bakes_nothing_and_says_why(self):
         cube = self._select_cube()
         LightmapExcludeSet.define([cube])
@@ -4524,13 +4895,21 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.tmp = tempfile.mkdtemp(prefix="lm_deps_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         # A project of our own: the sourceimages walk and the search folders
-        # both read the live workspace.
+        # both read the live workspace, and the folder record is spelled from
+        # the project the scene FILE lives in (2026-09-23) -- so the scene is
+        # saved into it, marked as a project.
         original_ws = cmds.workspace(q=True, rd=True)
         self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
         self.root = os.path.join(self.tmp, "project")
         self.si = os.path.join(self.root, "sourceimages")
         os.makedirs(self.si, exist_ok=True)
+        os.makedirs(os.path.join(self.root, "scenes"), exist_ok=True)
+        with open(os.path.join(self.root, "workspace.mel"), "w") as fh:
+            fh.write("//Maya 2025 Project Definition\n")
         cmds.workspace(self.root, openWorkspace=True)
+        cmds.file(rename=os.path.join(self.root, "scenes", "deps.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the file first
         self.baker = LightmapRecords
 
     # -- helpers ------------------------------------------------------------
@@ -4548,15 +4927,17 @@ class TestLightmapDependencies(MayaTkTestCase):
     def _commit(self, obj, path):
         self.baker.commit({obj: path})
 
-    def _marker_raw_dir(self, obj):
-        """The folder exactly as the marker stores it (the portable spelling)."""
-        raw = cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}")
-        return json.loads(raw).get("dir", "")
+    def _stored_dir(self, obj):
+        """The folder exactly as the scene stores it for the map *obj* reads
+        (the portable spelling): the private folder record, never the marker,
+        which rides the FBX (``TestLightmapFolderHints``)."""
+        info = json.loads(cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
+        return LightmapRecords._folder_hint(info, LightmapRecords._folder_hints(), obj)
 
-    def _marker_dir(self, obj):
-        """The marker's folder resolved on this machine (what a consumer joins)."""
-        raw = json.loads(cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
-        return LightmapRecords._resolved_dir(raw.get("dir", ""), raw.get("map", ""))
+    def _map_dir(self, obj):
+        """That folder resolved on this machine (what a consumer joins)."""
+        info = json.loads(cmds.getAttr(f"{obj}.{LightmapBaker.LIGHTMAP_INFO_ATTR}"))
+        return LightmapRecords._resolved_dir(self._stored_dir(obj), info.get("map", ""))
 
     def _lead_dir(self):
         """The folder a GLB build is handed FIRST for this scene's maps
@@ -4588,7 +4969,15 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual(dep["objects"], [cube])
         self.assertEqual(dep["found_by"], LightmapRecords.FOUND_BY_HINT)
         self.assertTrue(self._same(dep["path"], path))
-        self.assertTrue(self._same(dep["dir"], os.path.dirname(path)))
+        # "dir" is the RECORDED folder: spelled from the scene's own project
+        # (a chain to this folder beside it), resolving to where the map is.
+        self.assertEqual(dep["dir"], "../bake")
+        self.assertTrue(
+            self._same(
+                LightmapRecords._resolved_dir(dep["dir"], dep["map"]),
+                os.path.dirname(path),
+            )
+        )
 
     def test_a_moved_map_is_found_under_sourceimages(self):
         """The hint is dead; the map sits in a sourceimages SUBFOLDER -- where
@@ -4676,7 +5065,7 @@ class TestLightmapDependencies(MayaTkTestCase):
 
         self.assertEqual([h[0] for h in report["healed"]], ["healed_LightMap.exr"])
         self.assertEqual(report["missing"], [])
-        self.assertTrue(self._same(self._marker_dir(cube), os.path.dirname(found)))
+        self.assertTrue(self._same(self._map_dir(cube), os.path.dirname(found)))
         self.assertTrue(self._same(self._lead_dir(), os.path.dirname(found)))
         self.assertEqual([o["name"] for o in self._manifest()["objects"]], ["healed"])
         # Healed means resolved by hint from now on -- a second pass is a no-op.
@@ -4709,7 +5098,7 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertTrue(os.path.isfile(src), "copy keeps the original")
         self.assertEqual(len(result["copied"]), 1)
         self.assertEqual(result["updated"], 1)
-        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+        self.assertTrue(self._same(self._map_dir(cube), self.si))
         self.assertTrue(self._same(self._lead_dir(), self.si))
         self.assertEqual(
             self.baker.lightmap_dependencies()[0]["found_by"],
@@ -4720,7 +5109,7 @@ class TestLightmapDependencies(MayaTkTestCase):
         cube = self._cube("planned")
         src = self._file("elsewhere", "planned_LightMap.exr")
         self._commit(cube, src)
-        before = self._marker_dir(cube)
+        before = self._map_dir(cube)
 
         result = self.baker.relocate_lightmaps(self.si, dry_run=True)
 
@@ -4728,7 +5117,7 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual(result["copied"], [])
         self.assertEqual(result["updated"], 0)
         self.assertFalse(os.path.exists(os.path.join(self.si, "planned_LightMap.exr")))
-        self.assertEqual(self._marker_dir(cube), before)
+        self.assertEqual(self._map_dir(cube), before)
 
     def test_relocate_searches_the_source_folder_for_a_missing_map(self):
         cube = self._cube("searched")
@@ -4741,7 +5130,7 @@ class TestLightmapDependencies(MayaTkTestCase):
 
         self.assertEqual(result["missing"], [])
         self.assertTrue(os.path.isfile(os.path.join(self.si, "searched_LightMap.exr")))
-        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+        self.assertTrue(self._same(self._map_dir(cube), self.si))
 
     def test_relocate_move_removes_the_original(self):
         cube = self._cube("movedmap")
@@ -4762,7 +5151,7 @@ class TestLightmapDependencies(MayaTkTestCase):
 
         self.assertEqual(result["copied"], [])
         self.assertEqual(len(result["in_place"]), 1)
-        self.assertTrue(self._same(self._marker_dir(cube), self.si))
+        self.assertTrue(self._same(self._map_dir(cube), self.si))
 
     def test_relocate_names_what_it_could_not_find(self):
         cube = self._cube("nowhere")
@@ -4775,19 +5164,19 @@ class TestLightmapDependencies(MayaTkTestCase):
 
     # -- the portable spelling ---------------------------------------------
 
-    def test_a_map_inside_the_project_is_recorded_workspace_relative(self):
+    def test_a_map_inside_the_project_is_recorded_project_relative(self):
         """Asked 2026-08-26: a teammate mounts the cloud project on another
-        drive, so an absolute marker folder resolves nowhere there. The marker
-        stores the workspace-relative form (the rule textures follow); the
-        manifest names no folder at all, and what a build on THIS machine is
-        handed (``search_dirs``) is the absolute one."""
+        drive, so an absolute folder resolves nowhere there. The folder record
+        stores the form relative to the scene's own project; the manifest names
+        no folder at all, and what a build on THIS machine is handed
+        (``search_dirs``) is the absolute one."""
         cube = self._cube("portable")
         os.makedirs(os.path.join(self.si, "lm"), exist_ok=True)
         path = os.path.join(self.si, "lm", "portable_LightMap.exr")
         open(path, "wb").close()
         self._commit(cube, path)
 
-        self.assertEqual(self._marker_raw_dir(cube), "sourceimages/lm")
+        self.assertEqual(self._stored_dir(cube), "sourceimages/lm")
         self.assertTrue(self._same(self._lead_dir(), os.path.dirname(path)))
         manifest = self._manifest()
         self.assertTrue(manifest.get("objects"), manifest)
@@ -4796,13 +5185,17 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertEqual(dep["found_by"], LightmapRecords.FOUND_BY_HINT)
         self.assertTrue(self._same(dep["path"], path))
 
-    def test_a_map_outside_the_project_stays_absolute(self):
+    def test_a_map_beside_the_project_is_a_chain_from_it(self):
+        """BACKLOG 2026-09-22, decided 2026-09-23: a shared folder beside the
+        project is spelled from the scene's OWN project -- a ``../`` chain, so a
+        teammate who mounts the project with its neighbours resolves it (only
+        another drive stays absolute, ``ptk.FileUtils.portable_path``)."""
         cube = self._cube("external")
         path = self._file("elsewhere", "external_LightMap.exr")
         self._commit(cube, path)
 
-        self.assertTrue(os.path.isabs(self._marker_raw_dir(cube)))
-        self.assertTrue(self._same(self._marker_raw_dir(cube), os.path.dirname(path)))
+        self.assertEqual(self._stored_dir(cube), "../elsewhere")
+        self.assertTrue(self._same(self._map_dir(cube), os.path.dirname(path)))
 
     def test_normalize_lightmap_paths_round_trips(self):
         cube = self._cube("normalized")
@@ -4812,11 +5205,11 @@ class TestLightmapDependencies(MayaTkTestCase):
         self._commit(cube, path)
 
         self.assertEqual(self.baker.normalize_lightmap_paths(relative=False), 1)
-        self.assertTrue(os.path.isabs(self._marker_raw_dir(cube)))
+        self.assertTrue(os.path.isabs(self._stored_dir(cube)))
         self.assertEqual(self.baker.normalize_lightmap_paths(), 1)
-        self.assertEqual(self._marker_raw_dir(cube), "sourceimages/lm")
+        self.assertEqual(self._stored_dir(cube), "sourceimages/lm")
         self.assertEqual(self.baker.normalize_lightmap_paths(), 0, "idempotent")
-        self.assertTrue(self._same(self._marker_dir(cube), os.path.dirname(path)))
+        self.assertTrue(self._same(self._map_dir(cube), os.path.dirname(path)))
 
     def test_relocating_into_the_project_stores_the_relative_spelling(self):
         cube = self._cube("landed")
@@ -4824,7 +5217,7 @@ class TestLightmapDependencies(MayaTkTestCase):
 
         self.baker.relocate_lightmaps(self.si)
 
-        self.assertEqual(self._marker_raw_dir(cube), "sourceimages")
+        self.assertEqual(self._stored_dir(cube), "sourceimages")
         self.assertTrue(self._same(self._lead_dir(), self.si))
 
 
@@ -4895,7 +5288,9 @@ class TestLightmapSearchDirs(MayaTkTestCase):
         )
         self.assertNotIn("dir", manifest)
         self.assertNotIn("dirs", manifest)
-        self._assert_leads(LightmapRecords.search_dirs(), [os.path.dirname(one), self.si])
+        self._assert_leads(
+            LightmapRecords.search_dirs(), [os.path.dirname(one), self.si]
+        )
 
     def test_every_folder_the_markers_name_comes_before_the_texture_folders(self):
         """One object keeping a marker from an earlier bake -- exactly what
@@ -4974,7 +5369,7 @@ class TestLightmapSearchDirs(MayaTkTestCase):
 class _FakePresets:
     """Stands in for the wired PresetManager: the pointer and the combo sync."""
 
-    def __init__(self, active="quest"):
+    def __init__(self, active="mobile"):
         self.active_preset = active
         self.refreshed = 0
 
@@ -5201,7 +5596,7 @@ class _Settings:
 class TestDefaultPresetIsSeededOnce(unittest.TestCase):
     """A reset clears the preset pointer (``_after_reset``). Read on the next
     open as "never set", it was seeded again -- and the reset values showed as
-    that preset, modified ("quest *"), which is what the reset exists to stop."""
+    that preset, modified ("mobile *"), which is what the reset exists to stop."""
 
     def _open(self, settings):
         from types import SimpleNamespace
@@ -5223,6 +5618,14 @@ class TestDefaultPresetIsSeededOnce(unittest.TestCase):
         _SeedPresets.pointer = None  # ...and a reset cleared it
         self.assertIsNone(self._open(settings))
 
+    def test_a_pointer_left_on_a_renamed_tier_follows_the_rename(self):
+        """A machine whose last pick was ``quest`` opens on ``mobile``: the
+        store has no ``quest`` any more, and a stale pointer shows nothing."""
+        settings = _Settings()
+        settings.setValue(LightmapBakerSlots._PRESET_SEEDED_KEY, True)
+        _SeedPresets.pointer = "quest"
+        self.assertEqual(self._open(settings), "mobile")
+
 
 class TestResetToDefaults(unittest.TestCase):
     """A reset puts the dials at their defaults (uitk's StateManager does that
@@ -5232,32 +5635,200 @@ class TestResetToDefaults(unittest.TestCase):
     No Maya, no Qt: ``_after_reset`` touches only the preset manager.
     """
 
-    def _slots(self, active="quest"):
+    def _slots(self, active="mobile"):
         s = LightmapBakerSlots.__new__(LightmapBakerSlots)
         s._presets = _FakePresets(active)
         return s
 
     def test_a_reset_lets_go_of_the_active_preset(self):
-        s = self._slots("quest")
+        s = self._slots("mobile")
         s._after_reset("reset")
         self.assertIsNone(s._presets.active_preset)
         self.assertEqual(s._presets.refreshed, 1, "the combo follows the pointer")
 
     def test_a_factory_reset_lets_go_of_it_too(self):
-        s = self._slots("quest")
+        s = self._slots("mobile")
         s._after_reset("factory")
         self.assertIsNone(s._presets.active_preset)
 
     def test_saving_the_current_values_as_defaults_keeps_the_preset(self):
         """Shift+Click moves no dial, so the preset it was showing still holds."""
-        s = self._slots("quest")
+        s = self._slots("mobile")
         s._after_reset("save")
-        self.assertEqual(s._presets.active_preset, "quest")
+        self.assertEqual(s._presets.active_preset, "mobile")
         self.assertEqual(s._presets.refreshed, 0)
 
     def test_a_reset_before_the_combo_is_wired_is_a_no_op(self):
         s = LightmapBakerSlots.__new__(LightmapBakerSlots)
         s._after_reset("reset")  # must not raise
+
+
+class TestLightmapFolderHints(MayaTkTestCase):
+    """A map's folder never rides its marker (BACKLOG 2026-09-19).
+
+    A marker is a node attribute, so Maya's FBX exporter writes it as a user
+    property: its ``dir`` put the authoring machine's build folder on every
+    deliverable (measured 2026-09-23: an ASCII FBX carried
+    ``&quot;dir&quot;: &quot;O:/...&quot;``). The folder lives in the private
+    ``LIGHTMAP_DIRS`` record on ``data_internal``; a marker baked before the
+    move is lifted by a bake's migration and by every export bracket.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.store = ptk.TempArtifacts("mayatk_lm_folder_hints", policy="scoped")
+        self.addCleanup(self.store.cleanup)
+        self.maps = self.store.dir_path(name="maps")
+
+    def _lit(self, name):
+        cube = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, create=True, uvSet="lightmap")
+        path = os.path.join(self.maps, f"{name}_LightMap.exr")
+        open(path, "wb").close()
+        LightmapRecords.commit({cube: path})
+        return cube, path
+
+    @staticmethod
+    def _marker(node):
+        return json.loads(cmds.getAttr(f"{node}.{LightmapRecords.LIGHTMAP_INFO_ATTR}"))
+
+    @staticmethod
+    def _same(a, b):
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
+            os.path.abspath(b)
+        )
+
+    def _found_by(self):
+        return [
+            (d["map"], d["found_by"])
+            for d in LightmapRecords.lightmap_dependencies(search_dirs=[], walk=False)
+        ]
+
+    def test_a_commit_writes_no_folder_onto_the_marker(self):
+        cube, _path = self._lit("fh_box")
+        self.assertNotIn("dir", self._marker(cube))
+        folder = LightmapRecords._folder_hints().get("fh_box_lightmap.exr", "")
+        self.assertTrue(
+            self._same(
+                LightmapRecords._resolved_dir(folder, "fh_box_LightMap.exr"), self.maps
+            ),
+            folder,
+        )
+        self.assertEqual(
+            self._found_by(), [("fh_box_LightMap.exr", LightmapRecords.FOUND_BY_HINT)]
+        )
+
+    def test_an_export_ships_a_legacy_marker_without_its_folder(self):
+        import maya.mel as mel
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        cube, path = self._lit("fh_legacy")
+        legacy = dict(self._marker(cube), dir=LightmapRecords._portable_dir(path))
+        LightmapRecords._write_marker(cube, legacy)
+        LightmapRecords._save_folder_hints({})
+        self.assertEqual(
+            self._found_by(),
+            [("fh_legacy_LightMap.exr", LightmapRecords.FOUND_BY_HINT)],
+            "a legacy marker's folder must still resolve before any lift",
+        )
+        prepare, finish = FbxUtils.stagers(["lightmap_folder_hints"])[
+            "lightmap_folder_hints"
+        ]
+        self.assertTrue(callable(prepare))
+        self.assertIsNone(finish, "the lift is one way: nothing to restore")
+
+        FbxUtils.load_plugin()
+        self.addCleanup(mel.eval, "FBXResetExport")
+        mel.eval("FBXResetExport")
+        mel.eval("FBXExportInAscii -v true")
+        out = self.store.path(".fbx", name="fh_legacy")
+        cmds.select(cube)
+        with FbxUtils.export_prepared():
+            cmds.file(
+                out,
+                force=True,
+                options="v=0;",
+                type="FBX export",
+                exportSelected=True,
+                preserveReferences=False,
+            )
+        with open(out, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        self.assertIn("fh_legacy_LightMap.exr", text, "the marker itself still ships")
+        self.assertNotIn("&quot;dir&quot;", text)
+        self.assertNotIn('"dir"', text)
+        self.assertNotIn("dir", self._marker(cube))
+        self.assertEqual(
+            LightmapRecords._folder_hints().get("fh_legacy_lightmap.exr"),
+            legacy["dir"],
+        )
+
+    def test_the_records_folder_wins_and_a_second_lift_is_a_no_op(self):
+        cube, _path = self._lit("fh_win")
+        LightmapRecords._write_marker(cube, dict(self._marker(cube), dir="stale/x"))
+        self.assertEqual(LightmapRecords.migrate_folder_hints(), [cube])
+        folder = LightmapRecords._folder_hints().get("fh_win_lightmap.exr", "")
+        self.assertTrue(
+            self._same(
+                LightmapRecords._resolved_dir(folder, "fh_win_LightMap.exr"), self.maps
+            ),
+            folder,
+        )
+        self.assertEqual(LightmapRecords.migrate_folder_hints(), [])
+
+    def test_a_bakes_migration_lifts_the_folder_too(self):
+        cube, path = self._lit("fh_bake")
+        LightmapRecords._write_marker(
+            cube, dict(self._marker(cube), dir=LightmapRecords._portable_dir(path))
+        )
+        LightmapRecords._save_folder_hints({})
+        self.assertIn(cube, LightmapRecords.migrate_legacy([cube]))
+        self.assertNotIn("dir", self._marker(cube))
+        self.assertIn("fh_bake_lightmap.exr", LightmapRecords._folder_hints())
+
+    def test_a_revert_drops_the_reverted_maps_folders(self):
+        self._lit("fh_keep")
+        dropped, _path = self._lit("fh_drop")
+        LightmapRecords.revert([dropped])
+        self.assertEqual(
+            sorted(LightmapRecords._folder_hints()), ["fh_keep_lightmap.exr"]
+        )
+
+    def test_the_folder_record_crosses_a_bridge_handoff(self):
+        """Portable: the bridge's sidecar carries the record, so a scene pulled
+        into Blender (or back) still finds its maps -- which the marker's own
+        folder used to carry across."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self._lit("fh_cross")
+        folder = LightmapRecords._folder_hints()["fh_cross_lightmap.exr"]
+        sections = DataNodes.transfer_sections()
+        self.assertEqual(
+            sections.get("records", {}).get("lightmap_dirs"),
+            {"fh_cross_lightmap.exr": folder},
+        )
+        cmds.file(new=True, force=True)
+        DataNodes.receive_sections(sections)
+        self.assertEqual(
+            LightmapRecords._folder_hints(), {"fh_cross_lightmap.exr": folder}
+        )
+
+    def test_a_referenced_modules_own_record_resolves_its_markers(self):
+        """A module baked in its own scene records its maps in ITS
+        ``data_internal``; the host reads that record under the reference's
+        namespace, since the markers no longer carry a folder."""
+        self._lit("fh_ref")
+        module = self.store.path(".ma", name="fh_module")
+        cmds.file(rename=module)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        cmds.file(module, reference=True, namespace="MOD")
+        self.assertEqual(
+            self._found_by(), [("fh_ref_LightMap.exr", LightmapRecords.FOUND_BY_HINT)]
+        )
+        self.assertEqual(LightmapRecords._folder_hints(), {}, "the host's own record")
 
 
 if __name__ == "__main__":

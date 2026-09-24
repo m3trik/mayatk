@@ -89,7 +89,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     #: The tier a panel opened for the first time shows: the .ui's dial
     #: defaults are its values, so naming it costs nothing and says which
     #: tier the untouched dials are.
-    _DEFAULT_PRESET = "quest"
+    _DEFAULT_PRESET = "mobile"
     #: Settings key recording that the default preset was seeded once (see
     #: :meth:`cmb000_init`).
     _PRESET_SEEDED_KEY = "lightmap_baker_preset_seeded"
@@ -210,7 +210,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "<b>Scope</b>: the Selected meshes, every Visible one, or the "
                     "whole Scene. Its button takes the HDRI environment in or out "
                     "of the bake. <b>Exclude</b> keeps objects from getting a map "
-                    "of their own; they still cast shadows and bounce light.",
+                    "of their own but leaves them in the render: they still cast "
+                    "shadows and bounce light onto everything that bakes.",
                     "<b>Packing</b>: one atlas per material (the default), or one "
                     "map per object. <b>Processor</b>: which one Arnold renders on.",
                     "<b>Quality</b>: Resolution, Samples, GI Samples and Bounces. "
@@ -263,10 +264,18 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # The manager's user-facing lines (a preset that fails to load) reach
         # this panel's log rather than only the console.
         self._presets.use_logger(self.logger)
+        # A pointer left on a retired tier name ("quest", now "mobile") names a
+        # preset the store no longer has; follow the rename rather than open
+        # on no selection.
+        active = self._presets.active_preset
+        if active and not self._presets.exists(active):
+            current = LightmapBaker._resolve_retired_preset(active)
+            if current != active:
+                self._presets.active_preset = current
         # Seeded ONCE per machine: a reset (or deleting the active user
         # preset) clears the pointer, and read as "never set" it was reseeded
         # on the next open -- the reset values then showed as that preset,
-        # modified ("quest *"), which is what ``_after_reset`` exists to stop.
+        # modified ("mobile *"), which is what ``_after_reset`` exists to stop.
         settings = getattr(self.ui, "settings", None)
         seeded = bool(settings and settings.value(self._PRESET_SEEDED_KEY, False))
         if (
@@ -515,12 +524,19 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         silently produced no maps.
         """
         scope = self._scope()
-        if scope == "visible":
-            from mayatk.display_utils._display_utils import DisplayUtils
+        if scope in ("visible", "scene"):
+            # Every DAG PATH of every mesh: an instanced shape is ONE node
+            # under several transforms, and a listing of nodes names it once
+            # -- the production room's Scene scope reached 21 of its 61
+            # visible meshes, its 40 instanced walls and props missed (a
+            # group instance hides from a transform listing the same way).
+            pool = cmds.ls(
+                type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+            )
+            if scope == "visible":
+                from mayatk.display_utils._display_utils import DisplayUtils
 
-            pool = DisplayUtils.get_visible_geometry(inherit_parent_visibility=True)
-        elif scope == "scene":
-            pool = cmds.ls(type="mesh", noIntermediate=True, long=True)
+                pool = [path for path in pool or [] if DisplayUtils.is_visible(path)]
         else:
             pool = cmds.ls(selection=True, long=True)
         return TextureBaker.resolve_meshes(pool or [])
@@ -900,6 +916,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         notes = [f"Baked {count} object{'s' if count != 1 else ''} → {where}. {tail}"]
         if result.excluded:
             notes.append(f" {len(result.excluded)} excluded.")
+        if result.hidden:
+            notes.append(f" {len(result.hidden)} hidden or templated, not baked.")
+        if result.retired:
+            n = len(result.retired)
+            notes.append(
+                f" Deleted {n} superseded map{'s' if n != 1 else ''} "
+                "nothing reads any more."
+            )
         if result.unbaked:
             notes.append(
                 f" {len(result.unbaked)} not baked (cancelled or failed); "

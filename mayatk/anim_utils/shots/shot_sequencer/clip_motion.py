@@ -432,7 +432,11 @@ class ClipMotionMixin:
         Skipped when shift is held — shift means "move freely across shot
         boundaries without changing them".
         """
-        self._expand_shot_range(clip.data.get("shot_id"), new_start, new_end)
+        obj, attr = clip.data.get("obj"), clip.data.get("attr_name")
+        curves = curves_for_attr(obj, attr) if obj and attr else None
+        self._expand_shot_range(
+            clip.data.get("shot_id"), new_start, new_end, curves=curves
+        )
 
     def _lift_make_room_land(
         self, clip, lo, hi, delta, lowest, move, shown_from=None
@@ -488,8 +492,15 @@ class ClipMotionMixin:
         ]
         return min(times) if times else None
 
-    def _expand_shot_range(self, shot_id, new_start: float, new_end: float) -> None:
+    def _expand_shot_range(
+        self, shot_id, new_start: float, new_end: float, curves=None
+    ) -> None:
         """Grow *shot_id* so ``[new_start, new_end]`` fits inside it.
+
+        *curves* are the curves the moved content rides on: a landing on a
+        contiguous seam steps the bound one frame past it only when one of
+        them holds a key ON the seam -- the shared sample the landing would
+        take (``ShotStore.enclosing_bounds``). ``None`` assumes one does.
 
         The single chokepoint for "content moved past the shot edge, so the
         shot follows it" — shared by clip drags and per-key drags.  Without
@@ -523,13 +534,20 @@ class ClipMotionMixin:
             return
         prior_start = shot.start
         prior_end = shot.end
-        # Outward to whole frames, so the shot ENCLOSES what moved: rounded
-        # to the nearest frame, a key dragged off a whole frame (what a retime
-        # leaves) to 50.4 past an end at 50 left the end at 50 and the key
-        # outside it.
-        store = self.sequencer.store
-        expanded_start = min(shot.start, store.snap(new_start, "down"))
-        expanded_end = max(shot.end, store.snap(new_end, "up"))
+        # Outward to whole frames, so the shot ENCLOSES what moved (rounded to
+        # the nearest frame, a key dragged to 50.4 past an end at 50 left the
+        # key outside it), and one frame past a contiguous seam the landing
+        # would sit on, so the touching neighbour keeps its opening pose.
+        seam_keyed = None
+        if curves:
+            names = [str(c) for c in curves]
+
+            def seam_keyed(frame: float) -> bool:
+                return ShotSequencer._any_key_at(names, frame)
+
+        expanded_start, expanded_end = self.sequencer.store.enclosing_bounds(
+            shot_id, new_start, new_end, seam_keyed
+        )
         start_delta = expanded_start - prior_start
         end_delta = expanded_end - prior_end
         # One epsilon gate for the whole block: an exact != here with
@@ -780,7 +798,12 @@ class ClipMotionMixin:
                 if o != sid and self.sequencer.shot_by_id(o) is not None
             }
             lo, hi = shot_extents[sid]
-            self._expand_shot_range(sid, lo, hi)
+            curves = [
+                crv
+                for crv, entry in curve_moves.items()
+                if any(psid == sid for _old, _new, psid in entry["pairs"])
+            ]
+            self._expand_shot_range(sid, lo, hi, curves=curves)
             for o, pre_start in others.items():
                 shot_o = self.sequencer.shot_by_id(o)
                 if shot_o is None:
@@ -945,6 +968,10 @@ class ClipMotionMixin:
                     for crv in curves:
                         cmds.cutKey(str(crv), time=(t, t), clear=True)
                         deleted = True
+                if deleted:
+                    # A key edit like any other (``_key_scene_edit``): the claims
+                    # on the deleted keys go with them and the gap holds re-settle.
+                    self.sequencer.reconcile_system_edits()
         finally:
             self._syncing = was_syncing
 

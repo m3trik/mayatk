@@ -187,6 +187,11 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             ),
         ],
         "notes": [
+            "<b>pack</b> honours a shell selection: select the faces or UVs "
+            "of the shells to pack (any part of a shell picks all of it) and "
+            "only those move -- the objects' other shells stay exactly where "
+            "they are and are packed around. The other presets work on whole "
+            "objects.",
             "Add custom presets by dropping new <code>.lua</code> "
             "files into the scripts folder (use <code>__KEY__</code> "
             "tokens from <i>parameters.py</i> for tunable values), "
@@ -282,7 +287,10 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             )
             return
 
-        self.bridge.logger.info(f"--- {preset} on {len(selection)} object(s) ---")
+        # Distinct nodes, not entries: a component selection arrives as several
+        # range entries per object (``cube.map[0:3]``, ``cube.map[8:11]``).
+        objects = {str(item).split(".", 1)[0] for item in selection}
+        self.bridge.logger.info(f"--- {preset} on {len(objects)} object(s) ---")
 
         try:
             with self.sb.progress(text=f"Working: RizomUV {preset}"):

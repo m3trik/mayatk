@@ -791,6 +791,9 @@ class ShadowRig(ptk.LoggingMixin):
         local = self._rigid_contact_frame()[:3, :3] @ (world / n)
         return tuple(float(v) for v in local)
 
+    @ptk.Deprecation.parameter(
+        "axis", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     def create_silhouette_texture(
         self,
         size=512,
@@ -810,9 +813,10 @@ class ShadowRig(ptk.LoggingMixin):
 
         Args:
             size: Texture resolution.
-            axis: Retired. The silhouette is always the projection through
-                the source (an overhead source draws the footprint, a low one
-                the stretched shape); any other value warns and is ignored.
+            axis: DEPRECATED (warns; removed in 0.20.0) and ignored. The
+                silhouette is always the projection through the source (an
+                overhead source draws the footprint, a low one the stretched
+                shape); a positional value other than ``"auto"`` is logged.
             recursive: If True, include descendant meshes (e.g. for groups/locators).
             uniform_alpha: Physically flat shadow (default). False adds the
                 stylised contact falloff — alpha fading from the footprint to
@@ -915,7 +919,8 @@ class ShadowRig(ptk.LoggingMixin):
                 the PNG as a real texture, Unity rewires it on import) or
                 ``"stingray"`` (StingrayPBS; retired — its transparent graph
                 shows the silhouette only through the colour map's alpha and
-                cannot preview the fade at all; kept for one release).
+                cannot preview the fade at all; kept so a scene whose plane carries a
+                StingrayPBS still rebuilds (decided 2026-09-23)).
             stingray_opacity_mode: When ``shader_type="stingray"``:
                 ``"transparent"`` (alpha blend) or ``"masked"`` (alpha test).
 
@@ -2782,6 +2787,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
 
     @classmethod
+    @ptk.Deprecation.parameter(
+        "axis", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     def create(
         cls,
         targets,
@@ -2811,8 +2819,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 ``pythontk.ShadowHorizon``'s measured defaults when None.
             light_pos: Initial position for a source locator this call creates.
             texture_res: Resolution of silhouette texture
-            axis: Retired — the silhouette is always the projection through
-                  the source; any other value warns and is ignored.
+            axis: DEPRECATED (warns; removed in 0.20.0) and ignored -- the
+                  silhouette is always the projection through the source.
             source_name: The shadow source — any existing transform's name
                          (a light included; a ``directionalLight`` projects
                          along its direction), or the name of a locator to
@@ -2849,9 +2857,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
             shadow.create_contact_locator()
             shadow.create_shadow_plane()
-            shadow.create_silhouette_texture(
-                size=texture_res, axis=axis, recursive=recursive
-            )
+            # Positional, so only a caller's own (positional) retired axis
+            # reaches the texture's notice -- the keyword form warned above.
+            shadow.create_silhouette_texture(texture_res, axis, recursive)
             shadow.create_material(shader_type=shader_type)
             shadow.setup_expression()
             # Follow Source, when it is on: either end of the projection.

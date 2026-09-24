@@ -304,7 +304,9 @@ class RenderEffects(ptk.LoggingMixin):
             return OpacityAttributeMode.create(objects, spec)
 
     @classmethod
-    @ptk.Deprecation.symbol("RenderEffects.create", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "RenderEffects.create", remove_in="0.20.0", since="2026-09-23"
+    )
     def setup(cls, *args, **kwargs) -> Dict[str, Dict]:
         """Deprecated alias of :meth:`create` (warns until mayatk 0.20.0)."""
         return cls.create(*args, **kwargs)
@@ -459,8 +461,9 @@ class RenderEffects(ptk.LoggingMixin):
                 channel in the scene. Passing it warns until mayatk 0.20.0.
 
         Returns:
-            An empty list, kept for API compatibility for one release (it named
-            the objects whose visibility was re-synced).
+            An empty list (it named the objects whose visibility was
+            re-synced) -- until mayatk 0.20.0, when *objects* goes and this
+            returns None.
         """
         if objects is not None:
             # A body notice rather than ``Deprecation.parameter``: callers pass
@@ -469,6 +472,7 @@ class RenderEffects(ptk.LoggingMixin):
                 "RenderEffects.prepare_for_export(objects)",
                 "RenderEffects.prepare_for_export()",
                 remove_in="0.20.0",
+                since="2026-09-23",
                 kind="parameter",
                 reason="The staging always covers every keyed channel.",
                 stacklevel=2,

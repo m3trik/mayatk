@@ -69,6 +69,21 @@ class MayaUiHandler(UiHandler):
         # Same runtime init point, same reason: show deprecation notices in the
         # Script Editor (see _install_deprecation_sink).
         self._install_deprecation_sink()
+        # And keep the scene records' paths spelled from the scene's own
+        # project across a Save As into another one (the re-base hook).
+        self._install_record_path_rebase()
+
+    @staticmethod
+    def _install_record_path_rebase() -> bool:
+        """``DataNodes.install_path_rebase``, once per session: a scene opened
+        and saved into another project before any tool ran must still carry
+        its path records along. Never blocks UI-handler startup."""
+        try:
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            return DataNodes.install_path_rebase()
+        except Exception:  # never let a wiring hiccup block UI-handler startup
+            return False
 
     @staticmethod
     def _install_deprecation_sink() -> bool:

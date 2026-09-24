@@ -710,11 +710,43 @@ class GameShaderTest(unittest.TestCase):
 
     def test_setup_stingray_node_basic(self):
         """Test basic Stingray PBS node creation."""
-        result = self.shader.setup_stringray_node("test_material", opacity=False)
+        result = self.shader.setup_stringray_node("test_material")
 
         self.assertIsNotNone(result)
         self.assertTrue(cmds.objExists(result))
         self.assertEqual(cmds.nodeType(result), "StingrayPBS")
+
+    def test_the_retired_opacity_bool_warns_and_still_means_transparent(self):
+        """Retired 2026-09-23 (removed in 0.20.0): ``opacity`` restated what
+        ``opacity_mode`` says, so every StingrayPBS helper warns on it and
+        still folds it -- and GameShader's own build passes the mode alone."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        with self.assertWarns(DeprecationWarning) as caught:
+            node = self.shader.setup_stringray_node("retired_bool", opacity=True)
+        self.assertIn("'opacity'", str(caught.warning))
+        self.assertEqual(MatUtils.get_stingray_opacity_mode(node), "transparent")
+        with self.assertWarns(DeprecationWarning):
+            node = MatUtils.create_stingray_shader("retired_bool_mat", opacity=True)
+        self.assertEqual(MatUtils.get_stingray_opacity_mode(node), "transparent")
+        for helper, args in (
+            (MatUtils.resolve_opacity_mode, ()),
+            (MatUtils.resolve_stingray_graph, ()),
+            (MatUtils.load_stingray_graph, (node,)),
+        ):
+            with self.subTest(helper=helper.__name__):
+                with self.assertWarns(DeprecationWarning):
+                    helper(*args, opacity=True)
+
+        import warnings
+
+        with warnings.catch_warnings(record=True) as quiet:
+            warnings.simplefilter("always")
+            self.shader.setup_stringray_node("mode_only", opacity_mode="masked")
+            MatUtils.resolve_opacity_mode("transparent")
+        self.assertEqual(
+            [str(w.message) for w in quiet if w.category is DeprecationWarning], []
+        )
 
     # NOTE: GameShader has no Arnold surface at all — node creation, MSAO/MRAO
     # channel routing and scope handling all belong to ArnoldBridge, which
@@ -727,7 +759,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_base_color(self):
         """Test connecting base color texture to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_connect", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_connect")
         texture_path = "model_BaseColor.png"
 
         # `texture_type` is the CANONICAL map type the resolver yields, not the
@@ -747,7 +779,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_metallic(self):
         """Test connecting metallic texture to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_metallic", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_metallic")
         texture_path = "model_Metallic.png"
 
         success = self.shader.connect_stingray_nodes(texture_path, "Metallic", sr_node)
@@ -756,7 +788,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_roughness(self):
         """Test connecting roughness texture to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_roughness", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_roughness")
         texture_path = "model_Roughness.png"
 
         success = self.shader.connect_stingray_nodes(texture_path, "Roughness", sr_node)
@@ -765,7 +797,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_normal(self):
         """Test connecting normal map to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_normal", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_normal")
         texture_path = "model_Normal_OpenGL.png"
 
         success = self.shader.connect_stingray_nodes(
@@ -776,7 +808,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_emissive(self):
         """Test connecting emissive texture to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_emissive", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_emissive")
         texture_path = "model_Emissive.png"
 
         success = self.shader.connect_stingray_nodes(texture_path, "Emissive", sr_node)
@@ -785,7 +817,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_ao(self):
         """Test connecting AO texture to Stingray node."""
-        sr_node = self.shader.setup_stringray_node("test_ao", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_ao")
         texture_path = "model_AO.png"
 
         # "AO" is a filename token, not a map type -- the resolver canonicalizes
@@ -810,7 +842,7 @@ class GameShaderTest(unittest.TestCase):
         raw token ("BaseColor"/"AO") falls through to the unsupported branch and
         returns False rather than silently wiring the wrong slot.
         """
-        sr_node = self.shader.setup_stringray_node("test_uncanonical", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_uncanonical")
 
         for token in ("BaseColor", "AO"):
             with self.subTest(token=token):
@@ -862,7 +894,7 @@ class GameShaderTest(unittest.TestCase):
         materials carried `Maya|TEX_ao_map` alone, with `use_metallic_map` /
         `use_roughness_map` raised over nothing.
         """
-        sr_node = self.shader.setup_stringray_node("test_msao_stingray", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_msao_stingray")
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
 
         self.assertTrue(
@@ -876,7 +908,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_orm_binds_every_slot_compound(self):
         """Same contract for an ORM (R=AO, G=Roughness, B=Metallic)."""
-        sr_node = self.shader.setup_stringray_node("test_orm_stingray", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_orm_stingray")
         texture_path = os.path.join(self.test_assets, "model_ORM.png")
         if not os.path.exists(texture_path):
             from PIL import Image
@@ -895,7 +927,7 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_stingray_metallic_smoothness(self):
         """Metallic+Smoothness: two slots, two images, both compound."""
-        sr_node = self.shader.setup_stringray_node("test_ms_stingray", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_ms_stingray")
         texture_path = os.path.join(self.test_assets, "model_MetallicSmoothness.png")
 
         self.assertTrue(
@@ -1092,7 +1124,7 @@ class GameShaderTest(unittest.TestCase):
         """
         for mode in ("masked", "transparent", "none"):
             sr_node = self.shader.setup_stringray_node(
-                f"test_slots_{mode}", opacity=mode != "none", opacity_mode=mode
+                f"test_slots_{mode}", opacity_mode=mode
             )
             for attr in ("TEX_ao_map", "use_ao_map"):
                 self.assertTrue(
@@ -1106,7 +1138,9 @@ class GameShaderTest(unittest.TestCase):
         Regression (Autodesk's preset): this raised
         `setAttr: No object matches name: <shader>.use_ao_map`.
         """
-        sr_node = self.shader.setup_stringray_node("test_transp_msao", opacity=True)
+        sr_node = self.shader.setup_stringray_node(
+            "test_transp_msao", opacity_mode="transparent"
+        )
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
         success = self.shader.connect_stingray_nodes(texture_path, "MSAO", sr_node)
         self.assertTrue(success, "MSAO should connect its channels")
@@ -1125,7 +1159,9 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_orm_on_transparent_graph(self):
         """ORM on the opacity graph wires roughness, metallic and AO."""
-        sr_node = self.shader.setup_stringray_node("test_transp_orm", opacity=True)
+        sr_node = self.shader.setup_stringray_node(
+            "test_transp_orm", opacity_mode="transparent"
+        )
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")
         success = self.shader.connect_stingray_nodes(texture_path, "ORM", sr_node)
         self.assertTrue(success)
@@ -1141,7 +1177,9 @@ class GameShaderTest(unittest.TestCase):
 
     def test_connect_ao_on_transparent_graph(self):
         """A standalone AO map lands on the opacity graph like on the opaque one."""
-        sr_node = self.shader.setup_stringray_node("test_transp_ao", opacity=True)
+        sr_node = self.shader.setup_stringray_node(
+            "test_transp_ao", opacity_mode="transparent"
+        )
         texture_path = os.path.join(self.test_assets, "model_AO.png")
         success = self.shader.connect_stingray_nodes(
             texture_path, "Ambient_Occlusion", sr_node
@@ -1650,7 +1688,7 @@ class GameShaderTest(unittest.TestCase):
     def test_shading_group_follows_the_created_shader_name(self):
         """Maya uniquifies a taken name; the group must follow the node it got."""
         for builder in (
-            lambda n: self.shader.setup_stringray_node(n, opacity=False),
+            lambda n: self.shader.setup_stringray_node(n),
             lambda n: self.shader.setup_standard_surface_node(n, opacity=False),
         ):
             first = builder("gs_sg_twin")
@@ -2792,7 +2830,7 @@ class GameShaderFBXTest(QuickTestCase):
     def test_msao_fbx_safe_connection(self):
         """Test that MSAO connection uses direct RGB connection for FBX safety."""
         # Setup Stingray node
-        sr_node = self.shader.setup_stringray_node("test_stingray_fbx", opacity=False)
+        sr_node = self.shader.setup_stringray_node("test_stingray_fbx")
 
         # Create dummy MSAO texture
         texture_path = os.path.join(self.test_assets, "model_MaskMap.png")

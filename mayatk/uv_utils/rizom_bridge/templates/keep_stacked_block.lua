@@ -29,7 +29,11 @@
 -- Measured: exact stack kept (0.0000 drift), a wide+tall pair sharing a
 -- centre kept together, a half-overlap and a 30%-offset twin unstacked.
 --
--- Scope: WorkingSet=Visible, i.e. everything that was sent. Pack-only
+-- Scope: WorkingSet=Visible, i.e. everything that was sent -- or, in a
+-- shell-subset pack (the PACK_SUBSET global, see pack_block.lua), the subset
+-- ALONE: the packer does not treat a fixed island inside a group as an
+-- obstacle (measured 2026-09-23: a moved stack landed on a fixed stacked pair),
+-- and only the subset's own stacks have to move as units. Pack-only
 -- opt-in, NOT part of pack_block.lua: the unwrap_*.lua presets reach the
 -- pack with freshly flattened islands whose placement is meaningless. Left
 -- out of pack_into_existing.lua too -- new islands landing centred on a
@@ -41,7 +45,11 @@
 -- send with this on.
 
 if __PACK_KEEP_STACKED__ then
-    ZomSelect({PrimType="Island", Select=true, ResetBefore=true, All=true})
+    if PACK_SUBSET then
+        ZomSelect({PrimType="Island", Materials=PACK_SUBSET, Select=true, ResetBefore=true})
+    else
+        ZomSelect({PrimType="Island", Select=true, ResetBefore=true, All=true})
+    end
     ZomDeform({
         PrimType="Island",
         WorkingSet="Visible&Selected",
@@ -50,7 +58,7 @@ if __PACK_KEEP_STACKED__ then
     })
     ZomIslandGroups({
         Mode="DefineGroupsByOverlapness",
-        WorkingSet="Visible",
+        WorkingSet=PACK_SUBSET and "Visible&Selected" or "Visible",
         MergingPolicyString="A_ADD|AIB_ADD_A_VALUE_B|B_CLONE",
         AutoDelete=true,
         Properties={Pack={Stacked=true}},

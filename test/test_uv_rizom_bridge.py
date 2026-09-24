@@ -29,6 +29,7 @@ import maya.cmds as cmds
 
 from pythontk.core_utils.app_launcher import AppLauncher
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, _SCRIPT_DIR
@@ -627,13 +628,18 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         bridge = RizomUVBridge(rizom_path="not-used.exe")
         script = bridge._construct_full_script(body)
         self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
+        # The plain pack call carries the panel's Pre-scale + Layout Scale;
+        # the shared block's pack() sends them as Scaling.Mode and
+        # LayoutScalingMode.
         self.assertIn(
-            f"LayoutScalingMode={_params.PARAMS['LAYOUT_SCALING_MODE'].default}",
+            "pack({}, {})".format(
+                _params.PARAMS["SCALING_MODE"].default,
+                _params.PARAMS["LAYOUT_SCALING_MODE"].default,
+            ),
             script,
         )
-        self.assertIn(
-            f"Scaling={{Mode={_params.PARAMS['SCALING_MODE'].default},", script
-        )
+        self.assertIn("Scaling={\n            Mode=scaling_mode,", script)
+        self.assertIn("LayoutScalingMode=layout_mode,", script)
 
     def test_rizom_lua_is_byte_identical_across_the_dccs(self):
         """The pack-side Lua is shared surface: mayatk and blendertk ship the
@@ -652,6 +658,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
             for rel in (
                 "scripts/optimize.lua",
                 "scripts/pack.lua",
+                "scripts/pack_into_existing.lua",
                 "templates/pack_block.lua",
                 "templates/keep_stacked_block.lua",
             )
@@ -751,8 +758,8 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         sends per config: with Resolution stripped, 4 DAG instances pack to
         0.5766 of the tile on send 1 and only reach 0.6655 on send 2; with it
         sent, send 1 lands at 0.6777 -- better than the old two-send result --
-        and send 2 changes nothing. MaxMutations and Rotate.Enable stay gated:
-        neither changed the stacked/instances result at any tested value.
+        and send 2 changes nothing. MaxMutations, Scaling.Mix and Rotate.Enable
+        stay gated: none changed the result on 2020.1 at any tested value.
         """
         pack = _params.Parameters.expand_includes(
             (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
@@ -760,9 +767,82 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         old = _params.Parameters.strip_unsupported(pack, (2020, 1))
         self.assertIn("Resolution=", old)
         self.assertNotIn("PACK_RESOLUTION", _params.MIN_VERSIONS)
-        # The two that stay gated must still be stripped on 2020.1.
+        # The ones that stay gated must still be stripped on 2020.1.
         self.assertNotIn("MaxMutations=", old)
         self.assertNotIn("Enable=", old)
+        self.assertNotIn("Mix=", old)
+
+    def test_dead_pack_knobs_are_not_shown(self):
+        """A pack row the panel shows must change the result (live report
+        2026-09-23: "the pack params seem to have no effect").
+
+        Measured through the real Maya bridge on 2020.1: Recursion Depth 1/2/5
+        and Mix Scale on/off each saved a byte-identical layout (the bridge's
+        group hierarchy has nothing nested to recurse into; 2020.1 ignores
+        Scaling.Mix). Recursion Depth is pinned in the Lua, so no bundled
+        preset shows it; Mix Scale is version-gated like its dead siblings.
+        Rotate is the reverse: 2020.1 has no Rotate.Enable, but Mode 0 + Step 0
+        keeps every angle, so the row is live on every version now.
+        """
+        pack = _params.Parameters.expand_includes(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+
+        def shown(version):
+            return _params.Parameters.referenced_keys(
+                _params.Parameters.strip_unsupported(pack, version)
+            )
+
+        old, new = shown((2020, 1)), shown((2022, 0))
+        self.assertNotIn("SCALING_MIX", old)
+        self.assertIn("SCALING_MIX", new)
+        self.assertIn("PACK_ROTATE_ENABLE", old)
+        self.assertIn("ROTATE_STEP", old)
+        for script in sorted(_SCRIPT_DIR.glob("*.lua")):
+            keys = _params.Parameters.referenced_keys(
+                script.read_text(encoding="utf-8")
+            )
+            self.assertNotIn("RECURSION_DEPTH", keys, script.name)
+
+    def test_rotate_off_sends_mode_and_step_zero(self):
+        """Rizom pre-orients every island BEFORE the Rotate.Step search, so
+        keeping the incoming angles takes both halves off: Mode=0 (no
+        pre-orient) and Step=0 (no search) -- probe-verified, 30-degree strips
+        stay at 30 degrees only with both. On keeps Rizom's default pre-orient
+        (the Mode field is omitted) so a plain pack is unchanged. Enable is
+        only sent where it exists (>= 2022)."""
+        pack = (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        old = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2020.1\Rizomuv_VS.exe"
+        )
+        new = RizomUVBridge(
+            rizom_path=r"C:\Program Files\Rizom Lab\RizomUV 2022.2\rizomuv.exe"
+        )
+        for bridge in (old, new):
+            bridge._params = {"PACK_ROTATE_ENABLE": False, "ROTATE_STEP": 45}
+            code = _code_lines(bridge._construct_full_script(pack))
+            self.assertIn("local rotate = false", code)
+            self.assertIn("Step=rotate and 45 or 0,", code)
+            self.assertIn("Mode=(not rotate) and 0 or nil,", code)
+        self.assertNotIn("Enable=", _code_lines(old._construct_full_script(pack)))
+        self.assertIn("Enable=rotate,", _code_lines(new._construct_full_script(pack)))
+
+    def test_only_pack_opts_into_the_shell_subset(self):
+        """The subset token renders ``nil`` unless the host sets it, and only
+        pack.lua references it -- the unwrap presets re-cut every island, so a
+        subset pack at their end would strand the rest (see pack_block.lua)."""
+        self.assertEqual(_params.Parameters.render_context({})["PACK_SUBSET"], "nil")
+        opted = [
+            p.stem
+            for p in sorted(_SCRIPT_DIR.glob("*.lua"))
+            if "__PACK_SUBSET__" in p.read_text(encoding="utf-8")  # noqa: P103
+        ]
+        self.assertEqual(opted, ["pack"])
+        script = self.bridge._construct_full_script(
+            (_SCRIPT_DIR / "pack.lua").read_text(encoding="utf-8")
+        )
+        self.assertIn("PACK_SUBSET = nil", script)
+        self.assertEqual(re.findall(r"__[A-Z][A-Z0-9_]*__", script), [])
 
     def test_hard_reweld_unoverlap_gated_2022(self):
         """ReWeld / BooleanUnoverlap access-violate 2020.1 (probed) -- stripped
@@ -955,6 +1035,143 @@ class TestRizomBridgePackIntoExisting(MayaTkTestCase):
         self.assertEqual(len(kept), 2, kept)
         self.assertIn("instSolo", kept_leaves)
         self.assertTrue({"instBase", "instCopy"} & kept_leaves)
+
+
+class TestRizomBridgeShellSubset(MayaTkTestCase):
+    """A component selection names UV SHELLS, and ``pack`` moves only those.
+
+    Live report 2026-09-23: shells deliberately left out of the selection
+    were packed anyway -- the export resolved every component to its whole
+    object. The Lua half (tagged islands move, the rest stay bit-identical and
+    are packed around) is probe-verified in ``rizom_headless_probe.py``
+    (``pack_subset*``) and was confirmed through the real bridge; these pin the
+    host half: which faces the payload tags, the token the preset receives,
+    and that the tag never outlives the run.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = RizomUVBridge(rizom_path="not-used.exe")
+        self.tmp = Path(tempfile.mkdtemp(prefix="rizom_subset_test_"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.addCleanup(self.bridge._release_temp_payloads)
+
+    def _cube(self, name):
+        """A cube whose six faces are six one-face UV shells."""
+        cube = cmds.polyCube(name=name)[0]
+        cmds.polyAutoProjection(f"{cube}.f[*]", constructionHistory=False)
+        cmds.delete(cube, constructionHistory=True)
+        return cube
+
+    def _run(self, objects, preset="pack"):
+        """Round-trip through a RizomUV stand-in that keeps the payload as-is,
+        returning what the run handed it: ``(script text, copy of the FBX)``."""
+        seen = {}
+
+        def passthrough(exe, args=None, timeout=None):
+            seen["script"] = Path(args[1]).read_text(encoding="utf-8")
+            shutil.copy(self.bridge.export_path, self.tmp / "payload.fbx")
+            stamp = os.path.getmtime(self.bridge.export_path) + 2
+            os.utime(self.bridge.export_path, (stamp, stamp))
+            return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
+
+        with mock.patch.object(AppLauncher, "run", staticmethod(passthrough)):
+            self.bridge.process_with_rizomuv(objects, preset=preset)
+        return seen["script"], self.tmp / "payload.fbx"
+
+    def _tagged(self, fbx):
+        """``{exported mesh leaf: face ids | "all"}`` carrying the subset tag."""
+        new = cmds.file(
+            str(fbx), i=True, type="FBX", namespace="rzProbe", returnNewNodes=True
+        )
+        try:
+            mats = cmds.ls("rzProbe:rizomSubset*", materials=True)
+            if not mats:
+                return {}
+            sg = cmds.listConnections(mats[0], type="shadingEngine")[0]
+            out = {}
+            for member in cmds.ls(cmds.sets(sg, query=True) or [], flatten=True):
+                node, _, index = member.partition(".f[")
+                mesh = CoreUtils.short_name(node)
+                if mesh.endswith("Shape"):  # whole-mesh membership names the shape
+                    out[mesh[: -len("Shape")]] = "all"
+                else:
+                    out.setdefault(mesh, []).append(int(index.rstrip("]")))
+            return {k: v if v == "all" else sorted(v) for k, v in out.items()}
+        finally:
+            cmds.delete(cmds.ls(new or []))
+            if cmds.namespace(exists="rzProbe"):
+                cmds.namespace(removeNamespace="rzProbe", deleteNamespaceContent=True)
+
+    def test_only_the_selected_shells_are_tagged(self):
+        """Two of a cube's six shells plus a whole second mesh: the payload
+        tags exactly those faces, the preset receives the tag, and the tag
+        material is gone from the scene afterwards."""
+        partly = self._cube("subsetPartly")
+        whole = self._cube("subsetWhole")
+        script, fbx = self._run([f"{partly}.f[1:2]", whole])
+
+        tag = re.search(r'PACK_SUBSET = \{"([^"]+)"\}', script)
+        self.assertIsNotNone(tag, "the preset was not handed the subset tag")
+        tagged = self._tagged(fbx)
+        # Keyed by source mesh: the export's ``_<index>`` suffix follows the
+        # resolver's order, not the selection's.
+        by_mesh = {name.split("_")[0]: faces for name, faces in tagged.items()}
+        self.assertEqual(by_mesh.get("subsetPartly"), [1, 2], tagged)
+        self.assertEqual(by_mesh.get("subsetWhole"), "all", tagged)
+        self.assertEqual(cmds.ls("rizomSubset*"), [], "the subset tag leaked")
+
+    def test_a_component_names_its_whole_shell(self):
+        """One face of a cylinder's side shell picks the whole side shell --
+        a pack cannot move part of a shell -- and none of the caps."""
+        cyl = cmds.polyCylinder(name="subsetCyl", subdivisionsAxis=8)[0]
+        cmds.delete(cyl, constructionHistory=True)
+        subset, picked, total = RizomUVBridge._shell_subset([f"{cyl}.f[3]"])
+        faces = subset[RizomUVBridge._shape_uuid(cyl)]
+        side = set(UvUtils.get_uv_shell_sets([f"{cyl}.f[3]"], whole_shells=True)[0])
+        self.assertEqual(faces, {int(f.rsplit("[", 1)[1][:-1]) for f in side})
+        self.assertEqual((picked, total), (1, 3))
+
+    def test_uv_components_name_shells_too(self):
+        """A UV-editor selection (``.map[]``) names the shells it touches."""
+        cube = self._cube("subsetUvs")
+        uvs = cmds.polyListComponentConversion(f"{cube}.f[4]", toUV=True)
+        subset, picked, _ = RizomUVBridge._shell_subset(uvs)
+        self.assertEqual(subset[RizomUVBridge._shape_uuid(cube)], {4})
+        self.assertEqual(picked, 1)
+
+    def test_whole_objects_are_a_plain_pack(self):
+        """An object selection, an object that is ALSO selected by component,
+        and a component selection covering every shell all pack whole: no
+        subset, no tag."""
+        cube = self._cube("subsetPlain")
+        for objects in ([cube], [cube, f"{cube}.f[0]"], [f"{cube}.f[*]"]):
+            with self.subTest(objects=objects):
+                self.assertEqual(RizomUVBridge._shell_subset(objects)[0], {})
+        script, fbx = self._run([cube])
+        self.assertIn("PACK_SUBSET = nil", script)
+        self.assertEqual(self._tagged(fbx), {})
+
+    def test_instances_share_one_subset(self):
+        """DAG instances share one shape, so a subset picked through either
+        instance keys the same entry -- whichever the instance filter keeps."""
+        cube = self._cube("subsetInst")
+        twin = cmds.instance(cube, name="subsetInstTwin")[0]
+        subset, _, _ = RizomUVBridge._shell_subset([f"{twin}.f[0]"])
+        self.assertEqual(list(subset), [RizomUVBridge._shape_uuid(cube)])
+
+    def test_presets_that_cannot_take_a_subset_say_so(self):
+        """Every other preset processes the whole object and warns rather
+        than widening the selection silently -- that silence was the report."""
+        cube = self._cube("subsetOptimize")
+        with mock.patch.object(self.bridge.logger, "warning") as warned:
+            script, fbx = self._run([f"{cube}.f[0]"], preset="optimize")
+        messages = [c.args[0] for c in warned.call_args_list]
+        self.assertTrue(any("works on whole objects" in m for m in messages), messages)
+        # The shared block reads the global on every preset; only pack.lua
+        # assigns it.
+        self.assertNotIn("PACK_SUBSET = ", script)
+        self.assertEqual(self._tagged(fbx), {})
 
 
 class TestRizomBridgeUndo(MayaTkTestCase):

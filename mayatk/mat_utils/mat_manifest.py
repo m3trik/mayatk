@@ -66,7 +66,7 @@ class MatManifest(ptk.HelpMixin):
                 )
             except Exception:  # noqa: BLE001 -- components/shapes pass through
                 pass
-        materials = MatUtils.get_mats(list(dict.fromkeys(obj_strings)), as_strings=True)
+        materials = MatUtils.get_mats(list(dict.fromkeys(obj_strings)))
 
         for mat_name in materials:
             mat_data = cls._process_material(mat_name)

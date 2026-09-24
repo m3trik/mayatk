@@ -351,7 +351,7 @@ class TestGroupCombine(MayaTkTestCase):
 
         batched = MatUtils._materials_by_object(objs)
         for obj in objs:
-            per = set(MatUtils.get_mats([obj], as_strings=True))
+            per = set(MatUtils.get_mats([obj]))
             self.assertEqual(
                 set(batched.get(obj, [])),
                 per,

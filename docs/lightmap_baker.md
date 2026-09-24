@@ -24,8 +24,8 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 
 | Control | What it does |
 |:---|:---|
-| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**. Its **light** button is *Include Environment*: on, the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards. |
-| **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set). Its icons select the set or clear it. The label shows how many meshes are excluded. |
+| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included. Its **light** button is *Include Environment*: on, the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards. |
+| **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set): objects that get no map of their own but still cast shadows and bounce light onto everything that bakes. Its icons select the set or clear it. The label shows how many meshes are excluded. |
 | **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). |
 | **Processor** | Which one Arnold renders the bake on. **Auto** uses the GPU wherever Arnold has one, else the CPU; **GPU** and **CPU** force it. A machine setting, so it sits above the Quality group and no preset stores it. |
 | **Resolution** | Map size in pixels (256–4096). It also sets the gutter width. Its **filter** button is *Denoise*: each map is cleaned at the size it ships — the object's own map, or its atlas cell. |
@@ -62,7 +62,10 @@ The panel's **Bake Lightmaps** and a script's `LightmapBaker.bake` run the
 same steps:
 
 1. Resolve the Scope to meshes and take away the Exclude set
-   (`LightmapBaker.bake_targets`).
+   (`LightmapBaker.bake_targets`). Meshes Arnold renders nothing of are left
+   out too, and named in the Script Editor: hidden or templated by their own
+   flags, their shape's, an ancestor's, level-of-detail visibility or a
+   display layer. The footer counts them apart from the excluded ones.
 2. Check that the scene can bake (`LightmapBaker.preflight`), before anything
    in it changes. Every lightmap renders with Arnold, so mtoa is loaded here
    if it isn't yet; a machine without it is refused. Lights the tool authored
@@ -83,7 +86,9 @@ same steps:
 6. Place each map (see [Where the maps land](#where-the-maps-land)), then
    record it (`LightmapRecords.commit`): a JSON marker (`lightmapInfo`) on
    each transform, and a scene manifest on the `data_export` node that rides
-   the FBX (see [Scene data nodes](data_nodes.md)).
+   the FBX (see [Scene data nodes](data_nodes.md)). The maps the objects read
+   before, and that nothing reads now, are deleted (see
+   [When the maps move](#when-the-maps-move)).
 7. Measure the finished maps (`LightmapBaker.bake_verdict`). A bake that
    comes back essentially unlit, or blown out, is still recorded, because it
    is a faithful render of the scene. The panel's footer warns, and the
@@ -134,7 +139,7 @@ camera samples instead:
 
 - **Adaptive Sampling on** (the default — the button on the Samples field):
   every texel gets **Samples**. Noisy texels (shadows, contact) get more, up
-  to Samples × GI Samples. Measured on four production floors at **quest**
+  to Samples × GI Samples. Measured on four production floors at **mobile**
   (Samples 4, GI Samples 4): 73 s adaptive, against 381 s for giving every
   texel the full budget (Samples 16). Shadow noise was 1.31% against 1.06%.
 - **Adaptive Sampling off**: every texel gets the full Samples × GI Samples.
@@ -154,7 +159,7 @@ The Preset combo is uitk's preset template:
 - **Save** (the disk icon) stores the current settings under a name you type.
 - The **⋯** menu renames, deletes, or opens the preset folder.
 - A **\*** after the name means a setting has changed since the preset loaded.
-- The built-ins (**preview**, **quest**, **desktop**) are italic and
+- The built-ins (**preview**, **mobile**, **desktop**) are italic and
   read-only.
 
 Presets live in one store, `LightmapBaker.preset_store()`: the shipped JSON in
@@ -184,8 +189,12 @@ fail on the next machine.
 | Built-in | Resolution | Samples | GI Samples | Bounces |
 |:---|:---|:---|:---|:---|
 | preview | 256 | 2 | 2 | 1 |
-| quest | 1024 | 4 | 4 | 2 |
+| mobile | 1024 | 4 | 4 | 2 |
 | desktop | 2048 | 8 | 6 | 3 |
+
+**mobile** was named **quest**. `from_preset("quest")` still builds it, with
+a deprecation notice, until mayatk 0.21.0, and the panel moves a selection
+saved as **quest** onto **mobile**.
 
 ## Exclude set
 
@@ -199,10 +208,14 @@ does bake. A group in the set excludes every mesh under it; faces exclude
 their mesh.
 
 The workflow reads the set itself (`LightmapBaker.bake_targets`). A bake from
-the panel, from a script, or from a preset all skip the same objects.
+the panel, from a script, or from a preset all skip the same objects, and so
+does the Blender bridge's lightmap bake: an excluded mesh in the send crosses
+and shadows the Cycles bake like any other, but gets no map and is never wired
+on the way back. Only the send crosses, though, so an excluded object outside
+it casts no shadow there.
 
 A bake never touches an excluded object, so a map it already has survives. For example, bake a hero prop at **desktop**, exclude it, then
-re-bake the room at **quest**: the prop keeps its map.
+re-bake the room at **mobile**: the prop keeps its map.
 
 The row mirrors the Marmoset bridge's Bake Source row, and both sets share
 one base (`BakeSet`).
@@ -242,6 +255,31 @@ the maps through the markers wherever they were written
 `FileDependencies`: resolve each map by its recorded folder first, then by a
 search, and gather the maps into one folder.
 
+## When the maps move
+
+Re-bake after changing the Output Directory, Beside Material Textures, the
+Name affix or the Packing, and the objects get new files. The old ones are
+deleted once nothing reads them (`LightmapRecords.superseding`), and the
+footer says how many. A same-place re-bake just writes over its own maps.
+
+Left behind, an old map was more than clutter. A tool that finds maps by
+name can pick up the stale copy, and beside the textures a leftover keeps
+its name taken, so going back to it wrote `_1`.
+
+Only this scene's own maps are deleted. Each commit records which scene file
+wrote the map, and a map is kept when:
+
+- another object still reads it: an excluded object, one the bake didn't
+  finish, or one outside the Scope;
+- another scene file wrote it and is still there, such as the source of a
+  Save As copy;
+- it was baked before the scene recorded its writers (a scene's first bake
+  after the change starts recording);
+- a referenced object reads it, since the referenced file may name it too.
+
+A scene saved under a new name, with the old file gone, still owns what it
+wrote. Revert deletes nothing.
+
 ## Revert
 
 **Revert to Source** removes the lightmap wiring: each object's marker and its
@@ -259,7 +297,7 @@ restores the wiring: a revert is one undo chunk.
 import maya.cmds as cmds
 import mayatk as mtk
 
-baker = mtk.LightmapBaker.from_preset("quest", device="AUTO")
+baker = mtk.LightmapBaker.from_preset("mobile", device="AUTO")
 result = baker.bake(cmds.ls(selection=True), output_dir="D:/bakes")
 # packing="per_object" gives one map per object instead of an atlas per material.
 
@@ -279,7 +317,9 @@ returns a `LightmapBakeResult`, the same shape in blendertk:
 | `maps` | `{object: map path}` for every map written and recorded. |
 | `rects` | `{object: [scaleX, scaleY, offsetX, offsetY]}`, each object's engine binding (the identity for a map of its own). |
 | `excluded` | Objects the Exclude set left out. |
+| `hidden` | Objects left out because Arnold renders nothing of them (hidden or templated). Always empty in blendertk, which bakes hidden objects. |
 | `unbaked` | Objects asked for that the bake didn't finish. They keep the map they had. |
+| `retired` | Map files the bake superseded and deleted. |
 | `refused` | Why nothing was baked, as a sentence, or `None`. |
 | `verdict` | A warning about the maps' level, or `None`. |
 
@@ -302,20 +342,22 @@ warns and is removed in 0.20.0.
 ## Blender twin
 
 blendertk's `LightmapBaker` and its panel bake with Cycles and mirror this
-workflow: Scope, Packing, the quality dials, Include Environment, Denoise and
-Revert. The engine matches too: `bake()` with its preflight and verdict, the
-file claims, the legacy migration, and `LightmapRecords`. It returns the same
+one control for control: the same layout, the preset template (its presets
+store `bounces` for `gi_depth`), the Exclude set (a stamped collection that
+changes nothing about what renders), Beside Material Textures, Bounces,
+Adaptive Sampling, the four switches on the fields they qualify, Reset to
+Defaults and the confirmed Revert. The engine matches too: `bake()` with its
+preflight and verdict, `bake_targets`, the file claims, the deletion of
+superseded maps (a linked object's map is kept, as a referenced one's is
+here), the legacy migration, and `LightmapRecords`. It returns the same
 `LightmapBakeResult`, whose two copies `check_dcc_twins.py` keeps identical.
-Blender's preflight refuses a scene whose lights are all hidden from the
-render or at zero energy, unless the world lights the bake. The 2026-09-22
-panel additions are Maya-only for now and recorded as pending in the parity
-ledger
-([`tentacle/docs/parity_map.py`](../../tentacle/docs/parity_map.py)):
 
-- the preset template;
-- the Exclude set;
-- Beside Material Textures;
-- GI Samples, Bounces and Adaptive Sampling;
-- the Revert confirmation;
-- the switches-on-their-field layout (Blender still carries Include
-  Environment and Denoise as checkbox rows).
+The differences are the renderer's. Cycles has no GI Samples: one sample count
+covers every ray. Its adaptive sampling works on the CPU and the GPU alike, so
+the switch is never greyed out, and it stops a clean texel early instead of
+adding samples to a noisy one. A hidden mesh bakes (it is shown for its own
+bake) instead of being skipped. Blender's preflight refuses a scene whose
+lights are all hidden from the render or at zero energy, unless the world
+lights the bake. The parity ledger
+([`tentacle/docs/parity_map.py`](../../tentacle/docs/parity_map.py)) records
+each difference.

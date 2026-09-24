@@ -180,6 +180,42 @@ class _ReferenceManagerInternal(object):
             os.path.dirname(path), "incrementalSave", os.path.basename(path)
         )
 
+    @classmethod
+    def _holds_other_scenes(cls, folder, scene_path) -> bool:
+        """True if *folder* holds a Maya scene, at any depth, other than *scene_path*
+        and its own incremental saves -- a folder that is then not that scene's alone
+        to move with it: a folder shared by versions, or the scenes root itself.
+
+        Also True when *folder* cannot be read in full: leave what cannot be
+        inspected alone, as Delete does. A folder that does not exist holds nothing.
+        """
+        scene = os.path.normcase(os.path.normpath(scene_path))
+        own_increments = os.path.normcase(
+            os.path.normpath(cls._increments_dir(scene_path))
+        )
+
+        def _unreadable(error):
+            if not isinstance(error, FileNotFoundError):
+                raise error
+
+        try:
+            for root, dirs, files in os.walk(folder, onerror=_unreadable):
+                if os.path.normcase(os.path.normpath(root)) == own_increments:
+                    dirs[:] = []
+                    continue
+                for name in files:
+                    if (
+                        os.path.splitext(name)[1].lower()
+                        not in EnvUtils.SCENE_SAVE_TYPES
+                    ):
+                        continue
+                    path = os.path.normcase(os.path.normpath(os.path.join(root, name)))
+                    if path != scene:
+                        return True
+        except OSError:
+            return True
+        return False
+
     @staticmethod
     def _is_usd(path) -> bool:
         """True if *path* is a USD layer or package -- read through mayaUsd's translator."""
@@ -557,6 +593,18 @@ class ReferenceManager(
                 raise RuntimeError(
                     f"Failed to create reference for {file_path}. No valid reference node found."
                 )
+            if read:
+                # A USD row in another unit or up axis (a Blender default export
+                # is metre / Z-up; mayaUsd converts neither): its top nodes go
+                # under a host-side conform group -- a parent edit Maya re-applies
+                # on every reload, and an unlink keeps the group with its content.
+                UsdUtils.conform_roots(
+                    UsdUtils.top_transforms(
+                        cmds.referenceQuery(rn, nodes=True, dagPath=True) or []
+                    ),
+                    UsdUtils.stage_conform(file_path),
+                    f"{sanitized_namespace}_conform",
+                )
             return True
         except RuntimeError as e:
             if "Could not open file" in str(e):
@@ -762,11 +810,18 @@ class ReferenceManager(
         except RuntimeError:
             nodes = []
         handles = CoreUtils.node_handles(nodes)
+        try:
+            ref_file = ref.path
+        except RuntimeError:
+            ref_file = ""
         return decision, {
             "carriers": {
                 scope: CoreUtils.node_handles([node])
                 for scope, node in carriers.items()
             },
+            # The module's path records are spelled from ITS project: they
+            # arrive re-spelled from this scene's (DataNodes.merge_carriers).
+            "project": DataNodes.project_root_of(ref_file),
             "handles": handles,
             "authored": [
                 self._authored_name(name, namespace)
@@ -794,7 +849,12 @@ class ReferenceManager(
             if decision == "merge"
             else DataNodes.discard_carriers
         )
-        ctx = settle(carriers, rename=rename, source=namespace)
+        ctx = settle(
+            carriers,
+            rename=rename,
+            source=namespace,
+            source_path_base=captured.get("project"),
+        )
         self.logger.info(
             f"'{namespace}': scene data "
             + ("merged" if decision == "merge" else "discarded")
@@ -957,12 +1017,26 @@ class ReferenceManager(
         failed = []
         for ref in targets:
             try:
+                namespace = ref.namespace
+            except RuntimeError:
+                namespace = ""
+            try:
                 ref.remove()
             except RuntimeError as e:
                 self.logger.warning(
                     f"Failed to remove reference '{ref._ref_node}': {e}"
                 )
                 failed.append(ref)
+                continue
+            # The host-side group a USD reference was conformed under
+            # (add_reference) goes with it once it holds nothing.
+            group = f"{str(namespace).strip(':')}_conform"
+            if (
+                namespace
+                and cmds.objExists(group)
+                and not cmds.listRelatives(group, children=True)
+            ):
+                cmds.delete(group)
         return failed
 
 
@@ -1078,6 +1152,124 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         except Exception:
             return "scenes"
 
+    def _is_workspace_structure(self, folder) -> bool:
+        """True if *folder* is the browsed workspace or its ``{scenes}`` root, or
+        holds either: the project's own structure, never one scene's folder however
+        it is named, so Rename never moves it and Delete never removes it. The name
+        test alone let a scene named for its folder claim it -- ``scenes_final.ma``
+        loose in the scenes root, ``proj_v01.ma`` at the root of project ``proj``
+        -- even with no other scene below to hold it back."""
+        workspace = self.current_working_dir
+        if not workspace:
+            return False
+        folder = os.path.normcase(os.path.abspath(folder))
+        inside = os.path.join(folder, "")
+        for root in (workspace, os.path.join(workspace, self._scenes_folder())):
+            root = os.path.normcase(os.path.abspath(root))
+            if root == folder or root.startswith(inside):
+                return True
+        return False
+
+    def _naming_menu(self):
+        """The header menu — home of the naming fields (case / suffix / folder
+        structure), which Save, Rename, Delete and the list filters all read.
+        ``None`` until the header is built."""
+        header = getattr(getattr(self.slot, "ui", None), "header", None)
+        return getattr(header, "menu", None)
+
+    def _naming_options(self):
+        """``(case_style, suffix, structure_pattern)`` as set in the header menu's
+        Naming section — the single read every consumer (save / rename / delete / filters /
+        previews) goes through; defaults when the menu isn't built yet. Both text
+        fields come back trimmed (blendertk's filter read always trimmed them)."""
+        menu = self._naming_menu()
+        case_w = getattr(menu, "cmb_case_style", None) if menu else None
+        suffix_w = getattr(menu, "txt_suffix", None) if menu else None
+        txt = getattr(menu, "txt_subfolder_structure", None) if menu else None
+        return (
+            case_w.currentText() if case_w is not None else "None",
+            suffix_w.text().strip() if suffix_w is not None else "",
+            txt.text().strip() if txt is not None else "",
+        )
+
+    def _default_save_name(self, case_style: str, suffix: str) -> str:
+        """The name Save would prepopulate: the open scene's base, less every trailing
+        *suffix* (so it isn't double-appended), case-formatted. Empty with no scene.
+
+        EVERY trailing suffix: Save strips one from whatever its prompt returns, so a
+        prefill still ending in it -- a ``_v01_v01`` the old Rename doubled -- would
+        save under another name than the one both previews show.
+
+        ``splitext``, not ``split(".")[0]`` (the old spelling): a dotted scene name
+        like ``hero.rig.ma`` must prepopulate ``hero.rig``, not ``hero`` — only the
+        extension comes off (the spelling blendertk's twin always used)."""
+        current_scene = cmds.file(q=True, sceneName=True) or ""
+        if not current_scene:
+            return ""
+        base = os.path.splitext(os.path.basename(current_scene))[0]
+        stripped = ptk.StrUtils.strip_suffix(base, [suffix])
+        while stripped != base:
+            base, stripped = stripped, ptk.StrUtils.strip_suffix(stripped, [suffix])
+        return self._format_name(base, case_style, suffix="")
+
+    def _resolve_save_target(
+        self, name: str, case_style: str, suffix: str, pattern: str
+    ) -> str:
+        """The absolute ``.ma`` path Save To Workspace would write for *name* under
+        the current workspace with the given naming options — shared by
+        :meth:`save_scene` and the Save button's live tooltip, so the preview can't
+        drift from the real save. *pattern* arrives normalized (each caller handles
+        the ``{scene}`` typo its own way: Save warns once, the previews annotate).
+
+        Raises:
+            ValueError: Invalid workspace, or an invalid placeholder pattern.
+        """
+        workspace = self.current_working_dir
+        if not workspace or not os.path.isdir(workspace):
+            raise ValueError("Current workspace directory is invalid.")
+        target_dir = workspace
+        if pattern:
+            try:
+                rel = ptk.StrUtils.replace_placeholders(
+                    pattern,
+                    scenes=self._scenes_folder(),
+                    name=self._format_name(name, case_style, suffix=""),
+                    workspace=os.path.basename(workspace),
+                    suffix=suffix,
+                )
+            except ValueError as e:
+                raise ValueError(f"Invalid folder structure pattern: {e}")
+            target_dir = os.path.join(workspace, rel)
+        # normpath: the pattern's own separators ride through the join, and the
+        # path is user-facing (the Save button's tooltip previews it verbatim).
+        return os.path.normpath(
+            os.path.join(
+                target_dir, self._format_name(name, case_style, suffix) + ".ma"
+            )
+        )
+
+    def _save_scene_preview(self) -> str:
+        """Live tooltip for the footer Save button — the exact path Save would
+        write for the current scene under the current naming options."""
+        case_style, suffix, structure_text = self._naming_options()
+        notes = []
+        if "{scene}" in structure_text:
+            notes.append("<b>{scene}</b> is not valid — did you mean <b>{scenes}</b>?")
+        pattern = structure_text.replace("{scene}", "{scenes}")
+        name = self._default_save_name(case_style, suffix) or "<scene name>"
+        try:
+            path = self._resolve_save_target(name, case_style, suffix, pattern)
+        except ValueError as e:
+            path = None
+            notes.append(html.escape(str(e)))
+        return self.sb.tooltip.fmt(
+            title="Save To Workspace",
+            body="Save the current scene into the workspace using the header "
+            "menu's Naming options: case / suffix / folder structure.",
+            rows=[("saves →", f"<b>{html.escape(path)}</b>")] if path else None,
+            notes=notes or None,
+        )
+
     def _folder_structure_preview(self) -> str:
         """Live tooltip for ``txt_subfolder_structure`` — resolve the placeholders
         against the current workspace + scene so the hover shows the real Save dir.
@@ -1085,27 +1277,14 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         Side-effect-free (unlike :meth:`_normalize_subfolder_structure_pattern`,
         which warns): the ``{scene}`` typo is corrected locally and surfaced as a
         note instead of logging on every hover."""
-        header_menu = self.slot.ui.header.menu
-        txt = getattr(header_menu, "txt_subfolder_structure", None)
-        pattern = txt.text().strip() if txt is not None else ""
+        case_style, suffix, pattern = self._naming_options()
 
         workspace = self.current_working_dir or ""
         workspace_name = os.path.basename(workspace) if workspace else "<workspace>"
-        suffix_w = getattr(header_menu, "txt_suffix", None)
-        suffix = (suffix_w.text() if suffix_w is not None else "") or ""
-        case_w = getattr(header_menu, "cmb_case_style", None)
-        case_style = case_w.currentText() if case_w is not None else "None"
 
         # {name} = the current scene's base (what Save would prepopulate), formatted
         # the same way — so the preview reflects the real Save output.
-        current_scene = cmds.file(q=True, sceneName=True) or ""
-        if current_scene:
-            base = os.path.basename(current_scene).split(".")[0]
-            if suffix and base.lower().endswith(suffix.lower()):
-                base = base[: -len(suffix)]
-            name_val = self._format_name(base, case_style, suffix="")
-        else:
-            name_val = "<scene name>"
+        name_val = self._default_save_name(case_style, suffix) or "<scene name>"
 
         notes = ["e.g. {scenes} · {scenes}/{name} · {scenes}/{name}/versions"]
         if "{scene}" in pattern:
@@ -1131,8 +1310,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             resolve_pattern,
             context,
             title="Folder Structure",
-            body="Subfolder pattern for <b>Save To Workspace</b> — also drives the "
-            "<b>Filter by Folder Structure</b> option.",
+            body="Where scenes live, panel-wide: <b>Save To Workspace</b> writes "
+            "here, <b>Filter by Folder Structure</b> matches against it, and with "
+            "<b>{name}</b> Rename and Delete keep each scene's own folder in step.",
             descriptions={
                 "scenes": "workspace scenes folder (workspace.mel)",
                 "name": "scene name — excludes the suffix",
@@ -1574,6 +1754,39 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         name = os.path.basename(workspace.rstrip("/\\"))
         footer.setStatusText(f"Workspace: {name}" if name else "")
 
+    def set_maya_project(self):
+        """Set Maya's project (workspace) to the browsed workspace — the explicit
+        counterpart of the automatic set on scene open (:meth:`open_scene`), for
+        when the project should switch without opening anything.
+
+        Browsing alone never touches Maya's project (see :meth:`set_workspace`);
+        this is the one deliberate way to commit the combo's selection to it.
+        """
+        workspace = self.current_working_dir
+        if not workspace or not os.path.isdir(workspace):
+            self.sb.message_box("Select a valid workspace first.")
+            return False
+        try:
+            current = cmds.workspace(q=True, rd=True)
+            if os.path.normcase(os.path.normpath(current)) == os.path.normcase(
+                os.path.normpath(workspace)
+            ):
+                self.logger.debug("Maya project already set to this workspace.")
+            else:
+                cmds.workspace(workspace, openWorkspace=True)
+                self.logger.info(f"Set Maya project to: {workspace}")
+        except Exception as e:
+            self.sb.message_box(
+                f"Failed to set the Maya project:<br>{html.escape(str(e))}"
+            )
+            return False
+        footer = getattr(self.ui, "footer", None)
+        if footer is not None:
+            name = os.path.basename(workspace.rstrip("/\\"))
+            footer.setStatusText(f"Maya project set: {name}", level="success")
+            self.sb.defer_with_timer(self._update_workspace_footer, ms=3000)
+        return True
+
     def _update_workspace_combo(self, root_dir=None):
         """Repopulate the workspace combo box and select the best match.
 
@@ -1703,11 +1916,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         included = self.slot._included_extensions()
         file_list = [f for f in file_list if os.path.splitext(f)[1].lower() in included]
 
+        # The Naming fields feed the suffix / folder-structure filters.
+        _case_style, suffix_text, structure_text = self._naming_options()
+
         # Check for filter by suffix setting
         filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
-        suffix = getattr(header_menu, "txt_suffix", None)
-        suffix_text = suffix.text() if suffix else ""
-
         if filter_suffix and filter_suffix.isChecked() and suffix_text:
             filtered_list = []
             for f in file_list:
@@ -1718,11 +1931,6 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         # Check for filter by folder structure setting
         filter_structure = getattr(header_menu, "chk_filter_folder_structure", None)
-        structure_text = ""
-        txt_structure = getattr(header_menu, "txt_subfolder_structure", None)
-        if txt_structure:
-            structure_text = txt_structure.text().strip()
-
         if filter_structure and filter_structure.isChecked():
             # Determine the pattern to use
             pattern = self._normalize_subfolder_structure_pattern(structure_text)
@@ -1842,13 +2050,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         else:
             self.logger.debug(f"Found {len(file_list)} scenes to populate in table.")
 
-        # Check settings
-        header_menu = self.slot.ui.header.menu
-
+        # Check display settings (suffix_text already read with the naming options above)
         hide_suffix = getattr(header_menu, "chk_hide_suffix", None)
         hide_suffix_enabled = hide_suffix.isChecked() if hide_suffix else False
-        suffix = getattr(header_menu, "txt_suffix", None)
-        suffix_text = suffix.text() if suffix else ""
 
         hide_extension = getattr(header_menu, "chk_hide_extension", None)
         hide_extension_enabled = hide_extension.isChecked() if hide_extension else False
@@ -2187,6 +2391,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         try:
             cmds.file(file_path, open=True, force=True, **read)
+            conform = UsdUtils.stage_conform(file_path) if read else None
+            if conform:  # a USD row in another unit or up axis
+                roots = [
+                    r
+                    for r in UsdUtils.top_transforms(cmds.ls(assemblies=True))
+                    if not any(
+                        cmds.camera(s, q=True, startupCamera=True)
+                        for s in cmds.listRelatives(r, shapes=True, type="camera") or []
+                    )
+                ]
+                UsdUtils.conform_roots(
+                    roots,
+                    conform,
+                    f"{os.path.splitext(os.path.basename(file_path))[0]}_conform",
+                )
             # Loading a scene that carries references resolves/applies reference edits during
             # the open, which leaves Maya's scene 'modified' flag set even though the user made
             # no edits. That stale flag makes an immediate close/reference toggle falsely prompt
@@ -2435,82 +2654,41 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         return name
 
     def save_scene(self):
-        """Save the current scene to the workspace, prompting for a name."""
-        # Get settings from UI via slot
-        header_menu = self.slot.ui.header.menu
-        case_style = header_menu.cmb_case_style.currentText()
-        suffix = header_menu.txt_suffix.text()
+        """Save the current scene to the workspace, prompting for a name.
 
-        # Pre-populate with current scene name if available, with case formatting applied
-        default_name = ""
-        current_scene = cmds.file(q=True, sceneName=True) or ""
-        if current_scene:
-            base_name = os.path.basename(current_scene).split(".")[0]
-            # If the current scene already includes the configured suffix, strip it
-            # so the UI doesn't double-append it when the user saves.
-            suffix_text = (suffix or "").strip()
-            if suffix_text and base_name.lower().endswith(suffix_text.lower()):
-                base_name = base_name[: -len(suffix_text)]
+        The naming options (case / suffix / folder structure) come from the header
+        menu's Naming section; the target path comes from
+        :meth:`_resolve_save_target` — the same computation the button's live
+        tooltip previews.
+        """
+        case_style, suffix, structure_text = self._naming_options()
 
-            # Apply case formatting to the default name (without suffix)
-            default_name = self._format_name(base_name, case_style, suffix="")
+        # Pre-populate with the current scene's name (suffix stripped so it isn't
+        # double-appended, case formatting applied).
+        default_name = self._default_save_name(case_style, suffix)
 
         name = self.sb.input_dialog("Save Scene", "Enter name for scene:", default_name)
+        # The conventions append the suffix; one typed into the name would double.
+        name = ptk.StrUtils.strip_suffix(name or "", [suffix])
         if not name:
             return
 
-        formatted_name = self._format_name(name, case_style, suffix)
-
-        workspace = self.current_working_dir
-        if not workspace or not os.path.isdir(workspace):
-            self.sb.message_box("Current workspace directory is invalid.")
+        pattern = self._normalize_subfolder_structure_pattern(structure_text)
+        try:
+            new_path = self._resolve_save_target(name, case_style, suffix, pattern)
+        except ValueError as e:
+            self.sb.message_box(html.escape(str(e)))
             return
 
-        target_dir = workspace
-
-        # Get folder structure from UI
-        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
-        subfolder_structure_text = (
-            subfolder_structure.text().strip() if subfolder_structure else ""
-        )
-
-        if subfolder_structure_text:
-            # Resolve the {scenes} placeholder to the workspace's scenes folder
-            scenes_folder = self._scenes_folder()
-
-            # Use custom structure with all placeholders
-            base_name_formatted = self._format_name(name, case_style, suffix="")
-            workspace_name = os.path.basename(workspace)
-
-            pattern = self._normalize_subfolder_structure_pattern(
-                subfolder_structure_text
-            )
-
+        target_dir = os.path.dirname(new_path)
+        if not os.path.exists(target_dir):
             try:
-                resolved_path = ptk.StrUtils.replace_placeholders(
-                    pattern,
-                    scenes=scenes_folder,
-                    name=base_name_formatted,
-                    workspace=workspace_name,
-                    suffix=suffix,
-                )
-            except ValueError as e:
+                os.makedirs(target_dir)
+            except OSError as e:
                 self.sb.message_box(
-                    f"Invalid folder structure pattern: {html.escape(str(e))}"
+                    f"Failed to create directory: {html.escape(str(e))}"
                 )
                 return
-            target_dir = os.path.join(workspace, resolved_path)
-
-            if not os.path.exists(target_dir):
-                try:
-                    os.makedirs(target_dir)
-                except OSError as e:
-                    self.sb.message_box(
-                        f"Failed to create directory: {html.escape(str(e))}"
-                    )
-                    return
-
-        new_path = os.path.join(target_dir, formatted_name + ".ma")
 
         if os.path.exists(new_path):
             if (
@@ -2563,10 +2741,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         scenes where the user renamed one.
 
         *folder* is the new name for the per-scene folder ({name} in the subfolder structure); it
-        is applied only when the current folder name matches the file's base (a file may carry a
-        suffix the folder doesn't) — a folder that can't be renamed is reported, since the scene
-        itself was. ``OSError`` from the file rename propagates; a failed sidecar / increments
-        move is logged and the file rename stands.
+        is applied only when the folder is the scene's alone: named for the file's base (which may
+        carry a suffix the folder doesn't), not the project's own structure
+        (:meth:`_is_workspace_structure`) and holding no other scene (:meth:`_holds_other_scenes`)
+        — a folder that can't be renamed is reported, since the scene itself was. ``OSError``
+        from the file rename propagates; a failed sidecar / increments move is logged and the
+        file rename stands.
         """
         # Only Maya's own scene types round-trip through save-then-reopen. An .fbx or USD row
         # can also be the open scene (Maya opens both through their translators), but saving
@@ -2607,10 +2787,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             old_dir = os.path.dirname(old_path)
             parent_dir_name = os.path.basename(old_dir)
             old_base = os.path.splitext(os.path.basename(old_path))[0]
-            if old_base.startswith(parent_dir_name):
+            # The folder is the scene's own when it is named for it -- case-
+            # insensitively, as Delete's ("hero_v01.ma" in "Hero") -- is not the
+            # project's own structure, AND holds no other scene: the name test
+            # alone let a loose "scenes_final.ma" claim the scenes root. The file
+            # (and its increments) already moved.
+            if (
+                old_base.lower().startswith(parent_dir_name.lower())
+                and not self._is_workspace_structure(old_dir)
+                and not self._holds_other_scenes(old_dir, new_path)
+            ):
                 new_folder_path = os.path.join(os.path.dirname(old_dir), folder)
                 skipped = None
-                if os.path.exists(new_folder_path):
+                if os.path.exists(new_folder_path) and not ptk.FileUtils.is_same_file(
+                    new_folder_path, old_dir
+                ):
                     skipped = f"{new_folder_path} already exists"
                 else:
                     try:
@@ -2632,7 +2823,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     )
             else:
                 self.logger.debug(
-                    f"Folder '{parent_dir_name}' doesn't match file base '{old_base}', skipping folder rename"
+                    f"Folder '{parent_dir_name}' is not '{old_base}''s alone (named "
+                    "for another scene, or holds others); skipping its rename"
                 )
 
         if is_open:
@@ -2661,29 +2853,34 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         old_name = os.path.basename(old_path)
         old_base, ext = os.path.splitext(old_name)
 
-        new_base = self.sb.input_dialog("Rename Scene", "Enter new name:", old_base)
-        if not new_base or new_base == old_base:
-            return
-
-        # Get settings
-        header_menu = self.slot.ui.header.menu
-        case_style = header_menu.cmb_case_style.currentText()
-        suffix = header_menu.txt_suffix.text()
-
-        # Check if folder structure uses {name} placeholder (indicates per-scene folders)
-        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
-        structure_text = (
-            subfolder_structure.text().strip() if subfolder_structure else ""
-        )
+        # Naming options; {name} in the folder structure means
+        # per-scene folders, renamed alongside the file. The conventions append
+        # the suffix, so neither the prefill nor the answer may carry it.
+        case_style, suffix, structure_text = self._naming_options()
         use_folder = "{name}" in structure_text
+        prefill = ptk.StrUtils.strip_suffix(old_base, [suffix])
+        answer = self.sb.input_dialog("Rename Scene", "Enter new name:", prefill)
+        # "Unchanged" is what was TYPED: "hero_v01" for an unsuffixed "hero.ma"
+        # strips back to the prefill, yet asks for the suffix.
+        if not answer or answer == prefill:
+            return
+        new_base = ptk.StrUtils.strip_suffix(answer, [suffix])
+        if not new_base:
+            return
 
         formatted_name = self._format_name(new_base, case_style, suffix)
         new_filename = formatted_name + ext
+        if new_filename == old_name:
+            return  # the conventions give back the name it already has
 
         old_dir = os.path.dirname(old_path)
         new_path = os.path.join(old_dir, new_filename)
 
-        if os.path.exists(new_path):
+        # A case-only rename's target "exists" on a case-insensitive file system:
+        # it is the file itself.
+        if os.path.exists(new_path) and not ptk.FileUtils.is_same_file(
+            new_path, old_path
+        ):
             self.sb.message_box(f"Target file exists: {new_path}")
             return
 
@@ -2745,16 +2942,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         ):
             return
 
-        header_menu = self.slot.ui.header.menu
-
-        # Check if folder structure uses {name} placeholder (indicates per-scene folders)
-        subfolder_structure = getattr(header_menu, "txt_subfolder_structure", None)
-        structure_text = (
-            subfolder_structure.text().strip() if subfolder_structure else ""
-        )
+        # {name} in the folder structure = per-scene folders,
+        # removed with their last scene below.
+        _case_style, _suffix, structure_text = self._naming_options()
         use_folder = "{name}" in structure_text
-
-        import shutil
 
         for path in files_to_delete:
             try:
@@ -2774,58 +2965,49 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
                 if use_folder:
                     parent_dir = os.path.dirname(path)
-                    # rmtree is permanent (no recycle bin), so BOTH guards must
-                    # hold before removing the per-scene folder:
-                    # 1. Ownership: the folder must be named for this scene
-                    #    (per-scene layout from the {name} structure). Without
-                    #    this, deleting a scene sitting loose in the scenes
-                    #    ROOT -- whose siblings are per-scene subfolders, not
-                    #    .ma/.mb files -- makes `remaining` empty and rmtree
-                    #    wipes the entire root.
-                    # 2. Emptiness: no other scene files remain. Without this,
-                    #    a name-prefix match alone over-reaches -- deleting
-                    #    "Env_v1.ma" must never delete "Env_v2.ma" in the same
-                    #    "Env" folder.
-                    # Case-insensitive: Windows filenames — "Env_v1.ma" in
-                    # folder "env" is scene-owned.
+                    # Deletion is permanent (no recycle bin), so the per-scene
+                    # folder goes only when ALL of these hold:
+                    # 1. Ownership: the folder is named for this scene (the
+                    #    per-scene layout of the {name} structure). Case-
+                    #    insensitive: Windows filenames -- "Env_v1.ma" in
+                    #    folder "env" is scene-owned.
+                    # 2. Not the project's own structure: "scenes_final.ma"
+                    #    loose in a scenes root named "scenes" passes (1), and
+                    #    must never take the root (or the workspace) with it.
+                    # 3. Empty, now the scene and its sidecar are gone. Anything
+                    #    left keeps it -- another version ("Env_v2.ma"), a
+                    #    subfolder, and every file that is not a Maya scene (an
+                    #    FBX or USD row of this same panel, a playblast): the
+                    #    prompt named one file, so rmdir, never rmtree.
                     file_base = os.path.splitext(os.path.basename(path))[0].lower()
                     parent_name = os.path.basename(os.path.normpath(parent_dir)).lower()
                     owns_folder = bool(parent_name) and file_base.startswith(
                         parent_name
                     )
                     try:
-                        entries = os.listdir(parent_dir)
-                        remaining = [
-                            f
-                            for f in entries
-                            if os.path.splitext(f)[1].lower() in (".ma", ".mb")
-                        ]
-                        # A per-scene leaf folder holds files, not subfolders.
-                        # Any subdirectory means this is NOT a simple per-scene
-                        # folder (it may be the scenes ROOT via a name
-                        # coincidence, e.g. "scenes_final.ma" loose in a root
-                        # named "scenes") — leave it alone.
-                        has_subdirs = any(
-                            os.path.isdir(os.path.join(parent_dir, e)) for e in entries
-                        )
+                        leftovers = os.listdir(parent_dir)
                     except OSError:
-                        remaining = None  # cannot inspect: leave the folder alone
-                        has_subdirs = True
+                        leftovers = None  # cannot inspect: leave the folder alone
 
                     if (
                         owns_folder
-                        and not has_subdirs
-                        and remaining is not None
-                        and not remaining
+                        and leftovers == []
+                        and not self._is_workspace_structure(parent_dir)
                     ):
-                        shutil.rmtree(parent_dir)
-                        self.logger.info(f"Deleted empty scene folder: {parent_dir}")
+                        try:
+                            os.rmdir(parent_dir)
+                            self.logger.info(
+                                f"Deleted empty scene folder: {parent_dir}"
+                            )
+                        except OSError as e:
+                            self.logger.warning(
+                                f"Could not remove scene folder {parent_dir}: {e}"
+                            )
                     else:
                         self.logger.debug(
-                            f"Keeping folder '{parent_dir}'; not scene-owned, "
-                            f"has subfolders, scene files remain, or it could "
-                            f"not be inspected (owns={owns_folder}, "
-                            f"subdirs={has_subdirs}, remaining={remaining})."
+                            f"Keeping folder '{parent_dir}'; not scene-owned, the "
+                            f"project's own structure, not empty, or it could not "
+                            f"be inspected (owns={owns_folder}, left={leftovers})."
                         )
 
             except Exception as e:
@@ -2923,16 +3105,67 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.logger.debug("ReferenceManagerSlots initialized.")
 
     def _setup_footer_actions(self):
-        """Add action buttons to the footer."""
+        """Build the footer actions once, then (re)wire their signals to THIS instance.
+
+        Same construction/wiring split as ``tbl000_init``: the footer QWidget persists
+        across a slots reload while this instance (and ``self.controller``) rebuilds, so
+        an unguarded rebuild would duplicate the buttons and a bare ``connect`` would
+        leave clicks bound to a dead ``self``.
+
+        The footer hosts the panel's primary action, **Save To Workspace**. The
+        naming conventions it applies stay in the header menu: Rename, Delete and the
+        list filters read them too, so they are panel-wide settings, not Save's.
+        Hovering the button previews the exact path it would write.
+        """
         footer = getattr(self.ui, "footer", None)
         if footer is None or not hasattr(footer, "add_widget"):
             return
-        btn = self.sb.QtWidgets.QPushButton("Un-Reference All", footer)
-        btn.setToolTip("Remove all references from the scene.")
-        btn.setCursor(self.sb.QtGui.QCursor(self.sb.QtCore.Qt.ArrowCursor))
-        btn.setFixedHeight(max(footer.height() - 2, 1))
-        btn.clicked.connect(self.btn_unreference_all)
-        footer.add_widget(btn, side="right", background=True)
+        if not getattr(footer, "_rm_actions_built", False):
+            footer._rm_actions_built = True
+            self._build_footer_actions(footer)
+        self._wire_footer_signals(footer)
+
+    def _build_footer_actions(self, footer):
+        """One-time footer construction, left to right: Un-Reference All, then Save
+        To Workspace as the outermost, primary action."""
+        arrow = self.sb.QtGui.QCursor(self.sb.QtCore.Qt.ArrowCursor)
+        height = max(footer.height() - 2, 1)
+
+        # Add order IS the left-to-right order: add_widget(side="right") inserts
+        # each widget just before the size grip.
+        unref_btn = self.sb.QtWidgets.QPushButton("Un-Reference All", footer)
+        unref_btn.setToolTip("Remove all references from the scene.")
+        unref_btn.setCursor(arrow)
+        unref_btn.setFixedHeight(height)
+        footer.add_widget(unref_btn, side="right", background=True)
+        footer._rm_unref_btn = unref_btn
+
+        save_btn = self.sb.QtWidgets.QPushButton("Save To Workspace", footer)
+        save_btn.setObjectName("btn_save_footer")
+        save_btn.setCursor(arrow)
+        save_btn.setFixedHeight(height)
+        # Static fallback only — _wire_footer_signals binds the live tooltip that
+        # shows the exact path Save would write.
+        save_btn.setToolTip(
+            "Save the current scene into the workspace using the header menu's "
+            "Naming options."
+        )
+        footer.add_widget(save_btn, side="right", background=True)
+        footer._rm_save_btn = save_btn
+
+    def _wire_footer_signals(self, footer):
+        """(Re)wire the footer actions + live tooltips to this instance (idempotent)."""
+        save_btn = getattr(footer, "_rm_save_btn", None)
+        if save_btn is not None:
+            self._rewire_signal(save_btn, save_btn.clicked, self.btn_save_scene, "save")
+            # Live tooltip: hovering Save shows the full path it would write, per
+            # the current scene + naming options (re-binding replaces the provider).
+            self.sb.tooltip.bind(save_btn, self.controller._save_scene_preview)
+        unref_btn = getattr(footer, "_rm_unref_btn", None)
+        if unref_btn is not None:
+            self._rewire_signal(
+                unref_btn, unref_btn.clicked, self.btn_unreference_all, "unref"
+            )
 
     def header_init(self, widget):
         """Initialize the header for the reference manager."""
@@ -2959,17 +3192,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         # guarded; config_buttons + the signal above stay outside so a reload still re-targets
         # them at the current ``self``.
         if widget.is_initialized:
+            # The header outlives a reload: re-target the live preview at this
+            # instance's controller (the edits themselves are auto-wired).
+            self.controller._wire_structure_tooltip(widget.menu)
             return
-        # Save / load the header menu's naming + filter settings as named presets.
+        # Save / load the naming + filter settings as named presets.
         widget.menu.add_presets = True
         widget.menu.presets.preset_dir = "mayatk/reference_manager"
 
-        # --- Naming: conventions applied by Save To Workspace ----------------
+        # --- Naming: panel-wide conventions ----------------------------------
+        # Save applies all three; Rename applies case + suffix and moves a
+        # {name} folder; Delete removes an emptied {name} folder; the Filter
+        # options below match against suffix + folder structure.
         widget.menu.add("Separator", setTitle="Naming:")
         widget.menu.add(
             "QComboBox",
             setObjectName="cmb_case_style",
-            setToolTip="Case convention applied to the file name on Save.",
+            setToolTip="Case convention applied to the file name on Save and Rename.",
             addItems=[
                 "None",
                 "camel",
@@ -2984,33 +3223,17 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             "QLineEdit",
             setObjectName="txt_suffix",
             setPlaceholderText="Suffix (e.g. _v01)…",
-            setToolTip="Suffix appended to the file name on Save (excluded from case formatting).",
+            setToolTip="Suffix appended to the file name on Save and Rename (excluded "
+            "from case formatting) — also what Filter by Suffix and Hide Suffix match.",
         )
         widget.menu.add(
             "QLineEdit",
             setObjectName="txt_subfolder_structure",
             setText="{scenes}",
             setPlaceholderText="Folder Structure (e.g. {scenes}/{name})…",
-            setToolTip="Folder structure for Save — also drives the Folder-Structure filter.\n\n"
-            "Placeholders:\n"
-            "  {scenes} — workspace scenes folder (from workspace.mel)\n"
-            "  {name} — scene name (excludes the suffix)\n"
-            "  {workspace} — workspace folder name\n"
-            "  {suffix} — the suffix above\n\n"
-            "Examples:\n"
-            "  {scenes} — save directly in the scenes folder\n"
-            "  {scenes}/{name} — each scene in its own subfolder\n"
-            "  {scenes}/{name}/versions — a nested versions folder",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="Save To Workspace",
-            setObjectName="btn_save_scene",
-            setToolTip="Save the current scene into the workspace using the naming conventions above.",
         )
         # Live tooltip: hovering the Folder Structure field shows the placeholders
         # resolved against the current workspace + scene, plus the real save dir.
-        # (Wiring + preview live on the controller, which owns the UI-state reads.)
         self.controller._wire_structure_tooltip(widget.menu)
 
         # --- Filter / Display: narrow the list + shorten displayed names -----
@@ -3122,10 +3345,20 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 ],
                 sections=[
                     (
+                        "Footer",
+                        [
+                            "<b>Un-Reference All</b> removes every reference from the scene.",
+                            "<b>Save To Workspace</b> saves the current scene into the "
+                            "workspace using the <b>Naming</b> options; hovering the "
+                            "button previews the exact path it would write.",
+                        ],
+                    ),
+                    (
                         "Header menu",
                         [
-                            "<b>Naming</b> (case / suffix / folder structure) drives "
-                            "<b>Save To Workspace</b>.",
+                            "<b>Naming</b> (case / suffix / folder structure) is "
+                            "panel-wide: Save and Rename apply it, and the filters "
+                            "below match against it.",
                             "<b>Filter by Suffix / Folder Structure</b> narrow the list; "
                             "<b>Hide Suffix / Extension</b> shorten the displayed name; "
                             "<b>Show Notes Column</b> reveals Notes.",
@@ -3135,7 +3368,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                             "right-click <b>Unlink and Import</b> for a local copy instead (a "
                             "USD row too).",
                             "<b>Operations</b>: <b>Convert to Assembly</b>, <b>Unlink and Import "
-                            "All</b>; <b>Un-Reference All</b> is on the footer. The button beside Unlink cycles what "
+                            "All</b>. The button beside Unlink cycles what "
                             "an unlink does with the reference's namespace — remove it, keep it "
                             "on every node, or keep it on the top-level node(s) only.",
                         ],
@@ -3150,7 +3383,10 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 ],
                 notes=[
                     "<b>Right-click</b> a file row for per-reference actions "
-                    "(open, rename, delete, reveal, …).",
+                    "(open, rename, delete, copy path, reveal, …).",
+                    "The <b>Workspaces</b> field's ▸ action sets Maya's project to the "
+                    "selected workspace (opening a scene from the list does it "
+                    "automatically).",
                 ],
             )
         )
@@ -3318,6 +3554,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 setText="Open File Location",
                 setObjectName="btn_open_file_location",
                 setToolTip="Open the containing folder in the file explorer.",
+            )
+
+            widget.menu.add(
+                "QPushButton",
+                setText="Copy Path",
+                setObjectName="btn_copy_path",
+                setToolTip="Copy the file's full path to the clipboard.",
             )
 
             self.logger.debug(
@@ -3519,7 +3762,11 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
 
             new_path = os.path.join(os.path.dirname(old_path), new_name)
 
-            if os.path.exists(new_path):
+            # A case-only rename's target "exists" on a case-insensitive file
+            # system: it is the file itself.
+            if os.path.exists(new_path) and not ptk.FileUtils.is_same_file(
+                new_path, old_path
+            ):
                 self.sb.message_box(f"Target file already exists:<br>{new_name}")
                 self.controller.restore_item_display(item)
                 return
@@ -3529,10 +3776,23 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             # item would read the rebuild's setText as another inline rename.
             self.controller._editing_item = None
 
+            # A per-scene folder ({name} in the structure) follows under the typed
+            # name less the suffix -- the literal edit applies no case convention.
+            _case, suffix, structure = self.controller._naming_options()
+            folder = (
+                ptk.StrUtils.strip_suffix(os.path.splitext(new_name)[0], [suffix])
+                if "{name}" in structure
+                else None
+            )
             try:
                 # Same disk-side rename as the context menu's Rename — sidecar carried along,
                 # and the open scene saved then re-opened on its new path.
-                if self.controller._rename_scene_file(old_path, new_path) is None:
+                if (
+                    self.controller._rename_scene_file(
+                        old_path, new_path, folder=folder
+                    )
+                    is None
+                ):
                     self.controller.restore_item_display(item)
                     return
                 self.logger.info(f"Inline renamed {old_path} to {new_path}")
@@ -4265,6 +4525,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.controller.refresh_file_list(invalidate=True)
 
     def cmb000_init(self, widget):
+        # The ▸ action beside the combo commits the selection to Maya's project
+        # (browsing alone never touches it — only opening a scene does,
+        # automatically). Runs on every init on purpose: set_action replaces the
+        # prior ActionOption, which is what re-targets the callback at THIS
+        # instance's controller after a slots reload (the widget persists).
+        widget.option_box.set_action(
+            callback=self.controller.set_maya_project,
+            icon="home",
+            tooltip="Set Maya's project to the selected workspace.\n"
+            "Opening a scene from the list sets it automatically; this "
+            "applies it without opening anything.",
+        )
         # Delegate to the single source of truth for populating cmb000
         self.controller._update_workspace_combo()
 
@@ -4417,20 +4689,27 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         self.ui.tbl000.setColumnHidden(4, not show)
 
     def txt_suffix(self, text):
-        """Handle suffix text changes."""
-        # Refresh if hide suffix or filter by suffix is enabled
+        """Suffix edited: re-filter if a suffix-dependent option is on."""
+        self._on_naming_field_changed()
+
+    def txt_subfolder_structure(self, text):
+        """Folder structure edited: re-filter if a dependent option is on."""
+        self._on_naming_field_changed()
+
+    def _on_naming_field_changed(self):
+        """Re-filter when a naming field changes while a dependent filter /
+        display option is on. Checks all three options for either field: cheap,
+        and one rule for both."""
         header_menu = self.ui.header.menu
-        hide_suffix = getattr(header_menu, "chk_hide_suffix", None)
-        filter_suffix = getattr(header_menu, "chk_filter_suffix", None)
-
-        should_refresh = False
-        if hide_suffix and hide_suffix.isChecked():
-            should_refresh = True
-        if filter_suffix and filter_suffix.isChecked():
-            should_refresh = True
-
-        if should_refresh:
-            self.controller.refresh_file_list(invalidate=False)
+        for chk_name in (
+            "chk_hide_suffix",
+            "chk_filter_suffix",
+            "chk_filter_folder_structure",
+        ):
+            chk = getattr(header_menu, chk_name, None)
+            if chk is not None and chk.isChecked():
+                self.controller.refresh_file_list(invalidate=False)
+                return
 
     def chk_filter_folder_structure(self, checked):
         """Handle the filter by folder structure checkbox."""
@@ -4485,6 +4764,21 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if row is None:
             return
         self._toggle_reference_at_row(row, 1)
+
+    def btn_copy_path(self):
+        """Copy the right-clicked row's full file path to the clipboard."""
+        row = self._context_row()
+        item = self.ui.tbl000.item(row, 0) if row is not None else None
+        path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
+        if not path:
+            self.sb.message_box("No scene selected.")
+            return
+        path = os.path.normpath(path)
+        self.sb.QtWidgets.QApplication.clipboard().setText(path)
+        footer = getattr(self.ui, "footer", None)
+        if footer is not None:
+            footer.setStatusText(f"Copied: {path}", level="success")
+            self.sb.defer_with_timer(self.controller._update_workspace_footer, ms=3000)
 
     def btn_unlink_import(self):
         """Unlink and import at the right-clicked row — covers both cases (mirror of Blender).

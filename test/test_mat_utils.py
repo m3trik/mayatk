@@ -1452,7 +1452,7 @@ class TestViewportOpacity(MayaTkTestCase):
     def test_enable_viewport_opacity_stingray_loads_transparent_graph(self):
         """StingrayPBS gains its opacity slots and keeps its other textures."""
         shader = mtk.GameShader()
-        sr_node = shader.setup_stringray_node("vpo_sr", opacity=False)
+        sr_node = shader.setup_stringray_node("vpo_sr")
         color = self._file_node(self._png("set_Base_color.png"), "vpo_sr_color")
         opacity = self._file_node(self._png("set_Opacity.png"), "vpo_sr_opacity")
         cmds.connectAttr(f"{color}.outColor", f"{sr_node}.TEX_color_map", force=True)
@@ -2329,6 +2329,26 @@ class TestFindTextureFilesByName(MayaTkTestCase):
 
         self.assertFalse(os.path.isfile(src), "a proven-identical source is redundant")
         self.assertEqual([os.path.basename(d) for _s, d in copied], ["dup.png"])
+
+
+class TestDeprecatedAsStrings(MayaTkTestCase):
+    """``get_mats`` and ``filter_materials_by_objects`` always return name
+    strings, so ``as_strings`` has no effect. Since 2026-09-23 the keyword warns
+    through ``ptk.Deprecation.parameter`` (removed in mayatk 0.20.0) and is
+    dropped; the call is otherwise unchanged. Added: 2026-09-23
+    """
+
+    def test_the_keyword_warns_and_the_result_is_unchanged(self):
+        cube = cmds.polyCube(name="as_strings_mat_cube")[0]
+        for name in ("get_mats", "filter_materials_by_objects"):
+            call = getattr(MatUtils, name)
+            with self.subTest(method=name):
+                expected = call([cube])
+                with self.assertWarns(DeprecationWarning) as caught:
+                    got = call([cube], as_strings=True)
+                self.assertEqual(got, expected)
+                self.assertIn("'as_strings'", str(caught.warning))
+                self.assertIn("mayatk 0.20.0", str(caught.warning))
 
 
 if __name__ == "__main__":

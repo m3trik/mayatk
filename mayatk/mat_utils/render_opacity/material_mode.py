@@ -123,7 +123,7 @@ class OpacityMaterialMode(ptk.LoggingMixin):
         for obj in cmds.ls(objects):
             obj = str(obj)
             for mat in [
-                str(m) for m in MatUtils.get_mats([obj], as_strings=True) or []
+                str(m) for m in MatUtils.get_mats([obj]) or []
             ]:
                 for one in specs:
                     entry = bindings.get(f"{cls._short(mat)}:{one.name}")

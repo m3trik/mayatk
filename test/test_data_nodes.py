@@ -8,8 +8,10 @@ the inherited ``dump``), and the record layer on top of it.
 """
 
 import json
+import os
 import pathlib
 import unittest
+from unittest import mock
 
 try:
     import maya.cmds as cmds
@@ -719,6 +721,115 @@ class TestRecordHandoff(MayaTkTestCase):
         self.assertIn("glow", groups, "the registry still merges")
         self.assertTrue(groups["glow"]["missing"], "no set: no faces were claimed")
         self.assertTrue(any("faces" in n for n in ctx.notes), ctx.notes)
+
+
+class TestProjectRelativePaths(MayaTkTestCase):
+    """BACKLOG 2026-09-22, decided 2026-09-23: the path records are spelled
+    from the scene FILE's own project -- ``../`` chains included -- so a Save As
+    into another project re-spells them (``DataNodes.install_path_rebase``)."""
+
+    def setUp(self):
+        super().setUp()
+        self._tmp = ptk.TempArtifacts("mtk_dn_paths", policy="scoped")
+        self.addCleanup(self._tmp.cleanup)
+        root = self._tmp.dir_path()
+        self.proj_a = os.path.join(root, "shows", "a")
+        self.proj_b = os.path.join(root, "shows", "deeper", "b")
+        for proj in (self.proj_a, self.proj_b):
+            os.makedirs(os.path.join(proj, "scenes"), exist_ok=True)
+            with open(os.path.join(proj, "workspace.mel"), "w") as fh:
+                fh.write("//Maya 2025 Project Definition\n")
+        self.lib = os.path.join(root, "library", "lm")
+        self.maps = os.path.join(self.proj_a, "sourceimages", "lm")
+        for folder in (self.lib, self.maps):
+            os.makedirs(folder, exist_ok=True)
+        DataNodes.install_path_rebase()
+        self.addCleanup(DataNodes.remove_path_rebase)
+        # Registered last, so it runs first: off the files before they go.
+        self.addCleanup(cmds.file, new=True, force=True)
+
+    @staticmethod
+    def _save_as(path):
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+    @staticmethod
+    def _same(a, b):
+        return os.path.normcase(os.path.normpath(a)) == os.path.normcase(
+            os.path.normpath(b)
+        )
+
+    def test_the_project_is_the_one_the_scene_file_lives_in(self):
+        self.assertIsNone(DataNodes.project_root(), "unsaved: no project")
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        self.assertTrue(self._same(DataNodes.project_root(), self.proj_a))
+
+    def test_a_save_as_into_another_project_respells_every_path(self):
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec.save(
+            DataNodes,
+            {
+                "in.exr": ptk.FileUtils.portable_path(self.maps, self.proj_a),
+                "lib.exr": ptk.FileUtils.portable_path(self.lib, self.proj_a),
+            },
+        )
+        self.assertEqual(
+            spec.load(DataNodes),
+            {"in.exr": "sourceimages/lm", "lib.exr": "../../library/lm"},
+        )
+        moved_to = os.path.join(self.proj_b, "scenes", "shot.ma")
+        self._save_as(moved_to)
+        moved = spec.load(DataNodes)
+        self.assertEqual(moved["lib.exr"], "../../../library/lm")
+        self.assertTrue(
+            self._same(os.path.join(self.proj_b, moved["in.exr"]), self.maps), moved
+        )
+        # What was written is the re-spelled record.
+        cmds.file(new=True, force=True)
+        cmds.file(moved_to, open=True, force=True)
+        self.assertEqual(spec.load(DataNodes), moved)
+
+    def test_a_plain_save_normalizes_an_entry_that_arrived_absolute(self):
+        spec = ptk.SceneRecords.AUDIO_FILE_MAP
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec.save(DataNodes, {"1": os.path.join(self.lib, "hit.wav")})
+        cmds.file(save=True, force=True)
+        self.assertEqual(spec.load(DataNodes), {"1": "../../library/lm/hit.wav"})
+
+    def test_an_untitled_scenes_autosave_respells_nothing(self):
+        """An autosave writes an UNTITLED scene elsewhere without naming it:
+        the open scene still has no project, so its paths stay absolute and
+        the remembered project stays none. (The GUI's untitled scene name is
+        empty; mocked alike here, since batch reports a phantom instead.)"""
+        import maya.OpenMaya as om1
+
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        spelled = ptk.FileUtils.portable_path(self.lib, None)
+        spec.save(DataNodes, {"lib.exr": spelled})
+        autosave = os.path.join(self.proj_a, "autosave", "untitled.0001.ma")
+        real_file = cmds.file
+
+        def scene_file(*args, **kwargs):
+            if kwargs.get("query") and kwargs.get("sceneName"):
+                return ""
+            return real_file(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                om1.MFileIO, "beforeSaveFilename", return_value=autosave, create=True
+            ),
+            mock.patch.object(cmds, "file", side_effect=scene_file),
+        ):
+            DataNodes._rebase_before_save()
+        self.assertEqual(spec.load(DataNodes), {"lib.exr": spelled})
+        self.assertIsNone(DataNodes._rebase_state()["base"])
+
+    def test_install_is_idempotent_and_remove_takes_it_out(self):
+        DataNodes.install_path_rebase()
+        self.assertEqual(len(DataNodes._rebase_state()["ids"]), 4)
+        DataNodes.remove_path_rebase()
+        self.assertEqual(DataNodes._rebase_state()["ids"], [])
 
 
 if __name__ == "__main__":

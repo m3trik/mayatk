@@ -2713,9 +2713,11 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
         from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         info = json.loads(cmds.getAttr(f"{cube}.{LightmapRecords.LIGHTMAP_INFO_ATTR}"))
-        # The marker stores the portable spelling; compare what it resolves to.
+        # The map's folder lives in the private record (never on the marker),
+        # in the portable spelling; compare what it resolves to.
+        folder = LightmapRecords._folder_hint(info, LightmapRecords._folder_hints())
         return os.path.normcase(
-            os.path.abspath(LightmapRecords._resolved_dir(info["dir"], info["map"]))
+            os.path.abspath(LightmapRecords._resolved_dir(folder, info["map"]))
         )
 
     def _norm(self, path):

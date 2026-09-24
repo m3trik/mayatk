@@ -25,6 +25,7 @@ referenced module brings along when its reference is imported.
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
@@ -573,3 +574,110 @@ class DataNodes(ptk.SceneStoreBase):
         kwargs["keyable"] = bool(cmds.getAttr(plug, keyable=True))
         cmds.addAttr(dst, **kwargs)
 
+    # ------------------------------------------------------------------
+    # Project-relative paths
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def project_root(cls) -> Optional[str]:
+        """The project the open scene FILE lives in -- what the path records
+        (``ptk.RecordSpec.paths``) are spelled from; never the session's
+        project, which any other scene may have set. ``None`` while unsaved."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        return cls.project_root_of(EnvUtils.saved_scene_path())
+
+    @staticmethod
+    def _rebase_state() -> dict:
+        """The re-base hook's ids and remembered project, kept where a reload
+        cannot reach (``__main__``, as ``FbxUtils`` keeps its bracket)."""
+        import __main__
+
+        state = getattr(__main__, "_mayatk_record_path_rebase", None)
+        if state is None:
+            state = {"ids": [], "base": None}
+            __main__._mayatk_record_path_rebase = state
+        return state
+
+    @classmethod
+    def install_path_rebase(cls) -> bool:
+        """Keep the path records spelled from the scene's own project across a
+        save into another one (a Save As): the project is remembered at every
+        open, new and save, and just before a save the records are re-spelled
+        from it to the project of the file being written
+        (:meth:`rebase_paths`). A plain save normalizes (an entry that arrived
+        absolute is spelled relative).
+
+        Session-scoped, idempotent and reload-proof: a reinstall first removes
+        whatever a previous copy of this module registered, by id. Installed
+        at the UI handler's runtime init point (``MayaUiHandler``), never on
+        import. Returns False without Maya's API.
+        """
+        try:
+            import maya.api.OpenMaya as om
+        except ImportError:
+            return False
+        state = cls._rebase_state()
+        cls.remove_path_rebase()
+        state["base"] = cls.project_root()
+        message = om.MSceneMessage
+        state["ids"] = [
+            message.addCallback(message.kAfterOpen, cls._remember_project),
+            message.addCallback(message.kAfterNew, cls._remember_project),
+            message.addCallback(message.kAfterSave, cls._remember_project),
+            message.addCallback(message.kBeforeSave, cls._rebase_before_save),
+        ]
+        return True
+
+    @classmethod
+    def remove_path_rebase(cls) -> None:
+        """Remove the re-base hook's callbacks (every copy's, by id)."""
+        import maya.api.OpenMaya as om
+
+        state = cls._rebase_state()
+        for callback in state["ids"]:
+            try:
+                om.MMessage.removeCallback(callback)
+            except (RuntimeError, ValueError):
+                pass  # already gone with its session
+        state["ids"] = []
+
+    @classmethod
+    def _remember_project(cls, *_args) -> None:
+        cls._rebase_state()["base"] = cls.project_root()
+
+    @classmethod
+    def _rebase_before_save(cls, *_args) -> None:
+        """Re-spell the path records for the file about to be written. Never
+        raises: a record left spelled from the old project must not cost the
+        save."""
+        try:
+            # The file being written: Maya's own answer during the callback --
+            # API 1.0's MFileIO; API 2.0 has no MFileIO at all (measured,
+            # mayapy 2025) -- else the scene name (a Save As renamed it first).
+            import maya.OpenMaya as om1
+
+            before = getattr(om1.MFileIO, "beforeSaveFilename", None)
+            current = cmds.file(query=True, sceneName=True) or ""
+            target = (before() if before else "") or current
+            if not current or os.path.normcase(
+                os.path.abspath(target)
+            ) != os.path.normcase(os.path.abspath(current)):
+                # An autosave or a copy -- an UNTITLED scene's too: a save of
+                # the open scene names it first. The open scene stays put.
+                return
+            new_base = cls.project_root_of(target)
+            if new_base is None:
+                return
+            from mayatk.core_utils._core_utils import CoreUtils
+
+            state = cls._rebase_state()
+            # Not an undo step: an undone re-spelling would name the files
+            # from the project the scene no longer lives in.
+            with CoreUtils.undo_disabled():
+                cls.rebase_paths(state["base"], new_base)
+            state["base"] = new_base
+        except Exception:  # noqa: BLE001 - a save never fails on this
+            logger.warning(
+                "Scene-record paths were not re-spelled for the save.", exc_info=True
+            )

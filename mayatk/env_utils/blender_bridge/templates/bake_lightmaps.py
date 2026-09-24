@@ -28,6 +28,16 @@ model -- and is never folded into the shared UVs, which is the one place per-ins
 data cannot survive: a rect written into UVs all copies share is wrong for every copy
 but one.
 
+**The Maya scene's lightmap records cross too** (the manifest's ``lightmap`` section,
+written by ``BlenderBridge._manifest_lightmap``). A sent mesh in the scene's Exclude set is
+imported and rendered like any other -- it still shadows and bounces light onto the rest --
+but gets no map: it joins blendertk's own Exclude set here, which every bake entry point
+subtracts. And the scene's map claims -- which file names its markers read, and who reads
+them -- reach the bake, which never writes over a name something it is not re-baking still
+reads. This factory scene holds no markers of its own, so without them a partial re-bake
+could land on another object's map, and Beside Material Textures would treat the object's
+own previous map as a stranger's.
+
 **Why Blender rather than Maya's own LightmapBaker**: Cycles bakes white-card irradiance
 natively (``DIFFUSE`` minus the colour pass), needs no Arnold licence, denoises the result,
 and runs on the GPU. mayatk's Arnold baker remains the Maya-native path.
@@ -141,12 +151,18 @@ OUT_FILE = r"__OUT_FILE__"
 EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
 APPLY_UNIT_SCALE = __APPLY_UNIT_SCALE__
 
-# Quality: a named preset (blendertk's LightmapBaker.preset_store) sets resolution +
-# samples; the explicit values below override it when non-zero.
+# Quality: a named preset (blendertk's LightmapBaker.preset_store) sets resolution,
+# samples and bounces; the explicit values below override it when non-zero (bounces:
+# when not negative -- 0 is a real depth, direct light only).
 LIGHTMAP_QUALITY = __LIGHTMAP_QUALITY__
 LIGHTMAP_RESOLUTION = __LIGHTMAP_RESOLUTION__
 LIGHTMAP_SAMPLES = __LIGHTMAP_SAMPLES__
+LIGHTMAP_BOUNCES = __LIGHTMAP_BOUNCES__
+# The switches, the Lightmap Baker panel's: denoise the maps, sample adaptively, and
+# save each map beside its material's texture maps (LIGHTMAP_DIR takes the rest).
 LIGHTMAP_DENOISE = __LIGHTMAP_DENOISE__
+LIGHTMAP_ADAPTIVE = __LIGHTMAP_ADAPTIVE__
+LIGHTMAP_BESIDE_TEXTURES = __LIGHTMAP_BESIDE_TEXTURES__
 LIGHTMAP_DEVICE = __LIGHTMAP_DEVICE__
 # "atlas" (one shared map per material, each object given a rect) or "per_object".
 # Chosen BEFORE the bake, not after: the atlas path plans its layout up front and bakes
@@ -251,6 +267,35 @@ def rebuild_scene_lights():
         print("Scene-light rebuild failed; baking without them:")
         traceback.print_exc()
         return {}
+
+
+def lightmap_records(meshes):
+    """``(excluded meshes, claims)`` -- the Maya scene's lightmap records, as they arrived.
+
+    Read from the manifest's ``lightmap`` section: the excluded meshes among *meshes* (the
+    imported ones -- not every imported object: the light rebuild replaces the lights'
+    nulls, and a reference to one it removed raises on the first read) by the name Blender
+    gave them, and ``{file name: readers}`` with the readers this bake re-bakes spelled
+    the same way (every other reader carries a spelling no object here has, so its file
+    stays its own). A missing or older manifest reads as neither -- the bake then runs
+    as it did before the records crossed.
+    """
+    manifest = FBX_PATH + ".manifest.json"
+    section = {}
+    if os.path.isfile(manifest):
+        try:
+            with open(manifest, "r", encoding="utf-8") as fh:
+                section = (json.load(fh) or {}).get("lightmap") or {}
+        except (OSError, ValueError):
+            print("Manifest unreadable; baking without the scene's lightmap records:")
+            traceback.print_exc()
+    by_name = {obj.name: obj for obj in meshes}
+    excluded = [by_name[n] for n in section.get("exclude") or () if n in by_name]
+    claims = {
+        str(file_name): frozenset(readers or ())
+        for file_name, readers in (section.get("claims") or {}).items()
+    }
+    return excluded, claims
 
 
 def emissive_material_count():
@@ -455,23 +500,30 @@ def make_baker():
         overrides["resolution"] = LIGHTMAP_RESOLUTION
     if LIGHTMAP_SAMPLES:
         overrides["samples"] = LIGHTMAP_SAMPLES
+    if LIGHTMAP_BOUNCES >= 0:
+        overrides["bounces"] = LIGHTMAP_BOUNCES
     baker = LightmapBaker.from_preset(
         LIGHTMAP_QUALITY,
         denoise=LIGHTMAP_DENOISE,
+        adaptive=LIGHTMAP_ADAPTIVE,
+        beside_textures=LIGHTMAP_BESIDE_TEXTURES,
         device=LIGHTMAP_DEVICE or None,
         **overrides,
     )
     print(
-        "Baker: %s @ %dpx / %d samples / %d bounce(s) (denoise=%s, device=%s)"
+        "Baker: %s @ %dpx / %d samples / %d bounce(s) "
+        "(denoise=%s, adaptive=%s, beside textures=%s, device=%s)"
         % (
             LIGHTMAP_QUALITY,
             baker.resolution,
             baker.samples,
             # Reported because it is the tier dial that most changes the LEVEL in a
-            # closed room, and the one with no widget -- so the log is where a bake
-            # that came back brighter than its Arnold twin is traced back to.
+            # closed room -- the log is where a bake that came back brighter than
+            # its Arnold twin is traced back to.
             baker.bounces,
             baker.denoise,
+            getattr(baker, "adaptive", None),
+            getattr(baker, "beside_textures", None),
             baker.device,
         )
     )
@@ -592,6 +644,22 @@ def main():
     apply_texture_manifest(new)
     lighting = light_scene()
     baker = make_baker()
+    excluded, claims = lightmap_records(meshes)
+    if excluded:
+        # Into blendertk's own Exclude set, which every bake entry point subtracts:
+        # rendered (they shadow the rest), never baked.
+        names = ", ".join(sorted(o.name for o in excluded))
+        try:
+            from blendertk.mat_utils.bake_sets import LightmapExcludeSet
+        except ImportError:
+            # A blendertk older than the set: they bake too, and the Maya side
+            # still never wires them (nor lets them take a map another object reads).
+            print(
+                "WARNING: this blendertk has no Exclude set; baking anyway: %s" % names
+            )
+        else:
+            LightmapExcludeSet.define(excluded)
+            print("Excluded (in the render, no map): %s" % names)
 
     out_dir = LIGHTMAP_DIR or os.path.dirname(OUT_FILE) or "."
     # An affix cleared to nothing would bake files named after the object alone, which
@@ -611,12 +679,12 @@ def main():
         packed = {
             name: (path, None)
             for name, path in baker.bake_separated(
-                meshes, output_dir=out_dir, prefix=prefix, suffix=suffix
+                meshes, output_dir=out_dir, prefix=prefix, suffix=suffix, claims=claims
             ).items()
         }
     else:
         packed = baker.bake_atlas(
-            meshes, output_dir=out_dir, prefix=prefix, suffix=suffix
+            meshes, output_dir=out_dir, prefix=prefix, suffix=suffix, claims=claims
         )
     if not packed:
         raise RuntimeError("Bake produced no lightmaps; no manifest written.")

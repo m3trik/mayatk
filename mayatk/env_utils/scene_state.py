@@ -120,7 +120,7 @@ class SceneState:
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.mat_manifest import MatManifest
 
-        materials = MatUtils.get_mats(cls._expand(objects), as_strings=True) or []
+        materials = MatUtils.get_mats(cls._expand(objects)) or []
         textures = (
             (MatManifest.build(objects).get("materials", {}) or {})
             if include_textures

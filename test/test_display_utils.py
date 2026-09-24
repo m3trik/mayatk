@@ -78,6 +78,53 @@ class TestDisplayUtils(MayaTkTestCase):
             )
 
 
+class TestIsVisibleMatchesTheRenderer(MayaTkTestCase):
+    """``is_visible`` answers "will the renderer see this?".
+
+    A display layer, a drawing override and level-of-detail visibility hide a
+    node from Arnold as surely as ``.visibility`` does -- measured on mtoa:
+    each is "not exported to Arnold world", and a lightmap bake of such a mesh
+    wrote no map and stopped the whole bake. Read through every ancestor, like
+    the flag, and a layer's Template is a template like the attribute.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.ls(cmds.polyCube(name="visProbe")[0], long=True)[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+    def test_a_hidden_display_layer_hides_its_members(self):
+        layer = cmds.createDisplayLayer(self.cube, name="visHidden", noRecurse=True)
+        self.assertTrue(mtk.DisplayUtils.is_visible(self.shape))
+        cmds.setAttr(f"{layer}.visibility", False)
+        self.assertFalse(mtk.DisplayUtils.is_visible(self.shape))
+
+    def test_a_drawing_override_hides_what_is_under_it(self):
+        group = cmds.ls(cmds.group(self.cube, name="visOverride"), long=True)[0]
+        shape = cmds.listRelatives(
+            cmds.listRelatives(group, children=True, fullPath=True)[0],
+            shapes=True,
+            fullPath=True,
+        )[0]
+        cmds.setAttr(f"{group}.overrideEnabled", True)
+        cmds.setAttr(f"{group}.overrideVisibility", False)
+        self.assertFalse(mtk.DisplayUtils.is_visible(shape))
+
+    def test_level_of_detail_visibility_hides_the_node(self):
+        cmds.setAttr(f"{self.cube}.lodVisibility", False)
+        self.assertFalse(mtk.DisplayUtils.is_visible(self.shape))
+
+    def test_a_template_display_layer_templates_its_members(self):
+        layer = cmds.createDisplayLayer(self.cube, name="visTemplate", noRecurse=True)
+        cmds.setAttr(f"{layer}.displayType", 1)
+        self.assertFalse(mtk.DisplayUtils.is_visible(self.shape))
+        self.assertTrue(
+            mtk.DisplayUtils.is_visible(self.shape, consider_templated_visible=True)
+        )
+        # The attribute the Template macro drives is not what the layer sets.
+        self.assertFalse(mtk.DisplayUtils.is_templated(self.cube))
+
+
 class TestSetSmoothPreview(MayaTkTestCase):
     """Smooth-preview attrs live on the mesh SHAPE.
 

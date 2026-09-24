@@ -799,7 +799,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             )
             relay = ptk.ProgressRelay(progress, stages=1)
             self._step(relay, 0, 0, 1, "Maya: Importing the USD")
-            imported = self._transforms(UsdUtils.import_scene(src))
+            # A foreign layer -- the user's own file, not the bridge's payload:
+            # conformed into this scene's unit and up axis (a Blender default
+            # export is metre / Z-up, which mayaUsd reads 100x small, lying down).
+            imported = self._transforms(UsdUtils.import_scene(src, conform=True))
             if adopt_scene:
                 self._apply_scene_manifest(None, src)
             relay.report(0, 1, 1, "Maya: Imported")
@@ -2144,12 +2147,20 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         What qualifies is narrow, and every clause is load-bearing:
 
         * the parent carries NO shape of its own and has exactly ONE child,
-        * that child is a ``transform`` -- or, with *joints*, a ``joint``, which only
-          ever loses its WRAPPER: dissolving the joint instead would lift its chain
-          under a transform and take the skeleton's root with it,
-        * the two share a base name modulo a trailing ``_NNN`` -- which also keeps
-          out the group the FBX export flatten deliberately builds
-          (``<mesh>_skeleton_GRP`` holding ``<mesh>_skeleton``), and
+        * that child is a ``transform`` -- or, with *joints*, ONLY a ``joint``, which
+          only ever loses its WRAPPER: dissolving the joint instead would lift its
+          chain under a transform and take the skeleton's root with it. The pull
+          folds nothing else: transform pairs are the import's, folded before a
+          scene can reach a pull, so there a same-named pair is authored structure
+          (Maya allows the repeat),
+        * the two share the SAME short name. A carrier splits ONE object into two
+          levels of one name, and Blender's object names are unique, so a pair
+          whose names differ at all is two authored objects -- an Empty ``Crate``
+          holding the mesh ``Crate.001`` lands as ``Crate|Crate_001`` (measured
+          through the real route), and matching modulo a ``_NNN`` deleted the mesh
+          object. The same rule keeps out the group the FBX export flatten
+          deliberately builds (``<mesh>_skeleton_GRP`` holding ``<mesh>_skeleton``),
+          and
         * the one removed is INERT: its local matrix within ``_INERT_TOLERANCE`` of
           identity, every key held at its channel's default within the same
           tolerance (the carriers' float noise), no user attributes, not hidden. A
@@ -2162,13 +2173,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         So this cannot move, reveal or hide anything. Idempotent: a scene with
         nothing nested is untouched, so it is safe to run on every import.
         """
-        import re
-
         import maya.cmds as cmds
 
         from mayatk.anim_utils._anim_utils import AnimUtils
-
-        base = re.compile(r"^(?P<base>.+?)(?:_\d+)?$")
 
         def visibility_curve(node: str) -> Optional[str]:
             curves = cmds.listConnections(
@@ -2271,7 +2278,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             if orphans:
                 cmds.delete(orphans)
 
-        child_types = ("transform", "joint") if joints else ("transform",)
+        child_types = ("joint",) if joints else ("transform",)
         removed = 0
         # Deepest first: collapsing an inner level leaves the outer pair intact and
         # still addressable, where the reverse invalidates the paths below it.
@@ -2291,8 +2298,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             child_type = cmds.nodeType(child)
             if child_type not in child_types:
                 continue
-            leaf, child_leaf = node.rsplit("|", 1)[-1], child.rsplit("|", 1)[-1]
-            if base.match(leaf).group("base") != base.match(child_leaf).group("base"):
+            if node.rsplit("|", 1)[-1] != child.rsplit("|", 1)[-1]:
                 continue
             try:
                 if child_type == "transform" and inert(child):

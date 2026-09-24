@@ -223,9 +223,9 @@ class TestShadowRig(MayaTkTestCase):
         )
 
     def test_retired_stingray_shader_still_builds(self):
-        """``shader_type='stingray'`` is kept for one release: it builds, with
-        the silhouette bound as the colour map (the graph's only per-pixel
-        alpha)."""
+        """``shader_type='stingray'`` is kept, for rebuilding old scenes (decided
+        2026-09-23): it builds, with the silhouette bound as the colour map
+        (the graph's only per-pixel alpha)."""
         rig = self._make(shader_type="stingray")
         self.assertEqual(cmds.nodeType(rig.shader), "StingrayPBS")
         file_node = ShadowRig._plane_texture_node(rig.shadow_plane)
@@ -238,10 +238,16 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(cmds.getAttr(f"{rig.shader}.use_color_map"), 1.0)
 
     def test_explicit_axis_is_retired(self):
-        """An explicit axis builds the same projected silhouette (warned, ignored)."""
-        rig = self._make(axis="y")
+        """An explicit axis builds the same projected silhouette, ignored -- and
+        warns (removed in 0.20.0; 2026-09-23) on both entry points that take it."""
+        with self.assertWarns(DeprecationWarning) as caught:
+            rig = self._make(axis="y")
+        self.assertIn("'axis'", str(caught.warning))
+        self.assertIn("0.20.0", str(caught.warning))
         self.assertTrue(os.path.exists(rig.texture_path))
         self.assertPlaneMatchesModel(rig.shadow_plane)
+        with self.assertWarns(DeprecationWarning):
+            rig.create_silhouette_texture(size=64, axis="y")
 
     def test_namespaced_target(self):
         """A namespaced target builds with namespace-free rig node names and

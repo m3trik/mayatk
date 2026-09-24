@@ -30,8 +30,9 @@ default; the GUI pass launches a **new** Maya).
 - `skipIfBatch` — skips under mayapy/batch; the test still runs in the GUI pass.
 - `asset_path()` / `MAYATK_TEST_ASSETS` — machine-local scene assets a few
   extended tests replay; unset, guards resolve to a can't-exist sentinel and skip.
-  The fixtures carry neutral names; `TestAssets.LEGACY_ALIASES` still resolves an
-  already-staged folder's old names for one release while it is renamed on disk.
+  The fixtures carry neutral names; a staged folder's own `legacy_aliases.json`
+  (`TestAssets.ALIASES_FILE`, kept beside the private fixtures, never in source)
+  still resolves its old names while it is renamed on disk.
 
 ## Running
 

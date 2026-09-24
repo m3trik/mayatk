@@ -135,7 +135,7 @@ GUI_REQUIRED = {
     "test_reference_manager": (
         "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
         "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "
-        "a fresh process, 2026-09-14); all 116 tests pass in the GUI pass"
+        "a fresh process, 2026-09-14); the whole module passes in the GUI pass"
     ),
     "test_shot_manifest": (
         "shots adapters register OpenMaya/scriptJob callbacks that "

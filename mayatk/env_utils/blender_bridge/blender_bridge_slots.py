@@ -99,7 +99,7 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
                     "patch of the atlas via a per-instance rect, exactly Unity's native "
                     "<i>lightmapScaleOffset</i> model; the shared mesh and your scene's "
                     "instancing are untouched.",
-                    "<b>Quality</b> is a preset tier (Preview / Quest / Desktop / Hero); "
+                    "<b>Quality</b> is a preset tier (Preview / Mobile / Desktop / Hero); "
                     "<b>Lightmap Folder</b> defaults to the project's sourceimages.",
                     "<b>Your scene's lighting is what gets baked.</b> <b>Include Lights</b> "
                     "(on) exports the Maya lights and bakes with them; <b>Scene Light "

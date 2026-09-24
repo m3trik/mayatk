@@ -319,20 +319,22 @@ class TextureBaker(ptk.LoggingMixin):
     def resolve_meshes(objects=None) -> List[str]:
         """Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
 
-        Both backends render a SURFACE: a light, a locator or an empty group has
-        nothing to render, and handing one to Arnold RTT does not degrade -- it
-        raises per object (``quad_light nodes are not supported types`` /
-        ``not exported to Arnold world``) and reports success while writing no
-        file, so the caller sees a pile of warnings instead of an answer. A
-        selection is a rough gesture ("bake this room"), so filtering here is
-        what makes it one: every caller -- the panel's scopes, the API, the
-        bridges -- gets the same definition of bakeable instead of restating it.
+        Both backends render a SURFACE: a light, a locator, an empty group or a
+        mesh with no faces has nothing to render, and handing one to Arnold RTT
+        does not degrade -- it raises per object (``quad_light nodes are not
+        supported types`` / ``not exported to Arnold world``) and reports
+        success while writing no file, so the caller sees a pile of warnings
+        instead of an answer; an empty mesh node crashed mayapy natively in
+        ``ai.dll`` (measured 2026-09-23). A selection is a rough gesture ("bake
+        this room"), so filtering here is what makes it one: every caller -- the
+        panel's scopes, the API, the bridges -- gets the same definition of
+        bakeable instead of restating it.
 
         Mirrors ``blendertk.TextureBaker.resolve_meshes`` (name + behavior, not
         signature: Maya passes node strings, bpy passes object refs).
 
         Returns deduped long transform names, each owning a non-intermediate
-        mesh shape.
+        mesh shape with at least one face.
         """
         if cmds is None:
             return []
@@ -353,9 +355,10 @@ class TextureBaker(ptk.LoggingMixin):
             if transform in seen:
                 continue
             seen.add(transform)
-            if cmds.listRelatives(
+            shapes = cmds.listRelatives(
                 transform, shapes=True, fullPath=True, noIntermediate=True, type="mesh"
-            ):
+            )
+            if shapes and any(cmds.polyEvaluate(s, face=True) for s in shapes):
                 pool.append(transform)
         return pool
 
@@ -680,7 +683,7 @@ class TextureBaker(ptk.LoggingMixin):
         colour bleed the override exists to keep. The batch used to keep
         instances and re-bake afterwards the tiles whose MEAN strayed from
         their instance group's median; measured on a production room (46
-        instanced targets, quest) against an all-per-object reference, that
+        instanced targets, mobile) against an all-per-object reference, that
         test flagged 33 correct tiles -- instances stand in different light --
         and missed three hot ones (+13% / +29% / +54%: bright wall panels in
         the WebXR preview; one owner per mesh was its premise), in 428s
@@ -832,13 +835,6 @@ class TextureBaker(ptk.LoggingMixin):
         unique = (cmds.ls(shape) or [shape])[0]
         return unique.lstrip("|").replace("|", "_").replace(":", "_")
 
-    #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX
-    #: graphs render ERROR MAGENTA in Arnold. Their VIEWPORT look is fine,
-    #: which is exactly why the pollution ships -- nothing looks wrong in Maya.
-    _UNTRANSLATABLE_SHADER_TYPES = frozenset(
-        {"StingrayPBS", "ShaderfxShader", "ShaderfxGameHair"}
-    )
-
     @contextlib.contextmanager
     def arnold_translation_guard(self):
         """Bridge untranslatable (game/ShaderFX) materials for the bake.
@@ -852,76 +848,51 @@ class TextureBaker(ptk.LoggingMixin):
         neutral prop across the room stayed clean.
 
         The stand-in IS :class:`mayatk.ArnoldBridge` -- the existing
-        ``aiSurfaceShader`` bridge tool, applied temporarily: every material
-        of an :attr:`_UNTRANSLATABLE_SHADER_TYPES` type on an assigned
-        shading group gets a bridge for the duration of the bake and has it
-        removed after. That reuses the one implementation of Stingray->Arnold
-        parity (map-type resolution from the file names, packed-mask
-        layouts, DEDICATED file nodes with correct per-map colorSpace --
-        sharing the game material's file nodes cannot satisfy both
-        renderers), and it makes guarded materials bounce identically to
-        hand-bridged ones: the production room's walls carried exactly such
-        an authored bridge (``MAT_ROOM_ENV_ai`` -- this tool's own naming),
-        which is why THEY never showed the magenta. ``surfaceShader`` (the
-        viewport look / FBX export) is never touched; a material that
-        already has ANY ``aiSurfaceShader`` override is respected; teardown
-        removes only the bridges added here. An untextured game material
-        bridges to the ``aiStandardSurface`` defaults -- neutral grey bounce,
-        which is the point (not-magenta), not albedo fidelity.
+        ``aiSurfaceShader`` bridge tool, applied for the bake alone
+        (:meth:`ArnoldBridge.temporary`): every material Arnold cannot translate
+        (:meth:`ArnoldBridge.unrenderable_materials`) is bridged on EVERY
+        group it feeds, and each slot goes back as it was after. Every group,
+        not the material's first: a material consolidated across objects keeps
+        a group per object, and the bridge used to ride one of them -- on a
+        production soldering room 12 of the 16 rendered game-shader groups
+        stayed magenta (the bench's top among them) and ~11% of the texels of
+        the two floor pieces under the bench baked over 10% magenta
+        (2026-09-23). That reuses the one implementation
+        of Stingray->Arnold parity (map-type resolution from the file names,
+        packed-mask layouts, DEDICATED file nodes with correct per-map
+        colorSpace -- sharing the game material's file nodes cannot satisfy
+        both renderers), and it makes guarded materials bounce identically to
+        hand-bridged ones: the production room's walls carried exactly such an
+        authored bridge (``MAT_ROOM_ENV_ai`` -- this tool's own naming), which
+        is why THEY never showed the magenta. ``surfaceShader`` (the viewport
+        look / FBX export) is never touched; a group whose slot already has an
+        override keeps it (the material's open groups take that override for
+        the bake); teardown undoes only what was added here. An untextured
+        game material bridges to the ``aiStandardSurface`` defaults -- neutral
+        grey bounce, which is the point (not-magenta), not albedo fidelity.
         """
-        bridged: List[str] = []
-        bridge = None
-        try:
-            if cmds is not None:
-                from mayatk.mat_utils.arnold_bridge import ArnoldBridge
+        from mayatk.mat_utils.arnold_bridge import ArnoldBridge
 
-                bridge = ArnoldBridge()
-                candidates: List[str] = []
-                for sg in cmds.ls(type="shadingEngine") or []:
-                    if sg in ("initialShadingGroup", "initialParticleSE"):
-                        continue
-                    surf = (cmds.listConnections(f"{sg}.surfaceShader") or [None])[0]
-                    if (
-                        not surf
-                        or cmds.nodeType(surf) not in self._UNTRANSLATABLE_SHADER_TYPES
-                    ):
-                        continue
-                    if not cmds.sets(sg, query=True):
-                        continue  # no members -> contributes no bounce
-                    candidates.append(str(surf))
-                to_bridge = [
-                    m
-                    for m in dict.fromkeys(candidates)  # dedupe, keep order
-                    if not bridge.has_bridge(m)  # authored override -- respect
-                ]
-                if to_bridge:
-                    try:
-                        bridge.add(materials=to_bridge)
-                    except Exception as e:
-                        self.logger.warning(
-                            "Translation guard: bridging failed (%s); "
-                            "unbridged game shaders will bake error-magenta.",
-                            e,
-                        )
-                    # Track what actually got a bridge -- that (and only
-                    # that) is what teardown removes; a material add()
-                    # skipped keeps whatever it has.
-                    bridged = [m for m in to_bridge if bridge.has_bridge(m)]
-                if bridged:
-                    self.logger.info(
-                        "Arnold translation guard: %d game-shader material(s) "
-                        "bridged for the bake.",
-                        len(bridged),
+        materials = ArnoldBridge.unrenderable_materials() if cmds is not None else []
+        with contextlib.ExitStack() as stack:
+            if materials:
+                try:
+                    filled = stack.enter_context(ArnoldBridge().temporary(materials))
+                except Exception as e:
+                    self.logger.warning(
+                        "Translation guard: bridging failed (%s); "
+                        "unbridged game shaders will bake error-magenta.",
+                        e,
                     )
+                else:
+                    if filled:
+                        self.logger.info(
+                            "Arnold translation guard: %d shading group(s) of %d "
+                            "game-shader material(s) bridged for the bake.",
+                            len(filled),
+                            len(materials),
+                        )
             yield
-        finally:
-            if bridge is not None and bridged:
-                # Logged, never raised: teardown must not mask the bake
-                # result, but a bridge left behind must not go unnoticed.
-                with ptk.CoreUtils.teardown_guard(
-                    self.logger, "Arnold translation guard (bridges)"
-                ):
-                    bridge.remove(materials=[m for m in bridged if cmds.objExists(m)])
 
     @contextlib.contextmanager
     def _forced_shader(self, obj: str, shader: Optional[str]):
@@ -1211,7 +1182,7 @@ class TextureBaker(ptk.LoggingMixin):
 
     #: Arnold's adaptive-sampling threshold for a GPU bake: Arnold's own
     #: default, pinned so a scene's render setting never reaches the bake.
-    #: Measured on the production floors at quest (AA 4..16): 0.008 bought
+    #: Measured on the production floors at mobile (AA 4..16): 0.008 bought
     #: 10% less shadow noise for 11% more time -- the default is the trade.
     ADAPTIVE_THRESHOLD: float = 0.015
 
@@ -1229,7 +1200,7 @@ class TextureBaker(ptk.LoggingMixin):
         Arnold's GPU renderer ignores the ray-type sample counts and traces ONE
         diffuse ray per camera sample -- measured on a production floor, GI 4
         and GI 8 baked bit-identical maps there. So a preset's
-        ``GIDiffuseSamples`` only ever existed on the CPU: the quest preset
+        ``GIDiffuseSamples`` only ever existed on the CPU: the mobile preset
         (AA 4, GI 4) put AA^2 = 16 first-bounce rays into each texel on the
         GPU against AA^2 x GI^2 = 256 on the CPU, and baked 5.1x the per-texel
         noise (0.638 vs 0.124, 2026-09-21) -- the splotches the baked floors
@@ -1265,7 +1236,7 @@ class TextureBaker(ptk.LoggingMixin):
         On a GPU with :attr:`adaptive` on: Arnold's adaptive sampler, every
         texel taking :attr:`samples` and a texel whose noise needs it going on
         up to the preset's whole ray budget (:meth:`_gpu_budget`, AA x GI).
-        Measured on the production floors under the table (quest, tiles at 4x
+        Measured on the production floors under the table (mobile, tiles at 4x
         their cell, two AA seeds; shipped noise after the shrink): the budget
         on every texel -- AA 16 -- took 381s for 1.06% shadow noise and 0.18%
         lit; adaptive 4..16 took 73s for 1.31% and 0.84%. A lit texel stops at

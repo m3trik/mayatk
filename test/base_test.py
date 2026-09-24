@@ -53,8 +53,8 @@ class TestAssets:
     The fixtures are named for what they *exercise*, not for the client program
     they came from: a program identifier in tracked source leaks a business
     relationship the way a studio drive path does, and mayatk is public. Shaped
-    like unitytk's ``base_test.TestAssets``, except that the old names live
-    beside the private fixtures rather than in source (unitytk is private).
+    like unitytk's ``base_test.TestAssets``; the old names live beside the
+    private fixtures, never in source.
     """
 
     #: A staged folder's own rename map, kept beside the fixtures it renames:

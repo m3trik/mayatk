@@ -570,7 +570,7 @@ class _TaskDataMixin:
             # the surface-shader-only default left them invisible to the
             # whole pipeline.
             self._cached_materials = MatUtils.filter_materials_by_objects(
-                self._live_objects(), as_strings=True, include_displacement=True
+                self._live_objects(), include_displacement=True
             )
         return self._cached_materials
 

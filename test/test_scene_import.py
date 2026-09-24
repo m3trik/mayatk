@@ -1663,11 +1663,16 @@ class TestUsdWrapperCollapse(MayaTkTestCase):
         outer, inner = self._nested("rt_hidden_light")
         cmds.setAttr(f"{inner}.visibility", False)
 
+        # Each branch through the pass that reaches it: the pull folds wrappers
+        # around joints, the import folds transform pairs.
         self.assertEqual(
             BlenderSceneImport.collapse_nested_levels(
                 cmds.ls(type="transform"), joints=True
             ),
             0,
+        )
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
         )
         self.assertFalse(cmds.getAttr(f"{wrapper}.visibility"))
         self.assertTrue(cmds.objExists(inner), "the hidden inner level stays")
@@ -1691,13 +1696,72 @@ class TestUsdWrapperCollapse(MayaTkTestCase):
                 outer, inner = self._nested(name)
                 place(inner)
                 self.assertEqual(
-                    BlenderSceneImport.collapse_nested_levels(
-                        cmds.ls(type="transform"), joints=True
+                    BlenderSceneImport()._collapse_usd_wrappers(
+                        cmds.ls(type="transform")
                     ),
                     0,
                 )
                 self.assertTrue(cmds.objExists(inner), f"{name}: the level went")
                 cmds.delete(outer)
+
+    def _authored_pair(self, outer_name, inner_name):
+        """``<outer_name>/<inner_name>/shape``, the inner level at identity under
+        an outer one placed off the origin -- what the USD return leg makes of an
+        authored Blender Empty holding a mesh object at its origin. Measured 2026-09-23 through the real route (a fresh
+        Blender's ``btk.UsdUtils.export`` with the interchange options, then
+        ``cmds.file(i=True, **UsdUtils.file_options())``): Empty ``Crate`` holding
+        mesh ``Crate.001`` lands as ``Crate|Crate_001|Crate_001Shape``."""
+        outer = cmds.ls(cmds.group(empty=True, name=outer_name), long=True)[0]
+        cmds.setAttr(f"{outer}.translateX", 5)
+        cube = cmds.polyCube(name=inner_name)[0]
+        inner = cmds.ls(cmds.parent(cube, outer, relative=True)[0], long=True)[0]
+        return outer, inner
+
+    def test_an_authored_pair_named_apart_by_a_suffix_is_never_a_wrapper(self):
+        """A carrier splits ONE object into two levels of ONE name; Blender's
+        object names are unique, so a pair whose names differ at all -- by a
+        ``_NNN`` included -- is two authored objects. Folding the inner one
+        deleted a real mesh object (its keys and records with it); folding the
+        outer one deleted a real group (BACKLOG 2026-09-23)."""
+        outer, inner = self._authored_pair("rt_crate", "rt_crate_001")
+        inner_id = cmds.ls(inner, uuid=True)
+        # The OUTER-inert branch: a child that moves keeps the parent inert-only.
+        door, leaf = self._authored_pair("rt_door", "rt_door_01")
+        cmds.setAttr(f"{door}.translateX", 0)
+        cmds.setKeyframe(leaf, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(leaf, attribute="translateY", time=12, value=4)
+        door_id = cmds.ls(door, uuid=True)
+
+        self.assertEqual(
+            BlenderSceneImport()._collapse_usd_wrappers(cmds.ls(type="transform")), 0
+        )
+        self.assertEqual(
+            cmds.ls(inner_id, long=True), [inner], "the authored mesh object went"
+        )
+        shapes = cmds.listRelatives(inner, shapes=True, fullPath=True) or []
+        self.assertEqual(
+            len(cmds.ls(shapes, type="mesh")), 1, "the mesh shape left its object"
+        )
+        self.assertEqual(cmds.ls(door_id, long=True), [door], "the authored group went")
+
+    def test_the_pull_never_folds_a_transform_pair(self):
+        """The pull's pass (``joints=True``) exists for ONE accretion: the
+        transform a Blender armature object lands as, around its same-named root
+        joint. Transform pairs are the import's to fold, before the scene ever
+        reaches a pull -- so on the pull a same-named pair is authored Maya
+        structure (Maya allows the repeat), and dissolving it lost a real group."""
+        outer, inner = self._nested("rt_authored_twin")
+        outer_id = cmds.ls(outer, uuid=True)
+        inner_id = cmds.ls(inner, uuid=True)
+
+        self.assertEqual(
+            BlenderSceneImport.collapse_nested_levels(
+                cmds.ls(type="transform"), joints=True
+            ),
+            0,
+        )
+        self.assertEqual(len(cmds.ls(outer_id)), 1)
+        self.assertEqual(len(cmds.ls(inner_id)), 1)
 
     def test_a_wrapper_with_real_motion_around_a_skeleton_root_is_left_alone(self):
         """Motion past the noise floor has to be composed, not dropped."""
@@ -2485,6 +2549,61 @@ class TestConversionTemplateShots(unittest.TestCase):
                 self.assertIn("def scene_data_sections(bpy, spell):", script)
                 self.assertIn("scene_data=scene_data", script)
                 compile(script, f"_import_scene_{via}_rendered.py", "exec")
+
+    def test_legacy_lightmap_folders_are_lifted_before_the_records_are_sent(self):
+        """A file baked before 2026-09-23 carries its lightmap folder ON the
+        markers, which ride the conversion's carrier, and the export bracket's
+        stager that lifts it never runs in the conversion's own write: measured
+        on the office module's pull, all 51 markers shipped their old folder
+        and no record crossed. Each template lifts them first, then reads the
+        records it sends (mirror of the Maya-side templates)."""
+        import sys
+        import types
+        from unittest import mock
+
+        calls = []
+
+        class Records:
+            @staticmethod
+            def migrate_folder_hints():
+                calls.append("lift")
+                return []
+
+        class Nodes:
+            @staticmethod
+            def transfer_sections(spell=None):
+                calls.append("send")
+                return {}
+
+        names = (
+            "blendertk",
+            "blendertk.node_utils",
+            "blendertk.node_utils.data_nodes",
+            "blendertk.light_utils",
+            "blendertk.light_utils.lightmap_baker",
+            "blendertk.light_utils.lightmap_baker.lightmap_records",
+        )
+        stubs = {name: types.ModuleType(name) for name in names}
+        stubs["blendertk.node_utils.data_nodes"].DataNodes = Nodes
+        records_stub = stubs["blendertk.light_utils.lightmap_baker.lightmap_records"]
+        records_stub.LightmapRecords = Records
+        templates = os.path.join(os.path.dirname(bb.__file__), "templates")
+        for name in ("_import_scene.py", "_import_scene_usd.py"):
+            with self.subTest(template=name):
+                with open(os.path.join(templates, name), encoding="utf-8") as fh:
+                    tree = ast.parse(fh.read())
+                fn = next(
+                    node
+                    for node in tree.body
+                    if isinstance(node, ast.FunctionDef)
+                    and node.name == "scene_data_sections"
+                )
+                ns = {"traceback": __import__("traceback"), "_extend_sys_path": str}
+                exec(compile(ast.Module(body=[fn], type_ignores=[]), name, "exec"), ns)
+                calls.clear()
+                with mock.patch.dict(sys.modules, stubs):
+                    ns["scene_data_sections"](None, str)
+                self.assertEqual(calls, ["lift", "send"])
 
 
 class TestRestoreEmptyGroups(MayaTkTestCase):
@@ -4856,6 +4975,110 @@ save("pose_ik.blend")
             )
         )
         self.assertFalse(BlenderSceneImport.scene_has_complex_animation(__file__))
+
+
+class TestUsdFastPathConform(MayaTkTestCase):
+    """A foreign USD through the import's native fast path lands at size and
+    upright in ANY working unit, and the import names its nodes where they land.
+
+    mayaUsd writes every distance in Maya's INTERNAL unit, the centimetre,
+    whatever unit the scene works in -- in its own words, "All distance values
+    will be imported in Maya's internal distance unit" (mayaUsd 0.30) -- so the
+    conform is read against that, never against the unit the scene displays:
+    read against the working unit, a Maya-shaped cm layer would shrink 100x in a
+    metre scene and a metre layer stay 100x small there. The group's rotate goes
+    through ``setAttr``, which reads the working ANGULAR unit. And the conform
+    re-parents the imported roots, so the DAG paths the import captured before
+    it no longer name them after.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.usd import UsdUtils
+
+        UsdUtils.load_plugin()
+        self._store = ptk.TempArtifacts("mtk_usd_conform_test", policy="scoped")
+        self.addCleanup(self._store.cleanup)
+        self.root = self._store.dir_path()
+        # The next test's scene reset takes the working units from the
+        # preferences; put back what this test found either way.
+        self.addCleanup(
+            cmds.currentUnit,
+            linear=cmds.currentUnit(query=True, linear=True),
+            angle=cmds.currentUnit(query=True, angle=True),
+        )
+
+    def _box_stage(self, name, metres_per_unit, up_axis):
+        """A 0.2 x 0.2 x 1 m box standing on its stage's *up_axis* (``"Y"`` /
+        ``"Z"``), written in the stage's own unit; its path."""
+        from pxr import Gf, Usd, UsdGeom
+
+        path = os.path.join(self.root, f"{name}.usda")
+        stage = Usd.Stage.CreateNew(path)
+        UsdGeom.SetStageMetersPerUnit(stage, metres_per_unit)
+        UsdGeom.SetStageUpAxis(
+            stage, UsdGeom.Tokens.z if up_axis == "Z" else UsdGeom.Tokens.y
+        )
+        half, height = 0.1 / metres_per_unit, 1.0 / metres_per_unit
+        corners = [(-half, -half), (half, -half), (half, half), (-half, half)]
+        points = [
+            Gf.Vec3f(a, b, h) if up_axis == "Z" else Gf.Vec3f(a, h, b)
+            for h in (0.0, height)
+            for a, b in corners
+        ]
+        mesh = UsdGeom.Mesh.Define(stage, f"/{name}")
+        mesh.CreatePointsAttr(points)
+        mesh.CreateFaceVertexCountsAttr([4] * 6)
+        mesh.CreateFaceVertexIndicesAttr(
+            [0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7]
+        )
+        stage.SetDefaultPrim(mesh.GetPrim())
+        stage.GetRootLayer().Save()
+        return path
+
+    @staticmethod
+    def _world_box(name):
+        """*name*'s world bounds, in the scene's working unit."""
+        box = cmds.exactWorldBoundingBox(cmds.ls(name, long=True))
+        return [round(v, 3) for v in box]
+
+    def test_the_conform_is_read_against_the_internal_centimetre(self):
+        from mayatk.env_utils.usd import UsdUtils
+
+        metre = self._box_stage("tall", 1.0, "Z")
+        maya_shaped = self._box_stage("crate", 0.01, "Y")
+        for unit in ("cm", "m", "mm"):
+            cmds.currentUnit(linear=unit)
+            self.assertEqual(UsdUtils.stage_conform(metre), (100.0, -90.0), unit)
+            self.assertIsNone(UsdUtils.stage_conform(maya_shaped), unit)
+
+    def test_a_metre_z_up_layer_lands_at_size_in_a_metre_scene(self):
+        cmds.currentUnit(linear="m")
+        BlenderSceneImport().import_scene(self._box_stage("tall", 1.0, "Z"))
+        # 1 m tall, standing on Y -- in the metres this scene works in.
+        self.assertEqual(self._world_box("tall"), [-0.1, 0.0, -0.1, 0.1, 1.0, 0.1])
+
+    def test_a_maya_shaped_layer_is_left_as_written_in_a_metre_scene(self):
+        """cm / Y up: what mayaUsd writes, and what the bridge writes for Maya."""
+        cmds.currentUnit(linear="m")
+        BlenderSceneImport().import_scene(self._box_stage("crate", 0.01, "Y"))
+        self.assertFalse(cmds.ls("*_conform"), "a cm layer was rescaled")
+        self.assertEqual(self._world_box("crate"), [-0.1, 0.0, -0.1, 0.1, 1.0, 0.1])
+
+    def test_the_up_axis_turn_holds_in_a_radian_scene(self):
+        cmds.currentUnit(angle="rad")
+        BlenderSceneImport().import_scene(self._box_stage("tall", 1.0, "Z"))
+        self.assertEqual(
+            self._world_box("tall"), [-10.0, 0.0, -10.0, 10.0, 100.0, 10.0]
+        )
+
+    def test_the_import_returns_its_nodes_where_they_landed(self):
+        """The list the import returns -- and every "Imported N object(s)" count
+        built on it -- follows the conformed roots under their group."""
+        imported = BlenderSceneImport().import_scene(self._box_stage("tall", 1.0, "Z"))
+        self.assertIn("tall", [node.rsplit("|", 1)[-1] for node in imported])
+        self.assertIn("tall_conform", imported)
+        self.assertTrue(all(cmds.objExists(node) for node in imported), imported)
 
 
 if __name__ == "__main__":

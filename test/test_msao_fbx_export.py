@@ -28,7 +28,7 @@ class TestMsaoFbxExport(MayaTkTestCase):
             cmds.loadPlugin("shaderFXPlugin")
 
         # Create shader
-        shader = self.gs.setup_stringray_node("TestShader", opacity=False)
+        shader = self.gs.setup_stringray_node("TestShader")
 
         # A REAL packed RGBA map (R=metallic, G=AO, A=smoothness). Splitting the
         # channels genuinely opens the file, so a stub PIL cannot identify makes

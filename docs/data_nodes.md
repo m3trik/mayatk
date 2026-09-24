@@ -87,6 +87,8 @@ outside its divergence ledger.
 | `emissive_groups` | `data_internal` | 1 (bare) | authored | Emissive Groups | -- | -- | domain merge, hand-off | the group registry: slots, defaults, encoding |
 | `render_effects_bindings` | `data_internal` | 1 (bare) | authored | Render Effects | -- | -- | unites | the viewport material bindings a preview drives, so a suspend and rebind round-trips |
 | `audio_file_map` | `data_internal` | 1 (bare) | authored | Audio Clips | -- | -- | unites | track id to audio file path |
+| `lightmap_dirs` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | unites, hand-off | lightmap file name to the folder it was written to |
+| `lightmap_writers` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | unites, hand-off | lightmap file name to the scene file that wrote it |
 <!-- scene-records:end -->
 
 Beside the records, two tool-owned attribute families live on the carriers:
@@ -228,7 +230,8 @@ ships:
 | `DataNodes.ensure_internal()` / `ensure_export()` | get-or-create each node (idempotent, healing) |
 | `DataNodes.get_internal_node(create=True)` / `get_export_node(create=True)` / `get_export_nodes()` | resolve a carrier without creating it; the plural is for shipping |
 | `DataNodes.transfer_sections(spell, objects)` / `receive_sections(manifest, resolve, **adapters)` | the portable records as a hand-off sidecar's sections, and landing them (inherited from `ptk.SceneStoreBase`) |
-| `DataNodes.carriers_in(namespace)` / `merge_plan(carriers)` / `merge_carriers(carriers, rename)` / `discard_carriers(carriers)` | another scene's carriers: find them, ask what a merge would keep, merge or drop them |
+| `DataNodes.carriers_in(namespace)` / `merge_plan(carriers)` / `merge_carriers(carriers, rename, source_path_base=)` / `discard_carriers(carriers)` | another scene's carriers: find them, ask what a merge would keep, merge or drop them |
+| `DataNodes.project_root()` / `project_root_of(path)` / `rebase_paths(old, new)` / `install_path_rebase()` | the project the `paths=True` records are spelled from (the scene file's, `None` while unsaved), and re-spelling them when a save moves the scene |
 | `DataNodes.OWNERS` | record key -> the DCC class keeping state beside it (its crossing hooks) |
 
 Legacy audio migration (pre-`DataNodes` `audio_events*` carriers and the old
@@ -278,7 +281,15 @@ never be duplicated into the sidecar.
    whole API -- and declare how another scene's copy combines with this one's
    (`merge=Merge.UNION` / `CODEC` / `OWN`; `merge_key` for a list, `respell=False`
    for a payload that names no scene node). Crosses a hand-off too?
-   `portable=True`. Keeps state beside the record? One row in each DCC's
+   `portable=True`. Its values are file or folder paths? `paths=True`: each is
+   stored relative to the project the scene FILE lives in
+   (`ptk.FileUtils.portable_path` from `DataNodes.project_root()`; `../`
+   chains included, absolute only on another drive or while unsaved), and
+   every route that moves the record re-spells it -- a save into another
+   project (the save hook `DataNodes.install_path_rebase`, installed by
+   `MayaUiHandler`), a hand-off (sent absolute, landed from the receiving
+   scene's project) and a module merge (from the module's project).
+   Keeps state beside the record? One row in each DCC's
    `DataNodes.OWNERS` with the hooks it needs ([Crossing into another
    scene](#crossing-into-another-scene)).
 4. **Read by Unity?** Add the channel to `UnitytkSettings.cs` and `"unity"` to

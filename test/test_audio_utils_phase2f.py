@@ -188,10 +188,11 @@ class TestRenameTrack(MayaTkTestCase):
 
 class TestFileMapStoresProjectRelative(MayaTkTestCase):
     """No machine's drive layout in scene data (maintainer rule, 2026-09-19):
-    a path under the project root is STORED relative to it, so a teammate's
-    synced project resolves the same file, and every reader still gets an
-    absolute path back.  A path outside the root stays absolute (the texture
-    and lightmap-marker rule), and a write re-spells only its own entry."""
+    a path is STORED relative to the project the scene FILE lives in, so a
+    teammate's synced project resolves the same file, and every reader still
+    gets an absolute path back.  A shared library beside the project is a
+    ``../`` chain (decided 2026-09-23; only another drive stays absolute), and
+    a write re-spells only its own entry."""
 
     def setUp(self):
         super().setUp()
@@ -199,10 +200,15 @@ class TestFileMapStoresProjectRelative(MayaTkTestCase):
         self.addCleanup(store.cleanup)
         self.root = store.dir_path().replace("\\", "/")
         self.proj = f"{self.root}/proj"
-        os.makedirs(self.proj, exist_ok=True)
+        os.makedirs(f"{self.proj}/scenes", exist_ok=True)
+        with open(f"{self.proj}/workspace.mel", "w") as fh:
+            fh.write("//Maya 2025 Project Definition\n")
         original = cmds.workspace(q=True, rootDirectory=True)
         self.addCleanup(lambda: cmds.workspace(original, openWorkspace=True))
         cmds.workspace(self.proj, openWorkspace=True)
+        cmds.file(rename=f"{self.proj}/scenes/audio.ma")
+        cmds.file(save=True, type="mayaAscii", force=True)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the file first
         _events.ensure_track_attr("vo")
 
     @staticmethod
@@ -215,29 +221,40 @@ class TestFileMapStoresProjectRelative(MayaTkTestCase):
         self.assertEqual(self._stored(), {"vo": "sound/vo.wav"})
         self.assertEqual(_file_map.get_path("vo"), path)
 
-    def test_a_path_outside_the_project_stays_absolute(self):
-        """Never a ``../`` chain: a reader resolves against whatever project
-        its session has set, and a chain walks off the drive root there."""
+    def test_a_path_beside_the_project_is_a_chain_from_it(self):
+        """Spelled from the scene's OWN project, a ``../`` chain is stable: it
+        drifted only while it was spelled from the session's (2026-09-22)."""
         path = f"{self.root}/library/vo.wav"
         _file_map.set_path("vo", path)
-        self.assertEqual(self._stored(), {"vo": path})
+        self.assertEqual(self._stored(), {"vo": "../library/vo.wav"})
         self.assertEqual(_file_map.get_path("vo"), path)
 
-    def test_a_write_under_another_project_leaves_the_other_entries_alone(self):
+    def test_an_unsaved_scene_stores_absolute(self):
+        """No file, no project to spell from: absolute until the first save
+        re-spells it (``DataNodes.install_path_rebase``)."""
+        cmds.file(new=True, force=True)
+        _events.ensure_track_attr("vo")
+        path = f"{self.proj}/sound/vo.wav"
+        _file_map.set_path("vo", path)
+        self.assertEqual(self._stored(), {"vo": path})
+
+    def test_a_write_under_another_session_project_changes_no_spelling(self):
         """Review 2026-09-22: every write re-spelled the WHOLE map against the
-        session's project.  An absolute entry that happens to lie under THAT
-        project came back relative to it -- and read under its own project it
-        named a different file, for good.  (A relative entry re-based and
-        re-spelled reads back as the same string, so it cannot show this.)"""
+        SESSION's project, so an entry read under another project named a
+        different file, for good.  The base is the scene file's project now
+        (2026-09-23): another project set in the session spells nothing new,
+        and every entry reads back as the same file under either."""
         elsewhere = f"{self.root}/other_proj"
         os.makedirs(elsewhere, exist_ok=True)
         inside = f"{self.proj}/sound/vo.wav"
-        hit = f"{elsewhere}/sound/hit.wav"  # outside this project: absolute
+        hit = f"{elsewhere}/sound/hit.wav"  # beside this project: a chain
         _events.ensure_track_attr("hit")
         _file_map.set_path("vo", inside)
         _file_map.set_path("hit", hit)
         before = self._stored()
-        self.assertEqual(before, {"vo": "sound/vo.wav", "hit": hit})
+        self.assertEqual(
+            before, {"vo": "sound/vo.wav", "hit": "../other_proj/sound/hit.wav"}
+        )
         cmds.workspace(elsewhere, openWorkspace=True)
         _events.ensure_track_attr("sfx")
         _file_map.set_path("sfx", f"{elsewhere}/sound/sfx.wav")
@@ -245,6 +262,8 @@ class TestFileMapStoresProjectRelative(MayaTkTestCase):
         self.assertEqual(
             {k: stored[k] for k in before}, before, "untouched entries kept"
         )
+        self.assertEqual(stored["sfx"], "../other_proj/sound/sfx.wav")
+        self.assertEqual(_file_map.get_path("vo"), inside)
         cmds.workspace(self.proj, openWorkspace=True)
         self.assertEqual(_file_map.get_path("vo"), inside)
         self.assertEqual(_file_map.get_path("hit"), hit)

@@ -17,4 +17,5 @@ ptk.Deprecation.attributes(
     globals(),
     {"RenderOpacity": "mayatk.mat_utils.render_opacity.render_effects.RenderEffects"},
     remove_in="0.20.0",
+    since="2026-09-23",
 )

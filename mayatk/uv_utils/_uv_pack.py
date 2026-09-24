@@ -247,8 +247,8 @@ class _UvPackInternal:
         used = np.unique(tris.reshape(-1))
         # -1 for anything outside the scope: every triangle row is in `used` by
         # construction, so a row that isn't overflows the uint32 cast below into
-        # an out-of-range index the engine rejects, rather than silently
-        # aliasing onto UV 0.
+        # an out-of-range index ``ptk.UvPack.pack_islands`` refuses
+        # (ValueError), rather than silently aliasing onto UV 0.
         remap = np.full(len(uvs), -1, dtype=np.int64)
         remap[used] = np.arange(len(used))
         _, shell_ids = fn.getUvShellsIds()
@@ -366,29 +366,46 @@ class _UvPackInternal:
                 )
             solved.append((indices, scale, angle, mirrored, c0, c1))
 
-        for indices, scale, angle, mirrored, c0, c1 in solved:
-            comps = cls._component_ranges(
-                mesh, np.sort(indices if uv_ids is None else uv_ids[indices])
+        from mayatk.uv_utils._uv_utils import UvUtils
+
+        moves = [
+            (
+                cls._component_ranges(
+                    mesh, np.sort(indices if uv_ids is None else uv_ids[indices])
+                ),
+                scale,
+                angle,
+                mirrored,
+                c0,
+                c1,
             )
-            if mirrored:
-                # Maya's own Flip-U mechanism; centroid pivot keeps c0 fixed.
-                cmds.polyEditUV(comps, pivotU=c0[0], pivotV=c0[1], scaleU=-1, scaleV=1)
-            if abs(angle) > 1e-6:
-                cmds.polyEditUV(
-                    comps, pivotU=c0[0], pivotV=c0[1], angle=angle, relative=True
-                )
-            if abs(scale - 1.0) > 1e-9:
-                cmds.polyEditUV(
-                    comps,
-                    pivotU=c0[0],
-                    pivotV=c0[1],
-                    scaleU=scale,
-                    scaleV=scale,
-                    relative=True,
-                )
-            du, dv = float(c1[0] - c0[0]), float(c1[1] - c0[1])
-            if abs(du) > 1e-9 or abs(dv) > 1e-9:
-                cmds.polyEditUV(comps, uValue=du, vValue=dv, relative=True)
+            for indices, scale, angle, mirrored, c0, c1 in solved
+        ]
+        # A pinned UV refuses polyEditUV, which tore a shell carrying pins: its
+        # pinned UVs stayed where they were while the rest were packed.
+        with UvUtils.pins_lifted([c for comps, *_ in moves for c in comps]):
+            for comps, scale, angle, mirrored, c0, c1 in moves:
+                if mirrored:
+                    # Maya's own Flip-U mechanism; centroid pivot keeps c0 fixed.
+                    cmds.polyEditUV(
+                        comps, pivotU=c0[0], pivotV=c0[1], scaleU=-1, scaleV=1
+                    )
+                if abs(angle) > 1e-6:
+                    cmds.polyEditUV(
+                        comps, pivotU=c0[0], pivotV=c0[1], angle=angle, relative=True
+                    )
+                if abs(scale - 1.0) > 1e-9:
+                    cmds.polyEditUV(
+                        comps,
+                        pivotU=c0[0],
+                        pivotV=c0[1],
+                        scaleU=scale,
+                        scaleV=scale,
+                        relative=True,
+                    )
+                du, dv = float(c1[0] - c0[0]), float(c1[1] - c0[1])
+                if abs(du) > 1e-9 or abs(dv) > 1e-9:
+                    cmds.polyEditUV(comps, uValue=du, vValue=dv, relative=True)
 
     @classmethod
     def run(

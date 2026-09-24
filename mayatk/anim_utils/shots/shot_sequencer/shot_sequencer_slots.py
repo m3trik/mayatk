@@ -3131,13 +3131,13 @@ class ShotSequencerController(
     def on_selection_changed(self, clip_ids: list) -> None:
         """Select the corresponding Maya objects when clips are clicked.
 
-        Also opens the Graph Editor so the selected object's animation
-        curves are immediately visible, and mirrors an ATTRIBUTE selection
-        into the Channel Box (:meth:`_mirror_channel_box_attrs`): clicking
-        a sub-row clip means that channel, exactly as highlighting it in
-        the Channel Box does, and every helper that reads that highlight
-        narrows with it.  An object row means the whole object, so it
-        clears the highlight rather than listing the object's channels --
+        An open Graph Editor follows that selection; a closed one stays
+        closed (:meth:`_select_and_show`).  Also mirrors an ATTRIBUTE
+        selection into the Channel Box (:meth:`_mirror_channel_box_attrs`):
+        clicking a sub-row clip means that channel, exactly as highlighting
+        it in the Channel Box does, and every helper that reads that
+        highlight narrows with it.  An object row means the whole object, so
+        it clears the highlight rather than listing the object's channels --
         a mixed selection is therefore object-scoped.
         """
         if not clip_ids or cmds is None or self._syncing:
@@ -3324,17 +3324,21 @@ class ShotSequencerController(
             full = self._resolve_full_name(name)
             if cmds.objExists(full):
                 resolved.append(full)
-        if resolved:
-            # A view mirror, not an edit -- same guard as _select_and_show.
-            with CoreUtils.undo_disabled():
-                cmds.select(resolved, replace=True)
+        self._select_and_show(resolved)
         try:
             mel.eval("SpreadSheetEditor")
         except Exception:
             pass
 
     def _select_and_show(self, objects: list) -> None:
-        """Select the given Maya objects and open the Graph Editor.
+        """Select the given Maya objects; the editors that follow it show them.
+
+        Nothing is opened.  An open Graph Editor follows the scene selection
+        as the Outliner and the Channel Box do, so the ``GraphEditor`` call
+        this used to make only ever changed the user's layout: every clip or
+        header click -- and every marquee move that caught a clip -- expanded
+        a collapsed Graph Editor, or opened a closed one and moved Maya's
+        panel focus into it.
 
         The selection is NOT recorded on the undo queue.  This runs on every
         clip/track click and again on the rebuild after each edit, and
@@ -3351,10 +3355,6 @@ class ShotSequencerController(
             return
         with CoreUtils.undo_disabled():
             cmds.select(long_names, replace=True)
-        try:
-            mel.eval("GraphEditor")
-        except Exception:
-            pass
 
     def _mirror_channel_box_attrs(self, attrs) -> None:
         """Put *attrs* on Maya's Channel Box highlight; empty clears it.
@@ -3561,6 +3561,10 @@ class ShotSequencerController(
                             plug,
                             exc_info=True,
                         )
+                if deleted:
+                    # A key edit like any other (``_key_scene_edit``): the claims
+                    # on the deleted keys go with them and the gap holds re-settle.
+                    self.sequencer.reconcile_system_edits()
         finally:
             self._syncing = was_syncing
 
@@ -3776,6 +3780,11 @@ class ShotSequencerController(
                                     )
                             if cut_ok:
                                 deleted += 1
+                    if deleted:
+                        # A key edit like any other (``_key_scene_edit``): the
+                        # claims on the deleted keys go with them and the gap
+                        # holds re-settle.
+                        self.sequencer.reconcile_system_edits()
             finally:
                 self._syncing = was_syncing
 

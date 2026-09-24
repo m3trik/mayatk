@@ -43,9 +43,10 @@
 --   * ZomSelect must come BEFORE ZomOptimize. The identical line placed AFTER
 --     it access-violates (rc 0xC00000FF, nothing saved).
 --   * Do NOT switch ZomIslandGroups to Mode="DistributeTilesContent" or add
---     AuxGroup / WorkingSet to ZomPack -- those fields exist in newer Rizom
---     (the Titus 3ds Max bridge uses them) but access-violate on 2020.1.
---     Raise a version gate in parameters.py first.
+--     AuxGroup to ZomPack -- both exist in newer Rizom (the Titus 3ds Max
+--     bridge uses them) but access-violate on 2020.1. Raise a version gate in
+--     parameters.py first. (ZomPack WorkingSet, once listed here, is safe on
+--     2020.1 -- the shared pack block sends it for a shell subset.)
 --
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__

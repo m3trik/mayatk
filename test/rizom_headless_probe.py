@@ -201,6 +201,181 @@ def write_sprawl_obj(path: Path, objects: int = 8, quads: int = 6) -> None:
     path.write_text("\n".join(lines + faces) + "\n", encoding="ascii")
 
 
+SUBSET_TAG = "RZ_SUBSET"
+
+
+def write_subset_obj(path: Path) -> None:
+    """Three FIXED quads placed inside the tile, then sixteen quads sprawling
+    outside it whose faces carry the subset material -- the host's shell-subset
+    tagging, as OBJ ``usemtl``. Face order: 0-2 fixed, 3-18 packed. 3D size is
+    10x the UV size throughout (consistent texel density)."""
+    verts, vts, faces = [], [], []
+
+    def quad(x0, u0, v0, s, tag):
+        bv, bt = len(verts) + 1, len(vts) + 1
+        w = s * 10
+        verts.extend([(x0, 0, 0), (x0 + w, 0, 0), (x0 + w, w, 0), (x0, w, 0)])
+        vts.extend([(u0, v0), (u0 + s, v0), (u0 + s, v0 + s), (u0, v0 + s)])
+        faces.append(f"usemtl {tag}")
+        faces.append("f " + " ".join(f"{bv + k}/{bt + k}" for k in range(4)))
+
+    for i, (u0, v0, s) in enumerate(
+        ((0.40, 0.40, 0.25), (0.05, 0.70, 0.20), (0.75, 0.05, 0.15))
+    ):
+        quad(i * 10.0, u0, v0, s, "fixed_mat")
+    for i in range(16):
+        s = 0.2 * (0.8 + (i * 7 % 5) / 4.0)
+        quad(100 + i * 8.0, (i % 4) * 0.5 - 0.6, (i // 4) * 0.5 - 0.6, s, SUBSET_TAG)
+    lines = ["# probe subset", "o probe_subset"]
+    lines += [f"v {x} {y} {z}" for x, y, z in verts]
+    lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
+    path.write_text("\n".join(lines + faces) + "\n", encoding="ascii")
+
+
+STACKED_SUBSET = (0, 4, 5, 6)  # a unique quad + the whole 3-quad stack
+
+
+def write_stacked_subset_obj(path: Path) -> None:
+    """:func:`write_stacked_obj` with :data:`STACKED_SUBSET` carrying the subset
+    material: the stack must move as one unit, around fixed islands that
+    overlap each other (the wide+tall pair, the twins) and so would group."""
+    write_stacked_obj(path)
+    out, face = [], 0
+    for ln in path.read_text(encoding="ascii").splitlines():
+        if ln.startswith("f "):
+            out.append(
+                f"usemtl {SUBSET_TAG if face in STACKED_SUBSET else 'fixed_mat'}"
+            )
+            face += 1
+        out.append(ln)
+    path.write_text("\n".join(out) + "\n", encoding="ascii")
+
+
+def write_strips_obj(path: Path, deg: float = 30.0) -> None:
+    """Twelve thin 8:1 strips whose UVs sit rotated ``deg`` degrees."""
+    verts, vts, faces = [], [], []
+    a = math.radians(deg)
+    for i in range(12):
+        bv = len(verts) + 1
+        verts.extend(
+            [
+                (i * 10.0, 0, 0),
+                (i * 10.0 + 4, 0, 0),
+                (i * 10.0 + 4, 0.5, 0),
+                (i * 10.0, 0.5, 0),
+            ]
+        )
+        cu, cv = 0.15 + 0.7 * ((i % 4) / 3), 0.15 + 0.7 * ((i // 4) / 2)
+        for x, y in ((-0.12, -0.015), (0.12, -0.015), (0.12, 0.015), (-0.12, 0.015)):
+            vts.append(
+                (
+                    cu + x * math.cos(a) - y * math.sin(a),
+                    cv + x * math.sin(a) + y * math.cos(a),
+                )
+            )
+        faces.append("f " + " ".join(f"{bv + k}/{bv + k}" for k in range(4)))
+    lines = ["# probe strips", "o probe_strips"]
+    lines += [f"v {x} {y} {z}" for x, y, z in verts]
+    lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
+    path.write_text("\n".join(lines + faces) + "\n", encoding="ascii")
+
+
+def _polygons_overlap(a, b, eps: float = 1e-6) -> bool:
+    """Separating-axis test for two convex UV polygons (touching is not overlap)."""
+    for poly in (a, b):
+        for i in range(len(poly)):
+            (x0, y0), (x1, y1) = poly[i], poly[(i + 1) % len(poly)]
+            ax, ay = y0 - y1, x1 - x0
+            pa = [ax * x + ay * y for x, y in a]
+            pb = [ax * x + ay * y for x, y in b]
+            if max(pa) <= min(pb) + eps or max(pb) <= min(pa) + eps:
+                return False
+    return True
+
+
+def check_subset(
+    region=(0.0, 1.0, 0.0, 1.0),
+    fixed=range(3),
+    packed=range(3, 19),
+    writer=write_subset_obj,
+    stack=(),
+):
+    """Case checker for a subset pack of *writer*'s mesh: the fixed quads come
+    back bit-identical, the tagged ones land inside *region*, no two quads
+    overlap -- except the members of *stack*, which must stay coincident."""
+
+    def _check(obj_path: Path):
+        reference = obj_path.with_name(obj_path.stem + "_reference.obj")
+        writer(reference)
+        before, after = face_uvs(reference), face_uvs(obj_path)
+        reference.unlink()
+        problems = []
+        if stack:
+            spread = max(
+                max(math.dist(p, q) for p, q in zip(after[stack[0]], after[i]))
+                for i in stack[1:]
+            )
+            if spread > 1e-6:
+                problems.append(f"stack scattered (spread {spread:.2e})")
+        drift = max(
+            max(math.dist(p, q) for p, q in zip(before[i], after[i])) for i in fixed
+        )
+        if drift > 1e-9:
+            problems.append(f"fixed shells moved (max {drift:.2e})")
+        u0, u1, v0, v1 = region
+        pts = [p for i in packed for p in after[i]]
+        if not all(
+            u0 - 1e-6 <= u <= u1 + 1e-6 and v0 - 1e-6 <= v <= v1 + 1e-6 for u, v in pts
+        ):
+            us, vs = [u for u, _ in pts], [v for _, v in pts]
+            problems.append(
+                f"packed shells outside {region}: u[{min(us):.3f},{max(us):.3f}] "
+                f"v[{min(vs):.3f},{max(vs):.3f}]"
+            )
+        hits = [
+            (i, j)
+            for i in packed
+            for j in list(fixed) + [k for k in packed if k > i]
+            if not (i in stack and j in stack) and _polygons_overlap(after[i], after[j])
+        ]
+        if hits:
+            problems.append(f"{len(hits)} overlapping pair(s), e.g. {hits[:3]}")
+        return "; ".join(problems) or None
+
+    return _check
+
+
+def check_untouched(writer):
+    """Case checker: every UV comes back where *writer* put it."""
+
+    def _check(obj_path: Path):
+        reference = obj_path.with_name(obj_path.stem + "_reference.obj")
+        writer(reference)
+        before, after = face_uvs(reference), face_uvs(obj_path)
+        reference.unlink()
+        drift = max(
+            max(math.dist(p, q) for p, q in zip(a, b)) for a, b in zip(before, after)
+        )
+        return f"UVs moved (max {drift:.2e})" if drift > 1e-9 else None
+
+    return _check
+
+
+def check_angles(expect_deg: float, tol: float = 0.5):
+    """Case checker: every face's first UV edge sits at *expect_deg* (mod 90)."""
+
+    def _check(obj_path: Path):
+        off = []
+        for i, f in enumerate(face_uvs(obj_path)):
+            (u0, v0), (u1, v1) = f[0], f[1]
+            ang = math.degrees(math.atan2(v1 - v0, u1 - u0)) % 90.0
+            if min(abs(ang - expect_deg), 90 - abs(ang - expect_deg)) > tol:
+                off.append(f"{i}:{ang:.1f}")
+        return f"faces off {expect_deg} deg: {off[:6]}" if off else None
+
+    return _check
+
+
 def face_uvs(path: Path):
     """Per-face UV polygons of an OBJ (face order is preserved by Rizom's save)."""
     vts, faces = [], []
@@ -454,13 +629,67 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
 #     last digit -- the packer merely permutes equal-sized islands between
 #     equivalent slots. Compare per-island AREAS, not a whole-file digest, or
 #     you will conclude the modes differ when only the arrangement did.
-#   ZomPack Scaling.Mix ............. SAFE but NO EFFECT (dead knob, backlogged)
-#     Mix=true vs Mix=false with Mode=2 on the mismatched mesh produced a
-#     BYTE-IDENTICAL save (same vt digest), i.e. the differing input was
-#     ignored. Determinism control for that conclusion: the SAME config re-run
+#   ZomPack Scaling.Mix ............. SAFE but NO EFFECT (gated >= 2022 since
+#     2026-09-23). Mix=true vs Mix=false with Mode=2 on the mismatched mesh
+#     produced a BYTE-IDENTICAL save (same vt digest), i.e. the differing input
+#     was ignored; re-measured through the real Maya bridge 2026-09-23, same.
+#     Determinism control for that conclusion: the SAME config re-run
 #     from a separate probe script into a separate output file reproduced its
 #     numbers exactly (Mode=2/Layout=0 -> 0.042353 / 0.002647 both times), so
 #     identical output means identical treatment, not a coincidental collision.
+#   ZomPack RecursionDepth .......... SAFE but NO EFFECT in any bridge flow
+#     (pinned to 1 since 2026-09-23): 1/2/5 byte-identical on OBJ, through the
+#     real Maya bridge, and with keep-stacked groups -- the hierarchy is always
+#     RootGroup > one tile > islands, nothing nested to pack first.
+#   ZomPack Rotate.Mode / Rotate.Step  SAFE and REAL. Rizom PRE-ORIENTS every
+#     island before the step search (Mode defaults to 2 = upright along the
+#     minimal bounding box; the RootGroup props read back Rotate={Mode=2,
+#     Step=0, Min=0, Max=180}), so 30-degree strips come out axis-aligned at
+#     any step. Keeping the incoming angle needs Mode=0 AND Step=0 (either
+#     alone still rotates) -- shipped as Rotate off (pack_rotate_off/on).
+#     Steps 90/45/30 saved byte-identical on the strips; 15 differs.
+#   RootGroup / island readback ..... ZomGet("Lib.Mesh.RootGroup") and
+#     ZomGet("Lib.Mesh.Islands") are SAFE and return the whole tree (per-island
+#     BBoxUV {umin,umax,vmin,vmax,w,w}, PolyIDs, TopoStable.Selected; per-group
+#     IslandIDs + TopoStable.Pack defaults Resolution=200, MaxMutations=1).
+#     Indexing below them ("Lib.Mesh.Islands.0") CRASHES natively -- pcall
+#     cannot catch it; a bad top-level path ("Mesh.Islands") only errors.
+#     Lua's io library works under -cfi: the only readback channel (print()
+#     is swallowed). Island-table keys and IslandIDs values differ in type --
+#     compare them via tostring().
+#   Island SUBSET selection ......... ZomSelect PrimType="Island" with IDs=
+#     needs List=true (without it: silent no-op -- that, not a missing
+#     feature, is why ID selection "never worked"); Objects={name} selects an
+#     object's islands WITHOUT List (with it: no-op); Materials={name} selects
+#     the islands carrying that material (OBJ usemtl and Maya FBX alike) --
+#     shipped as the shell subset. No-ops: PrimType="Polygon" IDs (selects
+#     polygons, not islands, and Convert={Source="Polygon"} does not promote
+#     them), IslandGroup Names even with List=true. ZomIslandProperties
+#     Pack={Locked=true} and a DefineGroup with Pack.Locked lock NOTHING.
+#   ZomPack WorkingSet="Visible&Selected"  SAFE and REAL: unselected islands
+#     are the forbidden area and stay put -- ONLY with LayoutScalingMode=0
+#     (any other value rescales them too; PostLayoutScalingProcessIslandSelection
+#     fits the subset over them instead) and a membership-only tile filing:
+#     DistributeInTilesEvenly/ByBBox re-centre every island in its tile unless
+#     FreezeIslands=true. Filing: Evenly+Freeze puts EVERY island under the
+#     tile (fixed islands beside it then squeezed the subset into a strip);
+#     ByBBox+Freeze files by bounds centre; OBJ load files by position; a pack
+#     that overflows drops the overflow out of the tile, where the next pack
+#     skips it -- hence gather + ByBBox before each refit in pack_block.lua.
+#     Coverage of a partial region by fitting to it degenerates into a strip
+#     (the packer only fills a whole tile). With an EMPTY selection it packs
+#     every island -- pack_block.lua packs nothing when the tag reached no
+#     island (case pack_subset_missing_tag). Groups: the packer moves a group
+#     only if the GROUP is selected (ZomSelect PrimType="IslandGroup",
+#     IslandGroupMode="Group", All=true) -- selected member islands alone left
+#     a keep-stacked stack in place on top of fixed islands -- and treats a
+#     fixed island INSIDE a group as no obstacle; DefineGroupsByOverlapness
+#     honours WorkingSet="Visible&Selected" (groups only the subset), which is
+#     how keep_stacked_block.lua keeps fixed islands ungrouped
+#     (case pack_subset_keep_stacked).
+#   Lua syntax error ................ CRASH 0xC00000FF, like an unknown field:
+#     an unterminated string in a probe script took 2020.1 down before any
+#     statement ran -- a crash code alone does not implicate the API.
 #   ZomIslandGroups DefineGroupsByOverlapness
 #     + Properties={Pack={Stacked=true}} SAFE and REAL (shipped as the opt-in
 #     PACK_KEEP_STACKED, templates/keep_stacked_block.lua). Measured 2026-08-16
@@ -576,6 +805,64 @@ def main() -> int:
             check_bounds(0.0, 1.0, 0.0, 1.0),
         )
     )
+
+    # Shell subset: only the tagged quads may move; the fixed ones come back
+    # bit-identical and nothing lands on them. Also in a far UDIM (packed in
+    # that tile; the fixed quads stay in 1001) and with fixed quads that the
+    # subset must pack around rather than onto.
+    subset_token = {"PACK_SUBSET": '{"%s"}' % SUBSET_TAG}
+    cases.append(("pack_subset", pack, write_subset_obj, subset_token, check_subset()))
+    cases.append(
+        (
+            "pack_subset_udim1002",
+            pack,
+            write_subset_obj,
+            dict(subset_token, TARGET_UDIM=1002),
+            check_subset(region=(1.0, 2.0, 0.0, 1.0)),
+        )
+    )
+
+    # Keep Stacked + subset: the subset's stack moves as ONE unit and lands on
+    # no fixed island -- including fixed islands that overlap each other.
+    cases.append(
+        (
+            "pack_subset_keep_stacked",
+            pack,
+            write_stacked_subset_obj,
+            dict(subset_token, PACK_KEEP_STACKED=True),
+            check_subset(
+                fixed=[i for i in range(12) if i not in STACKED_SUBSET],
+                packed=STACKED_SUBSET,
+                writer=write_stacked_subset_obj,
+                stack=(4, 5, 6),
+            ),
+        )
+    )
+
+    # A tag that reached no island must pack NOTHING: an empty selection makes
+    # ZomPack pack every island, fixed ones included.
+    cases.append(
+        (
+            "pack_subset_missing_tag",
+            pack,
+            write_subset_obj,
+            {"PACK_SUBSET": '{"NO_SUCH_TAG"}'},
+            check_untouched(write_subset_obj),
+        )
+    )
+
+    # Rotate off keeps every island's incoming angle (Mode 0 + Step 0 on
+    # 2020.1); on, the upright pre-orient straightens 30-degree strips.
+    cases.append(
+        (
+            "pack_rotate_off",
+            pack,
+            write_strips_obj,
+            {"PACK_ROTATE_ENABLE": False},
+            check_angles(30.0),
+        )
+    )
+    cases.append(("pack_rotate_on", pack, write_strips_obj, None, check_angles(0.0)))
 
     # Keep-stacked: with the knob on, islands that arrive coincident leave
     # coincident (grouped in Rizom's Group Stack mode); off = Rizom's normal

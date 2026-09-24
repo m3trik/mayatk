@@ -280,7 +280,13 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                     non-mesh transform names its mesh DESCENDANTS and never
                     itself -- duplicating one for export would otherwise clone
                     its whole subtree and aim the UV transfer at a locatorShape
-                    (reproduced on a rigged asset).
+                    (reproduced on a rigged asset). Components (faces, UVs,
+                    edges, vertices) name the UV SHELLS they touch: a preset
+                    that can act on a subset (``pack``) moves only those
+                    shells and packs them around the object's other shells,
+                    which stay exactly where they are (see
+                    :meth:`_shell_subset`); any other preset processes the
+                    whole object and logs that it did.
             uv_script: Raw Lua string **or** path to a ``.lua`` file.
                        Mutually exclusive with *preset*.
             preset: Name of a built-in preset (``"pack"``, ``"unwrap_hard"``,
@@ -346,10 +352,36 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 "should be packed."
             )
 
+        # A component selection names SHELLS. A preset that can act on a subset
+        # opts in by referencing the subset token (pack.lua); for anything
+        # else, say that the whole object is processed rather than widen the
+        # selection silently -- that silence was the live report (every shell
+        # packed after some were deliberately left out of the selection).
+        shell_subset, picked, total = self._shell_subset(objects)
+        if shell_subset and not (resolved and "__PACK_SUBSET__" in resolved):
+            self.logger.warning(
+                f"'{preset or 'script'}' works on whole objects: all shells of "
+                f"{len(shell_subset)} partly selected object(s) were processed. "
+                "Use the 'pack' preset to move only the selected shells."
+            )
+            shell_subset = {}
+        elif shell_subset:
+            self.logger.info(
+                f"Packing the {picked} selected shell(s) only; the other "
+                f"{total - picked} shell(s) of those {len(shell_subset)} "
+                "object(s) stay where they are and are packed around."
+            )
+            if (params or {}).get("UV_AREA"):
+                self.logger.info(
+                    "Tile Coverage applies to whole-object packs; the selected "
+                    "shells fill the free space of the whole target tile."
+                )
+
         # Collapse true DAG instances to one representative per shared shape
         # (unless a preset needs every named object exported for its
         # island-group selection). The UV transfer to the representative's
-        # shape propagates to all instances -- see the docstring.
+        # shape propagates to all instances -- see the docstring. The shell
+        # subset is keyed by shape, so it survives whichever instance stays.
         if skip_instances and not needs_selection and len(original_transforms) > 1:
             deduped = NodeUtils.filter_duplicate_instances(original_transforms)
             if len(deduped) < len(original_transforms):
@@ -376,7 +408,10 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             # export duplicates are created and deleted inside this block, so
             # nothing it touches outlives the call.
             with CoreUtils.undo_disabled():
-                self._export_objects(original_transforms)
+                subset_tag = self._export_objects(original_transforms, shell_subset)
+                if subset_tag:
+                    self._params = dict(self._params)
+                    self._params["PACK_SUBSET"] = self._lua_strings([subset_tag])
                 if needs_selection:
                     self._params = dict(self._params)
                     self._params.setdefault(
@@ -548,7 +583,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         return imported_transforms
 
-    def _export_objects(self, objects):
+    def _export_objects(self, objects, shell_subset=None):
         """Export specified Maya objects to an FBX file after duplicating with a unique suffix.
 
         Strategy:
@@ -561,9 +596,18 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
            name under different parents (``|grpA|mesh`` / ``|grpB|mesh``)
            would otherwise collapse to the same map key and cross-wire the
            UV transfer on re-import.
-        2. Export only the duplicated (suffixed) transforms so re-import will not overwrite originals.
-        3. Delete the duplicates locally (their geometry lives inside the exported file now).
-        4. Later, on import, we detect suffixed names and map them back to originals for UV transfer.
+        2. With a *shell_subset* (see :meth:`_shell_subset`), tag the faces
+           that may move with one throwaway material on the copies: the FBX
+           carries it per polygon, and the preset's ``Materials`` selection
+           turns it back into Rizom's island selection. A copy whose original
+           is absent from the subset is tagged whole -- it packs whole.
+        3. Export only the duplicated (suffixed) transforms so re-import will not overwrite originals.
+        4. Delete the duplicates and the tag locally (their data lives inside the exported file now).
+        5. Later, on import, we detect suffixed names and map them back to originals for UV transfer.
+
+        Returns:
+            The subset tag's material name -- the name the FBX gives it -- or
+            None when there is no subset.
         """
         # Reset mapping each run
         self._export_name_map = {}
@@ -574,79 +618,180 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 "No mesh geometry found in the objects supplied for export."
             )
 
+        tag = self._make_subset_tag() if shell_subset else None
         duplicates = []
-        for i, orig in enumerate(original_transforms):
-            try:
-                # A STATIC copy, sharing nothing with the source: the export
-                # used to duplicate with ``inputConnections=True``, which wires
-                # a skinned mesh's copy in as a second output of its
-                # skinCluster -- the FBX then carried the skin, and the run
-                # left the rig's joints with a stale evaluation (the tube sat
-                # fine at rest and ignored the next control move). The
-                # primitive also strips the copy to the mesh itself: a child
-                # mesh would reach RizomUV as extra islands the re-import
-                # cannot map back to anything, and answers with the FULL path
-                # so a same-named leaf under another parent can't cross-wire
-                # the rename (reproduced).
-                dup = NodeUtils.static_copy(
-                    orig, name=f"{CoreUtils.leaf_name(orig)}_{i}{self._temp_suffix}"
-                )
-
-                duplicates.append(dup)
-                # Key on the name cmds.rename actually RETURNED, not the one
-                # requested — a stale *__RZTMP survivor from a crashed run
-                # makes Maya uniquify the rename (…RZTMP1), and a map keyed on
-                # the request would silently skip that object's UV transfer
-                # on re-import. Short (namespace-free) to match import-side
-                # lookups.
-                self._export_name_map[
-                    CoreUtils.short_name(CoreUtils.leaf_name(dup))
-                ] = orig
-            except Exception as dup_err:
-                self.logger.warning(f"Failed to duplicate {orig}: {dup_err}")
-        self.logger.debug(
-            f"Created {len(duplicates)} duplicates for export with suffix '{self._temp_suffix}'"
-        )
-
-        if not duplicates:
-            raise RuntimeError("Failed to create any duplicates for export.")
-
-        # Ensure the export directory exists
-        export_dir = Path(self.export_path).parent
-        export_dir.mkdir(parents=True, exist_ok=True)
-
-        cmds.select(duplicates, replace=True)
-        self.logger.info(
-            f"Exporting {len(duplicates)} object(s) to "
-            f'<a href="action://open?path={self.export_path}">{self.export_path}</a>'
-        )
-
-        # Live Maya sessions don't always have fbxmaya on by default;
-        # cmds.file(type="FBX export") raises "Invalid file type" without it.
-        FbxUtils.load_plugin()
-
         try:
-            # A scratch write: the session's export preparers stand down, so
-            # no producer stamps ``data_export`` into the user's scene.
-            with FbxUtils.scratch_export():
-                cmds.file(
-                    self.export_path,
-                    exportSelected=True,
-                    type="FBX export",
-                    force=True,
-                )
-            self.logger.debug("FBX export completed successfully")
-        except Exception as e:
-            raise RuntimeError(
-                f"FBX export failed for {len(duplicates)} object(s) -> {self.export_path}: {e}"
-            ) from e
-        finally:
-            # Remove the temporary duplicates from the scene before re-import
+            for i, orig in enumerate(original_transforms):
+                try:
+                    # A STATIC copy, sharing nothing with the source: the export
+                    # used to duplicate with ``inputConnections=True``, which wires
+                    # a skinned mesh's copy in as a second output of its
+                    # skinCluster -- the FBX then carried the skin, and the run
+                    # left the rig's joints with a stale evaluation (the tube sat
+                    # fine at rest and ignored the next control move). The
+                    # primitive also strips the copy to the mesh itself: a child
+                    # mesh would reach RizomUV as extra islands the re-import
+                    # cannot map back to anything, and answers with the FULL path
+                    # so a same-named leaf under another parent can't cross-wire
+                    # the rename (reproduced).
+                    dup = NodeUtils.static_copy(
+                        orig, name=f"{CoreUtils.leaf_name(orig)}_{i}{self._temp_suffix}"
+                    )
+
+                    duplicates.append(dup)
+                    # Key on the name cmds.rename actually RETURNED, not the one
+                    # requested — a stale *__RZTMP survivor from a crashed run
+                    # makes Maya uniquify the rename (…RZTMP1), and a map keyed on
+                    # the request would silently skip that object's UV transfer
+                    # on re-import. Short (namespace-free) to match import-side
+                    # lookups.
+                    self._export_name_map[
+                        CoreUtils.short_name(CoreUtils.leaf_name(dup))
+                    ] = orig
+                except Exception as dup_err:
+                    self.logger.warning(f"Failed to duplicate {orig}: {dup_err}")
+            self.logger.debug(
+                f"Created {len(duplicates)} duplicates for export with suffix '{self._temp_suffix}'"
+            )
+
+            if not duplicates:
+                raise RuntimeError("Failed to create any duplicates for export.")
+
+            if tag:
+                # Outside the per-copy guard on purpose: a copy that silently
+                # missed its tag would ship with every shell FIXED.
+                self._tag_subset_faces(duplicates, shell_subset, tag[1])
+
+            # Ensure the export directory exists
+            export_dir = Path(self.export_path).parent
+            export_dir.mkdir(parents=True, exist_ok=True)
+
+            cmds.select(duplicates, replace=True)
+            self.logger.info(
+                f"Exporting {len(duplicates)} object(s) to "
+                f'<a href="action://open?path={self.export_path}">{self.export_path}</a>'
+            )
+
+            # Live Maya sessions don't always have fbxmaya on by default;
+            # cmds.file(type="FBX export") raises "Invalid file type" without it.
+            FbxUtils.load_plugin()
+
             try:
-                cmds.delete(duplicates)
-                self.logger.debug("Deleted temporary duplicated export nodes.")
-            except Exception as cleanup_err:
-                self.logger.warning(f"Failed to delete duplicates: {cleanup_err}")
+                # A scratch write: the session's export preparers stand down, so
+                # no producer stamps ``data_export`` into the user's scene.
+                with FbxUtils.scratch_export():
+                    cmds.file(
+                        self.export_path,
+                        exportSelected=True,
+                        type="FBX export",
+                        force=True,
+                    )
+                self.logger.debug("FBX export completed successfully")
+            except Exception as e:
+                raise RuntimeError(
+                    f"FBX export failed for {len(duplicates)} object(s) -> {self.export_path}: {e}"
+                ) from e
+        finally:
+            # Remove the temporary duplicates (and the subset tag) from the
+            # scene before re-import -- on every path out, including a failure
+            # between duplicating and exporting.
+            if duplicates:
+                try:
+                    cmds.delete(duplicates)
+                    self.logger.debug("Deleted temporary duplicated export nodes.")
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Failed to delete duplicates: {cleanup_err}")
+            if tag:
+                self._delete_nodes(cmds.ls(list(tag)) or [], "subset tag")
+        return tag[0] if tag else None
+
+    @staticmethod
+    def _shape_uuid(node):
+        """UUID of *node*'s mesh shape (shared by every DAG instance), or None."""
+        shape = NodeUtils.get_shape(node)
+        return (cmds.ls(shape, uuid=True) or [None])[0] if shape else None
+
+    @classmethod
+    def _shell_subset(cls, objects) -> "tuple[dict, int, int]":
+        """The UV shells a COMPONENT selection names, per mesh it covers partly.
+
+        Faces / UVs / edges / vertices name every UV shell (current UV set)
+        they touch, whole -- a pack cannot move part of a shell. A mesh that is
+        also named as an object, or whose every shell is picked, packs whole
+        like any mesh named by object, and is left out.
+
+        Returns:
+            ``({shape uuid: face ids}, shells picked, shells on those meshes)``.
+            Keyed by the shape's UUID rather than a path: DAG instances share
+            one shape, so whichever instance the instance filter keeps still
+            finds its subset.
+        """
+        items = CoreUtils.as_strings(objects)
+        components = [o for o in items if "." in o]
+        if not components:
+            return {}, 0, 0
+        whole = {
+            cls._shape_uuid(t)
+            for t in Components.get_mesh_transforms([o for o in items if "." not in o])
+        }
+        # One call for every mesh: the helper groups faces by shape itself, and
+        # whole_shells widens each shell the selection touches to all its faces.
+        # Shells are collected as face-id SETS so an instanced shape reached
+        # through two of its paths counts each shell once.
+        uuids, by_shape = {}, {}
+        for shell in UvUtils.get_uv_shell_sets(components, whole_shells=True):
+            node = str(shell[0]).split(".", 1)[0]
+            if node not in uuids:
+                uuids[node] = cls._shape_uuid(node)
+            if uuids[node] is None or uuids[node] in whole:
+                continue
+            ids = frozenset(int(str(f).rsplit("[", 1)[1][:-1]) for f in shell)
+            by_shape.setdefault(uuids[node], (node, set()))[1].add(ids)
+
+        subset, picked, total = {}, 0, 0
+        for uuid, (node, shells) in by_shape.items():
+            faces = set().union(*shells)
+            if len(faces) >= (cmds.polyEvaluate(node, face=True) or 0):
+                continue  # every shell picked: it packs whole
+            subset[uuid] = faces
+            picked += len(shells)
+            total += cmds.polyEvaluate(node, uvShell=True) or len(shells)
+        return subset, picked, total
+
+    @staticmethod
+    def _lua_strings(names) -> str:
+        """*names* as a Lua table of string literals: ``{"a", "b"}``."""
+        return "{" + ", ".join(f'"{n}"' for n in names) + "}"
+
+    def _make_subset_tag(self) -> "tuple[str, str]":
+        """A throwaway ``(material, shadingGroup)`` marking the faces that may move.
+
+        The FBX names a polygon's material by the SHADER node, so that is the
+        name the Lua selects on; Maya uniquifies a clash, which is why the
+        caller carries the returned names rather than the requested one.
+        """
+        mat = cmds.shadingNode(
+            "lambert", asShader=True, name=f"rizomSubset{self._temp_suffix}"
+        )
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{mat}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        return mat, sg
+
+    def _tag_subset_faces(self, duplicates, shell_subset, shading_group) -> None:
+        """Assign *shading_group* to each export copy's faces that may move."""
+        for dup in duplicates:
+            orig = self._export_name_map[CoreUtils.short_name(CoreUtils.leaf_name(dup))]
+            faces = shell_subset.get(self._shape_uuid(orig))
+            if faces is None:
+                members = [f"{dup}.f[*]"]
+            else:
+                runs = ptk.IterUtils.collapse_integer_sequence(
+                    sorted(faces), compress=False, to_string=False
+                )
+                members = [f"{dup}.f[{r.replace('..', ':')}]" for r in runs]
+            cmds.sets(members, edit=True, forceElement=shading_group)
 
     def _execute_uv_script(self):
         """Run the RizomUV script using the prepared script file path."""
@@ -1141,7 +1286,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 "select_objects did not match any exported object -- "
                 "they must be a subset of the objects passed for processing."
             )
-        return "{" + ", ".join(f'"{n}"' for n in names) + "}"
+        return self._lua_strings(names)
 
     @staticmethod
     def expand_by_materials(objects) -> "tuple[list[str], list[str]]":
@@ -1161,7 +1306,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         selected = Components.get_mesh_transforms(objects)
         expanded = set(selected)
-        for mat in MatUtils.get_mats(selected, as_strings=True) or []:
+        for mat in MatUtils.get_mats(selected) or []:
             members = MatUtils.find_by_mat_id(mat, shell=True) or []
             # Normalized the same way the export set is -- ``find_by_mat_id``
             # answers with whatever the shading assignment names (shapes,

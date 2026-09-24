@@ -182,8 +182,6 @@ class TestSceneExporter(MayaTkTestCase):
         """Test export path generation."""
         self.exporter.export_dir = self.temp_dir
         self.exporter.output_name = None
-        self.exporter.name_regex = None
-        self.exporter.timestamp = False
 
         scene_path = os.path.join(self.temp_dir, "test_scene.ma")
         _pm_rename_file(scene_path)
@@ -195,17 +193,30 @@ class TestSceneExporter(MayaTkTestCase):
         path = self.exporter.generate_export_path()
         self.assertTrue(path.endswith("CustomName.fbx"))
 
-        self.exporter.timestamp = True
+        # The retired Timestamp checkbox, spelled in the name itself.
+        self.exporter.output_name = "CustomName_{date}_{time}"
         path = self.exporter.generate_export_path()
         self.assertRegex(path, r"CustomName_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.fbx")
+        # The naming state perform_export used to stamp is gone (2026-09-23):
+        # the retired inputs fold into output_name instead.
+        for retired in ("timestamp", "name_regex"):
+            self.assertFalse(hasattr(SceneExporter, retired), retired)
 
-    def _stem_for(self, output_name, **kwargs):
-        """The bare export stem the panel would write for *output_name*."""
+    def _stem_for(self, output_name, **retired):
+        """The bare export stem the panel would write for *output_name*.
+
+        *retired* takes the retired naming inputs (``name_regex``,
+        ``version_format``, ``timestamp``): each must warn and still fold in
+        until its removal release."""
         self.exporter.export_dir = self.temp_dir
-        self.exporter.timestamp = kwargs.pop("timestamp", False)
-        self.exporter.name_regex = kwargs.pop("name_regex", None)
         self.exporter.output_name = output_name
-        path = self.exporter.generate_export_path(**kwargs)
+        if not retired:
+            path = self.exporter.generate_export_path()
+        else:
+            with self.assertWarns(DeprecationWarning):
+                path = self.exporter.resolve_export_path(
+                    output_name, self.temp_dir, **retired
+                )["path"]
         return os.path.splitext(os.path.basename(path))[0]
 
     def test_wildcard_stands_in_for_the_scene_name(self):
@@ -311,24 +322,60 @@ class TestSceneExporter(MayaTkTestCase):
         {stem} IS the filename pattern -- and the log names the replacement."""
         _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
 
-        with self.assertLogs(self.exporter.logger, level="WARNING") as caught:
-            legacy = self._stem_for("WIP_*", version_format="{stem}_v{n:03d}")
+        legacy = self._stem_for("WIP_*", version_format="{stem}_v{n:03d}")
         self.assertEqual(legacy, self._stem_for("WIP_*_v{n:03d}"))
-        self.assertTrue(
-            any("Output Filename" in r.getMessage() for r in caught.records),
-            [r.getMessage() for r in caught.records],
-        )
 
-        # perform_export's tasks["version"] -- stamped before the early abort.
-        self.exporter.perform_export(
-            export_dir=self.temp_dir,
-            objects=[],
-            tasks={"version": "{stem}_v{n:03d}"},
+        # perform_export's tasks["version"] -- stamped before the early abort,
+        # folded once at the entry point (retired 2026-09-23, it warns), and
+        # the log names the pattern that says the same thing.
+        with (
+            self.assertWarns(DeprecationWarning) as retired,
+            self.assertLogs(self.exporter.logger, level="WARNING") as caught,
+        ):
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=[],
+                tasks={"version": "{stem}_v{n:03d}"},
+            )
+        self.assertIn("tasks['version']", str(retired.warning))
+        self.assertTrue(
+            any("{scene}_v{n:03d}" in r.getMessage() for r in caught.records),
+            [r.getMessage() for r in caught.records],
         )
         self.assertEqual(
             os.path.basename(self.exporter.export_path), "test_scene_v001.fbx"
         )
         self.assertTrue(self.exporter.task_manager.run.versioned)
+
+    def test_retired_perform_export_naming_inputs_warn_and_fold_once(self):
+        """Retired 2026-09-23: perform_export(timestamp=, name_regex=) each warn
+        and fold into the name ONCE, at the entry point, so output_name -- which
+        everything after reads -- states the whole rule."""
+        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
+
+        for kwargs, retired in (
+            ({"name_regex": "test_->prod_"}, "'name_regex'"),
+            ({"timestamp": True}, "'timestamp'"),
+        ):
+            with self.subTest(kwargs=kwargs):
+                with self.assertWarns(DeprecationWarning) as caught:
+                    self.exporter.perform_export(
+                        export_dir=self.temp_dir,
+                        objects=[],
+                        output_name="WIP_*",
+                        **kwargs,
+                    )
+                self.assertIn(retired, str(caught.warning))
+                stem = os.path.splitext(os.path.basename(self.exporter.export_path))[0]
+                if "name_regex" in kwargs:
+                    self.assertEqual(stem, "WIP_prod_scene")
+                    self.assertEqual(
+                        self.exporter.output_name, "WIP_{scene:test_->prod_}"
+                    )
+                else:
+                    self.assertRegex(
+                        stem, r"^WIP_test_scene_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"
+                    )
 
     def test_characters_illegal_in_a_filename_are_dropped(self):
         """A '?' the user typed cannot reach the write — nothing else emits one."""
@@ -374,15 +421,12 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertIn("unknown", html)  # {nope} is flagged, not silently kept
         self.assertIn(os.path.join(self.temp_dir, "WIP_test_scene_{nope}.fbx"), html)
 
-    def _preview_slots(self, pattern, regex="", output_format="fbx"):
-        """A panel stand-in whose fields hold *pattern*, *regex* and a format."""
+    def _preview_slots(self, pattern, output_format="fbx"):
+        """A panel stand-in whose fields hold *pattern* and a format."""
         from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.sb = SimpleNamespace(tooltip=TooltipFormat)
-        # The RegEx field is retired; a saved one reaches the panel as the
-        # deprecated attribute and folds into the pattern from there.
-        slots.name_regex = regex
         slots.ui = SimpleNamespace(
             txt000=SimpleNamespace(text=lambda: self.temp_dir),
             txt001=SimpleNamespace(text=lambda: pattern),
@@ -397,7 +441,7 @@ class TestSceneExporter(MayaTkTestCase):
         open(os.path.join(self.temp_dir, "prod_scene_v004.glb"), "w").close()
 
         slots = self._preview_slots(
-            "{scene}_v{n:03d}", regex="test_->prod_", output_format="fbx_glb"
+            "{scene:test_->prod_}_v{n:03d}", output_format="fbx_glb"
         )
         html = slots.output_name_preview()
         self.assertIn(
@@ -406,14 +450,16 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertNotIn("unknown", html)  # {n} is a token the field knows
 
     def test_format_export_name_regex(self):
-        """Test regex name formatting."""
-        self.exporter.name_regex = "test_->prod_"
-        result = self.exporter.format_export_name("test_scene")
-        self.assertEqual(result, "prod_scene")
-
-        self.exporter.name_regex = "scene|asset"
-        result = self.exporter.format_export_name("test_scene")
-        self.assertEqual(result, "test_asset")
+        """The retired RegEx field's own formatter: still honoured, warning,
+        until its removal release (retired 2026-09-23 with the field's
+        plumbing)."""
+        for regex, expected in (
+            ("test_->prod_", "prod_scene"),
+            ("scene|asset", "test_asset"),
+        ):
+            with self.assertWarns(DeprecationWarning):
+                result = self.exporter.format_export_name("test_scene", regex)
+            self.assertEqual(result, expected)
 
     # ------------------------------------------------------------------
     # Export execution
@@ -8798,6 +8844,15 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
 
         from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
+        # The folder is spelled from the project the scene FILE lives in
+        # (2026-09-23), so the scene is saved into the test project first.
+        with open(os.path.join(self.temp_dir, "workspace.mel"), "w") as fh:
+            fh.write("//Maya 2025 Project Definition\n")
+        os.makedirs(os.path.join(self.temp_dir, "scenes"), exist_ok=True)
+        cmds.file(rename=os.path.join(self.temp_dir, "scenes", "heal.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the file first
+
         self._commit(self.cube, self._gone("LitCube_LightMap.exr"))
         found = self._touch("sourceimages", "lm", "LitCube_LightMap.exr")
 
@@ -8806,14 +8861,15 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         marker = json.loads(
             cmds.getAttr(f"{self.cube}.{LightmapRecords.LIGHTMAP_INFO_ATTR}")
         )
-        # Stored in the portable spelling (inside the project -> relative);
-        # compare what it resolves to on this machine.
-        self.assertEqual(marker["dir"], "sourceimages/lm")
+        # The healed folder lives in the private record, never on the marker
+        # (a marker rides the FBX); stored in the portable spelling (inside
+        # the project -> relative), compared by what it resolves to here.
+        folder = LightmapRecords._folder_hint(marker, LightmapRecords._folder_hints())
+        self.assertNotIn("dir", marker)
+        self.assertEqual(folder, "sourceimages/lm")
         self.assertEqual(
             os.path.normcase(
-                os.path.abspath(
-                    LightmapRecords._resolved_dir(marker["dir"], marker["map"])
-                )
+                os.path.abspath(LightmapRecords._resolved_dir(folder, marker["map"]))
             ),
             os.path.normcase(os.path.abspath(os.path.dirname(found))),
         )
