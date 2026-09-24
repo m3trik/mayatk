@@ -58,7 +58,8 @@ class TestKnownProducers(MayaTkTestCase):
         entries.update(FbxUtils.STAGERS)
         for name, (module_path, class_name, *methods) in entries.items():
             cls = getattr(importlib.import_module(module_path), class_name)
-            for method_name in methods:
+            # An empty column is declared, not misspelt: a one-way stager.
+            for method_name in filter(None, methods):
                 with self.subTest(entry=name, method=method_name):
                     self.assertTrue(
                         callable(getattr(cls, method_name, None)),
@@ -84,6 +85,25 @@ class TestKnownProducers(MayaTkTestCase):
         self.assertTrue(callable(prepare))
         self.assertIsNone(finish)
         self.assertIn("finsh_export", "\n".join(logs.output))
+
+    def test_a_one_way_stager_declares_its_empty_finish_quietly(self):
+        """A ``None`` finish is DECLARED, not misspelt -- the lightmap folder
+        lift has nothing to undo -- so it resolves to None without the
+        misspelling warning, and its prepare still resolves.
+        Added: 2026-09-23
+        """
+        from unittest import mock
+
+        row = ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords")
+        with mock.patch.dict(
+            FbxUtils.STAGERS,
+            {"probe": (*row, "migrate_folder_hints", None)},
+            clear=True,
+        ):
+            with self.assertNoLogs("mayatk.env_utils.fbx_utils", "WARNING"):
+                prepare, finish = FbxUtils.stagers(["probe"])["probe"]
+        self.assertTrue(callable(prepare))
+        self.assertIsNone(finish)
 
 
 class TestFbxUtilsExport(MayaTkTestCase):

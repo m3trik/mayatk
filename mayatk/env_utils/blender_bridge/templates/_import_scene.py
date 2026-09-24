@@ -913,6 +913,20 @@ def scene_data_sections(bpy, spell):
         print("scene data: blendertk unavailable ({}); not carried.".format(error))
         return {}
     try:
+        # A scene baked before the lightmap folder moved off the markers still
+        # carries it ON them (2026-09-23): lift it into the private record
+        # first -- the markers ride this conversion's carrier, and the record is
+        # what crosses (shipped absolute from this scene's own project). The
+        # scene is this conversion's throwaway copy, so the lift is never saved.
+        from blendertk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        LightmapRecords.migrate_folder_hints()
+    except Exception:  # noqa: BLE001 -- degrade: the maps are still searched for
+        print("scene data: legacy lightmap folders not lifted:")
+        traceback.print_exc()
+    try:
         return DataNodes.transfer_sections(spell=spell) or {}
     except Exception:  # noqa: BLE001
         print("scene data: could not read the scene's records; not carried:")

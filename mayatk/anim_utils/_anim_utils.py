@@ -928,6 +928,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             {"unbake": "extremes"},
             what="AnimUtils optimize level",
             remove_in="0.20.0",
+            since="2026-09-23",
         )
     )
 
@@ -1256,7 +1257,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return results
 
     @staticmethod
-    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
+    @ptk.Deprecation.parameter(
+        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     def objects_to_curves(
         objects: Union[str, List[str]],
         recursive: bool = False,
@@ -1685,7 +1688,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             cmds.rename(node, target, uuid=True)
 
     @classmethod
-    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
+    @ptk.Deprecation.parameter(
+        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     def get_static_curves(
         cls,
         objects: List[str],
@@ -1790,7 +1795,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return static_curves
 
     @classmethod
-    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
+    @ptk.Deprecation.parameter(
+        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     @CoreUtils.undoable
     def get_redundant_flat_keys(
         cls,
@@ -2035,7 +2042,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return redundant
 
     @classmethod
-    @ptk.Deprecation.parameter("as_strings", drop=True, remove_in="0.20.0")
+    @ptk.Deprecation.parameter(
+        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
+    @ptk.Deprecation.parameter(
+        "time_tolerance", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     def simplify_curve(
         cls,
         objects: List[str],
@@ -2066,7 +2078,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             objects: List of nodes (curves or objects).
             value_tolerance: Maximum allowed value deviation when removing
                 a key.  Maps to ``filterCurve -precision``.
-            time_tolerance: Unused (kept for API compatibility).
+            time_tolerance: Deprecated (warns; removed in 0.20.0) and has
+                no effect -- ``filterCurve`` weighs values only.
             recursive: Whether to recursively search children for curves.
             as_strings: Deprecated (warns; removed in 0.20.0) and has no
                 effect -- curve names are always strings.
@@ -2328,6 +2341,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return reduced
 
     @classmethod
+    @ptk.Deprecation.parameter(
+        "time_tolerance", drop=True, remove_in="0.20.0", since="2026-09-23"
+    )
     @CoreUtils.undoable
     def optimize_keys(
         cls,
@@ -2357,7 +2373,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             objects (str, node, or list): The objects to optimize.
             value_tolerance (float): Tolerance for value comparison; negative
                 selects extremes mode.
-            time_tolerance (float): Tolerance for time comparison.
+            time_tolerance (float): Deprecated (warns; removed in 0.20.0) and
+                has no effect -- no pass compared times with it; its one
+                reader was :meth:`simplify_curve`'s, which is ignored too.
             remove_flat_keys (bool): Whether to remove redundant flat keys.
             remove_static_curves (bool): Whether to remove static curves.
             simplify_keys (bool): Whether to simplify curves.
@@ -2428,7 +2446,6 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             return cls._optimize_keys_inner(
                 anim_curves,
                 value_tolerance=value_tolerance,
-                time_tolerance=time_tolerance,
                 remove_flat_keys=remove_flat_keys,
                 remove_static_curves=remove_static_curves,
                 simplify_keys=simplify_keys,
@@ -2449,7 +2466,6 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         anim_curves,
         *,
         value_tolerance,
-        time_tolerance,
         remove_flat_keys,
         remove_static_curves,
         simplify_keys,
@@ -2474,7 +2490,6 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             return cls.__optimize_keys_body(
                 anim_curves,
                 value_tolerance=value_tolerance,
-                time_tolerance=time_tolerance,
                 remove_flat_keys=remove_flat_keys,
                 remove_static_curves=remove_static_curves,
                 simplify_keys=simplify_keys,
@@ -2496,7 +2511,6 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         anim_curves,
         *,
         value_tolerance,
-        time_tolerance,
         remove_flat_keys,
         remove_static_curves,
         simplify_keys,
@@ -2637,9 +2651,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             progress_callback(3, 4, "Simplifying curves")
         if simplify_keys and not extremes:
             simplified = cls.simplify_curve(
-                anim_curves,
-                value_tolerance=value_tolerance,
-                time_tolerance=time_tolerance,
+                anim_curves, value_tolerance=value_tolerance
             )
             simplified_curves_count += len(simplified)
 

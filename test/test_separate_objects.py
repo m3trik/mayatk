@@ -33,7 +33,7 @@ def _short(node: str) -> str:
 
 
 def _mats_on(node: str) -> List[str]:
-    return MatUtils.get_mats(node, as_strings=True) or []
+    return MatUtils.get_mats(node) or []
 
 
 class TestSeparateObjects(MayaTkTestCase):

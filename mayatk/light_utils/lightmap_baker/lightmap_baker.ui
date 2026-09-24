@@ -109,9 +109,9 @@
 
 Selected (default) — the selected meshes.
 Visible — every visible mesh in the scene.
-Scene — every visible mesh in the scene (Arnold renders no hidden object, so a hidden one is skipped and named).
+Scene — every visible mesh in the scene (Arnold renders no hidden or templated object, so one is skipped and named).
 
-Objects in the Exclude set are skipped whatever the scope.
+Objects in the Exclude set get no map of their own whatever the scope, but they stay in the render: they still cast shadows and bounce light onto everything that bakes.
 
 The light button beside the field takes the scene's environment (HDRI skydome) in or out of the bake.</string>
         </property>
@@ -142,7 +142,7 @@ The light button beside the field takes the scene's environment (HDRI skydome) i
           <property name="toolTip">
            <string>Exclude — objects that get no lightmap of their own but still light the bake: they cast shadows and bounce light onto everything that does bake.
 
-Stored in the scene (the lightmapBaker_exclude set), so every bake of this scene skips them — from this panel or a script — and a re-bake leaves a map they already have alone.</string>
+Stored in the scene (the lightmapBaker_exclude set), so every bake of this scene leaves them unbaked — from this panel or a script — and a re-bake leaves a map they already have alone.</string>
           </property>
           <property name="text">
            <string>Exclude:</string>
@@ -173,7 +173,9 @@ Stored in the scene (the lightmapBaker_exclude set), so every bake of this scene
            </size>
           </property>
           <property name="toolTip">
-           <string>Make the current selection the Exclude set (replacing it). A selected group excludes every mesh under it; with nothing selected, the set is cleared.</string>
+           <string>Make the current selection the Exclude set (replacing it): objects that get no lightmap of their own but still light the bake — they cast shadows and bounce light onto everything that does bake.
+
+A selected group excludes every mesh under it; with nothing selected, the set is cleared.</string>
           </property>
           <property name="text">
            <string>Set From Selection</string>
@@ -501,7 +503,7 @@ The folder is created if it doesn't exist. Browsing to a folder inside sourceima
            <property name="toolTip">
             <string>Preset — this panel's bake settings under a name: Packing, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Environment, Denoise and Beside Material Textures.
 
-   The built-ins (italic, read-only) — preview, quest, desktop — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
+   The built-ins (italic, read-only) — preview, mobile, desktop — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
 
    Not saved: Scope, Exclude, Processor, Output Directory and Name — they belong to a scene or a machine. A headless bake reads the same presets: LightmapBaker.from_preset(name).</string>
            </property>

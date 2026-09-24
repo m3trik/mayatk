@@ -830,13 +830,22 @@ class FbxUtils(ptk.HelpMixin):
     #: runs when a bracket opens (after which the producers see the staged
     #: scene), ``finish`` when it closes -- AFTER the FBX write and the GLB
     #: conversion that follows it, in reverse order, so the artist gets the
-    #: viewport back as it was.
-    STAGERS: Dict[str, Tuple[str, str, str, str]] = {
+    #: viewport back as it was.  A ``None`` finish is a one-way stage.
+    STAGERS: Dict[str, Tuple[str, str, str, Optional[str]]] = {
         "render_effects": (
             "mayatk.mat_utils.render_opacity.render_effects",
             "RenderEffects",
             "prepare_for_export",
             "finish_export",
+        ),
+        # One-way: a marker baked before 2026-09-23 still carries its map's
+        # folder, and markers ride every FBX -- lifted into the private record
+        # before the write, so an old scene ships clean without a re-bake.
+        "lightmap_folder_hints": (
+            "mayatk.light_utils.lightmap_baker.lightmap_records",
+            "LightmapRecords",
+            "migrate_folder_hints",
+            None,
         ),
     }
 
@@ -848,9 +857,10 @@ class FbxUtils(ptk.HelpMixin):
     #: by every bracket AND by the session hook (a preview that must detach
     #: before the write registers here).
     _session_stagers: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
+
     @staticmethod
     def _resolve_row(
-        label: str, module_path: str, cls_name: str, *methods: str
+        label: str, module_path: str, cls_name: str, *methods: Optional[str]
     ) -> Optional[Tuple[Optional[Callable], ...]]:
         """The callables a :attr:`PRODUCERS` / :attr:`STAGERS` row names.
 
@@ -858,7 +868,8 @@ class FbxUtils(ptk.HelpMixin):
         uninstalled subsystem is fine, and only debug-logged.  A method the
         class does not have resolves to ``None`` with a WARNING: that is a
         misspelt row, and skipping it quietly would stop a record shipping (or
-        a stager finishing) with no sign of why.
+        a stager finishing) with no sign of why.  A column the row leaves
+        ``None`` resolves to ``None`` quietly: a declared one-way stage.
         """
         import importlib
 
@@ -869,6 +880,9 @@ class FbxUtils(ptk.HelpMixin):
             return None
         resolved = []
         for method in methods:
+            if not method:  # a column the row leaves empty: a one-way stage
+                resolved.append(None)
+                continue
             fn = getattr(owner, method, None)
             if fn is None:
                 logger.warning(

@@ -184,10 +184,9 @@ class MatUpdater(ptk.LoggingMixin):
             results = {}
             texture_cache = {}
 
-            # Pre-resolve materials. Force string returns — un-migrated
-            # ``MatUtils.get_mats`` defaults to node wrapping which the
-            # downstream cmds.* calls don't accept in Maya 2025.
-            materials = MatUtils.get_mats(materials, as_strings=True)
+            # Pre-resolve materials (get_mats always returns name strings, which
+            # the downstream cmds.* calls need in Maya 2025).
+            materials = MatUtils.get_mats(materials)
 
             # Retype FIRST, before the connector filter below: a legacy
             # blinn/phong has no connector at all, so converting first is what
@@ -1453,7 +1452,7 @@ class MatUpdaterSlots(MatUpdater):
             # get_mats passes selected material nodes straight through, so a
             # Hypershade/Outliner selection works as well as geometry, and it
             # descends into groups.
-            resolved = MatUtils.get_mats(sel, as_strings=True) or []
+            resolved = MatUtils.get_mats(sel) or []
             materials = self._filter_supported(resolved)
             if not materials:
                 # Name what WAS resolved. "No supported materials found" reads

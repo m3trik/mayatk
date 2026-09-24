@@ -3,10 +3,11 @@
 """Arnold render-bridge management.
 
 A "bridge" is an ``aiStandardSurface`` shader (plus its ``aiMultiply`` and
-``bump2d`` helpers) wired into a shading engine's ``aiSurfaceShader`` slot,
-parallel to the base game material on ``surfaceShader``. It lets the same asset
-preview correctly under Arnold inside Maya while the Stingray / Standard Surface
-material remains the single thing exported to FBX.
+``bump2d`` helpers) wired into the ``aiSurfaceShader`` slot of every shading
+engine the base game material feeds, parallel to that material on
+``surfaceShader``. It lets the same asset preview correctly under Arnold inside
+Maya while the Stingray / Standard Surface material remains the single thing
+exported to FBX.
 
 This module owns the bridge as a standalone, lifecycle-managed concern: it is
 added or removed *after* material creation, on any scope (given materials, given
@@ -14,8 +15,9 @@ objects, the current selection, or the whole scene). Material builders like
 ``GameShader`` stay renderer-agnostic and know nothing about it.
 """
 
+import contextlib
 from functools import wraps
-from typing import List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -65,6 +67,13 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
     # that sits alongside the standard ``surfaceShader``).
     BRIDGE_SLOT = "aiSurfaceShader"
 
+    #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX graphs
+    #: render ERROR MAGENTA in Arnold. Their VIEWPORT look is fine, which is
+    #: exactly why the pollution ships -- nothing looks wrong in Maya.
+    UNTRANSLATABLE_TYPES = frozenset(
+        {"StingrayPBS", "ShaderfxShader", "ShaderfxGameHair"}
+    )
+
     # Channel layout for packed masks — which ``outColor`` channel carries which
     # property, so one routine wires them all. ``rough`` is ``(channel, invert)``
     # (invert routes through a ``reverse`` node, e.g. smoothness → roughness);
@@ -110,14 +119,25 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         nodes, so no texture list is required — this is what lets a bridge be
         added long after the material was built.
 
+        The bridge drives EVERY shading group the material feeds -- one network,
+        shared. A material consolidated across objects keeps a group per object
+        (an FBX import mints one per mesh), and a group left without the bridge
+        renders error magenta, which a lightmap bake bounces onto whatever is
+        near it (production soldering room, 2026-09-23: a bench's legs on a
+        second group of its top's material). A material already bridged on some
+        of its groups has the bridge extended into the rest; a group whose slot
+        something else drives keeps it.
+
         Parameters:
             materials: Material node(s) to bridge. Mutually combinable with
                 ``objects``.
             objects: Object(s)/component(s) whose assigned materials are bridged.
-            force: Rebuild the bridge if one already exists (default: skip).
+            force: Rebuild the bridge if one already exists (default: skip, or
+                extend it into the material's unbridged groups).
 
         Returns:
-            The created ``aiStandardSurface`` node(s).
+            The bridge node(s) this call created, or extended into more groups
+            (a material it skipped is not listed).
         """
         targets = self._resolve_materials(materials, objects)
         if not targets:
@@ -127,24 +147,34 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
         results: List[str] = []
         for mat in targets:
+            name = CoreUtils.short_name(mat)
             existing = self.get_bridge(mat)
-            if existing:
-                if not force:
-                    self.logger.info(
-                        f"{CoreUtils.short_name(mat)}: bridge exists — skipped."
-                    )
-                    continue
+            if existing and force:
                 self.remove(materials=mat)
+                existing = None
 
-            sg = self._get_shading_engine(mat)
-            if not sg:
-                self.logger.warning(
-                    f"{CoreUtils.short_name(mat)}: no shading engine — skipped."
-                )
+            groups = self._get_shading_engines(mat)
+            if not groups:
+                self.logger.warning(f"{name}: no shading engine — skipped.")
                 continue
 
-            name = CoreUtils.short_name(mat)
-            ai_node, aiMult_node, bump_node = self._setup_nodes(mat, sg, name)
+            if existing:
+                # The plug that already drives a group (an authored bridge
+                # may be wired from ``out``, not ``outColor``).
+                plugs = (self._slot_driver(sg, plug=True) for sg in groups)
+                plug = next(p for p in plugs if p)
+                extended = self._attach(plug, groups)
+                if extended:
+                    results.append(existing)
+                    self.logger.success(
+                        f"{name}: Arnold bridge extended to {len(extended)} more "
+                        f"shading group(s)."
+                    )
+                else:
+                    self.logger.info(f"{name}: bridge exists — skipped.")
+                continue
+
+            ai_node, aiMult_node, bump_node = self._setup_nodes(mat, groups, name)
 
             textures = self._iter_base_textures(mat)
             for path, map_type in textures:
@@ -166,9 +196,12 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         """Delete the Arnold bridge from every base material in scope.
 
         Removes only the ``aiSurfaceShader`` island (Arnold shader + its helper
-        and file nodes). The exported base material and its texture network are
-        left untouched — even if, defensively, a node were shared it would be
-        protected by the base material's own history.
+        and file nodes) -- every one on the material's shading groups, not only
+        the first group's. The exported base material and its texture network
+        are left untouched — even if, defensively, a node were shared it would
+        be protected by the base material's own history. An override that is a
+        material in its own right (a group with members renders it) is unwired
+        from the material's groups, never deleted.
 
         Parameters:
             materials: Material node(s) to clear.
@@ -180,34 +213,32 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         targets = self._resolve_materials(materials, objects)
         removed: List[str] = []
         for mat in targets:
-            ai_node = self.get_bridge(mat)
-            if not ai_node:
+            bridges = self._bridge_nodes(mat)
+            if not bridges:
                 continue
 
-            # Bridge island = everything upstream of the Arnold shader.
-            island = set(cmds.listHistory(ai_node) or [])
-            island.add(ai_node)
+            groups = self._get_shading_engines(mat)
             # Protect anything the exported material also depends on.
             protected = set(cmds.listHistory(str(mat)) or [])
             protected.add(str(mat))
-
-            to_delete = [n for n in island if n not in protected and cmds.objExists(n)]
-            # ...and a shading group the bridge shader drives as its OWN
-            # surfaceShader: bridges made before _setup_nodes stopped minting
-            # one left it empty and unassigned. The base material's group
-            # (fed through aiSurfaceShader) and any group with members stay.
-            for plug in (
-                cmds.listConnections(
-                    f"{ai_node}.outColor", plugs=True, source=False, destination=True
-                )
-                or []
-            ):
-                sg, attr = plug.split(".", 1)
-                if (
-                    attr == "surfaceShader"
-                    and cmds.nodeType(sg) == "shadingEngine"
-                    and not cmds.sets(sg, query=True)
-                ):
+            to_delete: List[str] = []
+            for ai_node in bridges:
+                own = self._get_shading_engines(ai_node)
+                if any(cmds.sets(sg, query=True) for sg in own):
+                    # A material in its own right -- a group WITH members renders
+                    # it -- wired here as the override: unwire it, never delete it
+                    # (and the textures upstream of it) along with the bridge.
+                    self._empty_slots(groups, driver=ai_node)
+                    continue
+                # Bridge island = everything upstream of the Arnold shader...
+                island = set(cmds.listHistory(ai_node) or [])
+                island.add(ai_node)
+                to_delete += [
+                    n for n in island if n not in protected and cmds.objExists(n)
+                ]
+                # ...and the empty group an older bridge minted as its own, with
+                # its materialInfo (before _setup_nodes stopped minting one).
+                for sg in own:
                     to_delete.append(sg)
                     to_delete += (
                         cmds.listConnections(f"{sg}.message", type="materialInfo") or []
@@ -239,24 +270,83 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         self.remove(materials=targets)
         return self.add(materials=targets, force=True)
 
+    @contextlib.contextmanager
+    def temporary(self, materials: Union[str, List[str]]) -> Iterator[List[str]]:
+        """Bridge *materials* for the duration of the block, then put every
+        ``aiSurfaceShader`` slot back exactly as it was.
+
+        :meth:`add`, undone on exit: a bridge built here is deleted whole, and a
+        slot :meth:`add` filled from a bridge that already existed (authored on
+        another of the material's groups) is emptied again -- that bridge
+        stays. For a render that must see Arnold-renderable materials without
+        keeping them (:meth:`TextureBaker.arnold_translation_guard`). Teardown
+        problems are logged, never raised: they must not mask the block's own
+        result.
+
+        Parameters:
+            materials: The material node(s) to bridge.
+
+        Yields:
+            The shading groups whose slot the block filled.
+        """
+        targets = self._resolve_materials(materials, None) if materials else []
+        open_slots = [
+            sg
+            for mat in targets
+            for sg in self._get_shading_engines(mat)
+            if not self._slot_driver(sg)
+        ]
+        had = {mat for mat in targets if self.has_bridge(mat)}
+        try:
+            if targets:
+                self.add(materials=targets)
+            yield [sg for sg in open_slots if self._slot_driver(sg)]
+        finally:
+            with ptk.CoreUtils.teardown_guard(self.logger, "Arnold bridge (temporary)"):
+                built = [
+                    mat
+                    for mat in targets
+                    if mat not in had and cmds.objExists(mat) and self.has_bridge(mat)
+                ]
+                if built:
+                    self.remove(materials=built)
+                self._empty_slots(open_slots)
+
     def get_bridge(self, material: str) -> Optional[str]:
-        """Return the ``aiStandardSurface`` bridging *material*, or None."""
-        sg = self._get_shading_engine(material)
-        if not sg or not cmds.attributeQuery(
-            self.BRIDGE_SLOT, node=str(sg), exists=True
-        ):
-            return None
-        conns = (
-            cmds.listConnections(
-                f"{sg}.{self.BRIDGE_SLOT}", source=True, destination=False
-            )
-            or []
-        )
-        return conns[0] if conns else None
+        """Return the Arnold shader bridging *material* -- the first of its
+        shading groups' ``aiSurfaceShader`` drivers -- or None."""
+        bridges = self._bridge_nodes(material)
+        return bridges[0] if bridges else None
 
     def has_bridge(self, material: str) -> bool:
-        """True if *material*'s shading engine already has an Arnold bridge."""
+        """True if any of *material*'s shading groups has an Arnold bridge."""
         return self.get_bridge(material) is not None
+
+    @classmethod
+    def unrenderable_materials(cls) -> List[str]:
+        """The materials Arnold would render as error magenta as the scene
+        stands: each one of an :attr:`UNTRANSLATABLE_TYPES` type on a shading
+        group that has members and nothing in its bridge slot.
+
+        What needs a bridge before Arnold renders the scene -- a render
+        (tentacle's Render adds it, and it stays) or a bake
+        (:meth:`TextureBaker.arnold_translation_guard`, for the bake alone).
+        A group without members renders nothing, and a bridged one renders its
+        override, so a scene bridged everywhere names none -- and costs its
+        callers no :meth:`add` at all.
+        """
+        materials: List[str] = []
+        for sg in cmds.ls(type="shadingEngine") or []:
+            if sg in ("initialShadingGroup", "initialParticleSE"):
+                continue
+            surf = cmds.listConnections(
+                f"{sg}.surfaceShader", source=True, destination=False
+            )
+            if not surf or cmds.nodeType(surf[0]) not in cls.UNTRANSLATABLE_TYPES:
+                continue
+            if cmds.sets(sg, query=True) and not cls._slot_driver(sg):
+                materials.append(str(surf[0]))
+        return list(dict.fromkeys(materials))
 
     # ----------------------------------------------------------------- scoping
     def _resolve_materials(
@@ -291,7 +381,7 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
                 mats.extend(
                     m
                     for m in MatUtils.get_scene_mats()
-                    if self._get_shading_engine(m) and self._iter_base_textures(m)
+                    if self._get_shading_engines(m) and self._iter_base_textures(m)
                 )
 
         seen, out = set(), []
@@ -305,25 +395,76 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         return out
 
     @staticmethod
-    def _get_shading_engine(material: str) -> Optional[str]:
-        """The shading engine fed by *material*'s ``outColor``.
+    def _get_shading_engines(material: str) -> List[str]:
+        """Every shading engine *material* is the ``surfaceShader`` of, in
+        Maya's connection order.
 
-        Returns None for a node that no longer exists — an earlier
-        force-rebuild in the same ``add``/``remove`` pass can delete a bridge
-        helper (e.g. ``aiMultiply1``) that's still referenced later in the
-        resolved scope, and ``cmds.listConnections`` would otherwise raise
-        ``ValueError: No object matches name`` instead of letting the caller
-        skip it cleanly.
+        A material consolidated across objects keeps a group per object, so
+        there can be many -- and the bridge must drive them all. A group the
+        material only OVERRIDES (its ``outColor`` on that group's
+        ``aiSurfaceShader``) is another material's, not one of its own. Returns
+        ``[]`` for a node that no longer exists — an earlier force-rebuild in
+        the same ``add``/``remove`` pass can delete a bridge helper (e.g.
+        ``aiMultiply1``) that's still referenced later in the resolved scope,
+        and ``cmds.listConnections`` would otherwise raise ``ValueError: No
+        object matches name`` instead of letting the caller skip it cleanly.
         """
         material = str(material)
         if not cmds.objExists(material):
-            return None
-        return NodeUtils.get_connected_nodes(
-            material,
-            node_type="shadingEngine",
-            direction="outgoing",
-            first_match=True,
+            return []
+        plugs = cmds.listConnections(
+            material, source=False, destination=True, plugs=True, type="shadingEngine"
         )
+        return list(
+            dict.fromkeys(
+                plug.split(".", 1)[0]
+                for plug in plugs or []
+                if plug.split(".", 1)[1] == "surfaceShader"
+            )
+        )
+
+    @classmethod
+    def _slot_driver(cls, shading_engine: str, plug: bool = False) -> Optional[str]:
+        """What drives *shading_engine*'s bridge slot (its source plug, with
+        *plug*), or None -- also when mtoa has not added the slot."""
+        sg = str(shading_engine)
+        if not cmds.attributeQuery(cls.BRIDGE_SLOT, node=sg, exists=True):
+            return None
+        src = cmds.listConnections(
+            f"{sg}.{cls.BRIDGE_SLOT}", source=True, destination=False, plugs=plug
+        )
+        return src[0] if src else None
+
+    def _bridge_nodes(self, material: str) -> List[str]:
+        """Every distinct driver of *material*'s groups' bridge slots, in group
+        order."""
+        drivers = (self._slot_driver(sg) for sg in self._get_shading_engines(material))
+        return list(dict.fromkeys(d for d in drivers if d))
+
+    def _attach(self, source_plug: str, shading_engines: List[str]) -> List[str]:
+        """Wire *source_plug* into each group's EMPTY bridge slot and return
+        the groups wired; a slot something else drives keeps its driver."""
+        wired: List[str] = []
+        for sg in shading_engines:
+            if not cmds.attributeQuery(self.BRIDGE_SLOT, node=str(sg), exists=True):
+                continue
+            if self._slot_driver(sg):
+                continue
+            cmds.connectAttr(source_plug, f"{sg}.{self.BRIDGE_SLOT}")
+            wired.append(sg)
+        return wired
+
+    def _empty_slots(
+        self, shading_engines: List[str], driver: Optional[str] = None
+    ) -> None:
+        """Disconnect each group's bridge slot -- only where *driver* drives
+        it, when given."""
+        for sg in shading_engines:
+            if not cmds.objExists(str(sg)):
+                continue
+            plug = self._slot_driver(sg, plug=True)
+            if plug and (driver is None or plug.split(".", 1)[0] == driver):
+                cmds.disconnectAttr(plug, f"{sg}.{self.BRIDGE_SLOT}")
 
     def _iter_base_textures(self, material: str) -> List[Tuple[str, str]]:
         """Resolve ``(path, map_type)`` for each unique map feeding *material*.
@@ -386,9 +527,10 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
 
     # --------------------------------------------------------------- network
     def _setup_nodes(
-        self, material: str, shading_engine: str, name: str
+        self, material: str, shading_engines: List[str], name: str
     ) -> Tuple[str, str, str]:
-        """Create the Arnold shader trio and wire it to *shading_engine*.
+        """Create the Arnold shader trio and wire it to every group in
+        *shading_engines* (:meth:`_attach`).
 
         Creates an ``aiStandardSurface`` (→ ``aiSurfaceShader``), an
         ``aiMultiply`` feeding its ``baseColor``, and a tangent-space ``bump2d``
@@ -416,10 +558,10 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # tangent-space normals
 
         Attributes.connect_multi(
-            (f"{ai_node}.outColor", f"{shading_engine}.{self.BRIDGE_SLOT}"),
             (f"{aiMult_node}.outColor", f"{ai_node}.baseColor"),
             (f"{bump_node}.outNormal", f"{ai_node}.normalCamera"),
         )
+        self._attach(f"{ai_node}.outColor", shading_engines)
         return ai_node, aiMult_node, bump_node
 
     # ----------------------------------------------------------- wiring helpers
@@ -687,9 +829,8 @@ class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def select_bridged(self) -> None:
         """Header action: select every base material that has a bridge.
 
-        Excludes the ``aiStandardSurface`` bridge shaders themselves (they're
-        scene materials too, and a bridge's ``outColor`` reaches its own SG's
-        ``aiSurfaceShader``, so ``has_bridge`` would report them as bridged).
+        Excludes the ``aiStandardSurface`` bridge shaders themselves: they're
+        scene materials too, but the overrides, never a base material.
         """
         bridged = [
             m for m in self._scene_base_materials() if self._bridge.has_bridge(m)

@@ -549,13 +549,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/blender_bridge/templates/bake_lightmaps.py` — Bake the bridged Maya selection's lightmaps in a headless Blender;
 - `apply_texture_manifest(new_objects)`
 - `rebuild_scene_lights()`
+- `lightmap_records(meshes)`
 - `emissive_material_count()`
 - `light_scene()`
 - `check_bake_level(packed)`
 - `make_baker()`
 - `write_return_manifest(packed, lighting)`
 - `main()`
-- constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_DENOISE, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PACKING_MODES
+- constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_BOUNCES, LIGHTMAP_DENOISE, LIGHTMAP_ADAPTIVE, LIGHTMAP_BESIDE_TEXTURES, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PACKING_MODES
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 - `import_payload()`
@@ -633,9 +634,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`
   - methods: current_references, sanitize_namespace, add_reference, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references
 - `class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`
-  - methods: current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, refresh_file_list, update_table, open_scene, new_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
+  - methods: current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, set_maya_project, refresh_file_list, update_table, open_scene, new_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
 - `class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`
-  - methods: header_init, tbl000_init, tbl000_item_double_clicked, tbl000_item_changed, tbl000_editor_closed, btn_open_file_location, txt000_init, txt001_init, txt001, cmb000_init, cmb000, chk000, chk003, chk_ignore_case, chk_filter_suffix, chk_hide_suffix, chk_hide_extension, chk_show_notes_column, txt_suffix, chk_filter_folder_structure, b000, b006, b001, btn_open_scene, btn_toggle_reference, btn_unlink_import, btn_save_scene, btn_refresh, btn_convert_assembly, btn_unlink_import_all, btn_unreference_all
+  - methods: header_init, tbl000_init, tbl000_item_double_clicked, tbl000_item_changed, tbl000_editor_closed, btn_open_file_location, txt000_init, txt001_init, txt001, cmb000_init, cmb000, chk000, chk003, chk_ignore_case, chk_filter_suffix, chk_hide_suffix, chk_hide_extension, chk_show_notes_column, txt_suffix, txt_subfolder_structure, chk_filter_folder_structure, b000, b006, b001, btn_open_scene, btn_toggle_reference, btn_copy_path, btn_unlink_import, btn_save_scene, btn_refresh, btn_convert_assembly, btn_unlink_import_all, btn_unreference_all
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(ptk.LoggingMixin)`
@@ -673,7 +674,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
 - `class UsdReadRefused(RuntimeError)`
 - `class UsdUtils(ptk.HelpMixin)`
-  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, file_options, skinning_methods, crashing_skins, live_read_options, dq_safe_source, apply_skinning_methods, import_scene
+  - methods: load_plugin, is_usd_file, sanitize_prim_name, export, name_materials_after_shaders, sampling_frame_range, options_string, file_options, skinning_methods, crashing_skins, live_read_options, dq_safe_source, apply_skinning_methods, stage_conform, conform_roots, top_transforms, import_scene
 
 ### `env_utils/webxr_preview.py` — Push the Maya selection to a live browser / WebXR preview.
 - `class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`
@@ -712,7 +713,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(ptk.LoggingMixin)`
-  - methods: baked_objects, commit, revert, migrate_legacy, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps
+  - methods: baked_objects, commit, revert, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
@@ -720,7 +721,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
-  - methods: add, remove, rebuild, get_bridge, has_bridge
+  - methods: add, remove, rebuild, temporary, get_bridge, has_bridge, unrenderable_materials
 - `class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`
   - methods: header_init, cmb000_init, b000, b001, select_bridged
 
@@ -991,7 +992,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py` — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - `class DataNodes(ptk.SceneStoreBase)`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, project_root, install_path_rebase, remove_path_rebase
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`
@@ -1149,7 +1150,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(ptk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP
@@ -1157,7 +1158,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: rizom_path, rizom_version, export_path, script_path, process_with_rizomuv, expand_by_materials, send_to_rizomuv
 
 ### `uv_utils/rizom_bridge/parameters.py` — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
-- constants: PARAMS, DERIVED_KEYS, MIN_VERSIONS, FBX_USE_UV_SET_NAMES_MIN_VERSION
+- constants: PARAMS, DERIVED_KEYS, HOST_TOKEN_DEFAULTS, MIN_VERSIONS, FBX_USE_UV_SET_NAMES_MIN_VERSION
 - `class Parameters`
   - methods: expand_includes, preset_min_version, referenced_keys, defaults, derived_values, render_context, strip_unsupported
 

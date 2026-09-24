@@ -211,7 +211,7 @@ class _LightUtilsInternal:
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
-        for mat in MatUtils.get_mats(list(members), as_strings=True) or []:
+        for mat in MatUtils.get_mats(list(members)) or []:
             mapping = ShaderAttributeMap.get_attr(cmds.nodeType(mat), "emission")
             if not mapping or SceneState.emission_weight(mat) == 0.0:
                 continue

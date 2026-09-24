@@ -58,6 +58,16 @@ class TestShotsPanel(MayaTkTestCase):
         for _ in range(50):
             app.processEvents()
 
+    @classmethod
+    def tearDownClass(cls):
+        # The handler keeps the panel for the process, as a Maya session does,
+        # but its store subscriptions must end with this class: a live panel
+        # re-syncs every store a later module invalidates, and wrote a gap it
+        # derived from the shot layout into test_shot_transfer's merged store
+        # when that module ran after this one in one mayapy.
+        cls.slots.controller.remove_callbacks()
+        super().tearDownClass()
+
     def _store(self):
         return self.slots.controller._active_store()
 

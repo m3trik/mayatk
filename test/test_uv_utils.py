@@ -2682,6 +2682,28 @@ class TestPackUvs(MayaTkTestCase):
         self.assertLessEqual(u1, 1.5)
         self.assertLessEqual(v1, 1.0)
 
+    def test_a_pinned_shell_moves_whole_and_keeps_its_pins(self):
+        # polyEditUV honours pin weights: a pinned UV refuses to move, so the
+        # write-back tore a shell carrying pins (Pin / Stack leave them) -- its
+        # pinned UVs stayed out of the tile while the rest were packed.
+        plane = cmds.polyPlane(name="pk_pinned", sx=2, sy=2, ch=False)[0]
+        cmds.polyEditUV(f"{plane}.map[*]", u=3.0, v=3.0)  # every UV has to move
+        cmds.polyPinUV(f"{plane}.map[0:2]", value=1.0)
+        cmds.polyPinUV(f"{plane}.map[4]", value=0.5)
+        before = self._uvs(plane)
+
+        result = UvUtils.pack_uvs([plane], map_size=1024, rotate=False)
+
+        self.assertEqual(len(result.succeeded), 1)
+        after = self._uvs(plane)
+        self.assertEqual(self._moved(before, after), set(range(len(before) // 2)))
+        (u0, u1), (v0, v1) = self._bbox(plane)
+        self.assertTrue(0.0 <= u0 and u1 <= 1.0 and 0.0 <= v0 and v1 <= 1.0)
+        self.assertEqual(
+            UvUtils.get_uv_pin_weights([f"{plane}.map[{i}]" for i in range(5)]),
+            [1.0, 1.0, 1.0, 0.0, 0.5],
+        )
+
     def test_preserve_3d_toggle_controls_relative_scale(self):
         a = cmds.polyPlane(name="pk_a", sx=1, sy=1, ch=False)[0]
         b = cmds.polyPlane(name="pk_b", sx=1, sy=1, ch=False)[0]

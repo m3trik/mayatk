@@ -13,6 +13,7 @@ Run headless (from the workspace root)::
 
 import sys
 import unittest
+from unittest import mock
 
 import base_test  # noqa: F401 — sys.path bootstrap for the sibling repos
 
@@ -133,6 +134,25 @@ class ArnoldBridgeTest(unittest.TestCase):
         hist = cmds.listHistory(ai) or []
         return cmds.ls(hist, type="file") or []
 
+    @staticmethod
+    def _add_group(shader, name):
+        """Another shading group fed by *shader*, holding a cube -- the
+        production shape: a material consolidated across objects keeps one
+        group per object (an FBX import mints one per mesh)."""
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cmds.polyCube(name=f"{name}_geo")[0], edit=True, forceElement=sg)
+        return sg
+
+    @staticmethod
+    def _slot(sg):
+        src = cmds.listConnections(
+            f"{sg}.aiSurfaceShader", source=True, destination=False
+        )
+        return src[0] if src else None
+
     # ------------------------------------------------------------------ add
     def test_no_bridge_initially(self):
         shader, _, _ = self._make_base_material("matA", ["model_BaseColor.png"])
@@ -174,7 +194,8 @@ class ArnoldBridgeTest(unittest.TestCase):
         shader, _, _ = self._make_base_material("matA", ["model_BaseColor.png"])
         self.bridge.add(materials=shader)
         first = self.bridge.get_bridge(shader)
-        self.bridge.add(materials=shader)  # second add — should be a no-op
+        # second add — should be a no-op, and report nothing done
+        self.assertEqual(self.bridge.add(materials=shader), [])
         self.assertEqual(self.bridge.get_bridge(shader), first)
         self.assertEqual(_ai_count(), 1)
 
@@ -187,6 +208,144 @@ class ArnoldBridgeTest(unittest.TestCase):
         # New DG node (Maya may recycle the freed name, so compare by UUID).
         self.assertNotEqual(first_uuid, second_uuid)
         self.assertEqual(_ai_count(), 1)  # old bridge fully replaced
+
+    # ------------------------------------------------ a material on many groups
+    def test_add_bridges_every_group_the_material_drives(self):
+        """A material on several shading groups renders in Arnold through ALL
+        of them. The bridge rode the material's first group only, so every
+        other group rendered error magenta -- and in a lightmap bake that
+        magenta bounced onto the floor (production soldering room, 2026-09-23:
+        the bench's legs sat on a second group of the top's material)."""
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        legs = self._add_group(shader, "legs")
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        self.assertIsNotNone(ai)
+        self.assertEqual((self._slot(top), self._slot(legs)), (ai, ai))
+        self.assertEqual(_ai_count(), 1, "one network, shared by the groups")
+
+    def test_add_extends_a_bridge_into_the_groups_it_misses(self):
+        """A scene bridged before that holds a bridge on one group only: a
+        second add completes it instead of skipping the bridged material."""
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        self.bridge.add(materials=shader)
+        ai = self.bridge.get_bridge(shader)
+        legs = self._add_group(shader, "legs")
+        # Reported as touched, so the panel's count says what the add did.
+        self.assertEqual(self.bridge.add(materials=shader), [ai])
+        self.assertEqual((self._slot(top), self._slot(legs)), (ai, ai))
+        self.assertEqual(_ai_count(), 1)
+
+    def test_add_never_replaces_a_groups_own_override(self):
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        legs = self._add_group(shader, "legs")
+        own = cmds.shadingNode("standardSurface", asShader=True, name="legs_own")
+        cmds.connectAttr(f"{own}.outColor", f"{legs}.aiSurfaceShader", force=True)
+        self.bridge.add(materials=shader)
+        self.assertEqual(self._slot(legs), own)
+        self.assertIsNotNone(self._slot(top), "the open group was left magenta")
+
+    def test_remove_clears_every_group(self):
+        """Remove leaves no Arnold override on any of the material's groups,
+        not only on the first one's."""
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        legs = self._add_group(shader, "legs")
+        for sg in (top, legs):
+            ai = cmds.shadingNode("aiStandardSurface", asShader=True, name=f"{sg}_ai")
+            cmds.connectAttr(f"{ai}.outColor", f"{sg}.aiSurfaceShader", force=True)
+        self.bridge.remove(materials=shader)
+        self.assertEqual((self._slot(top), self._slot(legs)), (None, None))
+        self.assertFalse(self.bridge.has_bridge(shader))
+
+    def _lookdev_override(self, sg):
+        """An assigned material of its own (a cube renders it), wired as *sg*'s
+        Arnold override -- a look shared from elsewhere in the scene."""
+        look, look_sg, look_files = self._make_base_material(
+            "lookdev", ["look_BaseColor.png"]
+        )
+        cmds.sets(cmds.polyCube(name="lookdev_geo")[0], edit=True, forceElement=look_sg)
+        cmds.connectAttr(f"{look}.outColor", f"{sg}.aiSurfaceShader", force=True)
+        return look, look_sg, look_files
+
+    def test_remove_never_deletes_a_material_assigned_in_its_own_right(self):
+        """An override that renders objects of its own is unwired, never
+        deleted: Remove used to take the material and its textures with it."""
+        shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        look, _look_sg, look_files = self._lookdev_override(sg)
+        self.assertEqual(self.bridge.remove(materials=shader), [shader])
+        self.assertIsNone(self._slot(sg))
+        self.assertTrue(cmds.objExists(look))
+        self.assertTrue(all(cmds.objExists(f) for f in look_files))
+
+    def test_a_material_overriding_another_group_still_gets_its_own_bridge(self):
+        """A group a material only overrides is another material's: it is
+        neither the override's bridge nor one of its own groups."""
+        shader, sg, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        look, look_sg, _ = self._lookdev_override(sg)
+        self.bridge.add(materials=look)
+        ai = self._slot(look_sg)
+        self.assertIsNotNone(ai, "the override material got no bridge")
+        self.assertEqual(cmds.nodeType(ai), "aiStandardSurface")
+        self.assertEqual(self._slot(sg), look, "matA's override was touched")
+
+    # ------------------------------------------------------------- temporary
+    def test_temporary_bridges_for_the_block_and_leaves_nothing(self):
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        legs = self._add_group(shader, "legs")
+        files = _file_count()
+        with self.bridge.temporary(shader) as filled:
+            self.assertEqual(sorted(filled), sorted([top, legs]))
+            self.assertIsNotNone(self._slot(top))
+        self.assertEqual((self._slot(top), self._slot(legs)), (None, None))
+        self.assertEqual((_ai_count(), _file_count()), (0, files))
+
+    def test_temporary_lends_an_authored_bridge_and_takes_it_back(self):
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        authored = cmds.shadingNode("aiStandardSurface", asShader=True, name="own_ai")
+        cmds.connectAttr(f"{authored}.outColor", f"{top}.aiSurfaceShader", force=True)
+        legs = self._add_group(shader, "legs")
+        with self.bridge.temporary([shader]) as filled:
+            self.assertEqual((filled, self._slot(legs)), ([legs], authored))
+        self.assertEqual((self._slot(top), self._slot(legs)), (authored, None))
+        self.assertEqual(_ai_count(), 1)
+
+    def test_temporary_puts_the_slots_back_when_the_block_raises(self):
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        with self.assertRaises(RuntimeError):
+            with self.bridge.temporary(shader):
+                raise RuntimeError("render failed")
+        self.assertIsNone(self._slot(top))
+        self.assertEqual(_ai_count(), 0)
+        self.assertEqual(
+            cmds.listConnections(
+                f"{top}.surfaceShader", source=True, destination=False
+            ),
+            [shader],
+        )
+
+    def test_temporary_takes_back_a_bridge_left_half_built(self):
+        """An add that fails part-way raises out of the block's entry with its
+        own error, and nothing it built stays: neither the material bridged
+        before the failure nor the network it failed on, textures included."""
+        first, first_sg, _ = self._make_base_material("matA", ["a_BaseColor.png"])
+        second, second_sg, _ = self._make_base_material("matB", ["b_BaseColor.png"])
+        files = _file_count()
+        real = ArnoldBridge._connect_texture
+        calls = []
+
+        def fail_second(bridge, *args, **kwargs):
+            calls.append(args[0])
+            if len(calls) > 1:
+                raise RuntimeError("texture would not wire")
+            return real(bridge, *args, **kwargs)
+
+        with mock.patch.object(ArnoldBridge, "_connect_texture", fail_second):
+            with self.assertRaises(RuntimeError) as caught:
+                with self.bridge.temporary([first, second]):
+                    self.fail("the block ran on a half-built bridge")
+        self.assertIn("would not wire", str(caught.exception))
+        self.assertEqual((self._slot(first_sg), self._slot(second_sg)), (None, None))
+        self.assertEqual((_ai_count(), _file_count()), (0, files))
 
     def test_helpers_are_utility_nodes_not_materials(self):
         """The aiMultiply / bump2d helpers must not register as shaders.
@@ -277,10 +436,10 @@ class ArnoldBridgeTest(unittest.TestCase):
             self.assertNotIn(fn, kept, f"Arnold-only file node still listed: {fn}")
 
     # ----------------------------------------------------- robustness (scope)
-    def test_get_shading_engine_nonexistent_returns_none(self):
+    def test_get_shading_engines_of_a_vanished_node_is_empty(self):
         """A vanished node must not raise (regression: ValueError
         'No object matches name: aiMultiply1' from cmds.listConnections)."""
-        self.assertIsNone(self.bridge._get_shading_engine("aiMultiply1"))
+        self.assertEqual(self.bridge._get_shading_engines("aiMultiply1"), [])
         self.assertIsNone(self.bridge.get_bridge("aiMultiply1"))
         self.assertFalse(self.bridge.has_bridge("aiMultiply1"))
 
@@ -677,6 +836,70 @@ class ArnoldBridgeTest(unittest.TestCase):
 
         self.bridge.add(materials=bare)
         self.assertTrue(self.bridge.has_bridge(bare))
+
+
+def _stingray_loadable() -> bool:
+    """True if the ShaderFX plugin loads (so StingrayPBS exists)."""
+    try:
+        if not cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True):
+            cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        return bool(cmds.pluginInfo("shaderFXPlugin", query=True, loaded=True))
+    except Exception:
+        return False
+
+
+class UnrenderableMaterialsTest(unittest.TestCase):
+    """What Arnold would render as error magenta as the scene stands: the game
+    shaders on a group with members and an empty bridge slot, each named once."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not (_mtoa_available() and _stingray_loadable()):
+            raise unittest.SkipTest("mtoa + shaderFXPlugin required")
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _group(shader, name, member=True):
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        if member:
+            cmds.sets(cmds.polyCube(name=f"{name}_geo")[0], edit=True, forceElement=sg)
+        return sg
+
+    @staticmethod
+    def _override(sg):
+        ai = cmds.shadingNode("aiStandardSurface", asShader=True, name=f"{sg}_ai")
+        cmds.connectAttr(f"{ai}.outColor", f"{sg}.aiSurfaceShader", force=True)
+
+    def test_names_each_magenta_game_shader_once_and_nothing_else(self):
+        rack = cmds.shadingNode("StingrayPBS", asShader=True, name="rack_srp")
+        self._group(rack, "rackTop")
+        self._group(rack, "rackLegs")  # a second group: still one name
+        half = cmds.shadingNode("StingrayPBS", asShader=True, name="half_srp")
+        self._override(self._group(half, "halfTop"))
+        self._group(half, "halfLegs")  # the group its bridge misses
+        done = cmds.shadingNode("StingrayPBS", asShader=True, name="done_srp")
+        self._override(self._group(done, "done"))  # renders its override
+        idle = cmds.shadingNode("StingrayPBS", asShader=True, name="idle_srp")
+        self._group(idle, "idle", member=False)  # renders nothing
+        plain = cmds.shadingNode("lambert", asShader=True, name="plain_lam")
+        self._group(plain, "plain")  # Arnold renders a lambert as it is
+        self.assertEqual(
+            sorted(ArnoldBridge.unrenderable_materials()), sorted([rack, half])
+        )
+
+    def test_a_scene_bridged_everywhere_names_none(self):
+        """So a render or a bake of it calls no ``add`` at all -- no undo step,
+        no "bridge exists" line per material on every click."""
+        rack = cmds.shadingNode("StingrayPBS", asShader=True, name="rack_srp")
+        self._group(rack, "rackTop")
+        self._group(rack, "rackLegs")
+        ArnoldBridge().add(materials=rack)
+        self.assertEqual(ArnoldBridge.unrenderable_materials(), [])
 
 
 class ArnoldBridgeSlotsTest(unittest.TestCase):

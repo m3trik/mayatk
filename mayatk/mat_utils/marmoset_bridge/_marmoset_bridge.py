@@ -656,7 +656,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                 visited.add(x)
                 if not cmds.listRelatives(x, shapes=True, type="mesh", fullPath=True):
                     continue
-                for mat in MatUtils.get_mats([x], as_strings=True) or []:
+                for mat in MatUtils.get_mats([x]) or []:
                     out.setdefault(str(mat), []).append(x)
         return out
 

@@ -15,8 +15,16 @@
 -- to it as a placeholder that failed to resolve.
 
 --
+-- Shell subset: select only SOME shells in the host (faces / UVs of the
+-- shells to pack) and only those move; every other shell of the sent objects
+-- stays exactly where it is and is packed around. The host renders the token
+-- below as nil (whole objects: plain pack) or the material tag it put on the
+-- selected shells -- see templates/pack_block.lua for the mechanism.
+--
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__
+
+PACK_SUBSET = __PACK_SUBSET__
 
 ZomSelect({PrimType="Island", Select=true, ResetBefore=true})
 

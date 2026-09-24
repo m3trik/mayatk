@@ -1969,6 +1969,90 @@ class TestAttributeSelectionMirrorsTheChannelBox(_ControllerCase):
         self.assertEqual(self.mirrored, [])
 
 
+@base_test.skipIfBatch("the Graph Editor is a GUI window")
+class TestSelectionLeavesTheGraphEditorAlone(_ControllerCase):
+    """A panel click mirrors the selection into Maya; it opens no editor.
+
+    An open Graph Editor follows the scene selection by itself, so the panel
+    never needs to open one.  It used to (``GraphEditor``, which is
+    ``tearOffRestorePanel``) on every clip or header click: a closed Graph
+    Editor popped open, and a collapsed one expanded.
+    """
+
+    def setUp(self):
+        # Decided before the fixture exists: a skip raised in setUp skips
+        # tearDown, which would leave the widget and its callbacks alive.
+        self._close_graph_editors()
+        if self._shown():
+            self.skipTest("this layout docks a Graph Editor in a view pane")
+        super().setUp()
+        self.addCleanup(self._close_graph_editors)
+
+    @staticmethod
+    def _close_graph_editors():
+        for panel in cmds.getPanel(scriptType="graphEditor") or []:
+            window = panel + "Window"  # tearOffRestorePanel's naming
+            if cmds.workspaceControl(window, exists=True):
+                cmds.workspaceControl(window, edit=True, close=True)
+        _process_events()
+
+    @staticmethod
+    def _shown() -> list:
+        """The Graph Editor panels open in a view pane or a window.
+
+        A collapsed dock counts -- it is open, only folded.  The window's own
+        flag is read because ``getPanel -visiblePanels`` lists neither that
+        nor a freshly opened window's panel before Maya's next idle.
+        """
+        visible = set(cmds.getPanel(visiblePanels=True) or [])
+
+        def windowed(panel):
+            window = panel + "Window"
+            if not cmds.workspaceControl(window, exists=True):
+                return False
+            return cmds.workspaceControl(window, query=True, visible=True)
+
+        return [
+            p
+            for p in cmds.getPanel(scriptType="graphEditor") or []
+            if p in visible or windowed(p)
+        ]
+
+    def _sub_row_clip(self):
+        tid = self.widget.add_track("probe")
+        return self.widget.add_clip(tid, 0, 40, obj=str(self.a), attr_name="translateX")
+
+    def test_a_clip_click_leaves_a_closed_graph_editor_closed(self):
+        self.ctrl.on_selection_changed([self._sub_row_clip()])
+        _process_events()
+        self.assertEqual(self._shown(), [])
+        selected = [n.split("|")[-1] for n in cmds.ls(sl=True, long=True) or []]
+        self.assertIn(str(self.a), selected, "the selection itself still lands")
+
+    def test_a_header_click_leaves_a_closed_graph_editor_closed(self):
+        self.ctrl.on_track_selected([str(self.a)])
+        self.ctrl.on_sub_track_selected([(str(self.a), "translateX")])
+        _process_events()
+        self.assertEqual(self._shown(), [])
+
+    def test_an_open_graph_editor_still_lists_the_clicked_object(self):
+        """Why nothing needs opening: an open one follows the selection."""
+        import maya.mel as mel
+
+        mel.eval("GraphEditor")  # the user's own open
+        _process_events()
+        panels = self._shown()
+        self.assertTrue(panels, "the Graph Editor did not open")
+        outline = panels[0] + "OutlineEd"
+        if not mel.eval(f'isAutoLoad "{outline}"'):
+            self.skipTest("the Graph Editor's Auto Load is off")
+        listed = cmds.outlinerEditor(outline, query=True, mainListConnection=True)
+        self.ctrl.on_track_selected([str(self.b)])
+        _process_events()
+        objects = cmds.selectionConnection(listed, query=True, object=True) or []
+        self.assertEqual([o.split("|")[-1] for o in objects], [str(self.b)])
+
+
 class TestBoundCapDrags(_ControllerCase):
     """The caps before the first shot and after the last are those shots'
     own bounds: a plain drag moves the bound and nothing else."""

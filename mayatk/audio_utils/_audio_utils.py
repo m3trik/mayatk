@@ -213,7 +213,7 @@ class AudioUtils(ptk.HelpMixin):
         an empty dict when the carrier or the map does not exist (or holds no
         readable map).
 
-        A path under the project root is STORED relative to it (see
+        A path is STORED relative to the scene's own project (see
         :meth:`set_path`); what this returns is resolved to absolute, so no
         caller sees the stored spelling.  A map written before that rule
         holds absolute paths, which read unchanged.
@@ -233,9 +233,9 @@ class AudioUtils(ptk.HelpMixin):
     def _load_stored_file_map(carrier: Optional[str] = None) -> Dict[str, str]:
         """*carrier*'s map exactly as STORED -- what every writer edits.
 
-        A write re-spells only the entry it writes.  Re-spelling the rest would
-        re-base each one onto whatever project this session has set, so an
-        entry read under the wrong project would be saved wrong for good.
+        A write re-spells only the entry it writes; the whole map is re-spelled
+        only when a save moves the scene into another project
+        (``DataNodes.install_path_rebase``).
         """
         if cmds is None:
             return {}
@@ -250,17 +250,18 @@ class AudioUtils(ptk.HelpMixin):
     @staticmethod
     def _file_map_base() -> str:
         """The folder the file map's paths are stored relative to: the
-        project root -- the base texture paths and lightmap markers use,
-        read through the same primitive they read it through."""
-        from mayatk.env_utils._env_utils import EnvUtils
-
-        return EnvUtils.get_env_info("workspace") or ""
+        project the scene FILE lives in (``DataNodes.project_root``) --
+        never the session's project, which another scene may have set; the
+        lightmap folder record's base too. ``""`` while the scene is unsaved,
+        which stores paths absolute until its first save re-spells them."""
+        return DataNodes.project_root() or ""
 
     @classmethod
     def _stored_spelling(cls, path: str) -> str:
-        """*path* as the map stores it: relative to the project root when the
-        file lies under it, absolute otherwise (``ptk.FileUtils.portable_path``
-        -- no machine's drive layout, and no ``../`` chain to mis-resolve)."""
+        """*path* as the map stores it (``ptk.FileUtils.portable_path``):
+        relative to the scene's own project wherever a relative spelling
+        reaches -- a shared sound library beside the project is a ``../``
+        chain -- and absolute on another drive; no machine's drive layout."""
         return ptk.FileUtils.portable_path(path, cls._file_map_base())
 
     @classmethod

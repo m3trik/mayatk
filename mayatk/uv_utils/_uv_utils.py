@@ -1,5 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
+import contextlib
 import uuid
 from typing import List, Optional, Sequence, Tuple, Union
 
@@ -660,6 +661,36 @@ class UvUtils(ptk.HelpMixin):
             cmds.polyPinUV(group, value=weight)
 
     @staticmethod
+    @contextlib.contextmanager
+    def pins_lifted(uvs):
+        """Zero the pin weights of *uvs* inside the block, then put each one back.
+
+        ``polyEditUV`` honours pin weights: a pinned UV refuses to move, so a
+        move of a shell carrying pins (Pin and Stack leave them behind) tears
+        it. One bulk query decides; an unpinned scope costs nothing more. The
+        exact weights are restored on every exit, a raise included.
+
+        Parameters:
+            uvs: UV components (``mesh.map[i]`` or ``mesh.map[a:b]`` ranges).
+
+        Yields:
+            The ``(uv, weight)`` pairs lifted -- empty when none was pinned.
+        """
+        comps = [str(uv) for uv in (ptk.make_iterable(uvs) or [])]
+        pinned = []
+        if comps and any(cmds.polyPinUV(comps, query=True, value=True) or []):
+            flat = cmds.ls(comps, flatten=True) or []
+            weights = UvUtils.get_uv_pin_weights(flat)
+            pinned = [(uv, w) for uv, w in zip(flat, weights) if w]
+        if pinned:
+            cmds.polyPinUV([uv for uv, _ in pinned], value=0.0)
+        try:
+            yield pinned
+        finally:
+            if pinned:
+                UvUtils.set_uv_pin_weights(*zip(*pinned))
+
+    @staticmethod
     def _similar_shell_targets(items) -> List[str]:
         """Widen *items* for ``polyUVStackSimilarShells``: components pass through
         verbatim, polygon objects become ``<obj>.f[*]`` (the command silently
@@ -793,17 +824,11 @@ class UvUtils(ptk.HelpMixin):
             shells.append((names, centre, any(n in ref_set for n in names)))
 
         if moved:
-            # polyEditUV honours pin weights (a pinned UV would refuse to move
-            # back), so lift the pins on the moved UVs for the restore and put
-            # the exact weights back afterwards.
-            names = [name for name, _, _ in moved]
-            weights = UvUtils.get_uv_pin_weights(names)
-            if any(weights):
-                cmds.polyPinUV(names, value=0.0)
-            for name, u, v in moved:
-                cmds.polyEditUV(name, uValue=u, vValue=v, relative=False)
-            if any(weights):
-                UvUtils.set_uv_pin_weights(names, weights)
+            # A pinned UV would refuse to move back: lift the pins on the moved
+            # UVs for the restore.
+            with UvUtils.pins_lifted([name for name, _, _ in moved]):
+                for name, u, v in moved:
+                    cmds.polyEditUV(name, uValue=u, vValue=v, relative=False)
 
         ref_centres = [c for _, c, is_ref in shells if is_ref]
         result = []

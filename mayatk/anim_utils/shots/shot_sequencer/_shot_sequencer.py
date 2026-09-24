@@ -7,7 +7,7 @@ Changing one shot's duration or position ripples downstream shots.
 
 import bisect
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 try:
     import maya.cmds as cmds
@@ -664,6 +664,32 @@ class ShotSequencer:
                 if tids:
                     b.mark_dirty(tids)
 
+    def _drop_claimed_seam_copy(
+        self, seq: Dict[str, Any], target: float, seam: float, eps: float = 1e-3
+    ) -> None:
+        """Cut the key a head landing claims: on each curve of *seq* whose own
+        key lands exactly on *seam* (the sequence moving to start at
+        *target*), the stationary key already sitting there -- the source's
+        closing-pose copy a leading room's split left (see
+        :meth:`move_sequences_to_shot`). The block's own key at the source
+        frame stays, so no curve is emptied (Maya deletes a keyless one); a
+        two-key curve (that key and the seam pose) is the common on/off
+        shape, and a "never below two keys" guard left its seam pose to be
+        pushed a frame into the destination."""
+        src = seam - (target - seq["start"])
+        if not seq["start"] - eps <= src <= seq["end"] + eps:
+            return
+        times = seq.get("times")
+        if times and not any(abs(t - src) <= eps for t in times):
+            return
+        for crv in self._anim_curves_of(seq["obj"], seq.get("attr")):
+            if not cmds.keyframe(crv, q=True, time=(src - eps, src + eps)):
+                continue
+            if not cmds.keyframe(crv, q=True, time=(seam - eps, seam + eps)):
+                continue
+            cmds.cutKey(crv, time=(seam - eps, seam + eps), clear=True)
+            self.ledger.release(crv, seam)
+
     def _recompute_shot_objects(self, shot_id: int, only=None, keep=()) -> None:
         """Rebuild ``shot.objects`` from animation that actually lives in the shot.
 
@@ -936,6 +962,17 @@ class ShotSequencer:
                         seq["start"] += room
                         seq["end"] += room
 
+            # The moved block owns the seam it lands on (maintainer decision,
+            # 2026-09-23). Room inserted at the head of a destination the
+            # source touched splits their shared sample: the source keeps a
+            # copy of its closing pose ON the destination's start, exactly
+            # where the block's first key lands, and pushed aside by the
+            # landing it survived as a stray key a hair into the destination's
+            # own content (measured: 290.1 beside the true opening pose at 290).
+            # The block's key takes the frame; the source ends on it.
+            for seq, source_id, target in placements:
+                if source_id in head_groups and seq["kind"] == "anim":
+                    self._drop_claimed_seam_copy(seq, target, dest.start)
             for seq, _source_id, target in placements:
                 self._move_sequence(seq, target)
 
@@ -1261,9 +1298,13 @@ class ShotSequencer:
                 continue  # never below two keys (Maya deletes a keyless curve)
             try:
                 cmds.cutKey(crv, time=(t - eps, t + eps), clear=True)
-                cut += 1
             except RuntimeError:
-                pass  # locked or referenced curve -- leave it as it was
+                continue  # locked or referenced curve -- leave it as it was
+            cut += 1
+            # A gap hold's step claim on it goes too, or what ripples onto the
+            # frame inherits it -- and _release_gap_holds would then restore
+            # the claim's pre-hold tangent onto a stepped key that landed there.
+            self.ledger.release(crv, t)
         return cut
 
     def trim_shot_to_content(
@@ -1630,6 +1671,25 @@ class ShotSequencer:
         found = cmds.keyframe(crv, q=True, time=(t - eps, t + eps), timeChange=True)
         return float(found[0]) if found else None
 
+    @staticmethod
+    def _same_value(
+        crv: str, t_a: float, t_b: float, eps: float = _BATCH_MOVE_EPS
+    ) -> bool:
+        """Whether *crv*'s keys at *t_a* and *t_b* hold the same value (to
+        ``1e-6``, relative above 1) -- a pose already waiting at *t_b*."""
+        a = cmds.keyframe(crv, q=True, time=(t_a - eps, t_a + eps), valueChange=True)
+        b = cmds.keyframe(crv, q=True, time=(t_b - eps, t_b + eps), valueChange=True)
+        if not a or not b:
+            return False
+        return abs(a[0] - b[0]) <= 1e-6 * max(1.0, abs(a[0]), abs(b[0]))
+
+    @classmethod
+    def _any_key_at(cls, curves, frame: float, eps: float = _BATCH_MOVE_EPS) -> bool:
+        """Whether any curve of *curves* holds a key within *eps* of *frame*:
+        the ``seam_keyed`` question ``ShotStore.enclosing_bounds`` asks of the
+        curves a landing rides on."""
+        return any(cls._key_time_at(str(c), frame, eps) is not None for c in curves)
+
     @classmethod
     def _destination_occupied(
         cls, crv: str, times: list, delta: float, eps: float = 1e-3
@@ -1786,8 +1846,7 @@ class ShotSequencer:
             if remaining > 2 and cls._sample_is_redundant(crv, t):
                 cmds.cutKey(crv, time=(t - eps, t + eps), clear=True)
                 if ledger is not None:
-                    ledger.release_step(crv, t)
-                    ledger.release_key(crv, t)
+                    ledger.release(crv, t)
             else:
                 kept.append(t)
         return kept
@@ -1815,7 +1874,9 @@ class ShotSequencer:
 
         1. Flat holds in the landing zone are absorbed (:meth:`_absorb_holds`).
         2. Whatever is left carries a pose, so it is PUSHED clear -- in the
-           direction of travel, by ONE delta, as a single rigid block.
+           direction of travel, by ONE delta, as a single rigid block -- or,
+           when it is one key whose pose already waits where the push would
+           lay it, merged into that key.
 
         The block is grown to a fixpoint before anything moves: a key the
         block would land on joins the block rather than being displaced
@@ -1873,6 +1934,27 @@ class ShotSequencer:
         else:
             push = hi + cls._PUSH_CLEARANCE - min(displaced)
         if abs(push) < eps:
+            return
+
+        # A LONE displaced key the push would lay exactly onto a stationary key
+        # of the SAME value merges into it instead: that pose already waits
+        # there, so nothing is lost, while pushing both shifts what follows.
+        # Measured 2026-09-23: a key dragged onto a contiguous seam pushed the
+        # old seam pose onto the neighbour's identical opening pose, and that
+        # pose a frame into the neighbour's motion. Alone, because the rest of
+        # a block are still pushed by the same delta, PAST the key the merged
+        # one joined: 50 (5), 55 (8) ahead of 56 (5) came out 56 (5), 61 (8),
+        # the return to 5 after the 8 gone.
+        if (
+            len(displaced) == 1
+            and cls._nearest_index(stationary, displaced[0] + push, eps) is not None
+            and cls._same_value(crv, displaced[0], displaced[0] + push, eps)
+            and len(cmds.keyframe(crv, q=True, timeChange=True) or []) > 2
+        ):
+            d = displaced[0]
+            cmds.cutKey(crv, time=(d - eps, d + eps), clear=True)
+            if ledger is not None:
+                ledger.release(crv, d)
             return
 
         # Grow to a fixpoint: anything the block would land on travels WITH it.
@@ -2023,6 +2105,76 @@ class ShotSequencer:
                 cls._try_key_tangent(crv, tt, {angle_flag: angle})
 
         return _restore
+
+    @staticmethod
+    def _derived_tangents(crv: str, t: float) -> Dict[str, Tuple[float, float]]:
+        """``{"in"|"out": (angle, weight)}`` for each half of *crv*'s key at *t*
+        whose type Maya re-derives from both neighbours
+        (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`) -- the halves a split would
+        disturb.  An authored half (fixed, linear, flat, step) is left out."""
+        tt = (t, t)
+        held: Dict[str, Tuple[float, float]] = {}
+        for half in ("in", "out"):
+            kind = (
+                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}TangentType": True})
+                or [""]
+            )[0]
+            if kind not in _NEIGHBOUR_DERIVED_TANGENTS:
+                continue
+            angle = (
+                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Angle": True}) or []
+            )
+            weight = (
+                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Weight": True}) or []
+            )
+            if angle:
+                held[half] = (float(angle[0]), float(weight[0]) if weight else 1.0)
+        return held
+
+    @classmethod
+    def _hold_split_tangent(
+        cls, crv: str, t: float, half: str, held: Tuple[float, float]
+    ) -> None:
+        """Hold *half* of *crv*'s key at *t* at *held* ``(angle, weight)`` when
+        Maya re-derived it away from that -- breaking the tangent first, as
+        :meth:`_hold_interior_tangents` does, so the OTHER half (which faces the
+        new gap) stays derived.  A no-op when the key is gone or the angle did
+        not really move (the type is then left alone)."""
+        landed = cls._key_time_at(crv, t, _BATCH_MOVE_EPS)
+        if landed is None:
+            return
+        tt = (landed, landed)
+        angle, weight = held
+        now = cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Angle": True}) or []
+        if not now or abs(float(now[0]) - angle) <= _TANGENT_MOVED_TOL:
+            return
+        cls._try_key_tangent(crv, tt, {"lock": False})
+        cls._try_key_tangent(crv, tt, {f"{half}Angle": angle})
+        cls._try_key_tangent(crv, tt, {f"{half}Weight": weight})  # weighted only
+
+    @classmethod
+    def _cut_carried_sample(cls, crv: str, t: float, value: float, ledger=None) -> None:
+        """Cut the carried seam sample left at *t* once its re-key is down.
+
+        Only a key still holding the carried pose (*value*) is cut -- anything
+        else there now is not the sample -- and never a curve's last key: Maya
+        deletes a keyless animCurve node, and the connection with it. Its
+        claims in *ledger* go with it, as with every key the system cuts.
+        """
+        landed = cls._key_time_at(crv, t, _BATCH_MOVE_EPS)
+        if landed is None:
+            return
+        got = cmds.keyframe(crv, q=True, time=(landed, landed), valueChange=True)
+        if not got or abs(float(got[0]) - value) > _POSE_TOL:
+            return
+        if (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) <= 1:
+            return
+        try:
+            cmds.cutKey(crv, time=(landed, landed), clear=True)
+        except RuntimeError:
+            return  # locked or referenced curve — leave it as it was
+        if ledger is not None:
+            ledger.release(crv, landed)
 
     @classmethod
     def _commit_curve_move(
@@ -2363,6 +2515,12 @@ class ShotSequencer:
         """Move one object's keys within a shot, expanding the shot and
         rippling downstream shots when the clip exceeds shot boundaries.
 
+        The shot grows to ENCLOSE the landing, by the rule a key or sub-row
+        clip drag grows by (``ShotStore.enclosing_bounds``): outward to whole
+        frames, and one frame past a contiguous seam the landing would sit on
+        when the object holds a key there -- rounded and unstepped, a clip
+        onto the seam opened the neighbour on the dragged pose.
+
         Parameters:
             shot_id: Shot the object belongs to.
             obj: Transform node name to move.
@@ -2375,8 +2533,13 @@ class ShotSequencer:
             raise ValueError(f"No shot with id {shot_id}")
 
         new_start = self.store.snap(new_start)
-        dur = old_end - old_start
-        new_end = self.store.snap(new_start + dur)
+        curves = self._anim_curves_of(obj, None)
+        grown_start, grown_end = self.store.enclosing_bounds(
+            shot_id,
+            new_start,
+            new_start + (old_end - old_start),
+            lambda frame: self._any_key_at(curves, frame),
+        )
 
         # Boundaries FIRST, keys second.  Expanding past the next shot's
         # start ripples that shot through its envelope, and a key already
@@ -2394,12 +2557,12 @@ class ShotSequencer:
         start_expanded = False
         end_expanded = False
 
-        if new_start < shot.start:
-            shot.start = new_start
+        if grown_start < shot.start:
+            shot.start = grown_start
             start_expanded = True
 
-        if new_end > shot.end:
-            shot.end = new_end
+        if grown_end > shot.end:
+            shot.end = grown_end
             end_expanded = True
 
         # Ripple upstream by however much the shot head grew
@@ -3017,9 +3180,9 @@ class ShotSequencer:
         nor a fencepost; leaving it is the clutter that builds up on every
         adjust.  Each claim resolves one of four ways:
 
-        * the bound is still under it — nothing to do;
         * the key is gone (cut, or moved by an edit that carried the claim
-          with it) — drop the claim;
+          with it) — drop the claim, on its bound or not;
+        * the bound is still under it — nothing to do;
         * the bound moved and its new frame is free — MOVE the sample there,
           full key record intact, carrying the claim with it — unless it
           holds nothing (a flat plateau, provably), in which case it is CUT:
@@ -3060,12 +3223,15 @@ class ShotSequencer:
                         bound = bounds[owner][0 if edge == "start" else 1]
                     elif shot is not None:
                         bound = shot.start if edge == "start" else shot.end
-                if bound is not None and abs(bound - t) <= eps:
-                    continue  # still on its bound
+                # Gone first: a sample deleted ON its bound -- where the system
+                # makes them -- would otherwise keep its claim for the next key
+                # to land there.
                 key_t = self._key_time_at(crv, t, eps)
                 if key_t is None:
-                    led.release_key(crv, t)
+                    led.release(crv, t)  # the key is gone, and every claim with it
                     continue
+                if bound is not None and abs(bound - t) <= eps:
+                    continue  # still on its bound
                 occupied = (
                     bound is not None and self._key_time_at(crv, bound, eps) is not None
                 )
@@ -3097,10 +3263,13 @@ class ShotSequencer:
                 ):
                     try:
                         cmds.cutKey(crv, time=(key_t - eps, key_t + eps), clear=True)
-                        removed += 1
                     except RuntimeError:
                         pass  # locked or referenced curve — leave it as it was
-                led.release_key(crv, key_t)
+                    else:
+                        removed += 1
+                        led.release(crv, key_t)  # cut: every claim goes with it
+                        continue
+                led.release_key(crv, key_t)  # kept: disowned; a hold on it stays
         return moved, removed
 
     def _reconcile_pending_bounds(
@@ -3771,12 +3940,7 @@ class ShotSequencer:
                 continue  # locked or referenced curve — leave it as it was
             cut += 1
             # Whatever the system claimed in there went with the keys.
-            for t in led.step_times(crv):
-                if window[0] <= t <= window[1]:
-                    led.release_step(crv, t)
-            for t in led.key_times(crv):
-                if window[0] <= t <= window[1]:
-                    led.release_key(crv, t)
+            led.release(crv, window[0], window[1])
         return cut
 
     def delete_shot(
@@ -4179,7 +4343,16 @@ class ShotSequencer:
           fencepost and the following shot's first segment keeps its
           timing.  Only curves the following shot actually animates past
           the boundary get a copy; a pose that was never its own is not
-          invented for it.
+          invented for it.  A derived tangent (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`)
+          on the sample is held too: the original's IN half and the copy's
+          OUT half, each at the angle it had while shared -- after the split
+          each has a new neighbour, and Maya re-derives the slope from it
+          (measured: a spline sample played 0.343 off in the preceding shot
+          and 0.197 off in the following one; :meth:`_hold_split_tangent`).
+          A sample the preceding shot does not animate is not copied but
+          CARRIED: re-keyed at the new start, its OUT half held the same way
+          (it too re-derives against a neighbour that is now further away),
+          and only then cut from its old frame (:meth:`_cut_carried_sample`).
         * **Merge** (gap collapsed).  Two samples converge on one frame.
           Maya would neither refuse nor overwrite — it stacks a duplicate a
           fraction of a frame away, and the pair then travels together
@@ -4248,6 +4421,12 @@ class ShotSequencer:
             prev_shot = self.shot_by_id(prev_id)
             if shot is None or prev_shot is None:
                 continue
+            # The shared sample is the preceding shot's, so it moves with that
+            # shot's content -- by its delta, or not at all.
+            prev_move = plan.moves.get(prev_id)
+            prev_delta = (
+                prev_move.delta if prev_move is not None and prev_move.moves else 0.0
+            )
             names = self._shot_nodes(shot)
             curves = (
                 AnimUtils.objects_to_curves(names, through_blends=False)
@@ -4304,20 +4483,44 @@ class ShotSequencer:
                         ),
                     )
                 )
+                if shared and self.ledger.owns_key(crv, key_t):
+                    # The sample stays the preceding shot's closing pose, so a
+                    # claim on it serves THAT shot's end from here, whoever it
+                    # was made for.  Left naming the following shot's start (a
+                    # copy an earlier split made), deleting the preceding shot
+                    # never found it, and the ripple landed the following
+                    # shot over it: 0.0 held mid-ramp (measured 2026-09-23).
+                    self.ledger.release_key(crv, key_t)
+                    self.ledger.record_key(crv, key_t, prev_id, "end")
                 captures.append(
-                    (crv, float(new_start), float(at[0]), tuple(tangents), shared)
+                    (
+                        crv,
+                        float(new_start),
+                        float(at[0]),
+                        tuple(tangents),
+                        shared,
+                        key_t + prev_delta,
+                        self._derived_tangents(crv, key_t),
+                        # A copy is the system's; a carried sample stays whose
+                        # it was -- claimed, an animator's opening pose would be
+                        # skipped by content scans and moved or cut with the bound.
+                        shared or self.ledger.owns_key(crv, key_t),
+                    )
                 )
-                if not shared:
-                    losers.append((crv, key_t))
+                # A carried sample is NOT cut here with the merge losers: see
+                # the end of _finish.
 
         # Never cut a curve down to nothing: Maya deletes a keyless animCurve
-        # node, which would take the connection with it.
+        # node, which would take the connection with it.  A cut key's claims
+        # go with it: the move remaps only the keys it finds, so a claim left
+        # on the frame is inherited by whatever lands there next.
         for crv, t in losers:
             if (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 1:
                 try:
                     cmds.cutKey(crv, time=(t, t), clear=True)
                 except RuntimeError:
-                    pass  # locked or referenced curve — leave it as it was
+                    continue  # locked or referenced curve — leave it as it was
+                self.ledger.release(crv, t)
 
         if not captures:
             return _noop
@@ -4333,7 +4536,7 @@ class ShotSequencer:
         led = self.ledger
 
         def _finish():
-            for crv, frame, value, tangents, _shared in captures:
+            for crv, frame, value, tangents, shared, original, held, claim in captures:
                 if not cmds.objExists(crv):
                     continue
                 occupied = cmds.keyframe(
@@ -4342,22 +4545,41 @@ class ShotSequencer:
                     time=(frame - _BATCH_MOVE_EPS, frame + _BATCH_MOVE_EPS),
                     keyframeCount=True,
                 )
-                if occupied:
-                    continue  # something already landed here; leave it alone
-                try:
-                    cmds.setKeyframe(crv, time=(frame,), value=value)
-                    if len(tangents) >= 2:
-                        cmds.keyTangent(
-                            crv,
-                            e=True,
-                            time=(frame, frame),
-                            itt=tangents[0],
-                            ott=tangents[1],
-                        )
-                except RuntimeError:
-                    pass  # locked or referenced curve — the move still stands
-                else:
-                    led.record_key(crv, frame, owners.get(frame, -1), "start")
+                keyed = bool(occupied)  # something already landed here
+                if not occupied:
+                    try:
+                        cmds.setKeyframe(crv, time=(frame,), value=value)
+                        if len(tangents) >= 2:
+                            cmds.keyTangent(
+                                crv,
+                                e=True,
+                                time=(frame, frame),
+                                itt=tangents[0],
+                                ott=tangents[1],
+                            )
+                    except RuntimeError:
+                        pass  # locked or referenced curve — the move still stands
+                    else:
+                        keyed = True
+                        if claim:
+                            led.record_key(crv, frame, owners.get(frame, -1), "start")
+                        # Each side plays on as it did before the gap opened:
+                        # the following shot's opening pose (a copy, or the
+                        # carried sample itself) and, where it stays, the
+                        # preceding shot's closing one.
+                        if shared and "in" in held:
+                            self._hold_split_tangent(crv, original, "in", held["in"])
+                        if "out" in held:
+                            self._hold_split_tangent(crv, frame, "out", held["out"])
+                if not shared and keyed:
+                    # Only now does a carried sample leave its old frame, and
+                    # only once the new start holds a pose. Cut before the
+                    # moves, its absence re-derived the following shot's first
+                    # key while the move was snapshotting that key's tangents,
+                    # and _hold_interior_tangents then pinned the damaged
+                    # angle (measured: 0.48 degrees where the curve had -1.43,
+                    # the shot 0.099 off).
+                    self._cut_carried_sample(crv, original, value, led)
 
         return _finish
 

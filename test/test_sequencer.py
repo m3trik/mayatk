@@ -3159,6 +3159,45 @@ class TestARemovedShotRetiresItsSamples(unittest.TestCase):
         )
         self.assertEqual(sorted(seq.ledger.key_times(crv)), [30.0, 40.0])
 
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_an_empty_shot_on_a_contiguous_seam_leaves_nothing_behind(self):
+        """The same chain on a seam two shots SHARE (measured 2026-09-23, the
+        production assembly at gap 0): the insert splits the seam, so the
+        empty shot ends on a claimed copy of C's opening pose; the respace
+        splits that seam again and the empty shot keeps the sample as its
+        own closing pose -- while the claim still named C's start.  The
+        delete then looked for the empty shot's claims, found none, and the
+        ripple landed C over the sample: "Shot 3.3" held 0.0 mid-ramp."""
+        cmds.file(new=True, force=True)
+        loc = cmds.spaceLocator(name="retireSeamLoc")[0]
+        for t, v in ((20, 5), (40, 0), (50, 0), (70, -6), (100, -8)):
+            cmds.setKeyframe(loc, at="translateY", t=t, v=v)
+        crv = cmds.listConnections(loc + ".translateY", type="animCurve")[0]
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [loc]), ShotBlock(1, "C", 50, 100, [loc])]
+        )
+        seq.store.gap = 0.0
+
+        def c_plays():
+            start = seq.shot_by_id(1).start
+            return [
+                round(cmds.keyframe(crv, q=True, eval=True, time=(t, t))[0], 4)
+                for t in (start + f for f in range(0, 51, 2))
+            ]
+
+        before = c_plays()
+        ins = seq.insert_shot("INS", 12.0, at_position=2)
+        seq.apply_gap(20.0, scope="all")
+        seq.delete_shot(ins.shot_id)
+
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()], [(0.0, 50.0), (70.0, 120.0)]
+        )
+        self.assertEqual(c_plays(), before, "C plays its own opening ramp again")
+        self.assertEqual(
+            cmds.keyframe(crv, q=True), [20.0, 40.0, 50.0, 70.0, 90.0, 120.0]
+        )
+
 
 class TestASlideStopsShortOfTheNeighboursContent(unittest.TestCase):
     """A slide's clamp reads the shot's CONTENT, tail in the gap included, not
@@ -3545,6 +3584,250 @@ class TestADragOntoAKeyedNeighbourLeavesItWhole(unittest.TestCase):
             [(0.0, 50.0), (60.0, 100.0)],
             "no shot moved",
         )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestALandingOnAContiguousSeamGrowsItsShotAFrame(unittest.TestCase):
+    """Two shots that touch share ONE sample, the preceding shot's, so a key
+    landing on that frame takes the neighbour's opening pose.
+
+    Measured 2026-09-23 through this handler (BACKLOG 2026-09-22): A [0,50]
+    and B [50,100], A's key dragged 40 -> 60 grew A to 60 and rippled B to
+    [60,110] -- the key landed on B's first frame, B opened on A's pose and its
+    own slipped to 61; equal poses still left a duplicate. Decided by the
+    maintainer: the shot grows ONE frame past the seam
+    (``ShotStore.enclosing_bounds``), so the shots still touch and the
+    neighbour keeps its pose. A landing on the existing seam also needed the
+    push to MERGE the old seam pose into the neighbour's identical opening
+    pose rather than shove both a frame on (``_clear_destination``)."""
+
+    _Clip = TestKeysBatchAuditRegressions._Clip
+    _Widget = TestKeysBatchAuditRegressions._Widget
+    _host = TestKeysBatchAuditRegressions._host
+    _keys = staticmethod(TestADragOntoAKeyedNeighbourLeavesItWhole._keys)
+    _scene = TestADragOntoAKeyedNeighbourLeavesItWhole._scene
+    _drag_keys = TestADragOntoAKeyedNeighbourLeavesItWhole._drag_keys
+
+    KEYS = ((10, 0), (40, 5), (50, 3), (70, 9), (90, 2))
+    SHOTS = [("A", 0, 50), ("B", 50, 100)]
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _bounds(self, seq):
+        return [(s.start, s.end) for s in seq.sorted_shots()]
+
+    def test_a_key_past_the_end_leaves_the_neighbour_its_opening_pose(self):
+        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 60.0)])
+        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
+        self.assertEqual(got, [(10, 0), (50, 3), (60, 5), (61, 3), (81, 9), (101, 2)])
+
+    def test_equal_poses_keep_their_frames(self):
+        keys = ((10, 0), (40, 5), (50, 5), (70, 9), (90, 2))
+        seq, got = self._drag_keys(self.SHOTS, keys, 0, [(40.0, 60.0)])
+        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
+        self.assertEqual(got, [(10, 0), (50, 5), (60, 5), (61, 5), (81, 9), (101, 2)])
+
+    def test_a_key_onto_the_existing_seam_leaves_the_neighbour_whole(self):
+        """The old seam pose merges into the neighbour's identical opening
+        pose; pushed instead, it shoved that pose a frame into B's motion."""
+        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 50.0)])
+        self.assertEqual(self._bounds(seq), [(0.0, 51.0), (51.0, 101.0)])
+        self.assertEqual(got, [(10, 0), (50, 5), (51, 3), (71, 9), (91, 2)])
+
+    def test_a_key_dragged_back_over_the_seam_mirrors_it(self):
+        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 1, [(70.0, 45.0)])
+        self.assertEqual(self._bounds(seq), [(-6.0, 44.0), (44.0, 100.0)])
+        self.assertEqual(got, [(4, 0), (34, 5), (44, 3), (45, 9), (50, 3), (90, 2)])
+
+    def test_a_landing_off_the_seam_is_unchanged(self):
+        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 59.5)])
+        self.assertEqual(self._bounds(seq), [(0.0, 60.0), (60.0, 110.0)])
+        self.assertEqual(got, [(10, 0), (50, 3), (59.5, 5), (60, 3), (80, 9), (100, 2)])
+
+    def _drag_object_clip(self, shots, keys, orig, new_start):
+        """A main-track (object) clip drag: ``move_object_in_shot``."""
+        node, seq = self._scene(shots, keys)
+        data = {"obj": node, "shot_id": 0, "orig_start": orig[0], "orig_end": orig[1]}
+        host = self._host({1: self._Clip(data)}, seq)
+        host._shifted_out_keys = {}
+        host.on_clip_moved(1, new_start)
+        return seq, self._keys(node)
+
+    def test_an_object_clip_past_the_end_leaves_the_neighbour_its_opening_pose(self):
+        """A main-track clip grows through ``move_object_in_shot``, which sized
+        the bound itself -- rounded, never stepped -- so the same landing
+        opened B on the dragged pose (in blendertk, one of the two was lost)."""
+        seq, got = self._drag_object_clip(self.SHOTS, self.KEYS, (10.0, 40.0), 30.0)
+        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
+        self.assertEqual(got, [(30, 0), (60, 5), (61, 3), (81, 9), (101, 2)])
+
+    def test_an_object_clip_onto_the_existing_seam_leaves_the_neighbour_whole(self):
+        seq, got = self._drag_object_clip(self.SHOTS, self.KEYS, (10.0, 40.0), 20.0)
+        self.assertEqual(self._bounds(seq), [(0.0, 51.0), (51.0, 101.0)])
+        self.assertEqual(got, [(20, 0), (50, 5), (51, 3), (71, 9), (91, 2)])
+
+    def test_an_object_clip_dragged_back_over_the_seam_mirrors_it(self):
+        """B's clip back to 45: B grows to 44 and A ripples to [-6, 44], its
+        closing pose -- left in B's landing zone -- pushed onto its new end."""
+        node, seq = self._scene(self.SHOTS, self.KEYS)
+        data = {"obj": node, "shot_id": 1, "orig_start": 70.0, "orig_end": 90.0}
+        host = self._host({1: self._Clip(data)}, seq)
+        host._shifted_out_keys = {}
+        host.on_clip_moved(1, 45.0)
+        self.assertEqual(self._bounds(seq), [(-6.0, 44.0), (44.0, 100.0)])
+        self.assertEqual(self._keys(node), [(4, 0), (34, 5), (44, 3), (45, 9), (65, 2)])
+
+    def test_an_object_clip_onto_an_unkeyed_seam_steps_nothing(self):
+        seq, got = self._drag_object_clip(
+            [("A", 0, 30), ("B", 30, 60)],
+            ((10, 0), (20, 1), (40, 2), (55, 3)),
+            (10.0, 20.0),
+            20.0,
+        )
+        self.assertEqual(self._bounds(seq), [(0.0, 30.0), (30.0, 60.0)])
+        self.assertEqual([t for t, _v in got], [20.0, 30.0, 40.0, 55.0])
+
+
+class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
+    """BACKLOG 2026-09-07: pulling contiguous shots apart splits their shared
+    sample -- the preceding shot keeps it, the following shot gets a copy at
+    its new start -- and a DERIVED tangent on it re-derives on both sides from
+    the new neighbour.  Measured (``probe_gap0_split.py``): a SPLINE sample
+    played 0.343 off in the preceding shot and 0.197 off in the following one,
+    a CLAMPED one 0.196 and 0.394; AUTO (an extremum here) and LINEAR were
+    exact.  The split now holds the original's IN half and the copy's OUT half
+    at their shared angles.  A sample only the following shot animates is
+    CARRIED to its new start instead: its OUT half is held the same way, and
+    it leaves its old frame only after the moves."""
+
+    # The seam at a local minimum, where AUTO clamps flat, and on a slope,
+    # where every derived type re-derives.
+    EXTREMUM = ((10, 0), (40, 5), (50, 3), (70, 9), (90, 2))
+    SLOPE = ((10, 0), (40, 3), (50, 5), (70, 9), (90, 2))
+    # Keyed before A and through B, never inside A: the seam sample is B's.
+    CARRIED = ((-30, 1), (50, 3), (70, 9), (90, 2))
+    DERIVED = ("spline", "auto", "clamped", "plateau")
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _curve(self, tangent, keys=EXTREMUM):
+        cube = cmds.polyCube(name="splitSeam")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        cmds.keyTangent(crv, edit=True, itt=tangent, ott=tangent)
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 50, 100, [cube])]
+        )
+        return crv, seq
+
+    @staticmethod
+    def _play(crv, lo, hi, shift=0.0):
+        return [
+            cmds.keyframe(crv, q=True, eval=True, time=(f + shift, f + shift))[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def _drift(self, tangent, op, keys=EXTREMUM):
+        """Worst playback change of A over [0,50] and of B rigidly over its span."""
+        crv, seq = self._curve(tangent, keys)
+        a_before, b_before = self._play(crv, 0, 50), self._play(crv, 50, 100)
+        op(seq)
+        shift = seq.shot_by_id(1).start - 50
+        a_after, b_after = self._play(crv, 0, 50), self._play(crv, 50, 100, shift)
+        return (
+            max(abs(x - y) for x, y in zip(a_before, a_after)),
+            max(abs(x - y) for x, y in zip(b_before, b_after)),
+        )
+
+    def _assert_both_play_on(self, op):
+        for keys in (self.EXTREMUM, self.SLOPE):
+            for tangent in (*self.DERIVED, "linear"):
+                with self.subTest(seam=keys[2], tangent=tangent):
+                    da, db = self._drift(tangent, op, keys)
+                    self.assertLess(da, 1e-3, f"A drifted {da}")
+                    self.assertLess(db, 1e-3, f"B drifted {db}")
+
+    def test_growing_the_first_shot_splits_without_reshaping_either(self):
+        self._assert_both_play_on(lambda s: s.resize_shot_bounds(0, 0, 60))
+
+    def test_moving_the_second_shot_splits_without_reshaping_either(self):
+        self._assert_both_play_on(lambda s: s.move_shot(1, 60))
+
+    def test_a_carried_opening_pose_keeps_its_slope(self):
+        """The curve is keyed before A and through B, never inside A, so the
+        seam sample is B's alone and is carried rather than copied (re-keyed
+        at B's new start, cut from its old frame).  Two faults, measured for
+        spline: cut BEFORE the moves, its absence re-derived B's next key while
+        the move snapshotted it, and the interior hold pinned that damaged
+        angle (B 0.099 off); and its own OUT half re-derived against the key
+        before A, now ten frames further away (0.022 off; auto 0.025).  (What
+        A plays between that key and B's pose is not a shot's own motion under
+        the planner's sharing rule, so only B is pinned.)"""
+        for tangent in (*self.DERIVED, "linear"):
+            with self.subTest(tangent=tangent):
+                _da, db = self._drift(
+                    tangent, lambda s: s.move_shot(1, 60), self.CARRIED
+                )
+                self.assertLess(db, 1e-3, f"B drifted {db}")
+
+    def test_a_carried_sample_leaves_no_claim_behind(self):
+        """A carried sample the system had claimed (B's start-bound sample)
+        is cut from its old frame; its claim goes with it rather than staying
+        on a frame with no key -- as with every key the system cuts."""
+        crv, seq = self._curve("spline", self.CARRIED)
+        seq.ledger.record_key(crv, 50.0, 1, "start")
+        seq.move_shot(1, 60)
+        self.assertEqual(cmds.keyframe(crv, q=True), [-30.0, 60.0, 80.0, 100.0])
+        self.assertEqual(seq.ledger.key_times(crv), [60.0])
+
+    def test_a_carried_animator_pose_stays_the_animators(self):
+        """...and an UNCLAIMED carried sample -- the animator's own opening
+        pose -- lands unclaimed: carried, it is still their key, not a sample
+        the system made.  Claimed, content scans would skip it and a bound
+        edit could move or cut it as the system's own."""
+        crv, seq = self._curve("spline", self.CARRIED)
+        seq.move_shot(1, 60)
+        self.assertEqual(cmds.keyframe(crv, q=True), [-30.0, 60.0, 80.0, 100.0])
+        self.assertEqual(seq.ledger.key_times(crv), [])
+
+    @staticmethod
+    def _half(crv, t, flag):
+        return cmds.keyTangent(crv, q=True, time=(t, t), **{flag: True})[0]
+
+    def test_only_the_halves_facing_each_shot_are_held(self):
+        """Only the shot-facing halves are pinned, at the shared angle: the
+        original's IN and the copy's OUT.  The halves facing the NEW gap are
+        not: the original's OUT is the gap's own hold (the system's claimed,
+        releasable step) and the copy's IN stays derived."""
+        crv, seq = self._curve("spline")
+        shared = self._half(crv, 50, "outAngle")
+        seq.move_shot(1, 60)
+        self.assertEqual(self._half(crv, 50, "inTangentType"), "fixed")
+        self.assertAlmostEqual(self._half(crv, 50, "inAngle"), shared, places=3)
+        self.assertEqual(self._half(crv, 60, "outTangentType"), "fixed")
+        self.assertAlmostEqual(self._half(crv, 60, "outAngle"), shared, places=3)
+        self.assertEqual(self._half(crv, 60, "inTangentType"), "spline")
+        self.assertEqual(self._half(crv, 50, "outTangentType"), "step")
+        self.assertEqual(seq.ledger.step_times(crv), [50.0])
+
+    def test_a_tangent_the_split_did_not_move_keeps_its_type(self):
+        """A half the split did not move keeps its type and lock rather than
+        turning ``fixed``: LINEAR halves facing each shot still point at the
+        same neighbours."""
+        crv, seq = self._curve("linear")
+        seq.move_shot(1, 60)
+        self.assertEqual(self._half(crv, 60, "outTangentType"), "linear")
+        self.assertTrue(self._half(crv, 60, "lock"))
+        self.assertEqual(self._half(crv, 50, "inTangentType"), "linear")
 
 
 class TestMoveToShotTakesEveryVisibleClip(unittest.TestCase):
@@ -4619,6 +4902,26 @@ class TestDirectionalTrim(unittest.TestCase):
         self.assertEqual(
             cmds.keyframe(crv, q=True), [20.0, 40.0, 50.0, 65.0, 90.0], "100 was cut"
         )
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_a_passed_bound_key_is_cut_with_every_claim_on_it(self):
+        """The cut clears the frame for what ripples onto it, which must not
+        inherit a gap hold's step claim on the key: ``_release_gap_holds``
+        would restore the claim's pre-hold tangent onto a stepped key that
+        landed there."""
+        cmds.file(new=True, force=True)
+        loc = cmds.spaceLocator(name="passLoc")[0]
+        for t, v in ((20, 1.0), (50, 0.0), (100, 0.0), (140, 5.0)):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+        crv = self._curve(loc, "translateX")
+        seq = ShotSequencer([ShotBlock(0, "A", 0, 100, [loc])])
+        seq.ledger.record_step(crv, 100.0, "auto", "auto")
+
+        cut = seq._cut_passed_bound_keys([(crv, 100.0)], 0, 100, 0, 50)
+
+        self.assertEqual(cut, 1)
+        self.assertEqual(cmds.keyframe(crv, q=True), [20.0, 50.0, 140.0])
+        self.assertEqual(seq.ledger.step_times(crv), [])
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_a_trim_still_removes_genuinely_empty_tail(self):
@@ -8834,6 +9137,35 @@ class TestDeleteKeysBracketing(unittest.TestCase):
         self.assertTrue(tag[0], "a key delete records a Maya undo step")
         self.assertEqual(tag[1], cmds.undoInfo(q=True, undoName=True))
 
+    def test_a_delete_takes_the_system_claims_on_its_keys(self):
+        """A key delete is a key edit like any other, so it runs the bracket's
+        reconcile (``_key_scene_edit``): the claims on a deleted key -- a
+        sample's and a gap hold's -- go with it instead of waiting on the
+        frame for the next key that lands there to inherit them."""
+        ctrl, store, loc = self._ctrl_with_clip()
+        cmds.setKeyframe(loc, at="translateX", t=60, v=60.0)  # outside the clip
+        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
+        led = store.edit_ledger
+        led.record_key(crv, 10.0, 0, "end")
+        led.record_step(crv, 10.0, "auto", "auto")
+        ctrl._delete_clip_keys([1])
+        self.assertEqual(cmds.keyframe(crv, q=True), [60.0])
+        self.assertEqual((led.key_times(crv), led.step_times(crv)), ([], []))
+
+    def test_a_deleted_sample_on_its_bound_takes_its_claim(self):
+        """...a sample still ON its bound too -- where the system makes them.
+        The reconcile passed a claim on its bound before asking whether its
+        key was still there, so it waited on the frame for the next key."""
+        ctrl, store, loc = self._ctrl_with_clip()
+        for t in (50, 60):  # 50: A's end, inside the clip; 60: outside it
+            cmds.setKeyframe(loc, at="translateX", t=t, v=float(t))
+        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
+        led = store.edit_ledger
+        led.record_key(crv, 50.0, 0, "end")
+        ctrl._delete_clip_keys([1])
+        self.assertEqual(cmds.keyframe(crv, q=True), [60.0])
+        self.assertEqual(led.key_times(crv), [])
+
     def test_a_delete_that_removes_nothing_leaves_no_restore_point(self):
         ctrl, store, _loc = self._ctrl_with_clip()
         depth = len(store._boundary_undo)
@@ -9199,6 +9531,41 @@ class TestMovingShotCarriesItsEnvelope(unittest.TestCase):
         for a, b in zip(times, times[1:]):
             self.assertGreater(b - a, 1e-3, "no near-duplicate pair survives")
 
+    def test_a_merge_cuts_its_losers_claims_with_them(self):
+        """A merge cuts the keys it does not keep BEFORE the move, and the
+        move remaps only the claims of keys it finds -- so a cut key's claim
+        stayed on its frame for whatever landed there next.  B's 110 and C's
+        120 both land on 100; the 120 is cut, and C's animator key from 140
+        then landed under its start claim (read as a system sample, so cut
+        with them later), while A's end claim on 50 doubled B's start claim:
+        claims [50, 50, 100, 120] over the keys this asserts."""
+        loc = cmds.spaceLocator(name="merge_claim_loc")[0]
+        for t, v in (
+            (0, 0),
+            (50, 2),
+            (60, 2),
+            (110, 4),
+            (120, 4),
+            (130, 5),
+            (140, 7),
+            (170, 9),
+        ):
+            cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [loc]),
+                ShotBlock(1, "B", 60, 110, [loc]),
+                ShotBlock(2, "C", 120, 170, [loc]),
+            ]
+        )
+        claims = ((50, 0, "end"), (60, 1, "start"), (110, 1, "end"), (120, 2, "start"))
+        for t, shot, edge in claims:
+            seq.ledger.record_key(crv, float(t), shot, edge)
+        seq.respace(gap=0, start_frame=0)  # B -10, C -20
+        self.assertEqual(self._times(loc), [0.0, 50.0, 100.0, 110.0, 120.0, 150.0])
+        self.assertEqual(seq.ledger.key_times(crv), [50.0, 100.0])
+
     def test_collapsing_a_gap_onto_disagreeing_poses_is_refused_intact(self):
         """A hard cut cannot live at gap 0 — one frame holds one pose.  The
         operation must refuse BEFORE writing, leaving the scene untouched."""
@@ -9557,13 +9924,20 @@ class TestShotEditLedger(unittest.TestCase):
         self.assertEqual(self.seq.ledger.key_times(crv), [])
 
     def test_a_redundant_orphaned_sample_is_cut(self):
-        """A sample inside a flat plateau plays no part, so it goes."""
+        """A sample inside a flat plateau plays no part, so it goes -- and
+        every claim with it, as with one whose key is already gone: a step
+        claim left on the frame would later hand its pre-hold tangent to a
+        stepped key that landed there (``_release_gap_holds``)."""
         c = self._cube("bndC", {1: 5, 20: 5, 40: 5, 60: 9})
         sc = self.seq.define_shot("C", 1, 60, objects=[c])
-        self.seq.ledger.record_key(self._curve(c), 20.0, sc.shot_id, "start")
+        crv, led = self._curve(c), self.seq.ledger
+        for t in (20.0, 30.0):  # 30 has no key at all
+            led.record_key(crv, t, sc.shot_id, "start")
+            led.record_step(crv, t, "auto", "auto")
         _moved, removed = self.seq._reconcile_boundary_keys()
         self.assertEqual(removed, 1)
         self.assertEqual(self._times(c), [1.0, 40.0, 60.0])
+        self.assertEqual((led.key_times(crv), led.step_times(crv)), ([], []))
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -9968,6 +10342,66 @@ class TestMoveToShotPlacement(unittest.TestCase):
         src = self.seq.define_shot("Src", 190, 240, objects=[mover])
         self._move(src.shot_id, dest.shot_id, obj="mvNew")
         self.assertEqual(min(self._times(mover)), 1.0)
+
+    def test_a_head_block_owns_the_contiguous_seam_it_lands_on(self):
+        """BACKLOG 2026-09-19, decided 2026-09-23: the head room's split left
+        the source's closing-pose copy ON the destination's start, the block's
+        first key landed there, and the copy was pushed to 290.1 beside the
+        destination's true opening pose at 290 -- a sixth, stray key. The
+        block owns the seam frame; the source ends on its first pose."""
+        self.addCleanup(ShotStore.clear_active)
+        cube = cmds.polyCube(name="mvSeam")[0]
+        for t, v in ((110.7, 0), (150, 5), (199.8, 2), (200, 7), (230, 1)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 100, 200, [cube]), ShotBlock(1, "S1", 200, 240, [cube])]
+        )
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 110.7, "end": 199.8}],
+            dest_shot_id=1,
+        )
+        times = cmds.keyframe(cube, q=True, at="translateX")
+        values = cmds.keyframe(cube, q=True, at="translateX", valueChange=True)
+        self.assertEqual(
+            [(round(t, 3), round(v, 3)) for t, v in zip(times, values)],
+            [(200.0, 0.0), (239.3, 5.0), (289.1, 2.0), (290.0, 7.0), (320.0, 1.0)],
+        )
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()], [(100, 200), (200, 330)]
+        )
+
+    def test_a_head_block_owns_the_seam_on_a_two_key_curve_too(self):
+        """A curve of just the block's key and the seam pose -- the common
+        on/off shape: "never below two keys" left that pose to be pushed a
+        frame into S1 (201 (7)), though the block's own key keeps the curve
+        alive.  translateY gives S1 content, so the leading room is made."""
+        self.addCleanup(ShotStore.clear_active)
+        cube = cmds.polyCube(name="mvSeamTwo")[0]
+        for t, v in ((150, 5), (200, 7)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        for t, v in ((200, 1), (230, 2)):
+            cmds.setKeyframe(cube, at="translateY", t=t, v=v)
+        seq = ShotSequencer(
+            [ShotBlock(0, "S0", 100, 200, [cube]), ShotBlock(1, "S1", 200, 240, [cube])]
+        )
+        seq.move_sequences_to_shot(
+            [
+                {
+                    "kind": "anim",
+                    "obj": cube,
+                    "attr": "translateX",
+                    "times": [150.0],
+                    "start": 150.0,
+                    "end": 150.0,
+                }
+            ],
+            dest_shot_id=1,
+        )
+        times = cmds.keyframe(cube, q=True, at="translateX")
+        values = cmds.keyframe(cube, q=True, at="translateX", valueChange=True)
+        self.assertEqual(
+            [(round(t, 3), round(v, 3)) for t, v in zip(times, values)], [(200.0, 5.0)]
+        )
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -10594,6 +11028,21 @@ class TestLandingOnOccupiedFrames(unittest.TestCase):
         times, values = self._keys(obj)
         self.assertEqual(times, [200.0, 210.0])
         self.assertEqual(values, [0.0, 5.0])
+
+    def test_a_same_value_merge_never_reorders_a_displaced_block(self):
+        """A displaced key merges into a same-valued key it would be pushed
+        onto only when it is ALONE (the old seam pose onto the neighbour's
+        identical opening pose): the rest of a block are still pushed by the
+        same delta, past the key the merged one joined -- 50 (5), 55 (8) ahead
+        of 56 (5) came out 56 (5), 61 (8), the return to 5 after the 8 gone."""
+        obj = self._make(
+            [(0, 0.0), (40, 1.0), (45, 2.0), (50, 5.0), (55, 8.0), (56, 5.0), (70, 0.0)]
+        )
+        ShotSequencer.move_curve_keys(self._curve(obj), [40.0, 45.0], 10.0)
+
+        times, values = self._keys(obj)
+        self.assertEqual(times, [0.0, 50.0, 55.0, 56.0, 61.0, 62.0, 70.0])
+        self.assertEqual(values, [0.0, 1.0, 2.0, 5.0, 8.0, 5.0, 0.0])
 
 
 class TestGroupMoveOrderIsRigid(unittest.TestCase):

@@ -14,7 +14,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.mat_utils._mat_utils import MatUtils, _OPACITY_IS_A_MODE
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -1171,9 +1171,11 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         elif shader_type == "open_pbr":
             shader_node = self.setup_open_pbr_node(name, wants_opacity)
         else:  # Default to stingray
-            shader_node = self.setup_stringray_node(
-                name, wants_opacity, opacity_mode=opacity_mode
-            )
+            # The mode travels alone: a bare want of opacity is alpha-blend,
+            # and an explicit mode wins (the retired `opacity` bool restated it).
+            if opacity_mode is None:
+                opacity_mode = "transparent" if wants_opacity else "none"
+            shader_node = self.setup_stringray_node(name, opacity_mode=opacity_mode)
 
         # Which ShaderFX graph the node actually got (None off StingrayPBS).
         # The report names it: a slot miss is the GRAPH's doing.
@@ -1296,8 +1298,11 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         return result_node
 
+    @ptk.Deprecation.parameter(
+        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
+    )
     def setup_stringray_node(
-        self, name: str, opacity: bool, opacity_mode: str = None
+        self, name: str, opacity: bool = False, opacity_mode: str = None
     ) -> object:
         """Create a StingrayPBS shader node with the right ShaderFX graph loaded.
 
@@ -1307,8 +1312,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         Parameters:
             name (str): The desired name for the StingrayPBS shader node.
-            opacity (bool): Legacy flag — True selects the transparent graph
-                when *opacity_mode* is not given.
+            opacity (bool): DEPRECATED (warns; removed in 0.20.0) -- True
+                selected the transparent graph when *opacity_mode* was not
+                given. Pass the mode.
             opacity_mode (str, optional): ``"none"`` / ``"masked"`` /
                 ``"transparent"``. ``"masked"`` gives alpha-cutout with hard
                 edges and a clean VP2.0 preview — usually what a decal wants.
@@ -1316,9 +1322,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         Returns:
             str: The created StingrayPBS shader node.
         """
-        sr_node = MatUtils.create_stingray_shader(
-            name, opacity=opacity, opacity_mode=opacity_mode
-        )
+        if opacity_mode is None:
+            opacity_mode = "transparent" if opacity else "none"
+        sr_node = MatUtils.create_stingray_shader(name, opacity_mode=opacity_mode)
         # Named from the node Maya actually created, not the name asked for:
         # Maya uniquifies a taken name (`x` -> `x1`), and `x1` paired with an
         # `xSG1` reads as two unrelated networks.

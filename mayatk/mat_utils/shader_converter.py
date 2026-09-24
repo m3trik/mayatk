@@ -241,7 +241,7 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
             )
 
         results: Dict[str, Optional[str]] = {}
-        for mat in MatUtils.get_mats(materials, as_strings=True) or []:
+        for mat in MatUtils.get_mats(materials) or []:
             mat = str(mat)
             source_type = cmds.nodeType(mat)
             short = CoreUtils.short_name(mat)

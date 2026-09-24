@@ -45,6 +45,11 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # ------------------------------------------------------------------
     # Pack-time parameters (ZomPack)
     # ------------------------------------------------------------------
+    # Not referenced by any bundled preset: the bridge's group hierarchy is
+    # always RootGroup > one tile > islands, so there is nothing nested for a
+    # deeper recursion to pack first (depths 1/2/5 saved byte-identical,
+    # probed 2026-09-23) and templates/pack_block.lua pins it to 1. Kept as
+    # token vocabulary for custom scripts that build their own island groups.
     "RECURSION_DEPTH": AttributeSpec(
         key="RECURSION_DEPTH",
         label="Recursion Depth",
@@ -54,8 +59,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
         maximum=5,
         step=1,
         tooltip=(
-            "How many recursion levels the packer explores.\n"
-            "Higher = tighter packing, much slower."
+            "ZomPack RecursionDepth -- how many levels of NESTED island\n"
+            "groups are packed first (1 = the tiles' content).\n"
+            "Only matters to a script that builds a group hierarchy."
         ),
     ),
     "SCALING_MODE": AttributeSpec(
@@ -115,7 +121,12 @@ PARAMS: "dict[str, AttributeSpec]" = {
         maximum=360,
         step=1,
         tooltip=(
-            "Rotation step in degrees.\n90 = axis-aligned, 1 = free rotation (slowest)."
+            "Rotation step in degrees.\n90 = axis-aligned, 1 = free rotation (slowest).\n"
+            "\n"
+            "Rizom first stands every island upright along its tightest\n"
+            "bounding box, THEN searches this step -- so rectangular shells\n"
+            "come out axis-aligned at any step. It changes the layout of\n"
+            "irregular shells. To keep the incoming angles, turn Rotate off."
         ),
     ),
     "PACK_ROTATE_ENABLE": AttributeSpec(
@@ -125,8 +136,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=True,
         tooltip=(
             "Allow the packer to rotate islands. When off, every island\n"
-            "keeps its incoming UV-space angle (the rotation step still\n"
-            "applies during the initial pre-orientation pass)."
+            "keeps its incoming UV-space angle: no upright pre-orientation\n"
+            "and no Orientation-step search."
         ),
     ),
     "PACK_TRANSLATE": AttributeSpec(
@@ -200,7 +211,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Mix incoming UV scale with the packer's computed scale.\n"
             "Intended for repacking a layout you want to mostly preserve;\n"
             "off = fully recompute scale from scratch.\n"
-            "MEASURED NO-OP on RizomUV 2020.1 -- on and off save a\n"
+            "Hidden below RizomUV 2022, where on and off save a\n"
             "byte-identical result. Effect on >= 2022 is unverified."
         ),
     ),
@@ -464,6 +475,13 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 # 4096, always the same fraction of the tile.
 DERIVED_KEYS = ("PACK_SPACING", "PACK_MARGIN")
 
+# Host-injected tokens (never panel knobs) and what they render when the host
+# has nothing to say -- so a preset that references one stays valid Lua for
+# every caller, the headless probe included. ``PACK_SUBSET`` is the Lua list of
+# material tags marking the shells a pack may move (see pack.lua); ``nil`` =
+# every island packs.
+HOST_TOKEN_DEFAULTS = {"PACK_SUBSET": "nil"}
+
 
 def _parse_version_literal(text: str) -> "tuple[int, ...]":
     """``"2022.0"`` -> ``(2022, 0)``; padded to length 2 for tuple compare."""
@@ -561,9 +579,11 @@ class Parameters:
 
         The derived gutter tokens are folded in LAST so they win over any
         stale ``PACK_SPACING`` / ``PACK_MARGIN`` left in a saved JSON preset
-        from when the two were spinboxes.
+        from when the two were spinboxes. Host tokens the caller did not set
+        render their :data:`HOST_TOKEN_DEFAULTS` value.
         """
-        merged = dict(values)
+        merged = dict(HOST_TOKEN_DEFAULTS)
+        merged.update(values)
         merged.update(Parameters.derived_values(merged))
         return _BridgeParams.render_context(merged, PARAMS, formatter=_FORMATTER)
 
@@ -641,20 +661,26 @@ class Parameters:
 # re-sending is a fresh dice roll rather than a refinement -- which is why the
 # old behaviour looked like "the second one works".
 #
-# The other two stay gated because neither earns its cost, not merely out of
-# caution: ``MaxMutations`` changed the stacked/instances result by NOTHING at
-# any value 25-250 (it only helps a single-mesh grid, 0.8084 -> 0.8394, and
-# needs 250 to be stable, at 8x the runtime -- 78s vs 10s), and
-# ``Rotate.Enable`` measurably changed nothing at all.
+# The gated knobs stay gated because none earns its place on 2020.1, not
+# merely out of caution -- a row the panel shows must change the result:
+# ``MaxMutations`` changed the stacked/instances result by NOTHING at any value
+# 25-250 (it only helps a single-mesh grid, 0.8084 -> 0.8394, and needs 250 to
+# be stable, at 8x the runtime -- 78s vs 10s), and ``Scaling.Mix`` on vs off
+# saves a byte-identical result (re-measured through the real Maya bridge
+# 2026-09-23). ``PACK_ROTATE_ENABLE`` is no longer gated: 2020.1 has no
+# ``Rotate.Enable`` (sending it changed nothing), but the documented pair
+# ``Rotate.Mode=0`` + ``Step=0`` does keep every island's angle, so
+# pack_block.lua derives both from the knob and sends ``Enable`` only on
+# >= 2022 via an inline ``@min_rizom_line`` gate.
 #
 # IMPORTANT (for future contributors): each gated placeholder must live on
 # its OWN line in the source .lua -- ``strip_unsupported`` drops whole
 # lines, so a sibling 2020.1-compatible key on the same line would be
-# dropped too. See the ``Rotate={Step=..., Enable=...}`` multi-line layout
-# in scripts/*.lua for the pattern.
+# dropped too. See the multi-line ``Scaling={Mode=..., Mix=...}`` layout in
+# templates/pack_block.lua for the pattern.
 MIN_VERSIONS: "dict[str, tuple[int, ...]]" = {
     "PACK_MAX_MUTATIONS": (2022, 0),
-    "PACK_ROTATE_ENABLE": (2022, 0),
+    "SCALING_MIX": (2022, 0),
 }
 
 # Minimum Rizom version that accepts the nested ``FBX={UseUVSetNames=true}``

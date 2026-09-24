@@ -13,12 +13,14 @@
 -- Pack op derives that set from the selection, and sends every mesh
 -- sharing the selection's materials so Rizom sees the whole layout).
 --
--- Requires RizomUV >= 2022.2: on 2020.1 island-group name selection is a
--- silent no-op and the ZomPack WorkingSet field is not honored (probed),
--- so this preset is version-gated -- hidden from the panel combo and
--- refused by the bridge below the gate. The recipe follows the official
--- RizomUVLink parameter reference; live verification on a >= 2022.2
--- install is still owed (probe it with test/rizom_headless_probe.py).
+-- Requires RizomUV >= 2022.2, and likely misbehaves there too: on 2020.1
+-- island-group name selection is a silent no-op, with or without the
+-- List=true the call below omits (probed 2026-09-23), and ZomPack with an
+-- EMPTY selection packs every island. The WorkingSet field itself IS
+-- honored on 2020.1 given an island selection -- templates/pack_block.lua's
+-- shell subset (a material tag selects the islands) is the probe-verified
+-- recipe to rebuild this on. Version-gated meanwhile: hidden from the panel
+-- combo and refused by the bridge below the gate.
 -- @min_rizom: 2022.2
 
 --
@@ -36,7 +38,7 @@ ZomSelect({
 ZomPack({
     WorkingSet="Visible&Selected",
     ProcessTileSelection=false,
-    RecursionDepth=__RECURSION_DEPTH__,
+    RecursionDepth=1,
     RootGroup="RootGroup",
     Scaling={Mode=0, Mix=false},
     Rotate={

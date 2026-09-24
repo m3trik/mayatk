@@ -10,6 +10,8 @@ GUI-only (registered in ``run_tests.GUI_REQUIRED``):
 
 import unittest
 import os
+import tempfile
+from html import escape as html_escape
 from unittest.mock import patch, MagicMock, PropertyMock
 
 import pythontk as ptk
@@ -1814,6 +1816,94 @@ class TestToggleReferenceOnCurrentSceneIsOneClick(unittest.TestCase):
             table.deleteLater()
 
 
+@unittest.skipUnless(_HAVE_QT, "needs a real Qt binding")
+class TestFooterActions(unittest.TestCase):
+    """The footer's action row, built by the REAL ``_setup_footer_actions`` on a
+    real uitk ``Footer`` (only the controller is stubbed).
+
+    Left to right: Un-Reference All, then Save To Workspace -- the primary
+    action, outermost, carrying the naming option box. A second slots instance
+    on the same persisted footer (a panel reload) must not build the row again.
+    Added: 2026-09-23.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        cls.app = _RealQtWidgets.QApplication.instance() or _RealQtWidgets.QApplication(
+            []
+        )
+
+    class _Controller:
+        def _save_scene_preview(self):
+            return "Save To Workspace"
+
+        def _wire_structure_tooltip(self, menu):
+            pass
+
+    def _slots(self, footer):
+        from qtpy import QtGui
+        from uitk.widgets.mixins.tooltip_mixin import TooltipNamespace
+
+        sb = type(
+            "SB",
+            (),
+            {"QtWidgets": _RealQtWidgets, "QtCore": _RealQtCore, "QtGui": QtGui},
+        )()
+        sb.tooltip = TooltipNamespace(sb)
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.sb = sb
+        slots.ui = type("UI", (), {"footer": footer})()
+        slots.logger = MockLogger()
+        slots.controller = self._Controller()
+        return slots
+
+    def _footer(self):
+        from uitk.widgets.footer import Footer
+
+        footer = Footer()
+        self.addCleanup(footer.deleteLater)
+        return footer
+
+    def test_unreference_all_sits_left_of_save(self):
+        footer = self._footer()
+        self._slots(footer)._setup_footer_actions()
+
+        row = footer.main_layout
+        unref = row.indexOf(footer._rm_unref_btn)
+        save = row.indexOf(footer._rm_save_btn)
+        self.assertGreaterEqual(unref, 0)
+        self.assertLess(unref, save)
+
+    def test_the_naming_fields_are_not_in_the_footer(self):
+        """They are panel-wide (Rename, Delete and the filters read them too), so
+        they live in the header menu, not on a Save option box."""
+        footer = self._footer()
+        self._slots(footer)._setup_footer_actions()
+
+        # Seated directly in the row: no option-box container wraps it. (Not
+        # ``option_box is None``: uitk patches a lazy option_box onto QPushButton.)
+        self.assertGreaterEqual(footer.main_layout.indexOf(footer._rm_save_btn), 0)
+        for name in ("cmb_case_style", "txt_suffix", "txt_subfolder_structure"):
+            self.assertIsNone(footer.findChild(_RealQtWidgets.QWidget, name), name)
+
+    def test_a_reload_does_not_rebuild_the_row(self):
+        footer = self._footer()
+        first = self._slots(footer)
+        first._setup_footer_actions()
+        save_btn = footer._rm_save_btn
+        second = self._slots(footer)  # a reload: new instance, same footer
+        second._setup_footer_actions()
+
+        labels = sorted(
+            b.text()
+            for b in footer.findChildren(_RealQtWidgets.QPushButton)
+            if b.text() in ("Un-Reference All", "Save To Workspace")
+        )
+        self.assertEqual(labels, ["Save To Workspace", "Un-Reference All"])
+        self.assertIs(footer._rm_save_btn, save_btn)
+
+
 class TestReferenceManagerHeaderInit(unittest.TestCase):
     """header_init opts this gesture-scoped panel into tap-to-pin.
 
@@ -1828,11 +1918,101 @@ class TestReferenceManagerHeaderInit(unittest.TestCase):
 
     def test_header_init_enables_pin_on_tap(self):
         slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.controller = MagicMock()
         widget = MagicMock()
         widget.is_initialized = True  # skip the one-time menu build
         slots.header_init(widget)
         self.assertTrue(widget.pin_on_tap)
         widget.config_buttons.assert_called_with("refresh", "menu", "collapse", "pin")
+
+
+class TestNamingLivesInTheHeaderMenu(unittest.TestCase):
+    """The naming fields (case / suffix / folder structure) are panel-wide: Save
+    and Rename apply them, Delete and the list filters read them. So header_init
+    builds them as a Naming section above the filters that match against them,
+    not on a Save option box, and editing one re-filters the list.
+    Added: 2026-09-23
+    """
+
+    NAMING = ("cmb_case_style", "txt_suffix", "txt_subfolder_structure")
+
+    def test_naming_section_precedes_the_filters_that_read_it(self):
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.controller = MagicMock()
+        slots.sb = MagicMock()
+        widget = MagicMock()
+        widget.is_initialized = False
+        slots.header_init(widget)
+
+        names = [c.kwargs.get("setObjectName") for c in widget.menu.add.call_args_list]
+        order = [
+            names.index(n)
+            for n in (*self.NAMING, "chk_filter_suffix", "chk_filter_folder_structure")
+        ]
+        self.assertEqual(order, sorted(order))
+        slots.controller._wire_structure_tooltip.assert_called_once_with(widget.menu)
+
+    def test_a_reload_rebinds_the_structure_preview_to_the_new_controller(self):
+        """The header outlives a slots reload; a preview left bound to the dead
+        controller would resolve against ITS stale workspace state."""
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.controller = MagicMock()
+        widget = MagicMock()
+        widget.is_initialized = True  # a reload: the menu is already built
+        slots.header_init(widget)
+        slots.controller._wire_structure_tooltip.assert_called_once_with(widget.menu)
+        widget.menu.add.assert_not_called()
+
+    def test_the_controller_reads_them_from_the_header_menu(self):
+        slot = MockSlot()
+        menu = MagicMock()
+        menu.cmb_case_style.currentText.return_value = "pascal"
+        menu.txt_suffix = MockLineEdit(" _v01 ")
+        menu.txt_subfolder_structure = MockLineEdit("{scenes}/{name}")
+        slot.ui.header = type("H", (), {"menu": menu})()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        self.assertEqual(
+            controller._naming_options(), ("pascal", "_v01", "{scenes}/{name}")
+        )
+
+    def _slots_with_filters(self, **checked):
+        def chk(on):
+            box = MagicMock()
+            box.isChecked.return_value = on
+            return box
+
+        menu = type(
+            "M",
+            (),
+            {
+                name: chk(checked.get(name, False))
+                for name in (
+                    "chk_hide_suffix",
+                    "chk_filter_suffix",
+                    "chk_filter_folder_structure",
+                )
+            },
+        )()
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.ui = MockUI()
+        slots.ui.header = type("H", (), {"menu": menu})()
+        slots.controller = MagicMock()
+        return slots
+
+    def test_editing_a_field_refilters_when_a_dependent_option_is_on(self):
+        slots = self._slots_with_filters(chk_filter_folder_structure=True)
+        slots.txt_subfolder_structure("{scenes}/{name}")
+        slots.txt_suffix("_v02")
+        self.assertEqual(slots.controller.refresh_file_list.call_count, 2)
+
+    def test_editing_a_field_leaves_the_list_alone_otherwise(self):
+        slots = self._slots_with_filters()
+        slots.txt_subfolder_structure("{scenes}/{name}")
+        slots.txt_suffix("_v02")
+        slots.controller.refresh_file_list.assert_not_called()
 
 
 class TestFolderStructurePreview(unittest.TestCase):
@@ -1860,8 +2040,8 @@ class TestFolderStructurePreview(unittest.TestCase):
         menu.txt_suffix = MockLineEdit(suffix)
         menu.cmb_case_style = MagicMock()
         menu.cmb_case_style.currentText.return_value = case
-        slot.ui.header = MagicMock()
-        slot.ui.header.menu = menu
+        # The naming fields live in the header menu (controller._naming_menu).
+        slot.ui.header = type("H", (), {"menu": menu})()
         return controller
 
     def test_wiring_and_preview_live_on_controller_not_slots(self):
@@ -1926,6 +2106,602 @@ class TestFolderStructurePreview(unittest.TestCase):
         self.assertIn("{scenes}", html)
 
 
+class TestSaveTargetAndFooterActions(unittest.TestCase):
+    """The footer Save button's shared path computation + the new footer/combo actions.
+
+    ``_resolve_save_target`` is the single computation behind ``save_scene`` AND the
+    Save button's live tooltip (``_save_scene_preview``), so the preview can never
+    show a path the save wouldn't write. ``set_maya_project`` commits the browsed
+    workspace to Maya's project (the explicit counterpart of open_scene's automatic
+    set); ``btn_copy_path`` puts the right-clicked row's path on the clipboard.
+    Added: 2026-09-23 (Save To Workspace moved to the footer).
+    """
+
+    def _make_controller(self, pattern="{scenes}/{name}", suffix="_v01", case="None"):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+
+        menu = MagicMock()
+        menu.txt_subfolder_structure = MockLineEdit(pattern)
+        menu.txt_suffix = MockLineEdit(suffix)
+        menu.cmb_case_style = MagicMock()
+        menu.cmb_case_style.currentText.return_value = case
+        slot.ui.header = type("H", (), {"menu": menu})()
+        return controller
+
+    def test_resolve_save_target_joins_workspace_pattern_and_suffixed_name(self):
+        controller = self._make_controller()
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=os.path.normpath(tempfile.gettempdir()),
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+        ):
+            path = controller._resolve_save_target(
+                "Env", "None", "_v01", "{scenes}/{name}"
+            )
+        ws = os.path.normpath(tempfile.gettempdir())
+        self.assertEqual(path, os.path.join(ws, "scenes", "Env", "Env_v01.ma"))
+
+    def test_resolve_save_target_refuses_an_invalid_workspace(self):
+        controller = self._make_controller()
+        with patch.object(
+            ref_mgr.ReferenceManagerController,
+            "current_working_dir",
+            new_callable=PropertyMock,
+            return_value="Z:/no/such/dir",
+        ):
+            with self.assertRaises(ValueError):
+                controller._resolve_save_target("Env", "None", "", "{scenes}")
+
+    def test_save_preview_shows_the_exact_target_path(self):
+        controller = self._make_controller()
+        ws = os.path.normpath(tempfile.gettempdir())
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=ws,
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+        ):
+            preview = controller._save_scene_preview()
+            expected = controller._resolve_save_target(
+                "<scene name>", "None", "_v01", "{scenes}/{name}"
+            )
+        # The preview names the button's purpose and carries the resolved path,
+        # HTML-escaped (the "<scene name>" sentinel must not be eaten as a tag).
+        self.assertIn("Save To Workspace", preview)
+        self.assertIn(html_escape(expected), preview)
+
+    def test_save_preview_surfaces_the_scene_typo_note(self):
+        controller = self._make_controller(pattern="{scene}/x")
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=os.path.normpath(tempfile.gettempdir()),
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+        ):
+            preview = controller._save_scene_preview()
+        self.assertIn("did you mean", preview)
+
+    def test_default_save_name_keeps_a_dotted_scene_name(self):
+        # Regression: the old ``split(".")[0]`` prepopulated "hero" for
+        # "hero.rig.ma" — only the extension may come off (blendertk parity).
+        controller = self._make_controller(suffix="")
+        with patch.object(
+            ref_mgr.cmds,
+            "file",
+            create=True,
+            return_value="C:/proj/scenes/hero.rig.ma",
+        ):
+            name = controller._default_save_name("None", "")
+        self.assertEqual(name, "hero.rig")
+
+    def test_a_doubled_suffix_scene_previews_the_path_its_save_writes(self):
+        """Save strips the suffix from whatever its prompt returns, so the prefill
+        must already be a fixed point of that strip. Regression: a scene the old
+        Rename doubled (``villain_v01_v01.ma``) prefilled ``villain_v01``, which
+        the tooltip previewed as ``scenes/villain_v01/villain_v01_v01.ma`` while
+        accepting the prompt saved ``scenes/villain/villain_v01.ma``."""
+        controller = self._make_controller()  # {scenes}/{name}, suffix _v01
+        controller.refresh_file_list = lambda invalidate=False: None
+        controller.sb.input_dialog = lambda title, label, default: default
+        ws = os.path.normpath(tempfile.gettempdir())
+        saved = []
+
+        def _file(*args, **kwargs):
+            if kwargs.get("q") or kwargs.get("query"):
+                return "C:/proj/scenes/villain/villain_v01_v01.ma"
+            if kwargs.get("rename"):
+                saved.append(kwargs["rename"])
+
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=ws,
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, side_effect=_file),
+            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == ws),
+            patch.object(ref_mgr.os, "makedirs"),  # nothing touches disk
+        ):
+            preview = controller._save_scene_preview()
+            controller.save_scene()
+        self.assertEqual(
+            [os.path.relpath(p, ws) for p in saved],
+            [os.path.join("scenes", "villain", "villain_v01.ma")],
+        )
+        self.assertIn(html_escape(saved[0]), preview)
+
+    def test_set_maya_project_commits_the_browsed_workspace(self):
+        controller = self._make_controller()
+        controller.ui.footer = None
+        ws = os.path.normpath(tempfile.gettempdir())
+        calls = []
+
+        def _workspace(*args, **kwargs):
+            if kwargs.get("q"):
+                return "C:/somewhere/else"
+            calls.append((args, kwargs))
+            return None
+
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=ws,
+            ),
+            patch.object(
+                ref_mgr.cmds, "workspace", create=True, side_effect=_workspace
+            ),
+        ):
+            result = controller.set_maya_project()
+        self.assertTrue(result)
+        self.assertEqual(calls, [((ws,), {"openWorkspace": True})])
+
+    def test_set_maya_project_refuses_an_invalid_workspace(self):
+        controller = self._make_controller()
+        boxes = []
+        controller.sb.message_box = lambda msg, *b: boxes.append(msg)
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value="Z:/no/such/dir",
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True) as ws_cmd,
+        ):
+            result = controller.set_maya_project()
+        self.assertFalse(result)
+        self.assertEqual(ws_cmd.call_count, 0)
+        self.assertTrue(boxes)
+
+    def test_btn_copy_path_puts_the_row_path_on_the_clipboard(self):
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot = MockSlot()
+        slots.sb = slot.sb
+        slots.ui = slot.ui
+        slots.logger = MockLogger()
+        slots.controller = MagicMock()
+        slots.controller._context_menu_row = 0
+
+        table = slots.ui.tbl000
+        table.setRowCount(1)
+        item = QtWidgets.QTableWidgetItem("EnvA")
+        item.setData(QtCore.Qt.UserRole, "C:/proj/scenes/EnvA_v01.ma")
+        table.setItem(0, 0, item)
+
+        copied = []
+        clipboard = type(
+            "Clipboard", (), {"setText": staticmethod(lambda t: copied.append(t))}
+        )
+        with patch.object(
+            QtWidgets.QApplication,
+            "clipboard",
+            create=True,
+            new=staticmethod(lambda: clipboard),
+        ):
+            slots.btn_copy_path()
+        self.assertEqual(copied, [os.path.normpath("C:/proj/scenes/EnvA_v01.ma")])
+
+    def test_btn_copy_path_without_a_row_reports_instead_of_raising(self):
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slot = MockSlot()
+        slots.sb = slot.sb
+        slots.ui = slot.ui
+        slots.logger = MockLogger()
+        slots.controller = MagicMock()
+        slots.controller._context_menu_row = None
+        boxes = []
+        slots.sb.message_box = lambda msg, *b: boxes.append(msg)
+        slots.btn_copy_path()
+        self.assertTrue(boxes)
+
+
+class TestNamingConventionsNeverDoubleTheSuffix(unittest.TestCase):
+    """Rename and Save append the configured suffix, so the name they are handed
+    must not carry it already.
+
+    Regression: Rename prefilled the dialog with the file's full stem -- suffix
+    included -- and ``_format_name`` then appended the suffix again, so keeping
+    the prefilled suffix while editing (``hero_v01`` -> ``villain_v01``) wrote
+    ``villain_v01_v01.ma``, and a ``{name}`` per-scene folder took the suffix
+    too. Save's prefill already stripped it, but a suffix TYPED into Save's
+    dialog doubled the same way. Added: 2026-09-23.
+    """
+
+    SUFFIX = "_v01"
+
+    def _make_controller(self, structure="{scenes}"):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        controller.refresh_file_list = lambda invalidate=False: None
+        menu = MagicMock()
+        menu.txt_subfolder_structure = MockLineEdit(structure)
+        menu.txt_suffix = MockLineEdit(self.SUFFIX)
+        menu.cmb_case_style = MagicMock()
+        menu.cmb_case_style.currentText.return_value = "None"
+        slot.ui.header = type("H", (), {"menu": menu})()
+        self.boxes = []
+        controller.sb.message_box = lambda msg, *b: self.boxes.append(msg)
+        return controller
+
+    def _rename(self, answer, structure="{scenes}", filename="hero_v01.ma"):
+        """Rename *filename* through the dialog answering *answer*; returns
+        (prefill, the ``_rename_scene_file`` call or None)."""
+        controller = self._make_controller(structure)
+        old = os.path.normpath(f"C:/proj/scenes/hero/{filename}")
+        table = controller.ui.tbl000
+        table.setRowCount(1)
+        item = QtWidgets.QTableWidgetItem("hero")
+        item.setData(QtCore.Qt.UserRole, old)
+        table.setItem(0, 0, item)
+        controller._context_menu_row = 0
+
+        seen = {}
+
+        def _dialog(title, label, default):
+            seen["prefill"] = default
+            return answer
+
+        controller.sb.input_dialog = _dialog
+        calls = []
+        controller._rename_scene_file = lambda o, n, folder=None: (
+            calls.append((o, n, folder)) or n
+        )
+        with patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == old):
+            controller.rename_scene()
+        return seen.get("prefill"), (calls[0] if calls else None)
+
+    def test_the_rename_prefill_leaves_out_the_suffix(self):
+        prefill, _call = self._rename(answer=None)
+        self.assertEqual(prefill, "hero")
+
+    def test_typing_the_suffix_onto_an_unsuffixed_file_adds_it(self):
+        # The answer differs from the prefill even though it strips back to it:
+        # "unchanged" is judged on what the user typed, not on the stripped name.
+        _prefill, call = self._rename(answer="hero_v01", filename="hero.ma")
+        self.assertIsNotNone(call, "a typed suffix was read as an unchanged name")
+        self.assertEqual(os.path.basename(call[1]), "hero_v01.ma")
+
+    def test_a_rename_that_keeps_the_suffix_writes_it_once(self):
+        _prefill, call = self._rename(answer="villain_v01")
+        self.assertEqual(os.path.basename(call[1]), "villain_v01.ma")
+
+    def test_a_rename_without_the_suffix_gains_it(self):
+        _prefill, call = self._rename(answer="villain")
+        self.assertEqual(os.path.basename(call[1]), "villain_v01.ma")
+
+    def test_the_per_scene_folder_takes_the_name_without_the_suffix(self):
+        _prefill, call = self._rename(answer="villain_v01", structure="{scenes}/{name}")
+        self.assertEqual(call[2], "villain")
+
+    def test_an_unchanged_answer_renames_nothing(self):
+        _prefill, call = self._rename(answer="hero")
+        self.assertIsNone(call)
+        self.assertEqual(self.boxes, [])  # no "target exists" for a no-op
+
+    def test_a_suffix_typed_into_save_is_written_once(self):
+        # Both the file and the {name} folder: the folder resolves from the
+        # typed name, so it took the suffix too (scenes/villain_v01/).
+        controller = self._make_controller(structure="{scenes}/{name}")
+        controller.sb.input_dialog = lambda title, label, default: "villain_v01"
+        ws = os.path.normpath(tempfile.gettempdir())
+        renamed = []
+
+        def _file(*args, **kwargs):
+            if kwargs.get("q") or kwargs.get("query"):
+                return ""
+            if kwargs.get("rename"):
+                renamed.append(kwargs["rename"])
+
+        with (
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "current_working_dir",
+                new_callable=PropertyMock,
+                return_value=ws,
+            ),
+            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_mgr.cmds, "file", create=True, side_effect=_file),
+            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == ws),
+            patch.object(ref_mgr.os, "makedirs"),  # nothing touches disk
+        ):
+            controller.save_scene()
+        self.assertEqual(
+            [os.path.relpath(p, ws) for p in renamed],
+            [os.path.join("scenes", "villain", "villain_v01.ma")],
+        )
+
+
+class _OnDiskRename:
+    """Fixture for renames against REAL files: a scoped temp workspace ``proj``
+    holding its ``scenes`` folder, and a controller browsing it, wired for Rename
+    under ``{scenes}/{name}`` with suffix ``_v01`` (only Qt/ui is stubbed)."""
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_rename_disk_test", policy="scoped")
+        self.workspace = os.path.join(self._store.dir_path(), "proj")
+        self.scenes = os.path.join(self.workspace, "scenes")
+        os.makedirs(self.scenes)
+        self.boxes = []
+
+    def tearDown(self):
+        self._store.cleanup()
+
+    def _touch(self, *parts):
+        path = os.path.join(self.scenes, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        return path
+
+    def _listing(self, *parts):
+        return sorted(os.listdir(os.path.join(self.scenes, *parts)))
+
+    def _controller(self, answer):
+        slot = MockSlot()
+        slot._is_current = lambda path, current=None: False
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot = slot
+        controller.sb = slot.sb
+        controller.ui = slot.ui
+        controller.logger = MockLogger()
+        controller.refresh_file_list = lambda invalidate=False: None
+        # The browsed workspace and its {scenes} rule, pinned: the guards that
+        # keep Rename / Delete off the project's own structure read both.
+        controller._current_working_dir = self.workspace
+        controller._scenes_folder = lambda: "scenes"
+        menu = MagicMock()
+        menu.txt_subfolder_structure = MockLineEdit("{scenes}/{name}")
+        menu.txt_suffix = MockLineEdit("_v01")
+        menu.cmb_case_style = MagicMock()
+        menu.cmb_case_style.currentText.return_value = "None"
+        slot.ui.header = type("H", (), {"menu": menu})()
+        controller.sb.message_box = lambda msg, *b: self.boxes.append(msg)
+        controller.sb.input_dialog = lambda title, label, default: answer
+        table = controller.ui.tbl000
+        table.setRowCount(1)
+        item = QtWidgets.QTableWidgetItem("row")
+        item.setData(QtCore.Qt.UserRole, self.old)
+        table.setItem(0, 0, item)
+        controller._context_menu_row = 0
+        return controller
+
+    def _inline_rename(self, typed):
+        """Commit an inline (double-click) edit of the row's name to *typed*,
+        through the REAL controller rename."""
+
+        class _Item:
+            def __init__(self, text, path):
+                self._text, self._path = text, path
+
+            def column(self):
+                return 0
+
+            def text(self):
+                return self._text
+
+            def data(self, role):
+                return self._path
+
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.sb = MockSB()
+        slots.sb.message_box = lambda msg, *b: self.boxes.append(msg)
+        slots.ui = MockUI()
+        slots.logger = MockLogger()
+        slots.controller = self._controller(answer=None)
+        item = _Item(typed, self.old)
+        slots.controller._editing_item = item
+        slots.tbl000_item_changed(item)
+
+
+class TestCaseOnlyRename(_OnDiskRename, unittest.TestCase):
+    """A rename that changes only the name's case goes through -- real files.
+
+    Regression: on a case-insensitive file system (Windows) ``os.path.exists``
+    reports ``Hero_v01.ma`` present while ``hero_v01.ma`` -- the very file being
+    renamed -- is, so both rename routes refused it ("Target file exists") and
+    the per-scene folder refused ``hero`` -> ``Hero`` the same way; the folder's
+    ownership test was also case-sensitive, unlike Delete's. ``os.rename`` does
+    case-only renames fine; the guards now let a target through when it IS the
+    source (``ptk.FileUtils.is_same_file``). Real files, so the tests hold on
+    either kind of file system. Added: 2026-09-23.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.old = self._touch("hero", "hero_v01.ma")
+
+    def test_the_context_rename_changes_only_the_case(self):
+        self._controller("Hero").rename_scene()
+        self.assertEqual(self.boxes, [])
+        self.assertEqual(self._listing(), ["Hero"])  # the folder too
+        self.assertEqual(self._listing("Hero"), ["Hero_v01.ma"])
+
+    def test_a_folder_differing_only_in_case_is_still_the_scenes_own(self):
+        os.rename(os.path.join(self.scenes, "hero"), os.path.join(self.scenes, "Hero"))
+        self.old = os.path.join(self.scenes, "Hero", "hero_v01.ma")
+        self._controller("villain").rename_scene()
+        self.assertEqual(self._listing(), ["villain"])
+        self.assertEqual(self._listing("villain"), ["villain_v01.ma"])
+
+    def test_the_inline_rename_changes_only_the_case(self):
+        self._inline_rename("Hero_v01.ma")
+        self.assertEqual(self.boxes, [])
+        self.assertEqual(self._listing(), ["Hero"])
+        self.assertEqual(self._listing("Hero"), ["Hero_v01.ma"])
+
+    def test_the_inline_rename_carries_the_per_scene_folder(self):
+        # Regression: the inline rename called the same disk-side rename as the
+        # context menu's, minus the folder -- "villain_v01.ma" was left in "hero".
+        self._inline_rename("villain_v01.ma")
+        self.assertEqual(self._listing(), ["villain"])
+        self.assertEqual(self._listing("villain"), ["villain_v01.ma"])
+
+
+class TestPerSceneFolderMovesOnlyWithItsOwnScene(_OnDiskRename, unittest.TestCase):
+    """A rename takes the scene's folder along only when the folder is its alone.
+
+    Regression: ownership was a bare name-prefix test, so a scene loose in the
+    scenes root whose name starts with the root's -- ``scenes/scenes_final.ma``
+    -- "owned" ``scenes/``, and renaming it renamed the whole scenes folder with
+    every other scene in it (Delete guards the same coincidence). A folder
+    shared with other scenes (``hero_v01`` beside ``hero_v02``) moved with one of
+    them the same way, filing the rest under a name no longer theirs. A folder
+    now moves only when it holds no other Maya scene at any depth -- the scene's
+    own incremental saves excepted. Added: 2026-09-23.
+    """
+
+    def test_a_loose_scene_never_moves_the_scenes_root(self):
+        self.old = self._touch("scenes_final.ma")
+        self._touch("hero", "hero_v01.ma")
+        self._controller("final").rename_scene()
+        self.assertTrue(os.path.isdir(self.scenes), "the scenes root was renamed")
+        self.assertEqual(self._listing(), ["final_v01.ma", "hero"])
+
+    def test_a_folder_shared_with_other_scenes_stays(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._touch("hero", "hero_v02.ma")
+        self._controller("villain").rename_scene()
+        self.assertEqual(self._listing(), ["hero"])
+        self.assertEqual(self._listing("hero"), ["hero_v02.ma", "villain_v01.ma"])
+
+    def test_the_scenes_own_incremental_saves_do_not_hold_it_back(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._touch("hero", "incrementalSave", "hero_v01.ma", "hero_v01.0001.ma")
+        self._controller("villain").rename_scene()
+        self.assertEqual(self._listing(), ["villain"])
+        self.assertEqual(
+            self._listing("villain", "incrementalSave", "villain_v01.ma"),
+            ["hero_v01.0001.ma"],
+        )
+
+    def test_a_folder_that_cannot_be_read_is_left_alone(self):
+        def _walk(top, onerror=None):
+            onerror(PermissionError(13, "Access is denied", top))
+            return iter(())
+
+        holds = ref_mgr._ReferenceManagerInternal._holds_other_scenes
+        with patch.object(ref_mgr.os, "walk", side_effect=_walk):
+            self.assertTrue(holds(self.scenes, os.path.join(self.scenes, "a.ma")))
+
+    def test_a_missing_folder_holds_nothing(self):
+        holds = ref_mgr._ReferenceManagerInternal._holds_other_scenes
+        gone = os.path.join(self.scenes, "gone")
+        self.assertFalse(holds(gone, os.path.join(gone, "a.ma")))
+
+    def test_the_inline_rename_never_moves_the_scenes_root_either(self):
+        self.old = self._touch("scenes_final.ma")
+        self._touch("hero", "hero_v01.ma")
+        self._inline_rename("final.ma")
+        self.assertTrue(os.path.isdir(self.scenes), "the scenes root was renamed")
+        self.assertEqual(self._listing(), ["final.ma", "hero"])
+
+    def test_a_scene_alone_in_the_scenes_root_never_moves_it(self):
+        # No OTHER Maya scene anywhere below (a fresh project; its other rows are
+        # FBX), so "holds other scenes" cannot protect the root: the structure
+        # guard has to. Regression: the scenes root was renamed to "final".
+        self.old = self._touch("scenes_final.ma")
+        self._touch("props", "chair.fbx")
+        self._controller("final").rename_scene()
+        self.assertTrue(os.path.isdir(self.scenes), "the scenes root was renamed")
+        self.assertEqual(self._listing(), ["final_v01.ma", "props"])
+
+    def test_a_scene_at_the_workspace_root_never_moves_the_workspace(self):
+        # "proj/proj_v01.ma" is named for the project folder itself; with no other
+        # Maya scene in the project, Rename renamed the whole project to "final".
+        self.old = os.path.join(self.workspace, "proj_v01.ma")
+        open(self.old, "w").close()
+        self._controller("final").rename_scene()
+        self.assertTrue(os.path.isdir(self.workspace), "the workspace was renamed")
+        self.assertEqual(
+            sorted(os.listdir(self.workspace)), ["final_v01.ma", "scenes"]
+        )
+
+
+class TestDeleteRemovesOnlyWhatItNames(_OnDiskRename, unittest.TestCase):
+    """Delete removes the scene (and its sidecar), and its per-scene folder only
+    once nothing else is left in it -- real files.
+
+    Regression: with a ``{name}`` structure, deleting a folder's last Maya scene
+    ``rmtree``'d the folder, and with it every file that was not a Maya scene --
+    an FBX or USD listed as a row of the same panel, a playblast, another file's
+    notes -- none of them named in the "Delete hero_v01.ma?" prompt, none
+    recoverable. And a scene alone in the scenes root took the root with it.
+    Added: 2026-09-23.
+    """
+
+    def _delete(self):
+        controller = self._controller(answer=None)
+        controller.sb.message_box = lambda msg, *b: "Yes"  # confirm the delete
+        controller.delete_scene()
+
+    def test_the_last_scene_takes_its_emptied_folder_along(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._touch("hero", "hero_v01.ma.metadata.json")
+        self._delete()
+        self.assertEqual(self._listing(), [])
+
+    def test_a_file_that_is_not_a_scene_keeps_the_folder_and_survives(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._touch("hero", "hero_v01.fbx")
+        self._delete()
+        self.assertEqual(self._listing("hero"), ["hero_v01.fbx"])
+
+    def test_a_scene_alone_in_the_scenes_root_never_removes_it(self):
+        self.old = self._touch("scenes_final.ma")
+        self._delete()
+        self.assertTrue(os.path.isdir(self.scenes), "the scenes root was removed")
+
+
 class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
     """Renaming the scene that is currently open must save it first, then re-open the new file.
 
@@ -1944,6 +2720,10 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
         controller.sb = slot.sb
         controller.ui = slot.ui
         controller.logger = MockLogger()
+        # A browsed workspace unrelated to the C:proj paths below, so the
+        # per-scene folders they rename are never the project's own structure.
+        controller._current_working_dir = tempfile.gettempdir()
+        controller._scenes_folder = lambda: "scenes"
         return controller
 
     @staticmethod
@@ -2096,6 +2876,9 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self._store = ptk.TempArtifacts("mtk_rm_rename_test", policy="scoped")
         self.root = self._store.dir_path()
         self.controller = self._make_controller()
+        # The panel browses the project these scenes live in (root/scenes/...).
+        self.controller._current_working_dir = self.root
+        self.controller._scenes_folder = lambda: "scenes"
 
     def tearDown(self):
         ref_mgr.cmds.file(new=True, force=True)  # leave no scene open for the next test
@@ -2686,6 +3469,83 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
     def _norm(path):
         return os.path.normcase(os.path.normpath(path))
 
+    def _metre_z_up_stage(self):
+        """Blender's default USD export shape: metres, Z up -- a 0.2 x 0.2 x 1 m
+        box standing on Z. mayaUsd 0.30 converts neither on read."""
+        from pxr import Gf, Usd, UsdGeom
+
+        path = os.path.join(self.root, "tall_box_m_zup.usda")
+        stage = Usd.Stage.CreateNew(path)
+        UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+        UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+        mesh = UsdGeom.Mesh.Define(stage, "/tall_box")
+        corners = [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)]
+        points = [Gf.Vec3f(x, y, z) for z in (0.0, 1.0) for x, y in corners]
+        mesh.CreatePointsAttr(points)
+        mesh.CreateFaceVertexCountsAttr([4] * 6)
+        mesh.CreateFaceVertexIndicesAttr(
+            [0, 3, 2, 1, 4, 5, 6, 7, 0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6, 3, 0, 4, 7]
+        )
+        stage.SetDefaultPrim(mesh.GetPrim())
+        stage.GetRootLayer().Save()
+        return path
+
+    def _world_box(self, nodes):
+        box = ref_mgr.cmds.exactWorldBoundingBox(nodes)
+        return [round(v, 3) for v in box]
+
+    def test_a_metre_z_up_reference_lands_at_size_and_upright(self):
+        """BACKLOG 2026-09-21 (decided 2026-09-23: auto-conform): measured, this
+        layer referenced at 0.2 x 0.2 x 1.0 cm standing along Z. Its top nodes
+        now sit under a host-side group that scales and turns it into the
+        scene's cm / Y-up -- a parent edit, so an unload/reload keeps it."""
+        cmds = ref_mgr.cmds
+        manager = TestImportReferencesNamespaceModes._make_manager()
+        self.assertTrue(manager.add_reference("tall", self._metre_z_up_stage()))
+        ref = manager.current_references[0]
+        geo = cmds.ls(f"{ref.namespace}:tall_box", long=True)
+        want = [-10.0, 0.0, -10.0, 10.0, 100.0, 10.0]
+        self.assertEqual(self._world_box(geo), want)
+        self.assertTrue(cmds.objExists("tall_conform"))
+
+        rn = cmds.referenceQuery(geo[0], referenceNode=True)
+        cmds.file(unloadReference=rn)
+        cmds.file(loadReference=rn)
+        geo = cmds.ls(f"{ref.namespace}:tall_box", long=True)
+        self.assertEqual(self._world_box(geo), want, "the conform survives a reload")
+
+        self.assertEqual(manager.remove_references(["tall"]), [])
+        self.assertFalse(cmds.objExists("tall_conform"), "an empty group goes too")
+
+    def test_a_metre_z_up_scene_opens_at_size_and_upright(self):
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+        self.assertTrue(
+            controller.open_scene(self._metre_z_up_stage(), set_workspace=False)
+        )
+        self.assertEqual(
+            self._world_box(ref_mgr.cmds.ls("tall_box", long=True)),
+            [-10.0, 0.0, -10.0, 10.0, 100.0, 10.0],
+        )
+
+    def test_a_scene_unit_layer_gets_no_conform_group(self):
+        """The bridge writes Maya-bound layers in cm / Y-up; so does mayaUsd."""
+        manager = TestImportReferencesNamespaceModes._make_manager()
+        self.assertTrue(manager.add_reference("crate", self.usd))
+        self.assertFalse(ref_mgr.cmds.ls("*_conform"))
+
+    def test_a_metre_z_up_import_lands_at_size_and_upright(self):
+        """The native import path (the Reference Manager's Import of a USD row,
+        through ``BlenderSceneImport.import_scene``'s USD fast path) conforms
+        the same way; the bridge's own payload does not ask to."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        cmds = ref_mgr.cmds
+        BlenderSceneImport().import_scene(self._metre_z_up_stage())
+        self.assertEqual(
+            self._world_box(cmds.ls("tall_box", long=True)),
+            [-10.0, 0.0, -10.0, 10.0, 100.0, 10.0],
+        )
+
     def test_add_reference_reads_a_usd_through_its_translator(self):
         manager = TestImportReferencesNamespaceModes._make_manager()
         self.assertTrue(manager.add_reference("crate", self.usd))
@@ -2852,10 +3712,40 @@ class TestImportReferencesSceneData(unittest.TestCase):
     def test_a_merge_respells_the_records_and_the_carriers_go(self):
         self._module_with_a_shot()
         self.manager.import_references(namespace_mode="remove")
-        self.assertEqual(self._load("AUDIO_FILE_MAP"), {"1": "a.wav", "2": "b.wav"})
+        audio = self._load("AUDIO_FILE_MAP")
+        self.assertEqual(audio["1"], "a.wav")
+        # The module's path is spelled from ITS project (the folder it was saved
+        # in) and lands spelled from this scene's -- absolute while this one is
+        # unsaved (the path rule, 2026-09-23).
+        self.assertEqual(
+            os.path.normcase(audio["2"]),
+            os.path.normcase(os.path.join(os.path.dirname(self.module), "b.wav")),
+        )
         (shot,) = self._load("SHOT_STORE")["shots"]
         self.assertEqual(shot["objects"], ["|door1"], "where the clash put it")
         self.assertEqual(self._carriers(), ["data_internal"])
+
+    def test_a_merged_path_is_spelled_from_the_host_project(self):
+        """The path rule (2026-09-23): the module's audio path is spelled from
+        ITS project; merged into a host saved in another project, it arrives
+        re-spelled from the host's (``merge_carriers(source_path_base=)``) --
+        a relative spelling naming the same file."""
+        self._module_with_a_shot()
+        host_root = self._store.dir_path(name="host_project")
+        os.makedirs(os.path.join(host_root, "scenes"), exist_ok=True)
+        with open(os.path.join(host_root, "workspace.mel"), "w") as fh:
+            fh.write("//Maya 2025 Project Definition\n")
+        ref_mgr.cmds.file(rename=os.path.join(host_root, "scenes", "host.ma"))
+        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        self.manager.import_references(namespace_mode="remove")
+        landed = self._load("AUDIO_FILE_MAP")["2"]
+        module_wav = os.path.join(os.path.dirname(self.module), "b.wav")
+        self.assertFalse(os.path.isabs(landed), landed)
+        self.assertEqual(landed, ptk.FileUtils.portable_path(module_wav, host_root))
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(os.path.join(host_root, landed))),
+            os.path.normcase(os.path.normpath(module_wav)),
+        )
 
     def test_a_kept_namespace_is_respelled_too(self):
         self._module_with_a_shot()

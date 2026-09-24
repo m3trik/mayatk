@@ -76,8 +76,16 @@ class LightmapBakeResult:
             engine binding into its map (the identity for a map of its own).
         excluded: Objects the scene's lightmap exclusion set left out. They
             keep any map they already had.
+        hidden: Objects left out because Arnold renders nothing of them --
+            hidden or templated, by their own flags or an ancestor's
+            (:meth:`LightmapBaker.bake_targets`). They keep any map they
+            already had. Always empty in blendertk, whose bakes include
+            hidden objects.
         unbaked: Objects the bake was asked for and produced nothing for (a
             cancel, a failed render). They keep any map they already had.
+        retired: Map files the bake superseded and deleted -- what its
+            objects read before, that nothing reads now
+            (:meth:`LightmapRecords.superseding`).
         refused: Why nothing was baked, as a sentence for the artist, or
             ``None``.
         verdict: A warning about the finished maps' level (an unlit or a
@@ -87,7 +95,9 @@ class LightmapBakeResult:
     maps: Dict[str, str] = field(default_factory=dict)
     rects: Dict[str, List[float]] = field(default_factory=dict)
     excluded: List[str] = field(default_factory=list)
+    hidden: List[str] = field(default_factory=list)
     unbaked: List[str] = field(default_factory=list)
+    retired: List[str] = field(default_factory=list)
     refused: Optional[str] = None
     verdict: Optional[str] = None
 
@@ -256,6 +266,20 @@ class LightmapBaker(ptk.LoggingMixin):
         "denoise",
         "beside_textures",
     )
+    #: Retired built-in tier names -> the current one, warning until they go.
+    #: ``"quest"`` (until 2026-09-23) named one headset for a tier that serves
+    #: every mobile / standalone-VR target; a script or the panel's preset
+    #: pointer may still say it. :meth:`from_preset` resolves only a name the
+    #: store lacks, so a user preset saved under a retired name still wins.
+    _resolve_retired_preset = staticmethod(
+        ptk.Deprecation.values(
+            {"quest": "mobile"},
+            what="LightmapBaker preset",
+            remove_in="0.21.0",
+            since="2026-09-23",
+            reason="The tier was renamed; its settings are unchanged.",
+        )
+    )
 
     @staticmethod
     def preset_store() -> "ptk.PresetStore":
@@ -277,12 +301,15 @@ class LightmapBaker(ptk.LoggingMixin):
         switches a preset saved from the panel adds) -- the rest of the
         pipeline derives from resolution (gutter padding, dilation width) or
         has a sound default. ``overrides`` win over the preset (e.g.
-        ``from_preset("quest", resolution=1536)``); extra preset keys
+        ``from_preset("mobile", resolution=1536)``); extra preset keys
         (``description``, the panel's ``packing``) are ignored.
 
-        Built-ins: ``preview`` (256/2), ``quest`` (1024/4), ``desktop`` (2048/8).
+        Built-ins: ``preview`` (256/2), ``mobile`` (1024/4), ``desktop`` (2048/8).
+        A retired tier name (``quest``) still resolves, with a notice.
         """
         store = cls.preset_store()
+        if not store.exists(name):
+            name = cls._resolve_retired_preset(name)
         if not store.exists(name):
             raise ValueError(
                 f"Unknown lightmap preset {name!r}. Available: {store.list()}"
@@ -296,7 +323,7 @@ class LightmapBaker(ptk.LoggingMixin):
         kwargs.update({k: bool(data[k]) for k in cls.PRESET_BOOL_KEYS if k in data})
         # ...and the knobs a preset never stores but an override legitimately
         # passes. Filtering to the preset keys alone silently DROPPED them, so
-        # from_preset("quest", device="GPU") built a baker on the scene's
+        # from_preset("mobile", device="GPU") built a baker on the scene's
         # device and said nothing (the Blender twin had the same hole).
         for key in ("device", "baker"):
             if key in overrides:
@@ -315,46 +342,87 @@ class LightmapBaker(ptk.LoggingMixin):
         filters through here, so the panel, a headless bake and a preset run
         of the same scene all skip the same objects.
 
-        A HIDDEN mesh is left out too, and named: Arnold renders no hidden
-        object, so its bake returns normally with no map -- which the bake
-        reads as the render having been stopped, ending the whole bake at the
-        first hidden mesh of a Scene-scope bake. The Blender bridge's
-        lightmap leg drops them by the same rule (``BlenderBridge._bakeable``).
+        A mesh Arnold renders nothing of is left out too, and named: one
+        HIDDEN or TEMPLATED by its own flags, its shape's or an ancestor's --
+        visibility, level-of-detail visibility, a display layer
+        (:meth:`DisplayUtils.is_visible`). Its bake returns normally with no
+        map -- which the bake reads as the render having been stopped, ending
+        the whole bake at the first such mesh of a Scene-scope bake. The
+        Blender bridge's lightmap leg drops hidden ones by the same rule
+        (``BlenderBridge._bakeable``).
         """
         meshes = TextureBaker.resolve_meshes(objects)
         if not meshes or cmds is None:
             return meshes
+        return cls._partition(meshes)[0]
+
+    @classmethod
+    def _partition(cls, meshes: List[str]) -> Tuple[List[str], List[str], List[str]]:
+        """``(targets, hidden, excluded)``: *meshes* as :meth:`bake_targets` sorts them.
+
+        Kept apart because only one of the two is the Exclude set's doing:
+        counted together, a Scene bake of the production room reported its
+        two hidden props as excluded. A mesh the set names counts as excluded
+        whether or not it renders; each group left out is logged by name.
+        """
         from mayatk.display_utils._display_utils import DisplayUtils
 
-        def visible(mesh: str) -> bool:
+        def listed(names: List[str]) -> str:
+            return ", ".join(n.rsplit("|", 1)[-1] for n in names[:8]) + (
+                " ..." if len(names) > 8 else ""
+            )
+
+        def rendered(mesh: str) -> bool:
+            # Read from the SHAPE's path up: a shape hidden or templated under
+            # a shown transform renders nothing either, and a walk from the
+            # transform never reads it. The path is the instance's own.
             try:
-                return DisplayUtils.is_visible(mesh, consider_templated_visible=True)
+                shapes = cmds.listRelatives(
+                    mesh, shapes=True, fullPath=True, noIntermediate=True, type="mesh"
+                )
+                return any(DisplayUtils.is_visible(s) for s in shapes or [mesh])
             except (RuntimeError, ValueError, TypeError):
                 return True  # unreadable: this gate saves work, it never costs a bake
 
-        hidden = [m for m in meshes if not visible(m)]
+        in_set = set(LightmapExcludeSet.meshes())
+        excluded = [m for m in meshes if m in in_set]
+        hidden = [m for m in meshes if m not in in_set and not rendered(m)]
         if hidden:
             cls.logger.warning(
-                "Skipping %d hidden mesh(es): Arnold renders no hidden object, so "
-                "it could not bake a map. Show them to bake them: %s",
+                "Skipping %d hidden or templated mesh(es): Arnold renders "
+                "neither, so it could not bake a map. Show them to bake them: %s",
                 len(hidden),
-                ", ".join(m.rsplit("|", 1)[-1] for m in hidden[:8])
-                + (" ..." if len(hidden) > 8 else ""),
+                listed(hidden),
             )
-            meshes = [m for m in meshes if m not in set(hidden)]
-        excluded = set(LightmapExcludeSet.meshes())
-        kept = [m for m in meshes if m not in excluded]
-        if len(kept) != len(meshes):
-            skipped = [m for m in meshes if m in excluded]
+        if excluded:
             cls.logger.info(
                 "Skipping %d object(s) in the lightmap exclusion set (%s); they "
                 "still light the bake: %s",
-                len(skipped),
+                len(excluded),
                 LightmapExcludeSet.SET_NAME,
-                ", ".join(m.rsplit("|", 1)[-1] for m in skipped[:8])
-                + (" ..." if len(skipped) > 8 else ""),
+                listed(excluded),
             )
-        return kept
+        left_out = set(hidden) | in_set
+        return [m for m in meshes if m not in left_out], hidden, excluded
+
+    @staticmethod
+    def _nothing_to_bake(hidden: List[str], excluded: List[str]) -> str:
+        """Why a bake whose every mesh was left out refused, as a sentence."""
+
+        def are(count: int) -> str:
+            return "the object is" if count == 1 else f"all {count} objects are"
+
+        if not hidden:
+            return f"Nothing to bake: {are(len(excluded))} in the Exclude set."
+        if not excluded:
+            return (
+                f"Nothing to bake: {are(len(hidden))} hidden or templated, and "
+                "Arnold renders neither. Show them to bake them."
+            )
+        return (
+            f"Nothing to bake: {len(excluded)} in the Exclude set, "
+            f"{len(hidden)} hidden or templated."
+        )
 
     # ------------------------------------------------------------------
     # The workflow -- what the panel runs, and what a script should
@@ -379,7 +447,8 @@ class LightmapBaker(ptk.LoggingMixin):
         """Bake *objects*' lightmaps and record them: the whole workflow, as the panel runs it.
 
         1. The meshes in *objects* (default: the selection), minus the scene's
-           :class:`LightmapExcludeSet` (:meth:`bake_targets`).
+           :class:`LightmapExcludeSet` and the meshes Arnold renders nothing
+           of (:meth:`bake_targets`), reported apart.
         2. :meth:`preflight`: Arnold loaded, the tool's own authored lights
            upgraded, and a refusal when the scene has lights and none of them
            can light it.
@@ -389,14 +458,19 @@ class LightmapBaker(ptk.LoggingMixin):
            (:meth:`LightmapRecords.migrate_legacy`).
         4. *intensity*, when not 1.0, scaled into the maps this bake just
            wrote -- once, so re-recording them can never apply it twice.
-        5. :meth:`LightmapRecords.commit` records each map with its rect.
+        5. :meth:`LightmapRecords.commit` records each map with its rect, and
+           the maps the baked objects read before -- when this scene wrote
+           them and nothing reads them now -- are deleted
+           (:meth:`LightmapRecords.superseding`): a bake after an output
+           option changed leaves no old maps behind.
         6. :meth:`bake_verdict` reads the finished maps' level.
 
         Nothing is reverted first. An object the bake does not finish (a
         cancel, a failed render) keeps the map it had, and that map is intact:
         a bake never writes a file another object reads
         (:meth:`LightmapRecords.claims`), so the only file it replaces is one
-        read by the very objects it rewrote.
+        read by the very objects it rewrote -- and the only files it deletes
+        are ones no object reads any more.
 
         Parameters:
             objects: Mesh transforms, their shapes or components; ``None``
@@ -415,7 +489,7 @@ class LightmapBaker(ptk.LoggingMixin):
 
         Returns:
             :class:`LightmapBakeResult`: the maps and rects, the
-            excluded and unbaked objects, and the ``refused`` / ``verdict``
+            excluded, hidden and unbaked objects, and the ``refused`` / ``verdict``
             sentences for the artist.
 
         Raises:
@@ -433,19 +507,11 @@ class LightmapBaker(ptk.LoggingMixin):
         if not scoped:
             result.refused = "Nothing to bake: no mesh among the given objects."
             return result
-        # The Exclude set comes off BEFORE anything else touches the scene.
-        targets = self.bake_targets(scoped)
-        result.excluded = [o for o in scoped if o not in targets]
+        # The Exclude set, and what Arnold renders nothing of, come off BEFORE
+        # anything else touches the scene.
+        targets, result.hidden, result.excluded = self._partition(scoped)
         if not targets:
-            result.refused = (
-                "Nothing to bake: "
-                + (
-                    "the object is"
-                    if len(scoped) == 1
-                    else f"all {len(scoped)} objects are"
-                )
-                + " in the Exclude set."
-            )
+            result.refused = self._nothing_to_bake(result.hidden, result.excluded)
             return result
         result.refused = self.preflight()
         if result.refused:
@@ -488,9 +554,11 @@ class LightmapBaker(ptk.LoggingMixin):
             return result
         if float(intensity) != 1.0:
             self._apply_intensity(result.maps.values(), intensity)
-        LightmapRecords.commit(
-            result.maps, scale_offsets=result.rects, intensity=intensity
-        )
+        with LightmapRecords.superseding(result.maps) as retired:
+            LightmapRecords.commit(
+                result.maps, scale_offsets=result.rects, intensity=intensity
+            )
+        result.retired = retired
         result.verdict = self.bake_verdict(result.maps.values())
         return result
 
@@ -1228,7 +1296,7 @@ class LightmapBaker(ptk.LoggingMixin):
     #: nothing, and a tile rendered AT its cell keeps every sample's noise at
     #: full strength; the shrink averages it first, and :attr:`denoise` then
     #: works on what survives, at the cell (:meth:`_finish_tile`).
-    #: Measured on a production room at quest (1024 / 4 samples), with two AA
+    #: Measured on a production room at mobile (1024 / 4 samples), with two AA
     #: seeds so the difference is pure sampling noise: a floor cell's shadow
     #: carried 21.9% relative noise rendered at the cell, 15.2% at 2x and 9.5%
     #: at 4x -- 4x being, for those 256px cells, exactly the full-size render
@@ -2314,12 +2382,14 @@ class LightmapBaker(ptk.LoggingMixin):
     @ptk.Deprecation.parameter(
         "uv_rects",
         remove_in="0.20.0",
+        since="2026-09-23",
         reason="Only a pre-0.17 atlas pack squeezed UVs into a rect, and "
         "LightmapRecords.migrate_legacy now restores those losslessly.",
     )
     @ptk.Deprecation.parameter(
         "intensity",
         remove_in="0.20.0",
+        since="2026-09-23",
         reason="Pass intensity to bake(), which scales the maps it has just "
         "written exactly once; committing a map twice here scaled it twice.",
     )
@@ -2381,7 +2451,9 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         return LightmapRecords.baked_objects(objects)
 
-    @ptk.Deprecation.symbol("LightmapRecords.lightmap_dependencies", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.lightmap_dependencies", remove_in="0.20.0", since="2026-09-23"
+    )
     def lightmap_dependencies(
         self,
         objects: Optional[List[str]] = None,
@@ -2392,19 +2464,25 @@ class LightmapBaker(ptk.LoggingMixin):
         return LightmapRecords.lightmap_dependencies(objects, search_dirs, walk)
 
     @classmethod
-    @ptk.Deprecation.symbol("LightmapRecords.search_dirs", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.search_dirs", remove_in="0.20.0", since="2026-09-23"
+    )
     def search_dirs(cls, objects: Optional[List[str]] = None) -> List[str]:
         """Moved to :meth:`LightmapRecords.search_dirs`."""
         return LightmapRecords.search_dirs(objects)
 
-    @ptk.Deprecation.symbol("LightmapRecords.heal_lightmap_paths", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.heal_lightmap_paths", remove_in="0.20.0", since="2026-09-23"
+    )
     def heal_lightmap_paths(
         self, objects: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Moved to :meth:`LightmapRecords.heal_lightmap_paths`."""
         return LightmapRecords.heal_lightmap_paths(objects)
 
-    @ptk.Deprecation.symbol("LightmapRecords.relocate_lightmaps", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.relocate_lightmaps", remove_in="0.20.0", since="2026-09-23"
+    )
     def relocate_lightmaps(
         self,
         dest_dir: str,
@@ -2418,7 +2496,9 @@ class LightmapBaker(ptk.LoggingMixin):
             dest_dir, source_dir, mode, objects, dry_run
         )
 
-    @ptk.Deprecation.symbol("LightmapRecords.repath_lightmaps", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.repath_lightmaps", remove_in="0.20.0", since="2026-09-23"
+    )
     def repath_lightmaps(
         self,
         dirs_by_map: Dict[str, str],
@@ -2429,7 +2509,9 @@ class LightmapBaker(ptk.LoggingMixin):
         return LightmapRecords.repath_lightmaps(dirs_by_map, objects, relative)
 
     @ptk.Deprecation.symbol(
-        "LightmapRecords.normalize_lightmap_paths", remove_in="0.20.0"
+        "LightmapRecords.normalize_lightmap_paths",
+        remove_in="0.20.0",
+        since="2026-09-23",
     )
     def normalize_lightmap_paths(
         self, objects: Optional[List[str]] = None, relative: bool = True
@@ -2438,14 +2520,18 @@ class LightmapBaker(ptk.LoggingMixin):
         return LightmapRecords.normalize_lightmap_paths(objects, relative)
 
     @classmethod
-    @ptk.Deprecation.symbol("LightmapRecords.export_record", remove_in="0.20.0")
+    @ptk.Deprecation.symbol(
+        "LightmapRecords.export_record", remove_in="0.20.0", since="2026-09-23"
+    )
     def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
         """Moved to :meth:`LightmapRecords.export_record`."""
         return LightmapRecords.export_record(ctx)
 
     @classmethod
     @ptk.Deprecation.symbol(
-        "LightmapRecords.refresh_export_metadata", remove_in="0.20.0"
+        "LightmapRecords.refresh_export_metadata",
+        remove_in="0.20.0",
+        since="2026-09-23",
     )
     def refresh_export_metadata(cls) -> Optional[str]:
         """Moved to :meth:`LightmapRecords.refresh_export_metadata`."""

@@ -149,6 +149,11 @@ class UsdUtils(ptk.HelpMixin):
     #: a reference and an open all go through it (:meth:`file_options`).
     IMPORT_TRANSLATOR = "USD Import"
 
+    #: Metres per Maya's INTERNAL linear unit, the centimetre, whatever unit the
+    #: scene works in: what mayaUsd writes every distance it reads in, and so
+    #: what :meth:`stage_conform` measures a stage against.
+    _INTERNAL_METRES_PER_UNIT: float = 0.01
+
     #: Node types whose motion is not derivable from key times: their presence
     #: makes :meth:`sampling_frame_range` fall back to the full playback range.
     _UNKEYED_DRIVERS = (
@@ -740,6 +745,92 @@ class UsdUtils(ptk.HelpMixin):
         return applied
 
     @classmethod
+    def stage_conform(cls, usd_path: str) -> Optional[Tuple[float, float]]:
+        """``(scale, rotate_x)`` that brings *usd_path*'s stage into this scene's
+        linear unit and up axis, or ``None`` when it already matches.
+
+        mayaUsd 0.30 converts neither when it reads a layer -- its importer has
+        no unit or up-axis option (checked 2026-09-23) -- so a metre / Z-up
+        layer, which is Blender's default USD export, lands 100x small and
+        lying on its side, through Maya's own File > Create Reference too.
+        *scale* is the stage's metres-per-unit over Maya's INTERNAL unit, the
+        centimetre, whatever unit the scene works in: the reader writes every
+        distance in it ("All distance values will be imported in Maya's
+        internal distance unit" -- mayaUsd 0.30), so a Maya-authored layer
+        needs nothing in a metre scene either, and a metre layer needs 100x in
+        every scene. *rotate_x* turns the stage's up axis onto the scene's (-90
+        for a Z-up stage in a Y-up scene, +90 the other way). An unauthored
+        value reads as USD's own fallback (centimetres, Y-up), i.e. as a
+        Maya-authored layer.
+
+        Parameters:
+            usd_path: The layer (or package) to read.
+
+        Returns:
+            The conform :meth:`conform_roots` applies, or ``None``.
+        """
+        from pxr import Usd, UsdGeom
+
+        # Stage metadata lives on the root layer: no payload needs loading.
+        stage = Usd.Stage.Open(str(usd_path), Usd.Stage.LoadNone)
+        if stage is None:
+            return None
+        stage_mpu = UsdGeom.GetStageMetersPerUnit(stage) or 0.01
+        scale = stage_mpu / cls._INTERNAL_METRES_PER_UNIT
+        stage_up = str(UsdGeom.GetStageUpAxis(stage)).upper()
+        scene_up = str(cmds.upAxis(query=True, axis=True)).upper()
+        rotate_x = 0.0
+        if stage_up != scene_up:
+            rotate_x = -90.0 if stage_up == "Z" else 90.0
+        if abs(scale - 1.0) < 1e-9 and not rotate_x:
+            return None
+        return scale, rotate_x
+
+    @staticmethod
+    def conform_roots(
+        roots: List[str], conform: Optional[Tuple[float, float]], name: str
+    ) -> Optional[str]:
+        """Parent *roots* under a new world-level group carrying *conform*
+        (:meth:`stage_conform`); return the group, or ``None`` when there is
+        nothing to conform.
+
+        A group rather than a rewrite of the roots: an animated root's keys
+        would have to be composed with the conform, and on a live reference
+        the parenting is a reference edit Maya re-applies on every reload --
+        an unlink keeps the group with its content. Relative parenting keeps
+        each root's own values; the group supplies the unit and axis.
+
+        Parameters:
+            roots: The world-level transforms to conform (:meth:`top_transforms`).
+            conform: ``(scale, rotate_x)``, *rotate_x* in degrees; ``None`` or
+                an empty *roots* builds nothing.
+            name: The group's name (Maya uniquifies a taken one).
+
+        Returns:
+            The group, or ``None``.
+        """
+        if not conform or not roots:
+            return None
+        scale, rotate_x = conform
+        group = cmds.group(empty=True, world=True, name=name)
+        if cmds.currentUnit(query=True, angle=True) == "rad":
+            rotate_x = math.radians(rotate_x)  # setAttr reads the working unit
+        cmds.setAttr(f"{group}.rotateX", rotate_x)
+        cmds.setAttr(f"{group}.scale", scale, scale, scale, type="double3")
+        for root in roots:
+            cmds.parent(root, group, relative=True)
+        return group
+
+    @staticmethod
+    def top_transforms(nodes: List[str]) -> List[str]:
+        """The world-level transforms among *nodes* (long names)."""
+        return [
+            node
+            for node in cmds.ls(nodes or [], type="transform", long=True) or []
+            if not cmds.listRelatives(node, parent=True)
+        ]
+
+    @classmethod
     def import_scene(
         cls,
         file_path: str,
@@ -747,6 +838,7 @@ class UsdUtils(ptk.HelpMixin):
         options: Optional[Dict[str, Any]] = None,
         return_new_nodes: bool = True,
         read_animation: bool = True,
+        conform: bool = False,
     ) -> List[str]:
         """Import a USD file, optionally isolated into a namespace.
 
@@ -771,10 +863,15 @@ class UsdUtils(ptk.HelpMixin):
                 silently drops every animated prim — measured: a Blender scene
                 pulled via USD arrived static. An explicit ``options`` entry
                 wins over this flag.
+            conform: Parent the imported roots under a group that brings a
+                stage in another unit or up axis into this scene's
+                (:meth:`stage_conform`, :meth:`conform_roots`) -- for a foreign
+                layer. Off for a layer the bridge wrote for this scene.
 
         Returns:
             The newly created node names (namespace-prefixed when *namespace*
-            is given), or ``[]``.
+            is given) -- after a conform, the DAG nodes by their paths under its
+            group, the group included -- or ``[]``.
 
         Raises:
             FileNotFoundError: If *file_path* does not exist.
@@ -832,4 +929,19 @@ class UsdUtils(ptk.HelpMixin):
                 "skins bind classicLinear."
             )
         cls.apply_skinning_methods(new_nodes, skin_methods)
+        to_conform = cls.stage_conform(usd_path) if conform and new_nodes else None
+        if to_conform:
+            from mayatk.core_utils._core_utils import CoreUtils
+
+            # Taken before the group re-parents the roots: the DAG paths the
+            # import returned name nothing once the roots sit under it.
+            handles = CoreUtils.node_handles(new_nodes)
+            stem = os.path.splitext(os.path.basename(usd_path))[0]
+            group = cls.conform_roots(
+                cls.top_transforms(new_nodes),
+                to_conform,
+                f"{namespace or stem}_conform",
+            )
+            if group:
+                new_nodes = CoreUtils.resolve_handles(handles) + [group]
         return new_nodes

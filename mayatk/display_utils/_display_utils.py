@@ -222,7 +222,7 @@ class DisplayUtils(ptk.HelpMixin):
         consider_templated_visible: bool = False,
         consider_animated_visible: bool = False,
     ) -> bool:
-        """Whether *node* renders -- its own ``.visibility`` AND every parent's.
+        """Whether *node* renders -- its own visibility AND every parent's.
 
         Maya's visibility is INHERITED, so a node's own flag answers nothing on
         its own: the reported case was four area lights whose shapes were all
@@ -232,6 +232,14 @@ class DisplayUtils(ptk.HelpMixin):
         both :meth:`get_visible_geometry` (geometry) and
         :meth:`mayatk.LightUtils.contributing_lights` (lights), and those two
         must not be able to disagree about what visible means.
+
+        Three flags hide a node, each read on every node of the path: its
+        ``.visibility``, its ``.lodVisibility``, and an enabled drawing
+        override's ``.overrideVisibility`` -- the one a display layer drives.
+        A drawing override set to Template (a Template layer) is a template
+        like ``.template`` itself. Measured on mtoa: a mesh hidden or
+        templated by any of them is "not exported to Arnold world", and a
+        lightmap bake of it wrote no map and stopped there.
 
         Parameters:
             node: Any DAG node (transform or shape).
@@ -254,7 +262,15 @@ class DisplayUtils(ptk.HelpMixin):
                     pass  # Treat as visible — animation will be baked
                 else:
                     return False
-            if not consider_templated_visible and cls.is_templated(current):
+            if not cmds.getAttr(f"{current}.lodVisibility"):
+                return False
+            overridden = cmds.getAttr(f"{current}.overrideEnabled")
+            if overridden and not cmds.getAttr(f"{current}.overrideVisibility"):
+                return False
+            if not consider_templated_visible and (
+                cls.is_templated(current)
+                or (overridden and cmds.getAttr(f"{current}.overrideDisplayType") == 1)
+            ):
                 return False
             parents = cmds.listRelatives(current, parent=True, fullPath=True)
             current = parents[0] if parents else None

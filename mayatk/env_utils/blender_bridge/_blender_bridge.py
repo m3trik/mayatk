@@ -82,25 +82,33 @@ DEFAULTS: Dict[str, Any] = {
     # the plain import recipe nothing.
     #
     # These ARE blendertk ``LightmapBaker``'s own dials, one for one with its panel
-    # (Quality / Resolution / Samples / Packing / output dir / name affix), because the
-    # recipe drives that exact baker -- see ``parameters.py`` for why the lighting rows
-    # beside them are NOT baker settings. Quality is a named preset
-    # (``LightmapBaker.preset_store``) and RESOLUTION/SAMPLES override it -- 0 means
-    # "use the preset", the headless equivalent of the panel's preset -> dials fill.
+    # (Quality, Packing, Processor, Resolution + Denoise, Samples + Adaptive, Bounces,
+    # output dir + Beside Textures, name affix), because the recipe drives that exact
+    # baker -- see ``parameters.py`` for why the lighting rows beside them are NOT
+    # baker settings. Quality is a named preset (``LightmapBaker.preset_store``) and
+    # RESOLUTION / SAMPLES / BOUNCES override it -- 0 (-1 for Bounces, where 0 is a
+    # real depth) means "use the preset", the headless equivalent of the panel's
+    # preset filling its dials.
     # DEVICE "AUTO" is the GPU wherever it pays: every bake op rebuilds its Cycles
     # session, and on the GPU that setup+teardown (~0.35 s/object, measured) outweighs
     # a small tile's render, so tiny bakes go to the CPU (TextureBaker.GPU_MIN_WORK).
-    "LIGHTMAP_QUALITY": "quest",
+    "LIGHTMAP_QUALITY": "mobile",
     "LIGHTMAP_RESOLUTION": 0,
     "LIGHTMAP_SAMPLES": 0,
-    # Atlas, where the panel defaults to per-object: a bridge send is a whole module,
-    # not one selected mesh, and a material carries ONE lightmap in any engine.
+    "LIGHTMAP_BOUNCES": -1,
+    # Cycles' own default, and how every bridge bake ran before the switch existed
+    # (a factory scene samples adaptively). blendertk's TextureBaker has the numbers.
+    "LIGHTMAP_ADAPTIVE": True,
+    # Atlas, as on both Lightmap Baker panels: a material carries ONE lightmap in any
+    # engine, and a send is a whole module rather than one selected mesh.
     "LIGHTMAP_PACKING": "atlas",
     # The name the bridge used to hard-code, now the field's default rather than its
     # only value (composite ``affix`` kind: {"text", "mode"}).
     "LIGHTMAP_AFFIX": {"text": "_Lightmap", "mode": "suffix"},
     "LIGHTMAP_DENOISE": True,
     "LIGHTMAP_DEVICE": "AUTO",
+    # Off, as on both panels: each map in its material's texture folder is opt-in.
+    "LIGHTMAP_BESIDE_TEXTURES": False,
     "INCLUDE_ENVIRONMENT": True,
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
@@ -262,7 +270,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         ``MayaSceneImport._apply_texture_manifest`` -- the same sidecar contract
         the pull direction has always used, and the exact mirror of
         ``btk.MayaBridge._produce``. Best-effort: a manifest failure must never
-        cost the user the send itself.
+        cost the user the send itself. The bake is the exception, refused
+        instead: its manifest also carries the scene's map claims, its Exclude
+        set and the lights that cross, and a bake without them would run
+        unguarded and differently lit, then commit what it made.
         """
         # The bake's maps become textures THIS Maya scene references, so they may
         # never be left in tracked temp -- an age sweep would delete them out from
@@ -279,6 +290,12 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             # either -- not the FBX write, not the Blender import, not an atlas
             # rect taken from the geometry that does ship.
             objects = self._bakeable(objects)
+            # A send whose every mesh is excluded has nothing to bake: said here,
+            # as Maya's own baker says it, rather than after a Blender launch.
+            refusal = self._all_excluded(objects)
+            if refusal:
+                self.logger.error(refusal)
+                return None
 
         payload = super()._produce(objects, request)
         try:
@@ -307,8 +324,16 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                     )
                 ),
                 spell=self._manifest_spelling(self.carrier(request)),
+                # The scene's Exclude set and map claims: the bake's alone.
+                include_lightmap=request.template == self._LIGHTMAP_TEMPLATE,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001
+            if request.template == self._LIGHTMAP_TEMPLATE:
+                self.logger.error(
+                    f"Bake refused: its manifest sidecar failed ({error}).",
+                    exc_info=True,
+                )
+                return None
             self.logger.warning(
                 "Manifest sidecar failed; Blender keeps the FBX-carried materials.",
                 exc_info=True,
@@ -341,6 +366,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         include_environment: bool = False,
         include_scene_data: bool = True,
         spell=None,
+        include_lightmap: bool = False,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
 
@@ -378,28 +404,18 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         other one keyed under ``records``, memberships and ledger claims
         scoped to the sent subtree -- neither carrier has a place for them, and
         blendertk's ``MayaSceneImport`` lands them through the same engine.
-        """
-        import maya.cmds as cmds
 
+        *include_lightmap* adds :attr:`LIGHTMAP_SECTION` -- the scene's lightmap
+        Exclude set and map claims (:meth:`_manifest_lightmap`); only the bake
+        asks for it.
+        """
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.mat_manifest import MatManifest
         from mayatk.node_utils.data_nodes import DataNodes
 
-        seeds = cmds.ls([str(o) for o in objects], long=True) or []
-        if not seeds:
+        transforms = self._subtree(objects)
+        if not transforms:
             return
-        transforms = list(seeds)
-        seen = set(seeds)
-        for seed in seeds:
-            for descendant in (
-                cmds.listRelatives(
-                    seed, allDescendents=True, type="transform", fullPath=True
-                )
-                or []
-            ):
-                if descendant not in seen:
-                    seen.add(descendant)
-                    transforms.append(descendant)
 
         _leaf = spell or self._manifest_spelling()
         node_types = self._manifest_node_types(transforms, _leaf)
@@ -411,8 +427,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             if include_scene_data
             else {}
         )
+        lightmap = (
+            self._manifest_lightmap(transforms, _leaf) if include_lightmap else None
+        )
         if not include_materials:
-            self._dump_manifest(fbx_path, [], [], node_types, lights, world, scene_data)
+            self._dump_manifest(
+                fbx_path, [], [], node_types, lights, world, scene_data, lightmap
+            )
             return
 
         slots_by_mat = MatManifest.build(transforms).get("materials", {})
@@ -420,7 +441,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         scene_materials: List[str] = []
         objects_by_mat: Dict[str, List[str]] = {}
         for transform in transforms:
-            for mat in MatUtils.get_mats([transform], as_strings=True) or []:
+            for mat in MatUtils.get_mats([transform]) or []:
                 name = _leaf(mat)
                 if name not in scene_materials:
                     scene_materials.append(name)
@@ -452,8 +473,77 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 }
             )
         self._dump_manifest(
-            fbx_path, entries, scene_materials, node_types, lights, world, scene_data
+            fbx_path,
+            entries,
+            scene_materials,
+            node_types,
+            lights,
+            world,
+            scene_data,
+            lightmap,
         )
+
+    #: The manifest section only this bridge's bake template reads: the scene's
+    #: lightmap Exclude set and map claims, spelled the way Blender names the
+    #: imported objects (:meth:`_manifest_lightmap`). Private to the bake -- no
+    #: other consumer reads it -- so it is not in ``ptk.HandoffManifest``'s shared
+    #: vocabulary.
+    LIGHTMAP_SECTION: str = "lightmap"
+    #: What a claim's reader is spelled with when the bake cannot name it: a node
+    #: outside the send, an excluded one, or one sharing its leaf name with another
+    #: sent node. No Blender object is ever called that, so its file stays its own.
+    _FOREIGN_READER: str = "maya:"
+
+    def _manifest_lightmap(self, transforms: List[str], spell) -> Dict[str, Any]:
+        """``{"exclude": [...], "claims": {...}}`` -- what the Blender bake must know.
+
+        * ``exclude``: the sent meshes in the scene's :class:`LightmapExcludeSet`,
+          spelled as Blender names them. They still cross -- they shadow and bounce
+          light like any mesh in the send -- and the template gives them no map, as
+          :meth:`LightmapBaker.bake_targets` does here. A mesh whose spelling another
+          sent node shares (a mesh, a group or a light: Blender names every object
+          uniquely, and which one keeps the plain name is the importer's call)
+          cannot be named, so it is left out; the return leg never wires an
+          excluded object either way (:meth:`reassemble_lightmaps`).
+        * ``claims``: :meth:`LightmapRecords.claims`, the file names this scene's
+          markers read and who reads them, so the bake never writes over a map an
+          object it is not re-baking still reads -- a partial re-bake of a shared
+          texture set, a map beside other textures (Beside Material Textures). The
+          factory Blender the bake runs in holds no markers, so without this it saw
+          no claims at all. A reader the bake re-bakes is spelled as Blender names it
+          (its own map stays its own to replace); every other reader carries
+          :attr:`_FOREIGN_READER`.
+
+        Parameters:
+            transforms: The sent transforms, descendants included.
+            spell: :meth:`_manifest_spelling`'s name function.
+        """
+        from collections import Counter
+
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+        from mayatk.mat_utils.texture_baker import TextureBaker
+
+        meshes = TextureBaker.resolve_meshes(transforms)
+        spelled = {mesh: spell(mesh) for mesh in meshes}
+        counts = Counter(spell(node) for node in transforms)
+        excluded = set(LightmapExcludeSet.meshes())
+        nameable = {mesh: name for mesh, name in spelled.items() if counts[name] == 1}
+        rebaked = {
+            mesh: name for mesh, name in nameable.items() if mesh not in excluded
+        }
+        return {
+            "exclude": sorted(
+                name for mesh, name in nameable.items() if mesh in excluded
+            ),
+            "claims": {
+                file_name: sorted(
+                    rebaked.get(reader) or f"{self._FOREIGN_READER}{reader}"
+                    for reader in readers
+                )
+                for file_name, readers in LightmapRecords.claims().items()
+            },
+        }
 
     @staticmethod
     def _manifest_node_types(transforms: List[str], spell=None) -> Dict[str, str]:
@@ -883,16 +973,18 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         lights: Optional[List[Dict[str, Any]]] = None,
         world: Optional[Dict[str, Any]] = None,
         scene_data: Optional[Dict[str, Any]] = None,
+        lightmap: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Write the sidecar (shared by the materials-on and materials-off
         paths) -- atomically, through ``ptk.HandoffManifest``: a send that died
         mid-write must not leave a truncated sidecar the consumer would read
         as a producer with nothing to say.  *scene_data* is
-        ``DataNodes.transfer_sections``' sections, merged in whole."""
+        ``DataNodes.transfer_sections``' sections, merged in whole; *lightmap* is
+        the bake's :attr:`LIGHTMAP_SECTION`."""
         manifest_cls = ptk.HandoffManifest
         lights = lights or []
         scene_data = scene_data or {}
-        if not (entries or node_types or lights or world or scene_data):
+        if not (entries or node_types or lights or world or scene_data or lightmap):
             return
         manifest_cls.build(
             **{
@@ -902,6 +994,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 manifest_cls.TRANSFORMS: node_types,
                 manifest_cls.LIGHTS: lights,
                 manifest_cls.WORLD: world or None,
+                self.LIGHTMAP_SECTION: lightmap,
                 **scene_data,
             }
         ).write(fbx_path)
@@ -914,6 +1007,12 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             f"{len(lights)} light(s)"
             + (f", sky dome {world['name']} as the world" if world else "")
             + (f", scene data ({', '.join(carried)})" if carried else "")
+            + (
+                f", {len(lightmap['exclude'])} excluded mesh(es) and "
+                f"{len(lightmap['claims'])} claimed map name(s)"
+                if lightmap
+                else ""
+            )
             + " sidecarred."
         )
 
@@ -927,6 +1026,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         quality: Optional[str] = None,
         resolution: Optional[int] = None,
         samples: Optional[int] = None,
+        bounces: Optional[int] = None,
         packing: Optional[str] = None,
         scene_lights: Optional[bool] = None,
         light_strength: Optional[float] = None,
@@ -961,6 +1061,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         rect is committed per TRANSFORM as the engine's ``lightmapScaleOffset``
         binding, so the shared shape keeps one shared unwrap and the scene's
         instancing survives untouched.
+
+        **The scene's lightmap records cross with the send** (the manifest's
+        :attr:`LIGHTMAP_SECTION`): a sent mesh in the Exclude set gets no map but
+        stays in the bake's render, as it does in Maya's own baker, and no map is
+        written over a file another object in this scene still reads.
 
         Cycles rather than mayatk's Arnold ``LightmapBaker``: it bakes white-card
         irradiance natively, needs no licence, denoises, and runs on the GPU. Pick one
@@ -997,8 +1102,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 (:meth:`default_output_path`) -- the manifest is pipeline plumbing, not a
                 deliverable anyone names.
             quality: Preset tier (blendertk's ``LightmapBaker.preset_store``:
-                ``preview`` / ``quest`` / ``desktop`` / ``hero``). *resolution* /
-                *samples* override the preset when given.
+                ``preview`` / ``mobile`` / ``desktop`` / ``hero``). *resolution* /
+                *samples* / *bounces* override the preset when given. The other
+                dials ride *params* by their row keys (``LIGHTMAP_ADAPTIVE``,
+                ``LIGHTMAP_DENOISE``, ``LIGHTMAP_BESIDE_TEXTURES``, ...).
             packing: ``"atlas"`` (default -- one shared map per material, each object
                 given a rect) or ``"per_object"``. The Lightmap Baker panel's Packing
                 dial; atlas is the default here because a send is a whole module.
@@ -1018,6 +1125,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             ("LIGHTMAP_QUALITY", quality),
             ("LIGHTMAP_RESOLUTION", resolution),
             ("LIGHTMAP_SAMPLES", samples),
+            ("LIGHTMAP_BOUNCES", bounces),
             ("LIGHTMAP_PACKING", packing),
             ("INCLUDE_LIGHTS", scene_lights),
             ("SCENE_LIGHT_STRENGTH", light_strength),
@@ -1133,6 +1241,55 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         stem = Path(cmds.file(query=True, sceneName=True) or "").stem or "untitled"
         return ptk.TempArtifacts("blender_bridge").path(extension=ext, name=stem)
 
+    @staticmethod
+    def _subtree(objects: List[Any]) -> List[str]:
+        """*objects* and every transform under them, long names, each once.
+
+        What a send ships: Maya's export-selection carries descendants, so a
+        group send is its whole subtree -- the set the manifest describes and a
+        lightmap bake renders.
+        """
+        import maya.cmds as cmds
+
+        seeds = cmds.ls([str(o) for o in objects or []], long=True) or []
+        transforms = list(dict.fromkeys(seeds))
+        seen = set(transforms)
+        for seed in seeds:
+            for descendant in (
+                cmds.listRelatives(
+                    seed, allDescendents=True, type="transform", fullPath=True
+                )
+                or []
+            ):
+                if descendant not in seen:
+                    seen.add(descendant)
+                    transforms.append(descendant)
+        return transforms
+
+    def _all_excluded(self, objects: List[Any]) -> Optional[str]:
+        """Why a lightmap send has nothing to bake, or ``None``.
+
+        Every mesh in the send in the scene's :class:`LightmapExcludeSet`: the
+        bake would render them and give none a map. Maya's own baker refuses the
+        same case (``LightmapBaker.bake``).
+        """
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+        from mayatk.mat_utils.texture_baker import TextureBaker
+
+        meshes = TextureBaker.resolve_meshes(self._subtree(objects))
+        excluded = set(LightmapExcludeSet.meshes()) if meshes else set()
+        if not meshes or any(mesh not in excluded for mesh in meshes):
+            return None
+        return (
+            "Nothing to bake: "
+            + (
+                "the mesh in the send is"
+                if len(meshes) == 1
+                else f"all {len(meshes)} meshes in the send are"
+            )
+            + " in the Exclude set."
+        )
+
     def _bakeable(self, objects: List[Any]) -> List[Any]:
         """*objects* minus the mesh transforms a lightmap could never reach.
 
@@ -1142,6 +1299,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         baking one spends export time, Blender import time, a Cycles bake and a
         share of the atlas on a map with nothing left to bind it to -- the
         applier then reports it as "covers N object(s) not in this export".
+
+        That flag alone, own or inherited: it is all the carriers act on. Maya's
+        FBX exporter writes hidden geometry with full vertex data and marks only
+        a hidden node (``Visibility`` 0); a display layer's hiding leaves no
+        trace (measured), so a mesh hidden only by its layer ships and has to
+        come back lit. Arnold renders none of it, which is why Maya's own baker
+        reads :meth:`DisplayUtils.is_visible` and this gate does not.
 
         Meshes only, and only on the lightmap leg: a plain send-to-Blender
         deliberately carries hidden geometry (the artist may be going there to
@@ -1156,7 +1320,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         """
         import maya.cmds as cmds
 
-        from mayatk.display_utils._display_utils import DisplayUtils
+        def ships(node: str) -> bool:
+            current = node
+            while current:
+                if not cmds.getAttr(f"{current}.visibility"):
+                    return False
+                parents = cmds.listRelatives(current, parent=True, fullPath=True)
+                current = parents[0] if parents else None
+            return True
 
         keep, skipped = [], []
         for obj in objects or []:
@@ -1171,7 +1342,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 ):
                     keep.append(obj)  # not a mesh transform -- not this gate's business
                     continue
-                visible = DisplayUtils.is_visible(node, consider_templated_visible=True)
+                visible = ships(node)
             except (RuntimeError, ValueError, TypeError):
                 keep.append(obj)
                 continue
@@ -1571,17 +1742,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         from mayatk.node_utils._node_utils import NodeUtils
 
         # The manifest names MESH transforms; a whole-scene save_as hands DAG roots.
-        # Expand to descendants so the index holds the leaf names FBX actually carried.
-        pool: List[str] = []
-        for obj in objects or []:
-            for node in [str(obj)] + (
-                cmds.listRelatives(
-                    str(obj), allDescendents=True, type="transform", fullPath=True
-                )
-                or []
-            ):
-                if node not in pool:
-                    pool.append(node)
+        # Expand to descendants so the index holds the leaf names FBX actually carried
+        # -- the send's own subtree, long names throughout.
+        pool = self._subtree(objects or [])
 
         instanced = self._instanced_shapes(pool)
         if instanced:
@@ -1627,14 +1790,23 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             )
 
         from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
         from mayatk.uv_utils._uv_utils import UvUtils
 
         # Vet each entry BEFORE touching a mesh: an entry that cannot be committed must
         # not leave rewritten UVs behind. A missing map would otherwise give the material
         # a dead texture reference plus a marker claiming the object is lit -- worse than
-        # no lightmap, because nothing downstream reports it.
+        # no lightmap, because nothing downstream reports it. An object in the scene's
+        # Exclude set is never wired: the bake leaves it out by name, and one it could
+        # not name (a leaf name two sent nodes share) must still keep the map it had.
+        excluded = set(LightmapExcludeSet.meshes())
         usable: Dict[str, Tuple[str, Any, Optional[List[float]]]] = {}
         for blender, maya in resolved.items():
+            if maya in excluded:
+                self.logger.warning(
+                    f"{maya}: in the Exclude set; not wired, it keeps the map it had."
+                )
+                continue
             entry = entries[blender]
             path, layout = entry.get("map") or "", _layout(entry)
             if not layout:
@@ -1678,10 +1850,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             return {}
 
         rects = {m: usable[m][2] for m in wired if usable[m][2]}
-        recorded = LightmapRecords.commit(mapping, scale_offsets=rects)
-        maps_dir = os.path.dirname(next(iter(mapping.values()), ""))
+        # The maps these objects read before, once nothing reads them, go --
+        # the same rule the Maya-native bake applies around its commit.
+        with LightmapRecords.superseding(list(mapping)):
+            recorded = LightmapRecords.commit(mapping, scale_offsets=rects)
+        # Beside Material Textures sends each map to its own texture folder.
+        folders = sorted({os.path.dirname(path) for path in mapping.values()})
+        where = folders[0] if len(folders) == 1 else f"{len(folders)} folders"
         self.logger.info(
-            f"Wired {len(recorded)} lightmap(s) from {maps_dir} into the scene "
+            f"Wired {len(recorded)} lightmap(s) from {where} into the scene "
             "alongside the existing maps -- Lightmap Baker's Revert to Source undoes it."
         )
         return recorded

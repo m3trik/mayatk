@@ -895,7 +895,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             # shells that each carry multiple materials would only split per
             # shell.
             if by_material:
-                mats = MatUtils.get_mats(obj, as_strings=True)
+                mats = MatUtils.get_mats(obj)
                 if mats and len(mats) > 1:
                     chipped = False
                     for mat in mats[:-1]:

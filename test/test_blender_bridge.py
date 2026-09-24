@@ -146,10 +146,12 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
     def test_the_bake_recipe_exposes_the_lightmap_bakers_own_dials(self):
         """The bridge drives blendertk's ``LightmapBaker``; it must show its settings.
 
-        One row per dial of that baker's panel -- Quality, Resolution, Samples,
-        Packing, output folder, name affix -- so an artist who has used the panel
+        One row per dial and switch of that baker's panel -- Quality, Packing,
+        Processor, Resolution + Denoise, Samples + Adaptive, Bounces, output folder
+        + Beside Textures, name affix -- so an artist who has used the panel
         recognises the recipe. Pinned by KEY rather than by widget count so adding an
-        unrelated row cannot quietly satisfy it.
+        unrelated row cannot quietly satisfy it (``TestBridgeMirrorsTheBlenderBaker``
+        derives the same set from the baker itself).
 
         The lighting rows beside them (HDRI / world / scene-light / emission strength)
         are deliberately NOT in this list: Maya's baker renders the scene's own Arnold
@@ -162,14 +164,38 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         )
         for key in (
             "LIGHTMAP_QUALITY",
-            "LIGHTMAP_RESOLUTION",
-            "LIGHTMAP_SAMPLES",
             "LIGHTMAP_PACKING",
+            "LIGHTMAP_DEVICE",
+            "LIGHTMAP_RESOLUTION",
+            "LIGHTMAP_DENOISE",
+            "LIGHTMAP_SAMPLES",
+            "LIGHTMAP_ADAPTIVE",
+            "LIGHTMAP_BOUNCES",
             "LIGHTMAP_DIR",
+            "LIGHTMAP_BESIDE_TEXTURES",
             "LIGHTMAP_AFFIX",
         ):
             self.assertIn(key, params.PARAMS, f"{key} has no panel row")
             self.assertIn(key, referenced, f"{key} is not used by the bake template")
+
+    def test_each_switch_sits_beside_the_dial_it_qualifies(self):
+        """As it rides that field's option box on the Lightmap Baker panel."""
+        keys = list(params.PARAMS)
+        for switch, dial in (
+            ("LIGHTMAP_DENOISE", "LIGHTMAP_RESOLUTION"),
+            ("LIGHTMAP_ADAPTIVE", "LIGHTMAP_SAMPLES"),
+            ("LIGHTMAP_BESIDE_TEXTURES", "LIGHTMAP_DIR"),
+        ):
+            self.assertTrue(params.PARAMS[switch].inline, switch)
+            self.assertEqual(keys.index(switch), keys.index(dial) + 1, switch)
+
+    def test_a_dial_left_to_the_tier_says_so(self):
+        """Samples and Bounces keep the Quality tier's value at their lowest
+        setting (Bounces -1: 0 is a real depth), shown as words, not a number."""
+        for key, unset in (("LIGHTMAP_SAMPLES", 0), ("LIGHTMAP_BOUNCES", -1)):
+            spec = params.PARAMS[key]
+            self.assertEqual((spec.minimum, spec.default), (unset, unset), key)
+            self.assertTrue(spec.placeholder, key)
 
     def test_the_affix_mode_survives_into_the_template(self):
         """The ``affix`` kind substitutes the SPELLING alone -- the mode must be resolved.
@@ -208,7 +234,6 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         """
         import ast
 
-
         from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
 
         source = open(
@@ -225,6 +250,10 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         rendered = ptk.StrUtils.replace_delimited(source, context)
         self.assertEqual(re.findall(r"__[A-Z0-9_]+__", rendered), [])
         ast.parse(rendered)
+        # The new dials substitute as the values the baker takes.
+        self.assertIn("LIGHTMAP_BOUNCES = -1", rendered)
+        self.assertIn("LIGHTMAP_ADAPTIVE = True", rendered)
+        self.assertIn("LIGHTMAP_BESIDE_TEXTURES = False", rendered)
 
     def test_import_exposes_scene_and_frame_options(self):
         # The unified template exposes both scene-behavior knobs so the panel shows them.
@@ -1052,7 +1081,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         self.assertNotIn("save_as_mainfile", script)
         self.assertNotIn("LightmapWebExport", script)
         # The quality preset resolves in Blender, where the preset store lives.
-        self.assertIn("LIGHTMAP_QUALITY = 'quest'", script)
+        self.assertIn("LIGHTMAP_QUALITY = 'mobile'", script)
         # Named kwargs reach the template as Python literals (overriding the preset).
         self.assertIn("LIGHTMAP_SAMPLES = 64", script)
         self.assertIn("ENVIRONMENT_HDR = 'C:/hdri/room.hdr'", script)
@@ -2239,7 +2268,9 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
-        DataNodes.write(ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA, '{"version": 1}')
+        DataNodes.write(
+            ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA, '{"version": 1}'
+        )
         # Resolve the carrier the way the product does. The export set now folds
         # in EVERY carrier (a referenced module publishes onto its own namespaced
         # one), and that plural resolver returns unambiguous LONG paths.
@@ -2387,7 +2418,9 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         grp = cmds.group(cmds.polyCube()[0], name="PREVIEW_GATE")
         RenderEffects.key_fade([grp], start=5, end=20, direction="in")
         DataNodes.write(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL, "")
-        self.assertFalse(DataNodes.read(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL))
+        self.assertFalse(
+            DataNodes.read(ptk.Scope.DELIVERABLE, RenderEffects.DATA_CHANNEL)
+        )
 
         with (
             mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
@@ -2972,6 +3005,17 @@ class TestBridgeBakeableScope(MayaTkTestCase):
 
         self.assertEqual(self.bridge._bakeable([child]), [])
 
+    def test_a_mesh_hidden_only_by_its_display_layer_is_still_baked(self):
+        """Maya's FBX exporter writes a layer-hidden mesh with full vertex data
+        and no trace of the layer (measured), so it ships -- and has to come
+        back lit. Arnold renders none of it, which is Maya's own baker's reason
+        to leave it out (``DisplayUtils.is_visible``), not this gate's."""
+        cube = self._cube("layer_cube")
+        layer = cmds.createDisplayLayer([cube], name="bb_hidden_lyr", noRecurse=True)
+        cmds.setAttr(f"{layer}.visibility", False)
+
+        self.assertEqual(self._names(self.bridge._bakeable([cube])), ["layer_cube"])
+
     def test_a_non_mesh_passes_through_however_it_is_hidden(self):
         """Lights are gated separately and for a different reason (their own
         contribution), and a locator or empty group is not this gate's business."""
@@ -3334,3 +3378,294 @@ class TestPullTemplateCopiesMatchTheirSource(MayaTkTestCase):
         follower = cmds.polyCube()[0]
         cmds.parentConstraint(cube, follower)
         self.assertEqual(_same("unkeyed driver"), (1.0, 50.0))  # the full range
+
+
+class TestBridgeMirrorsTheBlenderBaker(unittest.TestCase):
+    """The bake recipe's rows are blendertk ``LightmapBaker``'s settings, read off it.
+
+    Read from the sibling repo's SOURCE (the baker's preset keys) and shipped
+    preset files, not imported: the mayatk suite does not put blendertk on its
+    path, and a drift guard that only runs where nobody runs it guards nothing.
+    Skipped outside the monorepo.
+    """
+
+    _BTK = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "blendertk",
+        "blendertk",
+        "light_utils",
+        "lightmap_baker",
+    )
+    #: The baker's preset keys -> the bridge row carrying each. Include
+    #: Environment keeps its shared row name: it is the crossing's too (the
+    #: sky dome it lights the bake's world from).
+    _ROWS = {
+        "resolution": "LIGHTMAP_RESOLUTION",
+        "samples": "LIGHTMAP_SAMPLES",
+        "bounces": "LIGHTMAP_BOUNCES",
+        "adaptive": "LIGHTMAP_ADAPTIVE",
+        "include_environment": "INCLUDE_ENVIRONMENT",
+        "denoise": "LIGHTMAP_DENOISE",
+        "beside_textures": "LIGHTMAP_BESIDE_TEXTURES",
+    }
+
+    def setUp(self):
+        if not os.path.isdir(self._BTK):
+            self.skipTest("blendertk is not beside mayatk (not the monorepo)")
+
+    def _preset_keys(self):
+        import ast
+
+        source = open(
+            os.path.join(self._BTK, "lightmap_baker.py"), encoding="utf-8"
+        ).read()
+        keys = {}
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                if node.target.id in ("PRESET_INT_KEYS", "PRESET_BOOL_KEYS"):
+                    keys[node.target.id] = ast.literal_eval(node.value)
+        self.assertEqual(len(keys), 2, "the baker's preset keys moved")
+        return set(keys["PRESET_INT_KEYS"]) | set(keys["PRESET_BOOL_KEYS"])
+
+    def test_every_dial_and_switch_of_the_baker_has_a_row_the_template_reads(self):
+        self.assertEqual(set(self._ROWS), self._preset_keys())
+        referenced = params.Parameters.referenced_keys(
+            (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        )
+        for key in self._ROWS.values():
+            self.assertIn(key, params.PARAMS, f"{key} has no row")
+            self.assertIn(key, referenced, f"{key} is not used by the bake template")
+
+    def test_the_quality_rows_describe_the_shipped_tiers(self):
+        """Each tier's row states the dials that tier's file ships -- the words the
+        artist picks a tier by, and the ones that went stale when tiers were tuned."""
+        for _label, tier, tip in params.PARAMS["LIGHTMAP_QUALITY"].choices:
+            with open(
+                os.path.join(self._BTK, "presets", f"{tier}.json"), encoding="utf-8"
+            ) as fh:
+                data = json.load(fh)
+            self.assertIn(
+                f"{data['resolution']} px / {data['samples']} samples / "
+                f"{data['bounces']} bounces",
+                tip,
+                tier,
+            )
+
+
+class TestBridgeLightmapSceneRecords(MayaTkTestCase):
+    """The scene's lightmap records cross with a bake send (``LIGHTMAP_SECTION``).
+
+    Maya's own baker gives an Exclude-set member no map but keeps it in the
+    render, and never writes over a map another object reads
+    (``LightmapRecords.claims``). The bridge bakes in a factory Blender that
+    holds neither record, so both ride the manifest, spelled the way Blender
+    names what it imports -- and a name the bake cannot be sure of is never
+    guessed at.
+    """
+
+    @staticmethod
+    def _cube(name, parent=None):
+        node = cmds.polyCube(name=name)[0]
+        if parent:
+            node = cmds.parent(node, parent)[0]
+        return cmds.ls(node, long=True)[0]
+
+    @staticmethod
+    def _section(objects):
+        bridge = BlenderBridge()
+        return bridge._manifest_lightmap(
+            bridge._subtree(objects), bridge._manifest_spelling()
+        )
+
+    def test_the_section_names_excluded_meshes_and_every_reader(self):
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        keep = self._cube("lmx_keep")
+        skip = self._cube("lmx_skip")
+        outside = self._cube("lmx_outside")  # never sent
+        LightmapExcludeSet.define([skip])
+        LightmapRecords.commit(
+            {
+                keep: "C:/lm/Shared_Lightmap.exr",
+                outside: "C:/lm/Shared_Lightmap.exr",
+                skip: "C:/lm/Skip_Lightmap.exr",
+            }
+        )
+
+        section = self._section([keep, skip])
+
+        self.assertEqual(section["exclude"], ["lmx_skip"])
+        # The re-baked reader by its Blender name; the one outside the send
+        # carries a spelling no Blender object has, so the file stays its own.
+        self.assertEqual(
+            section["claims"]["shared_lightmap.exr"],
+            sorted(["lmx_keep", f"{BlenderBridge._FOREIGN_READER}{outside}"]),
+        )
+        # An excluded reader is never the bake's either: its map is not replaced.
+        self.assertEqual(
+            section["claims"]["skip_lightmap.exr"],
+            [f"{BlenderBridge._FOREIGN_READER}{skip}"],
+        )
+
+    def test_a_leaf_name_two_sent_meshes_share_is_never_guessed(self):
+        """FBX keeps leaf names, so Blender sees ``twin`` and ``twin.001``;
+        which is which cannot be known from here."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        grp_a = cmds.group(empty=True, name="lmx_grpA")
+        grp_b = cmds.group(empty=True, name="lmx_grpB")
+        a = self._cube("lmx_twin", grp_a)
+        b = cmds.ls(cmds.rename(self._cube("lmx_other", grp_b), "lmx_twin"), long=True)[
+            0
+        ]
+        LightmapExcludeSet.define([a])
+        LightmapRecords.commit({b: "C:/lm/Twin_Lightmap.exr"})
+
+        section = self._section([grp_a, grp_b])
+
+        self.assertEqual(section["exclude"], [], "caught on the way back instead")
+        self.assertEqual(
+            section["claims"]["twin_lightmap.exr"],
+            [f"{BlenderBridge._FOREIGN_READER}{b}"],
+        )
+
+    def test_a_mesh_sharing_its_leaf_name_with_a_group_is_never_guessed(self):
+        """Blender names every imported OBJECT uniquely: a group and a mesh both
+        called ``shelf`` arrive as ``shelf`` and ``shelf.001``, in the importer's
+        order -- so the mesh's name is as unknowable as a twin mesh's."""
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        root = cmds.group(empty=True, name="lmx_root")
+        mesh = self._cube("lmx_shelf", root)
+        holder = cmds.group(empty=True, name="lmx_holder", parent=root)
+        cmds.rename(cmds.group(empty=True, name="lmx_tmp", parent=holder), "lmx_shelf")
+        LightmapExcludeSet.define([mesh])
+
+        self.assertEqual(self._section([root])["exclude"], [])
+
+    def test_the_template_reads_the_records_off_the_imported_meshes(self):
+        """Not off every imported object: the light rebuild replaces the lights'
+        FBX nulls, and the first read of a removed one raised ReferenceError --
+        measured on a live round trip, the whole bake died before a ray."""
+        import ast
+
+        tree = ast.parse(
+            (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        )
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "lightmap_records"
+        ]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([ast.unparse(a) for a in calls[0].args], ["meshes"])
+
+    def test_only_the_bake_send_writes_the_section(self):
+        keep = self._cube("lmx_write")
+        with tempfile.TemporaryDirectory() as tmp:
+            fbx = os.path.join(tmp, "x.fbx")
+            sidecar = fbx + ".manifest.json"
+            quiet = dict(
+                include_materials=False, include_lights=False, include_scene_data=False
+            )
+            BlenderBridge()._write_manifest([keep], fbx, include_lightmap=True, **quiet)
+            with open(sidecar, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertEqual(
+                data[BlenderBridge.LIGHTMAP_SECTION], {"exclude": [], "claims": {}}
+            )
+            os.remove(sidecar)
+            BlenderBridge()._write_manifest([keep], fbx, **quiet)
+            self.assertFalse(os.path.exists(sidecar), "a plain send has nothing to say")
+
+    def test_a_send_whose_every_mesh_is_excluded_is_refused_before_the_export(self):
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        only = self._cube("lmx_only")
+        LightmapExcludeSet.define([only])
+        bridge = BlenderBridge()
+        self.assertIn("Exclude set", bridge._all_excluded([only]))
+        self.assertIsNone(bridge._all_excluded([only, self._cube("lmx_also")]))
+
+        request = mock.Mock(
+            template=BlenderBridge._LIGHTMAP_TEMPLATE, params={"LIGHTMAP_DIR": "C:/lm"}
+        )
+        with mock.patch.object(handoff_export.FbxUtils, "export") as exported:
+            with self.assertLogs(bridge.logger, level="ERROR"):
+                self.assertIsNone(bridge._produce([only], request))
+        exported.assert_not_called()
+
+    def test_a_bake_whose_manifest_fails_is_refused(self):
+        """A send goes on without its sidecar; a bake cannot. The bake's
+        manifest carries the claims that keep it off the maps other objects
+        read, the Exclude set and the lights that cross: without it the bake
+        would run unguarded and differently lit, and commit what it made. It
+        stops instead, naming why."""
+        cube = self._cube("lmx_unguarded")
+        bridge = BlenderBridge()
+        with (
+            mock.patch.object(
+                BlenderBridge,
+                "_write_manifest",
+                side_effect=RuntimeError("claims unreadable"),
+            ),
+            mock.patch.object(
+                handoff_export.MayaExportMixin,
+                "_produce",
+                return_value=types.SimpleNamespace(primary="payload.fbx"),
+            ),
+        ):
+            for template, refused in (
+                ("send", False),
+                (BlenderBridge._LIGHTMAP_TEMPLATE, True),
+            ):
+                request = types.SimpleNamespace(
+                    template=template, params={"LIGHTMAP_DIR": "C:/lm"}
+                )
+                with self.assertLogs(bridge.logger, level="WARNING") as caught:
+                    payload = bridge._produce([cube], request)
+                self.assertEqual(payload is None, refused, template)
+            self.assertIn("claims unreadable", caught.output[-1])
+
+    def test_the_return_leg_never_wires_an_excluded_object(self):
+        """The template leaves an excluded mesh out by name; one it could not
+        name (a shared leaf name) comes back baked, and must still keep the map
+        it had."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+        from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+
+        kept = self._cube("lmx_back")
+        LightmapRecords.commit({kept: "C:/lm/Old_Lightmap.exr"})
+        LightmapExcludeSet.define([kept])
+        shape = cmds.listRelatives(kept, shapes=True, fullPath=True)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            exr = os.path.join(tmp, "New_Lightmap.exr")
+            open(exr, "wb").close()
+            manifest = os.path.join(tmp, "x.lightmaps.json")
+            Path(manifest).write_text(
+                json.dumps(
+                    {
+                        "version": 2,
+                        "mode": "separated",
+                        "lighting": {},
+                        "meshes": {
+                            "Mesh": TestBridgePerInstanceLightmaps._layout_from(shape)
+                        },
+                        "objects": {"lmx_back": {"map": exr, "mesh": "Mesh"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge = BlenderBridge()
+            # A seed arrives spelled as its caller wrote it: long, or short.
+            for seed in (kept, "lmx_back"):
+                with self.assertLogs(bridge.logger, level="WARNING") as caught:
+                    wired = bridge.reassemble_lightmaps(manifest, [seed])
+                self.assertEqual(wired, {}, seed)
+                self.assertTrue(
+                    any("Exclude set" in line for line in caught.output), seed
+                )
+        self.assertEqual(LightmapRecords._marker_info(kept)["map"], "Old_Lightmap.exr")

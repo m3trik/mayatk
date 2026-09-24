@@ -149,86 +149,57 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # only when that recipe is selected.
     #
     # This block IS blendertk ``LightmapBaker``'s panel surface, one row per dial and in
-    # its order -- Quality, Resolution, Samples, Packing, output folder, name affix --
-    # because the recipe drives that exact baker. The bridge previously showed Quality
-    # alone, on the argument that a tier already names the good values; that hid
-    # Packing (so every send was force-atlased) and the affix (so every map was named
-    # ``_Lightmap``), and it left the artist reading a panel whose dials did not match
-    # the tool underneath. The tier still FILLS resolution/samples -- 0 means "whatever
-    # the tier says", the headless equivalent of the panel's preset -> dials fill -- so
-    # the default experience is unchanged for anyone who only touches Quality.
+    # that panel's order -- Packing, Processor, Resolution (+ Denoise), Samples
+    # (+ Adaptive), Bounces, the output folder (+ Beside Textures), the name affix --
+    # because the recipe drives that exact baker. Each switch sits INLINE beside the
+    # dial it qualifies, as it rides that field's option box on the panel. Quality
+    # leads: on the panel a preset WRITES the dials, which a one-shot headless send
+    # cannot, so here the tier is the base and each dial row an override of it --
+    # "From Quality" (0, or -1 where 0 is a real value) leaves the tier's.
     #
     # Blender-side lighting (Environment HDRI / World / Scene Light / Emission
     # strength) has no counterpart in the baker's panel and never will: Maya's baker
     # renders the scene's own Arnold lights in place, while this one has to TRANSPORT
     # them into another renderer's units. Those rows belong to the crossing, not to
-    # the baker.
+    # the baker. The scene's Exclude set is not a row either: it is scene data, and
+    # it crosses with the send (``BlenderBridge.LIGHTMAP_SECTION``).
     "LIGHTMAP_QUALITY": AttributeSpec(
         key="LIGHTMAP_QUALITY",
         label="Quality",
         kind="choice",
         default=DEFAULTS["LIGHTMAP_QUALITY"],
+        # Pinned against blendertk's shipped tiers by test_blender_bridge.
         choices=[
-            ("Preview", "preview", "256 px / 64 samples — fast iteration."),
             (
-                "Quest / Mobile",
-                "quest",
-                "1024 px / 256 samples — the production default.",
+                "Preview",
+                "preview",
+                "256 px / 64 samples / 2 bounces — fast iteration.",
             ),
-            ("Desktop / High", "desktop", "2048 px / 512 samples — hero environments."),
+            (
+                "Mobile",
+                "mobile",
+                "1024 px / 256 samples / 4 bounces — the production default.",
+            ),
+            (
+                "Desktop / High",
+                "desktop",
+                "2048 px / 512 samples / 4 bounces — hero environments.",
+            ),
             (
                 "Hero / Production",
                 "hero",
-                "4096 px / 1024 samples — a whole environment sharing one material.\n"
-                "The figure is the ATLAS size, and one atlas is split between every\n"
-                "object in a material group: a 46-piece room on one material gets 1/46th\n"
-                "of it each, so an environment needs a tier above per-object intuition.",
+                "4096 px / 1024 samples / 4 bounces — a whole environment sharing\n"
+                "one material. The figure is the ATLAS size, and one atlas is split\n"
+                "between every object in a material group: a 46-piece room on one\n"
+                "material gets 1/46th of it each, so an environment needs a tier\n"
+                "above per-object intuition.",
             ),
         ],
         tooltip=(
-            "Bake quality tier (blendertk's lightmap preset store; denoised, GPU).\n"
-            "Fills Resolution and Samples below — set either of those and the tier\n"
-            "stops applying to it, exactly as in the Lightmap Baker panel."
-        ),
-    ),
-    "LIGHTMAP_RESOLUTION": AttributeSpec(
-        key="LIGHTMAP_RESOLUTION",
-        label="Resolution",
-        kind="choice",
-        default=DEFAULTS["LIGHTMAP_RESOLUTION"],
-        # The Lightmap Baker panel's own fixed sizes (``LightmapBakerSlots._RESOLUTIONS``),
-        # plus a leading row for "leave it to the tier" -- the panel has no such row
-        # because a preset there WRITES the dial, which a one-shot headless send cannot.
-        choices=[
-            ("From Quality preset", 0, "Use the tier's resolution (the default)."),
-            ("256", 256, "Preview / fast iteration."),
-            ("512", 512, "Between the preview and mobile tiers."),
-            ("1024", 1024, "Quest / mobile."),
-            ("2048", 2048, "Desktop / high."),
-            ("4096", 4096, "Hero — a whole environment on one atlas."),
-        ],
-        tooltip=(
-            "Lightmap size in pixels (square), overriding the Quality tier.\n\n"
-            "With Packing set to Atlas by Material this is the ATLAS size, SHARED by\n"
-            "every object in a material group — a 46-piece room on one material gets\n"
-            "1/46th of it each, so an environment wants a tier above per-object\n"
-            "intuition. Per-Object gives each mesh a map this size of its own."
-        ),
-    ),
-    "LIGHTMAP_SAMPLES": AttributeSpec(
-        key="LIGHTMAP_SAMPLES",
-        label="Samples",
-        kind="int",
-        default=DEFAULTS["LIGHTMAP_SAMPLES"],
-        minimum=0,
-        maximum=8192,
-        tooltip=(
-            "Cycles path samples per texel, overriding the Quality tier. 0 uses the\n"
-            "tier's value.\n\n"
-            "These are CYCLES paths, not Arnold AA samples — the Lightmap Baker's\n"
-            "Maya twin counts in the hundreds where this counts in the tens, so a\n"
-            "number carried over from that panel bakes far faster and far noisier\n"
-            "than it looks. Denoising below covers a lot of the difference."
+            "Bake quality tier (blendertk's lightmap preset store, denoised).\n"
+            "Fills Resolution, Samples and Bounces below -- set any of them and the\n"
+            "tier stops applying to that one, as a preset fills the Lightmap Baker\n"
+            "panel's dials."
         ),
     ),
     "LIGHTMAP_PACKING": AttributeSpec(
@@ -254,13 +225,122 @@ PARAMS: "dict[str, AttributeSpec]" = {
             ),
         ],
         tooltip=(
-            "How the baked maps are laid out — the Lightmap Baker panel's Packing\n"
-            "combobox.\n\n"
-            "Atlas is the default HERE (the panel defaults to Per-Object) because a\n"
-            "bridge send is a whole module, not one selected mesh. The UVs are never\n"
-            "edited either way; the choice is made BEFORE baking, since the atlas\n"
-            "path plans the layout first and bakes each object at the footprint it\n"
-            "will occupy rather than downscaling a full map per object."
+            "How the baked maps are laid out -- the Lightmap Baker panel's Packing\n"
+            "combobox, with the same default on both panels.\n\n"
+            "The UVs are never edited either way; the choice is made BEFORE baking,\n"
+            "since the atlas path plans the layout first and bakes each object at\n"
+            "the footprint it will occupy rather than downscaling a full map per\n"
+            "object."
+        ),
+    ),
+    "LIGHTMAP_DEVICE": AttributeSpec(
+        key="LIGHTMAP_DEVICE",
+        label="Processor",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_DEVICE"],
+        choices=[
+            (
+                "Auto",
+                "AUTO",
+                "Per object: the GPU where it pays, the CPU for small tiles.\n"
+                "Every bake op rebuilds its Cycles session, and on the GPU that\n"
+                "setup+teardown (~0.35 s/object, measured) outweighs a small\n"
+                "tile's render.",
+            ),
+            ("GPU", "GPU", "Force the GPU for every object."),
+            ("CPU", "CPU", "Force the CPU — the fallback when the GPU session fails."),
+        ],
+        tooltip=(
+            "Which processor Cycles bakes on (blendertk TextureBaker's device policy)\n"
+            "-- the Lightmap Baker panel's Processor row. A machine setting, not a\n"
+            "quality one: no preset stores it."
+        ),
+    ),
+    "LIGHTMAP_RESOLUTION": AttributeSpec(
+        key="LIGHTMAP_RESOLUTION",
+        label="Resolution",
+        kind="choice",
+        default=DEFAULTS["LIGHTMAP_RESOLUTION"],
+        # The Lightmap Baker panel's own fixed sizes (``LightmapBakerSlots._RESOLUTIONS``),
+        # plus a leading row for "leave it to the tier" -- the panel has no such row
+        # because a preset there WRITES the dial, which a one-shot headless send cannot.
+        choices=[
+            ("From Quality preset", 0, "Use the tier's resolution (the default)."),
+            ("256", 256, "Preview / fast iteration."),
+            ("512", 512, "Between the preview and mobile tiers."),
+            ("1024", 1024, "Mobile."),
+            ("2048", 2048, "Desktop / high."),
+            ("4096", 4096, "Hero — a whole environment on one atlas."),
+        ],
+        tooltip=(
+            "Lightmap size in pixels (square), overriding the Quality tier.\n\n"
+            "With Packing set to Atlas by Material this is the ATLAS size, SHARED by\n"
+            "every object in a material group — a 46-piece room on one material gets\n"
+            "1/46th of it each, so an environment wants a tier above per-object\n"
+            "intuition. Per-Object gives each mesh a map this size of its own."
+        ),
+    ),
+    "LIGHTMAP_DENOISE": AttributeSpec(
+        key="LIGHTMAP_DENOISE",
+        label="Denoise",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_DENOISE"],
+        inline=True,
+        tooltip=(
+            "Run Blender's denoiser (OpenImageDenoise) over each map -- Cycles does\n"
+            "not denoise a bake itself. On unless you are chasing what the raw\n"
+            "sample count actually gives you: it is what makes the low Samples of\n"
+            "the fast tiers usable. The Lightmap Baker panel's Denoise switch."
+        ),
+    ),
+    "LIGHTMAP_SAMPLES": AttributeSpec(
+        key="LIGHTMAP_SAMPLES",
+        label="Samples",
+        kind="int",
+        default=DEFAULTS["LIGHTMAP_SAMPLES"],
+        minimum=0,
+        maximum=8192,
+        placeholder="From Quality",
+        tooltip=(
+            "Cycles path samples per texel, overriding the Quality tier (0 keeps\n"
+            "the tier's value).\n\n"
+            "These are CYCLES paths, not Arnold AA samples: the Lightmap Baker's\n"
+            "Maya twin counts a handful of AA samples, each one squared and each\n"
+            "spawning its own GI rays, where this counts every path -- hundreds.\n"
+            "A number carried over from that panel bakes far faster and far\n"
+            "noisier than it looks."
+        ),
+    ),
+    "LIGHTMAP_ADAPTIVE": AttributeSpec(
+        key="LIGHTMAP_ADAPTIVE",
+        label="Adaptive",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_ADAPTIVE"],
+        inline=True,
+        tooltip=(
+            "Adaptive Sampling: each texel stops once its noise is low enough, so\n"
+            "the flat, lit ones finish early and the shadows take the rest of the\n"
+            "Samples. Measured after the denoise every map gets: 32.6 s instead of\n"
+            "71.7 s at 1024 samples, for residual noise of 0.37% against 0.26%.\n"
+            "Off gives every texel the full budget. The Lightmap Baker panel's\n"
+            "Adaptive Sampling switch."
+        ),
+    ),
+    "LIGHTMAP_BOUNCES": AttributeSpec(
+        key="LIGHTMAP_BOUNCES",
+        label="Bounces",
+        kind="int",
+        default=DEFAULTS["LIGHTMAP_BOUNCES"],
+        minimum=-1,
+        maximum=16,
+        placeholder="From Quality",
+        tooltip=(
+            "Diffuse bounces Cycles follows, overriding the Quality tier (the\n"
+            "lowest setting keeps the tier's; 0 is direct light only). The biggest\n"
+            "quality lever for an interior, and each bounce adds render time.\n\n"
+            "These are Cycles bounces, not Arnold's GI depth: measured on one room,\n"
+            "Cycles at 4 sits at 0.76x an Arnold depth-2 bake of the same scene,\n"
+            "so a number carried over from the Maya panel is not the same light."
         ),
     ),
     "INCLUDE_ENVIRONMENT": AttributeSpec(
@@ -346,7 +426,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "They come back as textures THIS Maya scene references (and its exporters\n"
             "resolve), so they belong in the project's texture folder.\n"
             "Empty puts each map beside the textures it joins — the folder holding the\n"
-            "selection's existing maps — falling back to the project's sourceimages."
+            "selection's existing maps — falling back to the project's sourceimages.\n"
+            "With Beside Textures on, this folder takes only the objects whose\n"
+            "material has no texture folder."
+        ),
+    ),
+    "LIGHTMAP_BESIDE_TEXTURES": AttributeSpec(
+        key="LIGHTMAP_BESIDE_TEXTURES",
+        label="Beside Textures",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_BESIDE_TEXTURES"],
+        inline=True,
+        tooltip=(
+            "Save each lightmap in the folder its material's texture maps are in,\n"
+            "named after that texture set -- the Lightmap Baker panel's Beside\n"
+            "Material Textures switch. A map another object in this scene still\n"
+            "reads is never written over; the bake takes the next free name."
         ),
     ),
     "LIGHTMAP_AFFIX": AttributeSpec(
@@ -364,36 +459,6 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "Under Atlas by Material the affix names the ATLAS, which is derived from\n"
             "the material rather than from any one object."
         ),
-    ),
-    "LIGHTMAP_DENOISE": AttributeSpec(
-        key="LIGHTMAP_DENOISE",
-        label="Denoise",
-        kind="bool",
-        default=DEFAULTS["LIGHTMAP_DENOISE"],
-        tooltip=(
-            "Run Cycles' denoiser over each bake. On unless you are chasing what the\n"
-            "raw sample count actually gives you — it is what makes the low Samples\n"
-            "of the fast tiers usable."
-        ),
-    ),
-    "LIGHTMAP_DEVICE": AttributeSpec(
-        key="LIGHTMAP_DEVICE",
-        label="Device",
-        kind="choice",
-        default=DEFAULTS["LIGHTMAP_DEVICE"],
-        choices=[
-            (
-                "Auto",
-                "AUTO",
-                "Per object: the GPU where it pays, the CPU for small tiles.\n"
-                "Every bake op rebuilds its Cycles session, and on the GPU that\n"
-                "setup+teardown (~0.35 s/object, measured) outweighs a small\n"
-                "tile's render.",
-            ),
-            ("GPU", "GPU", "Force the GPU for every object."),
-            ("CPU", "CPU", "Force the CPU — the fallback when the GPU session fails."),
-        ],
-        tooltip="Which device Cycles bakes on (blendertk TextureBaker's device policy).",
     ),
 }
 

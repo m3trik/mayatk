@@ -6000,6 +6000,25 @@ class TestDeprecatedAsStrings(MayaTkTestCase):
             with self.subTest(method=name), self.assertWarns(DeprecationWarning):
                 call()
 
+    def test_the_retired_time_tolerance_warns(self):
+        # time_tolerance has had no effect (filterCurve weighs values only, and
+        # no optimize pass compared times with it); since 2026-09-23 it warns
+        # the same way (removed in 0.20.0).
+        calls = {
+            "simplify_curve": lambda: AnimUtils.simplify_curve(
+                [self.cube], time_tolerance=0.01
+            ),
+            "optimize_keys": lambda: AnimUtils.optimize_keys(
+                [self.cube], time_tolerance=0.01
+            ),
+        }
+        for name, call in calls.items():
+            with self.subTest(method=name), self.assertWarns(
+                DeprecationWarning
+            ) as caught:
+                call()
+            self.assertIn("'time_tolerance'", str(caught.warning))
+
 
 class TestOptimizeLevelResolution(MayaTkTestCase):
     """``AnimUtils.OPTIMIZE_LEVELS`` -- the one table every consumer reads.

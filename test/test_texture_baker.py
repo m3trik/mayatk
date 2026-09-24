@@ -410,7 +410,7 @@ class TestBakeDevice(MayaTkTestCase):
         """REGRESSION (2026-09-21): Arnold's GPU ignores ``GIDiffuseSamples``.
 
         Measured on a production floor: GI 4 and GI 8 baked BIT-IDENTICAL maps
-        on the GPU, and the quest preset (AA 4, GI 4) baked 5.1x the per-texel
+        on the GPU, and the mobile preset (AA 4, GI 4) baked 5.1x the per-texel
         noise of the same preset on the CPU -- AA^2 = 16 first-bounce rays per
         texel against AA^2 * GI^2 = 256. Read as splotchy floors in the WebXR
         preview. The GPU takes the preset's diffuse budget in camera samples
@@ -787,9 +787,9 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         # ambiguous -- which is the point of the fixture.
         machine_a = cmds.ls(cmds.group(empty=True, name="MACHINE_A"), long=True)[0]
         machine_b = cmds.ls(cmds.group(empty=True, name="MACHINE_B"), long=True)[0]
-        inner = cmds.ls(cmds.group(empty=True, name="BODY", parent=machine_b), long=True)[
-            0
-        ]
+        inner = cmds.ls(
+            cmds.group(empty=True, name="BODY", parent=machine_b), long=True
+        )[0]
         bodies = []
         for parent in (machine_a, inner):
             cube = cmds.parent(cmds.polyCube(name="leafBody")[0], parent)[0]
@@ -1029,6 +1029,18 @@ class TestResolveMeshes(MayaTkTestCase):
             TextureBaker.resolve_meshes([cube, light, locator, group]), [cube]
         )
 
+    def test_drops_a_mesh_with_no_faces(self):
+        # An empty mesh node has no surface either,
+        # and Arnold does not skip one: measured 2026-09-23 (mtoa, Maya 2025), a
+        # lightmap bake with one in scope crashed mayapy natively in ai.dll.
+        cube = cmds.ls(cmds.polyCube(name="solidMesh")[0], long=True)[0]
+        empty = cmds.createNode("transform", name="emptyMesh")
+        cmds.createNode("mesh", name="emptyMeshShape", parent=empty)
+        empty = cmds.ls(empty, long=True)[0]
+        self.assertEqual(cmds.polyEvaluate(empty, face=True), 0)
+
+        self.assertEqual(TextureBaker.resolve_meshes([empty, cube]), [cube])
+
     def test_shapes_and_components_resolve_to_their_transform(self):
         cube = cmds.ls(cmds.polyCube(name="compMesh")[0], long=True)[0]
         shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
@@ -1169,7 +1181,7 @@ class TestForcedShaderReachesInstancedTargets(MayaTkTestCase):
         queried through, so every instance claims ownership). The batch used
         to keep instances and re-bake afterwards the tiles whose mean strayed
         from their instance group's median -- and on a production room (46
-        instanced targets, quest), measured against an all-per-object
+        instanced targets, mobile), measured against an all-per-object
         reference, that test flagged 33 correct tiles and missed three hot
         ones (+13% / +29% / +54%: bright wall panels in the WebXR preview),
         while taking 428s against 281s per-object. Instanced targets now bake
@@ -1443,6 +1455,106 @@ class TestArnoldTranslationGuard(MayaTkTestCase):
             f"{sg}.aiSurfaceShader", source=True, destination=False
         )
         return src[0] if src else None
+
+    @staticmethod
+    def _second_group(shader, name):
+        """Another group fed by *shader*, holding ``<name>_geo`` -- a material
+        consolidated across objects keeps one group per object."""
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cmds.polyCube(name=f"{name}_geo")[0], edit=True, forceElement=sg)
+        return sg
+
+    def test_guard_covers_every_group_of_a_shared_game_material(self):
+        """One StingrayPBS on two groups (a bench's top and its legs): both
+        render through the stand-in. The guard bridged per MATERIAL and the
+        bridge rode the material's first group, so the legs baked error
+        magenta and bounced it onto the floor under the bench (production
+        soldering room, 2026-09-23)."""
+        shader, top, _cube = self._stingray_sg("bench")
+        legs = self._second_group(shader, "legs")
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            standins = (self._override_source(top), self._override_source(legs))
+            self.assertNotIn(None, standins, "a group of the material kept no stand-in")
+        self.assertEqual(
+            (self._override_source(top), self._override_source(legs)), (None, None)
+        )
+        for node in set(standins):
+            self.assertFalse(cmds.objExists(node), "guard must delete its bridge")
+
+    def test_guard_fills_the_groups_an_authored_bridge_misses_and_puts_them_back(
+        self,
+    ):
+        """An authored override on one group is respected, the material's
+        other groups still bake through Arnold, and both come back exactly as
+        they were. (The authored group is the material's NEWER one: Maya lists
+        it first, which is the group a per-material check used to read.)"""
+        shader, open_sg, _cube = self._stingray_sg("openBench")
+        authored_sg = self._second_group(shader, "authoredLegs")
+        authored = cmds.shadingNode(
+            "standardSurface", asShader=True, name="authoredLegs_ai"
+        )
+        cmds.connectAttr(
+            f"{authored}.outColor", f"{authored_sg}.aiSurfaceShader", force=True
+        )
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            self.assertEqual(self._override_source(authored_sg), authored)
+            self.assertIsNotNone(self._override_source(open_sg), "left magenta")
+        self.assertEqual(self._override_source(authored_sg), authored)
+        self.assertIsNone(self._override_source(open_sg))
+        self.assertTrue(cmds.objExists(authored))
+
+    def test_a_shared_game_material_bounces_no_magenta_onto_the_floor(self):
+        """The symptom, end to end: a lit wall standing on a white floor shares
+        one StingrayPBS with a prop elsewhere, through a second group. The
+        group the stand-in missed rendered error magenta and bounced it onto
+        the floor -- on the production soldering room, ~11% of the texels of
+        the two floor pieces under the bench came back over 10% magenta."""
+        if not _cv2_available():
+            self.skipTest("cv2/numpy unavailable for map means")
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+
+        shader, _wall_sg, wall = self._stingray_sg("magentaWall")
+        self._second_group(shader, "magentaProp")
+        cmds.move(0, 0, 10, "magentaProp_geo")  # off the floor, out of the way
+        cmds.scale(0.2, 2.0, 4.0, wall)
+        cmds.move(-1.6, 1.0, 0, wall)
+        floor = cmds.polyPlane(name="magentaFloor", w=4, h=4, sx=1, sy=1)[0]
+        card = cmds.shadingNode("lambert", asShader=True, name="magentaCard")
+        cmds.setAttr(f"{card}.color", 1, 1, 1, type="double3")
+        # A grazing light from +X: the wall's inner face takes it nearly
+        # head-on and the floor at a slant, so what the wall bounces is a large
+        # part of what the floor beside it receives.
+        cmds.directionalLight(intensity=2.0, rotation=(-20, 90, 0))
+
+        tmp = tempfile.mkdtemp(prefix="bake_magenta_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        target = cmds.ls(floor, long=True)[0]
+        result = TextureBaker(resolution=32, samples=2, file_format="exr").bake(
+            [target],
+            output_dir=tmp,
+            prefix="",
+            suffix="_LM",
+            backend="arnold",
+            shader=card,
+        )
+        img = cv2.imread(result[target], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        self.assertIsNotNone(img, "unreadable floor map")
+        bgr = img[..., :3].reshape(-1, 3).astype(float)
+        level = float(bgr.mean())
+        self.assertGreater(level, 0.0, "black bake, nothing verified")
+        # Magenta = red and blue over green; neutral bounce keeps it ~0. The
+        # production probe's score: the share of texels over 10% of the level.
+        excess = ((bgr[:, 2] + bgr[:, 0]) / 2 - bgr[:, 1]) / level
+        share = float((excess > 0.10).mean())
+        self.assertLess(
+            share,
+            0.01,
+            f"{share:.1%} of the floor over 10% magenta (max {excess.max():.2f})",
+        )
 
     def test_guard_bridges_and_restores(self):
         shader, sg, _cube = self._stingray_sg()
@@ -1818,7 +1930,11 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         ):
             with self.assertLogs(baker.logger, level="WARNING"):
                 result = baker.bake(
-                    planes, output_dir=self.tmp, prefix="", suffix="_LM", backend="arnold"
+                    planes,
+                    output_dir=self.tmp,
+                    prefix="",
+                    suffix="_LM",
+                    backend="arnold",
                 )
         self.assertEqual(result, {}, "a stopped render is not the map it would replace")
         self.assertEqual(len(self.calls), 1, "the next object's render must not start")
