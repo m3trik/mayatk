@@ -150,6 +150,19 @@ longer written, and any commit in which the shots producer ran clears it, so an
 older scene loses it at its next shots publish. Until then it still reads:
 `ptk.SceneRecords.declared_takes` falls back to it when no clip carries a range.
 
+**A Save As copy carries every record verbatim.** Nothing in the scene data
+tells the copy from its source, so a record that must -- which scene file wrote
+the lightmaps a re-bake may delete (`lightmap_writers`), which scene recorded
+the hierarchy baseline -- stamps its writer (`DataNodes.writer_stamp`: the scene
+file spelled from its own project, `""` while unsaved) and asks
+`DataNodes.written_here(stamp)`: this file, or one that is gone (the scene was
+renamed or moved), is this scene's; another file still on disk is a Save As
+source's. The stamp is a path, declared as one (`RecordSpec.paths`; the
+baseline's `paths=("scene",)` names its one path beside a path set and a hash),
+so a save into another project re-spells it and the copy still names its
+source. The Scene Exporter's hierarchy check sets a source's baseline aside,
+and the copy's first export records its own.
+
 ## Crossing into another scene
 
 A record also says what it becomes when **another scene's copy arrives beside

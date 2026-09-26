@@ -18,7 +18,6 @@ import logging
 
 import maya.cmds as cmds
 import maya.mel as mel
-import maya.api.OpenMaya as om
 
 from qtpy import QtWidgets, QtCore
 
@@ -62,7 +61,7 @@ class ChannelBox:
             return None
 
     @classmethod
-    def _main_view(cls):
+    def _main_view(cls, require_rows=True):
         """Return the channel box as a ``QTableView``.
 
         In Maya 2025+ the ``mainChannelBox`` control *is* a QTableView.
@@ -72,6 +71,11 @@ class ChannelBox:
 
         Calls ``processEvents()`` first to let Maya finish any pending
         widget rebuilds, which stabilises the C++ pointer.
+
+        Parameters:
+            require_rows (bool): Return None while the model has no rows.
+                ``False`` returns the view as it is, for callers that tell
+                an unfilled box from a missing one themselves.
 
         Returns:
             QTableView|None
@@ -93,8 +97,10 @@ class ChannelBox:
                 return None
 
             view = wrapInstance(int(ptr), QtWidgets.QTableView)
-            # Verify the pointer is alive and the model is populated.
-            if view.model() is None or view.model().rowCount() == 0:
+            # Verify the pointer is alive (and, by default, the model populated).
+            if view.model() is None:
+                return None
+            if require_rows and view.model().rowCount() == 0:
                 return None
             return view
         except (ImportError, RuntimeError, AttributeError) as exc:
@@ -111,7 +117,9 @@ class ChannelBox:
 
         The C++ widget pointer can go stale after scene changes, so
         callers should re-invoke this method after ``SelectionChanged``
-        or ``SceneOpened`` scriptJob events.
+        or ``SceneOpened`` scriptJob events.  An empty box is fine to
+        connect to: measured on Maya 2025, it keeps the same selection
+        model when it fills.
 
         Parameters
         ----------
@@ -124,7 +132,7 @@ class ChannelBox:
             ``True`` if the connection succeeded.
         """
         try:
-            view = cls._main_view()
+            view = cls._main_view(require_rows=False)
             if view is None:
                 log.debug("connect_selection_changed: no view")
                 return False
@@ -145,7 +153,7 @@ class ChannelBox:
         Safe to call even if the widget has been destroyed.
         """
         try:
-            view = cls._main_view()
+            view = cls._main_view(require_rows=False)
             if view is None:
                 return
             sel_model = view.selectionModel()
@@ -359,6 +367,77 @@ class ChannelBox:
             # Maya 2025 refreshAE.mel bug — selection may still have taken effect.
             log.debug("select: update raised (expected in 2025)", exc_info=True)
 
+    # Idle turns ``select_visual`` waits for an unfilled channel box before
+    # it gives up and warns (measured: one turn is enough after a node change).
+    _REFILL_WAIT_TURNS = 5
+    # Bumped by every ``select_visual`` call, so a retry still queued for an
+    # older call cannot overwrite a newer highlight.
+    _select_request = 0
+    _SELECT_FAILURES = {
+        "hidden": "the channel box is hidden (it stays empty until shown)",
+        "unfilled": "the channel box is missing or stayed empty",
+        "unmatched": "the channel box does not show them",
+    }
+
+    @classmethod
+    def _try_select_rows(cls, attr_names):
+        """Make one attempt at the highlight through the channel box's Qt model.
+
+        Parameters:
+            attr_names (list[str]): Attribute names; empty clears the highlight.
+
+        Returns:
+            str|None: None when it landed, else why not: ``"hidden"``,
+                ``"unfilled"`` (no view or rows yet, or rows whose cells are all
+                blank) or ``"unmatched"``.
+        """
+        try:
+            view = cls._main_view(require_rows=False)
+            model = view.model() if view is not None else None
+            sel_model = view.selectionModel() if view is not None else None
+            if model is None or sel_model is None:
+                return "unfilled"
+
+            if not attr_names:
+                sel_model.clearSelection()
+            else:
+                if not view.isVisible():
+                    return "hidden"
+                display_names = cls._resolve_display_names(attr_names)
+                selection = QtCore.QItemSelection()
+                cols = max(model.columnCount(), 1)
+                filled = False
+                for r in range(model.rowCount()):
+                    cell_text = model.data(model.index(r, 0), QtCore.Qt.DisplayRole)
+                    if not cell_text:
+                        continue
+                    filled = True
+                    if str(cell_text) in display_names:
+                        selection.merge(
+                            QtCore.QItemSelection(
+                                model.index(r, 0), model.index(r, cols - 1)
+                            ),
+                            QtCore.QItemSelectionModel.Select,
+                        )
+                if selection.isEmpty():
+                    # Measured on Maya 2025: when the box's node changes it keeps
+                    # the old row count but blanks every cell until its idle refill.
+                    return "unmatched" if filled else "unfilled"
+                sel_model.select(
+                    selection,
+                    QtCore.QItemSelectionModel.ClearAndSelect
+                    | QtCore.QItemSelectionModel.Rows,
+                )
+        except (RuntimeError, AttributeError, ImportError) as exc:
+            log.debug("select_visual: Qt path failed (%s)", exc)
+            return "unfilled"
+
+        # Flush so cmds.channelBox -sma sees the new selection immediately.
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.processEvents()
+        return None
+
     @classmethod
     def select_visual(cls, attr_names):
         """Select attributes and ensure the highlight is visible in the UI.
@@ -368,82 +447,54 @@ class ChannelBox:
         **only reliable mechanism** in Maya 2025 — ``cmds.channelBox
         -select`` is accepted but silently does nothing.
 
-        Falls back to ``select()`` for older Maya versions where the
-        control may not be a ``QTableView``.
+        The channel box refills on Maya's idle turn, not synchronously, so a
+        call made just after its node changed finds blank rows.  That call is
+        retried on the following idle turns (the newest call wins), and the
+        highlight then lands a moment after this returns.  Only a box that is
+        hidden, never refills, or does not show the attributes gets a warning
+        and the ``select()`` fallback.
 
         Parameters:
             attr_names (str | list[str]): Short attribute names.
         """
         if isinstance(attr_names, str):
             attr_names = [attr_names]
+        attr_names = list(attr_names or [])
+        cls._select_request += 1
+        cls._select_when_filled(attr_names, cls._select_request, cls._REFILL_WAIT_TURNS)
 
-        # --- Qt path (primary) ---------------------------------------------
-        try:
-            view = cls._main_view()
-            if view is None:
-                raise RuntimeError("no view")
-
-            model = view.model()
-            sel_model = view.selectionModel()
-            if model is None or sel_model is None:
-                raise RuntimeError("no model/selectionModel")
-
-            if not attr_names:
-                sel_model.clearSelection()
-                app = QtWidgets.QApplication.instance()
-                if app:
-                    app.processEvents()
-                log.debug("select_visual: Qt clear succeeded")
-                return
-
-            display_names = cls._resolve_display_names(attr_names)
-
-            selection = QtCore.QItemSelection()
-            rows = model.rowCount()
-            cols = max(model.columnCount(), 1)
-            for r in range(rows):
-                cell_text = model.data(model.index(r, 0), QtCore.Qt.DisplayRole)
-                if cell_text and str(cell_text) in display_names:
-                    selection.merge(
-                        QtCore.QItemSelection(
-                            model.index(r, 0), model.index(r, cols - 1)
-                        ),
-                        QtCore.QItemSelectionModel.Select,
-                    )
-
-            if selection.isEmpty():
-                raise RuntimeError("no matching rows")
-
-            sel_model.select(
-                selection,
-                QtCore.QItemSelectionModel.ClearAndSelect
-                | QtCore.QItemSelectionModel.Rows,
-            )
-
-            # Flush so cmds.channelBox -sma sees the new selection immediately.
-            app = QtWidgets.QApplication.instance()
-            if app:
-                app.processEvents()
-
+    @classmethod
+    def _select_when_filled(cls, attr_names, request, turns_left):
+        """Attempt the highlight; re-queue on idle while the box is unfilled."""
+        if request != cls._select_request:
+            return  # a newer select_visual call owns the highlight
+        reason = cls._try_select_rows(attr_names)
+        if reason is None:
             log.debug("select_visual: Qt path succeeded")
             return
-
-        except (RuntimeError, AttributeError, ImportError) as exc:
-            log.debug("select_visual: Qt path failed (%s), falling back to cmds", exc)
+        if reason == "unfilled" and turns_left > 0:
+            # Plain evalDeferred, measured to run after the refill: the refill
+            # is already queued ahead of it.  A QTimer(0) runs before it, and
+            # lowestPriority starves while a command port holds the session.
+            try:
+                cmds.evalDeferred(
+                    lambda: cls._select_when_filled(attr_names, request, turns_left - 1)
+                )
+                return
+            except Exception:
+                log.debug("select_visual: could not defer a retry", exc_info=True)
 
         # --- cmds fallback (best-effort, measured dead in 2025) ------------
         # Measured on Maya 2025 against a POPULATED channel box: `channelBox
         # -e -select` leaves `-q -sma` empty for both short ("tx") and long
         # ("translateX") names.  So reaching here means the highlight almost
-        # certainly did NOT land — warn rather than fail silently.  The usual
-        # trigger is _main_view() coming back None because the channel box is
-        # hidden or its model has not repopulated yet after a selection
-        # change (it refills on idle, not synchronously).
+        # certainly did NOT land — warn rather than fail silently.
         log.warning(
-            "select_visual: Qt path unavailable for %s — falling back to "
-            "cmds.channelBox -select, which does not take effect in Maya "
-            "2025. The channel box highlight will not be set.",
+            "select_visual: channel box highlight not set for %s — %s. "
+            "Falling back to cmds.channelBox -select, which does not take "
+            "effect in Maya 2025.",
             attr_names,
+            cls._SELECT_FAILURES[reason],
         )
         cls.select(attr_names)
 

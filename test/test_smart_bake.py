@@ -2756,6 +2756,35 @@ class TestShearedMatrixFlatten(unittest.TestCase):
         live = cmds.ls(handle_id, long=True)[0]
         self.assertEqual(cmds.getAttr(f"{live}.ikBlend"), 1.0)
 
+    def test_the_restore_puts_back_a_clash_renamed_node_in_its_slot(self):
+        """Reparented beside a same-named node a joint is renamed by Maya, and
+        every move lands it LAST among its siblings; the restore put it back
+        under the new name and at the end, breaking name-based references and
+        reading as a change to the next hierarchy diff (restore-point audit,
+        2026-09-24)."""
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        rig, joints = self._stretch_chain()
+        cmds.group(empty=True, name="sh_jnt_2", parent=rig)  # the clash
+        side = cmds.spaceLocator(name="sh_side")[0]
+        cmds.parent(side, joints[0])  # a sibling AFTER sh_jnt_2
+        before = cmds.listRelatives(joints[0], children=True, fullPath=True)
+        uuids = cmds.ls(joints, uuid=True)
+
+        plan = [(p, cmds.ls(p, uuid=True)[0], rig, True) for p in joints[1:]]
+        outcome = WorldFitBake.flatten(plan, self.FRAMES)
+        self.assertEqual(outcome["failed"], [])
+        moved = cmds.ls(uuids[1], long=True)[0]
+        self.assertNotEqual(moved.rsplit("|", 1)[-1], "sh_jnt_2", "no clash made")
+
+        restored, errors = WorldFitBake.restore(outcome["records"])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(cmds.ls(uuids, long=True), joints)
+        self.assertEqual(
+            cmds.listRelatives(joints[0], children=True, fullPath=True), before
+        )
+
     def test_a_target_that_itself_moves_is_found_where_it_went(self):
         """A link that does not stretch has a similarity world, so it is the
         nearest fit target of the links below it -- and it moves too, since

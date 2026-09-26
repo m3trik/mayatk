@@ -1097,11 +1097,11 @@ class _TaskDefinitionsMixin:
                     "previous export — nodes that went missing or appeared, the "
                     "signature of an accidental change.",
                     notes=[
-                        "Compares against a lightweight sidecar manifest written "
-                        "beside the last export, so no FBX reimport is needed.",
-                        "Version the Output Filename with a trailing counter "
-                        "(<b>*_v{n:03d}</b>) so the baseline carries across "
-                        "versions.",
+                        "The baseline is recorded on the scene at every export, "
+                        "so renaming the Output Filename keeps it; no FBX "
+                        "reimport is needed.",
+                        "A scene saved as a copy (the source still on disk) "
+                        "starts its own baseline at its first export.",
                     ],
                 ),
                 "setChecked": False,

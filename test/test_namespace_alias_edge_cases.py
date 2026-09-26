@@ -50,10 +50,26 @@ class TestNamespaceAliasEdgeCases(unittest.TestCase):
 
         # From MeshDiagnostics
         self.assertIn("clean_geometry", diag_methods)
-        self.assertIn("classify", diag_methods)
 
         # From AnimCurveDiagnostics
-        self.assertIn("are_similar", diag_methods)
+        self.assertIn("repair_corrupted_curves", diag_methods)
+
+        # From UvDiagnostics
+        self.assertIn("cleanup_uv_sets", diag_methods)
+
+    def test_wildcard_takes_only_classes_the_package_defines(self):
+        """A class a diagnostics module merely IMPORTS is no member: CoreUtils
+        (and with it pythontk's ``are_similar`` / ``classify``), XformUtils,
+        NodeUtils and ``typing.Any`` used to ride in as bases of Diagnostics."""
+        import mayatk
+
+        foreign = [
+            b.__name__
+            for b in mayatk.Diagnostics.__bases__
+            if not b.__module__.startswith("mayatk.core_utils.diagnostics.")
+        ]
+        self.assertEqual(foreign, [])
+        self.assertFalse(hasattr(mayatk.Diagnostics, "are_similar"))
 
     def test_wildcard_excludes_private_classes(self):
         """Test wildcard excludes private/protected classes (starting with _)."""

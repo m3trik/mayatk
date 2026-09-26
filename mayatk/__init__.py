@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.19.1"
+__version__ = "0.20.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -96,6 +96,8 @@ DEFAULT_INCLUDE = {
         "MissingTexture",
         "SharedTexture",
         "MaterialSplit",
+        "MaterialAudit",
+        "SceneOverview",
         "SlotStats",
         "InstanceStats",
         "AuditProfile",

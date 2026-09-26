@@ -504,6 +504,73 @@ class TestCollectSegments(unittest.TestCase):
         self.assertEqual(len(seq.collect_object_segments(0)), 0)
 
 
+@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
+class TestDeleteStaleShots(unittest.TestCase):
+    """The shot list's Delete Stale Shots: names the shots whose objects and
+    keys are gone, asks, and drops their records -- one undo step, and no
+    key or live shot moves (a Delete Shot would close the gap behind each)."""
+
+    def setUp(self):
+        from types import SimpleNamespace
+
+        _new_scene()
+        gone = _make_cube("staleGone", {1: 0, 50: 5})
+        self.live = _make_cube("staleLive", {120: 0, 160: 3})
+        self.store = ShotStore()
+        self.store.define_shot("Gone", 1, 50, [str(gone)])
+        self.store.define_shot("Live", 120, 160, [str(self.live)])
+        cmds.delete(gone)
+        self.footer = []
+        # The controller's own collaborators, and nothing that builds a widget.
+        self.ctrl = SimpleNamespace(
+            sequencer=SimpleNamespace(store=self.store),
+            ui=None,
+            _get_sequencer_widget=lambda: None,
+            _discard_shot_state=self.store.discard_boundary_snapshot,
+            _after_shot_change=lambda: None,
+            _set_footer=self.footer.append,
+        )
+
+    def _remove(self, button):
+        """Run the action, answering its question with *button*; return the
+        question's text.  Patched with a function, never a bare MagicMock: a
+        QObject subclass faults natively on a mock attribute (uitk/CLAUDE.md)."""
+        from unittest import mock
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        asked = []
+
+        def answer(*args, **kwargs):
+            asked.append(args[2])
+            return button
+
+        with mock.patch.object(
+            QtWidgets.QMessageBox, "question", new=staticmethod(answer)
+        ):
+            ShotSequencerController.delete_stale_shots(self.ctrl)
+        return asked[0] if asked else ""
+
+    def test_confirmed_it_drops_only_the_stale_and_moves_no_key(self):
+        asked = self._remove(QtWidgets.QMessageBox.Yes)
+        self.assertIn("Gone [1–50]", asked)
+        self.assertEqual([s.name for s in self.store.shots], ["Live"])
+        self.assertEqual(
+            cmds.keyframe(self.live, q=True, timeChange=True), [120.0, 160.0]
+        )
+        self.assertEqual(self.footer, ["Deleted 1 stale shot(s)"])
+
+    def test_declined_it_drops_nothing(self):
+        self._remove(QtWidgets.QMessageBox.Cancel)
+        self.assertEqual([s.name for s in self.store.shots], ["Gone", "Live"])
+
+    def test_one_undo_puts_them_back(self):
+        self._remove(QtWidgets.QMessageBox.Yes)
+        self.assertTrue(self.store.restore_boundary_snapshot())
+        self.assertEqual(sorted(s.name for s in self.store.shots), ["Gone", "Live"])
+
+
 # =========================================================================
 # Full integration: engine → widget
 # =========================================================================

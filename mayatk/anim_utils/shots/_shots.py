@@ -550,6 +550,66 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             for shot in self.shots
         }
 
+    def _existing_objects(self, names) -> set:
+        """Which of *names* the scene still holds (``ptk.ShotStore.stale_shots``).
+
+        A member is stored as its long DAG path, and one whose parent was
+        renamed or reparented away is still the object the export view names
+        by its leaf -- so a path that no longer resolves is looked up by its
+        leaf, among transforms (a member is one; a material of that name is
+        not it), before it counts as gone.  Two batched ``ls`` calls, whatever
+        the member count.
+        """
+        names = [str(n) for n in names]
+        if cmds is None or not names:
+            return set(names)
+        found = set(cmds.ls(names, long=True) or [])
+        present = {n for n in names if n in found}
+        rest = [n for n in names if n not in present]
+        if rest:
+            leaves = sorted({self.leaf_name(n) for n in rest})
+            held = {self.leaf_name(h) for h in cmds.ls(leaves, type="transform") or []}
+            present.update(n for n in rest if self.leaf_name(n) in held)
+        return present
+
+    def _keyed_windows(self, windows) -> List[bool]:
+        """Per ``(start, end)`` window, whether any animation curve in the
+        scene keys a frame inside it -- whatever the curve drives, layers
+        included (``ptk.ShotStore.stale_shots``).  A curve that drives nothing
+        animates nothing and is skipped: a stash an interrupted export leaked
+        (``<curve>__snapshot``), a deleted rig's leftovers -- blendertk skips a
+        userless action alike.  So is one whose only outputs are ``message``
+        links: Key Stash clips and SmartBake's parked originals are duplicates
+        kept alive by ``message -> <registry>.<multi>``, which drives nothing
+        (SmartBake's own restore skips those links for the same reason) --
+        blendertk skips an action only its fake user holds.  Read from each
+        curve's own key index (``AnimUtils.curve_key_spans``): no key is listed
+        or walked.
+        """
+        windows = list(windows)
+        if cmds is None:
+            return super()._keyed_windows(windows)
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        curves = cmds.ls(type="animCurve") or []
+        pairs = (
+            cmds.listConnections(
+                curves, source=False, destination=True, connections=True
+            )
+            if curves
+            else None
+        ) or []
+        wired = sorted(
+            {
+                plug.split(".")[0]
+                for plug in pairs[::2]
+                if plug.rpartition(".")[2] != "message"
+            }
+        )
+        if not wired:
+            return [False] * len(windows)
+        return [span is not None for span in AnimUtils.curve_key_spans(wired, windows)]
+
     def _resolve_long_names(self, names):
         """Resolve object names to long DAG paths (drops missing objects)."""
         return _ShotStoreInternal._resolve_long_names(names)

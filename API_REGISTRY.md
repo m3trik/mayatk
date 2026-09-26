@@ -759,6 +759,7 @@ Switchboard slots for the Shot Sequencer UI.
   - `ShotSequencerController.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
   - `ShotSequencerController.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None` — Build a context menu specific to the clicked zone.
   - `ShotSequencerController.delete_shot(self, shot_id: int) -> None` — Delete *shot_id* with its contents, closing the timeline behind it.
+  - `ShotSequencerController.delete_stale_shots(self) -> None` — Delete every stale shot, after naming them (``ShotStore.remove_stale_shots``).
   - `ShotSequencerController.move_shot_to_position(self, shot_id: int, position: int) -> None` — Re-slot *shot_id* at 1-based *position*, pushing the rest along.
   - `ShotSequencerController.merge_shot_with(self, shot_id: int, other_id: int) -> None` — Fuse two neighbouring shots into one spanning both.
   - `ShotSequencerController.split_shot_at(self, shot_id: int, time: float) -> None` — Cut *shot_id* in two at *time*, leaving its content where it is.
@@ -783,9 +784,9 @@ Switchboard slots for the Shot Sequencer UI.
   - `ShotSequencerController.on_key_selection_changed(self, key_groups: list) -> None` — Sync the Maya Graph Editor selection to match the sequencer.
   - `ShotSequencerController.on_clip_renamed(self, clip_id: int, new_label: str) -> None` — Handle inline rename — currently a no-op (shot clips removed).
   - `ShotSequencerController.on_playhead_moved(self, frame: float) -> None` — Sync the Maya playhead to the widget playhead.
-- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4269)** — Lightweight dialog for creating or editing a shot.
+- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4302)** — Lightweight dialog for creating or editing a shot.
   - `ShotEditDialog.show(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot', validate=None)` *(static)* — Show a modal dialog and return the result tuple or ``None``.
-- **[`class ShotSequencerSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4360)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotSequencerSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4393)** — Switchboard slot class — routes UI events to the controller.
   - `ShotSequencerSlots.header_init(self, widget)` — Configure header menu.
   - `ShotSequencerSlots.btn_colors(self)` — Open the attribute color configuration dialog.
   - `ShotSequencerSlots.cmb_shot(self, index)` — Handle direct combobox selection of a shot or marker.
@@ -813,13 +814,15 @@ Switchboard slots for the Shots settings UI.
   - `ShotsController.on_shot_end_changed(self, value: float) -> None`
   - `ShotsController.on_shot_desc_changed(self, text: str) -> None`
   - `ShotsController.on_delete_shot(self) -> None` — Delete the active shot after confirmation.
+  - `ShotsController.confirm_stale_removal(stale, parent=None) -> bool` *(static)* — Ask before ``ShotStore.remove_stale_shots``, naming *stale*.
+  - `ShotsController.on_delete_stale_shots(self) -> None` — Delete the stale shots after naming them (All Shots group).
   - `ShotsController.on_delete_all_shots(self) -> None` — Delete every shot after confirmation.
   - `ShotsController.on_move_shot(self) -> None` — Move the active shot to the position specified by spn_move_to.
   - `ShotsController.on_trim_empty(self, edge: str = 'both') -> None` — Trim empty space from the active shot, at *edge*.
   - `ShotsController.on_trim_all_shots(self, edge: str = 'both') -> None` — Trim empty space from every shot, at *edge*.
   - `ShotsController.on_shift_all_shots(self, start: float) -> None` — Shift every shot so the first one starts on *start*.
   - `ShotsController.on_add_space(self, edge: str = 'leading') -> None` — Pad the active shot with ``spn_space`` frames of room at *edge*.
-- **[`class ShotsSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L1181)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotsSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L1237)** — Switchboard slot class — routes UI events to the controller.
   - `ShotsSlots.header_init(self, widget)` — Configure header help text.
   - `ShotsSlots.spn_detection(self, value)` — Detection threshold changed.
   - `ShotsSlots.cmb_detection_mode(self, index)` — Detection mode combobox changed.
@@ -833,6 +836,7 @@ Switchboard slots for the Shots settings UI.
   - `ShotsSlots.txt_shot_desc(self, text=None)` — Shot description edited.
   - `ShotsSlots.b000(self)` — Delete the selected shot.
   - `ShotsSlots.btn_delete_all(self)` — Delete every shot (All Shots group).
+  - `ShotsSlots.btn_delete_stale(self)` — Delete the stale shots (All Shots group).
   - `ShotsSlots.btn_move_shot(self)` — Move shot to the position in spn_move_to.
   - `ShotsSlots.btn_apply_gap(self)` — Apply gap value with the scope selected in the option box.
   - `ShotsSlots.btn_shift_all(self)` — Re-base every shot onto the frame in spn_shift_all.
@@ -1219,7 +1223,7 @@ Instancing strategy logic for AutoInstancer.
   - `GetComponentsMixin.convert_int_to_component(cls, obj, integers, component_type, returned_type='str', flatten=False)` *(class)* — Convert the given integers to components of the given object.
   - `GetComponentsMixin.filter_components(cls, components, inc=None, exc=None, flatten=False)` *(class)* — Filter the given components.
   - `GetComponentsMixin.get_components(cls, objects, component_type, returned_type='str', inc=None, exc=None, randomize=0, flatten=False)` *(class)* — Get the components of the given type from the given object(s).
-- **[`class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L415)**
+- **[`class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L457)**
   - `Components.get_mesh_transforms(objects) -> List[str]` *(static)* — Full paths of every mesh TRANSFORM in *objects*, descendants included.
   - `Components.get_standoff_distances(cls, objects, target, sample_limit: Optional[int] = None) -> Dict[str, float]` *(class)* — Measure how far each mesh in *objects* stands off *target*'s surface.
   - `Components.map_components_to_objects(components_list)` *(static)* — Map a list of components to their respective objects.
@@ -1265,38 +1269,43 @@ Animation-curve diagnostics and optional repair helpers.
 
 Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
 
-- [`SEVERITY_LOW`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L40) — constant
-- [`SEVERITY_MEDIUM`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L41) — constant
-- [`SEVERITY_HIGH`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L42) — constant
-- **[`class AuditProfile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L19)** — Thresholds for scene analysis.
-- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L46)** — Per-mesh statistics for a single shape node.
-- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L64)** — Per-shape material usage summary (aggregated across slots).
-- **[`class Finding`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L82)** — An observation about an asset (negative or risk-flagged).
-- **[`class FixAction`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L94)** — A recommended remediation step.
-- **[`class BudgetDelta`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L105)** — How far an asset exceeds the profile budget along each axis.
+- [`SEVERITY_LOW`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L49) — constant
+- [`SEVERITY_MEDIUM`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L50) — constant
+- [`SEVERITY_HIGH`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L51) — constant
+- [`TRANSPARENCY_OPAQUE`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L55) — constant
+- [`TRANSPARENCY_MASKED`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L56) — constant
+- [`TRANSPARENCY_BLEND`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L57) — constant
+- **[`class AuditProfile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L21)** — Thresholds for scene analysis.
+- **[`class MeshRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L61)** — Per-mesh statistics for a single shape node.
+- **[`class MaterialRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L85)** — Per-shape material usage summary (aggregated across slots).
+- **[`class Finding`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L113)** — An observation about an asset (negative or risk-flagged).
+- **[`class FixAction`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L123)** — A recommended remediation step.
+- **[`class BudgetDelta`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L134)** — How far an asset exceeds the profile budget along each axis.
   - `BudgetDelta.is_over_budget(self) -> bool`
   - `BudgetDelta.summary(self) -> str` — Pre-rendered ``"tris +N | slots +M | …"`` string used by the
-- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L140)** — Combined per-asset record produced by analyze().
-- **[`class ParetoEntry`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L159)** — One row of a Pareto ranking (top contributor + cumulative %).
-- **[`class TextureFile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L168)** — A texture file referenced by the scene, with usage stats.
-- **[`class MissingTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L182)** — A texture referenced by a material but not present on disk.
-- **[`class SharedTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L191)** — A texture used by more than one mesh.
-- **[`class MaterialSplit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L199)** — A material correlated with high-slot meshes (draw-call splits).
-- **[`class SlotStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L209)** — Distribution stats for material slots-per-mesh.
-- **[`class InstanceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L220)** — Mesh / instance counts.
-- **[`class BudgetBuckets`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L229)** — Histogram of overage severity per dimension.
-- **[`class ComplianceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L241)** — Percentage of scene over budget per dimension.
-- **[`class MissingTextureImpact`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L249)** — Downstream effect of missing textures on the asset list.
+- **[`class AssetRecord`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L169)** — Combined per-asset record produced by analyze().
+- **[`class ParetoEntry`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L193)** — One row of a Pareto ranking (top contributor + cumulative %).
+- **[`class TextureFile`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L202)** — A texture file referenced by the scene, with usage stats.
+- **[`class MissingTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L227)** — A texture referenced by a material but not present on disk.
+- **[`class SharedTexture`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L236)** — A texture used by more than one mesh.
+- **[`class MaterialSplit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L244)** — A material correlated with high-slot meshes (draw-call splits).
+- **[`class MaterialAudit`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L254)** — One material as the scope uses it: who wears it and what it costs.
+- **[`class SceneOverview`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L278)** — Scene-wide facts, independent of the audit scope: the file, its units
+- **[`class SlotStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L299)** — Distribution stats for material slots-per-mesh.
+- **[`class InstanceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L310)** — Mesh / instance counts.
+- **[`class BudgetBuckets`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L319)** — Histogram of overage severity per dimension.
+- **[`class ComplianceStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L331)** — Percentage of scene over budget per dimension.
+- **[`class MissingTextureImpact`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L339)** — Downstream effect of missing textures on the asset list.
   - `MissingTextureImpact.is_empty(self) -> bool`
-- **[`class SummaryStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L261)** — High-level scene counters surfaced by the Executive Summary.
-- **[`class BudgetStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L284)** — Budget / compliance / savings figures.
-- **[`class TextureStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L302)** — Texture-side aggregates.
-- **[`class PipelineStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L321)** — Pipeline integrity findings (missing textures + impact).
-- **[`class OffenderLists`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L331)** — Top-N rankings across various dimensions.
-- **[`class AnalysisManifest`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L356)** — What was analyzed, how, and how long it took.
-- **[`class SceneReport`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L378)** — Top-level result of ``SceneAnalyzer.generate_report``.
+- **[`class SummaryStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L351)** — High-level scene counters surfaced by the Executive Summary.
+- **[`class BudgetStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L380)** — Budget / compliance / savings figures.
+- **[`class TextureStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L398)** — Texture-side aggregates (surface maps only;
+- **[`class PipelineStats`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L425)** — Pipeline integrity findings (missing textures + impact).
+- **[`class OffenderLists`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L436)** — Top-N rankings across various dimensions.
+- **[`class AnalysisManifest`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L461)** — What was analyzed, how, and how long it took.
+- **[`class SceneReport`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L485)** — Top-level result of ``SceneAnalyzer.generate_report``.
   - `SceneReport.to_dict(self) -> Dict[str, Any]` — Serialize the report to a nested plain-dict tree.
-- **[`class SceneInfoSection`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L410)** — Report-section identifiers used to gate analyze() work and report output.
+- **[`class SceneInfoSection`](mayatk/mayatk/core_utils/diagnostics/audit_records.py#L519)** — Report-section identifiers used to gate analyze() work and report output.
   - `SceneInfoSection.normalize(cls, sections: Optional[List[str]]) -> List[str]` *(class)* — Coerce a caller-supplied sections argument to a stable,
 
 <a id="core_utils--diagnostics--mesh_diag"></a>
@@ -1313,11 +1322,11 @@ Mesh diagnostics and repair helpers.
 
 Scene audit engine — game-readiness analysis over meshes, materials, and textures.
 
-- **[`class SceneAnalyzer(ptk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_audit.py#L65)** — Analyzes scene objects for performance expectations in game engines.
+- **[`class SceneAnalyzer(ptk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_audit.py#L73)** — Analyzes scene objects for performance expectations in game engines.
   - `SceneAnalyzer.run_audit(cls, adaptive: bool = False, verbose: bool = True) -> None` *(class)* — Run a full scene audit and print the report.
-  - `SceneAnalyzer.format_audit_text(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]` *(class)* — Run the audit and return the formatted report as a
-  - `SceneAnalyzer.format_audit_html(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]` *(class)* — Run the audit and return a section-keyed dict of HTML
-  - `SceneAnalyzer.analyze(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None) -> List[AssetRecord]` — Main entry point for analysis.
+  - `SceneAnalyzer.format_audit_text(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]` *(class)* — Run the audit and return the formatted report as a
+  - `SceneAnalyzer.format_audit_html(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]` *(class)* — Run the audit and return a section-keyed dict of HTML
+  - `SceneAnalyzer.analyze(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> List[AssetRecord]` — Main entry point for analysis.
   - `SceneAnalyzer.generate_report(self, records: List[AssetRecord]) -> SceneReport` — Build a :class:`SceneReport` from per-asset records.
   - `SceneAnalyzer.print_report(self, report: SceneReport, sections: Optional[List[str]] = None)` — Print the formatted scene-audit report to the logger.
 
@@ -2203,12 +2212,14 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
 
 The scene's hierarchy baseline, stored in the scene.
 
-- **[`class HierarchyBaseline`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_baseline.py#L36)** — Read, compare and roll forward the scene's hierarchy baseline.
+- **[`class HierarchyBaseline`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_baseline.py#L51)** — Read, compare and roll forward the scene's hierarchy baseline.
   - `HierarchyBaseline.read(cls) -> Set[str]` *(class)* — Every path the scene has recorded, across all scopes.
+  - `HierarchyBaseline.inherited_from(cls) -> Optional[str]` *(class)* — Who recorded the baseline this scene holds but does not own.
   - `HierarchyBaseline.is_unreadable(cls) -> bool` *(class)* — The channel holds something, but no baseline could be read from it.
   - `HierarchyBaseline.compare(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> Tuple[bool, List[str], List[str], bool]` *(class)* — Diff *current_paths* against the baseline, scoped to what is exporting.
   - `HierarchyBaseline.write(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> bool` *(class)* — Roll the exported scope forward, leaving every other scope intact.
-  - `HierarchyBaseline.migrate_from_sidecar(cls, export_dir: str) -> int` *(class)* — Adopt any on-disk baselines in *export_dir* into the scene, once.
+  - `HierarchyBaseline.adopt_sidecar(cls, export_path: str, *, base_stem: bool = False) -> bool` *(class)* — Give the scene what *export_path* last shipped, where its own
+  - `HierarchyBaseline.migrate_from_sidecar(cls, export_dir: str) -> int` *(class)* **DEPRECATED (remove in 0.21.0)** — Adopt every on-disk baseline in *export_dir* into the scene, once.
 
 <a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
 ### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
@@ -2330,6 +2341,7 @@ Maya Connection Module
   - `MayaConnection.connect(self, mode: ConnectionMode = 'auto', port: int = 7002, host: str = 'localhost', launch: bool = True, app_path: Optional[str] = None, force_new_instance: bool = True, launch_args: Optional[List[str]] = None, confirm_existing: bool = True, auto_cleanup: bool = False) -> bool` — Connect to Maya using the specified mode.
   - `MayaConnection.get_pid_from_port(cls, port: int) -> Optional[int]` *(class)* — Find the process ID (PID) listening on the given TCP port.
   - `MayaConnection.get_port_from_pid(cls, pid: int, start_port: Optional[int] = None, span: Optional[int] = None) -> Optional[int]` *(class)* — Find a TCP port the given PID is LISTENING on (inverse of
+  - `MayaConnection.close_launched(self, force: bool = False) -> bool` — Close the Maya THIS connection launched -- only it, and only while
   - `MayaConnection.close_instance(port: Optional[int] = None, pid: Optional[int] = None, force: bool = False) -> bool` *(static)* — Close a Maya instance identified by Port or PID.
   - `MayaConnection.get_available_port(cls, start_port: int = 7002, max_check: int = 100) -> int` *(class)* — Find an available port starting from start_port.
   - `MayaConnection.ensure_connection(self, launch: bool = True, app_path: Optional[str] = None, launch_args: Optional[List[str]] = None) -> bool` — Verify the port is reachable;
@@ -2645,7 +2657,7 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
 
 Push the Maya selection to a live browser / WebXR preview.
 
-- **[`class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`](mayatk/mayatk/env_utils/webxr_preview.py#L45)** — Live browser / WebXR preview of the Maya selection.
+- **[`class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`](mayatk/mayatk/env_utils/webxr_preview.py#L50)** — Live browser / WebXR preview of the Maya selection.
 
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
@@ -2842,7 +2854,7 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L1049)**
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L1067)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and tile/frame tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -2902,6 +2914,7 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
   - `MatUtils.probe_texture_path(cls, path: str) -> Optional[str]` *(class)* — The one concrete file *path*'s tile/frame pattern denotes, or None.
   - `MatUtils.has_path_token(cls, path: str) -> bool` *(class)* — Does *path* carry a tile/frame token — i.e.
+  - `MatUtils.is_frame_sequence(cls, path: str) -> bool` *(class)* — Does *path*'s token count FRAMES (``<f>`` / ``<frame>``), not tiles?
   - `MatUtils.token_wildcard(cls, path: str, wildcard: Optional[str] = '*') -> str` *(class)* — *path* with every tile/frame token replaced by *wildcard*.
   - `MatUtils.texture_tiles(cls, path: str) -> List[str]` *(class)* — Every file on disk *path*'s tile/frame pattern denotes, sorted.
   - `MatUtils.apply_uv_tiling(cls, file_nodes) -> List[str]` *(class)* — Switch each file node reading ONE tile of a set to that set's tiling mode.
@@ -3302,7 +3315,7 @@ Marmoset Toolbag log-file resolution, classification, and live tailing.
 
 Lightweight material state snapshot and restore.
 
-- **[`class MatSnapshot(_MatSnapshotInternal)`](mayatk/mayatk/mat_utils/mat_snapshot.py#L390)** — Capture and restore material state across destructive operations.
+- **[`class MatSnapshot(_MatSnapshotInternal)`](mayatk/mayatk/mat_utils/mat_snapshot.py#L394)** — Capture and restore material state across destructive operations.
   - `MatSnapshot.capture(cls, mat_name: str, objects=None) -> Dict[str, Any]` *(class)* — Snapshot textures, scalar values and wiring for *mat_name*.
   - `MatSnapshot.restore(cls, mat_name: str, snapshot: Dict[str, Any], source_mat_name: Optional[str] = None) -> Dict[str, int]` *(class)* — Restore textures, scalar values and wiring onto *mat_name*.
   - `MatSnapshot.restored(cls, mat_name: str, objects=None)` *(class)* — Scope form of :meth:`capture` / :meth:`restore` (manifest + scalars).
@@ -3905,7 +3918,7 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
   - `DataNodes.values(cls, scope: ptk.Scope) -> Dict[str, object]` *(class)* — Every user-defined attribute value on the carrier of *scope* --
   - `DataNodes.dump_export_nodes(cls, decode: bool = True) -> Dict[str, Dict[str, object]]` *(class)* — Every ``data_export`` carrier's channels, keyed by node (long path).
   - `DataNodes.carriers_in(cls, namespace: str) -> Dict[ptk.Scope, str]` *(class)* — The carriers a referenced module keeps under *namespace*
-  - `DataNodes.project_root(cls) -> Optional[str]` *(class)* — The project the open scene FILE lives in -- what the path records
+  - `DataNodes.scene_path(cls) -> str` *(class)* — The open scene's file, ``""`` while unsaved
   - `DataNodes.install_path_rebase(cls) -> bool` *(class)* — Keep the path records spelled from the scene's own project across a
   - `DataNodes.remove_path_rebase(cls) -> None` *(class)* — Remove the re-base hook's callbacks (every copy's, by id).
 
@@ -4329,7 +4342,7 @@ Maya's answers to uitk's cancellation contract.
 
 Programmatic access to Maya's Channel Box.
 
-- **[`class ChannelBox`](mayatk/mayatk/ui_utils/channel_box.py#L30)** — Query, select, and hook into Maya's Channel Box programmatically.
+- **[`class ChannelBox`](mayatk/mayatk/ui_utils/channel_box.py#L29)** — Query, select, and hook into Maya's Channel Box programmatically.
   - `ChannelBox.connect_selection_changed(cls, callback)` *(class)* — Connect *callback* to the Channel Box's Qt selection signal.
   - `ChannelBox.disconnect_selection_changed(cls, callback)` *(class)* — Disconnect a previously connected *callback*.
   - `ChannelBox.get_selected_attrs(cls, sections='all')` *(class)* — Return attribute names currently selected in the channel box.

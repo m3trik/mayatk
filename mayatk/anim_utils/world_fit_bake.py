@@ -194,6 +194,17 @@ class WorldFitBake:
         }
         parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
         record["old_parent"] = (cmds.ls(parent, uuid=True) or [None])[0]
+        # Its name and slot among the siblings: a move that lands beside a
+        # same-named node is renamed by Maya, and every move appends it last
+        # (:meth:`_restore_place` puts both back).
+        long_node = (cmds.ls(node, long=True) or [node])[0]
+        record["name"] = long_node.rsplit("|", 1)[-1]
+        siblings = (
+            (cmds.listRelatives(parent, children=True, fullPath=True) or [])
+            if parent
+            else []
+        )
+        record["index"] = siblings.index(long_node) if long_node in siblings else None
 
         opm_plug = f"{node}.offsetParentMatrix"
         record["opm_source"] = (
@@ -604,6 +615,30 @@ class WorldFitBake:
         return outcome
 
     @staticmethod
+    def _restore_place(node: str, record: dict) -> str:
+        """Give *node* back the name a clash cost it and its slot among its
+        siblings; return its path.  Records run LIFO (:meth:`restore`), so
+        each slot is counted among the siblings its own move left.  A record
+        from before the two were kept leaves both as they are."""
+        name = record.get("name")
+        if name and node.rsplit("|", 1)[-1] != name:
+            try:
+                cmds.rename(node, name, ignoreShape=True)
+            except RuntimeError:
+                pass  # a referenced node, or a new sibling holds the name
+        uuid = record.get("node")
+        node = (cmds.ls(uuid, long=True) or [node])[0] if uuid else node
+        index = record.get("index")
+        if index is not None:
+            try:
+                cmds.reorder(node, front=True)
+                if index:
+                    cmds.reorder(node, relative=index)
+            except RuntimeError:
+                pass
+        return node
+
+    @staticmethod
     def restore_node(record: dict) -> bool:
         """Reverse one :meth:`bake_node` (or ``ikblend``) record: delete the
         fitted curves, reparent back, and put the joint orients, values and
@@ -639,6 +674,7 @@ class WorldFitBake:
             # bake; the recorded values/wiring restore the true local.
             moved = cmds.parent(node, old_parent, relative=True)[0]
             node = (cmds.ls(moved, long=True) or [moved])[0]
+            node = WorldFitBake._restore_place(node, record)
         # Each write on its own: a refused one (a locked attribute on a
         # referenced joint) must not skip the values and wiring after it.
         joint = record.get("joint") or {}

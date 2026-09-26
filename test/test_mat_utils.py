@@ -1997,6 +1997,13 @@ class TestTexturePathTokens(MayaTkTestCase):
         self.assertEqual(MatUtils.texture_tiles(self._p("nope.png")), [])
         self.assertEqual(MatUtils.texture_tiles(""), [])
 
+    def test_is_frame_sequence_tells_frames_from_tiles(self):
+        """Frames load one at a time, tiles all at once -- a cost needs the split."""
+        for path in ("fire.<f>.png", "fire.<FRAME>.png", "a.<UDIM>.<f>.png"):
+            self.assertTrue(MatUtils.is_frame_sequence(path), path)
+        for path in ("rock.<UDIM>.png", "t_<u>_<v>.png", "t.<uvtile>.png", "a.png", ""):
+            self.assertFalse(MatUtils.is_frame_sequence(path), path)
+
     def test_texture_tiles_finds_a_set_that_does_not_start_at_1001(self):
         """A set running 1002-1005 is there, and BOTH primitives now say so.
 

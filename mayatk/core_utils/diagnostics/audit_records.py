@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set, Any, Tuple
 
+import pythontk as ptk
+
 
 @dataclass
 class AuditProfile:
@@ -22,12 +24,19 @@ class AuditProfile:
     max_tris: int = 20000
     max_slots: int = 4
     max_tex_res: int = 4096
-    max_uvs: int = 1
+    # UV sets that ship per mesh. Two: the texture UVs plus a lightmap UV --
+    # TEXCOORD_1 is where every engine reads a lightmap, so a second set is the
+    # norm, not a cost. Leftover ``_uv_snap_*`` backups are judged separately.
+    max_uvs: int = 2
     name: str = "Standard"
     texture_compression: str = "BC7"  # BC7, ASTC, None
     adaptive_tris: bool = False
-    reference_diag: float = 200.0  # Size in units where max_tris applies
+    # World-space bounding-box diagonal (cm) at which ``max_tris`` applies.
+    reference_diag: float = 200.0
     min_tris: int = 500  # Floor for adaptive budget
+    # Scene-wide texture memory, as block-compressed GPU megabytes (mips
+    # included) -- the estimate a game build lands near.
+    max_texture_mb: float = 512.0
 
 
 # --------------------------------------------------------------- #
@@ -41,6 +50,12 @@ SEVERITY_LOW = "low"
 SEVERITY_MEDIUM = "medium"
 SEVERITY_HIGH = "high"
 
+#: Material transparency modes, cheapest first. ``masked`` is an alpha test
+#: (cutout); ``blend`` is sorted, alpha-blended overdraw.
+TRANSPARENCY_OPAQUE = "opaque"
+TRANSPARENCY_MASKED = "masked"
+TRANSPARENCY_BLEND = "blend"
+
 
 @dataclass
 class MeshRecord:
@@ -52,18 +67,26 @@ class MeshRecord:
     uv_sets: int
     has_colors: bool
     instanced: bool
+    # World-space bounding-box diagonal in centimeters (Maya's internal unit,
+    # whatever the UI unit), of the LARGEST in-scope instance.
     bounds_diag: float
     uv_set_names: List[str] = field(default_factory=list)
     ngons: int = 0
     non_manifold_edges: int = 0
     lamina_faces: int = 0
     vertex_bytes: int = 0
+    # ``_uv_snap_*`` backups an interrupted unwrap left behind (they ship as
+    # real UV sets), and the set recognized as the lightmap, if any.
+    uv_snapshot_sets: List[str] = field(default_factory=list)
+    lightmap_uv_set: Optional[str] = None
 
 
 @dataclass
 class MaterialRecord:
     """Per-shape material usage summary (aggregated across slots)."""
 
+    # Shading slots on the busiest in-scope instance (instances can be
+    # shaded per-instance, so this is a max, not a union).
     slot_count: int
     uses_transparency: bool
     materials: List[str]
@@ -76,6 +99,14 @@ class MaterialRecord:
     max_samplers: int = 0
     unique_paths_local: int = 0
     max_res_is_unique: bool = False
+    # Draw calls across every in-scope instance: slots per instance, at least
+    # one for any mesh that renders.
+    draw_calls: int = 0
+    # Strongest mode among the materials (TRANSPARENCY_*).
+    transparency: str = TRANSPARENCY_OPAQUE
+    # Most slots one instance spends on a material it already wears (two
+    # shading engines of one material): each merges away for free.
+    redundant_slots: int = 0
 
 
 @dataclass
@@ -83,9 +114,7 @@ class Finding:
     """An observation about an asset (negative or risk-flagged)."""
 
     severity: str  # SEVERITY_LOW / SEVERITY_MEDIUM / SEVERITY_HIGH
-    kind: (
-        str  # e.g. "high_poly", "vert_bloat", "ngons", "non_manifold", "extra_uv_sets"
-    )
+    kind: str  # e.g. "high_poly", "ngons", "non_manifold", "uv_snapshots"
     message: str  # human-readable summary; data lives in ``detail``
     detail: Dict[str, Any] = field(default_factory=dict)
 
@@ -138,7 +167,11 @@ class BudgetDelta:
 
 @dataclass
 class AssetRecord:
-    """Combined per-asset record produced by analyze()."""
+    """Combined per-asset record produced by analyze().
+
+    One record per unique mesh SHAPE; ``instance_count`` is how many of its
+    DAG paths (instances) are in scope and ``transforms`` names them.
+    """
 
     transform: str
     mesh: MeshRecord
@@ -153,6 +186,7 @@ class AssetRecord:
     delta: BudgetDelta = field(default_factory=BudgetDelta)
     fix_plan: List[FixAction] = field(default_factory=list)
     target_tris: int = 0
+    transforms: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -176,6 +210,17 @@ class TextureFile:
     materials: List[str]
     mesh_count: int
     instance_count: int
+    # Canonical map type (``ptk.MapFactory`` taxonomy), or "" when neither the
+    # filename nor the shader slot names one.
+    map_type: str = ""
+    # Block-compressed GPU estimate, mips included (ptk.MapRegistry.estimate_gpu_bytes).
+    gpu_mb: float = 0.0
+    tiles: int = 1  # files a UDIM / tile pattern expands to
+    # "material" -- a surface map, counted; "other" -- not a surface map
+    # (StingrayPBS's IBL cube maps and BRDF LUT, utility textures), listed but
+    # not counted.
+    role: str = "material"
+    bundled: bool = False  # lives in Maya's install, not the project
 
 
 @dataclass
@@ -203,6 +248,51 @@ class MaterialSplit:
     unique_mesh_count: int
     over_budget_count: int
     avg_slots: float
+
+
+@dataclass
+class MaterialAudit:
+    """One material as the scope uses it: who wears it and what it costs.
+
+    Texture costs are paid once per material (per file, really), not once per
+    mesh -- so they are judged here rather than repeated on every asset that
+    happens to wear the material.
+    """
+
+    name: str
+    node_type: str = ""
+    shading_engines: List[str] = field(default_factory=list)
+    mesh_count: int = 0  # unique shapes in scope wearing it
+    instance_count: int = 0  # in-scope instances wearing it
+    transparency: str = TRANSPARENCY_OPAQUE
+    textures: List[str] = field(default_factory=list)  # surface maps (resolved)
+    map_types: List[str] = field(default_factory=list)
+    max_res: int = 0
+    disk_mb: float = 0.0
+    gpu_mb: float = 0.0
+    missing: List[str] = field(default_factory=list)
+    findings: List[Finding] = field(default_factory=list)
+
+
+@dataclass
+class SceneOverview:
+    """Scene-wide facts, independent of the audit scope: the file, its units
+    and time setup, and what the DAG / DG holds."""
+
+    scene_path: str = ""  # "" for a scene that was never saved
+    file_size_mb: float = 0.0
+    linear_unit: str = ""
+    up_axis: str = ""
+    fps: float = 0.0
+    playback_range: Tuple[float, float] = (0.0, 0.0)
+    animation_range: Tuple[float, float] = (0.0, 0.0)
+    # Node census, e.g. {"transforms": 2727, "mesh_shapes": 486, "joints": 378}.
+    counts: Dict[str, int] = field(default_factory=dict)
+    namespaces: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
+    unloaded_references: List[str] = field(default_factory=list)
+    unknown_plugins: List[str] = field(default_factory=list)
+    unknown_nodes: int = 0
 
 
 @dataclass
@@ -278,6 +368,12 @@ class SummaryStats:
     meshes_with_transparency: int = 0
     meshes_with_extra_uvs: int = 0
     meshes_with_high_slots: int = 0
+    draw_calls: int = 0
+    materials_in_use: int = 0
+    uv_snapshot_meshes: int = 0
+    unassigned_meshes: int = 0
+    blend_meshes: int = 0
+    masked_meshes: int = 0
 
 
 @dataclass
@@ -300,7 +396,7 @@ class BudgetStats:
 
 @dataclass
 class TextureStats:
-    """Texture-side aggregates."""
+    """Texture-side aggregates (surface maps only; see ``other``)."""
 
     total_size_mb: float = 0.0
     est_gpu_mb: float = 0.0
@@ -315,6 +411,14 @@ class TextureStats:
     single_use_4k_count: int = 0
     shared_4k_count: int = 0
     heaviest: List[TextureFile] = field(default_factory=list)
+    budget_mb: float = 0.0
+    # Maps a half-resolution copy would serve: 4K+ and not resolution-critical
+    # in the map taxonomy (AO / roughness / metallic ...), and what halving
+    # them all would free.
+    downscale_candidates: int = 0
+    downscale_savings_mb: float = 0.0
+    # Referenced but not surface maps -- listed, never counted.
+    other: List[TextureFile] = field(default_factory=list)
 
 
 @dataclass
@@ -325,6 +429,7 @@ class PipelineStats:
     missing_project: List[MissingTexture] = field(default_factory=list)
     missing_presets: List[MissingTexture] = field(default_factory=list)
     impact: MissingTextureImpact = field(default_factory=MissingTextureImpact)
+    unassigned_meshes: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -366,6 +471,8 @@ class AnalysisManifest:
     sections_requested: List[str] = field(default_factory=list)
     materials_collected: bool = True
     textures_collected: bool = True
+    # Topology / UV checks (SceneInfoSection._NEEDS_MESH_CHECKS) ran.
+    mesh_checks_collected: bool = True
     profile: AuditProfile = field(default_factory=AuditProfile)
     started_at: float = 0.0  # unix timestamp
     duration_ms: int = 0
@@ -378,9 +485,9 @@ class AnalysisManifest:
 class SceneReport:
     """Top-level result of ``SceneAnalyzer.generate_report``.
 
-    Replaces the legacy ``SceneOverview`` mega-dataclass. Groups
-    related metrics into typed sub-records and exposes a
-    machine-readable export via :meth:`to_dict`.
+    Groups related metrics into typed sub-records (it replaced a single
+    70-field bag) and exposes a machine-readable export via :meth:`to_dict`.
+    ``overview`` is scene-wide; everything else covers the audited scope.
     """
 
     manifest: AnalysisManifest
@@ -391,6 +498,8 @@ class SceneReport:
     offenders: OffenderLists = field(default_factory=OffenderLists)
     fix_actions: List[FixAction] = field(default_factory=list)
     assets: List[AssetRecord] = field(default_factory=list)
+    materials: List[MaterialAudit] = field(default_factory=list)
+    overview: Optional[SceneOverview] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the report to a nested plain-dict tree.
@@ -415,35 +524,42 @@ class SceneInfoSection:
     corresponding collection phase (material caches, texture file IO).
     """
 
+    OVERVIEW = "overview"
     SUMMARY = "summary"
     FIX_FIRST = "fix_first"
     PARETO = "pareto"
     OFFENDERS = "offenders"
-    CATEGORIES = "categories"
+    MATERIALS = "materials"
     TEXTURES = "textures"
     PIPELINE = "pipeline"
     ASSUMPTIONS = "assumptions"
+    #: RETIRED (until 2026-09-24) -- the section was a five-row "materials
+    #: correlated with high-slot meshes" table; :attr:`MATERIALS` replaced it.
+    #: :meth:`normalize` still resolves it, warning until 0.21.0.
+    CATEGORIES = "categories"
 
     ALL: Tuple[str, ...] = (
+        OVERVIEW,
         SUMMARY,
         FIX_FIRST,
         PARETO,
         OFFENDERS,
-        CATEGORIES,
+        MATERIALS,
         TEXTURES,
         PIPELINE,
         ASSUMPTIONS,
     )
 
     LABELS: Dict[str, str] = {
+        OVERVIEW: "Scene Overview",
         SUMMARY: "Executive Summary",
-        FIX_FIRST: "Fix First (High Impact)",
-        PARETO: "Pareto View",
+        FIX_FIRST: "Fix First",
+        PARETO: "Top Contributors",
         OFFENDERS: "Top Issues by Asset",
-        CATEGORIES: "Top Offenders by Category",
+        MATERIALS: "Materials",
         TEXTURES: "Textures",
         PIPELINE: "Pipeline Integrity",
-        ASSUMPTIONS: "Data Assumptions",
+        ASSUMPTIONS: "Notes & Assumptions",
     }
 
     # Material-cache phase is needed for anything that touches slots,
@@ -453,20 +569,42 @@ class SceneInfoSection:
         FIX_FIRST,
         PARETO,
         OFFENDERS,
-        CATEGORIES,
+        MATERIALS,
         TEXTURES,
         PIPELINE,
     }
 
-    # Texture file IO (os.path.getsize + cmds.getAttr outSize per file
-    # node) is the heaviest single cost; only walk it if the sections
-    # the caller asked for actually surface that data.
+    # Texture file IO (a header read + a size stat per unique file) only runs
+    # when a requested section surfaces texture data -- the offenders' too: a
+    # mesh's oversized unique texture set is one of its issues.
     _NEEDS_TEXTURES: Set[str] = {
         SUMMARY,
         FIX_FIRST,
+        OFFENDERS,
+        MATERIALS,
         TEXTURES,
         PIPELINE,
     }
+
+    # Per-mesh topology and UV checks (n-gons, non-manifold edges, lamina
+    # faces, leftover UV snapshots, UV-set counts) -- counts and sizes are
+    # measured regardless.
+    _NEEDS_MESH_CHECKS: Set[str] = {
+        SUMMARY,
+        FIX_FIRST,
+        OFFENDERS,
+        PIPELINE,
+    }
+
+    _resolve_retired = staticmethod(
+        ptk.Deprecation.values(
+            {"categories": "materials"},
+            what="SceneInfoSection key",
+            remove_in="0.21.0",
+            since="2026-09-24",
+            reason="The Materials section lists every material with its cost.",
+        )
+    )
 
     @classmethod
     def normalize(cls, sections: Optional[List[str]]) -> List[str]:
@@ -476,7 +614,8 @@ class SceneInfoSection:
         ``None`` expands to all sections in :attr:`ALL` order. Unknown
         keys are dropped silently — that matches "best effort"
         semantics and means a downstream UI can pass through whatever
-        the user picked without pre-filtering.
+        the user picked without pre-filtering. A retired key resolves to
+        its replacement (with a deprecation warning).
 
         Caller order is preserved so an option-box exposing section
         reordering would Just Work without touching this code.
@@ -487,6 +626,7 @@ class SceneInfoSection:
         seen: Set[str] = set()
         out: List[str] = []
         for key in sections:
+            key = cls._resolve_retired(key)
             if key in valid and key not in seen:
                 out.append(key)
                 seen.add(key)

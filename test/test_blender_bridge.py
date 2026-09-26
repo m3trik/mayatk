@@ -2326,6 +2326,63 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.assertIn(namespaced, exported)
         self.assertIn("|data_export", exported)
 
+    def test_webxr_preview_ships_the_start_camera_it_was_not_given(self):
+        """The page opens its views through the scene's ``user_pos`` camera and
+        stands a headset under it -- so the preview lets cameras through its FBX
+        (the hand-off default keeps them out), and a push joins the start camera
+        to whatever its scope chose: a referenced set's namespaced one, unless
+        the root namespace holds one. An empty push stays empty."""
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        bridge = WebXrPreview()
+        self.assertIs(bridge._fbx_options({})["FBXExportCameras"], True)
+        self.assertIsNone(bridge._start_node("user_pos"))
+
+        mesh = cmds.ls(cmds.polyCube(name="start_cam_mesh")[0], long=True)[0]
+        cmds.namespace(add="SET")
+        cam = cmds.ls(cmds.rename(cmds.camera()[0], "SET:user_pos"), long=True)[0]
+        self.assertEqual(bridge._start_node("user_pos"), cam)
+
+        sent = []
+        with mock.patch.object(
+            WebXrPreview,
+            "send",
+            side_effect=lambda objects, **kwargs: sent.append(list(objects)),
+        ):
+            bridge.push(objects=[mesh])
+            bridge.push(objects=[])
+        self.assertEqual(sent, [[mesh, cam], []])
+
+        root = cmds.ls(cmds.spaceLocator(name="user_pos")[0], long=True)[0]
+        self.assertEqual(bridge._start_node("user_pos"), root)
+
+    def test_a_materials_strip_ships_what_holds_no_shading_as_itself(self):
+        """The strip copies what it takes materials off, and only that: a camera
+        or a locator has none, and its copy would ship under Maya's uniquified
+        name -- the preview's start camera as ``user_pos1``, found by nothing.
+        A set with nothing shaded copies nothing at all."""
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        mesh = cmds.ls(cmds.polyCube(name="strip_mesh")[0], long=True)[0]
+        cam = cmds.ls(cmds.rename(cmds.camera()[0], "user_pos"), long=True)[0]
+        loc = cmds.ls(cmds.spaceLocator(name="strip_marker")[0], long=True)[0]
+        stripped = {"INCLUDE_MATERIALS": False}
+
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export") as m_export,
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
+            WebXrPreview()._export_fbx([mesh, cam, loc], "x.fbx", stripped)
+            exported = list(m_export.call_args.kwargs["objects"])
+            WebXrPreview()._export_fbx([cam, loc], "x.fbx", stripped)
+            unshaded = list(m_export.call_args.kwargs["objects"])
+
+        self.assertIn(cam, exported)
+        self.assertIn(loc, exported)
+        self.assertNotIn(mesh, exported)  # the mesh went as a shader-less copy
+        self.assertEqual(len(exported), 3)
+        self.assertEqual(unshaded, [cam, loc])
+
     def test_declared_takes_are_realized_for_an_animated_handoff(self):
         """Shots must survive the preview leg, not only the Scene Exporter's.
 

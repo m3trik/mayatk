@@ -299,7 +299,9 @@ class MayaExportMixin:
         When ``INCLUDE_MATERIALS`` is False the selection is duplicated, the copies
         are forced onto ``initialShadingGroup``, exported, then deleted -- the
         originals are untouched (FBX has no "exclude materials" export flag). The
-        whole strip runs inside an undo chunk.
+        whole strip runs inside an undo chunk. Only what holds a shading
+        assignment is copied (:meth:`_holds_shading`): the rest -- a camera, a
+        locator, a group of them -- has nothing to strip, and ships as itself.
 
         The ``data_export`` carrier (when :attr:`include_data_export`) joins the
         export set but never the strip duplication -- it is a locked, hidden,
@@ -422,28 +424,41 @@ class MayaExportMixin:
                             # only the roots left a group's child meshes with their
                             # original materials, the one thing this path exists
                             # to remove.
-                            for orig in transforms:
+                            #
+                            # Only what holds a shading assignment, though: the
+                            # rest has nothing to strip, and a copy of it would
+                            # ship under Maya's uniquified name -- a camera the
+                            # WebXR preview starts its views at, found by name,
+                            # would arrive as ``user_pos1`` and be found by
+                            # nothing. It ships as itself.
+                            shaded, unshaded = [], []
+                            for t in transforms:
+                                (shaded if self._holds_shading(t) else unshaded).append(t)
+                            for orig in shaded:
                                 duplicates.append(
                                     NodeUtils.static_copy(orig, strip_children=False)
                                 )
-                            copied_meshes = (
-                                cmds.listRelatives(
-                                    duplicates,
-                                    allDescendents=True,
-                                    type="mesh",
-                                    fullPath=True,
-                                    noIntermediate=True,
+                            # Guarded: handed an empty list, a Maya command
+                            # reads the SELECTION instead.
+                            if duplicates:
+                                copied_meshes = (
+                                    cmds.listRelatives(
+                                        duplicates,
+                                        allDescendents=True,
+                                        type="mesh",
+                                        fullPath=True,
+                                        noIntermediate=True,
+                                    )
+                                    or []
                                 )
-                                or []
-                            )
-                            cmds.sets(
-                                copied_meshes or duplicates,
-                                edit=True,
-                                forceElement="initialShadingGroup",
-                            )
+                                cmds.sets(
+                                    copied_meshes or duplicates,
+                                    edit=True,
+                                    forceElement="initialShadingGroup",
+                                )
                             FbxUtils.export(
                                 file_path=fbx_path,
-                                objects=duplicates + carrier,
+                                objects=duplicates + unshaded + carrier,
                                 options=options,
                                 selection_only=True,
                             )
@@ -469,6 +484,19 @@ class MayaExportMixin:
                     cmds.select(existing, replace=True)
                 else:
                     cmds.select(clear=True)
+
+    @staticmethod
+    def _holds_shading(root: str) -> bool:
+        """Whether *root*, or anything under it, sits in a shading group.
+
+        The materials strip's test for what it has to copy: a mesh or a NURBS
+        surface does (``initialShadingGroup`` at the least), a camera, a locator
+        or a curve does not.
+        """
+        nodes = [root] + (
+            cmds.listRelatives(root, allDescendents=True, fullPath=True) or []
+        )
+        return bool(cmds.listConnections(nodes, type="shadingEngine"))
 
     def _usd_options(
         self, params: Dict[str, Any], transforms: Optional[List[str]] = None

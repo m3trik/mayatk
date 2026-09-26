@@ -764,6 +764,28 @@ class TestProjectRelativePaths(MayaTkTestCase):
         self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
         self.assertTrue(self._same(DataNodes.project_root(), self.proj_a))
 
+    def test_a_copy_saved_into_another_project_still_names_the_baselines_source(
+        self,
+    ):
+        """The hierarchy baseline names the scene that recorded it (2026-09-24),
+        and that stamp is a path: left spelled from the SOURCE's project, the
+        copy resolved it to a file not there -- "renamed" -- and diffed its first
+        export against the source's hierarchy, the bug the stamp exists for."""
+        from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import (
+            HierarchyBaseline,
+        )
+
+        source = os.path.join(self.proj_a, "scenes", "source_module.ma")
+        self._save_as(source)
+        self.assertTrue(HierarchyBaseline.write({"GRP", "GRP|part"}))
+        self.assertIsNone(HierarchyBaseline.inherited_from(), "the source's own")
+
+        self._save_as(os.path.join(self.proj_b, "scenes", "copy_module.ma"))
+        inherited = HierarchyBaseline.inherited_from()
+        self.assertIsNotNone(inherited, "the copy must not own its source's")
+        self.assertTrue(self._same(os.path.join(self.proj_b, inherited), source))
+        self.assertEqual(HierarchyBaseline.read(), set())
+
     def test_a_save_as_into_another_project_respells_every_path(self):
         spec = ptk.SceneRecords.LIGHTMAP_DIRS
         self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))

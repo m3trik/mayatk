@@ -34,7 +34,12 @@ Example:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
+
+try:
+    import maya.cmds as cmds
+except ModuleNotFoundError as error:
+    print(__file__, error)
 
 import pythontk as ptk
 
@@ -71,6 +76,30 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
     #: default there): the preview shows the nodes the deliverable ships, and
     #: the converter, whose cost is nodes x baked frames, never bakes them.
     drop_rig_apparatus = True
+
+    def _fbx_options(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The hand-off's FBX flags, with cameras let through.
+
+        The start camera (the deliverer's ``user_pos``) is what the page opens
+        its views through and stands a headset under, and FBX has no flag for
+        one camera: every camera in the pushed hierarchies rides along. The
+        page looks the start up by name and ignores the rest. The hand-off
+        default keeps cameras out because a receiving DCC has its own; the
+        preview is the one receiver that reads one. Mirror of blendertk's.
+        """
+        return {**super()._fbx_options(params), "FBXExportCameras": True}
+
+    def _start_node(self, name: str) -> Optional[str]:
+        """The transform named *name* -- the root namespace's first, else any
+        namespace's (a referenced set's ``set:user_pos``) -- or ``None``.
+
+        The page resolves a namespaced name the same way, so the node shipped
+        is the node it finds.
+        """
+        nodes = cmds.ls(name, type="transform", long=True) or cmds.ls(
+            name, type="transform", long=True, recursive=True
+        )
+        return nodes[0] if nodes else None
 
     def _produce(self, objects, request) -> Optional[ptk.Payload]:
         """Export the FBX, then attach the scene sidecar the FBX can't carry.

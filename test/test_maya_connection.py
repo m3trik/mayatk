@@ -218,6 +218,18 @@ class TestMayaConnectionMocked(unittest.TestCase):
         mock_socket.connect.assert_called_with(("localhost", 12345))
 
     @patch("socket.socket")
+    def test_execute_returns_the_value_without_the_ports_framing(self, mock_socket_cls):
+        """Maya's port frames a reply as ``value\\n\\0``; the caller gets ``value``.
+
+        Regression: the reply was stripped BEFORE its NUL was removed, so the
+        newline the NUL shielded survived (``'2\\n'``) and ``== "2"`` never held.
+        """
+        mock_socket_cls.return_value.recv.side_effect = [b"2\n\x00"]
+        conn = MayaConnection()
+        conn.mode, conn.is_connected, conn.port = "port", True, 12345
+        self.assertEqual(conn.execute("str(1+1)", wait_for_response=True), "2")
+
+    @patch("socket.socket")
     def test_connect_port_failure(self, mock_socket_cls):
         """Test failed port connection."""
         # Setup mock socket to raise exception
@@ -371,6 +383,26 @@ class TestMayaConnectionMocked(unittest.TestCase):
         # close_process now accepts an optional `force` kwarg.
         mock_close_process.assert_called_with(4321, force=False)
 
+    @patch("pythontk.AppLauncher.close_process")
+    @patch(
+        "pythontk.AppLauncher.get_window_titles",
+        return_value=["Autodesk Maya 2025 [Port: 7003]"],
+    )
+    @patch("pythontk.AppLauncher.get_running_processes", return_value=[4242])
+    @patch(
+        "mayatk.env_utils.maya_connection.MayaConnection.get_pid_from_port",
+        return_value=None,
+    )
+    def test_close_instance_never_closes_by_window_title(
+        self, _pid, _procs, _titles, mock_close_process
+    ):
+        """``open_default_ports(tag_window=True)`` stamps "[Port: N]" into a
+        user's own Maya, so a title names no owner. Dead code until
+        ``get_running_processes("maya")`` began finding Maya on Windows, the
+        title fallback then force-closed whichever Maya wore the title."""
+        self.assertFalse(MayaConnection.close_instance(port=7003))
+        mock_close_process.assert_not_called()
+
     @patch("pythontk.AppLauncher")
     def test_launch_maya_implementation(self, MockAppLauncher):
         """Test the implementation of launch_maya_gui uses AppLauncher."""
@@ -459,6 +491,38 @@ class TestMayaConnectionMocked(unittest.TestCase):
         mock_close.assert_called_once_with(port=7005, force=False)
         self.assertFalse(conn.is_connected)
         self.assertIsNone(conn.mode)
+
+    def _launched_port_connection(self):
+        conn = MayaConnection()
+        conn.is_connected = True
+        conn.mode = "port"
+        conn.port = 7005
+        conn._launched_pid = 4242
+        return conn
+
+    @patch.object(MayaConnection, "close_instance")
+    @patch("pythontk.AppLauncher.close_process", return_value=True)
+    @patch("pythontk.AppLauncher.get_running_processes", return_value=[4242])
+    def test_shutdown_closes_the_launched_pid_not_the_port(
+        self, _procs, mock_close_process, mock_close_instance
+    ):
+        conn = self._launched_port_connection()
+        conn.shutdown(force=True)
+        mock_close_process.assert_called_once_with(4242, force=True)
+        mock_close_instance.assert_not_called()
+        self.assertIsNone(conn._launched_pid)
+
+    @patch.object(MayaConnection, "close_instance")
+    @patch("pythontk.AppLauncher.close_process")
+    @patch("pythontk.AppLauncher.get_running_processes", return_value=[])
+    def test_shutdown_after_ours_died_closes_nothing(
+        self, _procs, mock_close_process, mock_close_instance
+    ):
+        """Ours is gone, so its port may be the user's Maya now."""
+        conn = self._launched_port_connection()
+        conn.shutdown(force=True)
+        mock_close_process.assert_not_called()
+        mock_close_instance.assert_not_called()
 
     def test_shutdown_standalone_mode(self):
         """shutdown() in standalone mode should uninitialise Maya."""

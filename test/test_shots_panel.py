@@ -42,6 +42,7 @@ BUTTONS = (
     "btn_trim_both",
     "btn_add_leading_space",
     "btn_add_trailing_space",
+    "btn_delete_stale",
 )
 
 
@@ -94,10 +95,63 @@ class TestShotsPanel(MayaTkTestCase):
             "spn_gap",
             "spn_shift_all",
             "btn_trim_all",
+            "btn_delete_stale",
             "btn_delete_all",
         )
         missing = [n for n in expected if getattr(self.ui, n, None) is None]
         self.assertEqual(missing, [])
+
+    def test_delete_stale_shots_is_offered_while_the_store_has_shots(self):
+        """All Shots > Delete Stale Shots: enabled while the store holds a
+        shot, and the click decides. Deleting an object raises no store event,
+        so a state judged at the last one went stale -- the export's Open
+        Shots link opened the panel with the button greyed out. With none
+        stale it says so and deletes nothing; with one (every member gone,
+        nothing keyed in its frames) it asks with the names and deletes that
+        record only -- the live shot and its keys stay."""
+        import maya.cmds as cmds
+        from unittest import mock
+        from pythontk import ShotBlock
+        from qtpy import QtWidgets
+
+        live = cmds.ls(cmds.polyCube(name="panelLive")[0], long=True)[0]
+        gone = cmds.ls(cmds.polyCube(name="panelGone")[0], long=True)[0]
+        for node, (first, last) in ((live, (1, 20)), (gone, (40, 60))):
+            for t, v in ((first, 0), (last, 5)):
+                cmds.setKeyframe(node, attribute="translateX", t=t, v=v)
+        store = self._store()
+        store.shots = [
+            ShotBlock(1, "Live", 0, 20, [live]),
+            ShotBlock(2, "Gone", 40, 60, [gone]),
+        ]
+        ctrl = self.slots.controller
+        asked = []
+
+        def answer(*args, **kwargs):
+            asked.append(args[2])
+            return QtWidgets.QMessageBox.Yes
+
+        try:
+            ctrl.refresh_state()
+            self.assertTrue(self.ui.btn_delete_stale.isEnabled())
+            with mock.patch.object(
+                QtWidgets.QMessageBox, "question", new=staticmethod(answer)
+            ):
+                self.slots.btn_delete_stale()  # nothing stale yet
+                self.assertEqual((asked, len(store.shots)), ([], 2))
+                cmds.delete(gone)  # its keys go with it; no store event
+                self.slots.btn_delete_stale()
+            self.assertIn("Gone [40–60]", asked[0])
+            self.assertEqual([s.name for s in store.shots], ["Live"])
+            self.assertEqual(
+                cmds.keyframe(live, query=True, timeChange=True), [1.0, 20.0]
+            )
+            store.shots = []
+            ctrl.refresh_state()
+            self.assertFalse(self.ui.btn_delete_stale.isEnabled())
+        finally:
+            store.shots = []
+            store.set_active_shot(None)  # the re-sync picked the survivor
 
     def test_the_option_box_menus_build_their_widgets(self):
         """uitk registers option-box widgets on the ui by objectName."""

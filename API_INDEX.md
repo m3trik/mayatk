@@ -145,7 +145,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
 - `class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`
-  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_keys_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
+  - methods: sequencer, remove_callbacks, on_zone_context_menu, delete_shot, delete_stale_shots, move_shot_to_position, merge_shot_with, split_shot_at, active_shot_id, on_undo, on_redo, on_clip_menu, on_key_menu, tangent_from_handle, on_keys_tangent_dragged, on_gap_menu, refresh, hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed, on_playhead_moved
 - `class ShotEditDialog`
   - methods: show
 - `class ShotSequencerSlots(ptk.LoggingMixin)`
@@ -153,9 +153,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shots_slots.py` — Switchboard slots for the Shots settings UI.
 - `class ShotsController(ptk.LoggingMixin)`
-  - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
+  - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, confirm_stale_removal, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
 - `class ShotsSlots(ptk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
+  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_delete_stale, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
@@ -267,7 +267,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: repair_visibility_tangents, repair_corrupted_curves
 
 ### `core_utils/diagnostics/audit_records.py` — Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
-- constants: SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH
+- constants: SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH, TRANSPARENCY_OPAQUE, TRANSPARENCY_MASKED, TRANSPARENCY_BLEND
 - `class AuditProfile`
 - `class MeshRecord`
 - `class MaterialRecord`
@@ -281,6 +281,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MissingTexture`
 - `class SharedTexture`
 - `class MaterialSplit`
+- `class MaterialAudit`
+- `class SceneOverview`
 - `class SlotStats`
 - `class InstanceStats`
 - `class BudgetBuckets`
@@ -590,7 +592,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/hierarchy_sync/hierarchy_baseline.py` — The scene's hierarchy baseline, stored in the scene.
 - `class HierarchyBaseline`
-  - methods: read, is_unreadable, compare, write, migrate_from_sidecar
+  - methods: read, inherited_from, is_unreadable, compare, write, adopt_sidecar, migrate_from_sidecar
 
 ### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
 - `class HierarchySyncController(ptk.LoggingMixin)`
@@ -612,7 +614,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/maya_connection.py` — Maya Connection Module
 - `class MayaConnection`
-  - methods: get_instance, open_command_ports, close_command_ports, open_available_command_ports, toggle_command_ports, reload_modules, connect, get_pid_from_port, get_port_from_pid, close_instance, get_available_port, ensure_connection, execute, get_script_editor_output, execute_and_capture_editor_output, clear_script_editor, shutdown
+  - methods: get_instance, open_command_ports, close_command_ports, open_available_command_ports, toggle_command_ports, reload_modules, connect, get_pid_from_port, get_port_from_pid, close_launched, close_instance, get_available_port, ensure_connection, execute, get_script_editor_output, execute_and_capture_editor_output, clear_script_editor, shutdown
 
 ### `env_utils/namespace_sandbox.py`
 - `class FBXImporter`
@@ -717,7 +719,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/_mat_utils.py`
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, has_path_token, token_wildcard, texture_tiles, apply_uv_tiling, get_texture_file_node
+  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, probe_texture_path, has_path_token, is_frame_sequence, token_wildcard, texture_tiles, apply_uv_tiling, get_texture_file_node
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -992,7 +994,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py` — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - `class DataNodes(ptk.SceneStoreBase)`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, project_root, install_path_rebase, remove_path_rebase
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, scene_path, install_path_rebase, remove_path_rebase
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(ptk.HelpMixin)`

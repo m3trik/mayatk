@@ -6,8 +6,8 @@ Captures the minimum state needed to survive a destructive operation
 (e.g. ``shaderfx loadGraph``) on a material node:
 
 1. **Texture connections** — via :class:`~mayatk.mat_utils.mat_manifest.MatManifest`.
-2. **Scalar attribute values** — non-default, non-driven, non-locked floats/ints/bools
-   that would otherwise be reset by a graph swap.
+2. **Scalar attribute values** — non-driven, non-locked floats/ints/bools/enums
+   that a graph swap would otherwise reset.
 3. **Incoming connections, verbatim** — every input plug the material carries,
    which is a superset of (1): the manifest models the mapped PBR channels,
    and it models them at the arity the authoring rule derives rather than the
@@ -88,26 +88,30 @@ class _MatSnapshotInternal:
             return {"materials": {mat_name: mat_data}}
         return {"materials": {}}
 
-    @classmethod
-    def _capture_scalars(cls, mat_name: str) -> Dict[str, Any]:
-        """Record non-default, non-driven, settable scalar attribute values."""
+    @staticmethod
+    def _capture_scalars(
+        node: str, connections: List[CapturedConnection]
+    ) -> Dict[str, Any]:
+        """*node*'s settable scalar values, less the plugs *connections* drive
+        (they are re-wired, not set) and the locked ones (nothing can change
+        them, and a restore must not force them).
+
+        One ``getAttr`` per attribute: the wiring is already in hand
+        (:meth:`_capture_connections`) and the locks come in one query, so
+        nothing is asked per plug.  A child of a driven compound is recorded
+        with the value flowing in; the network restore compares before it
+        writes, so it is never set over its driver.
+        """
+        skip = {dst for _src, _attr, dst in connections}
+        skip.update(cmds.listAttr(node, locked=True) or [])
         values: Dict[str, Any] = {}
-
-        attrs = cmds.listAttr(mat_name, settable=True, scalar=True) or []
-        for attr_name in attrs:
-            full = f"{mat_name}.{attr_name}"
+        for attr in cmds.listAttr(node, settable=True, scalar=True) or []:
+            if attr in skip:
+                continue
             try:
-                if not cmds.objExists(full):
-                    continue
-                # Skip driven attributes (they'll be reconnected, not set).
-                if cmds.listConnections(full, source=True, destination=False):
-                    continue
-                if cmds.getAttr(full, lock=True):
-                    continue
-                values[attr_name] = cmds.getAttr(full)
-            except Exception:
-                pass
-
+                values[attr] = cmds.getAttr(f"{node}.{attr}")
+            except (RuntimeError, ValueError):
+                continue  # an attribute Maya lists but will not read
         return values
 
     @classmethod
@@ -408,10 +412,11 @@ class MatSnapshot(_MatSnapshotInternal):
             Opaque snapshot dict with ``"textures"``, ``"scalars"`` and
             ``"connections"`` keys.
         """
+        connections = cls._capture_connections(mat_name)
         return {
             "textures": cls._capture_textures(mat_name, objects),
-            "scalars": cls._capture_scalars(mat_name),
-            "connections": cls._capture_connections(mat_name),
+            "scalars": cls._capture_scalars(mat_name, connections),
+            "connections": connections,
         }
 
     # ------------------------------------------------------------------
@@ -529,12 +534,20 @@ class MatSnapshot(_MatSnapshotInternal):
         model, rebuilt on restore through find-or-create file nodes) this keeps
         node identity for the WHOLE upstream network, not just the material's
         own inputs: every node upstream of the materials is recorded by UUID
-        with its incoming plug connections, and ``file`` nodes with the
-        attributes a rewire changes (path, colour space, ...).
-        :meth:`restore_network` then reverses a graph rewrite verbatim -- new
-        nodes deleted, stale connections broken, the recorded ones re-made --
-        which the per-material snapshot cannot do (it never learns which nodes
-        the rewrite *added*).
+        with its incoming plug connections, its settable scalar values and the
+        attributes it carries, and ``file`` nodes with the string attributes a
+        rewire changes (path, colour space, ...).  :meth:`restore_network`
+        then reverses a graph rewrite verbatim -- new nodes deleted, stale
+        connections broken, the recorded ones re-made, changed values put
+        back, added attributes removed -- which the per-material snapshot
+        cannot do (it never learns which nodes the rewrite *added*).
+
+        The values are part of the rewrite, not a side note: a connector sets
+        a standardSurface's emission weight to 1.0 beside its new emissive
+        map, flips a StingrayPBS ``use_*_map`` toggle, adds an ``MSAO_Map``;
+        and a slot it drives keeps the last value that flowed in once the
+        wiring comes off.  Recorded wiring alone left every one of those
+        changed after an "Export Copies" export (2026-09-24).
 
         Parameters:
             materials: Material node names (or nodes).
@@ -567,7 +580,12 @@ class MatSnapshot(_MatSnapshotInternal):
                     src_uuid = cls._uuid_of(src_node)
                     if src_uuid:
                         pairs.append((src_uuid, src_attr, dst_attr))
-                entry: Dict[str, Any] = {"uuid": uuid, "connections": pairs}
+                entry: Dict[str, Any] = {
+                    "uuid": uuid,
+                    "connections": pairs,
+                    "scalars": cls._capture_scalars(node, pairs),
+                    "user_attrs": sorted(cmds.listAttr(node, userDefined=True) or []),
+                }
                 if cmds.nodeType(node) == "file":
                     entry["attrs"] = {
                         a: cmds.getAttr(f"{node}.{a}")
@@ -587,11 +605,13 @@ class MatSnapshot(_MatSnapshotInternal):
            OUTSIDE the snapshotted network (a pre-existing node the rewrite
            merely wired in): that one is only unplugged by step 2.
         2. On every recorded node: break incoming connections the snapshot
-           lacks, re-make the recorded ones, and put a ``file`` node's
-           recorded attributes back.
+           lacks, re-make the recorded ones, put a ``file`` node's recorded
+           attributes back, then every scalar value the rewrite changed, and
+           remove the attributes it added.
 
         Returns:
-            ``{"deleted": n, "reconnected": n, "attrs": n}`` counts.
+            ``{"deleted": n, "reconnected": n, "attrs": n}`` counts -- ``attrs``
+            every attribute put back or removed.
         """
         by_uuid = {e["uuid"]: name for name, e in snapshot["nodes"].items()}
         counts = {"deleted": 0, "reconnected": 0, "attrs": 0}
@@ -683,6 +703,7 @@ class MatSnapshot(_MatSnapshotInternal):
                     counts["attrs"] += 1
                 except RuntimeError as e:
                     logger.debug(f"Could not restore {plug}: {e}")
+            counts["attrs"] += cls._restore_node_values(node, entry)
 
         if any(counts.values()):
             logger.info(
@@ -692,6 +713,42 @@ class MatSnapshot(_MatSnapshotInternal):
                 f"{counts['attrs']} attribute(s) reset."
             )
         return counts
+
+    @staticmethod
+    def _restore_node_values(node: str, entry: Dict[str, Any]) -> int:
+        """Put back the scalar values *entry* recorded on *node* and remove the
+        attributes added since; return how many changed.
+
+        Runs after the node's wiring is re-made, and writes only a value that
+        differs: an untouched node costs reads, and a plug the wiring drives
+        again refuses the write (skipped).  A snapshot from before the values
+        were recorded has none to put back, and no attribute record to judge
+        an added one by, so it removes nothing.
+        """
+        changed = 0
+        for attr, value in (entry.get("scalars") or {}).items():
+            plug = f"{node}.{attr}"
+            try:
+                if cmds.getAttr(plug) == value:
+                    continue
+                cmds.setAttr(plug, value)
+                changed += 1
+            except (RuntimeError, ValueError, TypeError):
+                continue  # gone, locked, or driven again by the wiring
+        if "user_attrs" not in entry:
+            return changed
+        kept = set(entry["user_attrs"])
+        for attr in cmds.listAttr(node, userDefined=True) or []:
+            # A compound's children go with it, so one deleted earlier in the
+            # loop can take a later entry's attribute along.
+            if attr in kept or not cmds.attributeQuery(attr, node=node, exists=True):
+                continue
+            try:
+                cmds.deleteAttr(node, attribute=attr)
+                changed += 1
+            except RuntimeError as e:
+                logger.debug(f"Could not remove the added {node}.{attr}: {e}")
+        return changed
 
     @classmethod
     def surviving_node(cls, snapshot: Dict[str, Any], node: str) -> Optional[str]:

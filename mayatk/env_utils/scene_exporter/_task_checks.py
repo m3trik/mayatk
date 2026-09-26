@@ -1616,12 +1616,16 @@ class _TaskChecksMixin(_TaskDataMixin):
         """Check export objects against the hierarchy manifest of the previous export.
 
         Compares namespace-stripped DAG paths of the current export objects
-        against the ``.scene_data.json`` sidecar written during the last
-        successful export to the same path.  Detects missing or extra nodes
-        that would indicate accidental structural changes.  A mismatch is
-        stashed for the post-export sidecar write (``hierarchy.last_diff``)
-        and its full report goes to a temp artifact linked from the log —
-        never into the export folder.
+        against the scene's own hierarchy baseline (``HierarchyBaseline``:
+        recorded on the scene at every export, scoped to the roots exporting).
+        A baseline another scene file recorded -- the source of a Save As
+        copy -- is set aside with a warning; where its own record holds nothing
+        of what this deliverable ships, the scene takes what the deliverable
+        last shipped (its sidecar), one deliverable at a time.  Detects
+        missing or extra nodes that would indicate accidental structural
+        changes.  A mismatch is stashed for the post-export sidecar write
+        (``hierarchy.last_diff``) and its full report goes to a temp artifact
+        linked from the log — never into the export folder.
         """
         self._hierarchy_check_ran = True
         self._hierarchy_last_diff = None
@@ -1634,15 +1638,35 @@ class _TaskChecksMixin(_TaskDataMixin):
         current_paths = self._build_full_hierarchy_set()
         roots = ptk.HierarchyBaseline.top_level(current_paths)
 
-        # One-time adoption of the per-stem sidecar baselines this scene used
-        # to keep on disk, so upgrading does not discard existing history.
-        # No-ops once the scene carries a record of its own.
-        adopted = HierarchyBaseline.migrate_from_sidecar(os.path.dirname(export_path))
+        # Where the scene's own record holds nothing of what THIS deliverable
+        # ships -- no record yet, one a Save As copy carries from its source, or
+        # one kept for other deliverables -- it takes what this one last shipped.
+        # Asked first: the adoption replaces the record it would name.
+        inherited = HierarchyBaseline.inherited_from()
+        adopted = HierarchyBaseline.adopt_sidecar(export_path, **self._sidecar_kwargs())
+        set_aside = inherited is not None and not adopted
         if adopted:
             messages.append(
-                f"Adopted {adopted} on-disk hierarchy baseline(s) into the scene; "
-                "the baseline now follows the scene rather than the output name."
+                "Adopted this deliverable's on-disk hierarchy baseline into the "
+                "scene; the baseline now follows the scene rather than the "
+                "output name."
             )
+        elif set_aside:
+            # Nothing to diff against, and the user must SEE why: a PASSING
+            # check's messages never reach them, so log it directly.
+            source = (
+                f"by '{inherited}', which is still on disk -- this scene is a "
+                "copy of it"
+                if inherited
+                else "before baselines named their scene (or while unsaved), so "
+                "a Save As source's cannot be told from this scene's"
+            )
+            message = (
+                f"Hierarchy baseline set aside: it was recorded {source}. This "
+                "export records the scene's own."
+            )
+            self.logger.warning(message)
+            messages.append(message)
 
         if HierarchyBaseline.is_unreadable():
             # The baseline is lost either way, but the user must SEE that this
@@ -1668,8 +1692,9 @@ class _TaskChecksMixin(_TaskDataMixin):
             # Said out loud when the deliverable ALREADY exists -- that is the
             # case where "passed" would otherwise read as "checked and clean"
             # rather than "nothing to check it against yet" (the sidecar-era
-            # check said the same thing about a missing manifest).
-            if os.path.exists(export_path):
+            # check said the same thing about a missing manifest). A baseline
+            # set aside above has said so already.
+            if not set_aside and os.path.exists(export_path):
                 messages.append(
                     "No hierarchy baseline yet for what this export ships. "
                     "One will be recorded on the scene after this export."

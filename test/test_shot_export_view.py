@@ -420,6 +420,170 @@ class TestExportRoundTrip(MayaTkTestCase):
         self.assertIn("shot_metadata", text)  # metadata attr name survives
         self.assertIn("opening", text)  # metadata value survives
 
+    def _keyed_shots(self, name="forkCube"):
+        """A keyed cube and two shots on it, published: 2 takes declared."""
+        cube = cmds.ls(self.create_test_cube(name), long=True)[0]
+        for t, v in ((1, 0), (50, 5), (100, 0)):
+            cmds.setKeyframe(cube, attribute="translateX", t=t, v=v)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Intro", 1, 50, objects=[cube])
+        store.define_shot("Outro", 51, 100, objects=[cube])
+        store.publish_export_view()
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 2)
+        FbxUtils.reset_takes()
+        return cube, store
+
+    def test_a_copy_whose_animated_objects_are_gone_declares_no_takes(self):
+        """A Save As copy keeps its source's shot store verbatim, and with the
+        animated objects deleted its shots describe nothing: 2026-09-24, a
+        module forked from an 18-shot assembly declared all 18 as takes and
+        its GLB carried none (clips_vs_takes and glb_envelope failed). The
+        export declares none of them -- the store keeps them."""
+        cube, store = self._keyed_shots()
+        stash = cmds.duplicate(
+            cmds.listConnections(cube, type="animCurve", source=True)[0]
+        )[0]
+        cmds.delete(cube)  # the fork's edit: the objects go, their keys too
+        # A node that merely shares the leaf name is not the member, and a
+        # curve that drives nothing (an interrupted export's leaked stash)
+        # animates nothing.
+        cmds.shadingNode("lambert", asShader=True, name="forkCube")
+        self.assertTrue(cmds.keyframe(stash, query=True, keyframeCount=True))
+
+        store.publish_export_view()
+
+        self.assertIsNone(
+            DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+        )
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
+        self.assertIsNone(ShotStore.declared_range(), "no bake range from them")
+        self.assertEqual(len(store.shots), 2, "the store keeps what it was given")
+
+    def test_a_parked_curve_keeps_no_dead_shot_declared(self):
+        """Key Stash and SmartBake park a curve as a duplicate kept alive by
+        ``message -> <registry>.<multi>``: a connection, but one that drives
+        nothing, so its keys must not keep a dead shot declared (SmartBake's
+        own restore skips message links for the same reason)."""
+        from mayatk.anim_utils.smart_bake.bake_session import (
+            BakeSessionStore,
+            _BakeSessionStoreInternal,
+        )
+
+        cube, store = self._keyed_shots("parkedCube")
+        parked = cmds.duplicate(
+            cmds.listConnections(cube, type="animCurve", source=True)[0]
+        )[0]
+        # The registry SmartBake and Key Stash really park into.
+        registry = _BakeSessionStoreInternal._ensure_stash_registry()
+        cmds.connectAttr(
+            f"{parked}.message",
+            f"{registry}.{BakeSessionStore.STASH_REGISTRY_ATTR}",
+            nextAvailable=True,
+        )
+        cmds.delete(cube)
+        self.assertTrue(cmds.keyframe(parked, query=True, keyframeCount=True))
+
+        self.assertEqual([s.name for s in store.stale_shots()], ["Intro", "Outro"])
+
+    def test_a_renamed_member_keeps_its_shot_declared(self):
+        """A rename leaves the stored path dangling but the keys in place --
+        the exporter's own name repairs rename mid-export -- and a parent
+        renamed away leaves the member findable by its leaf."""
+        cube, store = self._keyed_shots("renameCube")
+        group = cmds.group(cube, name="oldParent")
+        cmds.rename(group, "newParent")
+
+        store.publish_export_view()
+        meta = ptk.SceneRecords.SHOTS.load(DataNodes)
+        self.assertEqual([s["clip"] for s in meta["shots"]], ["Intro", "Outro"])
+        self.assertEqual(meta["shots"][0]["objects"], ["renameCube"])
+
+        cmds.rename(cmds.ls("renameCube", long=True)[0], "renamedCube")
+        store.publish_export_view()
+        meta = ptk.SceneRecords.SHOTS.load(DataNodes)
+        self.assertEqual([s["clip"] for s in meta["shots"]], ["Intro", "Outro"])
+        # Kept for its keys; the name it held is no object of this scene's.
+        self.assertEqual(meta["shots"][0]["objects"], [])
+
+    def test_removing_stale_shots_moves_no_key(self):
+        """The shot list's Remove Stale Shots drops RECORDS: a Sequencer delete
+        closes the gap behind a shot, which would retime the live one after."""
+        gone, store = self._keyed_shots("goneCube")
+        live = cmds.ls(self.create_test_cube("liveCube"), long=True)[0]
+        for t, v in ((120, 0), (160, 3)):
+            cmds.setKeyframe(live, attribute="translateY", t=t, v=v)
+        store.define_shot("Live", 120, 160, objects=[live])
+        cmds.delete(gone)
+
+        removed = store.remove_stale_shots()
+
+        self.assertEqual([s.name for s in removed], ["Intro", "Outro"])
+        self.assertEqual(
+            [(s.name, s.start, s.end) for s in store.shots], [("Live", 120, 160)]
+        )
+        self.assertEqual(cmds.keyframe(live, q=True, timeChange=True), [120.0, 160.0])
+
+    def test_the_exporter_names_the_stale_shots_it_left_out(self):
+        """The warning names them and links the Shots window, whose All Shots
+        group deletes them (``TaskManager.NOTE_PANELS``)."""
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        cube, store = self._keyed_shots("exportForkCube")
+        keep = cmds.ls(self.create_test_cube("keptCube"), long=True)[0]
+        cmds.delete(cube)
+
+        exporter = SceneExporter(log_level="WARNING")
+        tm = exporter.task_manager
+        tm.objects = [keep]
+        with self.assertLogs(exporter.logger, "WARNING") as logged:
+            tm.export_data_node()
+        stale = [line for line in logged.output if "2 shot(s) left out" in line]
+        self.assertTrue(stale, logged.output)
+        self.assertIn("action://show?ui=shots", stale[0])
+        tm.apply_declared_takes()
+        self.assertFalse(mel.eval("FBXExportSplitAnimationIntoTakes -q"))
+        tm.run_deferred_restores()
+
+    def test_a_run_without_the_carrier_task_still_names_the_stale_shots(self):
+        """Export Scene Data Node off: the takes task publishes instead, and
+        the note and its Open Shots link reached the log only through the
+        carrier task's summary -- this publish must say what it left out too."""
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        cube, store = self._keyed_shots("takesForkCube")
+        keep = cmds.ls(self.create_test_cube("takesKeptCube"), long=True)[0]
+        cmds.delete(cube)
+
+        exporter = SceneExporter(log_level="WARNING")
+        tm = exporter.task_manager
+        tm.objects = [keep]
+        try:
+            with self.assertLogs(exporter.logger, "WARNING") as logged:
+                tm.apply_declared_takes("both")
+        finally:
+            tm.run_deferred_restores()
+        stale = [line for line in logged.output if "2 shot(s) left out" in line]
+        self.assertTrue(stale, logged.output)
+        self.assertIn("action://show?ui=shots", stale[0])
+
+    def test_a_note_link_opens_the_panel_it_names(self):
+        """``action://show?ui=<panel>`` opens that panel through the Scene
+        Exporter's switchboard; every other action reaches UiUtils."""
+        from types import SimpleNamespace
+        from qtpy import QtCore
+        from mayatk.env_utils.scene_exporter.scene_exporter_slots import (
+            SceneExporterSlots,
+        )
+
+        shown = []
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = SimpleNamespace(
+            handlers=SimpleNamespace(marking_menu=SimpleNamespace(show=shown.append))
+        )
+        slots._on_log_link_clicked(QtCore.QUrl("action://show?ui=shots"))
+        self.assertEqual(shown, ["shots"])
+
 
 class TestCsvToFbxPipeline(MayaTkTestCase):
     """End-to-end: shot-manifest CSV → ShotStore → exporter task → FBX.

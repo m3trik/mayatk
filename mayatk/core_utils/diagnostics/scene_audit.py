@@ -12,8 +12,9 @@ The audit surface is split across three sibling modules, one responsibility each
 
 Public entry points: :meth:`SceneAnalyzer.run_audit` (analyze + print),
 :meth:`SceneAnalyzer.format_audit_text` / :meth:`SceneAnalyzer.format_audit_html`
-(section-keyed capture for UIs), and the two-phase
-:meth:`SceneAnalyzer.analyze` + :meth:`SceneAnalyzer.generate_report` API.
+(section-keyed output for UIs), and the two-phase :meth:`SceneAnalyzer.analyze` +
+:meth:`SceneAnalyzer.generate_report` API. Each report section is built once as a
+``ptk.ReportDoc`` and rendered either as HTML (the viewer) or as plain text.
 """
 
 from __future__ import annotations
@@ -21,19 +22,22 @@ from __future__ import annotations
 import os
 import math
 import time
-from typing import List, Dict, Optional, Set, Any, Tuple, Callable
+from typing import List, Dict, Optional, Set, Any, Tuple, Callable, Iterable
 
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:  # pragma: no cover - Maya runtime specific
-    print(__file__, error)
+except Exception:  # Maya-free import: registry, docs tooling, mock tests
+    cmds = om = None
 import pythontk as ptk
 
 from mayatk.core_utils.diagnostics.audit_records import (
     SEVERITY_LOW,
     SEVERITY_MEDIUM,
     SEVERITY_HIGH,
+    TRANSPARENCY_OPAQUE,
+    TRANSPARENCY_MASKED,
+    TRANSPARENCY_BLEND,
     AnalysisManifest,
     AssetRecord,
     AuditProfile,
@@ -44,6 +48,7 @@ from mayatk.core_utils.diagnostics.audit_records import (
     Finding,
     FixAction,
     InstanceStats,
+    MaterialAudit,
     MaterialRecord,
     MaterialSplit,
     MeshRecord,
@@ -53,6 +58,7 @@ from mayatk.core_utils.diagnostics.audit_records import (
     ParetoEntry,
     PipelineStats,
     SceneInfoSection,
+    SceneOverview,
     SceneReport,
     SharedTexture,
     SlotStats,
@@ -61,24 +67,50 @@ from mayatk.core_utils.diagnostics.audit_records import (
     TextureStats,
 )
 
+Doc = ptk.ReportDoc
+
 
 class SceneAnalyzer(ptk.LoggingMixin):
+    """Analyzes scene objects for performance expectations in game engines.
+
+    Collection is bulk and instance-aware: each unique mesh SHAPE is measured
+    once and weighted by how many of its instances are in scope, and each
+    material and texture file is read once however many meshes share it.
     """
-    Analyzes scene objects for performance expectations in game engines.
-    Focuses on Mesh and Material metrics with a scalable, bulk-collection workflow.
-    """
+
+    #: Scopes :meth:`analyze` resolves itself when it is given no ``objects``.
+    SCOPES = ("selection", "all")
+
+    #: Shading engines every Maya scene carries; not the scene's own.
+    _DEFAULT_SHADING_ENGINES = ("initialShadingGroup", "initialParticleSE")
+
+    #: Surface-map types that pack into one ORM texture when authored apart.
+    _LOOSE_PBR_TYPES = ("Ambient_Occlusion", "Roughness", "Metallic")
+
+    #: Texels a map needs per meter of an object's world diagonal before it is
+    #: judged oversized for that object (a 2 m prop -> ~1K).
+    TEXELS_PER_METER = 512
+
+    #: Rows a ranked table shows before folding the rest into a footer.
+    TABLE_ROWS = 12
 
     def __init__(self):
         super().__init__()
         self.logger.hide_logger_name(True)
-        self._shading_map: Dict[
-            str, Set[str]
-        ] = {}  # shape_name -> {shading_engine_names}
-        self._material_map: Dict[str, str] = {}  # shading_engine -> material_node
-        self._material_flags: Dict[str, Dict[str, Any]] = {}  # material_node -> {flags}
-        self._global_texture_usage: Dict[
-            str, Dict[str, Any]
-        ] = {}  # path -> {count, meshes, instances}
+        # Representative shape path -> {"paths": in-scope instance shape paths,
+        # "transforms": the matching instance transforms}.
+        self._targets: Dict[str, Dict[str, List[str]]] = {}
+        self._path_owner: Dict[str, str] = {}  # instance shape path -> representative
+        self._shading_map: Dict[str, Set[str]] = {}  # representative -> SEs (union)
+        self._path_shading: Dict[str, Set[str]] = {}  # instance shape path -> SEs
+        self._material_map: Dict[str, str] = {}  # shading engine -> material
+        self._material_flags: Dict[str, Dict[str, Any]] = {}  # material -> flags
+        self._texture_info: Dict[str, Dict[str, Any]] = {}  # texture key -> file facts
+        self._raw_keys: Dict[str, str] = {}  # stored path -> its texture key
+        # Scene-wide use of each texture file: mesh NODES, instance paths and
+        # materials. Judges "is this texture unique to one mesh?".
+        self._global_texture_usage: Dict[str, Dict[str, Set[str]]] = {}
+        self._overview: Optional[SceneOverview] = None
         self.scope = "selection"
         self.profile: Any = AuditProfile()
         # Populated by ``analyze`` so renderers can hide sections /
@@ -86,6 +118,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self.collected_sections: Set[str] = set(SceneInfoSection.ALL)
         self.materials_collected: bool = True
         self.textures_collected: bool = True
+        self.mesh_checks_collected: bool = True
         # Observability — populated by ``analyze``. Surfaced via
         # :class:`AnalysisManifest` on the SceneReport.
         self._analysis_started_at: float = 0.0
@@ -93,6 +126,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self._shading_engine_count: int = 0
         self._file_node_count: int = 0
 
+    # ------------------------------------------------------------------ #
+    # Public entry points
+    # ------------------------------------------------------------------ #
     @classmethod
     def run_audit(cls, adaptive: bool = False, verbose: bool = True) -> None:
         """
@@ -102,16 +138,19 @@ class SceneAnalyzer(ptk.LoggingMixin):
             adaptive: If True, use adaptive budgeting based on object size.
             verbose: If True, print the report to the script editor.
         """
+        analyzer, report = cls._build_report(adaptive=adaptive)
+        if verbose:
+            analyzer.print_report(report)
+
+    @staticmethod
+    def _profile(adaptive: bool) -> AuditProfile:
+        """The profile behind the Adaptive (Game Ready) / Generic choice."""
         profile = AuditProfile(adaptive_tris=adaptive)
         if adaptive:
             profile.name = "Adaptive (Game Ready)"
-
-        analyzer = cls()
-        records = analyzer.analyze(profile=profile)
-        report = analyzer.generate_report(records)
-
-        if verbose:
-            analyzer.print_report(report)
+        else:
+            profile.name = "Generic"
+        return profile
 
     @classmethod
     def _build_report(
@@ -120,6 +159,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
         objects: Optional[List[Any]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         sections: Optional[List[str]] = None,
+        scope: Optional[str] = None,
     ) -> Tuple["SceneAnalyzer", SceneReport]:
         """Run the analyze + generate_report pipeline once for the
         given audit settings, returning the (analyzer, report) pair.
@@ -130,16 +170,13 @@ class SceneAnalyzer(ptk.LoggingMixin):
         is forwarded to ``analyze`` so the right collection phases
         are skipped.
         """
-        profile = AuditProfile(adaptive_tris=adaptive)
-        if adaptive:
-            profile.name = "Adaptive (Game Ready)"
-
         analyzer = cls()
         records = analyzer.analyze(
-            profile=profile,
+            profile=cls._profile(adaptive),
             objects=objects,
             progress_callback=progress_callback,
             sections=sections,
+            scope=scope,
         )
         report = analyzer.generate_report(records)
         return analyzer, report
@@ -153,6 +190,7 @@ class SceneAnalyzer(ptk.LoggingMixin):
             sections_requested=sorted(self.collected_sections),
             materials_collected=self.materials_collected,
             textures_collected=self.textures_collected,
+            mesh_checks_collected=self.mesh_checks_collected,
             profile=self.profile
             if isinstance(self.profile, AuditProfile)
             else AuditProfile(),
@@ -163,103 +201,38 @@ class SceneAnalyzer(ptk.LoggingMixin):
             file_node_count=self._file_node_count,
         )
 
-    @staticmethod
-    def _capture_via_logger(
-        analyzer: "SceneAnalyzer",
-        formatter,
-        render: Callable[[], None],
-    ) -> str:
-        """Run ``render()`` with the analyzer's logger redirected to
-        an in-memory buffer using ``formatter``, then restore.
-
-        Isolation: existing handlers are stashed, replaced by a
-        single ``StreamHandler`` bound to a ``StringIO``, and
-        propagation is disabled — otherwise the report would also
-        appear in the script editor and any other handlers attached
-        to this logger (e.g. tentacle's footer status log). Restored
-        in ``finally`` so a raising renderer doesn't leave the logger
-        in a broken state.
-        """
-        import io
-        import logging as _logging
-
-        buf = io.StringIO()
-        handler = _logging.StreamHandler(buf)
-        handler.setLevel(_logging.NOTSET)
-        handler.setFormatter(formatter)
-
-        existing_handlers = analyzer.logger.handlers[:]
-        existing_propagate = analyzer.logger.propagate
-        analyzer.logger.handlers = [handler]
-        analyzer.logger.propagate = False
-        try:
-            render()
-        finally:
-            analyzer.logger.handlers = existing_handlers
-            analyzer.logger.propagate = existing_propagate
-
-        return buf.getvalue()
-
     @classmethod
     def format_audit_text(
         cls,
         adaptive: bool = False,
         objects: Optional[List[Any]] = None,
         sections: Optional[List[str]] = None,
+        scope: Optional[str] = None,
     ) -> Dict[str, str]:
         """Run the audit and return the formatted report as a
         section-keyed dict of plain text.
 
-        Sibling to :meth:`run_audit` — same analysis, captured into
-        per-section strings instead of routed through the logger.
-        Used by callers that want to display (or partially display)
-        the report somewhere other than the script editor.
+        Sibling to :meth:`run_audit` — same analysis, returned as
+        per-section strings instead of printed. Used by callers that
+        want to display (or partially display) the report somewhere
+        other than the script editor.
 
         Parameters:
             adaptive: Apply the Adaptive (Game Ready) profile.
-            objects: Forwarded to :meth:`analyze`. ``None`` uses the
-                current selection; pass an explicit list for
-                whole-scene or custom-scope audits.
+            objects: Forwarded to :meth:`analyze`. ``None`` resolves
+                *scope* (the current selection by default).
             sections: Iterable of ``SceneInfoSection`` keys. ``None``
-                means "all sections" (prior default behavior).
+                means "all sections".
+            scope: Forwarded to :meth:`analyze`.
 
         Returns:
             ``dict[str, str]`` keyed by section name (insertion order
-            matches the requested ``sections``). A special
-            ``"_header"`` entry contains the report title + profile
-            block. Empty sections (e.g. the analyzer had nothing to
-            say for "fix_first") are still present but map to an
-            empty string, so callers can iterate the dict and trust
-            it to mirror their request.
-
-        HTML markup that the logger's level wrappers inject (color
-        spans on NOTICE / WARNING / ERROR) is stripped via
-        ``LevelAwareFormatter(strip_html=True)`` so the output is
-        clean plain text.
+            matches the requested ``sections``). A special ``"_header"``
+            entry holds the report title and its context line. Every
+            requested section is present; one with nothing to render
+            maps to an empty string.
         """
-        from pythontk.core_utils.logging_mixin import LevelAwareFormatter
-
-        selected = SceneInfoSection.normalize(sections)
-        analyzer, report = cls._build_report(
-            adaptive=adaptive,
-            objects=objects,
-            sections=selected,
-        )
-        formatter = LevelAwareFormatter(logger=analyzer.logger, strip_html=True)
-
-        result: Dict[str, str] = {}
-        result["_header"] = cls._capture_via_logger(
-            analyzer, formatter, lambda: analyzer._render_header_section(report)
-        )
-        renderers = analyzer._section_renderers()
-        for section in selected:
-            renderer = renderers.get(section)
-            if renderer is None:
-                continue
-            result[section] = cls._capture_via_logger(
-                analyzer, formatter, lambda r=renderer: r(report)
-            )
-        return result
+        return cls._format_audit("to_text", adaptive, objects, None, sections, scope)
 
     @classmethod
     def format_audit_html(
@@ -268,80 +241,55 @@ class SceneAnalyzer(ptk.LoggingMixin):
         objects: Optional[List[Any]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         sections: Optional[List[str]] = None,
+        scope: Optional[str] = None,
     ) -> Dict[str, str]:
         """Run the audit and return a section-keyed dict of HTML
         chunks suitable for concatenation into a viewer dialog.
 
-        Preserves the logger's inline color spans (NOTICE lavender,
-        WARNING pastel yellow, ERROR pastel pink, etc.) by capturing
-        with a plain ``Formatter("%(message)s")`` — the level
-        wrappers stay in the output — and embedding each section's
-        captured text inside its own ``<pre>`` block. Per-section
-        ``<pre>`` blocks render identically to one large block in a
-        QTextDocument since the explicit ``margin:0`` collapses the
-        block spacing.
+        Each section is real HTML (headings, tables, key/value grids)
+        built by ``ptk.ReportDoc``: every scene-derived string is
+        escaped, object and material names are ``action://select``
+        links (a viewer given ``mayatk.UiUtils.dispatch_log_link``
+        selects them), and texture files are ``file:///`` links.
 
         Parameters:
             adaptive: Apply the Adaptive (Game Ready) profile.
             objects: Forwarded to :meth:`analyze`.
             progress_callback: Forwarded to :meth:`analyze`.
             sections: Iterable of ``SceneInfoSection`` keys. ``None``
-                means "all sections" (prior default behavior).
+                means "all sections".
+            scope: Forwarded to :meth:`analyze`.
 
         Returns:
             ``dict[str, str]`` keyed by section name (insertion order
             matches the requested ``sections``). A special
-            ``"_header"`` entry contains the ``<h2>`` title; the
-            tentacle viewer joins values in iteration order.
-
-        The body is **not** HTML-escaped because doing so would turn
-        the wrapping spans into literal markup. Maya names containing
-        a literal ``<`` could corrupt the rendering; same trade-off
-        the existing TextEditLogHandler accepts when streaming logger
-        output into a QTextEdit.
+            ``"_header"`` entry holds the title; the tentacle viewer
+            joins values in iteration order.
         """
-        import logging as _logging
+        return cls._format_audit(
+            "to_html", adaptive, objects, progress_callback, sections, scope
+        )
 
+    @classmethod
+    def _format_audit(
+        cls, render, adaptive, objects, progress_callback, sections, scope
+    ) -> Dict[str, str]:
+        """Shared body of :meth:`format_audit_text` / :meth:`format_audit_html`."""
         selected = SceneInfoSection.normalize(sections)
         analyzer, report = cls._build_report(
             adaptive=adaptive,
             objects=objects,
             progress_callback=progress_callback,
             sections=selected,
+            scope=scope,
         )
-        formatter = _logging.Formatter("%(message)s")
-
-        # Explicit ``font-family`` on the ``<pre>`` overrides any font
-        # inherited from the outer ``RichTextFormatter.format`` wrapper (``<font>``
-        # + ``<div align=...>``). ``margin:0`` keeps per-section <pre>
-        # blocks visually stitched together — identical line spacing
-        # to the previous single-block layout.
-        pre_open = (
-            "<pre style=\"font-family:'Consolas','Courier New',Monaco,monospace;"
-            ' color:#ddd; margin:0;">'
-        )
-        pre_close = "</pre>"
-
-        title = "Scene Audit Report — Adaptive" if adaptive else "Scene Audit Report"
-        result: Dict[str, str] = {}
-        result["_header"] = f"<h2 style='color:#9cf; margin:0 0 6px 0;'>{title}</h2>"
-
-        renderers = analyzer._section_renderers()
+        docs = analyzer._section_docs(report, selected)
+        result: Dict[str, str] = {
+            "_header": getattr(analyzer._doc_header(report), render)()
+        }
         for section in selected:
-            renderer = renderers.get(section)
-            if renderer is None:
-                continue
-            captured = cls._capture_via_logger(
-                analyzer, formatter, lambda r=renderer: r(report)
-            )
-            if not captured:
-                # Section returned no content (e.g. fix_first when
-                # nothing is over-budget). Keep the key for callers
-                # that key off section identity, but skip the <pre>
-                # so the dialog doesn't render an empty box.
-                result[section] = ""
-                continue
-            result[section] = pre_open + captured + pre_close
+            doc = docs.get(section)
+            result[section] = getattr(doc, render)() if doc else ""
         return result
 
     def analyze(
@@ -351,30 +299,39 @@ class SceneAnalyzer(ptk.LoggingMixin):
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         profile: AuditProfile = None,
         sections: Optional[List[str]] = None,
+        scope: Optional[str] = None,
     ) -> List[AssetRecord]:
         """
         Main entry point for analysis.
 
         Args:
-            objects: List of objects to analyze. If None, uses selection.
-            fast_mode: If True, skips deep checks (not implemented yet, but reserved for future).
-            progress_callback: Optional callback(current, total, message) for progress updates.
+            objects: Objects to analyze -- transforms, groups (their mesh
+                descendants), mesh shapes, components (their mesh) or object
+                sets (their members). ``None`` resolves *scope* instead.
+            fast_mode: Reserved.
+            progress_callback: Optional callback(current, total, message).
             profile: Target profile settings.
             sections: Iterable of ``SceneInfoSection`` keys controlling
                 which report sections will be rendered. The analyzer
                 uses the set to skip work the unselected sections don't
-                need — most notably texture file IO and (when no
-                section needs them) the material caches. ``None``
-                means "all sections" — equivalent to the prior
-                behavior.
+                need — the material caches, the texture file reads and the
+                mesh checks. (The scene overview is always read: it is cheap,
+                the header names the scene, and Fix First / Pipeline read its
+                unknown nodes.) ``None`` means "all sections".
+            scope: Used only when *objects* is None: ``"selection"``
+                (default) or ``"all"`` -- every mesh instance in the scene.
 
         Returns:
-            List of AssetRecord objects sorted by score (descending).
+            List of AssetRecord objects (one per unique mesh shape) sorted
+            by score (descending).
         """
         if profile is None:
             profile = AuditProfile()
         self.profile = profile
-        self.scope = "selection" if objects is None else "custom"
+        if objects is not None:
+            self.scope = "custom"
+        else:
+            self.scope = scope if scope in self.SCOPES else "selection"
 
         # Normalize via the canonical helper so a typo'd or
         # alternately-ordered list from a direct caller gets the same
@@ -382,11 +339,13 @@ class SceneAnalyzer(ptk.LoggingMixin):
         selected_sections = set(SceneInfoSection.normalize(sections))
         needs_materials = bool(selected_sections & SceneInfoSection._NEEDS_MATERIALS)
         needs_textures = bool(selected_sections & SceneInfoSection._NEEDS_TEXTURES)
+        needs_checks = bool(selected_sections & SceneInfoSection._NEEDS_MESH_CHECKS)
         # Recorded on the analyzer so generate_report / renderers can
         # hide texture/material lines that have no underlying data.
         self.collected_sections = selected_sections
         self.materials_collected = needs_materials
         self.textures_collected = needs_textures
+        self.mesh_checks_collected = needs_checks
 
         # Observability — reset per-run counters; the AnalysisManifest
         # on the eventual SceneReport reads these.
@@ -395,21 +354,21 @@ class SceneAnalyzer(ptk.LoggingMixin):
         self._file_node_count = 0
         _start_perf = time.perf_counter()
 
-        # Phase A: Resolve targets — always fast (just node-name
-        # normalization), so it gets a small fixed slice of the bar.
-        # The Phase B/C split is computed AFTER Phase A so it can use
-        # the true shape count instead of an estimate.
-        PHASE_A_END = 5
-        if progress_callback:
-            progress_callback(0, 100, "Resolving targets...")
+        def tick(pct, message):
+            if progress_callback:
+                progress_callback(pct, 100, message)
 
-        # shape -> list of transform names
-        shape_map = self._resolve_targets(
-            objects,
-            progress_callback=progress_callback,
-            pct_start=0,
-            pct_end=PHASE_A_END,
-        )
+        # Scene-wide facts first: cheap (a census of batched queries) and
+        # independent of the scope. Always collected -- the header names the
+        # scene, and Fix First / Pipeline read its unknown nodes.
+        tick(0, "Reading scene overview...")
+        self._overview = self._collect_overview()
+
+        # Phase A: resolve targets (a handful of batched queries).
+        PHASE_A_END = 5
+        tick(1, "Resolving targets...")
+        shape_map = self._resolve_targets(objects)
+        self._clear_caches()
         if not shape_map:
             self._analysis_duration_ms = int((time.perf_counter() - _start_perf) * 1000)
             return []
@@ -418,23 +377,17 @@ class SceneAnalyzer(ptk.LoggingMixin):
         total_shapes = len(shapes)
 
         # Weight the Phase B/C split by item counts so the bar tracks
-        # wall-clock progress instead of the old 10/10/80 layout. Phase
-        # B walks ALL scene shading engines (not just the selection's)
-        # and does one ``_analyze_material_node`` per SE — each
-        # potentially calling ``os.path.getsize`` per file node — so
-        # for selection-scope audits Phase B is usually the bottleneck.
-        # Item-count weighting fixes the "bar at ~15% when the work is
-        # at ~90%" symptom of the fixed split.
+        # wall-clock progress: Phase B walks every shading engine in the
+        # scene, Phase C every unique shape in scope.
         phase_b_count = (
             len(cmds.ls(type="shadingEngine") or []) if needs_materials else 0
         )
         phase_b_end = self._phase_b_end(PHASE_A_END, phase_b_count, total_shapes)
 
-        # Phase B: Bulk collect material data (skip entirely when no
+        # Phase B: bulk-collect material data (skipped entirely when no
         # selected section needs slot / transparency / texture data).
         if needs_materials:
-            if progress_callback:
-                progress_callback(PHASE_A_END, 100, "Collecting material data...")
+            tick(PHASE_A_END, "Collecting material data...")
             self._build_material_caches(
                 shape_map,
                 progress_callback=progress_callback,
@@ -443,31 +396,29 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 collect_textures=needs_textures,
             )
         else:
-            # Make sure stale caches from a prior run don't leak into
-            # this analyze pass.
-            self._shading_map.clear()
-            self._material_map.clear()
-            self._material_flags.clear()
-            self._global_texture_usage.clear()
-            # No Phase B work happened — give its bar range back to C.
-            phase_b_end = PHASE_A_END
+            phase_b_end = PHASE_A_END  # give Phase B's bar range back to C
 
-        # Phase C: Analyze and Score
+        # Phase C: analyze and score each unique shape.
         records = []
         phase_c_span = max(1, 100 - phase_b_end)
         for i, shape in enumerate(shapes):
-            if progress_callback:
-                pct = phase_b_end + int((i / total_shapes) * phase_c_span)
-                progress_callback(pct, 100, f"Analyzing {shape}")
-
-            mesh_rec = self._analyze_mesh(shape)
+            tick(
+                phase_b_end + int((i / total_shapes) * phase_c_span),
+                f"Analyzing {shape.rsplit('|', 1)[-1]} ({i + 1}/{total_shapes})",
+            )
+            paths = self._targets[shape]["paths"]
+            mesh_rec = self._analyze_mesh(shape, paths, checks=needs_checks)
             mat_rec = (
                 self._analyze_material(shape)
                 if needs_materials
-                else MaterialRecord(slot_count=0, uses_transparency=False, materials=[])
+                else MaterialRecord(
+                    slot_count=0,
+                    uses_transparency=False,
+                    materials=[],
+                    draw_calls=len(paths),
+                )
             )
 
-            # Calculate score and findings
             (
                 score,
                 perf_score,
@@ -479,15 +430,10 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 target_tris,
             ) = self._calculate_score(mesh_rec, mat_rec)
 
-            # Get transforms and instance count
             transforms = shape_map[shape]
-            instance_count = len(transforms)
-            # Use the first transform as the representative name
-            transform_name = transforms[0] if transforms else "Unknown"
-
             records.append(
                 AssetRecord(
-                    transform=transform_name,
+                    transform=transforms[0] if transforms else shape,
                     mesh=mesh_rec,
                     material=mat_rec,
                     score=score,
@@ -495,714 +441,744 @@ class SceneAnalyzer(ptk.LoggingMixin):
                     risk_score=risk_score,
                     findings=findings,
                     score_breakdown=breakdown,
-                    instance_count=instance_count,
+                    instance_count=len(transforms),
                     delta=delta,
                     fix_plan=fix_plan,
                     target_tris=target_tris,
+                    transforms=list(transforms),
                 )
             )
 
-        # Post-process: Calculate tri_percent
+        # Post-process: each asset's share of the rendered triangles.
         total_tris = sum(r.mesh.tris * r.instance_count for r in records)
         if total_tris > 0:
             for r in records:
                 r.tri_percent = ((r.mesh.tris * r.instance_count) / total_tris) * 100.0
 
-        # Sort by score descending
         records.sort(key=lambda x: x.score, reverse=True)
-
-        # Final tick — the per-shape loop ends at ~99% (i = N-1).
-        # Without this the bar visually stalls just shy of full before
-        # the context manager hides it.
-        if progress_callback:
-            progress_callback(100, 100, "Done")
-
+        tick(100, "Done")
         self._analysis_duration_ms = int((time.perf_counter() - _start_perf) * 1000)
         return records
 
+    # ------------------------------------------------------------------ #
+    # Report assembly
+    # ------------------------------------------------------------------ #
     def generate_report(self, records: List[AssetRecord]) -> SceneReport:
         """Build a :class:`SceneReport` from per-asset records.
 
-        The intermediate computation phases (texture aggregates,
-        Pareto rankings, missing-texture impact, fix actions) are the
-        same as before; the difference is in the *shape* of the
-        return — typed sub-records instead of a 70-field bag.
+        Scene totals weight each unique shape by its in-scope instances;
+        texture costs are counted once per FILE across the materials the
+        records wear, so a map shared by 450 meshes costs what one copy
+        costs.
         """
-        manifest = self._build_manifest()
         if not records:
-            return SceneReport(manifest=manifest)
+            report = SceneReport(
+                manifest=self._build_manifest(), overview=self._overview
+            )
+            # No mesh in scope -- the scene's own hazards still apply (its
+            # geometry may be the unloaded reference that left the scope empty).
+            report.fix_actions = self._scene_fix_actions(report)
+            return report
 
+        profile = self.profile
         total_meshes = len(records)
-        # Note: records are per unique shape. We must multiply by instance_count for scene totals.
+        total_instances = sum(r.instance_count for r in records)
         total_tris = sum(r.mesh.tris * r.instance_count for r in records)
         total_verts = sum(r.mesh.verts * r.instance_count for r in records)
         total_slots = sum(r.material.slot_count * r.instance_count for r in records)
+        draw_calls = sum(r.material.draw_calls for r in records)
         max_slots = max((r.material.slot_count for r in records), default=0)
-        avg_slots = (
-            total_slots / sum(r.instance_count for r in records)
-            if total_meshes > 0
-            else 0
-        )
+        avg_slots = total_slots / total_instances if total_instances else 0.0
 
         multi_slot_meshes = sum(1 for r in records if r.material.slot_count > 1)
         meshes_over_slot_threshold = sum(
-            1 for r in records if r.material.slot_count > self.profile.max_slots
+            1 for r in records if r.material.slot_count > profile.max_slots
         )
-        meshes_over_tri_threshold = sum(
-            1 for r in records if r.mesh.tris > r.target_tris
-        )
+        high_poly = [r for r in records if r.mesh.tris > r.target_tris]
         total_slots_over_budget = sum(
-            max(0, r.material.slot_count - self.profile.max_slots) * r.instance_count
+            max(0, r.material.slot_count - profile.max_slots) * r.instance_count
             for r in records
         )
 
-        transparent_meshes = sum(1 for r in records if r.material.uses_transparency)
+        # --- materials + textures (scope = what the records wear) -------------
+        materials = self._material_audits(records)
+        used_materials = {m.name for m in materials}
+        textures = self._texture_stats(used_materials)
 
-        non_manifold_count = sum(1 for r in records if r.mesh.non_manifold_edges > 0)
-        lamina_count = sum(1 for r in records if r.mesh.lamina_faces > 0)
-        ngon_count = sum(1 for r in records if r.mesh.ngons > 0)
-        high_poly_count = sum(1 for r in records if r.mesh.tris > r.target_tris)
-
-        # Texture stats — MaterialRecord totals are per-shape, so
-        # summing them would double-count textures shared across
-        # shapes. Rebuild the unique-path set from _material_flags and
-        # aggregate each path exactly once.
-        total_texture_mb = 0.0
-        est_gpu_mb = 0.0
-        est_gpu_mb_compressed = 0.0
-        texture_type_breakdown = {}
-        texture_class_estimates = {}  # Class -> Compressed MB
-        texture_dim_histogram = {"4k+": 0, "2k": 0, "1k": 0, "512": 0, "<512": 0}
-        shared_4k_textures = []
-        single_use_4k_count = 0
-        shared_4k_count = 0
-
-        # Re-scan materials used by these records
-        used_materials = set()
-        for r in records:
-            used_materials.update(r.material.materials)
-
-        # Unique-texture accounting is scoped to the analyzed records only.
-        # _global_texture_usage is scene-wide (populated per shading engine in
-        # _build_material_caches, which walks every SE, not just the selection's),
-        # so it must NOT drive the unique-path count for a selection-scope audit.
-        # processed_paths below is the correct scope-consistent set, matching
-        # total_texture_mb / est_gpu_mb.
-        processed_paths = set()
-
+        # --- missing textures ------------------------------------------------
+        missing_map: Dict[str, Set[str]] = {}
         for mat_name in used_materials:
-            flags = self._material_flags.get(mat_name, {})
-            textures = flags.get("textures", [])
-            for t in textures:
-                path = t["path"]
-                if path not in processed_paths:
-                    processed_paths.add(path)
+            for path in self._material_flags.get(mat_name, {}).get("missing_paths", []):
+                missing_map.setdefault(path, set()).add(mat_name)
+        from mayatk.mat_utils._mat_utils import MatUtils
 
-                    size_mb = t["size_mb"]
-                    total_texture_mb += size_mb
-
-                    w, h = t["res"]
-                    # Uncompressed: RGBA8 (4 bytes) + Mips (1.33x)
-                    est_gpu_mb += (w * h * 4 * 1.33) / (1024 * 1024)
-
-                    # Compressed Estimate per Class
-                    tex_type = t.get("type", "Other")
-                    has_alpha = t.get("has_alpha", False)
-
-                    bpp = 1.0  # Default BC7/BC5
-                    if tex_type == "BaseColor":
-                        bpp = 1.0 if has_alpha else 0.5  # BC7 vs BC1
-                    elif tex_type == "Normal":
-                        bpp = 1.0  # BC5
-                    elif tex_type == "Masks":
-                        bpp = 0.5  # BC1/BC4
-                    elif tex_type == "Emissive":
-                        bpp = 0.5  # BC1
-
-                    comp_size = (w * h * bpp * 1.33) / (1024 * 1024)
-                    est_gpu_mb_compressed += comp_size
-
-                    texture_class_estimates[tex_type] = (
-                        texture_class_estimates.get(tex_type, 0.0) + comp_size
-                    )
-
-                    texture_type_breakdown[tex_type] = (
-                        texture_type_breakdown.get(tex_type, 0.0) + size_mb
-                    )
-
-                    # Histogram & 4K Analysis
-                    max_dim = max(w, h)
-                    if max_dim >= 4096:
-                        texture_dim_histogram["4k+"] += 1
-                        # usage["meshes"] is a set of mesh names
-                        usage = self._global_texture_usage.get(path, {})
-                        mesh_count = len(usage.get("meshes", []))
-
-                        if mesh_count > 1:
-                            shared_4k_count += 1
-                            shared_4k_textures.append((path, mesh_count))
-                        else:
-                            single_use_4k_count += 1
-
-                    elif max_dim >= 2048:
-                        texture_dim_histogram["2k"] += 1
-                    elif max_dim >= 1024:
-                        texture_dim_histogram["1k"] += 1
-                    elif max_dim >= 512:
-                        texture_dim_histogram["512"] += 1
-                    else:
-                        texture_dim_histogram["<512"] += 1
-
-        # Sort shared 4K textures
-        shared_4k_textures.sort(key=lambda x: x[1], reverse=True)
-        shared_4k_textures = shared_4k_textures[:5]  # Top 5
-
-        max_texture_res = max((r.material.max_res for r in records), default=0)
-        large_texture_count = sum(1 for r in records if r.material.max_res > 2048)
-        unique_texture_paths = len(processed_paths)
-
-        # Top offenders (already sorted by score in analyze)
-        top_offenders = records[:20]
-
-        # Category offenders
-        top_by_tris = sorted(records, key=lambda x: x.mesh.tris, reverse=True)[:10]
-        top_by_slots = sorted(
-            records, key=lambda x: x.material.slot_count, reverse=True
-        )[:10]
-        top_by_max_res = sorted(
-            records, key=lambda x: x.material.max_res, reverse=True
-        )[:10]
-        top_by_risk = sorted(records, key=lambda x: x.risk_score, reverse=True)[:10]
-
-        # Heaviest Textures (Files) — one reverse-map pass
-        # (path -> texture record + materials using it) instead of the
-        # old per-path rescan of every material's texture list.
-        path_usage: Dict[str, Tuple[Dict[str, Any], List[str]]] = {}
-        for mat_name in used_materials:
-            for t in self._material_flags.get(mat_name, {}).get("textures", []):
-                entry = path_usage.setdefault(t["path"], (t, []))
-                if mat_name not in entry[1]:
-                    entry[1].append(mat_name)
-
-        heaviest_textures_list = []
-        for path in processed_paths:
-            if path not in path_usage:
-                continue
-            t, mats_using = path_usage[path]
-            usage = self._global_texture_usage.get(
-                path, {"count": 0, "meshes": set(), "instances": 0}
+        missing_project: List[MissingTexture] = []
+        missing_presets: List[MissingTexture] = []
+        for path, mats in sorted(missing_map.items(), key=lambda kv: -len(kv[1])):
+            entry = MissingTexture(
+                path=path, material_count=len(mats), materials=sorted(mats)
             )
-            heaviest_textures_list.append(
-                (
-                    path,
-                    t["size_mb"],
-                    t["res"],
-                    len(mats_using),
-                    mats_using,
-                    len(usage["meshes"]),
-                    usage["instances"],
-                )
+            (
+                missing_presets
+                if MatUtils.is_bundled_texture(path)
+                else missing_project
+            ).append(entry)
+
+        impact_meshes: List[str] = []
+        impact_materials: Set[str] = set()
+        if missing_map:
+            for r in records:
+                hit = [
+                    m
+                    for m in r.material.materials
+                    if m in used_materials
+                    and any(m in mats for mats in missing_map.values())
+                ]
+                if hit:
+                    impact_meshes.append(r.transform)
+                    impact_materials.update(hit)
+        impact = MissingTextureImpact(
+            affected_meshes=sorted(impact_meshes),
+            affected_materials=sorted(impact_materials),
+            top_offenders=impact_meshes[:5],
+        )
+
+        # Not collected is not "unassigned".
+        unassigned = (
+            [r.transform for r in records if not r.material.materials]
+            if self.materials_collected
+            else []
+        )
+        pipeline_warnings = []
+        if missing_project:
+            pipeline_warnings.append(f"{len(missing_project)} missing project files")
+        if missing_presets:
+            pipeline_warnings.append(
+                f"{len(missing_presets)} missing preset files (low priority)"
             )
+        if unassigned:
+            pipeline_warnings.append(f"{len(unassigned)} meshes without a material")
+        pipeline = PipelineStats(
+            integrity_warnings=pipeline_warnings,
+            missing_project=missing_project,
+            missing_presets=missing_presets,
+            impact=impact,
+            unassigned_meshes=unassigned,
+        )
 
-        # Sort by size descending
-        heaviest_textures_list.sort(key=lambda x: x[1], reverse=True)
+        # --- rankings ----------------------------------------------------------
+        def eff_score(r):
+            return r.score * max(1, r.instance_count)
 
-        # Transparency
-        transparent_recs = [r for r in records if r.material.uses_transparency]
-        top_by_transparency = sorted(
-            transparent_recs, key=lambda x: x.score, reverse=True
-        )[:10]
-
-        # Top by Effective Score (was the duplicate
-        # ``top_repeated_offenders`` / ``top_by_effective_score`` pair).
-        top_by_effective_score = sorted(
-            records, key=lambda x: x.score * max(1, x.instance_count), reverse=True
-        )[:10]
-
-        # Top Materials
-        mat_usage = {}
+        top_by_effective = sorted(records, key=eff_score, reverse=True)
+        mat_usage: Dict[str, int] = {}
         for r in records:
             for mat in r.material.materials:
                 mat_usage[mat] = mat_usage.get(mat, 0) + max(1, r.instance_count)
-        top_materials = sorted(mat_usage.items(), key=lambda x: x[1], reverse=True)[:10]
 
-        # Top Savings
-        # Draw Calls: (slots - 1) * instances
-        savings_draw_calls_candidates = [
-            r for r in records if r.material.slot_count > 1
-        ]
-        top_savings_draw_calls = sorted(
-            savings_draw_calls_candidates,
-            key=lambda x: (x.material.slot_count - 1) * x.instance_count,
-            reverse=True,
-        )[:5]
-        savings_draw_calls_total = sum(
-            (r.material.slot_count - 1) * r.instance_count
-            for r in savings_draw_calls_candidates
-        )
+        savings_dc = [r for r in records if r.material.slot_count > 1]
+        savings_tris = high_poly
 
-        # Savings to Budget (slots - budget) * instances
-        savings_draw_calls_budget = sum(
-            max(0, r.material.slot_count - self.profile.max_slots) * r.instance_count
-            for r in records
-        )
-
-        # Tris: (tris - budget) * instances
-        savings_tris_candidates = [r for r in records if r.mesh.tris > r.target_tris]
-        top_savings_tris = sorted(
-            savings_tris_candidates,
-            key=lambda x: (x.mesh.tris - x.target_tris) * x.instance_count,
-            reverse=True,
-        )[:5]
-        savings_tris_total = sum(
-            (r.mesh.tris - r.target_tris) * r.instance_count
-            for r in savings_tris_candidates
-        )
-        savings_tris_budget = (
-            savings_tris_total  # Same logic as total since budget is the baseline
-        )
-
-        # Missing Textures
-        missing_map = {}  # path -> set(mat_names)
-        for mat_name in used_materials:
-            flags = self._material_flags.get(mat_name, {})
-            paths = flags.get("missing_paths", [])
-            for p in paths:
-                if p not in missing_map:
-                    missing_map[p] = set()
-                missing_map[p].add(mat_name)
-
-        missing_textures_list = []
-        missing_textures_project = []
-        missing_textures_presets = []
-
-        for p, mats in missing_map.items():
-            entry = (p, len(mats), list(mats))
-            missing_textures_list.append(entry)
-
-            # Categorize
-            lower_p = p.lower().replace("\\", "/")
-            if "program files" in lower_p or "maya" in lower_p and "presets" in lower_p:
-                missing_textures_presets.append(entry)
-            else:
-                missing_textures_project.append(entry)
-
-        missing_textures_list.sort(key=lambda x: x[1], reverse=True)
-        missing_textures_project.sort(key=lambda x: x[1], reverse=True)
-        missing_textures_presets.sort(key=lambda x: x[1], reverse=True)
-
-        # Instance Stats
-        instance_stats = {
-            "unique_meshes": len(records),
-            "instanced_shapes": sum(1 for r in records if r.instance_count > 1),
-            "total_instances": sum(r.instance_count for r in records),
-        }
-
-        # Budget Compliance Distribution
-        budget_compliance_dist = {
-            "tris": {"0-10%": 0, "10-50%": 0, "50%+": 0},
-            "slots": {"1-2": 0, "3-5": 0, "6+": 0},
-        }
-
-        for r in records:
-            # Tris
-            if r.mesh.tris > r.target_tris:
-                overage = (r.mesh.tris - r.target_tris) / r.target_tris
-                if overage <= 0.1:
-                    budget_compliance_dist["tris"]["0-10%"] += 1
-                elif overage <= 0.5:
-                    budget_compliance_dist["tris"]["10-50%"] += 1
-                else:
-                    budget_compliance_dist["tris"]["50%+"] += 1
-
-            # Slots
-            slots = r.material.slot_count
-            if slots > self.profile.max_slots:
-                overage = slots - self.profile.max_slots
-                if overage <= 2:
-                    budget_compliance_dist["slots"]["1-2"] += 1
-                elif overage <= 5:
-                    budget_compliance_dist["slots"]["3-5"] += 1
-                else:
-                    budget_compliance_dist["slots"]["6+"] += 1
-
-        # Scene Compliance
-        # For adaptive, we sum the individual targets
-        total_target_tris = sum(r.target_tris * r.instance_count for r in records)
-        scene_compliance = {
-            "tris": (
-                (total_tris / total_target_tris * 100.0)
-                if total_target_tris > 0
-                else 0.0
-            ),
-            "slots": (
-                (total_slots / (total_meshes * self.profile.max_slots) * 100.0)
-                if total_meshes > 0
-                else 0.0
-            ),
-        }
-
-        # Scene-level fix actions (high-priority "do these next"
-        # items). Was ``fix_first_items: List[str]`` plus a dead
-        # scene-level ``fix_plan: List[str]``; renderer only used the
-        # former. Now consolidated to a single structured list.
-        scene_fix_actions: List[FixAction] = []
-
-        # 1. Top Offenders by Effective Score
-        effective_offenders = sorted(
-            records, key=lambda x: x.score * max(1, x.instance_count), reverse=True
-        )
-        for r in effective_offenders[:3]:
-            if r.score > 10:
-                reason_kind = "general"
-                reason = "General Issues"
-                if r.findings:
-                    first = r.findings[0]
-                    reason_kind = first.kind
-                    if first.kind == "high_poly":
-                        reason = "High Poly"
-                    elif first.kind == "draw_call_split":
-                        reason = "High Slots"
-                    elif first.kind in {
-                        "max_tex_dim",
-                        "oversized_texture",
-                        "heavy_textures",
-                    }:
-                        reason = "Heavy Textures"
-                    else:
-                        reason = first.message
-
-                scene_fix_actions.append(
-                    FixAction(
-                        severity=SEVERITY_HIGH,
-                        kind="fix_offender",
-                        message=(
-                            f"Fix {r.transform}: {reason} "
-                            f"(Score {r.score:.0f} x {r.instance_count} instances)"
-                        ),
-                        target=r.transform,
-                        detail={
-                            "score": r.score,
-                            "instances": r.instance_count,
-                            "primary_finding": reason_kind,
-                        },
-                    )
-                )
-
-        # 2. Missing Textures
-        if missing_textures_project:
-            scene_fix_actions.append(
-                FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="relink_textures",
-                    message=f"Relink {len(missing_textures_project)} missing project textures",
-                    detail={"count": len(missing_textures_project)},
-                )
-            )
-
-        # 3. Slot Reduction
-        if savings_draw_calls_budget > 0:
-            scene_fix_actions.append(
-                FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="reduce_slots_scene",
-                    message=f"Reduce material slots by {savings_draw_calls_budget} to reach budget",
-                    detail={"slots_to_reduce": savings_draw_calls_budget},
-                )
-            )
-
-        # 4. High Poly
-        high_poly_overage = sum(max(0, r.mesh.tris - r.target_tris) for r in records)
-        if high_poly_overage > 100000:
-            scene_fix_actions.append(
-                FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="decimate_scene",
-                    message=f"Decimate meshes to save {high_poly_overage:,} triangles total",
-                    detail={"tris_to_save": high_poly_overage},
-                )
-            )
-
-        # Pipeline Integrity
-        pipeline_integrity = []
-        if missing_textures_project:
-            pipeline_integrity.append(
-                f"{len(missing_textures_project)} missing project files"
-            )
-        if missing_textures_presets:
-            pipeline_integrity.append(
-                f"{len(missing_textures_presets)} missing preset files (low priority)"
-            )
-
-        raw_total_tris = sum(r.mesh.tris for r in records)
-
-        # Slot Stats (Per Unique Mesh) — feeds the SlotStats record
-        # built below. ``avg_slots`` above is per-instance; these are
-        # per-unique-mesh.
-        slot_counts = sorted([r.material.slot_count for r in records])
-        if slot_counts:
-            median_slots = slot_counts[len(slot_counts) // 2]
-            p90_index = int(len(slot_counts) * 0.9)
-            p90_slots = slot_counts[p90_index]
-        else:
-            median_slots = 0
-            p90_slots = 0
-
-        # Pareto View (Tris) — structured ParetoEntry rows; the
-        # renderer formats the display string from these.
-        sorted_by_eff_tris = sorted(
-            records, key=lambda r: r.mesh.tris * r.instance_count, reverse=True
-        )
         pareto_tris: List[ParetoEntry] = []
-        running_tris = 0
-        for r in sorted_by_eff_tris[:10]:
-            eff_tris = r.mesh.tris * r.instance_count
-            running_tris += eff_tris
-            pct = (running_tris / total_tris * 100.0) if total_tris > 0 else 0.0
+        running = 0
+        for r in sorted(
+            records, key=lambda r: r.mesh.tris * r.instance_count, reverse=True
+        )[:10]:
+            eff = r.mesh.tris * r.instance_count
+            running += eff
             pareto_tris.append(
-                ParetoEntry(target=r.transform, value=eff_tris, cum_percent=pct)
+                ParetoEntry(
+                    target=r.transform,
+                    value=eff,
+                    cum_percent=(running / total_tris * 100.0) if total_tris else 0.0,
+                )
             )
-
-        # Pareto View (Slots)
-        sorted_by_eff_slots = sorted(
-            records,
-            key=lambda r: r.material.slot_count * r.instance_count,
-            reverse=True,
-        )
         pareto_slots: List[ParetoEntry] = []
-        running_slots = 0
-        for r in sorted_by_eff_slots[:10]:
-            eff_slots = r.material.slot_count * r.instance_count
-            running_slots += eff_slots
-            pct = (running_slots / total_slots * 100.0) if total_slots > 0 else 0.0
+        running = 0
+        for r in sorted(records, key=lambda r: r.material.draw_calls, reverse=True)[
+            :10
+        ]:
+            running += r.material.draw_calls
             pareto_slots.append(
-                ParetoEntry(target=r.transform, value=eff_slots, cum_percent=pct)
+                ParetoEntry(
+                    target=r.transform,
+                    value=r.material.draw_calls,
+                    cum_percent=(running / draw_calls * 100.0) if draw_calls else 0.0,
+                )
             )
 
-        # ``pareto_texture_mb`` and ``top_wins_by_type`` removed —
-        # both were computed but never rendered, and the structured
-        # data they would have surfaced (heaviest textures, scene
-        # savings) is already on TextureStats / BudgetStats.
-
-        # Scene Health Flags
-        scene_health_flags = []
-        if total_tris > 10000000:
-            scene_health_flags.append("Extreme Poly Count (>10M)")
-        if total_slots > 5000:
-            scene_health_flags.append("High Draw Call Count (>5k)")
-        if unique_texture_paths > 500:
-            scene_health_flags.append("Many Unique Textures (>500)")
-
-        # Materials Causing Splits
-        mat_mesh_counts = {}
+        splits: Dict[str, Dict[str, Any]] = {}
         for r in records:
             for m in r.material.materials:
-                if m not in mat_mesh_counts:
-                    mat_mesh_counts[m] = {"unique": 0, "over_budget": 0, "slots": []}
-                mat_mesh_counts[m]["unique"] += 1
-                mat_mesh_counts[m]["slots"].append(r.material.slot_count)
-                if r.material.slot_count > self.profile.max_slots:
-                    mat_mesh_counts[m]["over_budget"] += 1
-
-        materials_causing_splits: List[MaterialSplit] = []
-        for m, data in mat_mesh_counts.items():
-            avg_slots_for_mat = sum(data["slots"]) / len(data["slots"])
-            # Filter: avg_slots >= 4 or significant over-budget meshes
-            if avg_slots_for_mat >= 4 or data["over_budget"] > 5:
-                materials_causing_splits.append(
-                    MaterialSplit(
-                        material=m,
-                        unique_mesh_count=data["unique"],
-                        over_budget_count=data["over_budget"],
-                        avg_slots=avg_slots_for_mat,
-                    )
+                s = splits.setdefault(m, {"unique": 0, "over": 0, "slots": []})
+                s["unique"] += 1
+                s["slots"].append(r.material.slot_count)
+                if r.material.slot_count > profile.max_slots:
+                    s["over"] += 1
+        materials_causing_splits = sorted(
+            (
+                MaterialSplit(
+                    material=m,
+                    unique_mesh_count=s["unique"],
+                    over_budget_count=s["over"],
+                    avg_slots=sum(s["slots"]) / len(s["slots"]),
                 )
-
-        materials_causing_splits.sort(key=lambda s: s.unique_mesh_count, reverse=True)
-        materials_causing_splits = materials_causing_splits[:5]
-
-        # Missing Texture Impact — structured record (was a
-        # ``Dict[str, Any]`` with set values that bled out of the
-        # dataclass type system).
-        impact_materials: Set[str] = set()
-        impact_meshes: Set[str] = set()
-        impact_offenders: List[str] = []
-        if missing_textures_list:
-            missing_paths_set = {p[0] for p in missing_textures_list}
-            for r in records:
-                rec_missing = False
-                for m in r.material.materials:
-                    flags = self._material_flags.get(m, {})
-                    m_missing = flags.get("missing_paths", [])
-                    if any(p in missing_paths_set for p in m_missing):
-                        rec_missing = True
-                        impact_materials.add(m)
-
-                if rec_missing:
-                    impact_meshes.add(r.transform)
-                    impact_offenders.append(r.transform)
-
-        missing_texture_impact = MissingTextureImpact(
-            affected_meshes=sorted(impact_meshes),
-            affected_materials=sorted(impact_materials),
-            top_offenders=impact_offenders[:5],
-        )
-
-        meshes_with_transparency = sum(
-            1 for r in records if r.material.uses_transparency
-        )
-        meshes_with_extra_uvs = sum(1 for r in records if r.mesh.uv_sets > 1)
-        meshes_with_high_slots = sum(1 for r in records if r.material.slot_count > 1)
-
-        # ``selection_coverage`` removed — duplicated values already
-        # present on InstanceStats (``total_instances`` /
-        # ``unique_meshes``).
-
-        # --- Pack the legacy positional tuples into typed records ---
-
-        def _to_missing(
-            entries: List[Tuple[str, int, List[str]]],
-        ) -> List[MissingTexture]:
-            return [
-                MissingTexture(path=p, material_count=c, materials=list(mats))
-                for (p, c, mats) in entries
-            ]
-
-        missing_project_records = _to_missing(missing_textures_project)
-        missing_presets_records = _to_missing(missing_textures_presets)
-
-        shared_4k_records = [
-            SharedTexture(path=p, mesh_count=c) for (p, c) in shared_4k_textures
-        ]
-
-        heaviest_records: List[TextureFile] = []
-        for (
-            path,
-            size_mb,
-            res,
-            mat_count,
-            mats,
-            mesh_count,
-            inst_count,
-        ) in heaviest_textures_list:
-            width, height = res if isinstance(res, tuple) else (0, 0)
-            heaviest_records.append(
-                TextureFile(
-                    path=path,
-                    size_mb=float(size_mb),
-                    width=int(width),
-                    height=int(height),
-                    material_count=int(mat_count),
-                    materials=list(mats),
-                    mesh_count=int(mesh_count),
-                    instance_count=int(inst_count),
-                )
-            )
-
-        slot_stats_record: Optional[SlotStats]
-        if slot_counts:
-            slot_stats_record = SlotStats(
-                avg=avg_slots,
-                avg_unique=sum(slot_counts) / len(slot_counts),
-                median=int(median_slots),
-                p90=int(p90_slots),
-                max=int(max_slots),
-            )
-        else:
-            slot_stats_record = None
-
-        # --- Compose typed sub-records ---
-
-        manifest = self._build_manifest(shape_count=total_meshes)
-
-        summary = SummaryStats(
-            total_meshes=total_meshes,
-            total_tris=total_tris,
-            total_verts=total_verts,
-            raw_total_tris=raw_total_tris,
-            instance_stats=InstanceStats(**instance_stats),
-            scene_health_flags=scene_health_flags,
-            multi_slot_meshes=multi_slot_meshes,
-            transparent_meshes=transparent_meshes,
-            non_manifold_count=non_manifold_count,
-            lamina_count=lamina_count,
-            ngon_count=ngon_count,
-            high_poly_count=high_poly_count,
-            meshes_with_transparency=meshes_with_transparency,
-            meshes_with_extra_uvs=meshes_with_extra_uvs,
-            meshes_with_high_slots=meshes_with_high_slots,
-        )
-
-        budget = BudgetStats(
-            total_target_tris=total_target_tris,
-            total_slots=total_slots,
-            meshes_over_tri_threshold=meshes_over_tri_threshold,
-            meshes_over_slot_threshold=meshes_over_slot_threshold,
-            total_slots_over_budget=total_slots_over_budget,
-            savings_draw_calls_total=savings_draw_calls_total,
-            savings_tris_total=savings_tris_total,
-            savings_draw_calls_budget=savings_draw_calls_budget,
-            savings_tris_budget=savings_tris_budget,
-            slot_stats=slot_stats_record,
-            compliance=ComplianceStats(
-                tris_pct=scene_compliance["tris"],
-                slots_pct=scene_compliance["slots"],
+                for m, s in splits.items()
+                if sum(s["slots"]) / len(s["slots"]) >= 4 or s["over"] > 5
             ),
-            buckets=BudgetBuckets(
-                tris=budget_compliance_dist["tris"],
-                slots=budget_compliance_dist["slots"],
-            ),
-        )
-
-        textures = TextureStats(
-            total_size_mb=total_texture_mb,
-            est_gpu_mb=est_gpu_mb,
-            est_gpu_mb_compressed=est_gpu_mb_compressed,
-            max_resolution=max_texture_res,
-            large_texture_count=large_texture_count,
-            unique_paths=unique_texture_paths,
-            dim_histogram=texture_dim_histogram,
-            type_breakdown=texture_type_breakdown,
-            class_estimates=texture_class_estimates,
-            shared_4k=shared_4k_records,
-            single_use_4k_count=single_use_4k_count,
-            shared_4k_count=shared_4k_count,
-            heaviest=heaviest_records,
-        )
-
-        pipeline = PipelineStats(
-            integrity_warnings=pipeline_integrity,
-            missing_project=missing_project_records,
-            missing_presets=missing_presets_records,
-            impact=missing_texture_impact,
-        )
+            key=lambda s: s.unique_mesh_count,
+            reverse=True,
+        )[:5]
 
         offenders = OffenderLists(
-            by_score=top_offenders,
-            by_tris=top_by_tris,
-            by_slots=top_by_slots,
-            by_max_res=top_by_max_res,
-            by_risk=top_by_risk,
-            by_transparency=top_by_transparency,
-            by_effective_score=top_by_effective_score,
-            top_materials=top_materials,
-            savings_draw_calls=top_savings_draw_calls,
-            savings_tris=top_savings_tris,
+            by_score=records[:20],
+            by_tris=sorted(records, key=lambda x: x.mesh.tris, reverse=True)[:10],
+            by_slots=sorted(records, key=lambda x: x.material.slot_count, reverse=True)[
+                :10
+            ],
+            by_max_res=sorted(records, key=lambda x: x.material.max_res, reverse=True)[
+                :10
+            ],
+            by_risk=sorted(records, key=lambda x: x.risk_score, reverse=True)[:10],
+            by_transparency=sorted(
+                (r for r in records if r.material.uses_transparency),
+                key=lambda x: x.score,
+                reverse=True,
+            )[:10],
+            by_effective_score=top_by_effective[:10],
+            top_materials=sorted(mat_usage.items(), key=lambda x: x[1], reverse=True)[
+                :10
+            ],
+            savings_draw_calls=sorted(
+                savings_dc,
+                key=lambda x: (x.material.slot_count - 1) * x.instance_count,
+                reverse=True,
+            )[:5],
+            savings_tris=sorted(
+                savings_tris,
+                key=lambda x: (x.mesh.tris - x.target_tris) * x.instance_count,
+                reverse=True,
+            )[:5],
             pareto_tris=pareto_tris,
             pareto_slots=pareto_slots,
             materials_causing_splits=materials_causing_splits,
         )
 
-        return SceneReport(
-            manifest=manifest,
+        # --- budget -------------------------------------------------------------
+        buckets = {
+            "tris": {"0-10%": 0, "10-50%": 0, "50%+": 0},
+            "slots": {"1-2": 0, "3-5": 0, "6+": 0},
+        }
+        for r in high_poly:
+            over = (r.mesh.tris - r.target_tris) / max(1, r.target_tris)
+            key = "0-10%" if over <= 0.1 else "10-50%" if over <= 0.5 else "50%+"
+            buckets["tris"][key] += 1
+        for r in records:
+            over = r.material.slot_count - profile.max_slots
+            if over > 0:
+                key = "1-2" if over <= 2 else "3-5" if over <= 5 else "6+"
+                buckets["slots"][key] += 1
+
+        total_target_tris = sum(r.target_tris * r.instance_count for r in records)
+        savings_tris_total = sum(
+            (r.mesh.tris - r.target_tris) * r.instance_count for r in high_poly
+        )
+        slot_counts = sorted(r.material.slot_count for r in records)
+        budget = BudgetStats(
+            total_target_tris=total_target_tris,
+            total_slots=total_slots,
+            meshes_over_tri_threshold=len(high_poly),
+            meshes_over_slot_threshold=meshes_over_slot_threshold,
+            total_slots_over_budget=total_slots_over_budget,
+            savings_draw_calls_total=sum(
+                (r.material.slot_count - 1) * r.instance_count for r in savings_dc
+            ),
+            savings_tris_total=savings_tris_total,
+            savings_draw_calls_budget=total_slots_over_budget,
+            savings_tris_budget=savings_tris_total,
+            slot_stats=SlotStats(
+                avg=avg_slots,
+                avg_unique=sum(slot_counts) / len(slot_counts),
+                median=int(slot_counts[len(slot_counts) // 2]),
+                p90=int(slot_counts[int(len(slot_counts) * 0.9)]),
+                max=int(max_slots),
+            ),
+            compliance=ComplianceStats(
+                tris_pct=(total_tris / total_target_tris * 100.0)
+                if total_target_tris
+                else 0.0,
+                # Both sides instance-weighted, as total_slots is.
+                slots_pct=(total_slots / (total_instances * profile.max_slots) * 100.0)
+                if total_instances and profile.max_slots
+                else 0.0,
+            ),
+            buckets=BudgetBuckets(tris=buckets["tris"], slots=buckets["slots"]),
+        )
+
+        # --- summary -----------------------------------------------------------
+        health = []
+        if total_tris > 10_000_000:
+            health.append("Extreme poly count (>10M rendered triangles)")
+        if draw_calls > 5000:
+            health.append("High draw-call count (>5k)")
+        if textures.unique_paths > 500:
+            health.append("Many unique textures (>500)")
+        transparency_of = {m.name: m.transparency for m in materials}
+        summary = SummaryStats(
+            total_meshes=total_meshes,
+            total_tris=total_tris,
+            total_verts=total_verts,
+            raw_total_tris=sum(r.mesh.tris for r in records),
+            instance_stats=InstanceStats(
+                unique_meshes=total_meshes,
+                instanced_shapes=sum(1 for r in records if r.instance_count > 1),
+                total_instances=total_instances,
+            ),
+            scene_health_flags=health,
+            multi_slot_meshes=multi_slot_meshes,
+            transparent_meshes=sum(1 for r in records if r.material.uses_transparency),
+            non_manifold_count=sum(1 for r in records if r.mesh.non_manifold_edges),
+            lamina_count=sum(1 for r in records if r.mesh.lamina_faces),
+            ngon_count=sum(1 for r in records if r.mesh.ngons),
+            high_poly_count=len(high_poly),
+            meshes_with_transparency=sum(
+                1 for r in records if r.material.uses_transparency
+            ),
+            meshes_with_extra_uvs=sum(
+                1
+                for r in records
+                if r.mesh.uv_sets - len(r.mesh.uv_snapshot_sets) > profile.max_uvs
+            ),
+            meshes_with_high_slots=multi_slot_meshes,
+            draw_calls=draw_calls,
+            materials_in_use=len(materials),
+            uv_snapshot_meshes=sum(1 for r in records if r.mesh.uv_snapshot_sets),
+            unassigned_meshes=len(unassigned),
+            blend_meshes=sum(
+                1
+                for r in records
+                if any(
+                    transparency_of.get(m) == TRANSPARENCY_BLEND
+                    for m in r.material.materials
+                )
+            ),
+            masked_meshes=sum(
+                1
+                for r in records
+                if any(
+                    transparency_of.get(m) == TRANSPARENCY_MASKED
+                    for m in r.material.materials
+                )
+            ),
+        )
+
+        report = SceneReport(
+            manifest=self._build_manifest(shape_count=total_meshes),
             summary=summary,
             budget=budget,
             textures=textures,
             pipeline=pipeline,
             offenders=offenders,
-            fix_actions=scene_fix_actions,
             assets=records,
+            materials=materials,
+            overview=self._overview,
         )
+        report.fix_actions = self._scene_fix_actions(report)
+        return report
+
+    def _material_audits(self, records: List[AssetRecord]) -> List[MaterialAudit]:
+        """One :class:`MaterialAudit` per material the records wear, costliest first."""
+        wearers: Dict[str, List[AssetRecord]] = {}
+        for r in records:
+            for mat in r.material.materials:
+                wearers.setdefault(mat, []).append(r)
+
+        audits = []
+        for mat, users in wearers.items():
+            flags = self._material_flags.get(mat, {})
+            maps = self._surface_maps(mat)
+            infos = [self._texture_info[k] for k in maps if k in self._texture_info]
+            audit = MaterialAudit(
+                name=mat,
+                node_type=flags.get("type", ""),
+                shading_engines=sorted(
+                    se for se, m in self._material_map.items() if m == mat
+                ),
+                mesh_count=len(users),
+                instance_count=sum(
+                    sum(
+                        1
+                        for p in self._targets.get(r.mesh.shape_name, {}).get(
+                            "paths", []
+                        )
+                        if any(
+                            self._material_map.get(se) == mat
+                            for se in self._path_shading.get(p, ())
+                        )
+                    )
+                    for r in users
+                ),
+                transparency=flags.get("transparency", TRANSPARENCY_OPAQUE),
+                textures=[i["path"] for i in infos],
+                map_types=sorted({i["map_type"] for i in infos if i["map_type"]}),
+                max_res=max((max(i["width"], i["height"]) for i in infos), default=0),
+                disk_mb=sum(i["size_bytes"] for i in infos) / 2**20,
+                gpu_mb=sum(i["gpu_bytes"] for i in infos) / 2**20,
+                missing=list(flags.get("missing_paths", [])),
+            )
+            audit.findings = self._material_findings(audit, flags)
+            audits.append(audit)
+        audits.sort(key=lambda a: (a.gpu_mb, a.instance_count), reverse=True)
+        return audits
+
+    def _material_findings(
+        self, audit: MaterialAudit, flags: Dict[str, Any]
+    ) -> List[Finding]:
+        """Texture-side observations, judged once per material."""
+        findings = []
+        if audit.missing:
+            findings.append(
+                Finding(
+                    SEVERITY_HIGH,
+                    "missing_textures",
+                    self._count(len(audit.missing), "missing texture file"),
+                    {"paths": list(audit.missing)},
+                )
+            )
+        if audit.max_res > self.profile.max_tex_res:
+            findings.append(
+                Finding(
+                    SEVERITY_HIGH,
+                    "max_tex_dim",
+                    f"{audit.max_res}px map (budget {self.profile.max_tex_res}px)",
+                    {"res": audit.max_res, "budget": self.profile.max_tex_res},
+                )
+            )
+        if audit.transparency == TRANSPARENCY_BLEND:
+            findings.append(
+                Finding(
+                    SEVERITY_MEDIUM,
+                    "transparency",
+                    "Alpha-blended (sorted, overdraw on every pixel it covers)",
+                )
+            )
+        elif audit.transparency == TRANSPARENCY_MASKED:
+            findings.append(
+                Finding(SEVERITY_LOW, "transparency", "Alpha-tested (masked)")
+            )
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        alpha_maps = [t for t in audit.map_types if t in MatUtils.OPACITY_MAP_TYPES]
+        if alpha_maps and audit.transparency == TRANSPARENCY_OPAQUE:
+            findings.append(
+                Finding(
+                    SEVERITY_LOW,
+                    "unused_alpha",
+                    f"Has an {alpha_maps[0]} map but renders opaque -- its alpha is ignored",
+                    {"map_type": alpha_maps[0]},
+                )
+            )
+        # Loose AO / roughness / metallic maps are not flagged: the Scene
+        # Exporter packs them into one ORM map for a GLB, so in the scene they
+        # are the norm. (``MaterialRecord.unpacked_pbr`` still carries it.)
+        if len(audit.textures) > 8:
+            findings.append(
+                Finding(
+                    SEVERITY_LOW,
+                    "texture_samplers",
+                    f"{len(audit.textures)} texture samplers",
+                    {"samplers": len(audit.textures)},
+                )
+            )
+        return findings
+
+    def _texture_stats(self, used_materials: Set[str]) -> TextureStats:
+        """Aggregate every texture file the used materials reference, once per file."""
+        stats = TextureStats(budget_mb=float(self.profile.max_texture_mb))
+        if not self.textures_collected:
+            return stats
+
+        users: Dict[str, Set[str]] = {}  # texture key -> materials (in scope)
+        other: Dict[str, Set[str]] = {}
+        for mat in used_materials:
+            for entry in self._material_flags.get(mat, {}).get("textures", []):
+                bucket = users if entry["role"] == "material" else other
+                bucket.setdefault(entry["key"], set()).add(mat)
+
+        hist = {"4k+": 0, "2k": 0, "1k": 0, "512": 0, "<512": 0}
+        files: List[TextureFile] = []
+        registry = ptk.MapRegistry()
+        for key, mats in users.items():
+            info = self._texture_info.get(key)
+            if not info or not info["exists"]:
+                continue
+            record = self._texture_file(key, mats)
+            files.append(record)
+            stats.total_size_mb += record.size_mb
+            stats.est_gpu_mb += info["raw_bytes"] / 2**20
+            stats.est_gpu_mb_compressed += record.gpu_mb
+            label = record.map_type or "Other"
+            stats.type_breakdown[label] = (
+                stats.type_breakdown.get(label, 0.0) + record.size_mb
+            )
+            stats.class_estimates[label] = (
+                stats.class_estimates.get(label, 0.0) + record.gpu_mb
+            )
+            dim = max(record.width, record.height)
+            if dim >= 4096:
+                hist["4k+"] += 1
+                if record.mesh_count > 1:
+                    stats.shared_4k_count += 1
+                    stats.shared_4k.append(
+                        SharedTexture(record.path, record.mesh_count)
+                    )
+                else:
+                    stats.single_use_4k_count += 1
+                if record.map_type and not registry.is_resolution_critical(
+                    record.map_type
+                ):
+                    stats.downscale_candidates += 1
+                    stats.downscale_savings_mb += record.gpu_mb * 0.75
+            elif dim >= 2048:
+                hist["2k"] += 1
+            elif dim >= 1024:
+                hist["1k"] += 1
+            elif dim >= 512:
+                hist["512"] += 1
+            else:
+                hist["<512"] += 1
+
+        stats.dim_histogram = hist
+        stats.unique_paths = len(files)
+        stats.max_resolution = max((max(f.width, f.height) for f in files), default=0)
+        stats.large_texture_count = sum(
+            1 for f in files if max(f.width, f.height) > 2048
+        )
+        stats.shared_4k.sort(key=lambda s: s.mesh_count, reverse=True)
+        stats.shared_4k = stats.shared_4k[:5]
+        stats.heaviest = sorted(
+            files, key=lambda f: (f.gpu_mb, f.size_mb), reverse=True
+        )
+        stats.other = sorted(
+            (self._texture_file(k, m) for k, m in other.items() if k not in users),
+            key=lambda f: f.path,
+        )
+        return stats
+
+    def _texture_file(self, key: str, mats: Set[str]) -> TextureFile:
+        """The :class:`TextureFile` view of one cached texture."""
+        info = self._texture_info[key]
+        usage = self._global_texture_usage.get(key, {})
+        return TextureFile(
+            path=info["path"],
+            size_mb=info["size_bytes"] / 2**20,
+            width=int(info["width"]),
+            height=int(info["height"]),
+            material_count=len(mats),
+            materials=sorted(mats),
+            mesh_count=len(usage.get("meshes", ())),
+            instance_count=len(usage.get("instances", ())),
+            map_type=info["map_type"] or "",
+            gpu_mb=info["gpu_bytes"] / 2**20,
+            tiles=info["tiles"],
+            role=info["role"],
+            bundled=info["bundled"],
+        )
+
+    def _scene_fix_actions(self, report: SceneReport) -> List[FixAction]:
+        """The scene-level "do these first" list, most severe (then largest) first."""
+        actions: List[FixAction] = []
+        textures, pipeline, records = report.textures, report.pipeline, report.assets
+
+        def add(severity, kind, message, targets=(), **detail):
+            actions.append(
+                FixAction(
+                    severity=severity,
+                    kind=kind,
+                    message=message,
+                    target=targets[0] if targets else None,
+                    detail={"targets": list(targets), **detail},
+                )
+            )
+
+        if pipeline.missing_project:
+            # The project files' materials: a missing Maya preset is listed apart.
+            relink = {m for entry in pipeline.missing_project for m in entry.materials}
+            add(
+                SEVERITY_HIGH,
+                "relink_textures",
+                f"Relink {self._count(len(pipeline.missing_project), 'missing texture file')} "
+                f"used by {self._count(len(relink), 'material')}.",
+                [m.path for m in pipeline.missing_project],
+                count=len(pipeline.missing_project),
+            )
+        snap = [r for r in records if r.mesh.uv_snapshot_sets]
+        if snap:
+            add(
+                SEVERITY_HIGH,
+                "uv_snapshots",
+                f"Leftover _uv_snap_* UV sets on {self._count(len(snap), 'mesh', 'meshes')}: "
+                "an interrupted unwrap's backups, which export as real UV sets -- the "
+                "second is TEXCOORD_1, the lightmap channel. Remove with "
+                "mtk.UvUtils.discard_uv_snapshot(mtk.UvUtils.find_uv_snapshots(objects)).",
+                [r.transform for r in snap],
+                count=len(snap),
+            )
+        if textures.est_gpu_mb_compressed > textures.budget_mb > 0:
+            n = textures.downscale_candidates
+            maps = (
+                "the non-detail 4K map" if n == 1 else f"the {n:,} non-detail 4K maps"
+            )
+            hint = (
+                f" Halving {maps} (AO / roughness / metallic ...) frees "
+                f"~{textures.downscale_savings_mb:,.0f} MB -- the Scene Exporter's "
+                "Secondary Map Size does it for a GLB."
+                if n
+                else " Downscale the largest maps (see Textures)."
+            )
+            add(
+                SEVERITY_HIGH,
+                "texture_memory",
+                f"Texture memory ~{textures.est_gpu_mb_compressed:,.0f} MB GPU "
+                f"(budget {textures.budget_mb:,.0f} MB).{hint}",
+                gpu_mb=textures.est_gpu_mb_compressed,
+                savings_mb=textures.downscale_savings_mb,
+            )
+        broken = [
+            r for r in records if r.mesh.non_manifold_edges or r.mesh.lamina_faces
+        ]
+        if broken:
+            add(
+                SEVERITY_HIGH,
+                "geometry_errors",
+                "Non-manifold edges or lamina faces on "
+                f"{self._count(len(broken), 'mesh', 'meshes')}: Mesh > Cleanup "
+                "before export.",
+                [r.transform for r in broken],
+                count=len(broken),
+            )
+        over = sorted(
+            (r for r in records if r.mesh.tris > r.target_tris),
+            key=lambda r: (r.mesh.tris - r.target_tris) * r.instance_count,
+            reverse=True,
+        )
+        if over:
+            excess = sum((r.mesh.tris - r.target_tris) * r.instance_count for r in over)
+            add(
+                SEVERITY_HIGH if excess > 100_000 else SEVERITY_MEDIUM,
+                "decimate_scene",
+                f"Triangle budget exceeded on {self._count(len(over), 'mesh', 'meshes')}: "
+                f"{excess:,} rendered triangles to cut (decimate / retopo).",
+                [r.transform for r in over],
+                tris_to_save=excess,
+            )
+        split = [r for r in records if r.material.slot_count > self.profile.max_slots]
+        if split:
+            add(
+                SEVERITY_MEDIUM,
+                "reduce_slots_scene",
+                f"More than {self.profile.max_slots} material slots on "
+                f"{self._count(len(split), 'mesh', 'meshes')}: merging saves "
+                f"{self._count(report.budget.total_slots_over_budget, 'draw call')}.",
+                [r.transform for r in split],
+                slots_to_reduce=report.budget.total_slots_over_budget,
+            )
+        if pipeline.unassigned_meshes:
+            add(
+                SEVERITY_MEDIUM,
+                "unassigned_materials",
+                "No material on "
+                f"{self._count(len(pipeline.unassigned_meshes), 'mesh', 'meshes')}: "
+                "the engine picks its own default.",
+                pipeline.unassigned_meshes,
+                count=len(pipeline.unassigned_meshes),
+            )
+        oversized = [
+            r for r in records if any(f.kind == "oversized_texture" for f in r.findings)
+        ]
+        if oversized:
+            add(
+                SEVERITY_MEDIUM,
+                "oversized_textures",
+                "Oversized unique texture sets on "
+                f"{self._count(len(oversized), 'mesh', 'meshes')}: more resolution "
+                "than the object's size can show (see Top Issues by Asset).",
+                [r.transform for r in oversized],
+                count=len(oversized),
+            )
+        blend = [m for m in report.materials if m.transparency == TRANSPARENCY_BLEND]
+        if blend:
+            # Distinct instances: one wearing two blended materials is one.
+            names = {m.name for m in blend}
+            instances = sum(
+                1
+                for r in records
+                for path in self._targets.get(r.mesh.shape_name, {}).get("paths", ())
+                if any(
+                    self._material_map.get(se) in names
+                    for se in self._path_shading.get(path, ())
+                )
+            )
+            add(
+                SEVERITY_LOW,
+                "blend_materials",
+                f"{self._count(len(blend), 'alpha-blended material')} on "
+                f"{self._count(instances, 'instance')}: alpha-test (masked) is "
+                "cheaper wherever hard edges will do.",
+                [m.name for m in blend],
+                count=len(blend),
+            )
+        ngons = [r for r in records if r.mesh.ngons]
+        if ngons:
+            add(
+                SEVERITY_LOW,
+                "ngons",
+                f"N-gons on {self._count(len(ngons), 'mesh', 'meshes')} "
+                f"({self._count(sum(r.mesh.ngons for r in ngons), 'face')}): "
+                "triangulation at export can shade them differently.",
+                [r.transform for r in ngons],
+                count=len(ngons),
+            )
+        extra = [
+            r
+            for r in records
+            if r.mesh.uv_sets - len(r.mesh.uv_snapshot_sets) > self.profile.max_uvs
+        ]
+        if extra:
+            add(
+                SEVERITY_LOW,
+                "extra_uv_sets",
+                f"More than {self.profile.max_uvs} UV sets on "
+                f"{self._count(len(extra), 'mesh', 'meshes')}.",
+                [r.transform for r in extra],
+                count=len(extra),
+            )
+        overview = report.overview
+        if overview and (overview.unknown_nodes or overview.unknown_plugins):
+            add(
+                SEVERITY_LOW,
+                "unknown_nodes",
+                f"{self._count(overview.unknown_nodes, 'unknown node')} and "
+                f"{self._count(len(overview.unknown_plugins), 'unknown plugin requirement')}: "
+                "Scene > Fix > Cleanup Unknown.",
+                count=overview.unknown_nodes,
+                plugins=list(overview.unknown_plugins),
+            )
+        if overview and overview.unloaded_references:
+            n = len(overview.unloaded_references)
+            add(
+                SEVERITY_LOW,
+                "unloaded_references",
+                f"{self._count(n, 'unloaded reference')}: "
+                f"{'its' if n == 1 else 'their'} meshes are in neither this audit "
+                "nor an export (Reference Editor > Load).",
+                count=n,
+                references=list(overview.unloaded_references),
+            )
+
+        rank = {SEVERITY_HIGH: 0, SEVERITY_MEDIUM: 1, SEVERITY_LOW: 2}
+        actions.sort(key=lambda a: rank.get(a.severity, 3))
+        return actions
 
     @staticmethod
     def _phase_b_end(
@@ -1222,6 +1198,57 @@ class SceneAnalyzer(ptk.LoggingMixin):
         phase_b_weight = int(remaining * phase_b_count / total_bc)
         return phase_a_end + phase_b_weight
 
+    # ------------------------------------------------------------------ #
+    # Collection
+    # ------------------------------------------------------------------ #
+    def _clear_caches(self) -> None:
+        """Forget everything a previous ``analyze`` collected (targets excepted)."""
+        self._shading_map.clear()
+        self._path_shading.clear()
+        self._material_map.clear()
+        self._material_flags.clear()
+        self._texture_info.clear()
+        self._raw_keys.clear()
+        self._global_texture_usage.clear()
+
+    @staticmethod
+    def _node_key(path: str) -> str:
+        """One string per DAG NODE, whichever of its paths names it.
+
+        Instances of a shape share the node, so they share this key (the
+        node's first path). Not ``cmds.ls(uuid=True)``: a batched query
+        collapses instance paths (the order stops lining up), and a file
+        referenced twice carries duplicate UUIDs.
+        """
+        try:
+            sel = om.MSelectionList()
+            sel.add(path)
+            return om.MFnDagNode(sel.getDependNode(0)).fullPathName()
+        except Exception:  # noqa: BLE001 -- unresolvable: its own key
+            return path
+
+    @staticmethod
+    def _expand_object_sets(objects: Iterable[Any]) -> List[str]:
+        """*objects* with every object set replaced by its members (recursively)."""
+        out: List[str] = []
+        seen: Set[str] = set()
+        stack = [str(o) for o in ptk.make_iterable(objects)][::-1]
+        while stack:
+            name = stack.pop()
+            if "|" in name or "." in name:
+                is_set = False  # a DAG path or a component; set names hold neither
+            else:
+                try:
+                    is_set = cmds.objectType(name, isAType="objectSet")
+                except Exception:  # noqa: BLE001 -- not a node
+                    is_set = False
+            if not is_set:
+                out.append(name)
+            elif name not in seen:
+                seen.add(name)
+                stack.extend((cmds.sets(name, q=True) or [])[::-1])
+        return out
+
     def _resolve_targets(
         self,
         objects: Optional[List[Any]],
@@ -1229,111 +1256,88 @@ class SceneAnalyzer(ptk.LoggingMixin):
         pct_start: int = 0,
         pct_end: int = 10,
     ) -> Dict[str, List[str]]:
-        """Resolves inputs to a map of {mesh_shape_path: [transform_paths]}.
+        """Resolve inputs to ``{representative shape path: [instance transform paths]}``.
 
-        ``progress_callback`` (when supplied) ticks across the
-        [``pct_start``, ``pct_end``) range during the normalized-input
-        walk — heavy for whole-scene scopes with thousands of nodes.
+        One entry per unique mesh SHAPE, however many of its instances the
+        input names; the list holds every in-scope instance's transform. The
+        instance-specific walk is ``Components._mesh_transform_shapes`` (groups
+        name their mesh descendants, shapes their every parent, components the
+        instance they were picked on); Entire Scene pairs every instance path
+        with its parent directly. Instances are then gathered by the node they
+        share.
+
+        ``progress_callback`` / ``pct_*`` are accepted for signature stability;
+        resolution is a few batched queries and reports no intermediate ticks.
         """
-        if objects is None:
-            objects = cmds.ls(selection=True, long=True) or []
-            if not objects:
-                return {}
+        from mayatk.core_utils.components import _ComponentsInternal
 
-        shape_map: Dict[
-            str, List[str]
-        ] = {}  # shape full path -> list of transform paths
-
-        def _shape_of(transform: str) -> Optional[str]:
-            shapes = (
-                cmds.listRelatives(
-                    transform, shapes=True, fullPath=True, noIntermediate=True
+        self._targets = {}
+        self._path_owner = {}
+        if objects is None and self.scope == "all":
+            # Every instance PATH of every live mesh (a shape-typed ls names an
+            # instanced shape once). A path's parent IS its transform, so pair
+            # them directly: the general walk maps each path to all of its
+            # shape's parents, O(n^2) for a shape instanced thousands of times.
+            paths = (
+                cmds.ls(
+                    type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
                 )
                 or []
             )
-            return shapes[0] if shapes else None
+            pairs = [(path.rsplit("|", 1)[0], path) for path in paths]
+        else:
+            if objects is None:
+                objects = cmds.ls(selection=True, long=True) or []
+            objects = self._expand_object_sets(objects)
+            if not objects:
+                return {}
+            pairs = _ComponentsInternal._mesh_transform_shapes(objects)
 
-        def _parent_of(node: str) -> Optional[str]:
-            parents = cmds.listRelatives(node, parent=True, fullPath=True) or []
-            return parents[0] if parents else None
+        groups: Dict[str, Dict[str, List[str]]] = {}
+        for xform, shape in pairs:
+            key = self._node_key(shape)
+            entry = groups.setdefault(
+                key, {"shape": shape, "paths": [], "transforms": []}
+            )
+            entry["paths"].append(shape)
+            entry["transforms"].append(xform)
 
-        def add_shape(shape: str, transform: str):
+        for entry in groups.values():
+            rep = entry.pop("shape")
+            self._targets[rep] = entry
+            for path in entry["paths"]:
+                self._path_owner[path] = rep
+        return {rep: list(e["transforms"]) for rep, e in self._targets.items()}
+
+    def _member_shape_paths(self, nodes: List[str]) -> List[str]:
+        """Mesh shape PATHS a shading engine's member names resolve to.
+
+        Members come back shortest-unique and instance-specific
+        (``box_i1|boxShape``); a per-face member names its TRANSFORM
+        (``box.f[0:2]``), which is resolved to that path's mesh shape.
+        """
+        paths: List[str] = []
+        # noIntermediate: an Orig shape a scene file connected into the engine
+        # (FBX imports write it) is no second mesh wearing the material.
+        for node in cmds.ls(nodes, long=True, noIntermediate=True) or []:
             try:
-                if cmds.getAttr(f"{shape}.intermediateObject"):
-                    return
-            except Exception:
-                pass
-            if shape not in shape_map:
-                shape_map[shape] = []
-            shape_map[shape].append(transform)
-
-        # Normalize inputs to long-name strings
-        normalized: List[str] = []
-        for obj in objects:
-            name = str(obj)
-            if not cmds.objExists(name):
+                node_type = cmds.nodeType(node)
+            except Exception:  # noqa: BLE001
                 continue
-            longs = cmds.ls(name, long=True) or []
-            if longs:
-                normalized.extend(longs)
-            else:
-                normalized.append(name)
-
-        total_norm = len(normalized)
-        span = max(1, pct_end - pct_start)
-        for obj_idx, obj in enumerate(normalized):
-            if progress_callback and total_norm:
-                pct = pct_start + int((obj_idx / total_norm) * span)
-                progress_callback(
-                    pct, 100, f"Resolving targets ({obj_idx + 1}/{total_norm})"
-                )
-            try:
-                node_type = cmds.nodeType(obj)
-            except Exception:
-                continue
-
-            if node_type == "transform":
-                s = _shape_of(obj)
-                if s and cmds.objectType(s) == "mesh":
-                    add_shape(s, obj)
-                else:
-                    # Group: collect descendant mesh shapes
-                    descendants = (
-                        cmds.listRelatives(
-                            obj, allDescendents=True, type="mesh", fullPath=True
-                        )
-                        or []
+            if node_type == "mesh":
+                paths.append(node)
+            elif node_type == "transform":
+                paths.extend(
+                    cmds.listRelatives(
+                        node,
+                        shapes=True,
+                        type="mesh",
+                        noIntermediate=True,
+                        fullPath=True,
                     )
-                    for ds in descendants:
-                        parent = _parent_of(ds)
-                        if parent:
-                            add_shape(ds, parent)
-
-            elif node_type == "mesh":
-                parent = _parent_of(obj)
-                if parent:
-                    add_shape(obj, parent)
-
-            elif node_type == "objectSet":
-                members = cmds.sets(obj, q=True) or []
-                # Flatten nested sets / components down to leaf nodes
-                flat = cmds.ls(members, long=True, flatten=True) or []
-                for m in flat:
-                    # Strip component suffix if present
-                    node = m.split(".")[0]
-                    if not cmds.objExists(node):
-                        continue
-                    nt = cmds.nodeType(node)
-                    if nt == "transform":
-                        s = _shape_of(node)
-                        if s and cmds.objectType(s) == "mesh":
-                            add_shape(s, node)
-                    elif nt == "mesh":
-                        parent = _parent_of(node)
-                        if parent:
-                            add_shape(node, parent)
-
-        return shape_map
+                    or []
+                )
+        return paths
 
     def _build_material_caches(
         self,
@@ -1343,647 +1347,526 @@ class SceneAnalyzer(ptk.LoggingMixin):
         pct_end: int = 20,
         collect_textures: bool = True,
     ):
+        """Build the shared material caches by walking shading engines -> members.
+
+        Inverts the per-object graph walk: each shading engine is read once,
+        its members mapped onto the in-scope instance paths they shade
+        (members are per instance, so two instances of one shape can wear
+        different materials), and each material's flags and textures are
+        read once however many engines use it. Components are stripped
+        rather than flattened -- ``ls -flatten`` on a per-face assignment
+        expands every face into its own string.
+
+        ``collect_textures`` gates the texture file reads for a
+        sections-filtered run that surfaces no texture data.
         """
-        Builds shared caches for material lookups to avoid per-object graph walks.
-        Inverts the relationship: Iterates Shading Engines -> Members.
-
-        ``progress_callback`` (when supplied) ticks per shading-engine
-        across the [``pct_start``, ``pct_end``) range so the footer bar
-        advances during this otherwise-static phase.
-
-        ``collect_textures`` is forwarded to ``_analyze_material_node``
-        so a sections-filtered run can skip file-IO when none of the
-        requested sections depend on texture data.
-        """
-        self._shading_map.clear()
-        self._material_map.clear()
-        self._material_flags.clear()
-        self._global_texture_usage.clear()
-
         shading_engines = cmds.ls(type="shadingEngine") or []
-        # Observability — count SEs walked for the AnalysisManifest.
         self._shading_engine_count = len(shading_engines)
 
-        # target_shapes uses full DAG paths; build a leaf-name lookup for matching SE members.
-        # Map leaf -> list of full paths so shared leaf names (collisions) are detectable;
-        # the fallback is only trusted when exactly one full path owns a given leaf.
-        target_shapes = set(shape_map.keys())
-        target_leaf_to_full: Dict[str, List[str]] = {}
-        for s in target_shapes:
-            target_leaf_to_full.setdefault(s.split("|")[-1], []).append(s)
-
-        total_ses = len(shading_engines)
+        total = len(shading_engines)
         span = max(1, pct_end - pct_start)
-        for se_idx, se in enumerate(shading_engines):
-            if progress_callback and total_ses:
-                pct = pct_start + int((se_idx / total_ses) * span)
+        for index, se in enumerate(shading_engines):
+            if progress_callback and total:
                 progress_callback(
-                    pct, 100, f"Collecting material data ({se_idx + 1}/{total_ses})"
+                    pct_start + int((index / total) * span),
+                    100,
+                    f"Collecting material data ({index + 1}/{total})",
                 )
             members = cmds.sets(se, q=True) or []
             if not members:
                 continue
-
-            se_name = se
-
-            # Find the surface shader
-            surface_shader = (
+            shader = (
                 cmds.listConnections(
                     f"{se}.surfaceShader", source=True, destination=False
                 )
-                or []
-            )
-            mat_name = surface_shader[0] if surface_shader else "lambert1"
-            self._material_map[se_name] = mat_name
-
-            # Cache material flags if not done
-            if mat_name not in self._material_flags:
-                self._material_flags[mat_name] = self._analyze_material_node(
-                    surface_shader[0] if surface_shader else None,
-                    collect_textures=collect_textures,
+                or [None]
+            )[0]
+            material = shader or se  # an engine with no shader shows as itself
+            self._material_map[se] = material
+            if material not in self._material_flags:
+                self._material_flags[material] = self._analyze_material_node(
+                    shader, collect_textures=collect_textures
                 )
 
-            mat_textures = self._material_flags[mat_name].get("textures", [])
-
-            se_objects = set()
-            se_instance_count = 0
-
-            # Flatten components / nested sets to leaf nodes
-            flat_members = cmds.ls(members, long=True, flatten=True) or []
-
-            for member in flat_members:
-                # Strip component suffix
-                node = member.split(".")[0]
-                if not cmds.objExists(node):
+            nodes = list(dict.fromkeys(m.split(".", 1)[0] for m in members))
+            mesh_nodes: Set[str] = set()
+            instance_paths: List[str] = []
+            for path in self._member_shape_paths(nodes):
+                mesh_nodes.add(self._node_key(path))
+                instance_paths.append(path)
+                owner = self._path_owner.get(path)
+                if owner is None:
                     continue
+                self._path_shading.setdefault(path, set()).add(se)
+                self._shading_map.setdefault(owner, set()).add(se)
 
-                node_type = cmds.nodeType(node)
-                if node_type == "transform":
-                    shapes = (
-                        cmds.listRelatives(
-                            node, shapes=True, fullPath=True, noIntermediate=True
-                        )
-                        or []
-                    )
-                    if shapes:
-                        node = shapes[0]
-                        node_type = cmds.nodeType(node)
-
-                if node_type != "mesh":
-                    continue
-
-                # Resolve to canonical full path so equality works against shape_map keys
-                full_paths = cmds.ls(node, long=True) or []
-                if not full_paths:
-                    continue
-                node_full = full_paths[0]
-                node_leaf = node_full.split("|")[-1]
-                se_objects.add(node_full)
-
-                # Resolve to a target key: prefer the direct full-path match; only fall
-                # back to the leaf lookup when exactly one full path owns that leaf name
-                # (a collision would otherwise mis-attribute the shading engine).
-                if node_full in target_shapes:
-                    key = node_full
-                else:
-                    leaf_candidates = target_leaf_to_full.get(node_leaf, [])
-                    key = leaf_candidates[0] if len(leaf_candidates) == 1 else None
-
-                instances = 1
-                if key is not None:
-                    instances = len(shape_map[key])
-
-                se_instance_count += instances
-
-                if key is not None:
-                    if key not in self._shading_map:
-                        self._shading_map[key] = set()
-                    self._shading_map[key].add(se_name)
-
-            # Update global texture usage
-            obj_count = len(se_objects)
-            for tex in mat_textures:
-                path = tex["path"]
-                if path not in self._global_texture_usage:
-                    self._global_texture_usage[path] = {
-                        "count": 0,
-                        "meshes": set(),
-                        "instances": 0,
-                    }
-
-                self._global_texture_usage[path]["count"] += (
-                    obj_count  # This is actually "used by X materials * objects" which is weird.
+            # Scene-wide texture usage (not just the scope): "is this map unique
+            # to one mesh?" must see the meshes outside the selection too.
+            for entry in self._material_flags[material].get("textures", []):
+                usage = self._global_texture_usage.setdefault(
+                    entry["key"],
+                    {"meshes": set(), "instances": set(), "materials": set()},
                 )
-                # Wait, "Used by X mats" is one metric. "Used by Y meshes" is another.
-                # Here we are iterating SEs. One SE = One Material (usually).
-                # So for this SE, we add the objects to the set.
-                self._global_texture_usage[path]["meshes"].update(se_objects)
-                self._global_texture_usage[path]["instances"] += se_instance_count
+                usage["meshes"].update(mesh_nodes)
+                usage["instances"].update(instance_paths)
+                usage["materials"].add(material)
 
     def _analyze_material_node(
         self,
         mat_node: Optional[str],
         collect_textures: bool = True,
     ) -> Dict[str, Any]:
-        """Analyzes a single material node for flags (transparency, etc).
+        """Flags for one material: type, transparency mode, texture entries.
 
-        ``collect_textures`` gates the file-node walk that does the
-        heavy ``os.path.getsize`` + ``cmds.getAttr outSize`` per
-        texture. Skip it when the requested report sections don't
-        surface texture data — the slot/transparency/PBR flags above
-        are still computed because they're effectively free.
+        ``textures`` holds one entry per distinct file the material's network
+        reads: ``{"key", "node", "map_type", "role"}``, with the file's own
+        facts cached once in ``self._texture_info[key]``. ``role`` is
+        ``"material"`` for a surface map -- one the ``ptk.MapFactory`` taxonomy
+        names from its filename, or from the shader slot it drives
+        (``ShaderAttributeMap``) -- and ``"other"`` for the rest: StingrayPBS's
+        IBL cube maps and BRDF LUT, which Maya wires onto every such material
+        and no export carries.
         """
-        flags = {"transparent": False, "type": "Unknown"}
+        flags: Dict[str, Any] = {
+            "type": "",
+            "transparent": False,
+            "transparency": TRANSPARENCY_OPAQUE,
+            "unpacked_pbr": False,
+            "textures": [],
+            "missing_textures": 0,
+            "missing_paths": [],
+        }
         if not mat_node:
             return flags
 
-        flags["type"] = cmds.nodeType(mat_node)
+        mat_type = cmds.nodeType(mat_node)
+        flags["type"] = mat_type
+        mode = self._transparency_mode(mat_node, mat_type)
+        flags["transparency"] = mode
+        flags["transparent"] = mode != TRANSPARENCY_OPAQUE
 
-        def _has_attr(node: str, attr: str) -> bool:
-            try:
-                return bool(cmds.attributeQuery(attr, node=node, exists=True))
-            except Exception:
-                return False
+        if not collect_textures:
+            return flags
 
-        def _attr_inputs(node: str, attr: str) -> List[str]:
+        try:
+            # pruneDagObjects: never on through a uvChooser / place3dTexture into
+            # a mesh and its deformer / rig history (MatUtils.get_file_nodes too).
+            history = cmds.listHistory(mat_node, pruneDagObjects=True) or []
+            file_nodes = cmds.ls(history, type="file") or [] if history else []
+        except Exception:  # noqa: BLE001
+            file_nodes = []
+        self._file_node_count += len(file_nodes)
+
+        seen: Set[str] = set()
+        slot_types: Optional[Dict[str, str]] = None  # walked on demand, once
+        for fn in file_nodes:
             try:
-                return (
-                    cmds.listConnections(
-                        f"{node}.{attr}", source=True, destination=False
+                raw = cmds.getAttr(f"{fn}.fileTextureName") or ""
+            except Exception:  # noqa: BLE001
+                continue
+            if not raw:
+                continue
+            info = self._texture_record(raw, fn)
+            key = info["key"]
+            if not info["exists"]:
+                if info["path"] not in flags["missing_paths"]:
+                    flags["missing_paths"].append(info["path"])
+            if key in seen:
+                continue
+            seen.add(key)
+            map_type = info["map_type"]
+            if not map_type:
+                if slot_types is None:
+                    slot_types = self._slot_map_types(mat_node, mat_type)
+                map_type = slot_types.get(fn)
+            if map_type and not info["map_type"]:
+                info["map_type"] = map_type
+                info["gpu_bytes"], info["raw_bytes"] = (
+                    ptk.MapRegistry().estimate_gpu_bytes(
+                        info["width"], info["height"], map_type, info["tiles"]
                     )
-                    or []
                 )
-            except Exception:
-                return []
+            role = "material" if map_type else "other"
+            if role == "material":
+                info["role"] = "material"
+            flags["textures"].append(
+                {"key": key, "node": fn, "map_type": map_type, "role": role}
+            )
 
-        def _attr_get(node: str, attr: str):
-            try:
-                v = cmds.getAttr(f"{node}.{attr}")
-            except Exception:
-                return None
-            # cmds.getAttr returns [(r,g,b)] for color3 / double3 — unwrap
-            if isinstance(v, list) and len(v) == 1 and isinstance(v[0], tuple):
-                return v[0]
-            return v
-
-        is_transparent = False
-
-        transparency_attrs = ["transparency", "transmission"]
-
-        for attr in transparency_attrs:
-            if _has_attr(mat_node, attr):
-                if _attr_inputs(mat_node, attr):
-                    is_transparent = True
-                    break
-                val = _attr_get(mat_node, attr)
-                if isinstance(val, (float, int)):
-                    if val > 0.001:
-                        is_transparent = True
-                        break
-                elif isinstance(val, (tuple, list)):
-                    if any(c > 0.001 for c in val):
-                        is_transparent = True
-                        break
-
-        if not is_transparent:
-            opacity_attrs = ["opacity", "cutout_opacity"]
-
-            for attr in opacity_attrs:
-                if _has_attr(mat_node, attr):
-                    if _attr_inputs(mat_node, attr):
-                        is_transparent = True
-                        break
-                    val = _attr_get(mat_node, attr)
-                    if isinstance(val, (float, int)):
-                        if val < 0.999:
-                            is_transparent = True
-                            break
-                    elif isinstance(val, (tuple, list)):
-                        if any(c < 0.999 for c in val):
-                            is_transparent = True
-                            break
-
-        flags["transparent"] = is_transparent
-
-        unpacked_pbr = False
-        if mat_node:
-            try:
-                pbr_sources = {}
-                check_attrs = {
-                    "metallic": ["metalness", "metallic"],
-                    "roughness": ["specularRoughness", "roughness"],
-                    "ao": ["ambientOcclusion", "ao"],
-                }
-
-                for key, attrs in check_attrs.items():
-                    for attr in attrs:
-                        if _has_attr(mat_node, attr):
-                            inputs = _attr_inputs(mat_node, attr)
-                            if inputs:
-                                src = inputs[0]
-                                if cmds.nodeType(src) == "file":
-                                    pbr_sources[key] = src
-                            break
-
-                # If we have both Metallic and Roughness, check if they are different
-                if "metallic" in pbr_sources and "roughness" in pbr_sources:
-                    if pbr_sources["metallic"] != pbr_sources["roughness"]:
-                        unpacked_pbr = True
-
-                # If we have AO and it's different from Metallic or Roughness
-                if "ao" in pbr_sources:
-                    if (
-                        "metallic" in pbr_sources
-                        and pbr_sources["ao"] != pbr_sources["metallic"]
-                    ):
-                        unpacked_pbr = True
-                    elif (
-                        "roughness" in pbr_sources
-                        and pbr_sources["ao"] != pbr_sources["roughness"]
-                    ):
-                        unpacked_pbr = True
-
-            except Exception:
-                pass
-
-        flags["unpacked_pbr"] = unpacked_pbr
-
-        # Find textures
-        textures = []
-        missing_count = 0
-        missing_paths = []
-        if mat_node and collect_textures:
-            try:
-                history = cmds.listHistory(mat_node) or []
-                file_nodes = cmds.ls(history, type="file") or []
-                # Observability — count file nodes stat'd for the manifest.
-                self._file_node_count += len(file_nodes)
-                for fn in file_nodes:
-                    path = (
-                        cmds.getAttr(f"{fn}.fileTextureName")
-                        if _has_attr(fn, "fileTextureName")
-                        else ""
-                    )
-                    if path:
-                        resolved_path = cmds.workspace(expandName=path)
-
-                        # outSize is double2; cmds returns [(w,h)]
-                        out_size = cmds.getAttr(f"{fn}.outSize")
-                        if (
-                            isinstance(out_size, list)
-                            and out_size
-                            and isinstance(out_size[0], tuple)
-                        ):
-                            res = (out_size[0][0], out_size[0][1])
-                        else:
-                            res = out_size
-
-                        size_mb = 0.0
-                        if os.path.exists(resolved_path):
-                            size_mb = os.path.getsize(resolved_path) / (1024 * 1024)
-                        else:
-                            missing_count += 1
-                            missing_paths.append(resolved_path)
-
-                        tex_type = "Unknown"
-                        has_alpha = False
-
-                        if _has_attr(fn, "outTransparency") and _attr_inputs(
-                            fn, "outTransparency"
-                        ):
-                            has_alpha = True
-                        elif _has_attr(fn, "outAlpha") and _attr_inputs(fn, "outAlpha"):
-                            has_alpha = True
-
-                        connected_channels = set()
-                        try:
-                            dest_plugs = (
-                                cmds.listConnections(
-                                    fn,
-                                    source=False,
-                                    destination=True,
-                                    plugs=True,
-                                )
-                                or []
-                            )
-                            for dest_plug in dest_plugs:
-                                dest_node, _, attr_path = dest_plug.partition(".")
-
-                                if dest_node == mat_node:
-                                    connected_channels.add(attr_path.lower())
-
-                                elif cmds.nodeType(dest_node) in [
-                                    "bump2d",
-                                    "bump3d",
-                                ]:
-                                    bump_dests = (
-                                        cmds.listConnections(
-                                            dest_node,
-                                            source=False,
-                                            destination=True,
-                                            plugs=True,
-                                        )
-                                        or []
-                                    )
-                                    for b_plug in bump_dests:
-                                        if b_plug.split(".")[0] == mat_node:
-                                            connected_channels.add("normal")
-                                            break
-                        except Exception:
-                            pass
-
-                        if connected_channels:
-                            # Determine type from channels
-                            # Priority: BaseColor, Normal, Emissive, then PBR/Masks
-                            if any(
-                                x in c
-                                for c in connected_channels
-                                for x in ["basecolor", "diffuse", "tex_color"]
-                            ):
-                                tex_type = "BaseColor"
-                            elif any(
-                                x in c
-                                for c in connected_channels
-                                for x in ["normal", "bump"]
-                            ):
-                                tex_type = "Normal"
-                            elif any(
-                                x in c
-                                for c in connected_channels
-                                for x in ["emiss", "emission"]
-                            ):
-                                tex_type = "Emissive"
-                            else:
-                                # Check for PBR components
-                                pbr_comps = []
-                                if any("rough" in c for c in connected_channels):
-                                    pbr_comps.append("Roughness")
-                                if any("metal" in c for c in connected_channels):
-                                    pbr_comps.append("Metallic")
-                                if any("spec" in c for c in connected_channels):
-                                    pbr_comps.append("Specular")
-                                if any(
-                                    "ao" in c or "ambient" in c
-                                    for c in connected_channels
-                                ):
-                                    pbr_comps.append("AO")
-                                if any(
-                                    "trans" in c or "opacity" in c
-                                    for c in connected_channels
-                                ):
-                                    pbr_comps.append("Opacity")
-
-                                if len(pbr_comps) > 1:
-                                    # Sort for consistency
-                                    pbr_comps.sort()
-                                    tex_type = "Packed (" + "+".join(pbr_comps) + ")"
-                                elif len(pbr_comps) == 1:
-                                    tex_type = pbr_comps[0]
-                                else:
-                                    # Fallback to first channel name
-                                    first_channel = list(connected_channels)[0]
-                                    # Clean up name (e.g. "TEX_global_diffuse" -> "Global Diffuse")
-                                    clean_name = (
-                                        first_channel.replace("tex_", "")
-                                        .replace("_map", "")
-                                        .replace("_", " ")
-                                        .title()
-                                    )
-                                    tex_type = clean_name
-
-                        # 2. Fallback to filename
-                        if tex_type == "Unknown":
-                            lower_path = resolved_path.lower()
-                            if any(
-                                x in lower_path
-                                for x in [
-                                    "_bc",
-                                    "_d",
-                                    "_diff",
-                                    "_albedo",
-                                    "_color",
-                                    "_basecolor",
-                                ]
-                            ):
-                                tex_type = "BaseColor"
-                            elif any(
-                                x in lower_path
-                                for x in ["_n", "_nrm", "_norm", "_normal"]
-                            ):
-                                tex_type = "Normal"
-                            elif any(
-                                x in lower_path
-                                for x in [
-                                    "_m",
-                                    "_met",
-                                    "_metal",
-                                    "_r",
-                                    "_rough",
-                                    "_s",
-                                    "_spec",
-                                    "_orm",
-                                    "_arm",
-                                    "_mask",
-                                ]
-                            ):
-                                tex_type = "Masks"
-                            elif any(
-                                x in lower_path for x in ["_e", "_emiss", "_emit"]
-                            ):
-                                tex_type = "Emissive"
-
-                        # Fallback: Check connection if possible (not implemented here to keep it fast/simple)
-
-                        textures.append(
-                            {
-                                "path": resolved_path,
-                                "res": res,
-                                "size_mb": size_mb,
-                                "node": fn,
-                                "type": tex_type,
-                                "has_alpha": has_alpha,
-                            }
-                        )
-            except Exception:
-                pass
-
-        flags["textures"] = textures
-        flags["missing_textures"] = missing_count
-        flags["missing_paths"] = missing_paths
+        flags["missing_textures"] = len(flags["missing_paths"])
+        # Loose masks no packed map already carries: an Albedo_Transparency
+        # map is packed too, but it carries opacity, not occlusion / roughness.
+        types = {t["map_type"] for t in flags["textures"] if t["role"] == "material"}
+        registry = ptk.MapRegistry()
+        carried: Set[str] = set()
+        for map_type in types:
+            definition = registry.get(map_type) if map_type else None
+            if getattr(definition, "is_packed", False):
+                carried.update(definition.carried_types())
+        loose = [t for t in self._LOOSE_PBR_TYPES if t in types and t not in carried]
+        flags["unpacked_pbr"] = len(loose) >= 2
         return flags
 
-    def _analyze_mesh(self, shape: str) -> MeshRecord:
-        """Fast mesh analysis."""
-        counts = cmds.polyEvaluate(shape, triangle=True, vertex=True)
-        bbox = cmds.polyEvaluate(shape, boundingBox=True)
+    def _surface_maps(self, material: str) -> List[str]:
+        """Texture keys of *material*'s surface maps (role ``material``)."""
+        return [
+            t["key"]
+            for t in self._material_flags.get(material, {}).get("textures", [])
+            if t["role"] == "material"
+        ]
 
-        if isinstance(counts, dict):
-            tris = counts.get("triangle", 0)
-            verts = counts.get("vertex", 0)
-        else:
-            tris = 0
-            verts = 0
+    def _texture_record(self, raw: str, file_node: str) -> Dict[str, Any]:
+        """Facts about one texture FILE, read once and cached.
 
-        uv_sets = cmds.polyUVSet(shape, q=True, allUVSets=True) or []
-        uv_count = len(uv_sets)
-        uv_set_names = list(uv_sets)
+        Resolution is Maya's own order (``MatUtils.resolve_path(search=False)``:
+        env vars, project root, then the sourceImages rule), once per stored
+        path; a tile token counts every tile, a frame token one frame.
+        Dimensions come from the image HEADER
+        (``ptk.ImgUtils.get_image_size``) -- reading the file node's
+        ``outSize`` makes Maya decode the whole image, ~0.25 s per 4K PNG,
+        which was 98% of an audit's time; it remains the fallback for a
+        format the header reader cannot parse.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
 
-        color_sets = cmds.polyColorSet(shape, q=True, allColorSets=True) or []
-        has_colors = len(color_sets) > 0
+        # Resolved once per stored path: every file node reading it asks again.
+        key = self._raw_keys.get(raw)
+        if key is not None:
+            return self._texture_info[key]
+        resolved = MatUtils.resolve_path(raw, search=False)
+        key = self._raw_keys[raw] = os.path.normcase(os.path.normpath(resolved or raw))
+        if key in self._texture_info:
+            return self._texture_info[key]
 
-        has_skin = False
+        info: Dict[str, Any] = {
+            "key": key,
+            "path": (resolved or raw).replace("\\", "/"),
+            "exists": resolved is not None,
+            "size_bytes": 0,
+            "width": 0,
+            "height": 0,
+            "tiles": 1,
+            "map_type": None,
+            "role": "other",
+            "bundled": MatUtils.is_bundled_texture(resolved or raw),
+            "gpu_bytes": 0.0,
+            "raw_bytes": 0.0,
+        }
+        if resolved is not None:
+            files = [resolved]
+            if MatUtils.has_path_token(resolved):
+                files = MatUtils.texture_tiles(resolved)
+                if MatUtils.is_frame_sequence(resolved):
+                    files = files[:1]  # loaded a frame at a time; tiles all at once
+            files = files or [MatUtils.probe_texture_path(resolved) or resolved]
+            info["tiles"] = max(1, len(files))
+            for f in files:
+                try:
+                    info["size_bytes"] += os.path.getsize(f)
+                except OSError:
+                    pass
+            size = ptk.ImgUtils.get_image_size(files[0]) or self._out_size(file_node)
+            if size:
+                info["width"], info["height"] = int(size[0]), int(size[1])
         try:
-            history = cmds.listHistory(shape) or []
-            if cmds.ls(history, type="skinCluster"):
-                has_skin = True
-        except Exception:
-            pass
+            info["map_type"] = ptk.MapFactory.resolve_map_type(raw) or None
+        except Exception:  # noqa: BLE001 -- not a path-like value
+            info["map_type"] = None
+        if info["map_type"]:
+            info["role"] = "material"
+        info["gpu_bytes"], info["raw_bytes"] = ptk.MapRegistry().estimate_gpu_bytes(
+            info["width"], info["height"], info["map_type"], info["tiles"]
+        )
+        self._texture_info[key] = info
+        return info
 
-        # Instanced if shape has more than one parent transform
-        instanced = len(cmds.listRelatives(shape, allParents=True) or []) > 1
+    @staticmethod
+    def _out_size(file_node: str) -> Optional[Tuple[int, int]]:
+        """The file node's decoded ``outSize`` -- the slow fallback."""
+        try:
+            value = cmds.getAttr(f"{file_node}.outSize")
+        except Exception:  # noqa: BLE001
+            return None
+        if isinstance(value, list) and value and isinstance(value[0], tuple):
+            value = value[0]
+        try:
+            width, height = int(value[0]), int(value[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        return (width, height) if width and height else None
 
-        # Bounds
-        dx = bbox[0][1] - bbox[0][0]
-        dy = bbox[1][1] - bbox[1][0]
-        dz = bbox[2][1] - bbox[2][0]
-        diag = math.sqrt(dx * dx + dy * dy + dz * dz)
+    @staticmethod
+    def _slot_map_types(material: str, material_type: str) -> Dict[str, str]:
+        """``{file node: map type}`` for the files *material*'s surface slots read.
 
-        ngons = 0
-        non_manifold_edges = 0
-        lamina_faces = 0
+        For a file whose NAME carries no map-type token. Each slot
+        ``ShaderAttributeMap`` names for the shader type is traced UPSTREAM to
+        its file node by ``MatUtils.get_texture_file_node`` (through bump /
+        normal-map / colour-correct nodes, and a packed map's per-channel
+        wiring), and the slot's logical channel resolves through
+        ``ptk.MapRegistry`` -- never overriding a filename classification (see
+        its ``LOGICAL_CHANNEL_TYPES`` note). A file no slot reaches (Stingray's
+        ``TEX_global_*`` IBL inputs) is absent.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        attrs = ShaderAttributeMap.SHADER_ATTRS.get(material_type)
+        if attrs is None:
+            return {}
+        found: Dict[str, str] = {}
+        for channel in ShaderAttributeMap.logical_channels():
+            slot = getattr(attrs, channel)
+            node = MatUtils.get_texture_file_node(material, slot[0]) if slot else None
+            map_type = ptk.MapRegistry.resolve_type_from_channel(channel)
+            if node and map_type and node not in found:
+                found[node] = map_type
+        return found
+
+    @staticmethod
+    def _transparency_mode(material: str, material_type: str) -> str:
+        """``opaque`` / ``masked`` / ``blend`` for *material*.
+
+        StingrayPBS reads its loaded ShaderFX graph
+        (``MatUtils.get_stingray_opacity_mode``: the transparent graph blends,
+        the masked graph alpha-tests). Other shaders blend when a
+        transparency / transmission input is driven or non-zero, or an
+        opacity input is driven or below one.
+        """
+        if material_type == "StingrayPBS":
+            from mayatk.mat_utils._mat_utils import MatUtils
+
+            mode = MatUtils.get_stingray_opacity_mode(material)
+            return {
+                "transparent": TRANSPARENCY_BLEND,
+                "masked": TRANSPARENCY_MASKED,
+            }.get(mode, TRANSPARENCY_OPAQUE)
+
+        def value_of(attr):
+            try:
+                if not cmds.attributeQuery(attr, node=material, exists=True):
+                    return None
+            except Exception:  # noqa: BLE001
+                return None
+            if cmds.listConnections(
+                f"{material}.{attr}", source=True, destination=False
+            ):
+                return "driven"
+            try:
+                value = cmds.getAttr(f"{material}.{attr}")
+            except Exception:  # noqa: BLE001
+                return None
+            if (
+                isinstance(value, list)
+                and len(value) == 1
+                and isinstance(value[0], tuple)
+            ):
+                value = value[0]
+            return value
+
+        for attr in ("transparency", "transmission"):
+            value = value_of(attr)
+            if value == "driven":
+                return TRANSPARENCY_BLEND
+            if isinstance(value, (int, float)) and value > 0.001:
+                return TRANSPARENCY_BLEND
+            if isinstance(value, (tuple, list)) and any(c > 0.001 for c in value):
+                return TRANSPARENCY_BLEND
+        for attr in ("opacity", "cutout_opacity", "geometryOpacity"):
+            value = value_of(attr)
+            if value == "driven":
+                return TRANSPARENCY_BLEND
+            if isinstance(value, (int, float)) and value < 0.999:
+                return TRANSPARENCY_BLEND
+            if isinstance(value, (tuple, list)) and any(c < 0.999 for c in value):
+                return TRANSPARENCY_BLEND
+        return TRANSPARENCY_OPAQUE
+
+    @staticmethod
+    def _world_diag(path: str) -> float:
+        """World-space bounding-box diagonal of one instance, in centimeters.
+
+        The API answers in Maya's internal unit (cm) whatever the UI unit is,
+        and the box is transformed by the instance's own world matrix -- so a
+        prop modelled small and scaled up is measured at the size it renders.
+        ``polyEvaluate -boundingBox`` is object-space and in UI units, which in
+        a meter scene shrank every budget 100x.
+        """
         try:
             sel = om.MSelectionList()
-            sel.add(shape)
-            dag_path = sel.getDagPath(0)
-            mesh_fn = om.MFnMesh(dag_path)
+            sel.add(path)
+            dag = sel.getDagPath(0)
+            box = om.MFnDagNode(dag).boundingBox
+            matrix = dag.inclusiveMatrix()
+        except Exception:  # noqa: BLE001
+            return 0.0
+        points = [
+            om.MPoint(x, y, z) * matrix
+            for x in (box.min.x, box.max.x)
+            for y in (box.min.y, box.max.y)
+            for z in (box.min.z, box.max.z)
+        ]
+        return math.sqrt(
+            sum(
+                (max(p[i] for p in points) - min(p[i] for p in points)) ** 2
+                for i in range(3)
+            )
+        )
 
-            vertex_counts, _ = mesh_fn.getVertices()
-            ngons = sum(1 for count in vertex_counts if count > 4)
+    def _analyze_mesh(
+        self,
+        shape: str,
+        paths: Optional[List[str]] = None,
+        checks: bool = True,
+    ) -> MeshRecord:
+        """Measure one unique shape; *paths* are its in-scope instance paths.
 
-            nme = cmds.polyInfo(shape, nonManifoldEdges=True)
-            if nme:
-                non_manifold_edges = len(nme)
+        ``checks`` runs the topology and UV checks (n-gons, non-manifold edges,
+        lamina faces, UV snapshots, the lightmap set, skinning) -- the bulk of a
+        shape's cost, skipped when no requested section shows them
+        (``SceneInfoSection._NEEDS_MESH_CHECKS``).
+        """
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+        from mayatk.uv_utils._uv_utils import UvUtils
 
-            lf = cmds.polyInfo(shape, laminaFaces=True)
-            if lf:
-                lamina_faces = len(lf)
-        except Exception:
-            pass
+        paths = paths or [shape]
+        counts = cmds.polyEvaluate(shape, triangle=True, vertex=True)
+        tris = counts.get("triangle", 0) if isinstance(counts, dict) else 0
+        verts = counts.get("vertex", 0) if isinstance(counts, dict) else 0
 
-        # Vertex Payload Estimate
-        # Pos(12) + Norm(4) + Tan(4) + UV(8*count) + Color(4) + Skin(8)
-        # Baseline: 20 bytes
-        v_bytes = 20 + (uv_count * 8)
-        if has_colors:
+        uv_set_names = list(cmds.polyUVSet(shape, q=True, allUVSets=True) or [])
+        color_sets = cmds.polyColorSet(shape, q=True, allColorSets=True) or []
+
+        has_skin = False
+        lightmap = None
+        snapshots: List[str] = []
+        ngons = non_manifold_edges = lamina_faces = 0
+        if checks:
+            try:
+                history = cmds.listHistory(shape) or []
+                has_skin = (
+                    bool(cmds.ls(history, type="skinCluster")) if history else False
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                lightmap = UvDiagnostics.find_lightmap_uv_set(
+                    shape, all_sets=uv_set_names
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            snapshots = [snap for _s, _c, snap in UvUtils.find_uv_snapshots([shape])]
+            try:
+                sel = om.MSelectionList()
+                sel.add(shape)
+                vertex_counts, _ = om.MFnMesh(sel.getDagPath(0)).getVertices()
+                ngons = sum(1 for count in vertex_counts if count > 4)
+                non_manifold_edges = len(
+                    cmds.polyInfo(shape, nonManifoldEdges=True) or []
+                )
+                lamina_faces = len(cmds.polyInfo(shape, laminaFaces=True) or [])
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Vertex payload estimate: Pos(12) + Norm(4) + Tan(4) + UV(8/set)
+        # + Color(4) + Skin(8).
+        v_bytes = 20 + (len(uv_set_names) * 8)
+        if color_sets:
             v_bytes += 4
         if has_skin:
-            v_bytes += 8  # 4 weights + 4 indices (approx)
+            v_bytes += 8
 
         return MeshRecord(
             shape_name=shape,
             tris=tris,
             verts=verts,
-            uv_sets=uv_count,
+            uv_sets=len(uv_set_names),
             uv_set_names=uv_set_names,
-            has_colors=has_colors,
-            instanced=instanced,
-            bounds_diag=diag,
+            has_colors=bool(color_sets),
+            instanced=len(paths) > 1
+            or len(cmds.listRelatives(shape, allParents=True) or []) > 1,
+            bounds_diag=max(self._world_diag(p) for p in paths),
             ngons=ngons,
             non_manifold_edges=non_manifold_edges,
             lamina_faces=lamina_faces,
             vertex_bytes=v_bytes,
+            uv_snapshot_sets=snapshots,
+            lightmap_uv_set=lightmap,
         )
 
     def _analyze_material(self, shape: str) -> MaterialRecord:
-        """Fast material analysis using cache."""
-        assigned_ses = self._shading_map.get(shape, set())
+        """Summarize the materials one shape's in-scope instances wear."""
+        paths = self._targets.get(shape, {}).get("paths", [shape])
+        per_instance = [self._path_shading.get(p, set()) for p in paths]
+        shading_engines = self._shading_map.get(shape, set())
+        materials = sorted(
+            {
+                self._material_map[se]
+                for se in shading_engines
+                if se in self._material_map
+            }
+        )
 
-        # If no SE found in map, it might be using default shader or not in a set?
-        # If empty, try direct connection as fallback?
-        # The bulk collection should have caught it if it's in a shading group.
-
-        materials = []
-        uses_transparency = False
-        unpacked_pbr = False
-        all_textures = []
-        missing_textures = 0
+        rank = {TRANSPARENCY_OPAQUE: 0, TRANSPARENCY_MASKED: 1, TRANSPARENCY_BLEND: 2}
+        transparency = TRANSPARENCY_OPAQUE
+        unpacked = False
+        missing = 0
         max_samplers = 0
+        keys: List[str] = []
+        for mat in materials:
+            flags = self._material_flags.get(mat, {})
+            mode = flags.get("transparency", TRANSPARENCY_OPAQUE)
+            if rank.get(mode, 0) > rank[transparency]:
+                transparency = mode
+            unpacked = unpacked or bool(flags.get("unpacked_pbr"))
+            missing += flags.get("missing_textures", 0)
+            surface = self._surface_maps(mat)
+            max_samplers = max(max_samplers, len(surface))
+            keys.extend(k for k in surface if k not in keys)
 
-        for se in assigned_ses:
-            mat_name = self._material_map.get(se)
-            if mat_name:
-                materials.append(mat_name)
-                flags = self._material_flags.get(mat_name, {})
-                if flags.get("transparent"):
-                    uses_transparency = True
-                if flags.get("unpacked_pbr"):
-                    unpacked_pbr = True
-                if flags.get("textures"):
-                    mat_textures = flags["textures"]
-                    all_textures.extend(mat_textures)
-
-                    # Calculate samplers for this specific material
-                    # Dedup by path to handle same texture used multiple times in one shader
-                    unique_mat_textures = {t["path"] for t in mat_textures}
-                    count = len(unique_mat_textures)
-                    if count > max_samplers:
-                        max_samplers = count
-
-                if flags.get("missing_textures"):
-                    missing_textures += flags["missing_textures"]
-
-        # Aggregate texture stats
-        # Dedup by path to avoid double counting same texture used in multiple slots of same material
-        unique_textures = {t["path"]: t for t in all_textures}.values()
-        texture_count = len(unique_textures)
         max_res = 0
         max_res_is_unique = False
-        total_size = 0.0
-        est_gpu_size = 0.0
-        unique_paths_local = 0
-
-        for t in unique_textures:
-            w, h = t["res"]
-            max_dim = max(w, h)
-
-            path = t["path"]
-            usage_data = self._global_texture_usage.get(path, {})
-            usage_count = (
-                usage_data.get("count", 0) if isinstance(usage_data, dict) else 0
+        unique_local = 0
+        total_mb = 0.0
+        gpu_mb = 0.0
+        for key in keys:
+            info = self._texture_info.get(key)
+            if not info:
+                continue
+            is_unique = (
+                len(self._global_texture_usage.get(key, {}).get("meshes", ())) == 1
             )
-            is_unique = usage_count == 1
-
-            if is_unique:
-                unique_paths_local += 1
-
-            if max_dim > max_res:
-                max_res = max_dim
-                max_res_is_unique = is_unique
-            elif max_dim == max_res:
-                if is_unique:
-                    max_res_is_unique = True
-
-            total_size += t["size_mb"]
-
-            # Uncompressed GPU estimate: RGBA8 + 33% mips. The
-            # per-format compressed estimate is a scene-scope figure
-            # computed in generate_report; per-asset scoring uses the
-            # disk size only.
-            est_gpu_size += (w * h * 4 * 1.33) / (1024 * 1024)
+            unique_local += int(is_unique)
+            dim = max(info["width"], info["height"])
+            if dim > max_res:
+                max_res, max_res_is_unique = dim, is_unique
+            elif dim == max_res and is_unique:
+                max_res_is_unique = True
+            total_mb += info["size_bytes"] / 2**20
+            gpu_mb += info["gpu_bytes"] / 2**20
 
         return MaterialRecord(
-            slot_count=len(assigned_ses),
-            uses_transparency=uses_transparency,
-            materials=sorted(list(set(materials))),  # Dedup material names
-            texture_count=texture_count,
+            slot_count=max((len(s) for s in per_instance), default=0),
+            uses_transparency=transparency != TRANSPARENCY_OPAQUE,
+            materials=materials,
+            texture_count=len(keys),
             max_res=int(max_res),
-            total_tex_size_mb=total_size,
-            est_gpu_size_mb=est_gpu_size,
-            unpacked_pbr=unpacked_pbr,
-            missing_textures=missing_textures,
+            total_tex_size_mb=total_mb,
+            est_gpu_size_mb=gpu_mb,
+            unpacked_pbr=unpacked,
+            missing_textures=missing,
             max_samplers=max_samplers,
-            unique_paths_local=unique_paths_local,
+            unique_paths_local=unique_local,
             max_res_is_unique=max_res_is_unique,
+            draw_calls=sum(max(1, len(s)) for s in per_instance),
+            transparency=transparency,
+            redundant_slots=max(
+                (
+                    len(ses) - len({self._material_map.get(se, se) for se in ses})
+                    for ses in per_instance
+                ),
+                default=0,
+            ),
         )
 
     def _calculate_score(
@@ -1998,434 +1881,261 @@ class SceneAnalyzer(ptk.LoggingMixin):
         List[FixAction],
         int,
     ]:
-        """Calculate 'badness' scores (perf / risk) and emit structured
-        findings, fix actions, and a budget delta.
+        """Score one asset on what is ITS OWN to fix: geometry, UV sets,
+        material slots, a missing material, and a unique texture set bigger
+        than its size needs. Material-wide costs (texture memory, blending,
+        missing files) are judged once per material instead -- see
+        :meth:`_material_findings` -- rather than repeated on every mesh
+        that wears the material.
 
         Returns:
             ``(total_score, perf_score, risk_score, findings, breakdown,
-            delta, fix_plan, target_tris)`` — all richly-typed. ``delta``
-            is a :class:`BudgetDelta` (was the ``delta_summary`` string);
-            ``findings`` is ``List[Finding]`` (was ``List[str]`` with
-            severity baked into trailing ``[H]/[M]/[L]`` tags); ``fix_plan``
-            is ``List[FixAction]`` (was ``List[str]`` of prose).
+            delta, fix_plan, target_tris)``.
         """
+        profile = self.profile
         perf_score = 0.0
         risk_score = 0.0
         findings: List[Finding] = []
         breakdown: Dict[str, float] = {}
         fix_plan: List[FixAction] = []
 
-        # Determine Target Tris (Adaptive)
-        target_tris = self.profile.max_tris
-        if self.profile.adaptive_tris and self.profile.reference_diag > 0:
-            # Linear scaling: size / ref_size * max_tris
-            # Clamped between min_tris and max_tris
-            ratio = min(1.0, mesh.bounds_diag / self.profile.reference_diag)
-            calculated = int(self.profile.max_tris * ratio)
-            target_tris = max(self.profile.min_tris, calculated)
+        # Adaptive budget: linear in world size up to the reference diagonal.
+        target_tris = profile.max_tris
+        if profile.adaptive_tris and profile.reference_diag > 0:
+            ratio = min(1.0, mesh.bounds_diag / profile.reference_diag)
+            target_tris = max(profile.min_tris, int(profile.max_tris * ratio))
 
+        shipped_uvs = mesh.uv_sets - len(mesh.uv_snapshot_sets)
         delta = BudgetDelta(
             tris_over=max(0, mesh.tris - target_tris),
-            slots_over=max(0, mat.slot_count - self.profile.max_slots),
-            uvs_over=max(0, mesh.uv_sets - self.profile.max_uvs),
-            max_tex_res_over=max(0, mat.max_res - self.profile.max_tex_res),
+            slots_over=max(0, mat.slot_count - profile.max_slots),
+            uvs_over=max(0, shipped_uvs - profile.max_uvs),
+            max_tex_res_over=max(0, mat.max_res - profile.max_tex_res),
         )
 
-        # --- Mesh Scoring ---
-
-        # Tris
         if mesh.tris > target_tris:
             over = mesh.tris - target_tris
             penalty = over / 1000.0  # 1 point per 1k over
             perf_score += penalty
+            breakdown["High Poly"] = penalty
             findings.append(
                 Finding(
-                    severity=SEVERITY_HIGH,
-                    kind="high_poly",
-                    message=f"High Poly: {mesh.tris} tris (budget {target_tris}, +{over})",
-                    detail={"tris": mesh.tris, "budget": target_tris, "over": over},
+                    SEVERITY_HIGH,
+                    "high_poly",
+                    f"High poly: {mesh.tris:,} tris (budget {target_tris:,}, +{over:,})",
+                    {"tris": mesh.tris, "budget": target_tris, "over": over},
                 )
             )
-            breakdown["High Poly"] = penalty
             fix_plan.append(
                 FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="decimate",
-                    message=f"Reduce tris {mesh.tris:,} -> {target_tris:,} (Decimate/Retopo)",
+                    SEVERITY_HIGH,
+                    "decimate",
+                    f"Reduce tris {mesh.tris:,} -> {target_tris:,} (decimate / retopo)",
                     detail={"from_tris": mesh.tris, "to_tris": target_tris},
                 )
             )
 
-        # Verts per tri (Bloat check)
-        if mesh.tris > 0:
-            ratio = mesh.verts / mesh.tris
-            if ratio > 3.0:
-                penalty = 10.0
-                perf_score += penalty
-                findings.append(
-                    Finding(
-                        severity=SEVERITY_HIGH,
-                        kind="vert_bloat",
-                        message=f"Vert Bloat: {ratio:.1f} verts/tri",
-                        detail={"verts_per_tri": ratio},
-                    )
-                )
-                breakdown["Vert Bloat"] = penalty
-                fix_plan.append(
-                    FixAction(
-                        severity=SEVERITY_MEDIUM,
-                        kind="merge_vertices",
-                        message="Merge vertices / Fix hard edges to reduce vertex count",
-                    )
-                )
-
-        # UV Sets
-        if mesh.uv_sets > self.profile.max_uvs:
-            over = mesh.uv_sets - self.profile.max_uvs
-            penalty = over * 5.0
-            perf_score += penalty
-            uv_names_str = ", ".join(mesh.uv_set_names)
+        if mesh.uv_snapshot_sets:
+            penalty = 10.0 * len(mesh.uv_snapshot_sets)
+            risk_score += penalty
+            breakdown["UV Snapshots"] = penalty
             findings.append(
                 Finding(
-                    severity=SEVERITY_MEDIUM,
-                    kind="extra_uv_sets",
-                    message=(
-                        f"Extra Vertex Streams: {mesh.uv_sets} UV sets "
-                        f"({uv_names_str}) (budget {self.profile.max_uvs}, +{over})"
-                    ),
-                    detail={
-                        "uv_sets": mesh.uv_sets,
-                        "uv_names": list(mesh.uv_set_names),
-                        "budget": self.profile.max_uvs,
+                    SEVERITY_HIGH,
+                    "uv_snapshots",
+                    f"{self._count(len(mesh.uv_snapshot_sets), 'leftover UV snapshot set')} "
+                    f"({', '.join(mesh.uv_snapshot_sets)})",
+                    {"sets": list(mesh.uv_snapshot_sets)},
+                )
+            )
+            fix_plan.append(
+                FixAction(
+                    SEVERITY_HIGH,
+                    "remove_uv_snapshots",
+                    "Discard the leftover _uv_snap_* sets (mtk.UvUtils.discard_uv_snapshot)",
+                    detail={"sets": list(mesh.uv_snapshot_sets)},
+                )
+            )
+
+        if shipped_uvs > profile.max_uvs:
+            over = shipped_uvs - profile.max_uvs
+            penalty = over * 5.0
+            perf_score += penalty
+            breakdown["Extra UV Sets"] = penalty
+            names = [n for n in mesh.uv_set_names if n not in mesh.uv_snapshot_sets]
+            findings.append(
+                Finding(
+                    SEVERITY_LOW,
+                    "extra_uv_sets",
+                    f"{shipped_uvs} UV sets ({', '.join(names)}; budget "
+                    f"{profile.max_uvs})",
+                    {
+                        "uv_sets": shipped_uvs,
+                        "uv_names": names,
+                        "budget": profile.max_uvs,
                         "over": over,
                     },
                 )
             )
-            breakdown["Extra UV Sets"] = penalty
             fix_plan.append(
                 FixAction(
-                    severity=SEVERITY_LOW,
-                    kind="remove_uv_sets",
-                    message=(
-                        f"Remove {over} extra UV sets "
-                        "(if not required by export/profile)"
-                    ),
+                    SEVERITY_LOW,
+                    "remove_uv_sets",
+                    f"Remove {self._count(over, 'extra UV set')} (if not required by export/profile)",
                     detail={"remove_count": over},
                 )
             )
 
-        # Vertex Bytes finding deliberately dropped — the prior code
-        # appended a "Vertex Payload" finding then filtered it out in
-        # the renderer. Bytes are still available on
-        # ``MeshRecord.vertex_bytes`` for callers that want them.
-
-        # Ngons (Risk, not Perf)
         if mesh.ngons > 0:
             penalty = mesh.ngons * 0.1
             risk_score += penalty
-
-            severity = SEVERITY_MEDIUM
-            if mesh.ngons > 100 or mesh.tris > target_tris:
-                severity = SEVERITY_HIGH
-
-            if mesh.tris > 0:
-                ngons_per_10k = (mesh.ngons / mesh.tris) * 10000
-                msg = f"N-gons: {mesh.ngons} ({ngons_per_10k:.1f} per 10k tris)"
-            else:
-                msg = f"N-gons: {mesh.ngons}"
-
+            breakdown["N-gons"] = penalty
             findings.append(
                 Finding(
-                    severity=severity,
-                    kind="ngons",
-                    message=msg,
-                    detail={"ngons": mesh.ngons, "tris": mesh.tris},
+                    SEVERITY_HIGH
+                    if mesh.ngons > 100 or mesh.tris > target_tris
+                    else SEVERITY_LOW,
+                    "ngons",
+                    self._count(mesh.ngons, "n-gon"),
+                    {"ngons": mesh.ngons, "tris": mesh.tris},
                 )
             )
-            breakdown["N-gons"] = penalty
             fix_plan.append(
                 FixAction(
-                    severity=SEVERITY_LOW,
-                    kind="triangulate_ngons",
-                    message="Triangulate or Quadrangulate N-gons",
+                    SEVERITY_LOW,
+                    "triangulate_ngons",
+                    "Triangulate or quadrangulate n-gons",
                 )
             )
 
-        # Non-manifold edges (Risk)
         if mesh.non_manifold_edges > 0:
             penalty = mesh.non_manifold_edges * 2.0
             risk_score += penalty
+            breakdown["Non-Manifold"] = penalty
             findings.append(
                 Finding(
-                    severity=SEVERITY_HIGH,
-                    kind="non_manifold",
-                    message=f"Non-Manifold: {mesh.non_manifold_edges} edges",
-                    detail={"non_manifold_edges": mesh.non_manifold_edges},
+                    SEVERITY_HIGH,
+                    "non_manifold",
+                    self._count(mesh.non_manifold_edges, "non-manifold edge"),
+                    {"non_manifold_edges": mesh.non_manifold_edges},
                 )
             )
-            breakdown["Non-Manifold"] = penalty
             fix_plan.append(
                 FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="fix_non_manifold",
-                    message="Cleanup non-manifold geometry",
+                    SEVERITY_HIGH, "fix_non_manifold", "Clean up non-manifold geometry"
                 )
             )
 
-        # Lamina faces (Risk)
         if mesh.lamina_faces > 0:
             penalty = mesh.lamina_faces * 2.0
             risk_score += penalty
+            breakdown["Lamina Faces"] = penalty
             findings.append(
                 Finding(
-                    severity=SEVERITY_HIGH,
-                    kind="lamina_faces",
-                    message=f"Lamina Faces: {mesh.lamina_faces}",
-                    detail={"lamina_faces": mesh.lamina_faces},
+                    SEVERITY_HIGH,
+                    "lamina_faces",
+                    self._count(mesh.lamina_faces, "lamina face"),
+                    {"lamina_faces": mesh.lamina_faces},
                 )
             )
-            breakdown["Lamina Faces"] = penalty
             fix_plan.append(
-                FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="remove_lamina",
-                    message="Remove lamina faces",
-                )
+                FixAction(SEVERITY_HIGH, "remove_lamina", "Remove lamina faces")
             )
 
-        # --- Material Scoring ---
-
-        # Slots (Draw calls)
-        unique_mat_count = len(mat.materials)
-        if mat.slot_count > self.profile.max_slots:
-            over = mat.slot_count - self.profile.max_slots
+        if mat.slot_count > profile.max_slots:
+            over = mat.slot_count - profile.max_slots
             penalty = over * 10.0
             perf_score += penalty
-
-            redundancy_note = ""
-            if mat.slot_count > unique_mat_count:
-                redundancy_note = f" ({unique_mat_count} unique materials)"
-
+            breakdown["Draw Call Split"] = penalty
+            # Per instance: a union over instances hides one wearing a material twice.
+            redundant = mat.redundant_slots
             findings.append(
                 Finding(
-                    severity=SEVERITY_HIGH,
-                    kind="draw_call_split",
-                    message=(
-                        f"Draw Call Split: {mat.slot_count} slots"
-                        f"{redundancy_note} "
-                        f"(budget {self.profile.max_slots}, +{over})"
-                    ),
-                    detail={
+                    SEVERITY_HIGH,
+                    "draw_call_split",
+                    f"{mat.slot_count} material slots"
+                    + (f" ({redundant} redundant)" if redundant > 0 else "")
+                    + f" (budget {profile.max_slots})",
+                    {
                         "slot_count": mat.slot_count,
-                        "unique_materials": unique_mat_count,
-                        "budget": self.profile.max_slots,
+                        "redundant_slots": redundant,
+                        "budget": profile.max_slots,
                         "over": over,
                     },
                 )
             )
-            breakdown["Draw Call Split"] = penalty
-
-            if mat.slot_count > unique_mat_count:
+            if redundant > 0:
                 fix_plan.append(
                     FixAction(
-                        severity=SEVERITY_HIGH,
-                        kind="consolidate_slots",
-                        message=(
-                            f"Consolidate {mat.slot_count - unique_mat_count} "
-                            "redundant slots (Assign same material to all faces)"
-                        ),
-                        detail={"redundant_slots": mat.slot_count - unique_mat_count},
+                        SEVERITY_HIGH,
+                        "consolidate_slots",
+                        f"Consolidate {self._count(redundant, 'redundant slot')} (assign the "
+                        "same material to all their faces)",
+                        detail={"redundant_slots": redundant},
                     )
                 )
             else:
                 fix_plan.append(
                     FixAction(
-                        severity=SEVERITY_HIGH,
-                        kind="reduce_slots",
-                        message=(
-                            f"Reduce slots {mat.slot_count} -> "
-                            f"{self.profile.max_slots} (Merge materials: "
-                            "Combine textures or use Vertex Colors)"
-                        ),
+                        SEVERITY_HIGH,
+                        "reduce_slots",
+                        f"Reduce slots {mat.slot_count} -> {profile.max_slots} "
+                        "(merge materials: atlas the textures or use vertex colors)",
                         detail={
                             "from_slots": mat.slot_count,
-                            "to_slots": self.profile.max_slots,
+                            "to_slots": profile.max_slots,
                         },
                     )
                 )
 
-        # Transparency
-        if mat.uses_transparency:
-            penalty = 5.0
+        if self.materials_collected and not mat.materials:
+            risk_score += 10.0
+            breakdown["No Material"] = 10.0
+            findings.append(
+                Finding(SEVERITY_MEDIUM, "unassigned", "No material assigned")
+            )
+
+        # A texture set nobody else wears, at more resolution than the object's
+        # size can show. Shared sets are judged in the Textures section instead:
+        # their cost is paid once however many meshes wear them.
+        ideal = (mesh.bounds_diag / 100.0) * self.TEXELS_PER_METER
+        if mat.max_res_is_unique and mat.max_res >= 2048 and mat.max_res > ideal * 2.0:
+            suggested = 1 << max(9, int(math.ceil(math.log2(max(ideal, 1.0)))))
+            penalty = 10.0
             perf_score += penalty
+            breakdown["Oversized Texture"] = penalty
             findings.append(
                 Finding(
-                    severity=SEVERITY_MEDIUM,
-                    kind="transparency",
-                    message="Transparent",
+                    SEVERITY_MEDIUM,
+                    "oversized_texture",
+                    f"Unique {mat.max_res}px texture set on a "
+                    f"{mesh.bounds_diag:,.0f} cm object (~{suggested}px suffices)",
+                    {
+                        "res": mat.max_res,
+                        "ideal_res": int(ideal),
+                        "suggested": suggested,
+                    },
                 )
             )
-            breakdown["Transparency"] = penalty
-
-        # Textures
-        ideal_res = (mesh.bounds_diag / 100.0) * 512
-
-        if mat.max_res > self.profile.max_tex_res:
-            over = mat.max_res - self.profile.max_tex_res
-            if mat.max_res_is_unique and mat.max_res > ideal_res * 2.0:
-                penalty = 10.0
-                perf_score += penalty
-                findings.append(
-                    Finding(
-                        severity=SEVERITY_MEDIUM,
-                        kind="oversized_texture",
-                        message=(
-                            f"Oversized Texture: {mat.max_res}px "
-                            f"(vs ideal {int(ideal_res)}px)"
-                        ),
-                        detail={
-                            "res": mat.max_res,
-                            "ideal_res": int(ideal_res),
-                        },
-                    )
-                )
-                breakdown["Oversized Texture"] = penalty
-                fix_plan.append(
-                    FixAction(
-                        severity=SEVERITY_MEDIUM,
-                        kind="downscale_textures",
-                        message=f"Downscale textures to {int(ideal_res)}px",
-                        detail={"target_res": int(ideal_res)},
-                    )
-                )
-            else:
-                findings.append(
-                    Finding(
-                        severity=SEVERITY_HIGH,
-                        kind="max_tex_dim",
-                        message=(
-                            f"Max texture dimension: {mat.max_res} "
-                            f"(budget {self.profile.max_tex_res}, +{over})"
-                        ),
-                        detail={
-                            "res": mat.max_res,
-                            "budget": self.profile.max_tex_res,
-                            "over": over,
-                        },
-                    )
-                )
-                fix_plan.append(
-                    FixAction(
-                        severity=SEVERITY_HIGH,
-                        kind="downscale_textures",
-                        message=f"Downscale textures to {self.profile.max_tex_res}px",
-                        detail={"target_res": self.profile.max_tex_res},
-                    )
-                )
-
-        if mat.total_tex_size_mb > 50.0:  # 50MB soft limit per mesh
-            penalty = (mat.total_tex_size_mb - 50.0) * 0.5
-            perf_score += penalty
-            findings.append(
-                Finding(
-                    severity=SEVERITY_LOW,
-                    kind="heavy_textures",
-                    message=f"Heavy Textures: {mat.total_tex_size_mb:.1f} MB",
-                    detail={"size_mb": mat.total_tex_size_mb},
-                )
-            )
-            breakdown["Heavy Textures"] = penalty
-
-        # Sampler Count / Packing
-        if mat.unpacked_pbr:
-            penalty = 15.0
-            perf_score += penalty
-            findings.append(
-                Finding(
-                    severity=SEVERITY_MEDIUM,
-                    kind="unpacked_pbr",
-                    message="Unpacked PBR Maps (Inefficient)",
-                )
-            )
-            breakdown["Unpacked PBR"] = penalty
             fix_plan.append(
                 FixAction(
-                    severity=SEVERITY_MEDIUM,
-                    kind="pack_pbr",
-                    message="Pack PBR maps (ORM/ARM)",
+                    SEVERITY_MEDIUM,
+                    "downscale_textures",
+                    f"Downscale its textures to {suggested}px",
+                    detail={"target_res": suggested},
                 )
             )
 
-        # Max Samplers (Per-material limit, usually 16)
-        if mat.max_samplers > 8:
-            penalty = (mat.max_samplers - 8) * 2.0
-            perf_score += penalty
-            findings.append(
-                Finding(
-                    severity=SEVERITY_LOW,
-                    kind="texture_samplers",
-                    message=f"Texture Samplers: {mat.max_samplers} samplers",
-                    detail={"samplers": mat.max_samplers},
-                )
-            )
-            breakdown["Texture Samplers"] = penalty
-
-        # Unique Files (Local Impact)
-        if mat.unique_paths_local > 0:
-            penalty = mat.unique_paths_local * 2.0
-            perf_score += penalty
-            findings.append(
-                Finding(
-                    severity=SEVERITY_LOW,
-                    kind="unique_textures_local",
-                    message=f"Unique Textures: {mat.unique_paths_local} (Local only)",
-                    detail={"count": mat.unique_paths_local},
-                )
-            )
-            breakdown["Unique Textures"] = penalty
-
-        # Shader Complexity (Total textures)
-        if mat.texture_count > 5:
-            penalty = (mat.texture_count - 5) * 0.5
-            perf_score += penalty
-            breakdown["Shader Complexity"] = penalty
-
-        if mat.missing_textures > 0:
-            penalty = mat.missing_textures * 2.0
-            risk_score += penalty
-            findings.append(
-                Finding(
-                    severity=SEVERITY_HIGH,
-                    kind="missing_textures",
-                    message=f"Missing Textures: {mat.missing_textures} files",
-                    detail={"count": mat.missing_textures},
-                )
-            )
-            breakdown["Missing Textures"] = penalty
-            fix_plan.append(
-                FixAction(
-                    severity=SEVERITY_HIGH,
-                    kind="relink_textures",
-                    message="Relink missing textures",
-                )
-            )
-
-        total_score = perf_score + risk_score
-
-        # Deduplicate fix plan by (kind, message) — the structured
-        # form means we don't accidentally collapse two distinct
-        # actions that happen to share a prefix.
         seen: Set[Tuple[str, str]] = set()
         deduped: List[FixAction] = []
         for action in fix_plan:
             key = (action.kind, action.message)
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(action)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(action)
 
         return (
-            total_score,
+            perf_score + risk_score,
             perf_score,
             risk_score,
             findings,
@@ -2435,15 +2145,119 @@ class SceneAnalyzer(ptk.LoggingMixin):
             target_tris,
         )
 
-    # ------------------------------------------------------------ #
-    # Section renderers — all consume :class:`SceneReport`.
-    # ------------------------------------------------------------ #
+    def _collect_overview(self) -> SceneOverview:
+        """Scene-wide facts: the file, units and time setup, and a node census."""
+        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.mat_utils._mat_utils import MatUtils
 
-    # Severity-to-confidence-tag map used by per-asset findings.
-    _CONF_TAG = {
-        SEVERITY_HIGH: "[H]",
-        SEVERITY_MEDIUM: "[M]",
-        SEVERITY_LOW: "[L]",
+        def count(**kwargs) -> int:
+            try:
+                return len(cmds.ls(**kwargs) or [])
+            except Exception:  # noqa: BLE001
+                return 0
+
+        path = EnvUtils.saved_scene_path()
+        try:
+            size_mb = os.path.getsize(path) / 2**20 if path else 0.0
+        except OSError:
+            size_mb = 0.0
+        try:
+            settings = EnvUtils.scene_settings()
+        except Exception:  # noqa: BLE001
+            settings = {}
+
+        cameras: List[str] = []
+        startup: List[str] = []  # persp / top / front / side: every scene has them
+        for camera in cmds.ls(cameras=True, long=True) or []:
+            is_startup = cmds.camera(camera, q=True, startupCamera=True)
+            (startup if is_startup else cameras).append(camera)
+        startup_xforms = set(
+            cmds.listRelatives(startup, parent=True, fullPath=True) or []
+            if startup
+            else ()
+        )
+        shading_engines = [
+            s
+            for s in cmds.ls(type="shadingEngine") or []
+            if s not in self._DEFAULT_SHADING_ENGINES
+        ]
+        layers = [
+            layer
+            for layer in cmds.ls(type="displayLayer") or []
+            if layer != "defaultLayer"
+        ]
+        try:
+            materials = len(MatUtils.get_scene_mats() or [])
+        except Exception:  # noqa: BLE001
+            materials = 0
+
+        references, unloaded = [], []
+        for ref in cmds.file(q=True, reference=True) or []:
+            references.append(ref)
+            try:
+                if not cmds.referenceQuery(ref, isLoaded=True):
+                    unloaded.append(ref)
+            except Exception:  # noqa: BLE001
+                pass
+        namespaces = [
+            ns
+            for ns in cmds.namespaceInfo(":", listOnlyNamespaces=True, recurse=True)
+            or []
+            if ns not in ("UI", "shared")
+        ]
+
+        return SceneOverview(
+            scene_path=path,
+            file_size_mb=size_mb,
+            linear_unit=cmds.currentUnit(q=True, linear=True),
+            up_axis=cmds.upAxis(q=True, axis=True),
+            fps=float(settings.get("fps", 0.0) or 0.0),
+            playback_range=(
+                settings.get("frame_start", 0.0),
+                settings.get("frame_end", 0.0),
+            ),
+            animation_range=(
+                settings.get("anim_start", 0.0),
+                settings.get("anim_end", 0.0),
+            ),
+            counts={
+                "transforms": len(
+                    set(cmds.ls(exactType="transform", long=True) or [])
+                    - startup_xforms
+                ),
+                "mesh_shapes": count(type="mesh", noIntermediate=True),
+                "mesh_instances": count(
+                    type="mesh", dag=True, allPaths=True, noIntermediate=True
+                ),
+                "curves": count(type="nurbsCurve", noIntermediate=True),
+                "locators": count(type="locator"),
+                "joints": count(type="joint"),
+                "skin_clusters": count(type="skinCluster"),
+                "blend_shapes": count(type="blendShape"),
+                "constraints": count(type="constraint"),
+                "anim_curves": count(type="animCurve"),
+                "expressions": count(type="expression"),
+                "lights": count(lights=True),
+                "cameras": len(cameras),
+                "display_layers": len(layers),
+                "materials": materials,
+                "shading_engines": len(shading_engines),
+                "file_textures": count(type="file"),
+            },
+            namespaces=namespaces,
+            references=references,
+            unloaded_references=unloaded,
+            unknown_plugins=list(cmds.unknownPlugin(q=True, list=True) or []),
+            unknown_nodes=count(type=["unknown", "unknownDag", "unknownTransform"]),
+        )
+
+    # ------------------------------------------------------------------ #
+    # Rendering — every section is one ptk.ReportDoc built from the report.
+    # ------------------------------------------------------------------ #
+    _SEVERITY_TONES = {
+        SEVERITY_HIGH: "error",
+        SEVERITY_MEDIUM: "warn",
+        SEVERITY_LOW: "dim",
     }
 
     def print_report(
@@ -2454,362 +2268,715 @@ class SceneAnalyzer(ptk.LoggingMixin):
         """Print the formatted scene-audit report to the logger.
 
         ``sections`` chooses which sections to render and in what
-        order. ``None`` means "all sections" — equivalent to the
-        prior behavior. The context header (title + profile lines)
-        is always emitted first.
+        order. ``None`` means "all sections". The context header (title +
+        scope line) is always emitted first.
         """
-        self._render_header_section(report)
-        selected = list(SceneInfoSection.ALL) if sections is None else list(sections)
-        for section in selected:
-            renderer = self._section_renderers().get(section)
-            if renderer is not None:
-                renderer(report)
+        selected = SceneInfoSection.normalize(sections)
+        docs = self._section_docs(report, selected)
+        text = [self._doc_header(report).to_text()]
+        text.extend(docs[key].to_text() for key in selected if docs.get(key))
+        self.logger.log_raw("\n\n".join(text))
 
-    def _section_renderers(self) -> Dict[str, Callable[[SceneReport], None]]:
-        """Map a ``SceneInfoSection`` key to its renderer. Centralized
-        so ``print_report`` and the per-section HTML capture path
-        share a single registry."""
+    def _section_docs(
+        self, report: SceneReport, sections: Optional[List[str]] = None
+    ) -> Dict[str, "ptk.ReportDoc"]:
+        """``{section key: ReportDoc}`` for the requested sections, in order."""
+        builders = {
+            SceneInfoSection.OVERVIEW: self._doc_overview,
+            SceneInfoSection.SUMMARY: self._doc_summary,
+            SceneInfoSection.FIX_FIRST: self._doc_fix_first,
+            SceneInfoSection.PARETO: self._doc_pareto,
+            SceneInfoSection.OFFENDERS: self._doc_offenders,
+            SceneInfoSection.MATERIALS: self._doc_materials,
+            SceneInfoSection.TEXTURES: self._doc_textures,
+            SceneInfoSection.PIPELINE: self._doc_pipeline,
+            SceneInfoSection.ASSUMPTIONS: self._doc_assumptions,
+        }
         return {
-            SceneInfoSection.SUMMARY: self._render_summary_section,
-            SceneInfoSection.FIX_FIRST: self._render_fix_first_section,
-            SceneInfoSection.PARETO: self._render_pareto_section,
-            SceneInfoSection.OFFENDERS: self._render_offenders_section,
-            SceneInfoSection.CATEGORIES: self._render_categories_section,
-            SceneInfoSection.TEXTURES: self._render_textures_section,
-            SceneInfoSection.PIPELINE: self._render_pipeline_section,
-            SceneInfoSection.ASSUMPTIONS: self._render_assumptions_section,
+            key: builders[key](report)
+            for key in SceneInfoSection.normalize(sections)
+            if key in builders
         }
 
-    def _emit_section(
-        self, title: str, lines: List[str], level: str = "NOTICE"
-    ) -> None:
-        """Emit one report section as a SINGLE log record.
+    # ---- rendering helpers ------------------------------------------------
+    @staticmethod
+    def _display_names(paths: Iterable[str]) -> Dict[str, str]:
+        """The shortest trailing ``|`` segments that tell *paths* apart.
 
-        Every log record renders as its own paragraph in a text-widget
-        handler, so the shape this replaced — ``info("") + notice(title) +
-        log_divider()`` followed by one ``log_raw`` per value — put a
-        blank-line gap between every line of the report. ``log_group``
-        already supplies the leading blank line, the coloured bold title
-        and a left rule down the item block, so one call covers what the
-        four-call preamble was approximating.
-
-        No level gate here: ``print_report`` is imperative and its caller
-        (``run_audit(verbose=...)``) already decides whether to render.
-
-        Routed through ``TableMixin.log_group`` — the sibling of the
-        ``self.log_table`` calls the same renderers already make, so both
-        section shapes are reached the same way.
+        ``WIRE_LOOM_B`` alone when it is the only one listed;
+        ``ITA_DA2_CFG_A_LOC|WIRE_LOOMS|WIRE_LOOM_B`` style only as deep as it
+        takes to separate two rows that share a leaf.
         """
-        self.log_group(title, [ln for ln in lines if ln is not None], level=level)
+        paths = list(dict.fromkeys(paths))
+        parts = {p: [s for s in p.split("|") if s] or [p] for p in paths}
+        depth = {p: 1 for p in paths}
+        while True:
+            by_name: Dict[str, List[str]] = {}
+            for p in paths:
+                by_name.setdefault("|".join(parts[p][-depth[p] :]), []).append(p)
+            grew = False
+            for clash in (c for c in by_name.values() if len(c) > 1):
+                for p in clash:
+                    if depth[p] < len(parts[p]):
+                        depth[p] += 1
+                        grew = True
+            if not grew:
+                break
+        return {p: "|".join(parts[p][-depth[p] :]) for p in paths}
 
-    def _render_header_section(self, report: SceneReport) -> None:
-        """Title + profile block. Always emitted at the top."""
-        profile = report.manifest.profile
-        header_lines = [
-            f"Profile: {profile.name}",
-            f"  - Max Tris: {profile.max_tris:,} {'(Adaptive)' if profile.adaptive_tris else ''}",
-            f"  - Max Slots: {profile.max_slots}",
-            f"  - Max Tex Res: {profile.max_tex_res}px",
-            f"  - Max UV Sets: {profile.max_uvs}",
-        ]
-        self.logger.log_box("Scene Audit Report", header_lines)
+    @staticmethod
+    def _node_link(name: str, node: str) -> "ptk.ReportDoc.Inline":
+        """*name* as a link that selects *node* in the scene."""
+        return Doc.action(name, "select", node=node)
 
-    def _render_summary_section(self, report: SceneReport) -> None:
-        """Executive Summary — high-level scene metrics."""
-        col_width = 30
-        summary = report.summary
-        budget = report.budget
-        textures = report.textures
+    @staticmethod
+    def _count(n: int, noun: str, plural: Optional[str] = None) -> str:
+        """``"1 mesh"`` / ``"1,505 meshes"``."""
+        return f"{n:,} {noun if n == 1 else (plural or noun + 's')}"
+
+    @staticmethod
+    def _mb(value: float) -> str:
+        return f"{value:,.1f} MB" if value < 100 else f"{value:,.0f} MB"
+
+    @staticmethod
+    def _file_link(path: str, text: str) -> "ptk.ReportDoc.Inline":
+        """*text* linking a texture file that opens: a tile / frame set links
+        its first real file (the ``<UDIM>`` spelling names nothing on disk, so
+        the link raised the OS's "cannot find" dialog), and a file that is not
+        there reads as plain text rather than a link to nowhere."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        target = (
+            MatUtils.probe_texture_path(path) if MatUtils.has_path_token(path) else path
+        )
+        if not target or not os.path.isfile(target):
+            return Doc.span(text)
+        return Doc.file(target, text)
+
+    def _severity(self, severity: str) -> "ptk.ReportDoc.Inline":
+        return Doc.span(
+            severity.upper(), tone=self._SEVERITY_TONES.get(severity), bold=True
+        )
+
+    def _scope_phrase(self, report: SceneReport) -> str:
+        scope = report.manifest.scope
+        return {"all": "Entire scene", "selection": "Selection"}.get(scope, "Objects")
+
+    # ---- sections -----------------------------------------------------------
+    def _doc_header(self, report: SceneReport) -> "ptk.ReportDoc":
+        """Report title and the one-line context: scope, profile, timing."""
+        doc = Doc()
+        overview = report.overview
+        scene = (
+            os.path.basename(overview.scene_path)
+            if overview and overview.scene_path
+            else ""
+        )
+        doc.heading(f"Scene Info — {scene}" if scene else "Scene Info", level=1)
         manifest = report.manifest
-
-        # Health flags lead as their own WARNING-titled group so they keep
-        # their severity colour instead of being buried in the metrics block.
-        self._emit_section(
-            "Scene Health",
-            [f"[!] {flag}" for flag in summary.scene_health_flags],
-            level="WARNING",
-        )
-
-        lines = [
-            f"{'Mesh Shapes':<{col_width}}: {summary.total_meshes} unique",
-            f"{'Instances':<{col_width}}: {summary.instance_stats.total_instances} total "
-            f"({summary.instance_stats.instanced_shapes} instanced shapes)",
-            f"{'Triangles':<{col_width}}: {summary.total_tris:,} Effective "
-            f"(Raw: {summary.raw_total_tris:,})",
-        ]
-
-        # Material Slots Block — only if material data was collected.
-        if manifest.materials_collected:
-            if budget.slot_stats is not None:
-                s = budget.slot_stats
-                lines.append(
-                    f"{'Slots per mesh':<{col_width}}: avg {s.avg_unique:.1f} | "
-                    f"median {s.median} | p90 {s.p90} | max {s.max}"
-                )
-            lines.append(
-                f"{'Effective draw calls':<{col_width}}: {budget.total_slots} (slot proxy)"
-            )
-
-        # Compressed Breakdown — only if textures were collected.
-        if manifest.textures_collected:
-            lines.append(
-                f"{'Est. GPU Compressed':<{col_width}}: {textures.est_gpu_mb_compressed:.1f} MB "
-                "(assumed formats by map type)"
-            )
-
-            missing_count = len(report.pipeline.missing_project)
-            if missing_count > 0:
-                affected = len(report.pipeline.impact.affected_meshes)
-                lines.append(
-                    f"{'Missing Files':<{col_width}}: {missing_count} project textures "
-                    f"(affecting {affected} meshes)"
-                )
-
-        self._emit_section("Executive Summary", lines)
-
-    def _render_fix_first_section(self, report: SceneReport) -> None:
-        """Fix First — prioritized high-impact remediation items."""
         summary = report.summary
-        budget = report.budget
-        scene_actions = report.fix_actions
-
-        if not (
-            scene_actions
-            or summary.total_tris > budget.total_target_tris
-            or budget.total_slots_over_budget > 0
-        ):
-            return
-
-        deltas = []
-        if summary.total_tris > budget.total_target_tris:
-            deltas.append(
-                f"+{summary.total_tris - budget.total_target_tris:,} tris "
-                f"({budget.meshes_over_tri_threshold} meshes)"
+        parts = [
+            self._scope_phrase(report),
+            f"{manifest.profile.name} profile",
+        ]
+        if summary.instance_stats.total_instances:
+            parts.append(
+                self._count(summary.instance_stats.total_instances, "mesh instance")
             )
-        if budget.total_slots_over_budget > 0:
-            deltas.append(f"+{budget.total_slots_over_budget} slots")
+        parts.append(f"analyzed in {manifest.duration_ms / 1000.0:.1f} s")
+        doc.text(" · ".join(parts), tone="dim")
+        return doc
 
-        lines = []
-        if deltas:
-            lines.append(f"Over budget deltas: {' | '.join(deltas)}")
+    def _doc_overview(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.OVERVIEW])
+        o = report.overview
+        if o is None:
+            return doc.text("Scene overview was not collected.", tone="dim")
+        c = o.counts
 
-        for action in scene_actions:
-            # The scene-level Reduce / Decimate actions duplicate the
-            # delta line above when deltas are printed — skip them by
-            # structured kind rather than substring matching.
-            if deltas and action.kind in {"reduce_slots_scene", "decimate_scene"}:
-                continue
-            lines.append(f"  - {action.message}")
-
-        self._emit_section("Fix First (High Impact)", lines)
-
-    def _render_pareto_section(self, report: SceneReport) -> None:
-        """Pareto View — top contributors to tris / slots."""
-        pareto_tris = report.offenders.pareto_tris
-        pareto_slots = report.offenders.pareto_slots
-        if not (pareto_tris or pareto_slots):
-            return
-
-        # One group per list rather than one per entry — a top-10 rendered
-        # line-by-line is ten blank-line-separated paragraphs.
-        if pareto_tris:
-            self._emit_section(
-                f"Pareto — Triangles (Top 10 account for "
-                f"{pareto_tris[-1].cum_percent:.1f}%)",
-                [f"{e.target}: {e.value:,}" for e in pareto_tris],
-            )
-
-        if pareto_slots:
-            self._emit_section(
-                f"Pareto — Slots (Top 10 account for "
-                f"{pareto_slots[-1].cum_percent:.1f}%)",
-                [f"{e.target}: {e.value}" for e in pareto_slots],
-            )
-
-    def _render_offenders_section(self, report: SceneReport) -> None:
-        """Top Issues by Asset (Base Score)."""
-        by_score = report.offenders.by_score
-        if not by_score:
-            return
-        offenders = [r for r in by_score if r.score > 0]
-        if not offenders:
-            return
-
-        # A real section boundary, not a value. The blank line is its own
-        # ``log_raw`` record rather than a "\n" inside the notice: NOTICE
-        # formats as "[NOTICE] %(message)s", so a leading newline in the
-        # message strands the prefix alone on the line above the title.
-        # Each asset below is then its own group (its header line as the title,
-        # its evidence as the items), so the section reads as N chunks rather
-        # than N × ~8 loose paragraphs.
-        self.logger.log_raw("")
-        self.logger.notice("Top Issues by Asset (Base Score)")
-        for i, rec in enumerate(offenders[:5], 1):
-            self._print_asset_record(rec, i)
-
-    def _render_categories_section(self, report: SceneReport) -> None:
-        """Top Offenders by Category — materials correlated with slot bloat."""
-        splits = report.offenders.materials_causing_splits
-        if splits:
-            headers = ["Material", "Unique Meshes", "Avg Slots", "Over-Slot"]
-            sorted_mats = sorted(
-                splits,
-                key=lambda s: (s.over_budget_count, s.avg_slots),
-                reverse=True,
-            )
-            data = [
-                [
-                    s.material,
-                    s.unique_mesh_count,
-                    f"{s.avg_slots:.1f}",
-                    s.over_budget_count,
-                ]
-                for s in sorted_mats[:5]
+        def group(*pairs):
+            items = [
+                self._count(c.get(key, 0), noun, plural)
+                for key, noun, plural in pairs
+                if c.get(key)
             ]
-            self.log_table(
-                data,
-                headers,
-                title="Materials correlated with high slot meshes",
-            )
+            return " · ".join(items)
 
-    def _render_textures_section(self, report: SceneReport) -> None:
-        """Textures — histogram, 4K analysis, heaviest files."""
-        if not report.manifest.textures_collected:
-            return
-
-        textures = report.textures
-
-        if textures.dim_histogram:
-            hist = textures.dim_histogram
-            lines = [
-                f"4k+: {hist['4k+']} | 2k: {hist['2k']} | 1k: {hist['1k']} | "
-                f"512: {hist['512']} | <512: {hist['<512']}"
-            ]
-            if hist["4k+"] > 0:
-                lines.append(
-                    f"4K Analysis: {hist['4k+']} textures "
-                    f"(Shared: {textures.shared_4k_count} | "
-                    f"Single-use: {textures.single_use_4k_count})"
-                )
-            self._emit_section("Textures — Dimension Histogram", lines)
-
-            # Tables are already one record each (``log_table`` writes through
-            # ``log_raw``), so they stay as-is — just not wrapped in a
-            # hand-built header/divider preamble.
-            if hist["4k+"] > 0 and textures.shared_4k:
-                headers = ["Texture Name", "Mesh Count"]
-                data = [
-                    [os.path.basename(s.path), s.mesh_count] for s in textures.shared_4k
-                ]
-                self.log_table(data, headers, title="Top Shared 4K Textures")
-
-        # Heaviest Textures: only print when the single-use 4K count
-        # is high — see prior reviewer note ("Print Heaviest only
-        # when single-use 4K is high (e.g., >25)").
-        if textures.heaviest and textures.single_use_4k_count > 25:
-            headers = ["Path", "Size (MB)", "Res", "Mats", "Meshes", "Inst"]
-            data = []
-            for t in textures.heaviest[:10]:
-                display_path = t.path
-                if len(display_path) > 50:
-                    display_path = "..." + display_path[-47:]
-                data.append(
+        rows: List[Tuple[str, Any]] = []
+        if o.scene_path:
+            rows.append(
+                (
+                    "File",
                     [
-                        display_path,
-                        f"{t.size_mb:.1f}",
-                        f"{t.width}x{t.height}",
-                        t.material_count,
-                        t.mesh_count,
-                        t.instance_count,
-                    ]
+                        Doc.file(
+                            os.path.dirname(o.scene_path),
+                            os.path.basename(o.scene_path),
+                        ),
+                        f"  ({self._mb(o.file_size_mb)})",
+                    ],
                 )
-            self.log_table(data, headers, title="Heaviest Textures (Files)")
-
-    def _render_pipeline_section(self, report: SceneReport) -> None:
-        """Pipeline Integrity — missing project textures + impact."""
-        if not report.manifest.textures_collected:
-            return
-        pipeline = report.pipeline
-        if not pipeline.integrity_warnings:
-            return
-
-        lines = []
-        if pipeline.missing_project:
-            lines.append(f"Missing project files: {len(pipeline.missing_project)}")
-
-        impact = pipeline.impact
-        if not impact.is_empty() and impact.top_offenders:
-            lines.append(f"Affected top offenders: {', '.join(impact.top_offenders)}")
-
-        self._emit_section("Pipeline Integrity", lines, level="WARNING")
-
-        if pipeline.missing_project:
-            headers = ["Missing File Path", "Mats"]
-            data = []
-            for missing in pipeline.missing_project[:5]:
-                display_path = (
-                    missing.path
-                    if len(missing.path) <= 60
-                    else "..." + missing.path[-57:]
-                )
-                data.append([display_path, missing.material_count])
-            self.log_table(data, headers, title="Missing Project Files")
-
-    def _render_assumptions_section(self, report: SceneReport) -> None:
-        """Data Assumptions — methodology notes."""
-        self._emit_section(
-            "Data Assumptions",
-            [
-                "- GPU Size Est: Uncompressed RGBA8 + 33% Mips. Actual usage depends on engine compression (BC1/BC3/ASTC).",
-                "- Compression assumptions: BaseColor BC7/BC1, Normal BC5, Masks (AO/Rough/Metal) BC4/BC1 (varies).",
-                "- Unique Texture Disk Size: Sum of file sizes on disk for unique paths referenced by materials.",
-                "- Effective Score: Base Score * Instance Count. Prioritize high effective scores.",
-            ],
-        )
-
-    def _print_asset_record(self, rec: AssetRecord, rank: int, effective: bool = False):
-        """Render a single asset record. Uses the structured
-        ``rec.findings`` / ``rec.fix_plan`` / ``rec.delta`` — no
-        substring sniffing or regex stripping needed."""
-        effective_score = rec.score * max(1, rec.instance_count)
-
-        score_display = f"Score: {rec.score:.0f}"
-        if effective:
-            score_display = f"Effective: {effective_score:.0f} (Base: {rec.score:.0f})"
-
-        # Evidence accrues here and goes out as ONE grouped record: logged
-        # line-by-line, a single asset spanned ~8 blank-line-separated
-        # paragraphs, which buried the record boundary the ranking implies.
-        lines = []
-
-        if rec.delta.is_over_budget():
-            lines.append(f"Deltas: {rec.delta.summary()}")
-
-        # Slots evidence
-        if rec.material.slot_count > 1:
-            mats = rec.material.materials
-            limit = 3
-            mat_str = ", ".join(mats[:limit])
-            if len(mats) > limit:
-                mat_str += "..."
-            lines.append(f"Slots ({rec.material.slot_count}): {mat_str}")
-
-        # Findings — severity comes from the Finding itself.
-        for finding in rec.findings:
-            conf = self._CONF_TAG.get(finding.severity, "[L]")
-            lines.append(f"- {finding.message} {conf}")
-
-        # Fix Plan — top 3 by emission order (already deduped in
-        # _calculate_score).
-        if rec.fix_plan:
-            lines.append("Fix Plan:")
-            lines.extend(f"  > {action.message}" for action in rec.fix_plan[:3])
-
-        title = (
-            f"#{rank}  {rec.transform:<40} {rec.instance_count} instances | "
-            f"{score_display}"
-        )
-        if lines:
-            self.logger.log_group(title, lines, level="WARNING")
+            )
         else:
-            self.logger.warning(title)
+            rows.append(("File", Doc.span("untitled (never saved)", tone="warn")))
+        rows.append(
+            (
+                "Units",
+                f"{o.linear_unit} · {o.up_axis.upper()}-up · {o.fps:g} fps",
+            )
+        )
+        rows.append(
+            (
+                "Frames",
+                f"playback {o.playback_range[0]:g}–{o.playback_range[1]:g} · "
+                f"animation {o.animation_range[0]:g}–{o.animation_range[1]:g}",
+            )
+        )
+        rows.append(
+            (
+                "Geometry",
+                f"{self._count(c.get('mesh_instances', 0), 'mesh instance')} of "
+                + self._count(c.get("mesh_shapes", 0), "mesh shape"),
+            )
+        )
+        dag = group(
+            ("transforms", "transform", None),
+            ("curves", "curve", None),
+            ("locators", "locator", None),
+        )
+        if dag:
+            rows.append(("DAG", dag))
+        rig = group(
+            ("joints", "joint", None),
+            ("skin_clusters", "skin cluster", None),
+            ("blend_shapes", "blend shape", None),
+            ("constraints", "constraint", None),
+        )
+        if rig:
+            rows.append(("Rigging", rig))
+        anim = group(
+            ("anim_curves", "anim curve", None), ("expressions", "expression", None)
+        )
+        if anim:
+            rows.append(("Animation", anim))
+        shading = group(
+            ("materials", "material", None),
+            ("shading_engines", "shading engine", None),
+            ("file_textures", "file texture", None),
+        )
+        if shading:
+            rows.append(("Shading", shading))
+        other = group(
+            ("lights", "light", None),
+            ("cameras", "camera", None),
+            ("display_layers", "display layer", None),
+        )
+        if other:
+            rows.append(("Scene", other))
+        if o.namespaces:
+            rows.append(("Namespaces", ", ".join(o.namespaces)))
+        if o.references:
+            refs = [os.path.basename(r) for r in o.references]
+            text = ", ".join(refs)
+            if o.unloaded_references:
+                rows.append(
+                    (
+                        "References",
+                        [
+                            text,
+                            Doc.span(
+                                f"  ({len(o.unloaded_references)} unloaded)",
+                                tone="warn",
+                            ),
+                        ],
+                    )
+                )
+            else:
+                rows.append(("References", text))
+        if o.unknown_nodes or o.unknown_plugins:
+            parts = []
+            if o.unknown_nodes:
+                parts.append(self._count(o.unknown_nodes, "unknown node"))
+            if o.unknown_plugins:
+                parts.append("plugins: " + ", ".join(o.unknown_plugins))
+            rows.append(("Unknown", Doc.span(" · ".join(parts), tone="warn")))
+        return doc.fields(rows)
+
+    def _doc_summary(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.SUMMARY])
+        s = report.summary
+        if not s.total_meshes:
+            return doc.text("No meshes in scope.", tone="warn")
+        inst = s.instance_stats
+        rows: List[Tuple[str, Any]] = [
+            (
+                "Meshes",
+                f"{self._count(inst.total_instances, 'instance')} of "
+                f"{self._count(inst.unique_meshes, 'unique shape')}"
+                + (
+                    f" ({inst.instanced_shapes:,} instanced)"
+                    if inst.instanced_shapes
+                    else ""
+                ),
+            ),
+            (
+                "Triangles",
+                f"{s.total_tris:,} rendered · {s.raw_total_tris:,} unique",
+            ),
+            ("Vertices", f"{s.total_verts:,} rendered"),
+        ]
+        m = report.manifest
+        if m.materials_collected:
+            rows.append(
+                (
+                    "Draw calls",
+                    f"~{s.draw_calls:,} (one per material slot per instance, "
+                    "before batching)",
+                )
+            )
+            mats = self._count(s.materials_in_use, "material") + " in use"
+            extra = []
+            if s.blend_meshes:
+                extra.append(
+                    f"{self._count(s.blend_meshes, 'mesh', 'meshes')} alpha-blended"
+                )
+            if s.masked_meshes:
+                extra.append(f"{s.masked_meshes:,} alpha-tested")
+            rows.append(
+                ("Materials", mats + (f" ({', '.join(extra)})" if extra else ""))
+            )
+        t = report.textures
+        if m.textures_collected and t.unique_paths:
+            over = t.est_gpu_mb_compressed > t.budget_mb > 0
+            memory = Doc.span(
+                f"~{self._mb(t.est_gpu_mb_compressed)} GPU (budget {self._mb(t.budget_mb)})",
+                tone="error" if over else None,
+            )
+            rows.append(
+                (
+                    "Textures",
+                    [
+                        f"{self._count(t.unique_paths, 'map')} · "
+                        f"{t.dim_histogram.get('4k+', 0):,} at 4K+ · "
+                        f"{self._mb(t.total_size_mb)} on disk · ",
+                        memory,
+                    ],
+                )
+            )
+        b = report.budget
+        over_parts = [
+            f"{self._count(b.meshes_over_tri_threshold, 'mesh', 'meshes')} over "
+            "the triangle budget",
+        ]
+        if m.materials_collected:
+            over_parts.append(
+                f"{b.meshes_over_slot_threshold:,} over "
+                f"{report.manifest.profile.max_slots} material slots"
+            )
+        rows.append(("Budget", " · ".join(over_parts)))
+        doc.fields(rows)
+        if s.scene_health_flags:
+            doc.items(
+                [Doc.span(f, tone="warn") for f in s.scene_health_flags], tone="warn"
+            )
+        return doc
+
+    def _doc_fix_first(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.FIX_FIRST])
+        if not report.fix_actions:
+            if not report.assets:
+                return doc.text("No meshes in scope.", tone="dim")
+            return doc.text(
+                "Nothing over budget and no pipeline hazards found.", tone="ok"
+            )
+        if not report.assets:  # the scene's own hazards, with nothing in scope
+            doc.text("No meshes in scope; the scene itself:", tone="dim")
+        rows = []
+        names = self._display_names(
+            t
+            for a in report.fix_actions
+            for t in a.detail.get("targets", [])[:3]
+            if str(t).startswith("|")
+        )
+        for index, action in enumerate(report.fix_actions, 1):
+            targets = action.detail.get("targets", [])
+            links = []
+            for target in targets[:3]:
+                if target in names:  # a DAG path
+                    links.append(self._node_link(names[target], target))
+                elif action.kind == "blend_materials":  # a material node
+                    links.append(self._node_link(target, target))
+            cell: List[Any] = [action.message]
+            if links:
+                cell += [Doc.span("  e.g. ", tone="dim"), Doc.join(links)]
+                if len(targets) > len(links):
+                    cell.append(
+                        Doc.span(f" +{len(targets) - len(links):,} more", tone="dim")
+                    )
+            rows.append([index, self._severity(action.severity), cell])
+        return doc.table(["#", "Severity", "Issue"], rows, align="rll")
+
+    def _doc_pareto(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.PARETO])
+        records = report.assets
+        if not records:
+            return doc.text("No meshes in scope.", tone="dim")
+        total = report.summary.total_tris or 1
+        ranked = sorted(
+            records, key=lambda r: r.mesh.tris * r.instance_count, reverse=True
+        )[: self.TABLE_ROWS]
+        names = self._display_names(r.transform for r in ranked)
+        running = 0
+        rows = []
+        for index, r in enumerate(ranked, 1):
+            rendered = r.mesh.tris * r.instance_count
+            running += rendered
+            rows.append(
+                [
+                    index,
+                    self._node_link(names[r.transform], r.transform),
+                    f"{r.mesh.tris:,}",
+                    f"×{r.instance_count:,}",
+                    f"{rendered:,}",
+                    f"{rendered / total * 100:.1f}%",
+                    f"{running / total * 100:.1f}%",
+                ]
+            )
+        top = (
+            "the top mesh carries"
+            if len(ranked) == 1
+            else f"the top {len(ranked)} carry"
+        )
+        doc.table(
+            ["#", "Mesh", "Tris", "Instances", "Rendered", "Share", "Cumulative"],
+            rows,
+            align="rlrrrrr",
+            title=f"Rendered triangles, heaviest first: {top} "
+            f"{running / total * 100:.0f}%",
+        )
+        if report.manifest.materials_collected and report.summary.multi_slot_meshes:
+            # Filtered, THEN cut: single-slot meshes out-drawing the multi-slot
+            # ones must not push them all off the table.
+            ranked = sorted(
+                (r for r in records if r.material.slot_count > 1),
+                key=lambda r: r.material.draw_calls,
+                reverse=True,
+            )[: self.TABLE_ROWS]
+            names = self._display_names(r.transform for r in ranked)
+            calls = report.summary.draw_calls or 1
+            doc.table(
+                ["Mesh", "Slots", "Instances", "Draw calls", "Share"],
+                [
+                    [
+                        self._node_link(names[r.transform], r.transform),
+                        r.material.slot_count,
+                        f"×{r.instance_count:,}",
+                        f"{r.material.draw_calls:,}",
+                        f"{r.material.draw_calls / calls * 100:.1f}%",
+                    ]
+                    for r in ranked
+                ],
+                align="lrrrr",
+                title="Multi-material meshes by draw calls",
+            )
+        return doc
+
+    def _doc_offenders(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.OFFENDERS])
+        flagged = sorted(
+            (r for r in report.assets if r.findings),
+            key=lambda r: (r.score * max(1, r.instance_count), r.mesh.tris),
+            reverse=True,
+        )
+        if not flagged:
+            if report.assets:
+                return doc.text("No mesh-level issues.", tone="ok")
+            return doc.text("No meshes in scope.", tone="dim")
+        shown = flagged[: self.TABLE_ROWS]
+        names = self._display_names(r.transform for r in shown)
+        rows = []
+        for r in shown:
+            issues = Doc.join(
+                [
+                    Doc.span(f.message, tone=self._SEVERITY_TONES.get(f.severity))
+                    for f in r.findings
+                ],
+                sep="; ",
+            )
+            rows.append(
+                [
+                    self._node_link(names[r.transform], r.transform),
+                    f"×{r.instance_count:,}",
+                    f"{r.mesh.tris:,} / {r.target_tris:,}",
+                    issues,
+                ]
+            )
+        rest = len(flagged) - len(shown)
+        return doc.table(
+            ["Mesh", "Inst", "Tris / budget", "Issues"],
+            rows,
+            align="lrrl",
+            title=f"{self._count(len(flagged), 'mesh', 'meshes')} with issues, "
+            "worst first (score × instances)",
+            footer=f"… {rest:,} more" if rest > 0 else None,
+        )
+
+    def _doc_materials(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.MATERIALS])
+        if not report.manifest.materials_collected:
+            return doc.text("Material data was not collected.", tone="dim")
+        if not report.materials:
+            return doc.text("No materials in scope.", tone="dim")
+        textures = report.manifest.textures_collected
+        rows = []
+        for m in report.materials:
+            notes = Doc.join(
+                [
+                    Doc.span(f.message, tone=self._SEVERITY_TONES.get(f.severity))
+                    for f in m.findings
+                ],
+                sep="; ",
+            )
+            row = [
+                self._node_link(m.name, m.name),
+                Doc.span(m.node_type, tone="dim"),
+                f"{m.mesh_count:,}",
+                f"{m.instance_count:,}",
+            ]
+            if textures:
+                row += [
+                    f"{len(m.textures):,}",
+                    f"{m.max_res:,}" if m.max_res else "–",
+                    self._mb(m.gpu_mb) if m.gpu_mb else "–",
+                ]
+            rows.append(row + [notes])
+        headers = ["Material", "Type", "Meshes", "Instances"]
+        if textures:
+            headers += ["Maps", "Max px", "GPU (est.)"]
+        headers.append("Notes")
+        return doc.table(
+            headers,
+            rows,
+            align="llrr" + ("rrr" if textures else "") + "l",
+            title=f"{self._count(len(report.materials), 'material')} in scope, "
+            + ("by texture memory" if textures else "by use"),
+        )
+
+    def _doc_textures(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.TEXTURES])
+        t = report.textures
+        if not report.manifest.textures_collected:
+            return doc.text("Texture data was not collected.", tone="dim")
+        if not t.unique_paths:
+            doc.text("No surface maps in scope.", tone="dim")
+        else:
+            hist = t.dim_histogram
+            doc.fields(
+                [
+                    (
+                        "Memory",
+                        f"~{self._mb(t.est_gpu_mb_compressed)} GPU compressed · "
+                        f"{self._mb(t.est_gpu_mb)} uncompressed · "
+                        f"{self._mb(t.total_size_mb)} on disk",
+                    ),
+                    (
+                        "Resolution",
+                        " · ".join(
+                            f"{label} {hist.get(key, 0):,}"
+                            for key, label in (
+                                ("4k+", "4K+"),
+                                ("2k", "2K"),
+                                ("1k", "1K"),
+                                ("512", "512"),
+                                ("<512", "<512"),
+                            )
+                        ),
+                    ),
+                ]
+            )
+            if t.downscale_candidates:
+                doc.text(
+                    f"{self._count(t.downscale_candidates, 'non-detail map')} at 4K+ "
+                    "(AO / roughness / metallic ...) would read the same at half "
+                    f"resolution: ~{self._mb(t.downscale_savings_mb)} GPU saved.",
+                    tone="warn" if t.est_gpu_mb_compressed > t.budget_mb > 0 else None,
+                )
+            shown = t.heaviest[: self.TABLE_ROWS]
+            rest = len(t.heaviest) - len(shown)
+            doc.table(
+                ["File", "Type", "Size", "Disk", "GPU (est.)", "Materials", "Meshes"],
+                [
+                    [
+                        self._file_link(f.path, os.path.basename(f.path)),
+                        f.map_type.replace("_", " "),
+                        f"{f.width}×{f.height}"
+                        + (f" ×{f.tiles}" if f.tiles > 1 else ""),
+                        self._mb(f.size_mb),
+                        self._mb(f.gpu_mb),
+                        f"{f.material_count:,}",
+                        f"{f.mesh_count:,}",
+                    ]
+                    for f in shown
+                ],
+                align="llrrrrr",
+                title="Heaviest maps by GPU memory",
+                footer=f"… {rest:,} more" if rest > 0 else None,
+            )
+        if t.other:
+            doc.text(
+                [
+                    Doc.span(
+                        f"Not counted: {self._count(len(t.other), 'non-surface map')} "
+                        "(environment / utility images, e.g. StingrayPBS's IBL cube "
+                        "maps and BRDF LUT): ",
+                        tone="dim",
+                    ),
+                    Doc.join(
+                        self._file_link(f.path, name)
+                        for name, f in {
+                            os.path.basename(f.path): f for f in t.other
+                        }.items()
+                    ),
+                ]
+            )
+        return doc
+
+    def _doc_pipeline(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.PIPELINE])
+        if not report.assets:
+            doc.text("No meshes in scope.", tone="dim")
+            self._doc_scene_hazards(doc, report.overview)
+            return doc
+        p = report.pipeline
+        problems = 0
+        if report.manifest.textures_collected:
+            missing = p.missing_project + p.missing_presets
+            if missing:
+                problems += 1
+                doc.table(
+                    ["Missing file", "Materials"],
+                    [
+                        [Doc.span(m.path, tone="error"), ", ".join(m.materials)]
+                        for m in missing[: self.TABLE_ROWS]
+                    ],
+                    align="ll",
+                    wrap=[0, 1],
+                    title=f"Unresolved texture files: {len(missing):,} (Maya's own "
+                    "lookup: project root, then the sourceImages rule)",
+                )
+            bundled = [f for f in report.textures.heaviest if f.bundled]
+            if bundled:
+                problems += 1
+                doc.text(
+                    "Read from Maya's install tree, so not travelling with the "
+                    f"project: {self._count(len(bundled), 'surface map')}.",
+                    tone="warn",
+                )
+        if p.unassigned_meshes:
+            problems += 1
+            names = self._display_names(p.unassigned_meshes[: self.TABLE_ROWS])
+            doc.text(
+                [
+                    Doc.span(
+                        f"{self._count(len(p.unassigned_meshes), 'mesh', 'meshes')} "
+                        "without a material: ",
+                        tone="warn",
+                    ),
+                    Doc.join(self._node_link(names[x], x) for x in names),
+                ]
+            )
+        snap = [r for r in report.assets if r.mesh.uv_snapshot_sets]
+        if snap:
+            problems += 1
+            names = self._display_names(r.transform for r in snap[: self.TABLE_ROWS])
+            doc.text(
+                [
+                    Doc.span(
+                        "Leftover _uv_snap_* UV sets on "
+                        f"{self._count(len(snap), 'mesh', 'meshes')}: ",
+                        tone="error",
+                    ),
+                    Doc.join(self._node_link(names[x], x) for x in names),
+                    Doc.span(
+                        f" +{len(snap) - len(names):,} more"
+                        if len(snap) > len(names)
+                        else "",
+                        tone="dim",
+                    ),
+                ]
+            )
+        if self._doc_scene_hazards(doc, report.overview):
+            problems += 1
+        if not problems:
+            # Only what this run checked is claimed clean.
+            m, files = report.manifest, report.textures.unique_paths
+            clean = []
+            if m.textures_collected and files:
+                clean.append(
+                    "the texture file resolves"
+                    if files == 1
+                    else f"all {files:,} texture files resolve"
+                )
+            if m.materials_collected:
+                clean.append("every mesh has a material")
+            if m.mesh_checks_collected:
+                clean.append("no leftover UV snapshots")
+            if clean:
+                text = "; ".join(clean) + "."
+                doc.text(text[0].upper() + text[1:], tone="ok")
+        return doc
+
+    def _doc_scene_hazards(
+        self, doc: "ptk.ReportDoc", overview: Optional[SceneOverview]
+    ) -> bool:
+        """Scene-wide hazards (unknown nodes / plugins, unloaded references) as
+        one warning line on *doc* -- whatever the scope. True when there were any."""
+        o = overview
+        if not (o and (o.unknown_nodes or o.unknown_plugins or o.unloaded_references)):
+            return False
+        parts = []
+        if o.unknown_nodes or o.unknown_plugins:
+            parts.append(
+                f"{self._count(o.unknown_nodes, 'unknown node')} / "
+                f"{self._count(len(o.unknown_plugins), 'unknown plugin')} "
+                "(Scene > Fix > Cleanup Unknown)"
+            )
+        if o.unloaded_references:
+            parts.append(
+                self._count(len(o.unloaded_references), "unloaded reference")
+                + " (not audited)"
+            )
+        doc.text(" · ".join(parts), tone="warn")
+        return True
+
+    def _doc_assumptions(self, report: SceneReport) -> "ptk.ReportDoc":
+        doc = Doc().heading(SceneInfoSection.LABELS[SceneInfoSection.ASSUMPTIONS])
+        p = report.manifest.profile
+        if p.adaptive_tris:
+            budget = (
+                f"Adaptive triangle budget: {p.max_tris:,} at a {p.reference_diag:g} cm "
+                "world-space diagonal, scaled linearly with size (largest instance), "
+                f"floor {p.min_tris:,}."
+            )
+        else:
+            budget = f"Generic triangle budget: a flat {p.max_tris:,} per mesh."
+        return doc.items(
+            [
+                "Rendered counts weigh each unique shape by its instances in scope; "
+                "unique counts measure each shape once.",
+                "Draw calls: one per material slot per instance, before engine "
+                "batching or GPU instancing.",
+                budget,
+                "GPU memory: a block-compressed estimate with a full mip chain -- "
+                "BC4 / BC1 (0.5 B/px) for single-channel and RGB maps, BC5 / BC7 "
+                "(1 B/px) for normal maps and maps with alpha. Uncompressed RGBA8 "
+                "is shown for reference.",
+                "Surface maps are classified by the ptk map taxonomy (filename "
+                "first, shader slot second); images neither names are listed but "
+                "not counted.",
+                "Texture costs are counted once per file and judged per material, "
+                "not per mesh that wears it; a UDIM set costs every tile, a frame "
+                "sequence one frame. Loose AO / roughness / metallic maps are "
+                "costed as the separate files they are; a GLB export packs them "
+                "into one ORM map.",
+            ]
+        )

@@ -133,6 +133,11 @@ class _SceneTasksMixin(_TaskDataMixin):
         (which scans all descendants), leaving the check failing after
         every repair pass.  Permanent scene improvement (deliberately not
         reverted after export).
+
+        The shots follow the rename (:meth:`_repath_shot_members`): a shot
+        names its members by path, and a hold shot -- nothing keyed in its
+        window -- whose members this repair renamed named no object any more,
+        so the export it was repairing names for dropped its take as stale.
         """
         # `or []` — a None/empty export set must stay a no-op; passing None
         # through would repair the WHOLE scene.
@@ -146,6 +151,7 @@ class _SceneTasksMixin(_TaskDataMixin):
         # (a bulk cmds.ls silently drops an unresolvable name and expands an
         # ambiguous one, which would shift every pairing after it).
         uuids = [(cmds.ls(o, uuid=True) or [None])[0] for o in objects]
+        members = self._shot_member_uuids() if objects else {}
 
         result = SceneDiagnostics.repair_mangled_names(objects)
         if result["renamed"]:
@@ -161,7 +167,67 @@ class _SceneTasksMixin(_TaskDataMixin):
         # run after two minutes of texture work.
         if result["renamed"] or result["shapes_conformed"]:
             self.objects = self._repath_renamed(objects, uuids)
+            self._repath_shot_members(members)
             self.record_kept_edit("repaired node and shape names")
+
+    def _shot_member_uuids(self) -> Dict[str, str]:
+        """``{member path: node UUID}`` for every shot member the active
+        ``ShotStore`` names that resolves to exactly one node -- snapshotted
+        before a rename, for :meth:`_repath_shot_members`.  A store that
+        cannot be read snapshots nothing: the shots then stay as they were,
+        which is never worse than before the repair."""
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            store = ShotStore.active()
+            names = {o for shot in store.shots for o in shot.objects}
+        except Exception:  # shot bookkeeping must never stop the repair
+            self.logger.debug("Shot members not snapshotted.", exc_info=True)
+            return {}
+        snapshot = {}
+        for name in sorted(names):
+            found = cmds.ls(name, uuid=True) or []
+            if len(found) == 1:
+                snapshot[name] = found[0]
+        return snapshot
+
+    def _repath_shot_members(self, members: Dict[str, str]) -> int:
+        """Point every shot member a rename moved at its node's new path.
+
+        *members* is :meth:`_shot_member_uuids`' pre-rename snapshot; each
+        entry is re-derived as the export set is (:meth:`_repath_renamed`, by
+        UUID -- a path a rename freed up may hold a DIFFERENT node now).  The
+        store is updated in one batch (``ShotStore.update_shot``), kept like
+        the rename itself.  Returns how many shots changed.
+        """
+        moved = {}
+        for name, uuid in members.items():
+            found = self._repath_renamed([name], [uuid])
+            if found and found[0] != name:
+                moved[name] = found[0]
+        if not moved:
+            return 0
+        try:
+            from mayatk.anim_utils.shots._shots import ShotStore
+
+            store = ShotStore.active()
+            changed = [s for s in store.shots if moved.keys() & set(s.objects)]
+            with store.batch_update():
+                for shot in changed:
+                    store.update_shot(
+                        shot.shot_id, objects=[moved.get(o, o) for o in shot.objects]
+                    )
+        except Exception:  # the export goes on; say which shots may drop
+            self.logger.warning(
+                "Could not point the shots at their repaired member names; a "
+                "shot keyed nothing in its frames may be left out as stale.",
+                exc_info=True,
+            )
+            return 0
+        self.logger.info(
+            f"Pointed {len(changed)} shot(s) at their repaired member names."
+        )
+        return len(changed)
 
     def _shear_scan_nodes(self) -> List[str]:
         """Export-set transforms plus every joint under them.
