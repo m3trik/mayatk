@@ -1,52 +1,54 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 3988123)._
+_Diff vs the last release (origin/main @ 74a06db)._
 
-## Added (19)
+## Added (14)
 
-- `env_utils/blender_bridge/templates/bake_lightmaps.py::LIGHTMAP_ADAPTIVE(constant)`
-- `env_utils/blender_bridge/templates/bake_lightmaps.py::LIGHTMAP_BESIDE_TEXTURES(constant)`
-- `env_utils/blender_bridge/templates/bake_lightmaps.py::LIGHTMAP_BOUNCES(constant)`
-- `env_utils/blender_bridge/templates/bake_lightmaps.py::lightmap_records(meshes)`
-- `env_utils/reference_manager.py::ReferenceManagerController.set_maya_project(self)`
-- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_copy_path(self)`
-- `env_utils/reference_manager.py::ReferenceManagerSlots.txt_subfolder_structure(self, text)`
-- `env_utils/usd.py::UsdUtils.conform_roots(roots: List[str], conform: Optional[Tuple[float, float]], name: str) -> Optional[str]`
-- `env_utils/usd.py::UsdUtils.stage_conform(cls, usd_path: str) -> Optional[Tuple[float, float]]`
-- `env_utils/usd.py::UsdUtils.top_transforms(nodes: List[str]) -> List[str]`
-- `light_utils/lightmap_baker/lightmap_records.py::LightmapRecords.migrate_folder_hints(cls, objects: Optional[List[str]] = None) -> List[str]`
-- `light_utils/lightmap_baker/lightmap_records.py::LightmapRecords.superseding(cls, objects: List[str]) -> Iterator[List[str]]`
-- `mat_utils/arnold_bridge.py::ArnoldBridge.temporary(self, materials: Union[str, List[str]]) -> Iterator[List[str]]`
-- `mat_utils/arnold_bridge.py::ArnoldBridge.unrenderable_materials(cls) -> List[str]`
-- `node_utils/data_nodes.py::DataNodes.install_path_rebase(cls) -> bool`
-- `node_utils/data_nodes.py::DataNodes.project_root(cls) -> Optional[str]`
-- `node_utils/data_nodes.py::DataNodes.remove_path_rebase(cls) -> None`
-- `uv_utils/_uv_utils.py::UvUtils.pins_lifted(uvs)`
-- `uv_utils/rizom_bridge/parameters.py::HOST_TOKEN_DEFAULTS(constant)`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_stale_shots(self) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsController.confirm_stale_removal(stale, parent=None) -> bool`
+- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_stale_shots(self) -> None`
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_delete_stale(self)`
+- `core_utils/diagnostics/audit_records.py::MaterialAudit(class)`
+- `core_utils/diagnostics/audit_records.py::SceneOverview(class)`
+- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_BLEND(constant)`
+- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_MASKED(constant)`
+- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_OPAQUE(constant)`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.adopt_sidecar(cls, export_path: str, *, base_stem: bool = False) -> bool`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.inherited_from(cls) -> Optional[str]`
+- `env_utils/maya_connection.py::MayaConnection.close_launched(self, force: bool = False) -> bool`
+- `mat_utils/_mat_utils.py::MatUtils.is_frame_sequence(cls, path: str) -> bool`
+- `node_utils/data_nodes.py::DataNodes.scene_path(cls) -> str`
 
-## Deprecations (10)
+## Deprecations (11)
 
 _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its window: delete the alias and its tests rather than moving the date. A **HELD** row is due by version, but its notice has not yet had its calendar window._
 
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.export_record` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.heal_lightmap_paths` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.lightmap_dependencies` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.normalize_lightmap_paths` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.refresh_export_metadata` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.relocate_lightmaps` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.repath_lightmaps` — remove in 0.20.0, not before 2026-10-23
-- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.search_dirs` — remove in 0.20.0, not before 2026-10-23
-- `mat_utils/render_opacity/render_effects.py::RenderEffects.setup` — remove in 0.20.0, not before 2026-10-23
-- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.format_export_name` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.export_record` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.heal_lightmap_paths` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.lightmap_dependencies` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.normalize_lightmap_paths` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.refresh_export_metadata` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.relocate_lightmaps` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.repath_lightmaps` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.search_dirs` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `mat_utils/render_opacity/render_effects.py::RenderEffects.setup` — remove in 0.20.0, not before 2026-10-23
+- **HELD** `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.format_export_name` — remove in 0.20.0, not before 2026-10-23
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.migrate_from_sidecar` — remove in 0.21.0, not before 2026-10-24
+
+## Moved (1)
+
+_Still resolvable at the same call site -- hoisted to a base class or re-exported from another module. NOT a removal: no alias or minor bump is owed._
+
+- `node_utils/data_nodes.py::DataNodes.project_root`
 
 ## Signature changed (3)
 
-- `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.bake_lightmaps`
-  - was: `(self, out: Optional[str] = None, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, quality: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, packing: Optional[str] = None, scene_lights: Optional[bool] = None, light_strength: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]`
-  - now: `(self, out: Optional[str] = None, objects: Optional[List[Any]] = None, *, environment_hdr: Optional[str] = None, quality: Optional[str] = None, resolution: Optional[int] = None, samples: Optional[int] = None, bounces: Optional[int] = None, packing: Optional[str] = None, scene_lights: Optional[bool] = None, light_strength: Optional[float] = None, timeout: Optional[float] = None, reassemble: bool = True, **params: Any) -> Optional[Dict[str, Any]]`
-- `env_utils/usd.py::UsdUtils.import_scene`
-  - was: `(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, read_animation: bool = True) -> List[str]`
-  - now: `(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, read_animation: bool = True, conform: bool = False) -> List[str]`
-- `mat_utils/game_shader.py::GameShader.setup_stringray_node`
-  - was: `(self, name: str, opacity: bool, opacity_mode: str = None) -> object`
-  - now: `(self, name: str, opacity: bool = False, opacity_mode: str = None) -> object`
+- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.analyze`
+  - was: `(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None) -> List[AssetRecord]`
+  - now: `(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> List[AssetRecord]`
+- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.format_audit_html`
+  - was: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]`
+  - now: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]`
+- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.format_audit_text`
+  - was: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]`
+  - now: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]`

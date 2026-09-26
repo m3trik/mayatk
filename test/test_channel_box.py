@@ -30,9 +30,10 @@ def _await_channel_box(node=None):
     the channel box back; hence a truthful None rather than a pump loop that
     cannot succeed.
 
-    This matters because an empty model makes ``ChannelBox._main_view()``
-    return None, and ``select_visual`` then falls back to ``cmds.channelBox
-    -select``, measured to leave ``-q -sma`` empty — the highlight never lands.
+    This matters because ``select_visual`` can only highlight a filled box:
+    on an unfilled one it retries on idle, which never comes inside the
+    harness call (``TestSelectVisualWaitsForRefill`` drives that path with
+    a fake view instead).
 
     Returns:
         QTableView|None: the view, or None if the channel box is not populated.
@@ -219,6 +220,188 @@ class TestSelect(MayaTkTestCase):
         self.assertIn("tx", sel)
 
 
+class _FakeChannelBoxView:
+    """Stand-in for the ``mainChannelBox`` QTableView: a QtCore model only.
+
+    Mirrors the state measured on Maya 2025 right after the box's node changes:
+    the old row count survives but every cell reads ``""`` until Maya's idle
+    refill fills them in.
+    """
+
+    def __init__(self, texts, visible=True):
+        from qtpy import QtCore
+
+        class _Model(QtCore.QStringListModel):
+            # PySide6's binding makes ``parent`` mandatory here; the real
+            # channel-box model takes the QAbstractItemModel default.
+            def columnCount(self, parent=QtCore.QModelIndex()):
+                return 1
+
+        self._model = _Model(list(texts))
+        self._sel = QtCore.QItemSelectionModel(self._model)
+        self.visible = visible
+
+    def refill(self, texts):
+        self._model.setStringList(list(texts))
+
+    def isVisible(self):
+        return self.visible
+
+    def model(self):
+        return self._model
+
+    def selectionModel(self):
+        return self._sel
+
+    def selected_texts(self):
+        return sorted(self._model.data(i) for i in self._sel.selectedRows(0))
+
+
+class TestSelectVisualWaitsForRefill(MayaTkTestCase):
+    """select_visual on a channel box that has not refilled yet.
+
+    Repro (Channels panel, fresh Maya 2025): the first row click after the
+    box's node changed logged "Qt path unavailable" and set no highlight; the
+    same click a moment later worked.  The box still had its 16 rows, all
+    blank, so nothing matched.  It should wait for the refill, not warn.
+    """
+
+    POPULATED = ["cubeA", "Translate X", "Translate Y", "Translate Z"]
+
+    def setUp(self):
+        super().setUp()
+        cmds.select(cmds.polyCube(name="cubeA")[0], replace=True)
+        self.deferred = []
+        self.warnings = []
+        import logging
+        from unittest import mock
+        import mayatk.ui_utils.channel_box as cb_mod
+
+        test = self
+
+        class _Warn(logging.Handler):
+            def emit(self, record):
+                if record.levelno >= logging.WARNING:
+                    test.warnings.append(record.getMessage())
+
+        handler = _Warn()
+        logger = logging.getLogger(cb_mod.__name__)
+        logger.addHandler(handler)
+        self.addCleanup(logger.removeHandler, handler)
+
+        for target, attr, kwargs in (
+            # Idle is ours to run: queue the deferred callables.
+            (cb_mod.cmds, "evalDeferred", {"side_effect": self._queue}),
+            # The cmds fallback is measured dead in 2025; keep it off the scene.
+            (ChannelBox, "select", {}),
+        ):
+            patcher = mock.patch.object(target, attr, **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _queue(self, fn, *args, **kwargs):
+        self.deferred.append(fn)
+
+    def _use_view(self, view):
+        from unittest import mock
+
+        patcher = mock.patch.object(
+            ChannelBox, "_main_view", side_effect=lambda *a, **k: view
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run_idle(self, limit=50):
+        """Drain the deferred queue the way Maya's idle loop would."""
+        ran = 0
+        while self.deferred and ran < limit:
+            self.deferred.pop(0)()
+            ran += 1
+        return ran
+
+    def test_blank_model_waits_for_refill_instead_of_warning(self):
+        view = _FakeChannelBoxView([""] * 4)
+        self._use_view(view)
+
+        ChannelBox.select_visual(["translateX"])
+        self.assertEqual(self.warnings, [])
+        self.assertTrue(self.deferred, "no retry scheduled for the unfilled box")
+
+        view.refill(self.POPULATED)
+        self._run_idle()
+        self.assertEqual(view.selected_texts(), ["Translate X"])
+        self.assertEqual(self.warnings, [])
+
+    def test_warns_once_when_the_box_never_fills(self):
+        self._use_view(_FakeChannelBoxView([""] * 4))
+
+        ChannelBox.select_visual(["translateX"])
+        ran = self._run_idle()
+        self.assertLess(ran, 50, "retries must be bounded")
+        self.assertEqual(len(self.warnings), 1, self.warnings)
+
+    def test_newer_request_supersedes_a_pending_retry(self):
+        view = _FakeChannelBoxView([""] * 4)
+        self._use_view(view)
+
+        ChannelBox.select_visual(["translateX"])
+        view.refill(self.POPULATED)
+        ChannelBox.select_visual(["translateY"])
+        self._run_idle()
+        self.assertEqual(view.selected_texts(), ["Translate Y"])
+
+    def test_hidden_box_warns_without_retrying(self):
+        # Hidden (e.g. tabbed behind the Outliner) it stays empty until shown.
+        self._use_view(_FakeChannelBoxView([""] * 4, visible=False))
+
+        ChannelBox.select_visual(["translateX"])
+        self.assertEqual(self.deferred, [])
+        self.assertEqual(len(self.warnings), 1, self.warnings)
+        self.assertIn("hidden", self.warnings[0])
+
+    def test_attr_not_shown_warns_without_retrying(self):
+        self._use_view(_FakeChannelBoxView(self.POPULATED))
+
+        ChannelBox.select_visual(["visibility"])
+        self.assertEqual(self.deferred, [])
+        self.assertEqual(len(self.warnings), 1, self.warnings)
+
+
+class TestConnectToAnEmptyBox(MayaTkTestCase):
+    """The Channels panel connects when it opens, often to an empty box.
+
+    Measured on Maya 2025: the box keeps the same model and selection model
+    from empty to filled, and a connection made while it was empty receives
+    the later selections.  Refusing it left the panel's box-to-table sync
+    dead until the next scene selection change.
+    """
+
+    def test_connects_while_the_box_has_no_rows(self):
+        from unittest import mock
+
+        view = _FakeChannelBoxView([])
+
+        def main_view(require_rows=True):
+            if require_rows and view.model().rowCount() == 0:
+                return None
+            return view
+
+        hits = []
+
+        def slot(selected, deselected):
+            hits.append(1)
+
+        with mock.patch.object(ChannelBox, "_main_view", side_effect=main_view):
+            self.assertTrue(ChannelBox.connect_selection_changed(slot))
+            view.refill(["cubeA", "Translate X"])
+            view.selectionModel().select(
+                view.model().index(1, 0),
+                view.selectionModel().SelectionFlag.Select,
+            )
+            ChannelBox.disconnect_selection_changed(slot)
+        self.assertEqual(hits, [1])
+
+
 class TestClearSelection(MayaTkTestCase):
     """Tests for ChannelBox.clear_selection."""
 
@@ -246,7 +429,10 @@ class TestConnectDisconnectSignal(MayaTkTestCase):
             self.skipTest("channel box not populated (see _await_channel_box)")
 
         calls = []
-        cb = lambda sel, desel: calls.append(1)
+
+        def cb(sel, desel):
+            calls.append(1)
+
         result = ChannelBox.connect_selection_changed(cb)
         self.assertTrue(result)
         ChannelBox.disconnect_selection_changed(cb)
@@ -257,7 +443,9 @@ class TestWatchUnwatch(MayaTkTestCase):
 
     @skipUnlessExtended
     def test_watch_returns_job_id(self):
-        cb = lambda attrs: None
+        def cb(attrs):
+            pass
+
         job_id = ChannelBox.watch_selection(cb)
         self.assertIsNotNone(job_id)
         ChannelBox.unwatch_selection(cb)

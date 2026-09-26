@@ -499,6 +499,12 @@ class _TaskDataMixin:
         one from before the first of them ran, which is the only correct one
         to restore.
 
+        Taken over the export's whole DAG subtree (:meth:`_exported_objects`),
+        SHAPES included, because that is what snap and tie edit: a camera's
+        focalLength or a light's intensity is keyed on its shape, and a
+        snapshot that probed descendant transforms only handed those curves
+        back snapped and tied (2026-09-24).
+
         Parameters:
             keeps_edits: Whether the caller's key edits stay in the scene in
                 write-back mode, and so are recorded as kept there
@@ -516,7 +522,7 @@ class _TaskDataMixin:
             return False
         if "animation" in self._deferred_restores:
             return True  # an earlier task already captured the scene
-        snapshot = AnimUtils.snapshot_curves(self._live_objects(), recursive=True)
+        snapshot = AnimUtils.snapshot_curves(self._exported_objects(), recursive=False)
         self.stage_deferred_restore(
             "animation", lambda: self._restore_animation(snapshot)
         )

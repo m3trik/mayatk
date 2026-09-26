@@ -905,6 +905,38 @@ class TestMeshTransformResolution(MayaTkTestCase):
             {cmds.ls(base, long=True)[0], cmds.ls(inst, long=True)[0]},
         )
 
+    def test_a_component_names_the_instance_it_was_picked_on(self):
+        """Faces picked on one instance are that instance's, not every wearer's:
+        a component's ``objectsOnly`` answer is one instance PATH of the shape."""
+        base = cmds.polyCube(name="mtr_pick_base")[0]
+        inst = cmds.instance(base, name="mtr_pick_copy")[0]
+        self.assertEqual(
+            Components.get_mesh_transforms([f"{inst}.f[0:2]"]),
+            cmds.ls(inst, long=True),
+        )
+
+    def test_group_instanced_subtree_reports_every_path(self):
+        """A group instanced under two named parents is two targets, not one.
+
+        ``ls -dagObjects`` names each NODE once, so the second parent's walk
+        reached a subtree the first had already listed and its path was
+        dropped: selecting both parents resolved a single mesh (measured,
+        mayapy 2025). ``-allPaths`` recovers it but also lists instances under
+        parents that were NOT named, so one parent must still answer alone.
+        """
+        geo = cmds.polyCube(name="mtr_grp_geo")[0]
+        grp = cmds.group(geo, name="mtr_grp")
+        p1 = cmds.ls(cmds.group(grp, name="mtr_grp_p1"), long=True)[0]
+        p2 = cmds.ls(cmds.group(empty=True, name="mtr_grp_p2"), long=True)[0]
+        cmds.parent(grp, p2, addObject=True)
+        leaf = "|mtr_grp|mtr_grp_geo"
+
+        self.assertEqual(
+            sorted(Components.get_mesh_transforms([p1, p2])),
+            sorted([p1 + leaf, p2 + leaf]),
+        )
+        self.assertEqual(Components.get_mesh_transforms([p1]), [p1 + leaf])
+
 
 class TestStandoffDistances(MayaTkTestCase):
     """``get_standoff_distances`` -- what sizes the Marmoset bake cage.

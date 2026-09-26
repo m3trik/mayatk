@@ -235,29 +235,6 @@ class LightmapRecords(ptk.LoggingMixin):
 
         ptk.SceneRecords.LIGHTMAP_WRITERS.save(DataNodes, dict(sorted(writers.items())))
 
-    @staticmethod
-    def _scene_file() -> str:
-        """This scene's file as the writer record stores it: spelled from its own
-        project (``ptk.FileUtils.portable_path``), ``""`` while unsaved."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        scene = EnvUtils.saved_scene_path()
-        if not scene:
-            return ""
-        return ptk.FileUtils.portable_path(scene, DataNodes.project_root())
-
-    @staticmethod
-    def _written_here(writer: Optional[str]) -> bool:
-        """Whether *writer* (a writer-record entry) makes a map this scene's own
-        (:meth:`ptk.FileDependencies.written_here`: this file, written while it
-        is still unsaved, or a file that is gone -- never a Save As copy's
-        source)."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return ptk.FileDependencies.written_here(
-            writer, EnvUtils.saved_scene_path(), DataNodes.project_root()
-        )
-
     @classmethod
     def _marked_nodes(cls) -> set:
         """Every node in the scene carrying a :attr:`LIGHTMAP_INFO_ATTR` marker.
@@ -508,8 +485,10 @@ class LightmapRecords(ptk.LoggingMixin):
             cls._save_folder_hints(hints)
             # ...and that THIS scene wrote them: what lets a later re-bake
             # delete them once superseded (:meth:`superseding`).
+            from mayatk.node_utils.data_nodes import DataNodes
+
             writers = cls._writers()
-            writers.update(dict.fromkeys(folders, cls._scene_file()))
+            writers.update(dict.fromkeys(folders, DataNodes.writer_stamp()))
             cls._save_writers(writers)
             cls._publish()
         return recorded
@@ -591,7 +570,7 @@ class LightmapRecords(ptk.LoggingMixin):
         that raises deletes nothing.
 
         Only this scene's own maps are candidates: recorded in its folder
-        record AND written by it (:meth:`_written_here`) -- never a map
+        record AND written by it (``DataNodes.written_here``) -- never a map
         another scene file still reads, such as a Save As copy's source, nor
         one committed before writers were recorded -- and never one a
         REFERENCED object reads, which its own file may name too. A map an
@@ -623,6 +602,8 @@ class LightmapRecords(ptk.LoggingMixin):
         superseded (:meth:`superseding`)."""
         if cmds is None or not objects:
             return []
+        from mayatk.node_utils.data_nodes import DataNodes
+
         hints, writers = cls._folder_hints(), cls._writers()
         readers = cls.claims()
         own: Dict[Optional[str], bool] = {}
@@ -632,7 +613,7 @@ class LightmapRecords(ptk.LoggingMixin):
             key = cls._hint_key(name)
             writer = writers.get(key)
             if writer not in own:
-                own[writer] = cls._written_here(writer)
+                own[writer] = DataNodes.written_here(writer)
             if key not in hints or not own[writer]:
                 continue
             if any(cls._referenced(o) for o in readers.get(key, ())):

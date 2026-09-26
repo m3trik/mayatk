@@ -1734,11 +1734,10 @@ def main() -> int:
                 print("[OK] Maya closed.")
             except Exception as e:
                 print(f"[WARNING] Failed to close Maya gracefully: {e}")
-                # Last resort: kill by PID
+                # Last resort: the Maya this run launched, by its PID -- never
+                # by port, which another Maya can hold once ours is gone.
                 try:
-                    port = getattr(runner.connection, "port", None)
-                    if port:
-                        runner.connection.close_instance(port=port, force=True)
+                    runner.connection.close_launched(force=True)
                 except Exception:
                     pass
 

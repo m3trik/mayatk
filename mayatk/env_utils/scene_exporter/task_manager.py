@@ -269,11 +269,11 @@ class TaskManager(
 
         paths = self._build_full_hierarchy_set()
 
-        # Adopt any on-disk baselines before rolling forward, so history is not
-        # lost for a scene whose hierarchy CHECK is switched off -- the check
-        # migrates too, but it is optional and the write is not. No-ops once the
-        # scene carries a record of its own.
-        HierarchyBaseline.migrate_from_sidecar(os.path.dirname(export_path))
+        # Adopt this deliverable's on-disk baseline before rolling forward, so
+        # history is not lost for a scene whose hierarchy CHECK is switched off
+        # -- the check adopts too, but it is optional and the write is not.
+        # No-ops once the scene's record holds this deliverable's scope.
+        HierarchyBaseline.adopt_sidecar(export_path, **self._sidecar_kwargs())
 
         # The BASELINE first, and unconditionally: it goes to the SCENE, not the
         # sidecar, so it must not be skipped by the sidecar's own "nothing to

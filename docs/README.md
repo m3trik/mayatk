@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-7727%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-7802%20passed-brightgreen.svg)](../test/)
 
 # mayatk
 
@@ -108,10 +108,14 @@ mtk.SmartBake.restore()             # undo the bake — drivers resume
 ### Scene audit
 
 ```python
-mtk.SceneAnalyzer.run_audit(adaptive=True)
-# → triangle/material budgets, top-offender Pareto, missing-texture impact,
-#   instancing stats (format_audit_html for an HTML report)
+mtk.SceneAnalyzer.run_audit(adaptive=True)                  # print the report
+html = mtk.SceneAnalyzer.format_audit_html(scope="all")    # {section: html}
+# → scene overview, rendered vs unique triangles (every instance counted),
+#   draw calls, per-material texture cost (GPU estimate), a ranked Fix First
+#   list, top contributors, missing textures, leftover UV snapshots
 ```
+
+The report behind tentacle's Get Scene Info. Sections render through pythontk's `ReportDoc` -- HTML tables for a viewer, the same content as text for the console -- and blendertk's `SceneAnalyzer` produces the same report from a Blender scene.
 
 ### DCC bridges
 

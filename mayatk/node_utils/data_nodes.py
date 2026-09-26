@@ -579,13 +579,15 @@ class DataNodes(ptk.SceneStoreBase):
     # ------------------------------------------------------------------
 
     @classmethod
-    def project_root(cls) -> Optional[str]:
-        """The project the open scene FILE lives in -- what the path records
-        (``ptk.RecordSpec.paths``) are spelled from; never the session's
-        project, which any other scene may have set. ``None`` while unsaved."""
+    def scene_path(cls) -> str:
+        """The open scene's file, ``""`` while unsaved
+        (``EnvUtils.saved_scene_path``) -- what the store's project root and
+        writer stamp (``project_root`` / ``writer_stamp`` / ``written_here``,
+        ``ptk.SceneStoreBase``) derive from: the project the scene FILE lives
+        in, never the session's, which any other scene may have set."""
         from mayatk.env_utils._env_utils import EnvUtils
 
-        return cls.project_root_of(EnvUtils.saved_scene_path())
+        return EnvUtils.saved_scene_path()
 
     @staticmethod
     def _rebase_state() -> dict:

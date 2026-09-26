@@ -4,7 +4,7 @@ import math
 import random
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Union, List, Dict, Tuple, Optional
+from typing import Union, List, Dict, Set, Tuple, Optional
 
 try:
     import maya.cmds as cmds
@@ -343,6 +343,22 @@ class _ComponentsInternal(object):
             return None
 
     @staticmethod
+    def _path_at_or_below(path: str, roots) -> bool:
+        """Is DAG *path* one of *roots* (full paths) or a descendant of one?
+
+        Walks the path's own ancestors (``|a``, ``|a|b``, ...) against the set,
+        so the cost is the path's depth rather than the number of roots.
+        """
+        if path in roots:
+            return True
+        index = path.find("|", 1)
+        while index != -1:
+            if path[:index] in roots:
+                return True
+            index = path.find("|", index + 1)
+        return False
+
+    @staticmethod
     def _mesh_transform_shapes(objects) -> List[Tuple[str, str]]:
         """``[(mesh transform, its mesh shape)]`` in *objects*, descendants included.
 
@@ -386,19 +402,45 @@ class _ComponentsInternal(object):
         resolved = cmds.ls(names, objectsOnly=True, long=True) or []
         if not resolved:
             return []
-        transforms = (
-            cmds.ls(resolved, dagObjects=True, long=True, type="transform") or []
-        )
+        # Every PATH below the named nodes, not every node: ``dagObjects`` names
+        # a node once, so a subtree instanced under two named parents came back
+        # under whichever parent was walked first (select both parents of an
+        # instanced group, get one mesh). ``allPaths`` lists each path -- and
+        # with it the instances under parents nobody named, so keep only the
+        # paths at or below a named node.
+        roots = set(resolved)
+        transforms = [
+            path
+            for path in cmds.ls(
+                resolved, dagObjects=True, allPaths=True, long=True, type="transform"
+            )
+            or []
+            if _ComponentsInternal._path_at_or_below(path, roots)
+        ]
         # A mesh SHAPE names geometry just as legitimately as its transform does
         # (``cmds.ls(type="mesh")`` is the usual way to ask for "every mesh in
         # the scene"), but it has no descendants for ``dagObjects`` to walk, so
         # the transform-typed filter above drops it and the caller gets an empty
         # answer with no error. Map each one back to EVERY parent, not the
-        # first: an instanced shape is one node worn by many transforms.
+        # first: an instanced shape is one node worn by many transforms. A
+        # COMPONENT is the exception: its ``objectsOnly`` answer is the one
+        # instance path it was picked on (faces selected on instance 2 are
+        # instance 2's), so it keeps that path's own parent.
+        # (Every ``ls`` here is gated: an empty list reads as "everything".)
+        picked: Set[str] = set()
+        components = [n for n in names if "." in n]
+        owners = cmds.ls(components, objectsOnly=True, long=True) if components else []
+        if owners:
+            picked.update(cmds.ls(owners, long=True, type="mesh") or [])
+        whole = [n for n in names if "." not in n]
+        named = set(cmds.ls(whole, long=True, type="mesh") or []) if whole else set()
         for shape in cmds.ls(resolved, long=True, type="mesh") or []:
-            transforms.extend(
-                cmds.listRelatives(shape, allParents=True, fullPath=True) or []
-            )
+            if shape in picked and shape not in named:
+                transforms.append(shape.rsplit("|", 1)[0])
+            else:
+                transforms.extend(
+                    cmds.listRelatives(shape, allParents=True, fullPath=True) or []
+                )
         pairs = []
         for xform in dict.fromkeys(transforms):
             shapes = (

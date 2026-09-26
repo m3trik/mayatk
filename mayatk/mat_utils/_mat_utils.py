@@ -561,6 +561,24 @@ class _MatUtilsInternal(ptk.HelpMixin):
         return bool(path) and bool(cls._PATH_TOKEN_RE.search(path))
 
     @classmethod
+    def is_frame_sequence(cls, path: str) -> bool:
+        """Does *path*'s token count FRAMES (``<f>`` / ``<frame>``), not tiles?
+
+        The split a cost has to make: a UDIM / UV-tile set is loaded whole, a
+        frame sequence one frame at a time, so :meth:`texture_tiles` answers
+        with every file of both but only a tile set's count multiplies memory.
+        The same table (:attr:`_PATH_TOKENS`) decides: a token with no fixed
+        stand-in is a frame counter. A pure string test.
+
+        Parameters:
+            path: A stored texture path, or just its basename.
+        """
+        return any(
+            cls._PATH_TOKENS[match.group(0).lower()][0] is None
+            for match in cls._PATH_TOKEN_RE.finditer(path or "")
+        )
+
+    @classmethod
     def token_wildcard(cls, path: str, wildcard: Optional[str] = "*") -> str:
         """*path* with every tile/frame token replaced by *wildcard*.
 

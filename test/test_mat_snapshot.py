@@ -174,6 +174,29 @@ class TestMatSnapshotNetwork(MayaTkTestCase):
         self.assertTrue(cmds.isConnected(f"{self.tex}.outColor", f"{self.mat}.color"))
         self.assertEqual(cmds.getAttr(f"{self.tex}.fileTextureName"), "orig.png")
 
+    def test_restore_puts_back_the_values_a_rewrite_set_and_drops_its_attrs(self):
+        """A conversion writes VALUES beside the wiring -- a standardSurface's
+        emission weight set to 1.0 for its new emissive map, a StingrayPBS
+        ``use_*_map`` toggle, an added ``MSAO_Map`` -- and a slot it drove
+        keeps the last value that flowed in once the wiring comes off.  The
+        staged conversion's restore put back only the wiring and five file
+        attributes, so each of those stayed changed after an "Export Copies"
+        export (restore-point audit, 2026-09-24)."""
+        cmds.setAttr(f"{self.mat}.glowIntensity", 0.25)
+        cmds.setAttr(f"{self.mat}.diffuse", 0.61)
+        snap = MatSnapshot.capture_network([self.mat])
+        self._rewire_like_a_conversion()  # drives .diffuse from a new map
+        cmds.getAttr(f"{self.mat}.diffuse")  # let the driven value flow in
+        cmds.setAttr(f"{self.mat}.glowIntensity", 1.0)
+        cmds.addAttr(self.mat, longName="MSAO_Map", attributeType="bool")
+
+        counts = MatSnapshot.restore_network(snap)
+
+        self.assertAlmostEqual(cmds.getAttr(f"{self.mat}.glowIntensity"), 0.25, 5)
+        self.assertAlmostEqual(cmds.getAttr(f"{self.mat}.diffuse"), 0.61, 5)
+        self.assertFalse(cmds.attributeQuery("MSAO_Map", node=self.mat, exists=True))
+        self.assertGreaterEqual(counts["attrs"], 2)
+
     def test_restore_is_a_no_op_on_an_untouched_network(self):
         snap = MatSnapshot.capture_network([self.mat])
         counts = MatSnapshot.restore_network(snap)

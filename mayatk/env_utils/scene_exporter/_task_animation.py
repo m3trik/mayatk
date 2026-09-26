@@ -355,12 +355,30 @@ class _AnimationTasksMixin(_TaskDataMixin):
             return
 
         start, end = int(math.floor(resolved[0])), int(math.ceil(resolved[1]))
-        # Capture BEFORE the write, and stage rather than revert-pair: the
-        # write itself has to read this range, so a revert that runs when
-        # run_tasks returns would undo it before the export.  Staging is
-        # first-wins and unwinds LIFO, so with apply_declared_takes' own
-        # "fbx_takes" restore also staged (earlier, since it runs first) the
-        # pair composes back to the true pre-run state.
+        self._stage_bake_range_restore()
+        mel.eval(f"FBXExportBakeComplexStart -v {start}")
+        mel.eval(f"FBXExportBakeComplexEnd -v {end}")
+        self.logger.info(f"Set bake range to {start}-{end} ({source}).")
+
+    def _stage_bake_range_restore(self) -> None:
+        """Stage the FBX bake range's restore to the range it holds NOW.
+
+        Captured before the write, and staged rather than revert-paired: the
+        write has to read the range, so a revert when ``run_tasks`` returns
+        would undo it before the export.  First-wins keying means the EARLIEST
+        caller's capture is the one restored, so :meth:`apply_declared_takes`
+        captures before ``apply_takes`` sets the shot union.  Captured only by
+        :meth:`set_bake_animation_range`, after it, the restore wrote the union
+        back whenever the auto-export hook's ``reset_takes`` had already
+        consumed the pre-takes capture mid-write (2026-09-24).
+        """
+        if "bake_range" in self._deferred_restores:
+            return
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        # Nothing has necessarily loaded fbxmaya yet -- a USD route applies no
+        # FBX options -- and the query is its command.
+        FbxUtils.load_plugin()
         prior_start = mel.eval("FBXExportBakeComplexStart -q")
         prior_end = mel.eval("FBXExportBakeComplexEnd -q")
 
@@ -369,10 +387,6 @@ class _AnimationTasksMixin(_TaskDataMixin):
             mel.eval(f"FBXExportBakeComplexEnd -v {prior_end}")
 
         self.stage_deferred_restore("bake_range", _restore_bake_range)
-
-        mel.eval(f"FBXExportBakeComplexStart -v {start}")
-        mel.eval(f"FBXExportBakeComplexEnd -v {end}")
-        self.logger.info(f"Set bake range to {start}-{end} ({source}).")
 
     def tie_all_keyframes(self):
         """Use AnimUtils to tie all keyframes for the specified objects."""
@@ -453,9 +467,13 @@ class _AnimationTasksMixin(_TaskDataMixin):
     def ensure_scene_records_published(self):
         """Publish once if no task did: the bracket's fallback for a run with
         the carrier tasks off, so an ``all``-mode export never ships a carrier
-        whose records predate the artist's last edit."""
+        whose records predate the artist's last edit.  What it left out is
+        logged as the carrier task's publish logs it
+        (:meth:`_log_snapshot_notes`): with that task off, this is the run's
+        only publish, and the only place a stale shot is named."""
         if self._scene_snapshot is None:
             self._scene_snapshot = self._publish_scene_records()
+            self._log_snapshot_notes()
 
     def _publish_scene_records(self, only=None):
         """``FbxUtils.publish`` with THIS run's context.
@@ -466,6 +484,13 @@ class _AnimationTasksMixin(_TaskDataMixin):
         written whole (measured on Maya 2025 / FBX 2020.3.6: a curve keyed
         0-100 exports as 0-100 under a 20-80 bake range).  Never raises -- a
         record that cannot be produced is logged and left as stored.
+
+        Outside the write's bracket the publish PREPARES the session stagers
+        (a shadow preview stands down so no producer reads it), and a run that
+        stops before its write -- a declined check, a cancel -- never reaches
+        the bracket that finishes them; so their finish is staged here too,
+        under the key :meth:`export_data_node` stages it by (first wins), as
+        blendertk's mirror does.  A finish tolerates running twice.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
@@ -477,6 +502,11 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 # the GLB's envelope does, with this run's choices.
                 rendering=self.run.rendering,
             )
+            if not FbxUtils._export_depth:
+                staged = dict(FbxUtils._session_stagers)
+                self.stage_deferred_restore(
+                    "export_stagers", lambda: FbxUtils._run_stagers("finish", staged)
+                )
             return FbxUtils.publish(ctx, only=only)
         except Exception:  # noqa: BLE001 - the write goes on; say what ships
             self.logger.warning(
@@ -485,10 +515,17 @@ class _AnimationTasksMixin(_TaskDataMixin):
             )
             return None
 
+    #: The panel that acts on a record's export notes: record key -> (link
+    #: label, panel name).  The note's link opens it (``action://show``, which
+    #: the Scene Exporter panel handles) -- the Shots window's All Shots group
+    #: holds Delete Stale Shots.
+    NOTE_PANELS = {ptk.SceneRecords.SHOTS.key: ("Open Shots", "shots")}
+
     def _log_data_node_summary(self):
         """Log what this run published on ``data_export`` -- the snapshot's
         own summary, so a silently-empty export is distinguishable from a
-        populated one.  Best-effort: never aborts the export."""
+        populated one -- and what a producer left out of it
+        (:meth:`_log_snapshot_notes`).  Best-effort: never aborts the export."""
         snapshot = self._scene_snapshot
         if snapshot is None:
             return
@@ -498,6 +535,35 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 self.logger.info(f"Embedded on data_export: {summary}.")
         except Exception:  # a summary must never break the export it describes
             self.logger.debug("data_export summary skipped.", exc_info=True)
+        self._log_snapshot_notes()
+
+    def _log_snapshot_notes(self):
+        """Log, as warnings, what a producer left out of this run's publish
+        (``ExportSnapshot.noted``: the stale shots a copied scene still holds),
+        each with a link to the panel that acts on it (:attr:`NOTE_PANELS`).
+        Every publish path calls it -- the carrier task's summary and the
+        fallback publish of a run with that task off.  Best-effort: never
+        aborts the export."""
+        snapshot = self._scene_snapshot
+        if snapshot is None:
+            return
+        try:
+            for key, notes in snapshot.noted.items():
+                link = self._note_link(key)
+                for note in notes:
+                    self.logger.warning(f"{note} {link}" if link else note)
+        except Exception:  # a note must never break the export it describes
+            self.logger.debug("data_export notes skipped.", exc_info=True)
+
+    def _note_link(self, key: str) -> str:
+        """The link to the panel that acts on *key*'s notes, or ``""`` (none
+        declared, or a plain logger that builds no links)."""
+        entry = self.NOTE_PANELS.get(key)
+        build = getattr(self.logger, "log_link", None)
+        if entry is None or build is None:
+            return ""
+        label, panel = entry
+        return build(label, "show", ui=panel)
 
     def _include_data_export_node(self):
         """Append the ``data_export`` carrier(s) to the export set.
@@ -583,6 +649,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
             )
             return
 
+        # The range as it stands, before apply_takes sets the shot union.
+        self._stage_bake_range_restore()
         count = FbxUtils.apply_takes_from_node()
         if count:
             # The carrier ships WITH the clips, never instead of them: its

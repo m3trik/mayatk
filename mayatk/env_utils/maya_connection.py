@@ -816,6 +816,30 @@ class MayaConnection:
             matches = [p for p in matches if start_port <= p < end]
         return min(matches) if matches else None
 
+    def close_launched(self, force: bool = False) -> bool:
+        """Close the Maya THIS connection launched -- only it, and only while
+        its PID still names a running Maya (Windows recycles PIDs).
+
+        The session-safe close: never by port or window title, both of which
+        another Maya -- the user's own -- can hold once ours is gone.
+
+        Parameters:
+            force: Close without prompting to save.
+
+        Returns:
+            bool: True if a close was issued and succeeded.
+        """
+        from pythontk import AppLauncher
+
+        pid, self._launched_pid = self._launched_pid, None
+        if not pid:
+            return False
+        try:
+            still_maya = pid in AppLauncher.get_running_processes("maya")
+        except Exception:
+            still_maya = False
+        return bool(still_maya and AppLauncher.close_process(pid, force=force))
+
     @staticmethod
     def close_instance(
         port: Optional[int] = None, pid: Optional[int] = None, force: bool = False
@@ -833,16 +857,10 @@ class MayaConnection:
         if port and not pid:
             pid = MayaConnection.get_pid_from_port(port)
             if not pid:
+                # No title fallback: "[Port: N]" is stamped into users' own
+                # windows (open_default_ports(tag_window=True)), so a title
+                # names no owner -- matching it force-closed a user's session.
                 print(f"[MayaConnection] No process found listening on port {port}.")
-                # Fallback: Try to find by Window Title if locally launched
-                for proc_pid in AppLauncher.get_running_processes("maya"):
-                    titles = AppLauncher.get_window_titles(proc_pid)
-                    if any(f"Port: {port}" in t for t in titles):
-                        print(
-                            f"[MayaConnection] Found PID {proc_pid} via Window Title."
-                        )
-                        pid = proc_pid
-                        break
 
         if pid:
             print(
@@ -982,21 +1000,11 @@ class MayaConnection:
         if self._launched_pid:
             import time
 
-            from pythontk import AppLauncher
-
             try:
-                still_maya = self._launched_pid in AppLauncher.get_running_processes(
-                    "maya"
-                )
-            except Exception:
-                still_maya = False
-            if still_maya:
-                try:
-                    AppLauncher.close_process(self._launched_pid, force=True)
+                if self.close_launched(force=True):
                     time.sleep(2)
-                except Exception:
-                    pass
-            self._launched_pid = None
+            except Exception:
+                pass
 
         # Re-probe: the dead port may be squatted (zombie / stranger), in
         # which case relaunching on it guarantees another failure.
@@ -1345,8 +1353,9 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                             break
                     except socket.timeout:
                         break
-                response = response_bytes.decode("utf-8").strip()
-                response = response.replace("\x00", "")
+                # The NUL first: stripped before it, the reply's trailing
+                # newline (shielded by the NUL) survived as "value\n".
+                response = response_bytes.decode("utf-8").replace("\x00", "").strip()
 
             client.close()
             return response
@@ -1400,7 +1409,12 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
 
         if mode == "port":
             try:
-                self.close_instance(port=self.port, force=force)
+                if self._launched_pid:
+                    # Ours: by the PID we launched, never by the port -- once
+                    # ours is gone the port can be another Maya's.
+                    self.close_launched(force=force)
+                else:
+                    self.close_instance(port=self.port, force=force)
             except Exception as e:
                 print(f"[MayaConnection] Error closing Maya instance: {e}")
             # The instance is gone (or unfindable) — drop the PID so a later

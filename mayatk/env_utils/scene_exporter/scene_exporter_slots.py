@@ -153,9 +153,23 @@ class SceneExporterSlots(SceneExporter):
         return self.sb.message_box(body, "Yes", "No") == "Yes"
 
     def _on_log_link_clicked(self, url) -> None:
-        """Dispatch clickable ``action://`` links from the log panel."""
+        """Dispatch clickable ``action://`` links from the log panel.
+
+        ``show?ui=<panel>`` opens a panel -- a note's remedy, such as the
+        Shots window a stale-shot warning links (``TaskManager.NOTE_PANELS``);
+        opening one takes the switchboard, which this panel holds and the
+        shared dispatcher does not.  Everything else goes to
+        ``UiUtils.dispatch_log_link``.
+        """
         from mayatk.ui_utils._ui_utils import UiUtils
 
+        if url.scheme() == "action" and url.host() == "show":
+            from urllib.parse import parse_qs
+
+            panel = parse_qs(url.query()).get("ui", [""])[0]
+            if panel:
+                self.sb.handlers.marking_menu.show(panel)
+            return
         UiUtils.dispatch_log_link(url, self.logger)
 
     @property

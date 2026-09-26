@@ -35,6 +35,20 @@ still respelled on export, and the export logs each `old -> new` when it does.
 Descriptions, sections and object lists ride as JSON strings and are never
 refused or rewritten.
 
+**The record declares the scene as it is now.** A shot is *stale* when every
+object it names is gone from the scene and nothing is keyed inside its frames
+-- what a scene saved from another keeps of shots whose animation it deleted.
+The record leaves stale shots out (a take of one would carry nothing, and a GLB
+cannot carry an empty clip at all), drops each member the scene no longer
+holds, and the bake range spans only what it declares; clip names are resolved
+over every shot first, so the ones that ship keep theirs. The export log names
+what it left out, with an **Open Shots** link. The store keeps them: **Delete
+Stale Shots** (the Shots window's *All Shots* group, or the Sequencer's
+shot-list menu; `ShotStore.remove_stale_shots()`) drops their records without
+touching a key or moving a shot, where *Delete Shot* cuts a shot's keys and
+closes the gap behind it. A shot that names no members is never stale --
+nothing tells it from a hold.
+
 ## The GLB deliverable
 
 The same record survives the FBX → glTF conversion (`MeshConvert.fbx_to_glb`

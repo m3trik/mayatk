@@ -946,6 +946,39 @@ class ShotSequencerController(
             parts.append(f"closed {closed:.0f}f")
         self._set_footer(" \u00b7 ".join(parts))
 
+    def delete_stale_shots(self) -> None:
+        """Delete every stale shot, after naming them (``ShotStore.remove_stale_shots``).
+
+        A stale shot names only objects the scene no longer holds and keys
+        nothing in its frames -- what a scene saved from another keeps of the
+        shots whose animation it deleted, and what every export already leaves
+        out (and says so).  Records only: no key is touched and no shot moves,
+        where :meth:`delete_shot` cuts a shot's keys and closes the gap behind
+        it, which would retime every live shot after a stale one.  One undo.
+        The question is the Shots window's own
+        (``ShotsController.confirm_stale_removal``).
+        """
+        if self.sequencer is None:
+            return
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        store = self.sequencer.store
+        stale = store.stale_shots()
+        if not stale:
+            self._set_footer("No stale shots")
+            return
+        parent = self._get_sequencer_widget() or self.ui
+        if not ShotsController.confirm_stale_removal(stale, parent):
+            return
+        try:
+            with store.scene_edit("delstale"):
+                removed = store.remove_stale_shots()
+        except Exception:
+            self._discard_shot_state()
+            raise
+        self._after_shot_change()
+        self._set_footer(f"Deleted {len(removed)} stale shot(s)")
+
     def move_shot_to_position(self, shot_id: int, position: int) -> None:
         """Re-slot *shot_id* at 1-based *position*, pushing the rest along.
 
@@ -4806,6 +4839,21 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         menu.add("Generate Next Shot\u2026", callback=self._detect_next_shot)
         menu.add_separator()
         menu.add("Delete Shot\u2026", callback=self._delete_shot, setEnabled=has_shot)
+        seq = self.controller.sequencer
+        stale = seq.store.stale_shots() if seq is not None else []
+        menu.add(
+            "Delete Stale Shots\u2026",
+            callback=self.controller.delete_stale_shots,
+            setEnabled=bool(stale),
+            setToolTip=(
+                f"{len(stale)} shot(s) name only objects the scene no longer "
+                "holds and key nothing -- exports already leave them out.\n"
+                "Deletes their records; no keyframe is touched, no shot moves."
+                if stale
+                else "No stale shots: every shot names an object the scene "
+                "holds, or keys something in its frames."
+            ),
+        )
         menu.exec_(cmb.mapToGlobal(pos))
 
     def header_init(self, widget):
@@ -4967,7 +5015,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                     (
                         "Shot Navigation",
                         [
-                            "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline). Right-click for Edit Shot, Generate Next Shot, Delete Shot \u2014 the shot body's own menu carries the rest.",
+                            "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline). Right-click for Edit Shot, Generate Next Shot, Delete Shot, Delete Stale Shots \u2014 the shot body's own menu carries the rest.",
                             "<b>\u25c4 / \u25ba</b> \u2014 Previous / next shot. &nbsp; <b>+</b> \u2014 Append new shot.",
                             "<b>View Mode</b> (cycles): Current \u2192 Adjacent \u2192 All.",
                             "<b>Refresh</b> \u2014 Rebuild from Maya.",

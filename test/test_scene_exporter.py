@@ -3935,6 +3935,188 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertFalse(passed, "B's export must not have erased A's baseline")
         self.assertTrue(any("ExportSphere" in m for m in messages))
 
+    def _save_scene_as(self, name):
+        """Save the open scene as *name* in the temp dir -- a Save As: a file
+        saved before stays on disk."""
+        path = os.path.join(self.temp_dir, name)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        return path
+
+    def test_a_save_as_copy_does_not_inherit_its_sources_baseline(self):
+        """THE reported bug (2026-09-24): a module scene saved as a new module
+        carried its source's baseline in data_internal, and the copy's first
+        export failed against the SOURCE's hierarchy (``INTERACTIVE|
+        MULTIMETER_GRP`` missing, ``INTERACTIVE|SOLDERING_TABLE_GRP`` new)
+        although the copy had never exported. A baseline recorded by another
+        scene file that is still on disk is that scene's, not this one's."""
+        tm = self.exporter.task_manager
+        self._save_scene_as("source_module.ma")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        self._check_with_output("source.fbx")
+
+        self._save_scene_as("copy_module.ma")  # the source stays on disk
+        cmds.delete(str(self.sphere))  # ...and the copy becomes another module
+        cmds.parent(cmds.polyTorus(name="CopyTorus")[0], str(self.group))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+
+        with self.assertLogs(self.exporter.logger, level="WARNING") as captured:
+            passed, messages = self._check_with_output("copy.fbx")
+        self.assertTrue(passed, messages)
+        self.assertTrue(
+            any("source_module.ma" in m for m in captured.output),
+            "the user must be told whose baseline was set aside",
+        )
+
+        # The export recorded the copy's OWN baseline, so its changes are caught.
+        cmds.delete("CopyTorus")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = self._check_with_output("copy.fbx")
+        self.assertFalse(passed, "the copy's own baseline must be compared")
+        self.assertTrue(any("CopyTorus" in m for m in messages))
+
+    def test_a_version_up_still_diffs_the_deliverable_it_continues(self):
+        """A version-up (v001 kept, v002 saved) is a Save As copy too, so the
+        record is v001's -- but v002 exports the deliverable v001 exported, and
+        what that deliverable last shipped (its sidecar) is the baseline."""
+        tm = self.exporter.task_manager
+        self._save_scene_as("asset_v001.ma")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "asset.fbx"))
+        tm.check_hierarchy_vs_existing_fbx()
+        tm.write_scene_data_sidecar()
+
+        self._save_scene_as("asset_v002.ma")
+        cmds.delete(str(self.sphere))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed, "a version-up must still diff its deliverable")
+        self.assertTrue(any("ExportSphere" in m for m in messages))
+
+    def test_a_renamed_scene_keeps_its_baseline(self):
+        """Renamed or moved -- the old file gone -- the record is still the
+        scene's own: nothing can open the file it names any more."""
+        tm = self.exporter.task_manager
+        old = self._save_scene_as("module_old.ma")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        self._check_with_output("module.fbx")
+
+        self._save_scene_as("module_new.ma")
+        os.remove(old)  # a rename, not a copy
+        cmds.delete(str(self.sphere))
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = self._check_with_output("module_renamed.fbx")
+        self.assertFalse(passed, "a renamed scene must keep its baseline")
+        self.assertTrue(any("ExportSphere" in m for m in messages))
+
+    def test_a_scene_never_adopts_another_deliverables_sidecar(self):
+        """Every module of a production exports into ONE shared folder, and the
+        upgrade adoption merged EVERY sidecar there into a scene with no record
+        of its own: a new module's first export was diffed against the other
+        modules' deliverables wherever they shared a top group
+        (``INTERACTIVE``). Only the deliverable being exported is this scene's
+        history."""
+        import json
+        from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import (
+            HierarchyBaseline,
+        )
+
+        other = os.path.join(self.temp_dir, ".other_module.scene_data.json")
+        with open(other, "w") as f:
+            json.dump(
+                {
+                    "format": 3,
+                    "hierarchy": {"paths": ["ExportGroup", "ExportGroup|OtherPart"]},
+                },
+                f,
+            )
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        tm.run = tm.run.replace(
+            export_path=os.path.join(self.temp_dir, "this_module.fbx")
+        )
+        passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed, messages)
+        tm.write_scene_data_sidecar()
+        self.assertNotIn("ExportGroup|OtherPart", HierarchyBaseline.read())
+
+    def _save_unstamped_baseline(self, paths):
+        """Store *paths* as a baseline recorded before records named their
+        scene -- what every scene exported before 2026-09-24 carries."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        ptk.SceneRecords.HIERARCHY_BASELINE.save(
+            DataNodes, ptk.HierarchyBaseline.encode(paths)
+        )
+
+    def test_an_unstamped_baseline_is_set_aside_for_a_new_deliverable(self):
+        """The reported scene's own state: its record predates the stamp, so
+        nothing can say which scene recorded it -- a copy carries its source's
+        verbatim. With no sidecar for the deliverable either, the export is a
+        first one, said out loud."""
+        tm = self.exporter.task_manager
+        self._save_scene_as("forked_module.ma")
+        self._save_unstamped_baseline({"ExportGroup", "ExportGroup|SourcePart"})
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "forked.fbx"))
+
+        with self.assertLogs(self.exporter.logger, level="WARNING") as captured:
+            passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        self.assertTrue(passed, messages)
+        self.assertTrue(any("set aside" in m for m in captured.output))
+
+    def test_an_unstamped_baseline_defers_to_its_deliverables_sidecar(self):
+        """...while a scene that exported the deliverable before keeps being
+        diffed: its sidecar holds what the record held for it."""
+        import json
+
+        tm = self.exporter.task_manager
+        self._save_scene_as("module.ma")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        recorded = sorted(tm._build_full_hierarchy_set()) + ["ExportGroup|Gone"]
+        self._save_unstamped_baseline(recorded)
+        sidecar = os.path.join(self.temp_dir, ".module.scene_data.json")
+        with open(sidecar, "w") as f:
+            json.dump({"format": 3, "hierarchy": {"paths": recorded}}, f)
+        tm.run = tm.run.replace(export_path=os.path.join(self.temp_dir, "module.fbx"))
+
+        passed, messages = tm.check_hierarchy_vs_existing_fbx()
+        self.assertFalse(passed, "a pre-stamp scene must keep being diffed")
+        self.assertTrue(any("Gone" in m for m in messages))
+
+    def test_an_unstamped_baseline_still_diffs_every_deliverable_it_covered(self):
+        """A pre-stamp record covering TWO deliverables is set aside, and the
+        first export adopts its own sidecar and records that scope alone. The
+        adoption ran only into an EMPTY record, so the second deliverable's
+        sidecar was never read: its next export had nothing to diff and
+        passed a deleted child (reading the legacy record, HEAD caught it)."""
+        import json
+
+        blade = cmds.polyCube(name="BladeCube")[0]
+        hilt = cmds.polyCube(name="HiltCube")[0]
+        group_b = cmds.group(blade, hilt, name="BladeGroup")
+        tm = self.exporter.task_manager
+        self._save_scene_as("module.ma")
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        paths_a = sorted(tm._build_full_hierarchy_set())
+        tm.objects = [cmds.ls(str(group_b), l=True)[0]]
+        paths_b = sorted(tm._build_full_hierarchy_set())
+        self._save_unstamped_baseline(paths_a + paths_b)
+        for stem, paths in (("asset_a", paths_a), ("asset_b", paths_b)):
+            sidecar = os.path.join(self.temp_dir, f".{stem}.scene_data.json")
+            with open(sidecar, "w") as f:
+                json.dump({"format": 3, "hierarchy": {"paths": paths}}, f)
+
+        tm.objects = [cmds.ls(str(self.group), l=True)[0]]
+        passed, messages = self._check_with_output("asset_a.fbx")
+        self.assertTrue(passed, messages)
+
+        cmds.delete(blade)
+        tm.objects = [cmds.ls(str(group_b), l=True)[0]]
+        passed, messages = self._check_with_output("asset_b.fbx")
+        self.assertFalse(passed, "the second deliverable must still be diffed")
+        self.assertTrue(any("BladeCube" in m for m in messages))
+
     def test_hierarchy_check_unreadable_baseline_warns(self):
         """A baseline that exists but cannot be read must be SEEN, not silently
         replaced: the export went structurally unchecked either way, and a fresh
@@ -4610,6 +4792,41 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertEqual(proxies(), [], "the curve proxies outlived the run")
         self.assertEqual(finished, [True], "the session stager never finished")
 
+    def test_a_run_without_the_carrier_task_still_finishes_the_session_stagers(self):
+        """Export Scene Data Node off: the takes task publishes instead, which
+        PREPARES the session stagers too -- and it staged no finish, so a run
+        stopped before its write left a shadow preview detached (blendertk's
+        mirror already staged it; restore-point audit, 2026-09-24)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        prepared, finished = [], []
+        FbxUtils.register_export_stager(
+            "preview_probe_takes",
+            prepare=lambda: prepared.append(True),
+            finish=lambda: finished.append(True),
+        )
+        self.addCleanup(FbxUtils.unregister_export_stager, "preview_probe_takes")
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False  # decline the override
+        tm = exporter.task_manager
+
+        def _takes_then_fail(tasks):
+            tm.apply_declared_takes("both")
+            self.assertTrue(prepared, "precondition: the publish staged the write")
+            tm._last_failed_checks = ["check_path_length"]
+            return False
+
+        tm.run_tasks = _takes_then_fail
+        self.assertFalse(
+            exporter.perform_export(
+                export_dir=os.path.dirname(self.temp_path("stopped_takes_run")),
+                objects=[self.cube],
+                output_name="stopped_takes_run",
+                tasks={"apply_declared_takes": "both"},
+            )
+        )
+        self.assertTrue(finished, "the session stager never finished")
+
     def test_noop_without_metadata(self):
         from mayatk.node_utils.data_nodes import DataNodes
 
@@ -5000,6 +5217,35 @@ class TestTaskStateHygiene(MayaTkTestCase):
         status, _ = self.tm.check_floating_point_keys()
         self.assertTrue(status, "pipeline failed its own floating-point check")
 
+    def test_tie_and_snap_hand_back_a_shapes_curve_untouched(self):
+        """The key tasks edit the export's whole DAG subtree -- a camera's
+        focalLength and a light's intensity are keyed on SHAPES -- while the
+        Animation Output snapshot probed descendant TRANSFORMS only, so such a
+        curve kept the snap's moved keys and the tie's bookends after an export
+        that promises the scene back (restore-point audit, 2026-09-24)."""
+        cam, cam_shape = cmds.camera(name="restoreCam")
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=10.4, value=35)
+        cmds.setKeyframe(cam_shape, attribute="focalLength", time=40, value=50)
+        # A transform keyed wider, so the tie has bookends to add on the shape.
+        cmds.setKeyframe(self.cube, attribute="translateX", time=0, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=100, value=5)
+        group = cmds.group(self.cube, cam, name="restoreGrp")
+        plug = f"{cam_shape}.focalLength"
+        before = cmds.keyframe(plug, query=True, timeChange=True)
+
+        self.tm.objects = [cmds.ls(group, long=True)[0]]
+        self.tm.run = self.tm.run.replace(animation_write_back=False)
+        self.tm.snap_keys_to_frame()
+        self.tm.tie_all_keyframes()
+        self.assertNotEqual(
+            cmds.keyframe(plug, query=True, timeChange=True),
+            before,
+            "the key tasks must have reached the shape's curve",
+        )
+        self.tm.run_deferred_restores()
+
+        self.assertEqual(cmds.keyframe(plug, query=True, timeChange=True), before)
+
     def test_begin_run_resets_the_per_run_markers(self):
         """One hierarchy-checked export must not leak baseline writes into
         later runs -- begin_run (the ONE per-run reset) clears the marker.
@@ -5133,6 +5379,32 @@ class TestMangledNameGuards(MayaTkTestCase):
         self.assertEqual(leaf, "GuardCubeShape")
         ok, messages = self.tm.check_mangled_names()
         self.assertTrue(ok, messages)
+
+    def test_a_repaired_member_keeps_its_hold_shot_declared(self):
+        """A hold shot keys nothing in its window, so only its members say it
+        is live -- and the repair renamed them (``door___handle`` collapses to
+        ``door_handle``): the shot named no object any more, was judged stale,
+        and the export whose names were being repaired dropped its take. The
+        shots follow the rename as the export set does."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        handle = cmds.polyCube(name="door___handle")[0]
+        group = cmds.group(handle, name="DoorGroup")
+        ShotStore.clear_active()
+        self.addCleanup(ShotStore.clear_active)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Hold", 1, 20, objects=[cmds.ls(handle, long=True)[0]])
+        self.tm.objects = [cmds.ls(group, long=True)[0]]
+
+        self.tm.conform_shape_names()
+        self.tm.export_data_node()
+        self.tm.run_deferred_restores()
+
+        self.assertEqual(store.shots[0].objects, ["|DoorGroup|door_handle"])
+        meta = ptk.SceneRecords.SHOTS.load(DataNodes) or {}
+        self.assertEqual([s["clip"] for s in meta.get("shots", [])], ["Hold"])
 
     def test_conform_task_is_registered(self):
         self.assertIn("conform_shape_names", self.tm.task_definitions)
@@ -6144,6 +6416,7 @@ class TestTexturePathPipeline(MayaTkTestCase):
             f.write("payload")
         self.addCleanup(lambda: os.path.exists(tex) and os.remove(tex))
         shader, file_node = self._textured_shader(tex, name="probeStageMat")
+        cmds.setAttr(f"{shader}.glowIntensity", 0.25)
         self.tm.objects = [self.cube_long]
         self.tm.run = self.tm.run.replace(
             output_format="glb"
@@ -6155,7 +6428,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
         def _fake_rewire(materials=None, config=None, **_):
             seen["config"] = config
             # What a conversion does: a NEW file node into a slot, the old one
-            # unplugged and repointed.
+            # unplugged and repointed -- and material VALUES beside the wiring
+            # (a connector sets an emission weight for its new map, adds an
+            # MSAO_Map), which "Export Copies" must put back too.
             new = cmds.shadingNode("file", asTexture=True, name="probeStage_ORM")
             cmds.setAttr(
                 f"{new}.fileTextureName",
@@ -6165,6 +6440,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
             cmds.disconnectAttr(f"{file_node}.outColor", f"{shader}.color")
             cmds.connectAttr(f"{new}.outColor", f"{shader}.color")
             cmds.setAttr(f"{file_node}.fileTextureName", "moved.png", type="string")
+            cmds.setAttr(f"{shader}.glowIntensity", 1.0)
+            cmds.addAttr(shader, longName="MSAO_Map", attributeType="bool")
             seen["new"] = new
             return {}
 
@@ -6188,6 +6465,8 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertFalse(cmds.objExists(seen["new"]), "created node must be deleted")
         self.assertTrue(cmds.isConnected(f"{file_node}.outColor", f"{shader}.color"))
         self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), tex)
+        self.assertAlmostEqual(cmds.getAttr(f"{shader}.glowIntensity"), 0.25, 5)
+        self.assertFalse(cmds.attributeQuery("MSAO_Map", node=shader, exists=True))
         self.assertFalse(os.path.exists(staging), "temp staging must be removed")
 
     def test_convert_textures_failure_defers_to_the_check(self):
@@ -9829,6 +10108,37 @@ class TestBakeRangeModes(MayaTkTestCase):
     def test_off_keeps_the_preset_range(self):
         self.tm.set_bake_animation_range(None)
         self.assertEqual(self._range(), (1, 48))
+
+    def test_the_restore_puts_back_the_range_from_before_the_takes(self):
+        """With the auto-export hook installed (any session producer or
+        stager), its after-export ``reset_takes`` runs DURING the write and
+        consumes the pre-takes capture -- and the range restore, captured
+        after ``apply_takes`` had set the union, wrote the union back for
+        every later export in the session (restore-point audit, 2026-09-24).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self._declare_shots((20, 60), (80, 120))
+        self.tm.apply_declared_takes("both")
+        self.tm.set_bake_animation_range("auto")
+        FbxUtils.reset_takes()  # the hook's after-export, mid-write
+
+        self.tm.run_deferred_restores()
+
+        self.assertEqual(self._range(), (1, 48))
+
+    def test_declared_takes_load_the_fbx_plugin_they_query(self):
+        """A USD route applies no FBX options, so nothing may have loaded
+        fbxmaya before the takes task stages the bake range's restore -- and
+        that capture queries fbxmaya's own command, which raised "Cannot find
+        procedure" and aborted the export (review, 2026-09-26)."""
+        if cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            cmds.unloadPlugin("fbxmaya", force=True)
+        self.addCleanup(cmds.loadPlugin, "fbxmaya", quiet=True)
+
+        self.tm.apply_declared_takes("both")
+
+        self.assertTrue(cmds.pluginInfo("fbxmaya", query=True, loaded=True))
 
     def test_legacy_true_reads_as_the_keyframe_extent(self):
         """A headless caller's pre-combo bool keeps doing what it did."""
