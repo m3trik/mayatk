@@ -14,6 +14,11 @@ A freshly installed plugin is picked up on Painter's next launch (or via
 **Python ▸ Reload Plugins Folder** in a running Painter). If Painter
 doesn't auto-enable it, tick ``substance_rpc`` once in the **Python**
 menu -- Painter remembers the choice.
+
+**Vendored twin -- keep code-identical.** This file is duplicated at
+``mayatk/mat_utils/substance_bridge/substance_rpc/installer.py`` (the SSoT: edit it there)
+and ``blendertk/mat_utils/substance_bridge/substance_rpc/installer.py``; mirror every change
+into both. Drift fails ``extapps/test/test_vendor_sync.py``.
 """
 
 import os
@@ -21,6 +26,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import pythontk as ptk
 from pythontk.net_utils.rpc.installer import PluginInstaller
 
 
@@ -41,8 +47,10 @@ class _InstallerInternal(object):
 
         Windows: ``SHGetKnownFolderPath(FOLDERID_Documents)`` -- the same
         API Painter itself uses, so a redirected Documents folder still
-        resolves to where Painter actually looks. Fallback (and
-        non-Windows): ``~/Documents``.
+        resolves to where Painter actually looks. Linux: the
+        ``XDG_DOCUMENTS_DIR`` entry of ``user-dirs.dirs``, which Qt (and so
+        Painter) reads -- a localized desktop names it e.g. ``~/Dokumente``.
+        Fallback: ``~/Documents``.
         """
         if sys.platform == "win32":
             try:
@@ -80,7 +88,22 @@ class _InstallerInternal(object):
                     return path
             except Exception:  # noqa: BLE001 -- fall through to expanduser
                 pass
-        fallback = Path(os.path.expanduser("~")) / "Documents"
+        home = os.path.expanduser("~")
+        if sys.platform.startswith("linux"):
+            config = ptk.UserConfig.xdg_home("config")
+            try:
+                with open(
+                    os.path.join(config, "user-dirs.dirs"), encoding="utf-8"
+                ) as f:
+                    for line in f:
+                        key, _, value = line.strip().partition("=")
+                        if key == "XDG_DOCUMENTS_DIR" and value.strip('"'):
+                            docs = Path(value.strip('"').replace("$HOME", home))
+                            if docs.is_dir():
+                                return docs
+            except OSError:  # no user-dirs file: the default below
+                pass
+        fallback = Path(home) / "Documents"
         return fallback if fallback.is_dir() else None
 
 

@@ -3,7 +3,10 @@
 from pathlib import Path
 from typing import Union, Optional, Dict, List, Any
 import pythontk as ptk
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 from mayatk.env_utils.fbx_utils import FbxUtils
 

@@ -44,7 +44,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 

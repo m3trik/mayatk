@@ -3,7 +3,7 @@
 """Gap and range-highlight handlers for the shot sequencer controller.
 
 Provides :class:`GapManagerMixin` — mixed into
-:class:`~.shot_sequencer_slots.ShotSequencerController` to handle gap
+:class:`~.shot_sequencer_controller.ShotSequencerController` to handle gap
 resize, move, lock, and range-highlight interactions.
 """
 

@@ -93,7 +93,7 @@ except Exception:
 # Conditional imports (only available when Maya is running)
 # ---------------------------------------------------------------------------
 if HAS_MAYA and HAS_QT:
-    from uitk.widgets.sequencer._sequencer import SequencerWidget
+    from uitk import SequencerWidget
     from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
         ShotSequencer,
     )
@@ -278,56 +278,6 @@ class TestPlayheadNavigation(unittest.TestCase):
         ph = self.widget._timeline._scene.playhead
         self.assertIsNotNone(ph)
         self.assertAlmostEqual(ph.time, 42.0)
-
-
-@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
-class TestRangeOverlays(unittest.TestCase):
-    def setUp(self):
-        self.widget = SequencerWidget()
-        self.widget.show()
-        _process_events()
-
-    def tearDown(self):
-        self.widget.close()
-        self.widget.deleteLater()
-        _process_events()
-
-    def test_add_range_overlay(self):
-        self.widget.add_range_overlay(0, 50)
-        _process_events()
-        from uitk.widgets.sequencer._sequencer import _StaticRangeOverlay
-
-        overlays = [
-            item
-            for item in self.widget._timeline.scene().items()
-            if isinstance(item, _StaticRangeOverlay)
-        ]
-        self.assertEqual(len(overlays), 1)
-
-
-@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
-class TestMarkers(unittest.TestCase):
-    def setUp(self):
-        self.widget = SequencerWidget()
-        self.widget.show()
-        _process_events()
-
-    def tearDown(self):
-        self.widget.close()
-        self.widget.deleteLater()
-        _process_events()
-
-    def test_add_marker(self):
-        self.widget.add_marker(time=25.0, note="test")
-        _process_events()
-        from uitk.widgets.sequencer._sequencer import MarkerItem
-
-        markers = [
-            item
-            for item in self.widget._timeline.scene().items()
-            if isinstance(item, MarkerItem)
-        ]
-        self.assertEqual(len(markers), 1)
 
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)

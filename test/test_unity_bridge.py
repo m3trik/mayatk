@@ -18,7 +18,7 @@ from pathlib import Path
 
 import maya.cmds as cmds
 
-from pythontk.core_utils.app_handoff import HandoffRequest
+from pythontk import HandoffRequest
 from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
 
 from base_test import MayaTkTestCase

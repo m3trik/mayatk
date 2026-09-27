@@ -233,10 +233,11 @@ class TextureBaker(ptk.LoggingMixin):
         BOUNDED: a lock on the destination FILE clears under a new name on the first
         retry, but a locked SOURCE (the sync client indexing the just-written
         render) or a locked directory fails every name equally -- and an unbounded
-        rename loop there would hang Maya rather than report anything. After
-        :data:`_PLACE_ATTEMPTS` there is one paused retry and then a COPY (a
-        read-share lock still permits reading); only a truly unwritable directory
-        raises, for the caller to log as a real failure for that object.
+        rename loop there would hang Maya rather than report anything. Each rename
+        is ``ptk.FileUtils.replace_file`` (it waits out a momentary Windows lock
+        before raising); after :data:`_PLACE_ATTEMPTS` there is one more and then
+        a COPY (a read-share lock still permits reading); only a truly unwritable
+        directory raises, for the caller to log as a real failure for that object.
         """
         if os.path.abspath(src) == os.path.abspath(dst):
             return dst
@@ -244,7 +245,7 @@ class TextureBaker(ptk.LoggingMixin):
         candidate = dst
         for attempt in range(self._PLACE_ATTEMPTS):
             try:
-                os.replace(src, candidate)
+                ptk.FileUtils.replace_file(src, candidate)
                 if attempt:
                     self.logger.warning(
                         "%s is held by another process (cloud sync, or open in "
@@ -267,14 +268,14 @@ class TextureBaker(ptk.LoggingMixin):
         # just-written render -- measured: 4 of a production room's 46 maps
         # stayed under their raw RTT names, dropped out of the atlas, and
         # rendered as BLACK objects in the preview) or the directory is
-        # unwritable. A brief pause clears most sync locks; failing that, a
-        # read-share lock still permits COPYING, so the finished bake always
-        # lands at the recorded path and only the locked stray is left to the
-        # sync client. A truly unwritable directory makes the copy raise --
-        # bounded, and a real failure for the caller to log.
-        time.sleep(0.25)
+        # unwritable. One more ``replace_file`` (its brief wait clears most
+        # sync locks); failing that, a read-share lock still permits COPYING,
+        # so the finished bake always lands at the recorded path and only the
+        # locked stray is left to the sync client. A truly unwritable directory
+        # makes the copy raise -- bounded, and a real failure for the caller
+        # to log.
         try:
-            os.replace(src, dst)
+            ptk.FileUtils.replace_file(src, dst)
             return dst
         except PermissionError:
             pass

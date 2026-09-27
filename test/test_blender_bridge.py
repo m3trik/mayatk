@@ -34,7 +34,6 @@ from mayatk.env_utils.blender_bridge import parameters as params
 # MayaExportMixin (handoff_export); the fresh-app launch lives on the pythontk
 # ScriptLaunchDeliverer (app_handoff). Patch them where they're actually looked up.
 from mayatk.env_utils import handoff_export
-from pythontk.core_utils import app_handoff as bridge_base
 
 from base_test import MayaTkTestCase
 import pythontk as ptk
@@ -95,15 +94,9 @@ class TestBlenderBridgeTemplates(unittest.TestCase):
         Marmoset/Substance bridges' ``roundtrip`` drifted from the canon's ``round_trip``
         and made a mode look shared when it was not.
         """
-        from pythontk.core_utils import script_template
-
         self.assertEqual(
             set(BlenderBridge.template_modes_allowed),
-            {
-                script_template.SEND_TO,
-                script_template.SAVE_AS,
-                script_template.ROUND_TRIP,
-            },
+            {ptk.SEND_TO, ptk.SAVE_AS, ptk.ROUND_TRIP},
         )
 
     def test_render_substitutes_path_and_params(self):
@@ -300,7 +293,7 @@ class TestBlenderBridgeSend(MayaTkTestCase):
                 return_value="x.fbx",
             ),
             mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
-            mock.patch.object(bridge_base.AppLauncher, "launch", return_value=object()),
+            mock.patch.object(ptk.AppLauncher, "launch", return_value=object()),
         )
 
     def test_send_export_and_launch_args(self):
@@ -466,7 +459,7 @@ class TestBlenderBridgeUsdCarrier(MayaTkTestCase):
         return (
             mock.patch.object(handoff_export.UsdUtils, "export", return_value="x.usd"),
             mock.patch.object(handoff_export.FbxUtils, "export", return_value="x.fbx"),
-            mock.patch.object(bridge_base.AppLauncher, "launch", return_value=object()),
+            mock.patch.object(ptk.AppLauncher, "launch", return_value=object()),
         )
 
     def test_the_bridge_offers_both_carriers_and_defaults_to_fbx(self):
@@ -1018,7 +1011,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
             )
 
         return mock.patch.object(
-            bridge_base.ScriptRunDeliverer, "run", staticmethod(fake_run)
+            ptk.ScriptRunDeliverer, "run", staticmethod(fake_run)
         )
 
     def _export_patches(self):
@@ -1047,7 +1040,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         # can never destroy an existing .blend.
         import re
 
-        staged = bridge_base.ScriptRunDeliverer._staging_path(self.out)
+        staged = ptk.ScriptRunDeliverer._staging_path(self.out)
         self.assertIn("save_as_mainfile", run["script"])
         self.assertIn(f'OUT_FILE = r"{staged.replace(os.sep, "/")}"', run["script"])
         self.assertEqual(run["artifact"], staged)
@@ -1315,7 +1308,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
 
     def test_save_template_declares_only_save_as(self):
         """Read through the strict parser the blocking deliverer uses."""
-        from pythontk.core_utils.script_template import ScriptTemplate
+        from pythontk import ScriptTemplate
 
         self.assertEqual(
             ScriptTemplate.declared_modes(_TEMPLATE_DIR / "_save_scene.py"),
@@ -1789,7 +1782,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             )
 
         return mock.patch.object(
-            bridge_base.ScriptRunDeliverer, "run", staticmethod(fake_run)
+            ptk.ScriptRunDeliverer, "run", staticmethod(fake_run)
         )
 
     @staticmethod
@@ -1835,7 +1828,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         request = mock.Mock(template="bake_lightmaps", params={})
         bridge = BlenderBridge()
         with mock.patch.object(
-            bridge_base.HandoffBridge, "_preflight", return_value=True
+            ptk.HandoffBridge, "_preflight", return_value=True
         ):
             self.assertTrue(bridge._preflight([src, copy], request))
 

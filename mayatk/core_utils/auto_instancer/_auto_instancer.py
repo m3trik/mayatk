@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 from collections import defaultdict
 
@@ -93,14 +92,6 @@ class _AutoInstancerInternal(object):
     """Internal helpers for AutoInstancer."""
 
     @staticmethod
-    def _natural_key(name: str) -> Tuple:
-        """Sort key ordering embedded integers numerically (``Cube2`` < ``Cube10``)."""
-        return tuple(
-            int(token) if token.isdigit() else token
-            for token in re.split(r"(\d+)", name)
-        )
-
-    @staticmethod
     def _long_path(node: str) -> str:
         """Best-effort full DAG path for *node* (falls back to the input string)."""
         resolved = cmds.ls(str(node), long=True) or []
@@ -133,7 +124,7 @@ class _AutoInstancerInternal(object):
         transform = candidate.transform
         return (
             not _AutoInstancerInternal._is_instanced(transform),
-            _AutoInstancerInternal._natural_key(CoreUtils.short_name(transform)),
+            ptk.StrUtils.natural_sort_key(CoreUtils.short_name(transform)),
             transform,
         )
 
@@ -242,15 +233,9 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         (per-skipped-group records for the console:
         ``{"name", "reason", "count", "tris"}``).
         """
-        return {
-            "matched_groups": 0,
-            "instanced_groups": 0,
-            "instances_created": 0,
-            "simple_groups": 0,
-            "kept_separate_groups": 0,
-            "micro_threshold": InstancingStrategy.MICRO_TRI_THRESHOLD,
-            "details": [],
-        }
+        return ptk.InstanceGrouping.default_summary(
+            InstancingStrategy.MICRO_TRI_THRESHOLD
+        )
 
     def _reset_summary(self) -> None:
         self.last_run_summary = self.default_summary()
@@ -268,48 +253,9 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         raise) — the slot shows it in its message box (newlines → ``<br>``)
         and prints it to the console verbatim.
         """
-        matched = summary.get("matched_groups", 0)
-        if matched == 0:
-            if output_count > 0:
-                return (
-                    "Auto Instance: no geometrically identical meshes to "
-                    f"instance; combined loose geometry into {output_count} "
-                    "mesh(es)."
-                )
-            return "Auto Instance: no geometrically identical meshes were found."
-
-        micro = summary.get("micro_threshold", InstancingStrategy.MICRO_TRI_THRESHOLD)
-        details = summary.get("details", []) or []
-        simple = [d for d in details if d.get("reason") == "too_simple"]
-        kept = [d for d in details if d.get("reason") == "kept_separate"]
-        instanced = summary.get("instanced_groups", 0)
-        instances = summary.get("instances_created", 0)
-
-        def _names(items):
-            return ", ".join(
-                f"{d['name']} (x{d['count']}, {d['tris']} tris)" for d in items
-            )
-
-        lines = [f"Auto Instance: {matched} matching group(s) found."]
-        if instanced:
-            lines.append(
-                f"- Instanced {instanced} group(s) -> {instances} new instance(s)."
-            )
-        if simple:
-            lines.append(
-                f"- {len(simple)} group(s) too simple to instance (< {micro} "
-                f"tris); combined where possible: {_names(simple)}."
-            )
-        if kept:
-            lines.append(
-                f"- {len(kept)} group(s) left separate (flagged individual / "
-                f"non-static): {_names(kept)}."
-            )
-        # Only when no line above explains the outcome (e.g. every group's
-        # conversion failed) — otherwise the reasons above already say it.
-        if not (instanced or simple or kept):
-            lines.append("- Nothing was instanced.")
-        return "\n".join(lines)
+        return ptk.InstanceGrouping.format_summary(
+            summary, output_count, InstancingStrategy.MICRO_TRI_THRESHOLD
+        )
 
     # ------------------------------------------------------------------
     # Configuration properties — forwarded to collaborators so post-init
@@ -504,7 +450,7 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         groups.sort(
             key=lambda g: (
                 _group_depth(g),
-                _AutoInstancerInternal._natural_key(
+                ptk.StrUtils.natural_sort_key(
                     CoreUtils.short_name(g.prototype.transform)
                 ),
                 g.prototype.transform,
@@ -805,57 +751,9 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         merged — geometric similarity must never override
         ``require_same_material`` / ``check_uvs``.
         """
-        sorted_keys = sorted(signature_map.keys(), key=lambda x: x[:3])
-
-        merged_map = defaultdict(list)
-        processed_sigs = set()
-
-        for i, sig in enumerate(sorted_keys):
-            if sig in processed_sigs:
-                continue
-
-            merged_map[sig].extend(signature_map[sig])
-            processed_sigs.add(sig)
-
-            topo = sig[:3]
-            pca = sig[3]
-
-            for j in range(i + 1, len(sorted_keys)):
-                other_sig = sorted_keys[j]
-                if other_sig in processed_sigs:
-                    continue
-                if other_sig[4:] != sig[4:]:  # materials / UV sets must match
-                    continue
-
-                o_pca = other_sig[3]
-
-                if other_sig[:3] == topo:
-                    if pca and o_pca:
-                        diff = sum(abs(p1 - p2) for p1, p2 in zip(pca, o_pca))
-                        if diff > 0.1:
-                            continue
-                    elif pca != o_pca:
-                        continue
-
-                    merged_map[sig].extend(signature_map[other_sig])
-                    processed_sigs.add(other_sig)
-
-                elif pca and o_pca:
-                    diff = sum(abs(p1 - p2) for p1, p2 in zip(pca, o_pca))
-                    total_mag = sum(pca) + sum(o_pca) + 0.001
-                    rel_diff = diff / total_mag
-
-                    if rel_diff < 0.005:
-                        self.logger.debug(
-                            "Merging near-identical signature %s into %s "
-                            "(topology differs; combine mode)",
-                            other_sig[:3],
-                            sig[:3],
-                        )
-                        merged_map[sig].extend(signature_map[other_sig])
-                        processed_sigs.add(other_sig)
-
-        return merged_map
+        return ptk.InstanceGrouping.merge_similar_signatures(
+            signature_map, logger=self.logger
+        )
 
     # ------------------------------------------------------------------
     # Conversion

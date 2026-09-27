@@ -347,7 +347,8 @@ class PlayblastExporter(ptk.SequenceExporter):
         """Capture with Maya's native movie playblast (``avi``/``movie``).
 
         The filepath extension is enforced against the format; a missing
-        extension is appended.
+        extension is appended. A format this Maya's playblast does not offer
+        (AVI is Windows-only: Linux Maya has none) raises before capturing.
         """
         extension = self.NATIVE_EXTENSIONS.get(fmt.lower())
         if not extension:
@@ -363,6 +364,12 @@ class PlayblastExporter(ptk.SequenceExporter):
             raise ValueError(
                 f"Extension {ext!r} does not match playblast format {fmt!r} "
                 f"({extension})."
+            )
+        offered = cmds.playblast(query=True, format=True) or []
+        if offered and fmt.lower() not in [str(f).lower() for f in offered]:
+            raise RuntimeError(
+                f"This Maya cannot playblast {fmt!r} (it offers {sorted(offered)}): "
+                "export an image sequence or an encoded movie instead."
             )
         output_dir = os.path.dirname(filepath)
         if output_dir:

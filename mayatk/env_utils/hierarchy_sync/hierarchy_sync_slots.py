@@ -5,9 +5,13 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 # Third-party imports
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
+from uitk import TreeDragReparentFilter
 
 # From this package
 from mayatk.core_utils.script_job_manager import ScriptJobManager
@@ -1048,114 +1052,6 @@ class HierarchySyncController(ptk.LoggingMixin):
         self.ui.settings.setValue("recent_reference_scenes", recent_scenes)
 
 
-class _MiddleButtonDragFilter(QtCore.QObject):
-    """Event filter that enables middle-mouse drag-to-reparent on a QTreeWidget.
-
-    Installed on ``tree001``'s **viewport** to intercept middle-button presses
-    and synthesise left-button events so that Qt's built-in ``InternalMove``
-    drag-drop machinery handles the visual move.
-
-    Also installed on the **tree widget** itself to intercept ``Drop`` events.
-    After Qt completes the internal move, the filter calls back into the slots
-    layer to mirror the reparent operation inside Maya.
-    """
-
-    def __init__(self, parent=None, *, reparent_callback=None):
-        super().__init__(parent)
-        self._mid_dragging = False
-        self._reparent_callback = reparent_callback
-        self._dragged_items = []
-
-    # ---- helpers -----------------------------------------------------------
-
-    @staticmethod
-    def _synth_mouse(etype, event, button=QtCore.Qt.LeftButton):
-        return QtGui.QMouseEvent(
-            etype, event.localPos(), button, button, event.modifiers()
-        )
-
-    # ---- eventFilter -------------------------------------------------------
-
-    def eventFilter(self, obj, event):  # noqa: N802
-        etype = event.type()
-
-        # --- viewport events (middle → left translation) ---
-        is_viewport = not obj.inherits("QTreeWidget")
-
-        if is_viewport:
-            if (
-                etype == QtCore.QEvent.MouseButtonPress
-                and event.button() == QtCore.Qt.MiddleButton
-            ):
-                tree = obj.parent()
-                self._dragged_items = list(tree.selectedItems())
-                self._mid_dragging = True
-                QtCore.QCoreApplication.sendEvent(
-                    obj, self._synth_mouse(QtCore.QEvent.MouseButtonPress, event)
-                )
-                return True
-
-            if self._mid_dragging and etype == QtCore.QEvent.MouseMove:
-                QtCore.QCoreApplication.sendEvent(
-                    obj, self._synth_mouse(QtCore.QEvent.MouseMove, event)
-                )
-                return True
-
-            if (
-                etype == QtCore.QEvent.MouseButtonRelease
-                and event.button() == QtCore.Qt.MiddleButton
-            ):
-                was_dragging = self._mid_dragging
-                self._mid_dragging = False
-                if was_dragging:
-                    QtCore.QCoreApplication.sendEvent(
-                        obj,
-                        self._synth_mouse(QtCore.QEvent.MouseButtonRelease, event),
-                    )
-                    return True
-
-            # A genuine left-button press (native drag start or plain click)
-            # invalidates any stale middle-captured selection so a subsequent
-            # native left-drag drop falls back to the live selection instead of
-            # mirroring — or crashing on a now-dangling item from — an earlier
-            # middle-click that produced no drop. Guard on ``not _mid_dragging``
-            # to skip the synthetic left-press injected during a middle drag
-            # (which runs with ``_mid_dragging`` already True).
-            if (
-                etype == QtCore.QEvent.MouseButtonPress
-                and event.button() == QtCore.Qt.LeftButton
-                and not self._mid_dragging
-            ):
-                self._dragged_items = []
-
-            return super().eventFilter(obj, event)
-
-        # --- tree-widget-level: intercept Drop to reparent in Maya ----------
-        if etype == QtCore.QEvent.Drop and self._reparent_callback:
-            # Let Qt handle the tree-item move first
-            result = super().eventFilter(obj, event)
-            # Mirror every reparent in Maya via ONE batch callback. The
-            # callback rebuilds the tree, which deletes every QTreeWidgetItem —
-            # a per-item callback left the remaining iterations holding dead
-            # items (RuntimeError, partial reparent on multi-select drags).
-            #
-            # ``_dragged_items`` is populated only for a middle-button drag.
-            # A native left-button InternalMove drop (enabled via
-            # setDragDropMode(InternalMove) in tree001_init) leaves it empty,
-            # which previously mirrored nothing — the tree moved the item but
-            # Maya was left unchanged. Fall back to the tree's live selection:
-            # the just-moved items stay selected and their ``parent()``
-            # reflects the new parent, exactly like the middle-drag path.
-            items = self._dragged_items or list(obj.selectedItems())
-            moves = [(item, item.parent()) for item in items]
-            self._dragged_items.clear()
-            if moves:
-                self._reparent_callback(moves)
-            return result
-
-        return super().eventFilter(obj, event)
-
-
 class HierarchySyncSlots(ptk.LoggingMixin):
     """Slots class for hierarchy management UI operations.
 
@@ -1201,7 +1097,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
         self.controller = HierarchySyncController(self)
 
         # Middle-mouse drag filter for current scene tree reparenting
-        self._tree001_drag_filter = _MiddleButtonDragFilter(
+        self._tree001_drag_filter = TreeDragReparentFilter(
             self.ui, reparent_callback=self._on_tree001_drop_reparent
         )
 
@@ -1514,8 +1410,8 @@ class HierarchySyncSlots(ptk.LoggingMixin):
     def _on_tree001_drop_reparent(self, moves):
         """Mirror tree-widget drag-drop reparents in the Maya scene.
 
-        Called by ``_MiddleButtonDragFilter`` with the whole dropped selection
-        after Qt finishes moving the tree items. Item data is resolved up
+        Called by ``uitk.TreeDragReparentFilter`` with the whole dropped
+        selection after Qt finishes moving the tree items. Item data is resolved up
         front — the rebuild below deletes every ``QTreeWidgetItem``, so
         nothing may touch an item after the first refresh. All reparents run
         in one undo chunk (one Ctrl+Z reverts the whole drag) and the tree is
@@ -1689,8 +1585,7 @@ class HierarchySyncSlots(ptk.LoggingMixin):
             # Enable internal drag-and-drop for reparenting via middle mouse button
             widget.setDragDropMode(self.sb.QtWidgets.QAbstractItemView.InternalMove)
             widget.setDefaultDropAction(self.sb.QtCore.Qt.MoveAction)
-            widget.viewport().installEventFilter(self._tree001_drag_filter)
-            widget.installEventFilter(self._tree001_drag_filter)
+            self._tree001_drag_filter.install(widget)
 
             # Mark as initialized to prevent re-adding menu items
             widget.is_initialized = True

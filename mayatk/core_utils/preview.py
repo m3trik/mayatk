@@ -59,8 +59,11 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional, Set, Tuple
 from functools import wraps
 
-import maya.cmds as cmds
-import maya.api.OpenMaya as om
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except Exception:
+    cmds = om = None
 
 # From this package:
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -482,7 +485,7 @@ class _PreviewInternal(object):
             bullets = None
 
         try:
-            from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+            from pythontk import TooltipFormat
 
             return TooltipFormat.fmt(title=title, body=body, bullets=bullets)
         except Exception:  # uitk unavailable -- degrade to plain text

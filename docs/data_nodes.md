@@ -6,7 +6,7 @@ record**. The model has three parts, and each lives in exactly one place:
 
 | Part | Where | What it decides |
 |---|---|---|
-| **The declaration** | `ptk.SceneRecords` (`pythontk/core_utils/scene_records.py`) | a record's key, scope, version, kind, owner, readers and description -- once, for both DCCs, the GLB readers and the Unity gate |
+| **The declaration** | `ptk.SceneRecords` (`pythontk/core_utils/engines/scene_export/scene_records.py`) | a record's key, scope, version, kind, owner, readers and description -- once, for both DCCs, the GLB readers and the Unity gate |
 | **The store** | `mtk.DataNodes` (this module) / `btk.DataNodes` | where a record's text lives in the scene -- two carrier nodes, strings only |
 | **The producers** | `FbxUtils.PRODUCERS` (one row per record per DCC) | how a record is computed from the live scene -- returned, never written |
 

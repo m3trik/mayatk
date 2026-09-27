@@ -435,7 +435,7 @@ def check_keep_stacked(stacked: int = 3, expect=True, tol: float = 1e-3):
 
 
 def render_script(user_lua: str, obj_path: Path, overrides: dict = None) -> str:
-    from pythontk.str_utils._str_utils import StrUtils
+    from pythontk import StrUtils
 
     # Mirror the bridge: expand shared includes (__PACK_BLOCK__) before
     # version-stripping + substitution.

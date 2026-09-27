@@ -41,7 +41,9 @@ class MayaUiHandler(UiHandler):
         if switchboard is None:
             from uitk import Switchboard as _Switchboard
 
-            switchboard = _Switchboard()
+            # As its "ui" handler: a bare Switchboard would register a plain
+            # UiHandler there, and the launcher's rows would run through it.
+            switchboard = _Switchboard(handlers={"ui": self})
 
         super().__init__(
             switchboard=switchboard,
@@ -53,6 +55,15 @@ class MayaUiHandler(UiHandler):
             source_tags={"mayatk"},
             **kwargs,
         )
+
+        # Maya's main window owns application-scoped shortcuts (it is always
+        # up); uitk names no host, so the host declares it -- here, not only
+        # in tentacle's launcher, so mayatk's own panels get it too.
+        from uitk import PresetEditor
+        from uitk.managers.shortcut_manager import ShortcutManager
+
+        ShortcutManager.register_host_window("MayaWindow")
+        PresetEditor.register_app_label("mayatk", "Maya")
 
         # Route the log panel's node actions (select/reveal) through uitk's
         # dependency-inverted registry so uitk needn't import mayatk. Registered

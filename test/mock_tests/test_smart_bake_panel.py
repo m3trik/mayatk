@@ -125,6 +125,20 @@ class TestSmartBakePanelLoads(unittest.TestCase):
         # treats that as a corrupt/missing manifest and falls back to [].
         self.assertFalse(self.ui.b001.isEnabled())
 
+    def test_header_reset_speaks_the_shared_grammar(self):
+        """Regression: the header menu's Reset to Defaults was clicked straight
+        to ``state.reset_all()`` with a one-line tooltip -- no Shift+Click to
+        save the defaults, no Ctrl+Shift+Click to forget them. Through a popup
+        menu the gesture must still reach this panel's own state."""
+        from uitk.managers.reset_gesture import ResetGesture
+
+        btn = self.ui.header.menu.reset_defaults
+        (gesture,) = btn.findChildren(ResetGesture)
+        gesture.refresh_tooltip()
+        self.assertIn("Shift", btn.toolTip())
+        self.assertIn("Ctrl", btn.toolTip())
+        self.assertIs(gesture._resolve_state(), self.ui.state)
+
 
 if __name__ == "__main__":
     unittest.main()

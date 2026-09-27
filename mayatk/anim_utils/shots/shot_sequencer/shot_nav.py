@@ -3,7 +3,7 @@
 """Shot navigation and combobox synchronization.
 
 Provides :class:`ShotNavMixin` — mixed into
-:class:`~.shot_sequencer_slots.ShotSequencerController` to handle shot
+:class:`~.shot_sequencer_controller.ShotSequencerController` to handle shot
 selection, navigation, and combobox population.
 """
 

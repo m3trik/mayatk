@@ -30,7 +30,7 @@ from typing import Dict, List, Sequence
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 
-from mayatk.rig_utils.tube_path import TubePath
+from mayatk.rig_utils.tube_rig.tube_path import TubePath
 
 
 class _TubeRigMetricsInternal(object):

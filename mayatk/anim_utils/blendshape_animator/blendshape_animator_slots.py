@@ -16,7 +16,7 @@ from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
 )
 from mayatk.anim_utils.blendshape_animator.applicator import ApplyStatus
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
-from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
+from mayatk.anim_utils.blendshape_animator.history import BlendshapeHistory
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -166,7 +166,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
             if Attributes.has_attr(node, "isInbetweenTarget"):
                 continue
             try:
-                history = BlendshapeHelpers.list_history(node, type_filter="blendShape")
+                history = BlendshapeHistory.list_history(node, type_filter="blendShape")
             except RuntimeError:
                 continue
             if not history:

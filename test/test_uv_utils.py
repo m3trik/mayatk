@@ -16,7 +16,7 @@ import math
 import unittest
 import pythontk as ptk
 from mayatk.uv_utils._uv_utils import UvUtils
-from mayatk.uv_utils._uv_pack import _UvPackInternal
+from mayatk.uv_utils._uv_pack import _U3dPackInternal, _UvPackInternal
 from mayatk.core_utils._core_utils import CoreUtils
 
 from base_test import MayaTkTestCase
@@ -1540,7 +1540,7 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
     def test_unwrap_unfold_does_not_collapse(self):
         """unfold=True must flatten shells (non-zero UV area), not collapse them
         to points -- even from a degenerate axis-aligned source projection."""
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         cyl = cmds.polyCylinder(
@@ -1629,7 +1629,7 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         seeded cylindrically (a planar seed folds a single-row ring flat and
         u3dUnfold then collapses it) and u3dLayout's packing mirrors are
         flipped back."""
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         cyl = cmds.polyCylinder(
@@ -1670,7 +1670,7 @@ class TestUvCylinderUnwrap(MayaTkTestCase):
         the good cylinders still unfold. u3dUnfold rejects a non-manifold mesh
         ('Mesh has non-manifold UVs…'); a single batched unfold would abort the
         whole selection on it, so each mesh is unfolded independently."""
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         g1 = cmds.polyCylinder(r=1, h=4, sx=12, name="good_a")[0]
@@ -1895,7 +1895,7 @@ class TestCylinderSeamRules(MayaTkTestCase):
         """The full unwrap of the reference column: 11 packed shells, none
         collapsed or mirrored -- the strips are seeded as developed strips and
         the rings / discs radially, so Unfold3D has nothing to untangle."""
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         if not cmds.pluginInfo("Unfold3D", query=True, loaded=True):
             self.skipTest("Unfold3D plugin unavailable")
         col = _turned_profile(
@@ -2498,7 +2498,7 @@ class TestSimilarUvShells(MayaTkTestCase):
 
     def setUp(self):
         super().setUp()
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         self.objs = {}
         for name, sx, sy, (du, dv, ang) in (
             ("A", 2, 2, (0, 0, 0)),
@@ -2934,6 +2934,95 @@ class TestPackUvs(MayaTkTestCase):
         self.assertGreaterEqual(self._bbox(plane)[0][0], 4.0)
         cmds.undo()
         self.assertEqual(self._bbox(plane), before)
+
+
+class TestPackUvsU3d(MayaTkTestCase):
+    """UvUtils.pack_uvs(engine="u3d") -- the native u3dLayout path (moved from
+    the tentacle Pack slot, whose own tests still drive it end to end)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cmds.loadPlugin("Unfold3D", quiet=True)
+
+    @staticmethod
+    def _bbox(obj):
+        return cmds.polyEvaluate(obj, boundingBox2d=True)
+
+    def test_default_pack_fills_target_tile(self):
+        a = cmds.polyCube(name="u3dA", ch=False)[0]
+        b = cmds.polyCube(name="u3dB", ch=False)[0]
+        result = UvUtils.pack_uvs([a, b], engine="u3d", map_size=1024)
+        self.assertEqual(result.engine, "u3d")
+        self.assertEqual(len(result.succeeded), 2)
+        self.assertEqual(result.failed, [])
+        for obj in (a, b):
+            (u0, u1), (v0, v1) = self._bbox(obj)
+            self.assertGreaterEqual(min(u0, v0), 0.0)
+            self.assertLessEqual(max(u1, v1), 1.0)
+
+    def test_grid_clamps_to_udim_row_end(self):
+        """UDIM 1010 sits at the row end (u=9): Tiles U 2 would pack past u=10,
+        outside UDIM addressing, so it clamps to 1 and the result says so."""
+        a = cmds.polyCube(name="u3dRowEnd", ch=False)[0]
+        result = UvUtils.pack_uvs(
+            [a], engine="u3d", map_size=1024, udim=1010, tiles=(2, 1)
+        )
+        self.assertEqual(result.tiles, (1, 1))
+        (u0, u1), _ = self._bbox(a)
+        self.assertGreaterEqual(u0, 9.0)
+        self.assertLessEqual(u1, 10.0)
+
+    def test_single_mesh_failure_reports_without_probe_pass(self):
+        from unittest import mock
+
+        a = cmds.polyCube(name="u3dFail", ch=False)[0]
+        calls = []
+
+        def boom(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise RuntimeError("u3dLayout: non-manifold vertices")
+
+        with mock.patch.object(cmds, "u3dLayout", side_effect=boom):
+            result = UvUtils.pack_uvs([a], engine="u3d", map_size=1024)
+        self.assertEqual(len(calls), 1, "single mesh must not be re-probed")
+        self.assertEqual(result.succeeded, [])
+        self.assertEqual(len(result.failed), 1)
+        self.assertEqual(result.failed[0][1], "non-manifold vertices")
+
+    def test_grid_distribution_moves_pinned_shells_whole(self):
+        """polyEditUV honours pin weights, so the whole-tile moves that deal
+        shells to a Tiles U/V grid left a shell's pinned UVs where they were:
+        the shell torn across tiles before u3dLayout ever packed it (the Pack
+        panel's Pin and Stack buttons leave pins behind). Pins are lifted for
+        the moves and the exact weights put back."""
+        cubes = [cmds.polyCube(name=f"packPin{i}", ch=False)[0] for i in range(4)]
+        for cube in cubes:
+            cmds.polyPinUV(f"{cube}.map[0:3]", value=1.0)
+            cmds.polyPinUV(f"{cube}.map[5]", value=0.5)
+        uvs = cmds.polyListComponentConversion(cubes, fromFace=True, toUV=True)
+
+        def state(cube):
+            flat = cmds.ls(f"{cube}.map[*]", flatten=True)
+            pos = [tuple(cmds.polyEditUV(uv, query=True)) for uv in flat]
+            return pos, UvUtils.get_uv_pin_weights(flat)
+
+        before = {cube: state(cube) for cube in cubes}
+
+        # Four equal one-shell cubes over 2 x 2 tiles: one per tile, so three
+        # of them move by a whole tile.
+        _U3dPackInternal.distribute_to_grid(UvUtils, uvs, 0, 0, 2, 2)
+
+        moved = 0
+        for cube in cubes:
+            (pos0, pins0), (pos1, pins1) = before[cube], state(cube)
+            offsets = {
+                (round(b[0] - a[0], 6), round(b[1] - a[1], 6))
+                for a, b in zip(pos0, pos1)
+            }
+            self.assertEqual(len(offsets), 1, f"{cube} tore: {sorted(offsets)}")
+            moved += offsets != {(0.0, 0.0)}
+            self.assertEqual(pins1, pins0, f"{cube} lost its pin weights")
+        self.assertEqual(moved, 3)
 
 
 class TestUvUtilsEdgeCases(MayaTkTestCase):

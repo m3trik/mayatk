@@ -1315,6 +1315,23 @@ class TestNodeUtils(MayaTkTestCase):
         self.assertNotIn(bump, cmds.ls(materials=True) or [])
         self.assertFalse(cmds.listConnections(bump, type="shadingEngine"))
 
+    def test_create_render_node_leaves_unset_creation_prefs_unset(self):
+        """It restored both creation prefs as ints, so a pref the user never
+        set was written into their saved prefs. Added: 2026-09-26
+        """
+        prefs = ("createMaterialsWithShadingGroup", "createTexturesWithPlacement")
+        saved = {n: cmds.optionVar(q=n) for n in prefs if cmds.optionVar(exists=n)}
+        self.addCleanup(
+            lambda: [cmds.optionVar(intValue=(n, v)) for n, v in saved.items()]
+        )
+        for n in prefs:
+            cmds.optionVar(remove=n)
+        # Placement nodes take the createRenderNodeCB path, which reads them.
+        NodeUtils.create_render_node(
+            "file", name="test_render_prefs", create_placement_nodes=True
+        )
+        self.assertEqual([n for n in prefs if cmds.optionVar(exists=n)], [])
+
     def test_create_render_node(self):
         """Test create_render_node."""
         # Try to source the MEL script required

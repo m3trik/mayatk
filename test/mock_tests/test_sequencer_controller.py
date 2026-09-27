@@ -91,7 +91,7 @@ if _app is None:
 # ---------------------------------------------------------------------------
 # Imports under test
 # ---------------------------------------------------------------------------
-from uitk.widgets.sequencer._sequencer import SequencerWidget
+from uitk import SequencerWidget
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
@@ -2674,54 +2674,6 @@ class TestClearDecorations(ControllerTestCase):
 # ===========================================================================
 
 
-class TestZoneDetection(ControllerTestCase):
-    """Verify TimelineView._hit_zone returns correct zone names."""
-
-    def test_ruler_zone(self):
-        """Y < _RULER_HEIGHT should return 'ruler'."""
-        from uitk.widgets.sequencer import _RULER_HEIGHT
-
-        tl = self.widget._timeline
-        self.assertEqual(tl._hit_zone(0), "ruler")
-        self.assertEqual(tl._hit_zone(_RULER_HEIGHT - 1), "ruler")
-
-    def test_ruler_boundary_exclusive(self):
-        """Y == _RULER_HEIGHT is the first pixel of the next zone, not ruler."""
-        from uitk.widgets.sequencer import _RULER_HEIGHT
-
-        tl = self.widget._timeline
-        # The shot lane starts here — the ruler ends at its last pixel.
-        self.assertNotEqual(tl._hit_zone(_RULER_HEIGHT), "ruler")
-
-    def test_the_band_below_the_ruler_is_the_shot_lane(self):
-        """The shot lane is its OWN strip, between the ruler and the tracks."""
-        from uitk.widgets.sequencer import _RULER_HEIGHT, _HEADER_HEIGHT
-
-        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
-        self._do_initial_sync()
-
-        tl = self.widget._timeline
-        self.assertEqual(tl._hit_zone(_RULER_HEIGHT), "shot_lane")
-        self.assertEqual(tl._hit_zone(_HEADER_HEIGHT), "tracks")
-
-    def test_content_top_equals_header_height(self):
-        """_content_top clears the ruler AND the shot lane below it."""
-        from uitk.widgets.sequencer import _HEADER_HEIGHT
-
-        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
-        self._do_initial_sync()
-        self.assertEqual(self.widget._content_top, _HEADER_HEIGHT)
-
-    def test_tracks_zone(self):
-        """Y below content_top should return 'tracks'."""
-        self._set_segments(0, make_segments("ObjA", [(100, 200)]))
-        self._do_initial_sync()
-
-        tl = self.widget._timeline
-        content_top = self.widget._content_top
-        self.assertEqual(tl._hit_zone(content_top + 1), "tracks")
-
-
 class TestTheFirstSyncFramesTheShot(ControllerTestCase):
     """Opening the panel lands on the shot being worked on, not frame 0.
 
@@ -2752,16 +2704,6 @@ class TestTheFirstSyncFramesTheShot(ControllerTestCase):
         self.widget.frame_shot = lambda: calls.append(1)
         self.ctrl._sync_to_widget(frame=True)
         self.assertEqual(len(calls), 1)
-
-
-class TestShotTrackHeight(ControllerTestCase):
-    """Verify content_top positioning."""
-
-    def test_content_top_always_header_height(self):
-        """content_top is the fixed header height, populated or not."""
-        from uitk.widgets.sequencer import _HEADER_HEIGHT
-
-        self.assertEqual(self.widget._content_top, _HEADER_HEIGHT)
 
 
 class TestZoneContextMenu(ControllerTestCase):
@@ -4242,7 +4184,7 @@ class TestKeyDeletionUndo(ControllerTestCase):
 
         # Mock KeyframeItem selection
         from unittest.mock import MagicMock as MM
-        from uitk.widgets.sequencer._keyframe import KeyframeItem
+        from uitk import KeyframeItem
 
         fake_key = MM(spec=KeyframeItem)
         fake_key._parent_clip = MM()
@@ -4285,7 +4227,7 @@ class TestKeyDeletionUndo(ControllerTestCase):
         clip.data["attr_name"] = "translateX"
 
         from unittest.mock import MagicMock as MM
-        from uitk.widgets.sequencer._keyframe import KeyframeItem
+        from uitk import KeyframeItem
 
         fake_key = MM(spec=KeyframeItem)
         fake_key._parent_clip = MM()

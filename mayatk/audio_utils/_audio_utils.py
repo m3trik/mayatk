@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import pythontk as ptk
-from pythontk.audio_utils._audio_utils import AudioUtils as _PtkAudioUtils
+from pythontk import AudioUtils as _PtkAudioUtils
 
 from mayatk.node_utils.data_nodes import DataNodes
 

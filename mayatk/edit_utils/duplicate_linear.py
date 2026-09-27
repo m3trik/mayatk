@@ -276,9 +276,12 @@ class DuplicateLinearSlots:
         self.ui.s010.setEnabled(uses_bias)  # Weight Bias
         self.ui.s011.setEnabled(uses_curve)  # Weight Curve
 
-    def b001(self):
-        """Reset to Defaults: Resets all UI widgets to their default values."""
-        self.ui.state.reset_all()
+    def b001_init(self, widget):
+        """Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
+        current values as the defaults, Ctrl+Shift+Click forgets them)."""
+        from uitk.managers.reset_gesture import ResetGesture
+
+        self._reset_gesture = ResetGesture(widget)
 
     def perform_operation(self, objects, contract):
         """Perform the linear duplication operation."""

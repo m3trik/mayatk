@@ -1709,6 +1709,25 @@ class TestFindAndCopyPanel(MayaTkTestCase):
         self.assertEqual(source["placeholder"], "1 path(s) require a search dir")
         self.assertIn("skip them and relocate the 1", source["hint"])
 
+    def test_a_file_found_under_another_case_is_pointed_at_as_it_landed(self):
+        """The search matches names case-insensitively, so a stored
+        ``WOOD.png`` finds ``Wood.png``. The node must then name the file as
+        it landed: on a case-sensitive filesystem (Linux) the stored case
+        names a file that does not exist."""
+        self._write(self.ext_dir, "Wood.png")
+        node = self._make_file_node(
+            "tex_case",
+            os.path.join(self.ext_dir, "gone", "WOOD.png").replace("\\", "/"),
+        )
+        self._answer(source_dir=self.ext_dir)
+
+        self._run([node], relocate_mode="copy")
+
+        self.assertIn("Wood.png", os.listdir(self.dest_dir))
+        self.assertTrue(
+            self._path_of(node).endswith("dest/Wood.png"), self._path_of(node)
+        )
+
     def test_an_empty_source_row_skips_the_unresolved_and_keeps_the_rest(self):
         """48-of-50 valid: no search folder skips 2, it doesn't abort 48."""
         good = self._make_file_node("tex_k", self._write(self.ext_dir, "keep.png"))

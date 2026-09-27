@@ -22,11 +22,7 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots._shot_apply import ShotApply
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
-from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-    Behaviors,
-    load_behavior,
-    resolve_keys,
-)
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 from mayatk.audio_utils._audio_utils import AudioUtils
 from mayatk.core_utils._core_utils import CoreUtils
 import maya.cmds as cmds
@@ -221,7 +217,7 @@ class TestResolveKeys(unittest.TestCase):
     """Test behavior_keys.resolve_keys helper."""
 
     def test_in_phase_start_anchor(self):
-        keys = resolve_keys(
+        keys = Behaviors.resolve_keys(
             {"offset": 0, "duration": 10, "values": [0.0, 1.0], "anchor": "start"},
             start=100.0,
             end=200.0,
@@ -233,7 +229,7 @@ class TestResolveKeys(unittest.TestCase):
         self.assertEqual(keys[1]["value"], 1.0)
 
     def test_out_phase_end_anchor(self):
-        keys = resolve_keys(
+        keys = Behaviors.resolve_keys(
             {"offset": 0, "duration": 20, "values": [1.0, 0.0], "anchor": "end"},
             start=100.0,
             end=200.0,
@@ -243,7 +239,7 @@ class TestResolveKeys(unittest.TestCase):
         self.assertAlmostEqual(keys[1]["time"], 200.0)
 
     def test_offset_shifts_base(self):
-        keys = resolve_keys(
+        keys = Behaviors.resolve_keys(
             {"offset": 5, "duration": 10, "values": [0.0, 1.0], "anchor": "start"},
             start=0.0,
             end=100.0,
@@ -252,7 +248,7 @@ class TestResolveKeys(unittest.TestCase):
         self.assertAlmostEqual(keys[1]["time"], 15.0)
 
     def test_three_values(self):
-        keys = resolve_keys(
+        keys = Behaviors.resolve_keys(
             {"duration": 20, "values": [0.0, 0.5, 1.0], "anchor": "start"},
             start=0.0,
             end=100.0,
@@ -267,7 +263,7 @@ class TestLoadBehavior(unittest.TestCase):
     """Test YAML behavior loading."""
 
     def test_load_fade_in(self):
-        t = load_behavior("fade_in")
+        t = Behaviors.load_behavior("fade_in")
         self.assertIn("attributes", t)
         self.assertIn("visibility", t["attributes"])
         vis = t["attributes"]["visibility"]
@@ -275,7 +271,7 @@ class TestLoadBehavior(unittest.TestCase):
         self.assertEqual(vis["in"]["values"], [0.0, 1.0])
 
     def test_load_fade_out(self):
-        t = load_behavior("fade_out")
+        t = Behaviors.load_behavior("fade_out")
         self.assertIn("attributes", t)
         self.assertIn("visibility", t["attributes"])
         vis = t["attributes"]["visibility"]
@@ -284,7 +280,7 @@ class TestLoadBehavior(unittest.TestCase):
 
     def test_missing_behavior_raises(self):
         with self.assertRaises(FileNotFoundError):
-            load_behavior("nonexistent_template_xyz")
+            Behaviors.load_behavior("nonexistent_template_xyz")
 
 
 # ---------------------------------------------------------------------------
@@ -1733,25 +1729,25 @@ class TestBehaviorYAMLAnchors(unittest.TestCase):
     """Verify YAML templates include explicit anchor fields."""
 
     def test_fade_in_has_anchor(self):
-        t = load_behavior("fade_in")
+        t = Behaviors.load_behavior("fade_in")
         vis = t["attributes"]["visibility"]
         self.assertEqual(vis["in"]["anchor"], "start")
 
     def test_fade_out_has_anchor(self):
-        t = load_behavior("fade_out")
+        t = Behaviors.load_behavior("fade_out")
         vis = t["attributes"]["visibility"]
         self.assertEqual(vis["out"]["anchor"], "end")
 
     def test_fade_in_template_exists(self):
         """fade_in.yaml should load and contain only the 'in' phase."""
-        t = load_behavior("fade_in")
+        t = Behaviors.load_behavior("fade_in")
         vis = t["attributes"]["visibility"]
         self.assertIn("in", vis)
         self.assertNotIn("out", vis)
 
     def test_fade_out_template_exists(self):
         """fade_out.yaml should load and contain only the 'out' phase."""
-        t = load_behavior("fade_out")
+        t = Behaviors.load_behavior("fade_out")
         vis = t["attributes"]["visibility"]
         self.assertNotIn("in", vis)
         self.assertIn("out", vis)
@@ -7262,7 +7258,7 @@ class TestColumnMap(unittest.TestCase):
 # Mapping resolver tests (JSON mapping files)
 # ---------------------------------------------------------------------------
 
-from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
+from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
 
 class TestMappingResolver(unittest.TestCase):
@@ -11095,7 +11091,7 @@ class TestGroupMoveOrderIsRigid(unittest.TestCase):
     def test_the_widget_orders_a_batch_the_way_the_engine_needs(self):
         """The two halves have to agree, so assert the widget's order against
         the engine's requirement rather than trusting a comment."""
-        from uitk.widgets.sequencer._clip import ClipItem
+        from uitk.widgets.sequencer import ClipItem
 
         left = ClipItem._collision_free_order([(130.0, "b", 105.0), (100.0, "a", 75.0)])
         self.assertEqual([cid for cid, _ in left], ["a", "b"])

@@ -2,7 +2,7 @@
 """Commit resolved :class:`MovePlan`\\ s to the Maya scene.
 
 The three-phase walk (park / ordered / land, +INF envelope capping) lives
-once in :func:`pythontk.core_utils.engines.shots.shot_apply.apply`; this
+once in :meth:`pythontk.core_utils.engines.shots.shot_apply.ShotApply.apply`; this
 module supplies the Maya *writer strategies* — the keyframe shifter
 (:func:`_batch_move_keys`) and the audio-track shifter
 (:func:`_shift_audio_range`) — and wraps the whole run in a single audio
@@ -42,10 +42,10 @@ from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots._shot_plan import MovePlan, _INF
 
 
-# Half-frame slop used so a key exactly on the upper envelope boundary
-# belongs to the next shot rather than both.  Named distinctly from
-# :data:`_shot_plan._EPS` (1e-6, used for delta-significance tests) —
-# different scale, different purpose, same file neighborhood.
+# Sub-frame slop used so a key exactly on the upper envelope boundary
+# belongs to the next shot rather than both.  Named distinctly from the
+# planner's ``_EPS`` (1e-6 in ``pythontk.core_utils.engines.shots.shot_plan``,
+# used for delta-significance tests) — different scale, different purpose.
 _ENVELOPE_SLOP = 1.0e-3
 
 # ``audio_utils.shift_keys_in_range`` internally inflates the caller's
@@ -443,7 +443,7 @@ class ShotApply(_ShotApplyInternal):
 
         Delegates the three-phase park / ordered / land walk (including the
         +INF-envelope capping) to the engine's
-        :func:`~pythontk.core_utils.engines.shots.shot_apply.apply`, passing
+        :meth:`~pythontk.core_utils.engines.shots.shot_apply.ShotApply.apply`, passing
         :func:`_batch_move_keys` / :func:`_shift_audio_range` as the Maya writer
         strategies.  All Maya writes happen inside one audio batch so derived
         DG audio nodes re-render exactly once.

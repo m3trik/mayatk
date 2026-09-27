@@ -1,15 +1,16 @@
 # coding=utf-8
 """Behaviors — Maya appliers over the engine's pure keying-recipe core.
 
-Template discovery/loading (:func:`load_behavior`, :func:`list_behaviors`,
-:func:`templates`), the schema, and the anchor/offset/duration →
-absolute-keyframe math (:func:`resolve_keys`) live once, DCC-agnostic, in
-``pythontk.core_utils.engines.shots.manifest.behaviors`` (JSON templates,
-shared with blendertk).  This module supplies the **scene-touching** half:
-applying keys via ``cmds`` (:func:`apply_behavior`, :func:`apply_to_shots`),
-verifying them (:func:`verify_behavior`), the audio-clip track writer
-(:func:`apply_audio_clip`), and :func:`compute_duration` bound to Maya's
-audio measurement.
+Template discovery/loading (``Behaviors.load_behavior`` /
+``list_behaviors`` / ``templates``), the schema, and the anchor/offset/duration
+→ absolute-keyframe math (``Behaviors.resolve_keys``) live once, DCC-agnostic,
+in ``pythontk.core_utils.engines.shots.manifest.behaviors`` (JSON templates,
+shared with blendertk); :class:`Behaviors` extends that engine class.  This
+module supplies the **scene-touching** half: applying keys via ``cmds``
+(:meth:`Behaviors.apply_behavior`, :meth:`Behaviors.apply_to_shots`),
+verifying them (:meth:`Behaviors.verify_behavior`), the audio-clip track writer
+(:meth:`Behaviors.apply_audio_clip`), and :meth:`Behaviors.compute_duration`
+bound to Maya's audio measurement.
 """
 
 import inspect
@@ -17,18 +18,10 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-from pythontk.core_utils.engines.shots.manifest.behaviors._behaviors import (
+from pythontk.core_utils.engines.shots.manifest.behaviors import (  # noqa: F401
     Behaviors as _PyBehaviors,
+    BehaviorSpec,  # published by this package's __init__
 )
-
-# Pure-core staticmethods re-exported under their historical flat names; mayatk's
-# ``Behaviors`` (below) wraps them with the Maya appliers. The engine is now
-# class-based, so these read off ``_PyBehaviors`` (``Behaviors.templates`` etc.).
-templates = _PyBehaviors.templates  # noqa: F401
-load_behavior = _PyBehaviors.load_behavior  # noqa: F401
-list_behaviors = _PyBehaviors.list_behaviors  # noqa: F401
-resolve_keys = _PyBehaviors.resolve_keys  # noqa: F401
-_compute_duration_pure = _PyBehaviors.compute_duration
 
 try:
     import maya.cmds as cmds
@@ -141,8 +134,14 @@ class _BehaviorsInternal(object):
             return True
 
 
-class Behaviors(_BehaviorsInternal):
-    """Behaviors — module namespace."""
+class Behaviors(_PyBehaviors, _BehaviorsInternal):
+    """Behaviors — module namespace.
+
+    Extends the pure engine class (so ``Behaviors.load_behavior`` /
+    ``list_behaviors`` / ``resolve_keys`` / ``templates`` resolve through this
+    one name) with the Maya appliers; :meth:`compute_duration` overrides the
+    pure version with the Maya-bound binding. Mirror of blendertk's.
+    """
 
     @staticmethod
     def apply_behavior(
@@ -189,7 +188,7 @@ class Behaviors(_BehaviorsInternal):
         if cmds is None:
             raise RuntimeError("Maya (cmds) is required to apply behaviors")
 
-        template = load_behavior(behavior_name, search_path)
+        template = Behaviors.load_behavior(behavior_name, search_path)
 
         # Audio-clip behaviors delegate to the audio-specific helper.
         verify_mode = (template.get("verify") or {}).get("mode", "")
@@ -254,7 +253,7 @@ class Behaviors(_BehaviorsInternal):
                 elif "anchor" not in block:
                     block = dict(block, anchor="start" if phase == "in" else "end")
 
-                keys = resolve_keys(block, start, end)
+                keys = Behaviors.resolve_keys(block, start, end)
                 for k in keys:
                     tan = k["tangent"]
                     # Maya's in-tangent doesn't accept "step" —
@@ -337,7 +336,7 @@ class Behaviors(_BehaviorsInternal):
         Returns:
             ``True`` if every expected keyframe is found.
         """
-        template = load_behavior(behavior_name, search_path)
+        template = Behaviors.load_behavior(behavior_name, search_path)
         verify_mode = (template.get("verify") or {}).get("mode", "exact")
 
         # Audio clip verification — track exists with start+stop keys.
@@ -389,7 +388,7 @@ class Behaviors(_BehaviorsInternal):
                         block = dict(block, anchor=anchor_override)
                     elif "anchor" not in block:
                         block = dict(block, anchor="start" if phase == "in" else "end")
-                    keys = resolve_keys(block, start, end)
+                    keys = Behaviors.resolve_keys(block, start, end)
                     for k in keys:
                         result = keyframe_fn(obj, check_attr, k["time"])
                         if not result:
@@ -529,7 +528,7 @@ class Behaviors(_BehaviorsInternal):
                 return None
             return _BehaviorsInternal._track_source_path(name) or None
 
-        return _compute_duration_pure(
+        return _PyBehaviors.compute_duration(
             behavior_entries,
             fallback=fallback,
             fps=fps,

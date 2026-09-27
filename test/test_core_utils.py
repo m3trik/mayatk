@@ -507,6 +507,60 @@ class TestCoreUtils(MayaTkTestCase):
                     pass
         self.assertIn("selection", " ".join(captured.output).lower())
 
+    def test_temp_option_vars_sets_then_restores_each_type(self):
+        """Each var holds the block's value inside, the user's after -- with
+        its own type. Added: 2026-09-26
+        """
+        saved = {"mtk_tov_i": 1, "mtk_tov_f": 0.5, "mtk_tov_s": "user"}
+        cmds.optionVar(intValue=("mtk_tov_i", 1))
+        cmds.optionVar(floatValue=("mtk_tov_f", 0.5))
+        cmds.optionVar(stringValue=("mtk_tov_s", "user"))
+        self.addCleanup(lambda: [cmds.optionVar(remove=n) for n in saved])
+        block = {"mtk_tov_i": False, "mtk_tov_f": 2.25, "mtk_tov_s": "tool"}
+        with CoreUtils.temp_option_vars(block):
+            self.assertEqual(
+                {n: cmds.optionVar(q=n) for n in block}, {**block, "mtk_tov_i": 0}
+            )
+        self.assertEqual({n: cmds.optionVar(q=n) for n in saved}, saved)
+
+    def test_temp_option_vars_removes_a_var_it_created(self):
+        """Restoring an absent var as 0 would write it into the user's prefs.
+        Added: 2026-09-26
+        """
+        cmds.optionVar(remove="mtk_tov_new")
+        with CoreUtils.temp_option_vars({"mtk_tov_new": 3}):
+            self.assertEqual(cmds.optionVar(q="mtk_tov_new"), 3)
+        self.assertFalse(cmds.optionVar(exists="mtk_tov_new"))
+
+    def test_temp_option_vars_restores_when_the_body_raises(self):
+        """Added: 2026-09-26"""
+        cmds.optionVar(intValue=("mtk_tov_i", 7))
+        self.addCleanup(cmds.optionVar, remove="mtk_tov_i")
+        with self.assertRaises(ValueError):
+            with CoreUtils.temp_option_vars({"mtk_tov_i": 1}):
+                raise ValueError("body")
+        self.assertEqual(cmds.optionVar(q="mtk_tov_i"), 7)
+
+    def test_temp_option_vars_refuses_an_array_var_untouched(self):
+        """A scalar would replace the array. Added: 2026-09-26"""
+        cmds.optionVar(remove="mtk_tov_arr")  # appends accumulate across runs
+        cmds.optionVar(intValueAppend=("mtk_tov_arr", 1))
+        cmds.optionVar(intValueAppend=("mtk_tov_arr", 2))
+        self.addCleanup(cmds.optionVar, remove="mtk_tov_arr")
+        with self.assertRaises(TypeError):
+            with CoreUtils.temp_option_vars({"mtk_tov_arr": 0}):
+                pass
+        self.assertEqual(cmds.optionVar(q="mtk_tov_arr"), [1, 2])
+
+    def test_temp_option_vars_refuses_an_unstorable_value_untouched(self):
+        """Added: 2026-09-26"""
+        cmds.optionVar(intValue=("mtk_tov_i", 7))
+        self.addCleanup(cmds.optionVar, remove="mtk_tov_i")
+        with self.assertRaisesRegex(TypeError, "not int, float or str"):
+            with CoreUtils.temp_option_vars({"mtk_tov_i": 1, "mtk_tov_l": [1]}):
+                pass
+        self.assertEqual(cmds.optionVar(q="mtk_tov_i"), 7)
+
 
 class TestCoreUtilsEdgeCases(MayaTkTestCase):
     """Edge case tests for CoreUtils."""

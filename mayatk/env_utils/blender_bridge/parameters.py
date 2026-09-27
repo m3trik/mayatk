@@ -22,16 +22,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
+from uitk.bridge import AttributeSpec, ParamRegistry, Parameters as _BridgeParams
 
 # Default VALUES live with the Qt-free engine so ``params_defaults()`` still answers
 # where this module cannot be imported (a DCC running headless has no Qt); the specs
 # below read them, so the two can never drift.
 from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
-
-
-# Templates are executable Blender Python -- substitute user values as Python source literals.
-_FORMATTER = Formatters.python_literal
 
 
 # Display order is iteration order over this dict.
@@ -463,23 +459,16 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
-class Parameters:
-    """Parameters — module namespace."""
+class Parameters(ParamRegistry):
+    """Parameters — module namespace.
 
-    #: The parameter registry, exposed on the class so a bridge slot can hand
-    #: this class to the shared base as its ``params_module`` (the base reads
-    #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level shim.
+    Declared as data: :class:`uitk.bridge.ParamRegistry` supplies
+    ``referenced_keys`` / ``defaults`` over :data:`PARAMS`, and a bridge slot
+    hands this class to the shared base as its ``params_module``. The two
+    methods below extend it for the lightmap affix and the engine's tokens.
+    """
+
     PARAMS = PARAMS
-
-    @staticmethod
-    def referenced_keys(script_text: str) -> "set[str]":
-        """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-        return _BridgeParams.referenced_keys(script_text, PARAMS)
-
-    @staticmethod
-    def defaults() -> "dict[str, Any]":
-        """Return ``{key: default}`` for every registered parameter."""
-        return _BridgeParams.defaults(PARAMS)
 
     @staticmethod
     def affix_parts(value: "Any", *, default: str = "suffix") -> "tuple[str, str]":
@@ -491,8 +480,8 @@ class Parameters:
         """
         return _BridgeParams.affix_parts(value, default=default)
 
-    @staticmethod
-    def render_context(values: "dict[str, Any]") -> "dict[str, str]":
+    @classmethod
+    def render_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
         """Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
         The shared base formats REGISTERED keys and lets unknown ones fall through to
@@ -510,12 +499,12 @@ class Parameters:
         two spellings of that rule from drifting; the template then receives the
         answer rather than the question.
         """
-        out = _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)
+        out = super().render_context(values)
         for key, val in values.items():
             if key not in PARAMS and key in DEFAULTS:
                 out[key] = repr(val)
         if "LIGHTMAP_AFFIX" in values:
-            prefix, suffix = Parameters.affix_parts(values["LIGHTMAP_AFFIX"])
+            prefix, suffix = cls.affix_parts(values["LIGHTMAP_AFFIX"])
             out["LIGHTMAP_PREFIX"] = repr(prefix)
             out["LIGHTMAP_SUFFIX"] = repr(suffix)
         return out

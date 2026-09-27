@@ -9,8 +9,7 @@ except ImportError:
 import os
 from functools import partial
 
-from pythontk.img_utils._img_utils import ImgUtils
-from pythontk.file_utils._file_utils import FileUtils
+from pythontk import FileUtils, ImgUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
@@ -2190,8 +2189,10 @@ class TexturePathEditorSlots:
                 f"{len(copied)} relocated, {len(in_place)} already at destination."
             )
 
-        copied_basenames = {os.path.basename(dst).lower() for _src, dst in copied}
-        copied_basenames.update(os.path.basename(p).lower() for p in in_place)
+        landed = [dst for _src, dst in copied] + list(in_place)
+        copied_basenames = {
+            os.path.basename(p).lower(): os.path.basename(p) for p in landed
+        }
         remap = self._plan_remap(node_names, dest_dir, copied_basenames)
 
         if remap:
@@ -2256,6 +2257,11 @@ class TexturePathEditorSlots:
         The path is flattened deliberately: the files land in ``dest_dir``'s
         root, and ``MatUtils.remap_texture_paths`` would try to preserve the
         original relative depth, which no longer corresponds to disk layout.
+
+        *basenames* maps each landed file's lower-case basename to its name
+        as it landed. The search matches names case-insensitively, so a
+        stored ``WOOD.png`` can land as ``Wood.png``; the node takes the
+        landed spelling, the only one a case-sensitive filesystem opens.
         """
         workspace, source_images = self._project_roots()
         plan = []
@@ -2264,10 +2270,11 @@ class TexturePathEditorSlots:
                 path = cmds.getAttr(f"{node_name}.fileTextureName")
             except Exception:
                 continue
-            if not path or not self._landed(os.path.basename(path), basenames):
+            name = os.path.basename(path or "")
+            if not name or not self._landed(name, basenames):
                 continue
             final_path = MatUtils.to_project_relative(
-                os.path.join(dest_dir, os.path.basename(path)),
+                os.path.join(dest_dir, basenames.get(name.lower(), name)),
                 workspace,
                 source_images,
             )
@@ -2275,12 +2282,13 @@ class TexturePathEditorSlots:
         return plan
 
     @staticmethod
-    def _landed(basename: str, landed: set) -> bool:
+    def _landed(basename: str, landed) -> bool:
         """Did a file for *basename* land -- literally, or as tiles of its set?
 
-        *landed* holds lower-case basenames of the files copied or already at
-        the destination. A tokened stored name (``rock.<UDIM>.png``) is never
-        among them literally -- its TILES are -- so it is matched as the
+        *landed* holds (as a set, or as a dict's keys) the lower-case
+        basenames of the files copied or already at the destination. A
+        tokened stored name (``rock.<UDIM>.png``) is never among them
+        literally -- its TILES are -- so it is matched as the
         pattern the token table spells (:meth:`MatUtils.token_wildcard`). A
         plain membership test left every tiled node unrepathed after its
         tiles had been copied.
@@ -2315,7 +2323,10 @@ class TexturePathEditorSlots:
         described, not a second guess at it.
         """
         verb = "Move" if relocate_mode == "move" else "Copy"
-        basenames = {os.path.basename(p).lower() for p in (*in_place, *to_relocate)}
+        basenames = {
+            os.path.basename(p).lower(): os.path.basename(p)
+            for p in (*in_place, *to_relocate)
+        }
         remap = self._plan_remap(node_names, dest_dir, basenames)
         changed = [row for row in remap if row[2] != row[1]]
         lightmaps_change = bool(

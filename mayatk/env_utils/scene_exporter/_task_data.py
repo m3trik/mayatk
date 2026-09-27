@@ -301,14 +301,15 @@ class _TaskDataMixin:
         ``<frame>`` — which every other stage resolves — arrived here untiled,
         skipped the representative collapse, and left the scan unclassified.
         """
-        return MatUtils.has_path_token(os.path.basename(path))
+        return ptk.TiledPath.has_token(os.path.basename(path or ""))
 
     @staticmethod
     def _tiled_representative(resolved: str) -> Optional[str]:
         """One concrete file standing in for a tiled/sequence texture *resolved* path.
 
-        The exporter's name for :meth:`MatUtils.probe_texture_path`, which is
-        where this rule now lives in full: ``<udim>`` resolves to its first
+        The exporter's name for ``ptk.TiledPath.representative`` (what
+        :meth:`MatUtils.probe_texture_path` delegates to), where this rule
+        lives in full: ``<udim>`` resolves to its first
         tile, ``1001``, while ``<uvtile>`` resolves to ITS OWN first tile,
         ``u1_v1`` — the two numberings are not interchangeable, and folding
         both onto ``"1001"`` pointed a ``<uvtile>`` set at a file that was
@@ -326,7 +327,7 @@ class _TaskDataMixin:
             the fixed-token miss: the caller tells the two apart by this
             return value, so they must not be conflated).
         """
-        return MatUtils.probe_texture_path(resolved)
+        return ptk.TiledPath.representative(resolved)
 
     def _export_texture_sources(
         self, include_tiled: bool = False

@@ -792,10 +792,21 @@ class TestValidateOrWarn(unittest.TestCase):
 
 
 def _write_complete_hdr(path):
-    """A 4x4 flat-RGBE Radiance HDR — validates as complete."""
-    blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 4\n" + b"\x10" * (4 * 4 * 4)
+    """An 8x4 flat-RGBE Radiance HDR — validates as complete.
+
+    2:1 like any real latlong environment, so the folder-add paths (which take
+    environment maps only — see ``ptk.ImgUtils.is_environment_map``) keep it.
+    """
+    blob = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 8\n" + b"\x10" * (8 * 4 * 4)
     with open(path, "wb") as f:
         f.write(blob)
+
+
+# A 32x16 (2:1) RLE Radiance HDR whose scanlines never arrive: an environment
+# map by shape, so a folder add reaches its integrity check and counts it skipped.
+_TRUNCATED_LATLONG_HDR = (
+    b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 32\n\x02\x02\x00\x20"
+)
 
 
 class TestAddHdrsFromFolder(unittest.TestCase):
@@ -808,9 +819,7 @@ class TestAddHdrsFromFolder(unittest.TestCase):
     def test_link_mode_adds_complete_skips_truncated(self):
         _write_complete_hdr(os.path.join(self.dir, "good.hdr"))
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(
-                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
-            )
+            f.write(_TRUNCATED_LATLONG_HDR)
 
         s = _make_slots(env="aiSkyDomeLight_")
         s._add_mode = lambda: "link"
@@ -831,9 +840,7 @@ class TestAddHdrsFromFolder(unittest.TestCase):
 
     def test_all_truncated_warns_none_added(self):
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(
-                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
-            )
+            f.write(_TRUNCATED_LATLONG_HDR)
         s = _make_slots(env="aiSkyDomeLight_")
         s._add_mode = lambda: "link"
         HdrManagerSlots._add_hdrs_from_folder(s, self.dir)
@@ -957,9 +964,7 @@ class TestAddHdr(unittest.TestCase):
     def test_folder_selection_is_bulk_no_per_file_modal(self):
         _write_complete_hdr(os.path.join(self.dir, "a.hdr"))
         with open(os.path.join(self.dir, "bad.hdr"), "wb") as f:
-            f.write(
-                b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 16 +X 16\n\x02\x02\x00\x10"
-            )
+            f.write(_TRUNCATED_LATLONG_HDR)
         s = self._slots("link", [self.dir])  # a directory
         HdrManagerSlots.add_hdr(s)
         self.assertEqual(len(s.manager.set_paths), 1)  # last good wired once
@@ -1048,6 +1053,105 @@ class TestRefreshComboRecursive(unittest.TestCase):
         add_spy.assert_called()
         data = [combo.itemData(i) for i in range(combo.count())]
         self.assertIn(r"C:\proj\sourceimages\b.hdr", data)
+
+
+def _write_exr_header(path, width, height):
+    """A header-only OpenEXR of *width* x *height* (enough to size, not decode)."""
+    import struct
+
+    window = struct.pack("<iiii", 0, 0, width - 1, height - 1)
+    blob = (
+        b"\x76\x2f\x31\x01"
+        + struct.pack("<I", 2)
+        + b"dataWindow\0box2i\0"
+        + struct.pack("<i", len(window))
+        + window
+        + b"\0"
+    )
+    with open(path, "wb") as f:
+        f.write(blob)
+
+
+class _StubCheck:
+    def __init__(self, checked):
+        self._checked = checked
+
+    def isChecked(self):
+        return self._checked
+
+
+class TestEnvironmentMapFilter(unittest.TestCase):
+    """The HDR list holds environment maps, not every EXR in sourceimages.
+
+    Bug (2026-09-26): the lightmap baker writes ``<set>_Lightmap.exr`` into
+    sourceimages -- a production sourceimages held 72 of them --
+    and every one listed in the dropdown as an HDR. The panel now lists through
+    ``ptk.ImgUtils.is_environment_map`` (shape: a latlong is 2:1, every measured
+    lightmap square; name: the convention's ``lightmap`` affix), each filter a
+    toggle in the dropdown's option box. The predicate itself is unit-tested in
+    pythontk's test_img.py; these pin the panel's use of it.
+    """
+
+    def setUp(self):
+        from pythontk import TestSandbox
+
+        # The name filter reads the naming convention: a developer's own
+        # Lightmap affix must not decide these.
+        sandbox = TestSandbox.user_config()
+        sandbox.__enter__()
+        self.addCleanup(sandbox.__exit__, None, None, None)
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(self.dir, ignore_errors=True))
+        _write_complete_hdr(os.path.join(self.dir, "workshop_8k.hdr"))  # 8x4
+        _write_exr_header(
+            os.path.join(self.dir, "ROOM_ENV_Lightmap_12.exr"), 256, 256
+        )
+        _write_exr_header(os.path.join(self.dir, "crate.exr"), 512, 512)
+        # 2:1 but named as a lightmap light group: only the name filter hides it.
+        _write_exr_header(
+            os.path.join(self.dir, "desk_LightMap.LIGHT_A.exr"), 2048, 1024
+        )
+
+    def _refresh(self, combo):
+        s = _make_slots(env=None)
+        s.ui.cmb000 = combo
+        with mock.patch(
+            "mayatk.light_utils.hdr_manager.EnvUtils.get_env_info",
+            return_value=self.dir,
+        ):
+            HdrManagerSlots._refresh_combo(s)
+        data = [combo.itemData(i) for i in range(combo.count())]
+        return s, [os.path.basename(d) for d in data if d != HdrManagerSlots.NONE_TOKEN]
+
+    def test_refresh_lists_only_the_environment(self):
+        s, listed = self._refresh(_StubCombo())
+        self.assertEqual(listed, ["workshop_8k.hdr"])
+        self.assertIn("1 HDR", s.ui.footer.text)
+        self.assertIn("3", s.ui.footer.text)  # how many were held back
+
+    def test_refresh_honours_the_option_box_toggles(self):
+        import types
+
+        combo = _StubCombo()
+        combo.option_box = types.SimpleNamespace(
+            menu=types.SimpleNamespace(
+                chk_latlong_only=_StubCheck(False),
+                chk_hide_lightmaps=_StubCheck(False),
+            )
+        )
+        _s, listed = self._refresh(combo)
+        self.assertEqual(len(listed), 4)
+
+    def test_a_folder_add_never_wires_a_lightmap(self):
+        """Adding sourceimages itself in Link mode wired the LAST file in the
+        listing -- here a lightmap -- into the skydome."""
+        s = _make_slots(env="aiSkyDomeLight_")
+        s._add_mode = lambda: "link"
+        HdrManagerSlots._add_hdrs_from_folder(s, self.dir)
+        self.assertEqual(
+            [os.path.basename(p) for p in s.manager.set_paths], ["workshop_8k.hdr"]
+        )
+        self.assertIn("Added 1", s.ui.footer.text)
 
 
 class TestHdrSpinBoxesAreUitk(unittest.TestCase):

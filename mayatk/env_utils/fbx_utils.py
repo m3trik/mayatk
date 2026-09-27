@@ -810,7 +810,7 @@ class FbxUtils(ptk.HelpMixin):
             "export_record",
         ),
         ptk.SceneRecords.SHADOWS: (
-            "mayatk.rig_utils.shadow_rig",
+            "mayatk.rig_utils.shadow_rig._shadow_rig",
             "ShadowRig",
             "export_record",
         ),

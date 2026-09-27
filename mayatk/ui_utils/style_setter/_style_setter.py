@@ -49,7 +49,10 @@ import os
 import glob
 import json
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 _HERE = os.path.dirname(__file__)
 # Shipped styles live under ``styles/`` — same dir name as blendertk's ``style_setter/styles/``

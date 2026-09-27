@@ -20,7 +20,7 @@ try:
 except ImportError:
     cmds = None
 
-from pythontk.core_utils.script_template import ROUND_TRIP
+from pythontk import ROUND_TRIP
 
 from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 

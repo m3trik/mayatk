@@ -1,10 +1,16 @@
 # !/usr/bin/python
 # coding=utf-8
-"""xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
-similarity transforms back.
+"""The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 
-Drives the pack-only external engine from Maya. Reached through
-:meth:`mayatk.UvUtils.pack_uvs`; nothing here is called directly.
+- :class:`_UvPackInternal` -- xatlas round-trip: UV arrays out,
+  :class:`pythontk.UvPack`, per-shell similarity transforms back. Drives the
+  pack-only external engine from Maya.
+- :class:`_U3dPackInternal` -- Maya's native ``u3dLayout`` (the Pack tool's
+  Standard method): per-mesh failure isolation and an area-balanced deal of
+  shells onto a UDIM tile grid.
+
+Reached through :meth:`mayatk.UvUtils.pack_uvs`; nothing here is called directly.
+The rest of this docstring describes the xatlas path.
 
 Pack scope — objects *or* components:
 
@@ -72,6 +78,10 @@ class PackUvsResult:
     # resulting texel density against ``succeeded`` would read the WHOLE mesh
     # after a faces-only pack and report a number the run never produced.
     targets: List[str] = field(default_factory=list)
+    # The UDIM tile grid actually packed into, (tiles_u, tiles_v): the u3d
+    # engine clamps a grid that would run past the end of the UDIM row, and a
+    # caller reporting the run needs to say so. Always (1, 1) under xatlas.
+    tiles: Tuple[int, int] = (1, 1)
 
     def __bool__(self) -> bool:
         return bool(self.succeeded)
@@ -555,3 +565,269 @@ class _UvPackInternal:
             cls._apply_shell_transforms(mesh, current, original_uvs, shell_ids)
         except (RuntimeError, ValueError) as error:
             print(f"# pack_uvs: could not restore {mesh}: {error} #")
+
+
+class _U3dPackInternal:
+    """Native ``u3dLayout`` pack for :meth:`mayatk.UvUtils.pack_uvs`
+    (``engine="u3d"``) -- the Pack tool's Standard method.
+
+    Gutters (verified): ``-shellSpacing`` is per-shell padding in UV units --
+    adjacent shells land 2x spacing apart -- and it rescales with the post-pack
+    fit; ``-tileMargin`` is an absolute inset from the region edges.
+    """
+
+    @staticmethod
+    def classify_error(error) -> str:
+        """Condense an Unfold3D RuntimeError (u3dLayout / u3dUnfold / u3dOptimize)
+        into a short, human-readable reason for display in a message box.
+        """
+        msg = str(error)
+        low = msg.lower()
+        if "non-manifold" in low:
+            return "non-manifold vertices"
+        if "overlapping" in low:
+            return "overlapping UVs"
+        return msg.split("\n")[0][:50]
+
+    @staticmethod
+    def _resolve(objects) -> Tuple[list, list]:
+        """``(meshes, uvs)``: what the layout packs, and its UVs.
+
+        Both scopes pack exactly what is given: whole objects pack their full
+        maps, while faces / UVs / edges / vertices pack only that region -- a
+        component entry is widened to the faces it touches, since a packer's
+        unit of input is a face (a shell chosen in the UV editor is a UV
+        selection). The UVs stay unflattened ranges (``pCube1.map[0:23]``), so
+        a dense mesh never expands into millions of index strings.
+        """
+        from mayatk.core_utils.components import Components
+
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        selection = CoreUtils.as_strings(objects)
+        meshes = Components.get_components(selection, "mesh", flatten=False)
+        if not meshes:
+            meshes = cmds.ls(selection, type="transform", dag=True) or selection
+        if any("." in str(m) for m in meshes):
+            meshes = cmds.polyListComponentConversion(meshes, toFace=True) or []
+        uvs = cmds.polyListComponentConversion(meshes, fromFace=True, toUV=True) or []
+        return meshes, uvs
+
+    @classmethod
+    def _pack(cls, all_uvs, meshes, pack_kwargs, result: PackUvsResult) -> None:
+        """u3dLayout with per-mesh failure isolation.
+
+        Batches all meshes into one call; on failure with several meshes,
+        probes each to isolate the bad one(s) and re-packs the survivors
+        together so they share the tile. A single mesh reports its failure
+        directly -- a probe pass would just re-run the same failing call.
+        Appends to *result*'s ``succeeded`` / ``failed``.
+        """
+        try:
+            cmds.u3dLayout(all_uvs, **pack_kwargs)
+            result.succeeded.extend(str(m) for m in meshes)
+            return
+        except RuntimeError as batch_error:
+            if len(meshes) == 1:
+                result.failed.append((str(meshes[0]), cls.classify_error(batch_error)))
+                return
+
+        good = []
+        for mesh in meshes:
+            uvs = cmds.polyListComponentConversion(mesh, fromFace=True, toUV=True) or []
+            if not uvs:
+                continue
+            try:
+                cmds.u3dLayout(uvs, **pack_kwargs)
+                good.extend(uvs)
+                result.succeeded.append(str(mesh))
+            except RuntimeError as mesh_error:
+                result.failed.append((str(mesh), cls.classify_error(mesh_error)))
+        if good:
+            try:
+                cmds.u3dLayout(good, **pack_kwargs)
+            except RuntimeError as combine_error:
+                # Survivors packed individually (each filling the tile);
+                # combine failed, so leave them as-is and surface the cause.
+                result.failed.append(
+                    ("<combined re-pack>", cls.classify_error(combine_error))
+                )
+
+    @staticmethod
+    def distribute_to_grid(uv_utils, uvs, u_tile, v_tile, tiles_u, tiles_v) -> None:
+        """Assign the shells of *uvs* to grid tiles, balanced by UV area.
+
+        u3dLayout's own Distribute mode (-tileAssignMode 0) deals shells to the
+        tiles by count and drops some on top of already-packed ones (measured:
+        2-400 stacked faces on mixed content, varying run to run). Its Center
+        mode (-tileAssignMode 1) instead packs each shell inside the tile its
+        center already occupies, overlap-free -- so the distribution is done
+        here: largest shell first into the least-loaded tile, each moved by a
+        whole-tile offset (shells sharing an offset move in one call). A pinned
+        UV moves with its shell and keeps its pin weight.
+        """
+        sel = om.MSelectionList()
+        for comp in uvs:
+            sel.add(comp)
+        shells = []  # (area, mesh path, uv ids of the shell in scope, center)
+        for i in range(sel.length()):
+            dag, component = sel.getComponent(i)
+            fn = om.MFnMesh(dag)
+            us, vs = fn.getUVs()
+            pos = np.column_stack([us, vs])
+            _, shell_ids = fn.getUvShellsIds()
+            shell_ids = np.asarray(shell_ids)
+            # Sorted + unique, so each shell's ids below stay ascending.
+            scope = np.unique(
+                np.asarray(
+                    om.MFnSingleIndexedComponent(component).getElements()
+                    if not component.isNull()
+                    else range(len(us)),
+                    dtype=np.int64,
+                )
+            )
+            if not len(scope):
+                continue
+            # Per-shell area (shoelace over each polygon's assigned UVs).
+            counts, uv_ids = fn.getAssignedUVs()
+            counts = np.asarray(counts, dtype=np.int64)
+            uv_ids = np.asarray(uv_ids, dtype=np.int64)
+            face = np.repeat(np.arange(len(counts)), counts)
+            nxt = np.arange(len(uv_ids)) + 1
+            ends = np.cumsum(counts)
+            nxt[ends[counts > 0] - 1] = (ends - counts)[counts > 0]
+            a, b = pos[uv_ids], pos[uv_ids[nxt]]
+            twice = np.zeros(len(counts))
+            np.add.at(twice, face, a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0])
+            area = np.zeros(shell_ids.max(initial=-1) + 1)
+            mapped = counts > 0
+            np.add.at(
+                area, shell_ids[uv_ids[ends[mapped] - 1]], np.abs(twice[mapped]) / 2
+            )
+            path = dag.fullPathName()
+            # One stable sort groups the scope by shell (a mask per shell is
+            # shells x UVs on a dense mesh).
+            order = np.argsort(shell_ids[scope], kind="stable")
+            scope = scope[order]
+            cuts = np.flatnonzero(np.diff(shell_ids[scope])) + 1
+            for ids in np.split(scope, cuts):
+                shell = shell_ids[ids[0]]
+                shells.append((area[shell], path, ids, pos[ids].mean(axis=0)))
+
+        load = [0.0] * (tiles_u * tiles_v)
+        moves = {}  # (du, dv) -> component strings
+        for area, path, ids, center in sorted(shells, key=lambda s: -s[0]):
+            tile = min(range(len(load)), key=load.__getitem__)
+            load[tile] += area
+            du = u_tile + tile % tiles_u - int(np.floor(center[0]))
+            dv = v_tile + tile // tiles_u - int(np.floor(center[1]))
+            if du or dv:
+                runs = np.split(ids, np.flatnonzero(np.diff(ids) != 1) + 1)
+                moves.setdefault((du, dv), []).extend(
+                    f"{path}.map[{int(r[0])}:{int(r[-1])}]" for r in runs
+                )
+        if not moves:
+            return
+        # polyEditUV honours pin weights: a pinned UV refuses to move, tearing
+        # its shell across tiles (the Pack panel's Pin and Stack leave pins
+        # behind). Lift them for the moves and put the exact weights back.
+        comps = [c for group in moves.values() for c in group]
+        pinned = []
+        if any(cmds.polyPinUV(comps, query=True, value=True) or []):
+            flat = cmds.ls(comps, flatten=True) or []
+            weights = uv_utils.get_uv_pin_weights(flat)
+            pinned = [(uv, w) for uv, w in zip(flat, weights) if w]
+        if pinned:
+            cmds.polyPinUV([uv for uv, _ in pinned], value=0.0)
+        for (du, dv), group in moves.items():
+            cmds.polyEditUV(group, uValue=du, vValue=dv, relative=True)
+        if pinned:
+            uv_utils.set_uv_pin_weights(*zip(*pinned))
+
+    @classmethod
+    def run(
+        cls,
+        uv_utils,
+        objects=None,
+        map_size: int = 1024,
+        udim: int = 1001,
+        coverage: Tuple[float, float] = (1.0, 1.0),
+        preserve_3d: bool = True,
+        padding: Optional[float] = None,
+        pre_rotate: int = 0,
+        rotate_step: int = 0,
+        rotate_min: int = 0,
+        rotate_max: int = 0,
+        mutations: int = 1,
+        scale_mode: int = 2,
+        tiles: Tuple[int, int] = (1, 1),
+    ) -> PackUvsResult:
+        """Full native pack. See :meth:`mayatk.UvUtils.pack_uvs`."""
+        meshes, all_uvs = cls._resolve(objects)
+        if not all_uvs:
+            raise ValueError("No UVs found on selection.")
+        cmds.loadPlugin("Unfold3D", quiet=True)
+
+        # packBox is [umin, umax, vmin, vmax], anchored at the UDIM's tile corner.
+        u_tile, v_tile = uv_utils.udim_to_tile(udim)
+        tiles_u, tiles_v = (max(1, int(t)) for t in tiles)
+        # A UDIM row is 10 tiles wide and u wraps to the next row at 10 -- the
+        # tile at u=10 is NOT the next UDIM -- so shells packed past the row
+        # end would be unaddressable by any UDIM texture. Clamp the grid to the
+        # columns remaining from the anchor (reported back through ``tiles``).
+        tiles_u = min(tiles_u, 10 - u_tile)
+        shell_padding = (
+            uv_utils.calculate_uv_padding(map_size, normalize=True)
+            if padding is None
+            else padding / float(map_size)
+        )
+        # Fractional tile coverage shrinks the pack box from the tile's
+        # bottom-left corner; u3dLayout accepts fractional -packBox extents.
+        # A tile grid repurposes the box as its cell template (verified), so
+        # coverage is forced Full then.
+        grid = tiles_u > 1 or tiles_v > 1
+        cov_u, cov_v = (1.0, 1.0) if grid else coverage
+
+        pack_kwargs = dict(
+            # -res is the packer's raster, not the texture size: Maya's own
+            # dialog caps it at 4096, and the 16k map size packed ~9x slower
+            # than 4096 (measured 86s vs 9s on 24 meshes) for no overlap gain.
+            resolution=min(map_size, 4096),
+            shellSpacing=shell_padding,
+            tileMargin=shell_padding / 2,
+            preScaleMode=1 if preserve_3d else 0,
+            preRotateMode=pre_rotate,
+            packBox=[u_tile, u_tile + cov_u, v_tile, v_tile + cov_v],
+            multiObject=True,  # -m off causes all shells to stack at the tile center
+        )
+        # Rotate flags only when the search is asked for (max > min). Maya's
+        # stock dialog follows the same pattern: passing them with the default
+        # range (0..180) silently rotates shells even with Pre-Rotate Off.
+        if rotate_max > rotate_min:
+            pack_kwargs["rotateStep"] = rotate_step
+            pack_kwargs["rotateMin"] = rotate_min
+            pack_kwargs["rotateMax"] = rotate_max
+        if mutations > 1:
+            pack_kwargs["mutations"] = mutations
+        # Omitted -layoutScaleMode == Uniform (verified), so only emit overrides.
+        if scale_mode != 2:
+            pack_kwargs["layoutScaleMode"] = scale_mode
+        if grid:
+            pack_kwargs["tileU"] = tiles_u
+            pack_kwargs["tileV"] = tiles_v
+        # Distribute here, then let u3dLayout pack each tile in place: its own
+        # Distribute mode stacks shells (see distribute_to_grid). Not under
+        # Scale Mode Off -- shells keep their size there and spill past the
+        # grid, so a tile-local pack has nothing to fit into.
+        distribute = grid and scale_mode != 1
+        if distribute:
+            pack_kwargs["tileAssignMode"] = 1
+
+        result = PackUvsResult(engine="u3d", tiles=(tiles_u, tiles_v))
+        if distribute:
+            cls.distribute_to_grid(uv_utils, all_uvs, u_tile, v_tile, tiles_u, tiles_v)
+        cls._pack(all_uvs, meshes, pack_kwargs, result)
+        # u3dLayout packs exactly the components it was given, so what packed
+        # is what succeeded (a face range under a component-scoped pack).
+        result.targets = list(result.succeeded)
+        return result

@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -46,6 +46,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
     "anim_utils.shots._shots": "ShotStore",
+    "anim_utils.shots._detection": "Detection",
     # Key stash — key clips parked out of the working animation (Maya adapter
     # over ``ptk.KeyStash``). The co-located ``KeyStashSlots`` panel is
     # discovered by ``MayaUiHandler``, not registered here.
@@ -65,6 +66,7 @@ DEFAULT_INCLUDE = {
     "audio_utils.audio_clips._audio_clips": "AudioClips",
     # Audio utils
     "audio_utils._audio_utils": "AudioUtils",
+    "audio_utils.segments": "AudioSegment",
     # Core utils - specific classes
     "core_utils.components": "Components",
     "core_utils.auto_instancer._auto_instancer": "AutoInstancer",
@@ -75,6 +77,8 @@ DEFAULT_INCLUDE = {
     "core_utils.undo_recorder": "UndoRecorder",
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": "SceneDiagnostics",
+    "core_utils.diagnostics.mesh_diag": "MeshDiagnostics",
+    "core_utils.diagnostics.transform_diag": "TransformDiagnostics",
     "core_utils.diagnostics.scene_audit": "SceneAnalyzer",
     "core_utils.diagnostics.audit_records": [
         "SceneInfoSection",
@@ -107,7 +111,7 @@ DEFAULT_INCLUDE = {
     "edit_utils.naming._naming": "Naming",
     "edit_utils.primitives": "Primitives",
     "edit_utils.snap": "Snap",
-    "edit_utils.macros": "Macros",
+    "edit_utils.macros._macros": "Macros",
     "edit_utils.bevel": "Bevel",
     "edit_utils.bridge": "Bridge",
     "edit_utils.cut_on_axis": "CutOnAxis",
@@ -115,6 +119,9 @@ DEFAULT_INCLUDE = {
     "edit_utils.duplicate_linear": "DuplicateLinear",
     "edit_utils.duplicate_radial": "DuplicateRadial",
     "edit_utils.dynamic_pipe": "DynamicPipe",
+    # The curtain's wire rig (``btk.CurtainRig`` twin). The drape engine,
+    # ``Rail`` + ``CurtainMesh`` (same names in blendertk), stays unregistered.
+    "edit_utils.curtain._curtain": "CurtainRig",
     "edit_utils.rack_builder": [
         "RackBuilder",
         "RackSpec",
@@ -127,13 +134,15 @@ DEFAULT_INCLUDE = {
     # CLAUDE.md's tool-panel contract). The mirror ENGINE is ``EditUtils.mirror``.
     # The entry that named a nonexistent ``Mirror`` here made ``mtk.Mirror`` raise
     # AttributeError; blendertk's twin correctly registers nothing.
+    # Display utils
+    "display_utils.color_id": "ColorId",
     # Environment utilities
     "env_utils.devtools": "*",
     "env_utils.maya_connection": "MayaConnection",
     "env_utils.workspace_manager": "WorkspaceManager",
     "env_utils.workspace_map": "WorkspaceMap",
     "env_utils.namespace_sandbox": "NamespaceSandbox",
-    "env_utils.reference_manager": "ReferenceManager",
+    "env_utils.reference_manager._reference_manager": "ReferenceManager",
     # ``ScriptConsole`` is the class this module DEFINES; the previous
     # "ScriptOutput" entry named uitk's widget, which the module merely imports
     # — so ``mtk.ScriptOutput`` resolved to a uitk class leaking through this
@@ -165,6 +174,8 @@ DEFAULT_INCLUDE = {
     # state FBX translation drops, shared by the WebXR preview and the Scene
     # Exporter's GLB task. Counterpart of blendertk's ``SceneState``.
     "env_utils.scene_state": "SceneState",
+    # Unity bridge engine (``btk.UnityBridge`` twin); its panel is discovered.
+    "env_utils.unity_bridge._unity_bridge": "UnityBridge",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",
@@ -213,8 +224,13 @@ DEFAULT_INCLUDE = {
     "nurbs_utils.image_tracer": "ImageTracer",
     "nurbs_utils.curve_to_tube": "CurveToTube",
     # Rig utils
-    "rig_utils.controls": "Controls",
-    "rig_utils.shadow_rig": "ShadowRig",
+    "rig_utils.controls": ["Controls", "ControlNodes"],
+    "rig_utils.shadow_rig._shadow_rig": "ShadowRig",
+    "rig_utils.telescope_rig": "TelescopeRig",
+    "rig_utils.wheel_rig": "WheelRig",
+    "rig_utils.tube_rig._tube_rig": "TubeRig",
+    "rig_utils.tube_rig.strategies": ["TubeStrategy", "TubeRigBundle"],
+    "rig_utils.tube_rig.tube_path": "TubePath",
     "rig_utils.skinning": ["SkinUtils", "CurveWeights"],
     "rig_utils.rig_graph_extract": "RigGraphExtractor",
     "rig_utils.rig_graph_build": "RigGraphBuilder",
@@ -235,13 +251,11 @@ bootstrap_package(
 try:
     import sys
     import os
-    from pythontk.core_utils.execution_monitor._execution_monitor import (
-        ExecutionMonitor,
-    )
+    from pythontk import ExecutionMonitor
 
-    # Only configure if running in Maya GUI
+    # Only configure if running in Maya GUI (Linux: maya.bin, behind bin/maya)
     executable = sys.executable
-    if os.path.basename(executable).lower() in ["maya.exe", "maya"]:
+    if os.path.basename(executable).lower() in ("maya.exe", "maya", "maya.bin"):
         # Try using MAYA_LOCATION first as it's most reliable
         maya_location = os.environ.get("MAYA_LOCATION")
         mayapy = None

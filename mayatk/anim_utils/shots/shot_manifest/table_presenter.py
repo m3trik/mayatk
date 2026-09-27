@@ -9,11 +9,13 @@ painting, assessment colouring, and behavior-label widgets.
 Mixed into :class:`ShotManifestController` via MRO.
 """
 
+import pythontk as ptk
+
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     BuilderStep,
     BuilderObject,
 )
-from mayatk.anim_utils.shots.shot_manifest.behaviors import list_behaviors
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     ManifestData,
     BEHAVIOR_STATUS_COLORS,
@@ -117,19 +119,14 @@ class ManifestTableMixin:
         """
         broken: list = []
         status_color = None
-        obj_st = None
-        results = getattr(self, "_last_results", None) or []
-        if step_id is not None:
-            results = [r for r in results if r.step_id == step_id]
-        for r in results:
-            obj_map = {o.name: o for o in r.objects}
-            obj_st = obj_map.get(obj.name)
-            if obj_st is not None:
-                if obj_st.status == "missing_object":
-                    status_color = BEHAVIOR_STATUS_COLORS.get("error")
-                else:
-                    broken = list(obj_st.broken_behaviors or [])
-                break
+        obj_st = ptk.StepStatus.find_object(
+            getattr(self, "_last_results", None) or [], obj.name, step_id
+        )
+        if obj_st is not None:
+            if obj_st.status == "missing_object":
+                status_color = BEHAVIOR_STATUS_COLORS.get("error")
+            else:
+                broken = list(obj_st.broken_behaviors or [])
         label.setText(
             ManifestData.format_behavior_html(
                 obj.behaviors, broken=broken, status_color=status_color
@@ -297,7 +294,7 @@ class ManifestTableMixin:
                 if display != obj.name:
                     child.setToolTip(COL_DESC, obj.name)
                 if obj.kind not in _kind_cache:
-                    _kind_cache[obj.kind] = list(list_behaviors(kind=obj.kind))
+                    _kind_cache[obj.kind] = list(Behaviors.list_behaviors(kind=obj.kind))
                 self._make_behavior_label(
                     obj, tree, child, _kind_cache[obj.kind], step.step_id
                 )
@@ -484,22 +481,18 @@ class ManifestTableMixin:
                     item.setToolTip(col, "")
 
             # Second pass: mark collision items
-            for i in range(len(resolved) - 1):
-                curr_id, curr_start, curr_end, _ = resolved[i]
-                next_id, next_start, _, _ = resolved[i + 1]
-                effective_end = curr_end if curr_end is not None else curr_start
-                if effective_end > next_start:
-                    collisions += 1
-                    for sid in (curr_id, next_id):
-                        item = item_map.get(sid)
-                        if item is not None:
-                            for col in (COL_START, COL_END):
-                                item.setForeground(col, collision_fg)
-                                item.setBackground(col, collision_bg)
-                                item.setToolTip(
-                                    col,
-                                    "Range collision: overlaps with adjacent step",
-                                )
+            for curr_id, next_id in ptk.RangeResolver.find_collisions(resolved):
+                collisions += 1
+                for sid in (curr_id, next_id):
+                    item = item_map.get(sid)
+                    if item is not None:
+                        for col in (COL_START, COL_END):
+                            item.setForeground(col, collision_fg)
+                            item.setBackground(col, collision_bg)
+                            item.setToolTip(
+                                col,
+                                "Range collision: overlaps with adjacent step",
+                            )
         finally:
             tree.blockSignals(False)
 
@@ -673,11 +666,7 @@ class ManifestTableMixin:
                     for b in obj_st.broken_behaviors or obj_st.behaviors:
                         desc = ""
                         try:
-                            from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-                                load_behavior,
-                            )
-
-                            desc = load_behavior(b).get("description", "")
+                            desc = Behaviors.load_behavior(b).get("description", "")
                         except Exception:
                             pass
                         entry = ManifestData.fmt_behavior(b)

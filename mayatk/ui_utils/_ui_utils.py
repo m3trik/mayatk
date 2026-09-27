@@ -1,10 +1,116 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
 from typing import Optional
+
+try:  # guarded: the surface must import without Maya (registry, mock tests)
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 
 
 class UiUtils:
+    #: Friendly editor name -> the Maya runtime command that opens it. The
+    #: registry behind :meth:`get_editor_types` / :meth:`open_editor` (mirror of
+    #: blendertk's ``EDITOR_TYPES``, whose values are Blender area ``ui_type``s).
+    _EDITOR_COMMANDS = {
+        # General
+        "Attribute Editor": "AttributeEditor",
+        "Channel Box": "OpenChannelBox",
+        "Layer Editor": "OpenLayerEditor",
+        "Content Browser": "OpenContentBrowser",
+        "Tool Settings": "ToolSettingsWindow",
+        "Hypergraph: Hierarchy": "HypergraphHierarchyWindow",
+        "Hypergraph: Connections": "HypergraphDGWindow",
+        "Viewport": "DisplayViewport",
+        "Adobe After Effects Live Link": "OpenAELiveLink",
+        "Asset Editor": "AssetEditor",
+        "Attribute Spread Sheet": "SpreadSheetEditor",
+        "Component Editor": "ComponentEditor",
+        "Channel Control": "ChannelControlEditor",
+        "Display Layer Editor": "DisplayLayerEditorWindow",
+        "File Path Editor": "FilePathEditor",
+        "Namespace Editor": "NamespaceEditor",
+        "Reference Editor": "ReferenceEditor",
+        "Script Editor": "ScriptEditor",
+        "Command Shell": "CommandShell",
+        "Profiler": "ProfilerTool",
+        "Evaluation Toolkit": "EvaluationToolkit",
+        # Modeling
+        "Modeling Toolkit": "OpenModelingToolkit",
+        "Paint Effects": "PaintEffectsWindow",
+        "UV Editor": "TextureViewWindow",
+        "XGen Editor": "OpenXGenEditor",
+        "Crease Sets": "OpenCreaseEditor",
+        # Animation
+        "Graph Editor": "GraphEditor",
+        "Time Editor": "TimeEditorWindow",
+        "Trax Editor": "CharacterAnimationEditor",
+        "Camera Sequencer": "SequenceEditor",
+        "Dope Sheet": "DopeSheetEditor",
+        "Quick Rig": "QuickRigEditor",
+        "HumanIK": "HIKCharacterControlsTool",
+        "Shape Editor": "ShapeEditor",
+        "Pose Editor": "PoseEditor",
+        "Expression Editor": "ExpressionEditor",
+        # Rendering
+        "Render View": "RenderViewWindow",
+        "Render Settings": "RenderGlobalsWindow",
+        "Hypershade": "HypershadeWindow",
+        "Render Setup": "RenderSetupWindow",
+        "Light Editor": "OpenLightEditor",
+        "Custom Stereo Rig Editor": "OpenStereoRigManager",
+        "Rendering Flags": "RenderFlagsWindow",
+        "Shading Group Attributes": "ShadingGroupAttributeEditor",
+        # Relationship
+        "Animation Layers": "AnimLayerRelationshipEditor",
+        "Camera Sets": "CameraSetEditor",
+        "Character Sets": "CharacterSetEditor",
+        "Deformer Sets": "DeformerSetEditor",
+        "Display Layers": "LayerRelationshipEditor",
+        "Dynamic Relationships": "DynamicRelationshipEditor",
+        "Light Linking: Light Centric": "LightCentricLightLinkingEditor",
+        "Light Linking: Object Centric": "ObjectCentricLightLinkingEditor",
+        "Partitions": "PartitionEditor",
+        "Render Pass Sets": "RenderPassSetEditor",
+        "Sets": "SetEditor",
+        "UV Linking: Texture-Centric": "TextureCentricUVLinkingEditor",
+        "UV Linking: UV-Centric": "UVCentricUVLinkingEditor",
+        "UV Linking: Paint Effects/UV": "PFXUVSetLinkingEditor",
+        "UV Linking: Hair/UV": "HairUVSetLinkingEditor",
+    }
+
+    @classmethod
+    def get_editor_types(cls) -> dict:
+        """The friendly-name -> runtime-command map understood by :meth:`open_editor`.
+
+        Mirror of blendertk's ``UiUtils.get_editor_types`` (there the values
+        are area ``ui_type``s). A copy: editing it changes nothing.
+        """
+        return dict(cls._EDITOR_COMMANDS)
+
+    @classmethod
+    def open_editor(cls, editor: str) -> Optional[str]:
+        """Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a
+        raw Maya runtime command (``"OutlinerWindow"``).
+
+        Mirror of blendertk's ``UiUtils.open_editor``: callers branch on the
+        ``None`` a failed open returns (an unknown command, an editor whose
+        plug-in is not loaded) rather than catching Maya's error themselves.
+
+        Parameters:
+            editor (str): The editor's friendly name, or a runtime command.
+
+        Returns:
+            (str/None): The runtime command that ran, or None when it failed.
+        """
+        command = cls._EDITOR_COMMANDS.get(editor, editor)
+        try:
+            mel.eval(command)
+        except RuntimeError:
+            return None
+        return command
+
     @staticmethod
     def get_main_window():
         """Get the main Maya window as a QMainWindow instance.

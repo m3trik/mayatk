@@ -32,16 +32,27 @@ Known limitations
   the flag must either be present or absent, not given a value. Wire
   those into a template's ``LAUNCH_ARGS`` unconditionally, or add a
   conditional-flag mechanism if the need arises.
-* **Empty path values** substitute as ``""``, producing an empty argv
-  slot if the template puts ``__PATH__`` after a flag. Template authors
-  should avoid that pattern; the bridge does not auto-skip empty pairs.
+* **Empty path values** substitute as ``""``. In ``LAUNCH_ARGS`` the
+  engine drops a ``(--flag, "")`` pair whole
+  (``SubstanceEngine._render_launch_args``), so an optional flag left
+  blank yields no argv entry rather than an empty slot Painter rejects.
+
+**Vendored twin -- keep code-identical.** This file is duplicated at
+``mayatk/mat_utils/substance_bridge/parameters.py`` (the SSoT: edit it there)
+and ``blendertk/mat_utils/substance_bridge/parameters.py``; mirror every change
+into both. Drift fails ``extapps/test/test_vendor_sync.py``.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
+from uitk.bridge import (
+    AttributeSpec,
+    Formatters,
+    ParamRegistry,
+    Parameters as _BridgeParams,
+)
 
 
 # Painter has two substitution contexts:
@@ -252,40 +263,24 @@ PARAMS: "dict[str, AttributeSpec]" = {
 }
 
 
-class Parameters:
-    """Parameters — module namespace."""
+class Parameters(ParamRegistry):
+    """Parameters — module namespace.
 
-    #: The parameter registry, exposed on the class so a bridge slot can hand
-    #: this class to the shared base as its ``params_module`` (the base reads
-    #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level
-    #: re-export shim required.
+    Declared as data: :class:`uitk.bridge.ParamRegistry` supplies
+    ``referenced_keys`` / ``defaults`` / ``affix_parts`` over :data:`PARAMS`,
+    and a bridge slot hands this class to the shared base as its
+    ``params_module``. The two contexts below are the Painter launch's two
+    target languages.
+    """
+
     PARAMS = PARAMS
 
-    @staticmethod
-    def referenced_keys(script_text: str) -> "set[str]":
-        """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-        return _BridgeParams.referenced_keys(script_text, PARAMS)
-
-    @staticmethod
-    def defaults() -> "dict[str, Any]":
-        """Return ``{key: default}`` for every registered parameter."""
-        return _BridgeParams.defaults(PARAMS)
-
-    @staticmethod
-    def affix_parts(value: "Any", *, default: str = "prefix") -> "tuple[str, str]":
-        """``(prefix, suffix)`` for an ``affix`` param value (delegates to uitk)."""
-        return _BridgeParams.affix_parts(value, default=default)
-
-    @staticmethod
-    def render_cli_context(values: "dict[str, Any]") -> "dict[str, str]":
+    @classmethod
+    def render_cli_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
         """Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting."""
-        return _BridgeParams.render_context(
-            values, PARAMS, formatter=Formatters.cli_raw
-        )
+        return cls.render_context(values, formatter=Formatters.cli_raw)
 
-    @staticmethod
-    def render_js_context(values: "dict[str, Any]") -> "dict[str, str]":
+    @classmethod
+    def render_js_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
         """Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping."""
-        return _BridgeParams.render_context(
-            values, PARAMS, formatter=Formatters.js_literal
-        )
+        return cls.render_context(values, formatter=Formatters.js_literal)

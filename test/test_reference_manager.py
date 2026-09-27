@@ -16,6 +16,9 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 import pythontk as ptk
 import mayatk.env_utils.reference_manager as ref_mgr
+from mayatk.env_utils.reference_manager import _reference_manager as ref_engine
+from mayatk.env_utils.reference_manager import reference_manager_controller as ref_ctrl
+from mayatk.env_utils.reference_manager import reference_manager_slots as ref_slots
 
 
 # Mock classes for UI components to allow testing logic without a GUI
@@ -444,7 +447,7 @@ class TestReferenceManager(unittest.TestCase):
 
         # Patch cmds.file so update_table doesn't need Maya
         self._cmds_file_patcher = patch.object(
-            ref_mgr.cmds, "file", create=True, return_value=""
+            ref_engine.cmds, "file", create=True, return_value=""
         )
         self._mock_cmds_file = self._cmds_file_patcher.start()
 
@@ -818,7 +821,7 @@ class TestReferenceManager(unittest.TestCase):
         import ast
         import re
 
-        with open(ref_mgr.__file__, encoding="utf-8") as fh:
+        with open(ref_slots.__file__, encoding="utf-8") as fh:
             src = fh.read()
         block = re.search(
             # [^\n]* tolerates a trailing comment after setCurrentIndex.
@@ -1010,7 +1013,7 @@ class TestDisplayName(unittest.TestCase):
     """
 
     def name(self, path, hide_extension=False, hide_suffix=""):
-        return ref_mgr._ReferenceManagerInternal._display_name(
+        return ref_engine._ReferenceManagerInternal._display_name(
             path, hide_extension, hide_suffix
         )
 
@@ -1232,7 +1235,7 @@ class TestWorkspaceHistory(unittest.TestCase):
         self.controller._warned_scene_placeholder_typo = False
 
         self._cmds_file_patcher = patch.object(
-            ref_mgr.cmds, "file", create=True, return_value=""
+            ref_engine.cmds, "file", create=True, return_value=""
         )
         self._mock_cmds_file = self._cmds_file_patcher.start()
 
@@ -1608,8 +1611,8 @@ class TestOpenSceneClearsModifiedFlag(unittest.TestCase):
     def test_open_scene_resets_modified_flag(self):
         controller = self._make_controller()
         with (
-            patch.object(ref_mgr.os.path, "exists", return_value=True),
-            patch.object(ref_mgr.cmds, "file", create=True) as mock_file,
+            patch.object(ref_engine.os.path, "exists", return_value=True),
+            patch.object(ref_engine.cmds, "file", create=True) as mock_file,
         ):
             result = controller.open_scene("/proj/scenes/shot.ma", set_workspace=False)
 
@@ -1649,9 +1652,9 @@ class TestForeignScratch(unittest.TestCase):
     def test_store_is_one_process_wide_scratch_twins(self):
         # The slot delegates naming + untouched-vs-saved discard to ptk.ScratchTwins
         # (pinned in pythontk's own tests); here only the wiring is checked.
-        twins = ref_mgr._scratch_twins()
-        self.assertIs(twins, ref_mgr._scratch_twins())
-        self.assertIsInstance(twins, ref_mgr.ptk.ScratchTwins)
+        twins = ref_ctrl._scratch_twins()
+        self.assertIs(twins, ref_ctrl._scratch_twins())
+        self.assertIsInstance(twins, ref_engine.ptk.ScratchTwins)
         self.assertEqual(twins.extension, ".ma")
 
 
@@ -1802,7 +1805,7 @@ class TestToggleReferenceOnCurrentSceneIsOneClick(unittest.TestCase):
             return ""
 
         try:
-            with patch.object(ref_mgr.cmds, "file", create=True, side_effect=fake_file):
+            with patch.object(ref_engine.cmds, "file", create=True, side_effect=fake_file):
                 slot._toggle_reference_at_row(0, 1)
 
             # One click: the scene was closed AND the reference persists.
@@ -2065,8 +2068,8 @@ class TestFolderStructurePreview(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="C:/proj/MyGame",
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
 
@@ -2096,8 +2099,8 @@ class TestFolderStructurePreview(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="C:/proj/MyGame",
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
 
@@ -2144,7 +2147,7 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=os.path.normpath(tempfile.gettempdir()),
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
         ):
             path = controller._resolve_save_target(
                 "Env", "None", "_v01", "{scenes}/{name}"
@@ -2173,8 +2176,8 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             preview = controller._save_scene_preview()
             expected = controller._resolve_save_target(
@@ -2194,8 +2197,8 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=os.path.normpath(tempfile.gettempdir()),
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, return_value=""),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             preview = controller._save_scene_preview()
         self.assertIn("did you mean", preview)
@@ -2205,7 +2208,7 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
         # "hero.rig.ma" — only the extension may come off (blendertk parity).
         controller = self._make_controller(suffix="")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             return_value="C:/proj/scenes/hero.rig.ma",
@@ -2238,10 +2241,10 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, side_effect=_file),
-            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == ws),
-            patch.object(ref_mgr.os, "makedirs"),  # nothing touches disk
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, side_effect=_file),
+            patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == ws),
+            patch.object(ref_engine.os, "makedirs"),  # nothing touches disk
         ):
             preview = controller._save_scene_preview()
             controller.save_scene()
@@ -2271,7 +2274,7 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 return_value=ws,
             ),
             patch.object(
-                ref_mgr.cmds, "workspace", create=True, side_effect=_workspace
+                ref_engine.cmds, "workspace", create=True, side_effect=_workspace
             ),
         ):
             result = controller.set_maya_project()
@@ -2289,7 +2292,7 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="Z:/no/such/dir",
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True) as ws_cmd,
+            patch.object(ref_engine.cmds, "workspace", create=True) as ws_cmd,
         ):
             result = controller.set_maya_project()
         self.assertFalse(result)
@@ -2395,7 +2398,7 @@ class TestNamingConventionsNeverDoubleTheSuffix(unittest.TestCase):
         controller._rename_scene_file = lambda o, n, folder=None: (
             calls.append((o, n, folder)) or n
         )
-        with patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == old):
+        with patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == old):
             controller.rename_scene()
         return seen.get("prefill"), (calls[0] if calls else None)
 
@@ -2448,10 +2451,10 @@ class TestNamingConventionsNeverDoubleTheSuffix(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_mgr.cmds, "workspace", create=True, return_value="scenes"),
-            patch.object(ref_mgr.cmds, "file", create=True, side_effect=_file),
-            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == ws),
-            patch.object(ref_mgr.os, "makedirs"),  # nothing touches disk
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(ref_engine.cmds, "file", create=True, side_effect=_file),
+            patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == ws),
+            patch.object(ref_engine.os, "makedirs"),  # nothing touches disk
         ):
             controller.save_scene()
         self.assertEqual(
@@ -2629,12 +2632,12 @@ class TestPerSceneFolderMovesOnlyWithItsOwnScene(_OnDiskRename, unittest.TestCas
             onerror(PermissionError(13, "Access is denied", top))
             return iter(())
 
-        holds = ref_mgr._ReferenceManagerInternal._holds_other_scenes
-        with patch.object(ref_mgr.os, "walk", side_effect=_walk):
+        holds = ref_engine._ReferenceManagerInternal._holds_other_scenes
+        with patch.object(ref_engine.os, "walk", side_effect=_walk):
             self.assertTrue(holds(self.scenes, os.path.join(self.scenes, "a.ma")))
 
     def test_a_missing_folder_holds_nothing(self):
-        holds = ref_mgr._ReferenceManagerInternal._holds_other_scenes
+        holds = ref_engine._ReferenceManagerInternal._holds_other_scenes
         gone = os.path.join(self.scenes, "gone")
         self.assertFalse(holds(gone, os.path.join(gone, "a.ma")))
 
@@ -2746,14 +2749,14 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
         controller.open_scene = lambda p, **kw: calls.append(("open", p))
         with (
             patch.object(
-                ref_mgr.cmds,
+                ref_engine.cmds,
                 "file",
                 create=True,
                 side_effect=self._fake_cmds_file(calls, fail_save),
             ),
-            patch.object(ref_mgr.os.path, "exists", return_value=False),
+            patch.object(ref_engine.os.path, "exists", return_value=False),
             patch.object(
-                ref_mgr.os,
+                ref_engine.os,
                 "rename",
                 side_effect=lambda a, b: calls.append(("rename", a, b)),
             ),
@@ -2810,14 +2813,14 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
 
         with (
             patch.object(
-                ref_mgr.cmds,
+                ref_engine.cmds,
                 "file",
                 create=True,
                 side_effect=self._fake_cmds_file(calls),
             ),
-            patch.object(ref_mgr.os.path, "exists", side_effect=lambda p: p == taken),
+            patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == taken),
             patch.object(
-                ref_mgr.os,
+                ref_engine.os,
                 "rename",
                 side_effect=lambda a, b: calls.append(("rename", a, b)),
             ),
@@ -2881,7 +2884,7 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.controller._scenes_folder = lambda: "scenes"
 
     def tearDown(self):
-        ref_mgr.cmds.file(new=True, force=True)  # leave no scene open for the next test
+        ref_engine.cmds.file(new=True, force=True)  # leave no scene open for the next test
         self._store.cleanup()
 
     @staticmethod
@@ -2908,15 +2911,15 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
 
     def _save_scene_as(self, path, *objects):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
         for name in objects:
-            ref_mgr.cmds.polySphere(name=name)
-        ref_mgr.cmds.file(rename=path)
-        ref_mgr.cmds.file(save=True, type="mayaAscii")
+            ref_engine.cmds.polySphere(name=name)
+        ref_engine.cmds.file(rename=path)
+        ref_engine.cmds.file(save=True, type="mayaAscii")
 
     @staticmethod
     def _open_scene_path():
-        scene = ref_mgr.cmds.file(q=True, sceneName=True) or ""
+        scene = ref_engine.cmds.file(q=True, sceneName=True) or ""
         # normpath("") is "." — guard it, as the production _current_scene_path does.
         return os.path.normcase(os.path.normpath(scene)) if scene else ""
 
@@ -2929,7 +2932,7 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         old = os.path.join(self.root, "scenes", "shot_v01.ma")
         new = os.path.join(self.root, "scenes", "hero_v01.ma")
         self._save_scene_as(old, "keeper")
-        ref_mgr.cmds.polyCube(name="unsaved_edit")  # authored AFTER the save
+        ref_engine.cmds.polyCube(name="unsaved_edit")  # authored AFTER the save
 
         final = self.controller._rename_scene_file(old, new)
 
@@ -2937,18 +2940,18 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.isfile(new))
         self._assert_session_on(new)
-        self.assertTrue(ref_mgr.cmds.objExists("keeper"))
+        self.assertTrue(ref_engine.cmds.objExists("keeper"))
         # The edit made since the last save was flushed into the file that got renamed.
-        self.assertTrue(ref_mgr.cmds.objExists("unsaved_edit"))
+        self.assertTrue(ref_engine.cmds.objExists("unsaved_edit"))
         # And a save now writes the new name — it does not resurrect the old one.
-        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        ref_engine.cmds.file(save=True, type="mayaAscii")
         self.assertFalse(os.path.exists(old))
 
     def test_open_scene_rename_reopens_the_path_the_folder_move_landed_on(self):
         old = os.path.join(self.root, "scenes", "Hero", "Hero_v01.ma")
         new = os.path.join(self.root, "scenes", "Hero", "Villain_v01.ma")
         self._save_scene_as(old, "folder_probe")
-        ref_mgr.cmds.polyCube(name="folder_edit")
+        ref_engine.cmds.polyCube(name="folder_edit")
         # Increments live INSIDE the per-scene folder, so the two moves compose: they are
         # re-keyed to the new filename first, then ride along with the folder rename.
         increments = os.path.join(
@@ -2965,7 +2968,7 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.assertTrue(os.path.isfile(moved))
         self.assertFalse(os.path.isdir(os.path.dirname(old)))
         self._assert_session_on(moved)
-        self.assertTrue(ref_mgr.cmds.objExists("folder_edit"))
+        self.assertTrue(ref_engine.cmds.objExists("folder_edit"))
         self.assertTrue(
             os.path.isfile(
                 os.path.join(
@@ -3012,7 +3015,7 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
     def test_renaming_a_closed_scene_opens_nothing(self):
         path = os.path.join(self.root, "scenes", "untouched.ma")
         self._save_scene_as(path, "other_probe")
-        ref_mgr.cmds.file(new=True, force=True)  # nothing open now
+        ref_engine.cmds.file(new=True, force=True)  # nothing open now
 
         renamed = os.path.join(self.root, "scenes", "untouched_renamed.ma")
         self.controller._rename_scene_file(path, renamed)
@@ -3166,7 +3169,7 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self.manager = self._make_manager()
 
     def tearDown(self):
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
         self._store.cleanup()
 
     @staticmethod
@@ -3178,16 +3181,16 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
     @staticmethod
     def _author_asset(path):
         """A two-level asset: ``asset_root`` > ``asset_child`` (+ their shapes)."""
-        ref_mgr.cmds.file(new=True, force=True)
-        root = ref_mgr.cmds.polyCube(name="asset_root")[0]
-        child = ref_mgr.cmds.polyCube(name="asset_child")[0]
-        ref_mgr.cmds.parent(child, root)
-        ref_mgr.cmds.file(rename=path)
-        ref_mgr.cmds.file(save=True, type="mayaAscii")
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
+        root = ref_engine.cmds.polyCube(name="asset_root")[0]
+        child = ref_engine.cmds.polyCube(name="asset_child")[0]
+        ref_engine.cmds.parent(child, root)
+        ref_engine.cmds.file(rename=path)
+        ref_engine.cmds.file(save=True, type="mayaAscii")
+        ref_engine.cmds.file(new=True, force=True)
 
     def _reference(self, namespace="ASSET"):
-        ref_mgr.cmds.file(self.asset, reference=True, namespace=namespace)
+        ref_engine.cmds.file(self.asset, reference=True, namespace=namespace)
 
     @staticmethod
     def _transforms():
@@ -3195,7 +3198,7 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         default = {"persp", "top", "front", "side"}
         return sorted(
             n.split("|")[-1]
-            for n in ref_mgr.cmds.ls(type="transform", long=True) or []
+            for n in ref_engine.cmds.ls(type="transform", long=True) or []
             if n.split("|")[-1].split(":")[-1] not in default
         )
 
@@ -3203,13 +3206,13 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self._reference()
         self.manager.import_references(namespace_mode="remove")
         self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
-        self.assertFalse(ref_mgr.cmds.namespace(exists="ASSET"))
+        self.assertFalse(ref_engine.cmds.namespace(exists="ASSET"))
 
     def test_keep_mode_leaves_every_node_namespaced(self):
         self._reference()
         self.manager.import_references(namespace_mode="keep")
         self.assertEqual(self._transforms(), ["ASSET:asset_child", "ASSET:asset_root"])
-        self.assertTrue(ref_mgr.cmds.namespace(exists="ASSET"))
+        self.assertTrue(ref_engine.cmds.namespace(exists="ASSET"))
         # The reference link itself is gone — this is an import, not a load.
         self.assertEqual(self.manager.current_references, [])
 
@@ -3223,7 +3226,7 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self.assertEqual(
             sorted(
                 n.split("|")[-1]
-                for n in ref_mgr.cmds.namespaceInfo(
+                for n in ref_engine.cmds.namespaceInfo(
                     "ASSET", listOnlyDependencyNodes=True
                 )
                 or []
@@ -3231,8 +3234,8 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
             ["ASSET:asset_root", "ASSET:asset_rootShape"],
         )
         # The child hierarchy and its shape are merged into the scene, unprefixed.
-        self.assertTrue(ref_mgr.cmds.objExists("|ASSET:asset_root|asset_child"))
-        self.assertEqual(ref_mgr.cmds.ls("ASSET:asset_child"), [])
+        self.assertTrue(ref_engine.cmds.objExists("|ASSET:asset_root|asset_child"))
+        self.assertEqual(ref_engine.cmds.ls("ASSET:asset_child"), [])
         self.assertEqual(self.manager.current_references, [])
 
     def _point_current_namespace_elsewhere(self):
@@ -3241,9 +3244,9 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         Routine in a real session — the Namespace Editor sets it, and so does any tool
         that imports into a sandbox namespace (see ``namespace_sandbox``).
         """
-        ref_mgr.cmds.namespace(add=":BYSTANDER")
-        ref_mgr.cmds.namespace(set=":BYSTANDER")
-        self.addCleanup(lambda: ref_mgr.cmds.namespace(set=":"))
+        ref_engine.cmds.namespace(add=":BYSTANDER")
+        ref_engine.cmds.namespace(set=":BYSTANDER")
+        self.addCleanup(lambda: ref_engine.cmds.namespace(set=":"))
 
     def test_remove_mode_strips_under_a_non_root_current_namespace(self):
         """``cmds.namespace`` resolves a BARE name against the CURRENT namespace, so a
@@ -3254,9 +3257,9 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
 
         self.manager.import_references(namespace_mode="remove")
 
-        ref_mgr.cmds.namespace(set=":")
+        ref_engine.cmds.namespace(set=":")
         self.assertEqual(self._transforms(), ["asset_child", "asset_root"])
-        self.assertFalse(ref_mgr.cmds.namespace(exists=":ASSET"))
+        self.assertFalse(ref_engine.cmds.namespace(exists=":ASSET"))
 
     def test_root_mode_works_under_a_non_root_current_namespace(self):
         self._reference()
@@ -3264,32 +3267,32 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
 
         self.manager.import_references(namespace_mode="root")
 
-        ref_mgr.cmds.namespace(set=":")
+        ref_engine.cmds.namespace(set=":")
         self.assertEqual(self._transforms(), ["ASSET:asset_root", "asset_child"])
         # Re-created at the ROOT, not nested under whatever was current.
-        self.assertTrue(ref_mgr.cmds.namespace(exists=":ASSET"))
-        self.assertFalse(ref_mgr.cmds.namespace(exists=":BYSTANDER:ASSET"))
+        self.assertTrue(ref_engine.cmds.namespace(exists=":ASSET"))
+        self.assertFalse(ref_engine.cmds.namespace(exists=":BYSTANDER:ASSET"))
 
     def test_root_mode_survives_the_asset_being_grouped(self):
         """Top-level is relative to the REFERENCE, not the world. Parenting a referenced
         asset under a scene group is routine; if that made the reference look rootless,
         'root' would silently degrade into 'remove'."""
         self._reference()
-        group = ref_mgr.cmds.group(empty=True, name="SET_DRESSING")
-        ref_mgr.cmds.parent("ASSET:asset_root", group)
+        group = ref_engine.cmds.group(empty=True, name="SET_DRESSING")
+        ref_engine.cmds.parent("ASSET:asset_root", group)
 
         self.manager.import_references(namespace_mode="root")
 
-        self.assertTrue(ref_mgr.cmds.objExists("|SET_DRESSING|ASSET:asset_root"))
+        self.assertTrue(ref_engine.cmds.objExists("|SET_DRESSING|ASSET:asset_root"))
         self.assertTrue(
-            ref_mgr.cmds.objExists("|SET_DRESSING|ASSET:asset_root|asset_child")
+            ref_engine.cmds.objExists("|SET_DRESSING|ASSET:asset_root|asset_child")
         )
 
     def test_top_transforms_are_reference_relative_not_world_relative(self):
         """The same rule read directly off the query the modes rest on."""
         self._reference()
-        group = ref_mgr.cmds.group(empty=True, name="SET_DRESSING")
-        ref_mgr.cmds.parent("ASSET:asset_root", group)
+        group = ref_engine.cmds.group(empty=True, name="SET_DRESSING")
+        ref_engine.cmds.parent("ASSET:asset_root", group)
 
         (ref,) = self.manager.current_references
         self.assertEqual(
@@ -3308,7 +3311,7 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self.assertEqual(roots, ["ASSET_A:asset_root", "ASSET_B:asset_root"])
         for ns in ("ASSET_A", "ASSET_B"):
             self.assertEqual(
-                sorted(ref_mgr.cmds.namespaceInfo(ns, listOnlyDependencyNodes=True)),
+                sorted(ref_engine.cmds.namespaceInfo(ns, listOnlyDependencyNodes=True)),
                 [f"{ns}:asset_root", f"{ns}:asset_rootShape"],
             )
 
@@ -3320,8 +3323,8 @@ class TestImportReferencesNamespaceModes(unittest.TestCase):
         self.assertEqual(
             [r.namespace for r in self.manager.current_references], ["ASSET_B"]
         )
-        self.assertTrue(ref_mgr.cmds.objExists("ASSET_A:asset_root"))
-        self.assertTrue(ref_mgr.cmds.objExists("asset_child"))
+        self.assertTrue(ref_engine.cmds.objExists("ASSET_A:asset_root"))
+        self.assertTrue(ref_engine.cmds.objExists("asset_child"))
 
     def test_invalid_mode_raises_rather_than_silently_removing(self):
         self._reference()
@@ -3355,7 +3358,7 @@ class TestImportReferencesClearsWhatItPromoted(unittest.TestCase):
     """
 
     def setUp(self):
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         self._store = ptk.TempArtifacts("mtk_rm_file_less_test", policy="scoped")
         root = self._store.dir_path()
         self.child = os.path.join(root, "fl_child.ma")
@@ -3378,15 +3381,15 @@ class TestImportReferencesClearsWhatItPromoted(unittest.TestCase):
         self.manager = TestImportReferencesNamespaceModes._make_manager()
 
     def tearDown(self):
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
         self._store.cleanup()
 
     @staticmethod
     def _file_less():
-        return ref_mgr.EnvUtils.list_reference_nodes(file_less=True)
+        return ref_engine.EnvUtils.list_reference_nodes(file_less=True)
 
     def test_the_node_the_import_promoted_is_removed(self):
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         cmds.file(self.parent, reference=True, namespace="PARENT")
         cmds.file(self.healthy, reference=True, namespace="KEEP")
 
@@ -3400,7 +3403,7 @@ class TestImportReferencesClearsWhatItPromoted(unittest.TestCase):
         )
 
     def test_debris_an_earlier_import_left_is_not_this_one_s(self):
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         cmds.file(self.parent, reference=True, namespace="EARLIER")
         cmds.file(referenceNode="EARLIERRN", importReference=True)  # a raw import
         earlier = self._file_less()
@@ -3412,7 +3415,7 @@ class TestImportReferencesClearsWhatItPromoted(unittest.TestCase):
         self.assertEqual(self._file_less(), earlier)
 
     def test_one_undo_brings_the_removed_node_back(self):
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         cmds.file(self.parent, reference=True, namespace="PARENT")
         self.manager.import_references(namespaces="PARENT")
         self.assertEqual(self._file_less(), [])
@@ -3440,7 +3443,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         self._store = ptk.TempArtifacts("mtk_rm_usd_test", policy="scoped")
         self.root = self._store.dir_path()
         self.usd = os.path.join(self.root, "crate.usda")
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         cmds.file(new=True, force=True)
         cube = cmds.polyCube(name="crate")[0]
         cmds.setKeyframe(cube, attribute="translateX", t=1, v=0)
@@ -3450,7 +3453,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         cmds.file(new=True, force=True)
 
     def tearDown(self):
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
         self._store.cleanup()
 
     def _dual_quaternion_stage(self):
@@ -3491,7 +3494,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         return path
 
     def _world_box(self, nodes):
-        box = ref_mgr.cmds.exactWorldBoundingBox(nodes)
+        box = ref_engine.cmds.exactWorldBoundingBox(nodes)
         return [round(v, 3) for v in box]
 
     def test_a_metre_z_up_reference_lands_at_size_and_upright(self):
@@ -3499,7 +3502,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         layer referenced at 0.2 x 0.2 x 1.0 cm standing along Z. Its top nodes
         now sit under a host-side group that scales and turns it into the
         scene's cm / Y-up -- a parent edit, so an unload/reload keeps it."""
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         manager = TestImportReferencesNamespaceModes._make_manager()
         self.assertTrue(manager.add_reference("tall", self._metre_z_up_stage()))
         ref = manager.current_references[0]
@@ -3523,7 +3526,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
             controller.open_scene(self._metre_z_up_stage(), set_workspace=False)
         )
         self.assertEqual(
-            self._world_box(ref_mgr.cmds.ls("tall_box", long=True)),
+            self._world_box(ref_engine.cmds.ls("tall_box", long=True)),
             [-10.0, 0.0, -10.0, 10.0, 100.0, 10.0],
         )
 
@@ -3531,7 +3534,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         """The bridge writes Maya-bound layers in cm / Y-up; so does mayaUsd."""
         manager = TestImportReferencesNamespaceModes._make_manager()
         self.assertTrue(manager.add_reference("crate", self.usd))
-        self.assertFalse(ref_mgr.cmds.ls("*_conform"))
+        self.assertFalse(ref_engine.cmds.ls("*_conform"))
 
     def test_a_metre_z_up_import_lands_at_size_and_upright(self):
         """The native import path (the Reference Manager's Import of a USD row,
@@ -3539,7 +3542,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         the same way; the bridge's own payload does not ask to."""
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         BlenderSceneImport().import_scene(self._metre_z_up_stage())
         self.assertEqual(
             self._world_box(cmds.ls("tall_box", long=True)),
@@ -3553,15 +3556,15 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         refs = manager.current_references
         self.assertEqual([self._norm(r.path) for r in refs], [self._norm(self.usd)])
         self.assertTrue(
-            ref_mgr.cmds.keyframe(
+            ref_engine.cmds.keyframe(
                 f"{refs[0].namespace}:crate", q=True, timeChange=True
             ),
             "the referenced stage arrived static",
         )
         # Stored on the reference itself, so a reopen reads the stage the same way.
         host = os.path.join(self.root, "host.ma")
-        ref_mgr.cmds.file(rename=host)
-        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        ref_engine.cmds.file(rename=host)
+        ref_engine.cmds.file(save=True, type="mayaAscii")
         with open(host, encoding="utf-8", errors="ignore") as fh:
             text = fh.read()
         self.assertIn('-typ "USD Import"', text)
@@ -3569,7 +3572,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
 
     def test_add_reference_refuses_a_usd_the_reader_crashes_on(self):
         manager = TestImportReferencesNamespaceModes._make_manager()
-        with patch.object(ref_mgr.cmds, "warning") as warned:
+        with patch.object(ref_engine.cmds, "warning") as warned:
             self.assertFalse(
                 manager.add_reference("limb", self._dual_quaternion_stage())
             )
@@ -3580,10 +3583,10 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
         self.assertTrue(controller.open_scene(self.usd, set_workspace=False))
         self.assertEqual(
-            self._norm(ref_mgr.cmds.file(q=True, sceneName=True)), self._norm(self.usd)
+            self._norm(ref_engine.cmds.file(q=True, sceneName=True)), self._norm(self.usd)
         )
         self.assertTrue(
-            ref_mgr.cmds.keyframe("crate", q=True, timeChange=True),
+            ref_engine.cmds.keyframe("crate", q=True, timeChange=True),
             "the opened stage arrived static",
         )
 
@@ -3592,10 +3595,10 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         shown = []
         controller.sb.message_box = lambda msg, *buttons: shown.append(msg)
         dq = self._dual_quaternion_stage()
-        with patch.object(ref_mgr.cmds, "warning"):
+        with patch.object(ref_engine.cmds, "warning"):
             self.assertFalse(controller.open_scene(dq, set_workspace=False))
         self.assertNotEqual(
-            self._norm(ref_mgr.cmds.file(q=True, sceneName=True) or "x"),
+            self._norm(ref_engine.cmds.file(q=True, sceneName=True) or "x"),
             self._norm(dq),
         )
         self.assertTrue(shown and "/rig/limb" in shown[0], shown)
@@ -3613,11 +3616,11 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         leaves an EMPTY reference node behind, which reads as referenced in the table
         while holding nothing."""
         manager = TestImportReferencesNamespaceModes._make_manager()
-        with patch.object(ref_mgr.cmds, "warning") as warned:
+        with patch.object(ref_engine.cmds, "warning") as warned:
             self.assertFalse(manager.add_reference("damaged", self._garbage_layer()))
         self.assertEqual(manager.current_references, [])
         self.assertEqual(
-            [r for r in ref_mgr.cmds.ls(type="reference") or [] if "shared" not in r],
+            [r for r in ref_engine.cmds.ls(type="reference") or [] if "shared" not in r],
             [],
         )
         self.assertIn("not a readable USD layer", warned.call_args[0][0])
@@ -3629,7 +3632,7 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
         shown = []
         controller.sb.message_box = lambda msg, *buttons: shown.append(msg)
-        with patch.object(ref_mgr.cmds, "warning"):
+        with patch.object(ref_engine.cmds, "warning"):
             self.assertFalse(
                 controller.open_scene(self._garbage_layer(), set_workspace=False)
             )
@@ -3652,7 +3655,7 @@ class TestImportReferencesSceneData(unittest.TestCase):
     def tearDown(self):
         from mayatk.anim_utils.shots._shots import ShotStore
 
-        ref_mgr.cmds.file(new=True, force=True)
+        ref_engine.cmds.file(new=True, force=True)
         ShotStore.clear_active()
         self._store.cleanup()
 
@@ -3661,7 +3664,7 @@ class TestImportReferencesSceneData(unittest.TestCase):
         saved on its own data nodes."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        cmds = ref_mgr.cmds
+        cmds = ref_engine.cmds
         cmds.file(new=True, force=True)
         cmds.polyCube(name="door")
         for spec, payload in records.items():
@@ -3675,9 +3678,9 @@ class TestImportReferencesSceneData(unittest.TestCase):
         its own audio clips."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        ref_mgr.cmds.polyCube(name="door")
+        ref_engine.cmds.polyCube(name="door")
         ptk.SceneRecords.AUDIO_FILE_MAP.save(DataNodes, {"1": "a.wav"})
-        ref_mgr.cmds.file(self.module, reference=True, namespace="MOD")
+        ref_engine.cmds.file(self.module, reference=True, namespace="MOD")
 
     def _module_with_a_shot(self):
         self._author_module(
@@ -3705,7 +3708,7 @@ class TestImportReferencesSceneData(unittest.TestCase):
     @staticmethod
     def _carriers():
         return sorted(
-            ref_mgr.cmds.ls("*data_internal*", "*:*data_internal*", type="network")
+            ref_engine.cmds.ls("*data_internal*", "*:*data_internal*", type="network")
             or []
         )
 
@@ -3735,8 +3738,8 @@ class TestImportReferencesSceneData(unittest.TestCase):
         os.makedirs(os.path.join(host_root, "scenes"), exist_ok=True)
         with open(os.path.join(host_root, "workspace.mel"), "w") as fh:
             fh.write("//Maya 2025 Project Definition\n")
-        ref_mgr.cmds.file(rename=os.path.join(host_root, "scenes", "host.ma"))
-        ref_mgr.cmds.file(save=True, type="mayaAscii")
+        ref_engine.cmds.file(rename=os.path.join(host_root, "scenes", "host.ma"))
+        ref_engine.cmds.file(save=True, type="mayaAscii")
         self.manager.import_references(namespace_mode="remove")
         landed = self._load("AUDIO_FILE_MAP")["2"]
         module_wav = os.path.join(os.path.dirname(self.module), "b.wav")
@@ -3779,7 +3782,7 @@ class TestImportReferencesSceneData(unittest.TestCase):
                 ShotStore.clear_active()
                 with patch.object(ShotStore, "_schedule_flush", lambda self: None):
                     ShotStore.active().define_shot("HostShot", 10.0, 20.0)
-                    ref_mgr.cmds.file(self.module, reference=True, namespace="MOD")
+                    ref_engine.cmds.file(self.module, reference=True, namespace="MOD")
                     self.manager.import_references(
                         namespace_mode="remove", scene_data=scene_data
                     )
@@ -3882,7 +3885,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
     def test_clean_scene_never_prompts(self):
         slot = self._make_slot()
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: False),
@@ -3893,7 +3896,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
     def test_prompt_offers_to_save(self):
         slot = self._make_slot("Cancel")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True),
@@ -3906,7 +3909,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
     def test_discard_proceeds_without_saving(self):
         slot = self._make_slot("Discard")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True),
@@ -3920,7 +3923,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         slot.controller._save_open_scene.return_value = True
         scene = os.path.normpath("/proj/scenes/shot.ma")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True, scene),
@@ -3934,7 +3937,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         slot = self._make_slot("Save")
         slot.controller._save_open_scene.return_value = False
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True, os.path.normpath("/proj/s.ma")),
@@ -3950,7 +3953,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
 
         slot.controller.save_scene.side_effect = named_and_saved
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: state["modified"], ""),
@@ -3963,7 +3966,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         """save_scene returns nothing whether it saved or bailed — the modified flag decides."""
         slot = self._make_slot("Save")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True, ""),
@@ -3976,7 +3979,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         scene = os.path.normpath("/proj/scenes/shot.ma")
         menu = self._row(slot, scene)
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: False, scene),
@@ -3989,7 +3992,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         menu = self._row(slot, os.path.normpath("/proj/scenes/shot.ma"))
         menu.btn_open_scene.setText("Reopen")  # left over from a prior right-click
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(
@@ -4009,7 +4012,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         scene = os.path.normpath("/proj/scenes/shot.ma")
         self._row(slot, scene)
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True, scene),
@@ -4022,7 +4025,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         scene = os.path.normpath("/proj/scenes/shot.ma")
         self._row(slot, scene)
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(lambda: True, scene),
@@ -4036,7 +4039,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
         other = os.path.normpath("/proj/scenes/other.ma")
         self._row(slot, other)
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(
@@ -4073,7 +4076,7 @@ class TestUnsavedChangesPrompt(unittest.TestCase):
             "modified", False
         )
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "file",
             create=True,
             side_effect=self._fake_file(
@@ -4124,15 +4127,15 @@ class TestReferenceRemoval(unittest.TestCase):
         """It must not re-implement the screen — a second copy is what let the two
         diverge in the first place."""
         with patch.object(
-            ref_mgr.EnvUtils,
+            ref_engine.EnvUtils,
             "list_reference_nodes",
             return_value=["ARN", "BRN"],
         ) as screen:
-            refs = ref_mgr._ReferenceManagerInternal._list_file_refs()
+            refs = ref_engine._ReferenceManagerInternal._list_file_refs()
 
         screen.assert_called_once_with()  # default = top level only
         self.assertEqual([r._ref_node for r in refs], ["ARN", "BRN"])
-        self.assertTrue(all(isinstance(r, ref_mgr._FileRef) for r in refs))
+        self.assertTrue(all(isinstance(r, ref_engine._FileRef) for r in refs))
 
     def test_one_unremovable_reference_does_not_strand_the_rest(self):
         """Unreference All must keep going past a reference Maya refuses to remove,
@@ -4178,9 +4181,9 @@ class TestReferenceRemoval(unittest.TestCase):
     def test_a_broken_reference_still_has_a_name_to_report(self):
         """.namespace raises on a file-less reference — the one kind most likely to be
         in a failure message — so the label must fall back to the node name."""
-        ref = ref_mgr._FileRef("PROPS_ASSEMBLY:ROOM_ENVRN")
+        ref = ref_engine._FileRef("PROPS_ASSEMBLY:ROOM_ENVRN")
         with patch.object(
-            ref_mgr.cmds,
+            ref_engine.cmds,
             "referenceQuery",
             create=True,
             side_effect=RuntimeError("is not associated with a reference file"),

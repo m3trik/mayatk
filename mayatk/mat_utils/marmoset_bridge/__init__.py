@@ -33,6 +33,6 @@ To talk to an already-running Toolbag, import the RPC client directly::
     from mayatk.mat_utils.marmoset_bridge.marmoset_rpc import MarmosetConnection
 """
 
-from mayatk.mat_utils.marmoset_bridge._marmoset_bridge import MarmosetBridge  # noqa: F401
+from pythontk.core_utils.module_resolver import lazy_exports
 
-__all__ = ["MarmosetBridge"]
+lazy_exports(globals(), {"_marmoset_bridge": "MarmosetBridge"})

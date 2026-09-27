@@ -49,12 +49,8 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     StepStatus,
     ManifestModel,
 )
-from mayatk.anim_utils.shots.shot_manifest.mapping._mapping import Mapping
-from mayatk.anim_utils.shots.shot_manifest.behaviors import (
-    Behaviors,
-    list_behaviors,
-    load_behavior,
-)
+from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
 
 
@@ -1573,7 +1569,7 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
         import shutil
         from pathlib import Path
         from pythontk import TemplateSet
-        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
         tmp = Path(tempfile.mkdtemp())
         try:
@@ -1606,7 +1602,7 @@ class TestMappingCombo(unittest.TestCase, _ControllerHarness):
         import shutil
         from pathlib import Path
         from pythontk import TemplateSet
-        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
         tmp = Path(tempfile.mkdtemp())
         try:
@@ -3528,18 +3524,18 @@ class TestSetClipBehavior(unittest.TestCase):
     """The set_clip YAML and its verify/apply routing."""
 
     def test_list_behaviors_audio_kind(self):
-        """list_behaviors(kind='audio') includes set_clip."""
-        names = list_behaviors(kind="audio")
+        """Behaviors.list_behaviors(kind='audio') includes set_clip."""
+        names = Behaviors.list_behaviors(kind="audio")
         self.assertIn("set_clip", names)
 
     def test_list_behaviors_scene_kind_excludes_set_clip(self):
-        """list_behaviors(kind='scene') does not include set_clip."""
-        names = list_behaviors(kind="scene")
+        """Behaviors.list_behaviors(kind='scene') does not include set_clip."""
+        names = Behaviors.list_behaviors(kind="scene")
         self.assertNotIn("set_clip", names)
 
     def test_load_set_clip_template(self):
         """set_clip.yaml is loadable and has audio_clip verify mode."""
-        tmpl = load_behavior("set_clip")
+        tmpl = Behaviors.load_behavior("set_clip")
         self.assertEqual(tmpl["kind"], ["audio"])
         self.assertEqual(tmpl["verify"]["mode"], "audio_clip")
 

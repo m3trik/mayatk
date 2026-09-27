@@ -110,7 +110,7 @@ with the rendered value and leave a stray temp path in the generated script's do
 """
 
 # Bridge metadata -- consumed by BlenderBridge before substitution. The mode string is
-# the ecosystem-wide vocabulary from ``pythontk.core_utils.script_template`` (SEND_TO /
+# the ecosystem-wide vocabulary from ``pythontk.core_utils.handoff.script_template`` (SEND_TO /
 # SAVE_AS / ROUND_TRIP); it is read STRICTLY here (ScriptRunDeliverer.strict_modes), so a
 # spelling outside that set aborts the run in preflight rather than degrading.
 BRIDGE_MODES = ("round_trip",)

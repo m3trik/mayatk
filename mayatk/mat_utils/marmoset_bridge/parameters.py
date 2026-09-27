@@ -17,15 +17,7 @@ stays identical in shape.
 
 from __future__ import annotations
 
-from typing import Any
-
-from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
-
-
-# Targets Python templates -- ``python_literal`` is the formatter the
-# ``render_context`` wrapper below uses to turn user values into Python
-# source literals when the bridge substitutes them into ``templates/*.py``.
-_FORMATTER = Formatters.python_literal
+from uitk.bridge import AttributeSpec, ParamRegistry, Parameters as _BridgeParams
 
 
 # Display order is iteration order over this dict.
@@ -406,29 +398,16 @@ SUPERSESSIONS = (
 )
 
 
-class Parameters:
-    """Parameters — module namespace."""
+class Parameters(ParamRegistry):
+    """Parameters — module namespace.
 
-    #: The parameter registry, exposed on the class so a bridge slot can hand
-    #: this class to the shared base as its ``params_module`` (the base reads
-    #: ``params_module.PARAMS`` and ``.referenced_keys``) — no module-level
-    #: re-export shim required.
+    Declared as data: :class:`uitk.bridge.ParamRegistry` supplies
+    ``referenced_keys`` / ``defaults`` / ``render_context`` (Python literals)
+    over :data:`PARAMS`, and a bridge slot hands this class to the shared base
+    as its ``params_module``.
+    """
+
     PARAMS = PARAMS
 
     #: Rows one parameter's value takes over; read by the bridge-slots base.
     SUPERSESSIONS = SUPERSESSIONS
-
-    @staticmethod
-    def referenced_keys(script_text: str) -> "set[str]":
-        """Registered keys present in *script_text* (delegates to uitk.bridge)."""
-        return _BridgeParams.referenced_keys(script_text, PARAMS)
-
-    @staticmethod
-    def defaults() -> "dict[str, Any]":
-        """Return ``{key: default}`` for every registered parameter."""
-        return _BridgeParams.defaults(PARAMS)
-
-    @staticmethod
-    def render_context(values: "dict[str, Any]") -> "dict[str, str]":
-        """Format *values* for ``StrUtils.replace_delimited`` using Python literals."""
-        return _BridgeParams.render_context(values, PARAMS, formatter=_FORMATTER)

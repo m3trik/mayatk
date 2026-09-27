@@ -793,6 +793,26 @@ class TestOcioProfileVersionGate(MayaTkTestCase):
         # An unknown ceiling must not gate anything (unknown != low).
         self.assertIsNone(SceneDiagnostics._max_ocio_profile_version(None))
 
+    def test_ceiling_reads_every_os_library_layout(self):
+        """Windows ships ``bin/OpenColorIOMaya_2_3.dll``; Linux keeps ``lib/``
+        shared objects -- ``libOpenColorIOMaya_2_3.so`` or a soname-versioned
+        ``libOpenColorIO.so.2.4`` -- which read as "unknown" and skipped the
+        gate."""
+        for i, (folder, name, expected) in enumerate(
+            (
+                ("bin", "OpenColorIOMaya_2_3.dll", (2, 3)),
+                ("lib", "libOpenColorIOMaya_2_3.so", (2, 3)),
+                ("lib", "libOpenColorIO.so.2.4", (2, 4)),
+            )
+        ):
+            with self.subTest(name=name):
+                root = os.path.join(self._tmp, f"maya_layout_{i}")
+                os.makedirs(os.path.join(root, folder))
+                open(os.path.join(root, folder, name), "w").close()
+                self.assertEqual(
+                    SceneDiagnostics._max_ocio_profile_version(root), expected
+                )
+
     def test_fix_ocio_refuses_an_env_config_newer_than_the_runtime(self):
         ceiling = SceneDiagnostics._max_ocio_profile_version(
             os.environ.get("MAYA_LOCATION")

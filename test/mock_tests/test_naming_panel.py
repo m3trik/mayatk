@@ -40,6 +40,14 @@ class TestNamingPanel(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        from pythontk import TestSandbox
+
+        # The suffix fields load the shared naming convention: build the panel
+        # against the shipped one, not the developer's (test_suffix_fields
+        # asserts "_GEO"), and keep every write off their doc.
+        sandbox = TestSandbox.user_config()
+        sandbox.__enter__()
+        cls.addClassCleanup(sandbox.__exit__, None, None, None)
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
         from uitk import Switchboard
         from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
@@ -55,10 +63,9 @@ class TestNamingPanel(unittest.TestCase):
         # patching a switchboard nothing calls (the browse stubs below then
         # miss and a real QFileDialog runs).
         cls.sb = cls.slots.sb
-        # The offscreen load skips header_init; drive the init entry points.
-        cls.slots.header_init(cls.ui.header)
-        for w in ("txt000", "txt001", "tb000", "tb001", "tb002", "tb003"):
-            getattr(cls.slots, f"{w}_init")(getattr(cls.ui, w))
+        # The load runs every *_init itself, header_init included; driving them
+        # again here built each menu twice (two Scope combos, 44 convention
+        # rows), so a test could pass against a widget the user never sees.
         cls.menu = cls.ui.header.menu
 
     def setUp(self):
@@ -115,6 +122,87 @@ class TestNamingPanel(unittest.TestCase):
         self.assertEqual(m.tb003_txt009.text(), "_SRF")
         self.assertEqual(m.tb003_txt018.text(), "_SET")
         self.assertIn("_IKH", self.slots.valid_suffixes)
+
+    # -- suffix-by-type: labels + convention presets --------------------------
+
+    def _grid_cell(self, grid, widget):
+        """``(row, col)`` of the grid item that is or holds *widget*.
+
+        The affix picker wraps each field in an option-box container, so the
+        grid holds the container, not the field itself.
+        """
+        for i in range(grid.count()):
+            held = grid.itemAt(i).widget()
+            if held is not None and (held is widget or held.isAncestorOf(widget)):
+                return grid.getItemPosition(i)[:2]
+        return None
+
+    def test_every_convention_row_names_its_type_beside_the_field(self):
+        """Every row ships filled, so the placeholder never shows: a label to
+        the right is what tells nineteen ``_XYZ`` fields apart."""
+        from pythontk import NamingConvention
+
+        m = self.ui.tb003.option_box.menu
+        grid = m.gridLayout
+        rows = list(self.slots._convention_editor.fields())
+        self.assertEqual(len(rows), 22)  # 19 node types + 3 artifact entries
+        labels = [i for i in range(grid.count()) if grid.getItemPosition(i)[1] == 1]
+        self.assertEqual(len(labels), 22, "one label per row, the menu built once")
+        for ck, field in rows:
+            with self.subTest(convention_key=ck):
+                cell = self._grid_cell(grid, field)
+                self.assertIsNotNone(cell)
+                self.assertEqual(cell[1], 0, "the field sits in the first column")
+                label = grid.itemAtPosition(cell[0], 1).widget()
+                self.assertIsInstance(label, QtWidgets.QLabel)
+                self.assertEqual(label.text(), NamingConvention.label(ck))
+
+    def test_a_convention_preset_round_trips_through_the_fields(self):
+        """uitk's preset template, semantic mode: a preset is the whole
+        convention, loading it rewrites the convention AND the fields, and a
+        field edit marks the active preset modified."""
+        from pythontk import NamingConvention, TestSandbox
+        from uitk.widgets.optionBox.options.affix import AffixOption
+
+        m = self.ui.tb003.option_box.menu
+        prev_dir = m.presets.preset_dir
+
+        def restore_fields():
+            m.presets.preset_dir = prev_dir
+            # Show the class's convention again WITHOUT writing it: each
+            # picker's on_change finds the convention already equal.
+            for ck, field in self.slots._convention_editor.fields():
+                rule = NamingConvention.get(ck)
+                field.setText(rule.text)
+                field.option_box.find_option(AffixOption).set_mode(rule.mode)
+
+        # Cleanups run last-in first-out: this test's own config root goes
+        # first, then the fields re-read the class sandbox's convention.
+        self.addCleanup(restore_fields)
+        sandbox = TestSandbox.user_config()
+        root = sandbox.__enter__()
+        self.addCleanup(sandbox.__exit__, None, None, None)
+        m.presets.preset_dir = os.path.join(root, "presets")
+        self.slots._convention_editor.apply_preset(NamingConvention.as_dict())
+        mesh = m.tb003_txt003
+
+        m.presets.save("studio")
+        self.assertEqual(m.presets.load("studio"), len(NamingConvention.keys()))
+        self.assertFalse(m.presets.is_modified())
+
+        mesh.setText("_MSH")
+        mesh.editingFinished.emit()
+        self.assertEqual(NamingConvention.affix("mesh"), "_MSH")
+        self.assertTrue(m.presets.is_modified(), "a field edit dirties the preset")
+        mesh.option_box.find_option(AffixOption).set_mode("prefix")
+        self.assertEqual(NamingConvention.affix_parts("mesh"), ("MSH_", ""))
+
+        m.presets.load("studio")
+        self.assertEqual(NamingConvention.affix("mesh"), "_GEO")
+        self.assertEqual(NamingConvention.mode("mesh"), "auto")
+        self.assertEqual(mesh.text(), "_GEO")
+        self.assertEqual(mesh.option_box.affix_mode, "auto")
+        self.assertFalse(m.presets.is_modified())
 
     # -- file scopes ---------------------------------------------------------
 

@@ -31,7 +31,10 @@ Usage::
 
 from __future__ import annotations
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 import contextlib
 import itertools

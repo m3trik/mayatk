@@ -303,13 +303,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         is scene data rather than a widget value, so a reset leaves it standing.
         """
         from uitk.managers.reset_gesture import ResetGesture
-        from uitk.managers.state_manager import StateManager
 
-        self._reset_gesture = ResetGesture(
-            widget,
-            state=lambda: StateManager.for_widget(self.ui),
-            on_performed=self._after_reset,
-        )
+        self._reset_gesture = ResetGesture(widget, on_performed=self._after_reset)
 
     def _after_reset(self, action: str) -> None:
         """Let go of the active preset when a reset moved the dials off it.
@@ -522,23 +517,37 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         render a quad_light. It also keeps the empty-scope message below honest:
         a lights-only selection reads as nothing to bake, not as a bake that
         silently produced no maps.
+
+        The words and their precedence are :class:`pythontk.HandoffScope`'s
+        (``scene`` is its synonym for ``all``; anything unknown bakes the
+        selection); this supplies only the scene reads.
         """
-        scope = self._scope()
-        if scope in ("visible", "scene"):
+
+        def scene_meshes():
             # Every DAG PATH of every mesh: an instanced shape is ONE node
             # under several transforms, and a listing of nodes names it once
             # -- the production room's Scene scope reached 21 of its 61
             # visible meshes, its 40 instanced walls and props missed (a
             # group instance hides from a transform listing the same way).
-            pool = cmds.ls(
-                type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+            # ``or []``: an empty scene is an answer, not "can't enumerate".
+            return (
+                cmds.ls(
+                    type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+                )
+                or []
             )
-            if scope == "visible":
-                from mayatk.display_utils._display_utils import DisplayUtils
 
-                pool = [path for path in pool or [] if DisplayUtils.is_visible(path)]
-        else:
-            pool = cmds.ls(selection=True, long=True)
+        def visible_meshes():
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            return [path for path in scene_meshes() if DisplayUtils.is_visible(path)]
+
+        pool = ptk.HandoffScope.resolve(
+            self._scope(),
+            selected=lambda: cmds.ls(selection=True, long=True),
+            all=scene_meshes,
+            visible=visible_meshes,
+        )
         return TextureBaker.resolve_meshes(pool or [])
 
     def set_exclusions_init(self, widget) -> None:

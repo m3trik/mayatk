@@ -49,7 +49,14 @@ degrades to "one manual reload," never a dead end.
 | `project.info` | `{is_open, file_path, mesh_path, needs_saving}` for the open project. |
 | `js.evaluate` | Run a legacy-JS (`alg.*`) snippet via `substance_painter.js.evaluate` — routes the render/bake_lighting template bodies. |
 | `system.eval` | Exec Python inside Painter; returns the script's `result` var. |
+| `project.set_resolution` | Set every texture set's document resolution (`size` px square). |
+| `bake.set_high_poly` | Point every texture set's baking Hipoly Mesh at `mesh_path`. |
+| `textures.apply_mesh_maps` | Wire each material's baked maps onto its own texture set, from the manifest's `mesh_maps` section. |
+| `bake.pending_setup` | What is queued for the next project-open (diagnostics). |
 | `system.ping` / `list_ops` / `version` | Liveness / discovery / version. |
+
+The three setup ops (resolution, high poly, mesh maps) apply at once when a
+project is open and are otherwise held until one opens.
 
 ## Config
 
@@ -80,3 +87,8 @@ plugins folder couldn't be resolved (set `SUBSTANCE_PAINTER_PLUGINS_PATH`).
 - [`plugin_src/substance_rpc/`](plugin_src/substance_rpc/) — the Painter-hosted plugin
   (registry / server / main-thread marshaller / ops), self-contained so it needs
   nothing on Painter's `sys.path`. Vendored from the marmoset_rpc plugin pattern.
+
+**Vendored twin.** This whole folder is kept code-identical in mayatk and
+blendertk (`mat_utils/substance_bridge/substance_rpc/`); mayatk's copy is the
+SSoT -- edit it there and mirror the change. Drift fails
+`extapps/test/test_vendor_sync.py`.

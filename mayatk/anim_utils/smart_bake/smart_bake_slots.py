@@ -118,12 +118,16 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         """Configure header menu, refresh button, and help text."""
         widget.config_buttons("refresh", "menu", "collapse", "hide")
         widget.refresh_requested.connect(self._refresh_session_state)
-        widget.menu.add(
+        reset = widget.menu.add(
             "QPushButton",
             setText="Reset to Defaults",
             setObjectName="reset_defaults",
-            setToolTip="Reset every field in this panel to its default value.",
         )
+        # Every field back to its default, on uitk's shared reset grammar: its
+        # tooltip teaches Shift+Click (save as defaults) and Ctrl+Shift+Click.
+        from uitk.managers.reset_gesture import ResetGesture
+
+        self._reset_gesture = ResetGesture(reset)
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Smart Bake",
@@ -158,10 +162,6 @@ class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # delete_inputs is a base-layer-only behavior — ignored (and visibly
         # disabled) whenever the nondestructive override layer is active.
         self.ui.chk_delete_inputs.setDisabled(text == "Override Layer")
-
-    def reset_defaults(self) -> None:
-        """Header menu: reset every field in this panel to its registry default."""
-        self.ui.state.reset_all()
 
     def _scope_objects(self) -> Optional[List[str]]:
         """Selected scope -> the selection (possibly empty); Auto -> None

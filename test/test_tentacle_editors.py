@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from base_test import MayaTkTestCase
-from tentacle.slots.maya.editors import Editors
+from tentacle.slots.maya.editors import EditorsSlots
 import maya.cmds as cmds
 
 
@@ -16,7 +16,7 @@ class TestTentacleEditors(MayaTkTestCase):
         # makes _update_repeat_last_shortcut return before reaching Qt.
         self.mock_switchboard.configurable.repeat_last_shortcut.get.return_value = ""
 
-        self.editors = Editors(self.mock_switchboard)
+        self.editors = EditorsSlots(self.mock_switchboard)
 
     def test_b009_time_range_toggle(self):
         """Test b009 toggles Time and Range sliders intelligently.

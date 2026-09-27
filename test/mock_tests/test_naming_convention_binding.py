@@ -14,9 +14,7 @@ test_naming.py under mayapy.
 """
 
 import os
-import shutil
 import sys
-import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,7 +24,7 @@ for _p in (REPO, os.path.join(MONO, "pythontk")):
         sys.path.insert(0, _p)
 
 from pythontk.core_utils.naming_convention import NamingConvention  # noqa: E402
-from pythontk.core_utils.user_config import CONFIG_ROOT_ENV_VAR  # noqa: E402
+from pythontk.core_utils.test_sandbox import TestSandbox  # noqa: E402
 from mayatk.edit_utils.naming._naming import Naming  # noqa: E402
 
 
@@ -34,19 +32,10 @@ class TestConventionBinding(unittest.TestCase):
     """The engine reads the convention; it no longer carries its own copy."""
 
     def setUp(self):
-        # Redirect the config root so no test writes the developer's real doc.
-        self.tmp = tempfile.mkdtemp()
-        self._prev = os.environ.get(CONFIG_ROOT_ENV_VAR)
-        os.environ[CONFIG_ROOT_ENV_VAR] = self.tmp
-        NamingConvention.reload()
-
-    def tearDown(self):
-        if self._prev is None:
-            os.environ.pop(CONFIG_ROOT_ENV_VAR, None)
-        else:
-            os.environ[CONFIG_ROOT_ENV_VAR] = self._prev
-        shutil.rmtree(self.tmp, ignore_errors=True)
-        NamingConvention.reload()
+        # Neither read the developer's convention nor write it.
+        sandbox = TestSandbox.user_config()
+        sandbox.__enter__()
+        self.addCleanup(sandbox.__exit__, None, None, None)
 
     # ------------------------------------------------------------- bindings
     def test_every_binding_names_a_real_convention_entry(self):
@@ -193,6 +182,76 @@ class TestHostParity(unittest.TestCase):
         )
 
         self.assertEqual(NamingSlots.CONVENTION_GROUPS, BNamingSlots.CONVENTION_GROUPS)
+
+    # The Suffix By Type editor lives ONCE, in uitk (``NamingConventionEditor``);
+    # each panel is a thin host that hands it data. The host glue must stay
+    # one text in both packages -- the only host difference is DATA
+    # (``CONVENTION_DISABLED``: blendertk greys the rows with no Blender type).
+    _HOST_GLUE = ("_convention_groups", "_convention_tooltip", "tb003_init")
+    # The editor's own methods, which used to be copied into both panels.
+    _RETIRED_COPIES = (
+        "_convention_rows",
+        "_wire_convention_field",
+        "_save_convention",
+        "_add_convention_row",
+        "_build_convention_only_rows",
+        "_convention_fields",
+        "_apply_convention_preset",
+        "_wire_convention_presets",
+    )
+
+    def _hosts(self):
+        btk_slots = os.path.join(
+            MONO, "blendertk", "blendertk", "edit_utils", "naming", "naming_slots.py"
+        )
+        if not os.path.isfile(btk_slots):
+            self.skipTest("blendertk not present beside mayatk")
+        if os.path.join(MONO, "blendertk") not in sys.path:
+            sys.path.insert(0, os.path.join(MONO, "blendertk"))
+        from mayatk.edit_utils.naming.naming_slots import NamingSlots
+        from blendertk.edit_utils.naming.naming_slots import (
+            NamingSlots as BNamingSlots,
+        )
+
+        return NamingSlots, BNamingSlots
+
+    def test_the_convention_editor_is_a_verbatim_mirror(self):
+        """The two panels host ONE editor (uitk's): their glue is one text, and
+        neither carries a copy of the editor itself any more -- a fix lands in
+        uitk once, and an edit to one host's glue fails here."""
+        import inspect
+
+        NamingSlots, BNamingSlots = self._hosts()
+        for name in self._HOST_GLUE:
+            with self.subTest(glue=name):
+                self.assertEqual(
+                    inspect.getsource(getattr(NamingSlots, name)),
+                    inspect.getsource(getattr(BNamingSlots, name)),
+                )
+        for name in self._RETIRED_COPIES:
+            with self.subTest(retired=name):
+                self.assertFalse(hasattr(NamingSlots, name))
+                self.assertFalse(hasattr(BNamingSlots, name))
+        self.assertIn(
+            "NamingConventionEditor", inspect.getsource(NamingSlots.tb003_init)
+        )
+
+    def test_both_panels_group_the_same_editor_rows(self):
+        """Same rows, same objectNames, same order: the editor's vocabulary."""
+        NamingSlots, BNamingSlots = self._hosts()
+        self.assertEqual(
+            NamingSlots._convention_groups(), BNamingSlots._convention_groups()
+        )
+        keys = [k for _g, rows in NamingSlots._convention_groups() for k, _n in rows]
+        self.assertEqual(sorted(keys), sorted(NamingConvention.DEFAULTS))
+
+    def test_disabled_rows_name_real_convention_entries(self):
+        """A typo in CONVENTION_DISABLED would silently leave a row enabled."""
+        NamingSlots, BNamingSlots = self._hosts()
+        self.assertEqual(NamingSlots.CONVENTION_DISABLED, {}, "Maya applies every row")
+        bound = {ck for _kw, ck, _tk in Naming.SUFFIX_BINDINGS}
+        self.assertTrue(BNamingSlots.CONVENTION_DISABLED)
+        self.assertLessEqual(set(BNamingSlots.CONVENTION_DISABLED), bound)
 
 
 if __name__ == "__main__":

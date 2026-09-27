@@ -9,7 +9,11 @@ Direct usage::
 
 The bridge mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 
-* :mod:`_substance_bridge` -- export/launch logic (:class:`SubstanceBridge`).
+* :mod:`_substance_engine` -- ``SubstanceEngine``, the DCC-free Painter half
+  (template parsing, launch / attach + RPC dispatch, texture staging); vendored
+  byte-identical into blendertk.
+* :mod:`_substance_bridge` -- :class:`SubstanceBridge`: the engine plus Maya's
+  scene I/O (mesh export, selection, manifest, bake source, export record).
 * :mod:`connection` -- live process I/O: stdio capture, log tail.
 * :mod:`substance_rpc` -- RPC client + installer + Painter-side plugin
   (``plugin_src/substance_rpc``) for a running Painter.
@@ -18,32 +22,21 @@ The bridge mirrors :mod:`mayatk.mat_utils.marmoset_bridge`:
 * ``templates/`` -- declarative Painter handoffs (``__KEY__`` placeholders).
 """
 
-from mayatk.mat_utils.substance_bridge._substance_bridge import (
-    SubstanceBridge,
-    SEND_TO,
-    ROUND_TRIP,
-    TARGET_AUTO,
-    TARGET_NEW,
-    TARGET_CURRENT,
-)
-from mayatk.mat_utils.substance_bridge.connection import (
-    OutputStream,
-    SubstanceConnection,
-)
+from pythontk.core_utils.module_resolver import lazy_exports
 
-# RPC client lives under :mod:`substance_bridge.substance_rpc` for clear
-# bridge vs. live-RPC separation. Import it from there explicitly:
-#     from mayatk.mat_utils.substance_bridge.substance_rpc import (
-#         PainterRpcClient,
-#     )
-
-__all__ = [
-    "SubstanceBridge",
-    "SEND_TO",
-    "ROUND_TRIP",
-    "TARGET_AUTO",
-    "TARGET_NEW",
-    "TARGET_CURRENT",
-    "OutputStream",
-    "SubstanceConnection",
-]
+# The RPC client lives under :mod:`substance_bridge.substance_rpc` for clear
+# bridge vs. live-RPC separation; import it from there.
+lazy_exports(
+    globals(),
+    {
+        "_substance_bridge": (
+            "SubstanceBridge",
+            "SEND_TO",
+            "ROUND_TRIP",
+            "TARGET_AUTO",
+            "TARGET_NEW",
+            "TARGET_CURRENT",
+        ),
+        "connection": ("OutputStream", "SubstanceConnection"),
+    },
+)

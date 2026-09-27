@@ -38,6 +38,20 @@ class MayaConnection:
     # launched PID.
     PORT_SCAN_SPAN: int = 20
 
+    #: ``AppLauncher.resolve_app_path`` keywords for the Maya GUI binary when
+    #: ``maya`` is on no PATH: every OS's install layout, newest version first.
+    #: On Linux ``bin/maya`` is the launcher script ``maya.bin`` runs behind.
+    MAYA_DISCOVERY: dict = {
+        "env_vars": ("MAYA_EXE",),
+        "location_env_vars": (("MAYA_LOCATION", ("bin", "maya{exe}")),),
+        "app_names": ("maya",),
+        "scan_globs": (
+            r"{program_files}\Autodesk\Maya*\bin\maya.exe",
+            "/usr/autodesk/maya*/bin/maya",
+            "/Applications/Autodesk/maya*/Maya.app/Contents/bin/maya",
+        ),
+    }
+
     @staticmethod
     def get_instance() -> "MayaConnection":
         """Get the global Maya connection instance."""
@@ -633,15 +647,15 @@ class MayaConnection:
             process = AppLauncher.launch("maya", args=args, detached=True)
 
             if not process:
-                # Try finding a specific version if 'maya' generic isn't found
-                # This is a basic fallback, could be expanded
+                # 'maya' is on no PATH (a Linux RPM installs to
+                # /usr/autodesk/maya<ver>/bin): $MAYA_EXE, $MAYA_LOCATION, then
+                # the standard install roots, newest version first.
                 print(
-                    "[MayaConnection] 'maya' not found in path. Checking for specific versions..."
+                    "[MayaConnection] 'maya' not found in path. Checking installs..."
                 )
-                for ver in ["2025", "2024", "2023", "2022"]:
-                    process = AppLauncher.launch(f"maya{ver}", args=args, detached=True)
-                    if process:
-                        break
+                found = AppLauncher.resolve_app_path(**self.MAYA_DISCOVERY)
+                if found:
+                    process = AppLauncher.launch(found, args=args, detached=True)
 
         if not process:
             print("[MayaConnection] Failed to launch Maya executable.")
@@ -709,8 +723,11 @@ class MayaConnection:
                     discovered["port"] = port
                 return ok
 
+            # The launched PID's tree: on Linux bin/maya is a script that may
+            # fork maya.bin, which then holds the port.
+            ours = AppLauncher.process_tree(proc.pid)
             for p, owner in rows:
-                if owner == proc.pid and port <= p < scan_end:
+                if owner in ours and port <= p < scan_end:
                     discovered["port"] = p
                     return True
             return False
@@ -748,29 +765,17 @@ class MayaConnection:
 
     @staticmethod
     def _iter_listening_tcp() -> List[tuple]:
-        """Return ``[(local_port, pid), ...]`` for every LISTENING TCP socket
-        (Windows ``netstat -ano`` parse; handles IPv4 and IPv6 rows).
+        """Return ``[(local_port, pid), ...]`` for every LISTENING TCP socket,
+        IPv4 and IPv6 (``pythontk.NetUtils.listening_ports``: ``netstat`` on
+        Windows, ``/proc`` on Linux; pid None where it is not ours to see).
 
-        Raises on netstat failure so callers can distinguish "netstat is
-        unavailable" from "no matching socket" and choose their fallback.
+        Raises when the platform source is unavailable, so callers can
+        distinguish "cannot enumerate" from "no matching socket" and choose
+        their fallback.
         """
-        import subprocess
-        import re
+        from pythontk import NetUtils
 
-        output = subprocess.check_output(["netstat", "-ano"], universal_newlines=True)
-        # e.g. "  TCP    0.0.0.0:7002    0.0.0.0:0    LISTENING    1234"
-        # Listening rows are identified by the foreign address ":0" — the
-        # state token is LOCALIZED on non-English Windows (e.g. German
-        # "ABHÖREN"), so it must not be matched literally. Anchoring on the
-        # LOCAL address field means an ESTABLISHED row (foreign port != 0)
-        # never matches.
-        pattern = re.compile(r"^\s*TCP\s+\S+:(\d+)\s+\S+:0\s+\S+\s+(\d+)\s*$")
-        rows = []
-        for line in output.splitlines():
-            match = pattern.match(line)
-            if match:
-                rows.append((int(match.group(1)), int(match.group(2))))
-        return rows
+        return NetUtils.listening_ports()
 
     @classmethod
     def get_pid_from_port(cls, port: int) -> Optional[int]:
@@ -1029,6 +1034,16 @@ class MayaConnection:
                 instance = QtWidgets.QApplication.instance()
                 if not instance:
                     print("Initializing QApplication...", flush=True)
+                    # No display to open (Linux over SSH, CI, a render node):
+                    # the xcb plug-in would abort the process from C++ -- no
+                    # exception to catch. Headless platforms, first found.
+                    if (
+                        sys.platform.startswith("linux")
+                        and not os.environ.get("QT_QPA_PLATFORM")
+                        and not os.environ.get("DISPLAY")
+                        and not os.environ.get("WAYLAND_DISPLAY")
+                    ):
+                        os.environ["QT_QPA_PLATFORM"] = "offscreen;minimal"
                     # Keep reference to avoid garbage collection
                     self._qapp = QtWidgets.QApplication([])
                 else:

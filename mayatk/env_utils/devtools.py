@@ -5,9 +5,12 @@ import re
 import sys
 import inspect
 import importlib
-import maya.cmds as cmds
-import maya.mel as mel
-import maya.OpenMayaUI as omui
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+    import maya.OpenMayaUI as omui
+except Exception:
+    cmds = mel = omui = None
 
 from qtpy import QtWidgets, QtCore
 
@@ -16,7 +19,7 @@ try:
 except ImportError:
     from shiboken2 import wrapInstance
 
-from pythontk.core_utils._core_utils import CoreUtils
+from pythontk import CoreUtils
 
 
 class DevTools(CoreUtils):
@@ -181,8 +184,15 @@ class DevTools(CoreUtils):
             # Also include the Maya install scripts directory
             maya_location = os.environ.get("MAYA_LOCATION", "")
             if maya_location:
-                for subdir in ("scripts", "Python/Lib"):
-                    p = os.path.join(maya_location, subdir)
+                import glob
+
+                # Maya's python library: Python/Lib on Windows, lib/python3.x
+                # on Linux.
+                for p in [
+                    os.path.join(maya_location, "scripts"),
+                    os.path.join(maya_location, "Python", "Lib"),
+                    *glob.glob(os.path.join(maya_location, "lib", "python3*")),
+                ]:
                     if os.path.isdir(p) and p not in root_paths:
                         root_paths.append(p)
         elif isinstance(root_paths, str):
@@ -221,9 +231,11 @@ class DevTools(CoreUtils):
                         if context > 0:
                             start = max(0, i - context)
                             end = min(len(all_lines), i + context + 1)
-                            entry["before"] = [l.rstrip() for l in all_lines[start:i]]
+                            entry["before"] = [
+                                ln.rstrip() for ln in all_lines[start:i]
+                            ]
                             entry["after"] = [
-                                l.rstrip() for l in all_lines[i + 1 : end]
+                                ln.rstrip() for ln in all_lines[i + 1 : end]
                             ]
                         results.append(entry)
                         if len(results) >= max_results:

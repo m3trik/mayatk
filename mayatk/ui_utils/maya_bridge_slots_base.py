@@ -18,7 +18,7 @@ Unity project).
 from __future__ import annotations
 
 from uitk.bridge import BridgeSlotsBase
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+from pythontk import HandoffScope, TooltipFormat
 
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -96,34 +96,44 @@ class MayaBridgeSlotsBase(BridgeSlotsBase):
         Marmoset / Substance / Rizom) resolves scope identically; the spec that
         drives it is :meth:`uitk.bridge.Parameters.scope_spec`, shared with
         blendertk's mirror (``BlenderBridgeSlotsBase.resolve_scope_objects``).
+        The precedence (the fallbacks above) is :class:`pythontk.HandoffScope`'s;
+        this supplies only Maya's scene reads.
         """
         import maya.cmds as cmds
 
-        if scope == "all":
+        def scene_hook():
             # Prefer the bridge's whole-scene hook (``MayaExportMixin
             # ._scene_objects``: DAG roots minus startup cameras) -- the same
             # set ``save_as`` ships. A mesh-only query here silently flattens
             # the scene graph on the far side: group/locator transforms never
             # reach the exporter, so every child re-roots (live report on the
-            # Blender mirror). Bridges without the hook (RPC bakers) keep the
-            # renderable-geometry set -- for them "the scene" IS its meshes.
-            # getattr, not self.bridge: the fallback below is documented for slots
+            # Blender mirror). Bridges without the hook (RPC bakers) answer
+            # ``None`` and keep the renderable-geometry set below -- for them
+            # "the scene" IS its meshes.
+            # getattr, not self.bridge: the fallback is documented for slots
             # whose bridge has no whole-scene hook, and a panel that has not built
             # its bridge yet has no ``.bridge`` AT ALL -- reaching for it directly
             # turns that case into an AttributeError instead of the fallback.
             bridge = getattr(self, "bridge", None)
-            scene = bridge._scene_objects() if bridge is not None else None
-            if scene is not None:
-                return scene
-            return cmds.ls(type="mesh", noIntermediate=True, long=True) or []
-        if scope == "visible":
-            # The engines' hook, same as "all" above -- but unconditionally,
-            # because it is a STATICMETHOD that consults only the scene. A
-            # bridge without the mixin therefore still gets the real answer
-            # instead of a second, drifting copy of it here (this WAS that
-            # copy; the preview bridge needed the same read and two would have
-            # been three).
+            return bridge._scene_objects() if bridge is not None else None
+
+        def visible():
+            # The engines' hook, same as "all" -- but unconditionally, because
+            # it is a STATICMETHOD that consults only the scene. A bridge
+            # without the mixin therefore still gets the real answer instead of
+            # a second, drifting copy of it here (this WAS that copy; the
+            # preview bridge needed the same read and two would have been
+            # three).
             from mayatk.env_utils.handoff_export import MayaExportMixin
 
             return MayaExportMixin._visible_objects()
-        return cmds.ls(selection=True, long=True) or []
+
+        return HandoffScope.resolve(
+            scope,
+            selected=lambda: cmds.ls(selection=True, long=True) or [],
+            all=(
+                scene_hook,
+                lambda: cmds.ls(type="mesh", noIntermediate=True, long=True) or [],
+            ),
+            visible=visible,
+        )

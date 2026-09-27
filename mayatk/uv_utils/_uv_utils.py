@@ -1127,14 +1127,38 @@ class UvUtils(ptk.HelpMixin):
     def _analyze_seams(cls, mesh, camera=None, **seam_options):
         """Run the band-based seamer on *mesh*; the returned seamer carries the
         cut set (``.cuts``) and the decomposition the unfold seed needs.
-        ``seam_options`` are :meth:`_CylinderSeamsInternal.seams`' keywords
+        ``seam_options`` are :meth:`pythontk.CylinderSeams.seams`' keywords
         (``angle``, ``taper_angle``, ``invert_seam``, ``flat_angle``,
         ``trim_ratio``); ``camera`` is resolved to an eye position first."""
-        from mayatk.uv_utils._cylinder_seams import _CylinderSeamsInternal
-
-        seamer = _CylinderSeamsInternal.from_mesh(str(mesh))
+        seamer = ptk.CylinderSeams(*cls._seam_mesh_arrays(mesh))
         seamer.seams(camera=cls._camera_eye(camera), **seam_options)
         return seamer
+
+    @staticmethod
+    def _seam_mesh_arrays(mesh) -> tuple:
+        """Read a mesh (transform or shape name / path) into the plain arrays
+        :class:`pythontk.CylinderSeams` takes: ``(points, faces, edges, hard)``.
+
+        Points are world space; the edge table is Maya's own, so the seam ids
+        the seamer returns are the mesh's ``e[i]`` indices.
+        """
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(str(mesh))
+        dag = sel.getDagPath(0)
+        dag.extendToShape()
+        fn = om.MFnMesh(dag)
+        points = [(p.x, p.y, p.z) for p in fn.getPoints(om.MSpace.kWorld)]
+        faces = [list(fn.getPolygonVertices(f)) for f in range(fn.numPolygons)]
+        edges = [tuple(fn.getEdgeVertices(e)) for e in range(fn.numEdges)]
+        hard = []
+        it = om.MItMeshEdge(dag)
+        while not it.isDone():
+            if not it.isSmooth:
+                hard.append(it.index())
+            it.next()
+        return points, faces, edges, hard
 
     @staticmethod
     def _camera_eye(camera):
@@ -1354,15 +1378,31 @@ class UvUtils(ptk.HelpMixin):
         brute_force: bool = False,
         preserve_3d: bool = True,
         padding: Optional[float] = None,
+        engine: str = "xatlas",
+        pre_rotate: int = 0,
+        rotate_step: int = 0,
+        rotate_min: int = 0,
+        rotate_max: int = 0,
+        mutations: int = 1,
+        scale_mode: int = 2,
+        tiles: Tuple[int, int] = (1, 1),
     ):
-        """Pack existing UV shells with the external xatlas engine.
+        """Pack existing UV shells into a UDIM tile (or a grid of tiles).
 
         The pack-only counterpart of :meth:`auto_unwrap`: shells are taken as
-        they are (never re-cut) and packed together into the target UDIM tile.
-        In-process round trip — UV/triangle arrays go to
-        :class:`pythontk.UvPack`, and each shell's solved similarity transform
-        comes back through ``cmds.polyEditUV``, so the whole pack is a single
-        undoable edit and a mesh either packs whole or reports and stays put.
+        they are (never re-cut) and packed together into the target UDIM tile,
+        by one of two engines sharing the scope, tile and gutter rules:
+
+        - ``"xatlas"`` (default) -- the optional external engine. In-process
+          round trip: UV/triangle arrays go to :class:`pythontk.UvPack`, and
+          each shell's solved similarity transform comes back through
+          ``cmds.polyEditUV``, so the whole pack is a single undoable edit and
+          a mesh either packs whole or reports and stays put.
+        - ``"u3d"`` -- Maya's native ``u3dLayout`` (the Pack tool's Standard
+          method). All meshes pack in one batch; when that fails with several,
+          each is probed to isolate the bad one(s) and the survivors re-pack
+          together. A tile grid (*tiles*) is dealt here, area-balanced, and each
+          tile packed in place: u3dLayout's own Distribute mode stacks shells.
 
         Parameters:
             objects (str/obj/list): Mesh(es) *or* components to pack. None uses
@@ -1394,22 +1434,57 @@ class UvUtils(ptk.HelpMixin):
                 relative UV scale (Preserve UV).
             padding (float): Island gutter in pixels. None derives it from
                 *map_size* via :meth:`calculate_uv_padding`.
+            engine (str): ``"xatlas"`` or ``"u3d"`` (see above).
+            pre_rotate (int): u3d only -- ``-preRotateMode``: 0 Off,
+                1 Horizontal, 2 Vertical, 3-5 Axis X/Y/Z to V.
+            rotate_step, rotate_min, rotate_max (int): u3d only -- the
+                packing-time rotation search, active only when
+                ``rotate_max > rotate_min`` (independent of *pre_rotate*).
+                xatlas' equivalent is *rotate*.
+            mutations (int): u3d only -- optimization passes (emitted when > 1).
+            scale_mode (int): u3d only -- ``-layoutScaleMode``: 2 uniform
+                scale-to-fill (default), 1 no scaling (keep texel density;
+                overflow spills to the next tile), 3 non-uniform stretch.
+            tiles (tuple): u3d only -- ``(tiles_u, tiles_v)``: a grid of UDIM
+                tiles anchored at *udim*, extending right/up. Coverage is forced
+                Full under a grid, and ``tiles_u`` is clamped so the grid stays
+                inside the UDIM row (the result's ``tiles`` says what ran).
 
         Returns:
             (PackUvsResult): ``engine``, ``succeeded``, ``failed``
-            ``(mesh, reason)`` pairs, the packed atlas dimensions, and
-            ``targets`` — what actually packed (the scoped face components, or
-            the mesh) for the meshes that succeeded, ready to measure the
-            resulting texel density against. Truthy when at least one mesh
-            packed.
+            ``(mesh, reason)`` pairs, the packed atlas dimensions (xatlas),
+            ``tiles`` (the grid actually packed), and ``targets`` — what
+            actually packed (the scoped face components, or the mesh) for the
+            meshes that succeeded, ready to measure the resulting texel density
+            against. Truthy when at least one mesh packed.
 
         Raises:
             RuntimeError: The xatlas Python package isn't installed in this
                 interpreter. The message carries the pip install command.
-            ValueError: No meshes given/selected.
+            ValueError: No meshes (xatlas) / no UVs (u3d) given or selected, or
+                an unknown *engine*.
         """
-        from mayatk.uv_utils._uv_pack import _UvPackInternal
+        from mayatk.uv_utils._uv_pack import _U3dPackInternal, _UvPackInternal
 
+        if engine == "u3d":
+            return _U3dPackInternal.run(
+                cls,
+                objects=objects,
+                map_size=map_size,
+                udim=udim,
+                coverage=coverage,
+                preserve_3d=preserve_3d,
+                padding=padding,
+                pre_rotate=pre_rotate,
+                rotate_step=rotate_step,
+                rotate_min=rotate_min,
+                rotate_max=rotate_max,
+                mutations=mutations,
+                scale_mode=scale_mode,
+                tiles=tiles,
+            )
+        if engine != "xatlas":
+            raise ValueError(f"Unknown pack engine {engine!r}: 'xatlas' or 'u3d'.")
         return _UvPackInternal.run(
             cls,
             objects=objects,
@@ -1421,6 +1496,25 @@ class UvUtils(ptk.HelpMixin):
             preserve_3d=preserve_3d,
             padding=padding,
         )
+
+    @staticmethod
+    def classify_unfold3d_error(error) -> str:
+        """A short, human-readable reason for an Unfold3D failure.
+
+        Condenses the ``RuntimeError`` a ``u3dLayout`` / ``u3dUnfold`` /
+        ``u3dOptimize`` call raises into a phrase fit for a message box:
+        "non-manifold vertices", "overlapping UVs", or the first line of the
+        message (at most 50 characters).
+
+        Parameters:
+            error (Exception): The raised error.
+
+        Returns:
+            str: The reason.
+        """
+        from mayatk.uv_utils._uv_pack import _U3dPackInternal
+
+        return _U3dPackInternal.classify_error(error)
 
     @classmethod
     def analyze_uv_budget(
@@ -1587,7 +1681,7 @@ class UvUtils(ptk.HelpMixin):
         ``shellSpacing`` is already normalized, so resolution only sets pack
         precision, not the gap. Cap it well below *map_size* to stay fast.
         """
-        cmds.loadPlugin("Unfold3D.mll", quiet=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
         pad = cls.calculate_uv_padding(map_size, normalize=True)
         uvs = cmds.polyListComponentConversion(mesh, toUV=True) or []
         if not uvs:
@@ -1625,7 +1719,7 @@ class UvUtils(ptk.HelpMixin):
         can fold (or bail out on) a shell whose seed doubles back on itself --
         both routine after sewing a stale projection shut and cutting fresh
         seams. The seamer already knows the mesh as strips and rings, so the
-        seed it hands over (:meth:`_CylinderSeamsInternal.seed_uvs`) is the
+        seed it hands over (:meth:`pythontk.CylinderSeams.seed_uvs`) is the
         developed shape itself: each strip unrolled from its seam, each
         annulus / disc unrolled radially. It is written per UV id with
         ``polyEditUV`` -- undo-captured, and folded into a single
@@ -1758,7 +1852,7 @@ class UvUtils(ptk.HelpMixin):
                 seamers[m] = seamer
         seamed = list(seamers)
         if unfold and seamed:
-            cmds.loadPlugin("Unfold3D.mll", quiet=True)
+            cmds.loadPlugin("Unfold3D", quiet=True)
             # Unfold each mesh on its own: a mesh u3dUnfold rejects (e.g. one
             # with "non-manifold UVs") then only skips itself -- a single batched
             # unfold would abort the whole selection on the first bad mesh.

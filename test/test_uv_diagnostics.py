@@ -504,7 +504,7 @@ class TestNonManifoldUvs(MayaTkTestCase):
         from mayatk import load_plugin
 
         try:
-            load_plugin("Unfold3D.mll")
+            load_plugin("Unfold3D")
         except Exception:
             self.skipTest("Unfold3D plugin unavailable")
         xform, shape = self._make_corrupt_strip()

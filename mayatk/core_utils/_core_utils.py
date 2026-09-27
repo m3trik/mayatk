@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-from typing import List, Callable, Any, Tuple, Optional
+from typing import List, Callable, Any, Dict, Tuple, Optional, Union
 from functools import wraps
 import contextlib
 import inspect
@@ -326,6 +326,59 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
                     cmds.select(survivors, replace=True, noExpand=True)
                 else:
                     cmds.select(clear=True)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def temp_option_vars(values: Dict[str, Union[int, float, str]]):
+        """Set Maya optionVars for a block, then put the user's values back.
+
+        For driving a stock MEL command that reads its settings from optionVars
+        (``performPolyExtrude``, ``createRenderNodeCB``) with the caller's
+        values, without changing the preferences Maya saves. A var that did not
+        exist before is removed again rather than left at the block's value.
+        The restore is guarded -- logged, never raised (:meth:`teardown_guard`),
+        so it cannot mask the body's own error.
+
+        Parameters:
+            values: ``{name: value}``; an int or bool is stored with
+                ``intValue``, a float with ``floatValue``, a str with
+                ``stringValue``.
+
+        Raises:
+            TypeError: A value is not an int, float or str, or a var already
+                holds an array (a scalar would replace it). Nothing is set.
+
+        Example:
+            >>> with CoreUtils.temp_option_vars({"polyKeepFacetsGrouped": 0}):
+            ...     mel.eval("PolyExtrude")
+        """
+        flags = {int: "intValue", float: "floatValue", str: "stringValue"}
+
+        def flag(value):
+            kind = int if isinstance(value, bool) else type(value)
+            if kind not in flags:
+                raise TypeError(f"optionVar value {value!r} is not int, float or str")
+            return flags[kind]
+
+        for value in values.values():
+            flag(value)
+        saved = {n: cmds.optionVar(q=n) for n in values if cmds.optionVar(exists=n)}
+        arrays = [n for n, v in saved.items() if isinstance(v, list)]
+        if arrays:
+            raise TypeError(
+                f"optionVars {arrays} hold arrays; a scalar would replace them"
+            )
+        try:
+            for name, value in values.items():
+                cmds.optionVar(**{flag(value): (name, value)})
+            yield
+        finally:
+            with CoreUtils.teardown_guard(logging.getLogger(__name__), "optionVars"):
+                for name in values:
+                    if name in saved:
+                        cmds.optionVar(**{flag(saved[name]): (name, saved[name])})
+                    else:
+                        cmds.optionVar(remove=name)
 
     @staticmethod
     def undoable(fn=None, *, name: str = "", suspend_refresh: bool = False):

@@ -4,8 +4,11 @@ This module provides functionality for creating various primitive objects
 with flexible parameter handling.
 """
 
-import maya.cmds as cmds
-import maya.mel as mel
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 import math
 from typing import Optional, List
 

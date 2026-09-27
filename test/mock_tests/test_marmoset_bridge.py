@@ -587,24 +587,34 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
         be size-verified. That store is age-swept on a later bake, so a
         material wired to it loses the texture with no further warning.
         """
+        out = self._native("proj", "out")
+        scratch = self._native("Temp", "marmoset_bake_1234")
         outputs = [
-            r"C:\proj\out\FLOOR_mat_Base_Color.png",
-            r"C:\Temp\marmoset_bake_1234\FLOOR_mat_Normal.png",  # scratch fallback
+            os.path.join(out, "FLOOR_mat_Base_Color.png"),
+            os.path.join(scratch, "FLOOR_mat_Normal.png"),  # scratch fallback
         ]
-        seen, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        seen, warnings = self._rewire(outputs, output_dir=out)
         joined = "\n".join(warnings)
         self.assertIn("FLOOR_mat_Normal.png", joined)
         self.assertIn("scratch", joined.lower())
+        self.assertNotIn("FLOOR_mat_Base_Color.png", joined)  # that one DID land
         # Still wired -- a map on disk beats no map; the warning is the point.
         self.assertEqual(len(seen[0]), 2)
 
     def test_rewire_is_quiet_when_every_map_landed_in_the_output_dir(self):
+        out = self._native("proj", "out")
         outputs = [
-            r"C:\proj\out\FLOOR_mat_Base_Color.png",
-            r"C:\proj\out\FLOOR_mat_Normal.png",
+            os.path.join(out, "FLOOR_mat_Base_Color.png"),
+            os.path.join(out, "FLOOR_mat_Normal.png"),
         ]
-        _, warnings = self._rewire(outputs, output_dir=r"C:\proj\out")
+        _, warnings = self._rewire(outputs, output_dir=out)
         self.assertEqual([w for w in warnings if "scratch" in w.lower()], [])
+
+    @staticmethod
+    def _native(*parts):
+        """An absolute path in this OS's own spelling: the landed-in-output check
+        compares real paths, and a ``C:\\`` fixture is a relative name on POSIX."""
+        return os.path.abspath(os.path.join(os.sep, *parts))
 
     # ------------------------------------------------------------------
     # Map filenames never pick up a suffix the first bake didn't give them
