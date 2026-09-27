@@ -16,8 +16,8 @@ from mayatk import NodeUtils, UvUtils
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.env_utils.fbx_utils import FbxUtils
-from pythontk.core_utils.app_launcher import AppLauncher
-from pythontk.str_utils._str_utils import StrUtils
+from pythontk import AppLauncher
+from pythontk import StrUtils
 
 _PKG_DIR = Path(__file__).resolve().parent
 _TEMPLATE_DIR = _PKG_DIR / "templates"

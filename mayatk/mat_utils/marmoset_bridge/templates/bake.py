@@ -15,7 +15,7 @@ meshes' wired materials, one texture set per material, into production
 image files (PNG/TGA/PSD) in the Output Dir."""
 
 # Bridge metadata -- consumed by MarmosetEngine before substitution. The mode strings are
-# the ecosystem-wide vocabulary from ``pythontk.core_utils.script_template``, not a
+# the ecosystem-wide vocabulary from ``pythontk.core_utils.handoff.script_template``, not a
 # per-bridge dialect.
 #   send_to    = open Toolbag with the baker set up; user clicks Bake themselves.
 #   round_trip = bake headless and let the host re-collect the resulting maps.

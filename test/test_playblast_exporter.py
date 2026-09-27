@@ -202,6 +202,27 @@ class TestPlayblastExporter(MayaTkTestCase):
         with self.assertRaises(ValueError):  # extension/format mismatch
             exporter.capture_movie(os.path.join(self.tmp, "x.mov"), fmt="avi")
 
+    def test_a_format_this_maya_lacks_is_refused_before_capturing(self):
+        """AVI playblast is Windows-only: Linux Maya's ``playblast`` offers no
+        ``avi``, and the AVI target failed inside the capture instead of
+        saying so."""
+        from unittest import mock
+
+        import mayatk.anim_utils.playblast_exporter as module
+
+        real = module.cmds.playblast
+
+        def linux_formats(*args, **kwargs):
+            if kwargs.get("query") and kwargs.get("format"):
+                return ["image", "qt"]
+            return real(*args, **kwargs)
+
+        with mock.patch.object(module.cmds, "playblast", side_effect=linux_formats):
+            with self.assertRaisesRegex(RuntimeError, "cannot playblast 'avi'"):
+                PlayblastExporter().capture_movie(
+                    os.path.join(self.tmp, "x.avi"), fmt="avi"
+                )
+
     def test_invalid_camera_raises(self):
         exporter = PlayblastExporter()
         with self.assertRaises(ValueError):

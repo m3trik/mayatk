@@ -11,7 +11,7 @@ except ImportError as error:
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
-from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
+from mayatk.anim_utils.blendshape_animator.history import BlendshapeHistory
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.target import Targets
 
@@ -25,7 +25,7 @@ class Recovery(ptk.LoggingMixin):
         """Rebuild corrupted blendShape animation."""
         cls.logger.info("=== RECOVERY: Fixing corrupted animation ===")
 
-        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHistory.list_history(base_mesh, type_filter="blendShape")
         if not history:
             cls.logger.error("No blendShape found to fix")
             return False
@@ -120,7 +120,7 @@ class Recovery(ptk.LoggingMixin):
         if not cls.fix_corrupted_animation(base_mesh, target_mesh):
             return False
 
-        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHistory.list_history(base_mesh, type_filter="blendShape")
         if history:
             new_blendshape = history[0]
             count = Targets.update_all_references(new_blendshape, base_mesh)

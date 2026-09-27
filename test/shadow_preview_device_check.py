@@ -36,7 +36,7 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import pythontk as ptk  # noqa: E402
-from mayatk.rig_utils.shadow_preview import ShadowPreview  # noqa: E402
+from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview  # noqa: E402
 
 DEVICES = {
     "dx11": "VirtualDeviceDx11",
@@ -58,7 +58,7 @@ sys.path[:0] = [r"__REPO__", r"__PTK__"]
 import maya.cmds as cmds
 import numpy as np
 from mayatk.rig_utils.shadow_rig import ShadowRig
-from mayatk.rig_utils.shadow_preview import ShadowPreview
+from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
 
 out = {"device_info": [str(l) for l in cmds.ogs(q=True, deviceInformation=True)]}
 out["device"] = ShadowPreview.device()

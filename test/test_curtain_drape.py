@@ -1,8 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for mayatk.edit_utils._curtain_drape (CurtainDrape) — the pure
+"""Tests for mayatk.edit_utils.curtain._curtain_drape (CurtainDrape) — the pure
 draped-cloth engine behind the curtain tool. The DCC adapters (mayatk
-``CurtainMesh``, blendertk ``create_curtain``) only build a mesh from
+``CurtainMesh``, blendertk ``CurtainMesh``) only build a mesh from
 :meth:`CurtainDrape.grid_points`, so the drape behavior is pinned here once.
 The module is a vendored twin (code-identical in mayatk and blendertk,
 guarded by extapps' ``test_vendor_sync.py``), so these tests cover both
@@ -16,7 +16,7 @@ import unittest
 
 from pythontk import Polyline
 
-from mayatk.edit_utils._curtain_drape import CurtainDrape
+from mayatk.edit_utils.curtain._curtain_drape import CurtainDrape
 
 STRAIGHT = [(0.0, 0.0, 0.0), (6.0, 0.0, 0.0)]
 

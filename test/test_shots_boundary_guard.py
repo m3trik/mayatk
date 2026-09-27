@@ -19,6 +19,11 @@ to "restore" a state the scene is already in.
 
 Measured 2026-09-16: three slots did exactly that (``on_shot_end_changed``,
 ``on_trim_empty``, ``on_trim_all_shots``), and blendertk's twin panel had ten.
+
+The engine those slots drive gets the same kind of structural guard here
+(:class:`TestSequencerAdapterHooks`; it imports the engine, which needs no Maya):
+a scene hook the Maya ``ShotSequencer`` stops overriding falls back to
+pythontk's empty-scene default without an error anywhere.
 """
 
 import ast
@@ -75,21 +80,28 @@ def _attr_calls(node):
     }
 
 
-def _reaching(path, target):
-    """Method names in *path* whose self-call graph reaches *target*."""
-    tree = _tree(path)
+def _reaching(paths, target):
+    """Method names in *paths* whose self-call graph reaches *target*.
+
+    Several paths are one class hierarchy: mayatk's ``ShotSequencer`` extends
+    pythontk's, which holds the orchestration that calls the Maya hooks.  A
+    name defined in more than one of them (an overridden hook) contributes
+    every definition's calls.
+    """
     graph = {}
-    for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
-        for fn in cls.body:
-            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                graph[fn.name] = {
-                    c.func.attr
-                    for c in ast.walk(fn)
-                    if isinstance(c, ast.Call)
-                    and isinstance(c.func, ast.Attribute)
-                    and isinstance(c.func.value, ast.Name)
-                    and c.func.value.id == "self"
-                }
+    for path in paths:
+        tree = _tree(path)
+        for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            for fn in cls.body:
+                if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    graph.setdefault(fn.name, set()).update(
+                        c.func.attr
+                        for c in ast.walk(fn)
+                        if isinstance(c, ast.Call)
+                        and isinstance(c.func, ast.Attribute)
+                        and isinstance(c.func.value, ast.Name)
+                        and c.func.value.id == "self"
+                    )
     reach = {target}
     changed = True
     while changed:
@@ -114,9 +126,16 @@ class TestRefusingCallsAreGuarded(unittest.TestCase):
         )
         if not os.path.isfile(engine):
             self.skipTest("engine module not found")
+        # The DCC-free orchestration the Maya class extends (its public
+        # methods reach _reconcile_boundaries through the Maya hooks).
+        import inspect
+
+        import pythontk as ptk
+
+        core = inspect.getsourcefile(ptk.ShotSequencer)
         derived = {
             n
-            for n in _reaching(engine, "_reconcile_boundaries")
+            for n in _reaching([engine, core], "_reconcile_boundaries")
             if not n.startswith("_")
         }
         self.assertEqual(
@@ -148,6 +167,75 @@ class TestRefusingCallsAreGuarded(unittest.TestCase):
             "these slots can be refused but do not route through "
             "_boundary_edit, so the refusal escapes to Qt and strands the "
             "restore point: %s" % offenders,
+        )
+
+
+class TestSequencerAdapterHooks(unittest.TestCase):
+    """The Maya ``ShotSequencer`` supplies the scene hooks pythontk leaves empty.
+
+    ``pythontk.ShotSequencer`` reaches the scene only through the hooks on
+    ``_ShotSequencerHooks``, and each default describes an EMPTY scene: no
+    keys, no audio, nothing to hold. A hook this adapter does not override is
+    therefore no error anywhere -- the panel's edits silently move bounds only.
+    blendertk's twin guard is in its ``test_shots_slots.py``.
+    """
+
+    #: Hooks inherited on purpose (none: the Maya adapter overrides them all).
+    INHERITED = frozenset()
+
+    @staticmethod
+    def _classes():
+        """``(adapter, pythontk's ShotSequencer, its hook defaults)``."""
+        import pythontk as ptk
+        from pythontk.core_utils.engines.shots.shot_sequencer import (
+            _ShotSequencerHooks,
+        )
+
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        return ShotSequencer, ptk.ShotSequencer, _ShotSequencerHooks
+
+    def test_every_hook_default_is_overridden(self):
+        adapter, core, defaults = self._classes()
+        hooks = {
+            n for n in vars(defaults) if not (n.startswith("__") and n.endswith("__"))
+        } - {"STORE_CLASS"}
+        self.assertTrue(hooks, "no hooks read off _ShotSequencerHooks")
+        mro = adapter.__mro__
+        ahead = mro[: mro.index(core)]
+        inherited = {n for n in hooks if not any(n in vars(c) for c in ahead)}
+        self.assertEqual(
+            [],
+            sorted(inherited - self.INHERITED),
+            "these hooks resolve to pythontk's empty-scene default, so every "
+            "operation reaching them edits bounds only",
+        )
+        self.assertEqual(
+            [],
+            sorted(self.INHERITED - inherited),
+            "listed in INHERITED but overridden now (or no longer a hook): "
+            "drop them from INHERITED",
+        )
+
+    def test_no_maya_base_sits_behind_the_hook_defaults(self):
+        """A helper base listed after pythontk's class is shadowed by it: a hook
+        implemented on an ``_<Class>Internal`` base (the house home for
+        helpers) would resolve to the pythontk no-op instead. blendertk's
+        bases had exactly that order until 2026-09-27."""
+        adapter, core, _ = self._classes()
+        mro = adapter.__mro__
+        behind = [
+            c.__qualname__
+            for c in mro[mro.index(core) :]
+            if c.__module__.partition(".")[0] == "mayatk"
+        ]
+        self.assertEqual(
+            [],
+            behind,
+            "these mayatk bases come after pythontk's ShotSequencer in the "
+            "MRO, so its hook defaults shadow anything they define",
         )
 
 

@@ -4,6 +4,8 @@ import logging
 import math
 from typing import List, Dict, Optional, Union, Any, Tuple, Callable
 
+import pythontk as ptk
+
 try:
     import maya.cmds as cmds
 except ImportError as error:
@@ -823,76 +825,62 @@ class SegmentKeys(SegmentKeysInfo):
 
     @staticmethod
     def _group_by_overlap(
-        segments: List[Dict[str, Any]], inclusive: bool = False
+        segments: List[Dict[str, Any]],
+        inclusive: bool = False,
+        dedupe_objects: bool = True,
     ) -> List[Dict[str, Any]]:
         """Group segments with overlapping time ranges.
+
+        The sweep is ``ptk.ShotDetection.cluster_spans`` (the ecosystem's one
+        key-timing grouping); this merges each cluster into a group dict.
 
         Args:
             segments: List of segments to group.
             inclusive: If True, touching segments (end == start) are merged.
                 If False (default), they are treated as separate groups.
+            dedupe_objects: List each object once in a group's ``objects``
+                (default). ``False`` keeps one entry per member -- the
+                ``AnimUtils._group_overlapping_keyframes`` contract.
         """
-        if not segments:
-            return []
+        # Inclusive also bridges the small epsilon seams collect_segments
+        # leaves (exclude_next_start uses 1e-3, so the tolerance is slightly more).
+        clusters = ptk.ShotDetection.cluster_spans(
+            segments, gap=2e-3 if inclusive else 0.0, inclusive=inclusive
+        )
+        return [
+            SegmentKeys._merge_group(members, dedupe_objects) for members in clusters
+        ]
 
-        # Sort by start frame
-        sorted_segments = sorted(segments, key=lambda x: x["start"])
+    @staticmethod
+    def _merge_group(
+        members: List[Dict[str, Any]], dedupe_objects: bool = True
+    ) -> Dict[str, Any]:
+        """Merge one start-ordered cluster of segments into a group dict.
 
-        groups = []
-        current_group = {
-            "objects": [sorted_segments[0]["obj"]],
-            "curves": list(sorted_segments[0].get("curves", [])),
-            "keyframes": sorted_segments[0]["keyframes"],
-            "start": sorted_segments[0]["start"],
-            "end": sorted_segments[0]["end"],
-            "duration": sorted_segments[0]["duration"],
-            "obj": sorted_segments[0]["obj"],
-            "sub_groups": [sorted_segments[0]],
+        A lone member keeps its own ``keyframes`` list and ``duration``; a
+        merged group gets the sorted union of keyframe times and the span
+        ``end - start``.
+        """
+        first = members[0]
+        group = {
+            "objects": [first["obj"]],
+            "curves": list(first.get("curves", [])),
+            "keyframes": first["keyframes"],
+            "start": first["start"],
+            "end": first["end"],
+            "duration": first["duration"],
+            "obj": first["obj"],
+            "sub_groups": [first],
         }
-
-        for i in range(1, len(sorted_segments)):
-            seg = sorted_segments[i]
-
-            # Check overlap based on inclusive flag
-            threshold = current_group["end"]
-            if inclusive:
-                # Allow for small epsilon gaps (e.g. from exclude_next_start)
-                # Epsilon used in collect_segments is 1e-3, so we use slightly more.
-                is_overlap = seg["start"] <= (threshold + 2e-3)
-            else:
-                is_overlap = seg["start"] < threshold
-
-            if is_overlap:
-                # Overlapping - merge into current group
-                if seg["obj"] not in current_group["objects"]:
-                    current_group["objects"].append(seg["obj"])
-                current_group["curves"].extend(seg.get("curves", []))
-                current_group["keyframes"] = sorted(
-                    set(current_group["keyframes"] + seg["keyframes"])
-                )
-                current_group["sub_groups"].append(seg)
-                current_group["end"] = max(current_group["end"], seg["end"])
-                current_group["duration"] = (
-                    current_group["end"] - current_group["start"]
-                )
-            else:
-                # Not overlapping - finalize current and start new
-                groups.append(current_group)
-                current_group = {
-                    "objects": [seg["obj"]],
-                    "curves": list(seg.get("curves", [])),
-                    "keyframes": seg["keyframes"],
-                    "start": seg["start"],
-                    "end": seg["end"],
-                    "duration": seg["duration"],
-                    "obj": seg["obj"],
-                    "sub_groups": [seg],
-                }
-
-        # Add the last group
-        groups.append(current_group)
-
-        return groups
+        for seg in members[1:]:
+            if not dedupe_objects or seg["obj"] not in group["objects"]:
+                group["objects"].append(seg["obj"])
+            group["curves"].extend(seg.get("curves", []))
+            group["keyframes"] = sorted(set(group["keyframes"] + seg["keyframes"]))
+            group["sub_groups"].append(seg)
+            group["end"] = max(group["end"], seg["end"])
+            group["duration"] = group["end"] - group["start"]
+        return group
 
     @staticmethod
     def _group_as_single(segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1303,18 +1291,13 @@ class SegmentKeys(SegmentKeysInfo):
         if not all_intervals:
             return ([], [], sorted(all_keyframe_times))
 
-        # Merge overlapping span intervals
-        all_intervals.sort(key=lambda x: x[0])
-        merged = []
-        current_start, current_end = all_intervals[0]
-        for i in range(1, len(all_intervals)):
-            next_start, next_end = all_intervals[i]
-            if next_start <= current_end:
-                current_end = max(current_end, next_end)
-            else:
-                merged.append((current_start, current_end))
-                current_start, current_end = next_start, next_end
-        merged.append((current_start, current_end))
+        # Merge overlapping / touching span intervals.
+        merged = [
+            (run[0][0], max(end for _start, end in run))
+            for run in ptk.ShotDetection.cluster_spans(
+                all_intervals, inclusive=True, span=lambda iv: iv
+            )
+        ]
 
         return (merged, [], sorted(all_keyframe_times))
 

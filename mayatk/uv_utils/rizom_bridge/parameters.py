@@ -22,13 +22,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-from uitk.bridge import AttributeSpec, Formatters, Parameters as _BridgeParams
-
-
-# Targets Lua scripts -- ``lua_literal`` produces lowercase ``true`` /
-# ``false`` and bare numeric / string literals suitable for inlining
-# into ``scripts/*.lua`` preset bodies.
-_FORMATTER = Formatters.lua_literal
+from uitk.bridge import (
+    AttributeSpec,
+    Formatters,
+    ParamRegistry,
+    Parameters as _BridgeParams,
+)
 
 
 # Display order is iteration order over this dict.
@@ -489,8 +488,20 @@ def _parse_version_literal(text: str) -> "tuple[int, ...]":
     return parsed if len(parsed) >= 2 else parsed + (0,) * (2 - len(parsed))
 
 
-class Parameters:
-    """Parameters — module namespace."""
+class Parameters(ParamRegistry):
+    """Parameters — module namespace.
+
+    Declared as data: :class:`uitk.bridge.ParamRegistry` supplies ``defaults``
+    over :data:`PARAMS`, and the Rizom rules below (includes, version gates,
+    derived gutter tokens) extend its ``referenced_keys`` / ``render_context``.
+    """
+
+    PARAMS = PARAMS
+
+    # Targets Lua scripts -- ``lua_literal`` produces lowercase ``true`` /
+    # ``false`` and bare numeric / string literals suitable for inlining
+    # into ``scripts/*.lua`` preset bodies.
+    FORMATTER = Formatters.lua_literal
 
     @staticmethod
     def expand_includes(script_text: str) -> str:
@@ -530,22 +541,15 @@ class Parameters:
         match = _PRESET_MIN_VERSION_RE.search(script_text or "")
         return _parse_version_literal(match.group(1)) if match else None
 
-    @staticmethod
-    def referenced_keys(script_text: str) -> "set[str]":
+    @classmethod
+    def referenced_keys(cls, script_text: str) -> "set[str]":
         """Registered keys present in *script_text* (delegates to uitk.bridge).
 
         Includes are expanded first so tokens living only inside a shared
         partial (``templates/pack_block.lua``) are still discovered for panel
         visibility.
         """
-        return _BridgeParams.referenced_keys(
-            Parameters.expand_includes(script_text), PARAMS
-        )
-
-    @staticmethod
-    def defaults() -> "dict[str, Any]":
-        """Return ``{key: default}`` for every registered parameter."""
-        return _BridgeParams.defaults(PARAMS)
+        return super().referenced_keys(cls.expand_includes(script_text))
 
     @staticmethod
     def derived_values(values: "dict[str, Any]") -> "dict[str, float]":
@@ -573,8 +577,8 @@ class Parameters:
         spacing_key, margin_key = DERIVED_KEYS
         return {spacing_key: spacing, margin_key: spacing / 2}
 
-    @staticmethod
-    def render_context(values: "dict[str, Any]") -> "dict[str, str]":
+    @classmethod
+    def render_context(cls, values: "dict[str, Any]") -> "dict[str, str]":
         """Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
 
         The derived gutter tokens are folded in LAST so they win over any
@@ -584,8 +588,8 @@ class Parameters:
         """
         merged = dict(HOST_TOKEN_DEFAULTS)
         merged.update(values)
-        merged.update(Parameters.derived_values(merged))
-        return _BridgeParams.render_context(merged, PARAMS, formatter=_FORMATTER)
+        merged.update(cls.derived_values(merged))
+        return super().render_context(merged)
 
     @staticmethod
     def strip_unsupported(script_text: str, version: "tuple[int, ...]") -> str:

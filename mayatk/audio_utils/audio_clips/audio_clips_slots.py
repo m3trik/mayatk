@@ -200,9 +200,11 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             )
             return
 
-        from mayatk.node_utils.attributes.channels import launch
+        from mayatk.node_utils.attributes.channels import ChannelsSlots
 
-        launch(sb=self.sb, targets=[carrier], filter="Custom", search="audio_clip_*")
+        ChannelsSlots.launch(
+            sb=self.sb, targets=[carrier], filter="Custom", search="audio_clip_*"
+        )
 
     # ------------------------------------------------------------------
     # Tracks combo

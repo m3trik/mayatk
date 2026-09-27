@@ -17,6 +17,11 @@ Painter-specific conveniences layered on the generic client:
   plugin's ``js.evaluate`` op (:func:`substance_painter.js.evaluate`).
 * :meth:`eval_py` -- exec Python source inside Painter (``system.eval``).
 * :meth:`reload_mesh` -- the reimport primitive (``mesh.reload``).
+
+**Vendored twin -- keep code-identical.** This file is duplicated at
+``mayatk/mat_utils/substance_bridge/substance_rpc/client.py`` (the SSoT: edit it there)
+and ``blendertk/mat_utils/substance_bridge/substance_rpc/client.py``; mirror every change
+into both. Drift fails ``extapps/test/test_vendor_sync.py``.
 """
 
 import os

@@ -6,7 +6,7 @@ The Maya half of the Maya<->Blender object hand-off (``mtk.BlenderBridge`` <-> `
 A thin :class:`pythontk.ScriptLaunchBridge` subclass: the shared ``send()`` skeleton (resolve ->
 preflight -> produce payload -> deliver), the template discovery / ``BRIDGE_MODES`` / ``__KEY__``
 substitution machinery, and the render-script-then-launch-a-fresh-app deliverer all live upstream in
-:mod:`pythontk.core_utils.app_handoff`. The Maya-side selection + FBX export come from
+:mod:`pythontk.core_utils.handoff.app_handoff`. The Maya-side selection + FBX export come from
 :class:`mayatk.env_utils.handoff_export.MayaExportMixin` (shared with the Unity bridge). This file
 owns only the Blender-specific bits, declared as a :class:`pythontk.ScriptLaunchSpec` dataclass
 (executable discovery + the ``--python`` launch args) plus the parameter bindings.
@@ -17,7 +17,7 @@ what used to be three near-identical templates) and ``bake_lightmaps`` -- plus a
 ``templates/*.py`` the user drops in, discovered the same way.
 
 Three delivery *modes* ride the one export pipeline (:attr:`spec` / :attr:`run_spec`, dispatched by
-``HandoffBridge.deliverers``, named by ``pythontk.core_utils.script_template``'s ecosystem-wide
+``HandoffBridge.deliverers``, named by ``pythontk.core_utils.handoff.script_template``'s ecosystem-wide
 constants): ``send_to`` launches an interactive Blender on the ``import`` template, while
 ``save_as`` and ``round_trip`` both run Blender headlessly and wait for an artifact. Those two
 share a spec and a deliverer because the mechanics are identical -- what differs is where the
@@ -50,8 +50,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pythontk as ptk
-from pythontk.core_utils import script_template as _templates
-from pythontk.core_utils.script_template import ROUND_TRIP, SAVE_AS, SEND_TO
+from pythontk import ROUND_TRIP, SAVE_AS, SEND_TO
 
 from mayatk.env_utils.handoff_export import MayaExportMixin
 
@@ -123,13 +122,21 @@ DEFAULTS: Dict[str, Any] = {
 # opens for the artist and Maya returns control immediately. A FRESH instance every time
 # (session-safety rule).
 _SPEC = ptk.ScriptLaunchSpec(
-    # ``$BLENDER_EXE`` / ``$BLENDER`` -> ``AppLauncher.find_app`` -> a scan of
-    # ``Program Files\\Blender Foundation\\Blender *`` (highest version wins).
+    # ``$BLENDER_EXE`` / ``$BLENDER`` -> ``AppLauncher.find_app`` (PATH, App
+    # Paths, the Linux application menu) -> a scan of every OS's install roots
+    # (highest version wins): Program Files, a Linux tarball under /opt,
+    # /usr/local or the home folder, macOS /Applications.
     app=ptk.AppSpec(
         name="Blender",
         env_vars=("BLENDER_EXE", "BLENDER"),
         app_names=("blender",),
-        scan_globs=(r"{program_files}\Blender Foundation\Blender *\blender.exe",),
+        scan_globs=(
+            r"{program_files}\Blender Foundation\Blender *\blender.exe",
+            "/opt/blender*/blender",
+            "/usr/local/blender*/blender",
+            "~/blender-*/blender",
+            "/Applications/Blender*.app/Contents/MacOS/Blender",
+        ),
         not_found_msg=(
             "Blender executable not found. Install Blender or set $BLENDER_EXE / "
             "BlenderBridge.blender_path."
@@ -173,7 +180,7 @@ _RUN_SPEC = ptk.ScriptLaunchSpec(
 
 
 # Module-level template discovery -- kept so the slots (and tests) can list templates without a
-# live engine. Thin wrappers over the shared :mod:`pythontk.core_utils.script_template` helpers.
+# live engine. Thin wrappers over the shared :mod:`pythontk.core_utils.handoff.script_template` helpers.
 
 
 class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
@@ -1866,7 +1873,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     @staticmethod
     def list_templates() -> List[Path]:
         """User-visible templates in ``templates/`` (skips underscore-prefixed)."""
-        return _templates.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
+        return ptk.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
 
     #: Modes a user-visible template may declare — DERIVED from the specs that serve
     #: them, never restated. The helpers filter declarations against this and silently
@@ -1883,14 +1890,14 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     @classmethod
     def template_modes(cls, template_path: Path) -> Tuple[str, ...]:
         """Modes a template declares via ``BRIDGE_MODES``; ``("send_to",)`` fallback."""
-        return _templates.ScriptTemplate.template_modes(
+        return ptk.ScriptTemplate.template_modes(
             template_path, cls.template_modes_allowed
         )
 
     @classmethod
     def list_template_modes(cls) -> List[Tuple[str, str]]:
         """``[(stem, mode), ...]`` for every (template, mode) pairing."""
-        return _templates.ScriptTemplate.list_template_modes(
+        return ptk.ScriptTemplate.list_template_modes(
             _TEMPLATE_DIR, ".py", cls.template_modes_allowed
         )
 
@@ -1914,7 +1921,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         reader, deliberately: the mode-flavoured one folds legacy spellings, which has
         no business touching an extension or a timeout.
         """
-        declared = _templates.ScriptTemplate.declared_values(template_path, field)
+        declared = ptk.ScriptTemplate.declared_values(template_path, field)
         return declared[0] if declared else None
 
     @classmethod

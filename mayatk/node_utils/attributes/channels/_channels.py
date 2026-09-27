@@ -8,7 +8,10 @@ The companion ``channels_slots`` module wraps this class in a
 Switchboard UI.
 """
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes

@@ -7,8 +7,11 @@ inspecting, editing, locking, and managing Maya node attributes.
 Delegates all non-UI logic to :class:`Channels`.
 """
 
-import maya.cmds as cmds
-import maya.mel as mel
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 
 from qtpy import QtCore, QtWidgets
 from uitk.managers.field_visibility import FieldVisibility
@@ -220,8 +223,43 @@ class ChannelsSlots:
         # Wire compact-mode footer (edit page + target-toggle button).
         self._setup_compact_footer()
 
+    @staticmethod
+    def launch(sb=None, targets=None, filter=None, search=None):
+        """Open the Channels UI, optionally pre-targeted.
+
+        Parameters:
+            sb (Switchboard | None): The caller's switchboard (typically
+                ``self.sb`` from a sibling slots context).  When given, the UI
+                is shown via tentacle's ``marking_menu`` handler so it
+                integrates with the existing UI registry.  When ``None``, a
+                standalone Switchboard is created (useful for ``__main__``
+                testing only -- inside tentacle, always pass ``sb``).
+            targets (list[str] | None): Node names to pin.  ``None`` clears any
+                existing pin.
+            filter (str | None): :attr:`Channels.FILTER_MAP` key to select on
+                open.
+            search (str | None): Text-filter pattern to pre-populate the search
+                field.  Pass ``""`` to clear.
+
+        Returns:
+            The shown ``channels`` UI.
+        """
+        if sb is None:
+            from uitk import Switchboard
+
+            sb = Switchboard(ui_source="channels.ui", slot_source=ChannelsSlots)
+            ui = sb.loaded_ui.channels
+            ui.show(pos="screen")
+        else:
+            ui = sb.handlers.marking_menu.show("channels")
+
+        slots = sb.get_slots_instance(ui)
+        if slots is not None:
+            slots.apply_launch_config(targets=targets, filter=filter, search=search)
+        return ui
+
     def apply_launch_config(self, targets=None, filter=None, search=None):
-        """Configure the window from a :func:`launch` call.
+        """Configure the window from a :meth:`launch` call.
 
         Safe to call repeatedly — applies pin/filter/search to the
         already-constructed UI.  Pass ``targets=None`` to clear a pin.

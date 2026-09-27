@@ -24,6 +24,11 @@ Consumers can react to output with either:
 
 Session safety: :class:`SubstanceConnection` always launches a NEW Painter
 process. Connecting to an existing session is intentionally not supported.
+
+**Vendored twin -- keep code-identical.** This file is duplicated at
+``mayatk/mat_utils/substance_bridge/connection.py`` (the SSoT: edit it there)
+and ``blendertk/mat_utils/substance_bridge/connection.py``; mirror every change
+into both. Drift fails ``extapps/test/test_vendor_sync.py``.
 """
 
 import os
@@ -31,11 +36,11 @@ import subprocess
 from typing import Optional, List
 
 import pythontk as ptk
-from pythontk.core_utils.app_launcher import AppLauncher
+from pythontk import AppLauncher
 
 # Generic stream/tail machinery is pythontk's app-agnostic mechanism; this
 # module keeps only the Painter-specific shell that composes it.
-from pythontk.core_utils.process_stream import LogTailer, OutputStream, ProcessReader
+from pythontk import LogTailer, OutputStream, ProcessReader
 
 # PainterRpcClient now lives in the sibling substance_rpc/ namespace.
 # SubstanceConnection re-uses it (and DEFAULT_RPC_PORT) below, so the
@@ -53,6 +58,12 @@ APP = ptk.AppSpec(
         "Adobe Substance 3D Painter",
         "Adobe Substance 3D Painter.exe",
         "Painter",
+    ),
+    # Linux installs to /opt/Adobe (system) or ~/Adobe, on no PATH; ``?`` takes
+    # the space or underscore either spelling uses.
+    scan_globs=(
+        "/opt/Adobe/Adobe?Substance?3D?Painter/Adobe?Substance?3D?Painter",
+        "~/Adobe/Adobe?Substance?3D?Painter/Adobe?Substance?3D?Painter",
     ),
     not_found_msg=(
         "Adobe Substance 3D Painter not found. Install it, or pass an explicit "
@@ -295,9 +306,13 @@ class SubstanceConnection(ptk.LoggingMixin):
         """Return the standard Substance Painter log path, or None if absent.
 
         Painter writes to ``%LOCALAPPDATA%\\Adobe\\Adobe Substance 3D Painter\\log.txt``
-        on Windows.
+        on Windows; on Linux, Qt's matching app-data folder under
+        ``$XDG_DATA_HOME`` (``~/.local/share``).
         """
-        local = os.environ.get("LOCALAPPDATA")
+        if os.name == "nt":
+            local = os.environ.get("LOCALAPPDATA")
+        else:
+            local = ptk.UserConfig.xdg_home("data")
         if not local:
             return None
         path = os.path.join(local, "Adobe", "Adobe Substance 3D Painter", "log.txt")

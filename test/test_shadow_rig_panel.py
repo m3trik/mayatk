@@ -270,7 +270,7 @@ class TestRigType(_PanelCase):
         setting: disabled with no Horizon rig, enabled once one is
         committed, checked only while a preview stands, and back to
         disabled when the rig is deleted through the panel."""
-        from mayatk.rig_utils.shadow_preview import ShadowPreview
+        from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
 
         box = self.ui.chk_horizon_preview
         self.slots.chk_horizon_preview_init(box)

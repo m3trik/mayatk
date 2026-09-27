@@ -2,7 +2,8 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-7802%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-7794%20passed-brightgreen.svg)](../test/)
+![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
 
@@ -176,8 +177,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 Format specs (co-located with the code that consumes them):
 
-- **[Shot-manifest behaviors](../mayatk/anim_utils/shots/shot_manifest/behaviors/BEHAVIOR_FORMAT.md)** — behavior file format for the shot manifest.
-- **[Shot-manifest mapping](../mayatk/anim_utils/shots/shot_manifest/mapping/MAPPING_FORMAT.md)** — mapping file format for the shot manifest.
+- **Shot-manifest behavior and mapping files** — both formats are defined once, in pythontk's shots engine (`BehaviorSpec` / `MappingSpec` under `pythontk.core_utils.engines.shots.manifest`), which also generates their reference: the Shot Manifest panel writes `MAPPING_FORMAT.md` into the user mapping folder it opens (`MappingSpec.format_markdown()`; `BehaviorSpec.format_markdown()` for behaviors).
 - **[Scene-exporter template rules](../mayatk/env_utils/scene_exporter/TEMPLATE_RULES.md)** — export-template rule syntax.
 
 ---

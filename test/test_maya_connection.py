@@ -784,12 +784,36 @@ class TestPortCollisionResilience(unittest.TestCase):
         proc.poll.return_value = None
         MockAppLauncher.launch.return_value = proc
         MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        # The real answer off Linux; on Linux it adds the PID's children.
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid}
 
         conn = MayaConnection()
         with patch.object(
             MayaConnection,
             "_iter_listening_tcp",
             return_value=[(7002, 9999), (7003, 4242)],
+        ):
+            actual = conn._launch_maya_gui(port=7002)
+
+        self.assertEqual(actual, 7003)
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_adopts_a_port_its_launcher_scripts_child_owns(
+        self, MockAppLauncher
+    ):
+        """Linux: the launched PID is ``bin/maya``, a script that may fork
+        ``maya.bin`` -- the process that actually binds the command port."""
+        proc = MagicMock(pid=4242)
+        proc.poll.return_value = None
+        MockAppLauncher.launch.return_value = proc
+        MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid, 5151}
+
+        conn = MayaConnection()
+        with patch.object(
+            MayaConnection,
+            "_iter_listening_tcp",
+            return_value=[(7002, 9999), (7003, 5151)],
         ):
             actual = conn._launch_maya_gui(port=7002)
 
@@ -803,6 +827,8 @@ class TestPortCollisionResilience(unittest.TestCase):
         proc.poll.return_value = None
         MockAppLauncher.launch.return_value = proc
         MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        # The real answer off Linux; on Linux it adds the PID's children.
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid}
 
         conn = MayaConnection()
         with patch.object(
@@ -824,6 +850,8 @@ class TestPortCollisionResilience(unittest.TestCase):
         proc.poll.return_value = None
         MockAppLauncher.launch.return_value = proc
         MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        # The real answer off Linux; on Linux it adds the PID's children.
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid}
         MockAppLauncher.get_window_titles.return_value = [
             "untitled - Autodesk MAYA 2025.3: untitled [Port: 7004]"
         ]
@@ -847,6 +875,8 @@ class TestPortCollisionResilience(unittest.TestCase):
         proc.poll.return_value = None
         MockAppLauncher.launch.return_value = proc
         MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        # The real answer off Linux; on Linux it adds the PID's children.
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid}
         MockAppLauncher.get_window_titles.return_value = [
             "untitled - Autodesk MAYA 2025.3: untitled"
         ]
@@ -868,6 +898,8 @@ class TestPortCollisionResilience(unittest.TestCase):
         proc.poll.return_value = None
         MockAppLauncher.launch.return_value = proc
         MockAppLauncher.wait_for_ready.side_effect = self._wait_calls_check_fn
+        # The real answer off Linux; on Linux it adds the PID's children.
+        MockAppLauncher.process_tree.side_effect = lambda pid: {pid}
         MockAppLauncher.get_window_titles.return_value = ["Maya [Port: FAILED]"]
 
         conn = MayaConnection()

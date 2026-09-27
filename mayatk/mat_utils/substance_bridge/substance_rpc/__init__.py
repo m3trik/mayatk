@@ -18,9 +18,20 @@ Lives inside :mod:`mayatk.mat_utils.substance_bridge` as its
 Stock Painter binds no RPC port of its own (``--enable-remote-scripting``
 is a no-op; verified 2026-05-18) -- the plugin is what makes the
 ``reimport`` / ``render`` / ``bake_lighting`` templates dispatchable.
+
+**Vendored twin -- keep code-identical.** This whole subpackage (client,
+installer, README and ``plugin_src/``) is duplicated under
+``mayatk/mat_utils/substance_bridge/substance_rpc/`` (the SSoT: edit it
+there) and ``blendertk/mat_utils/substance_bridge/substance_rpc/``; mirror
+every change into both. Drift -- a changed file, or one present on one
+side only -- fails ``extapps/test/test_vendor_sync.py``. The plugin's
+``_rpc_core.py`` is in turn a staged copy of
+``pythontk.net_utils.rpc.plugin_core`` (``m3trik/scripts/sync_rpc_core.py``).
 """
 
-from .client import PainterRpcClient, DEFAULT_RPC_PORT  # noqa: F401
-from .installer import Installer  # noqa: F401
+from pythontk.core_utils.module_resolver import lazy_exports
 
-__all__ = ["PainterRpcClient", "DEFAULT_RPC_PORT", "Installer"]
+lazy_exports(
+    globals(),
+    {"client": ("PainterRpcClient", "DEFAULT_RPC_PORT"), "installer": "Installer"},
+)

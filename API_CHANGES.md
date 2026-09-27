@@ -1,23 +1,440 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 74a06db)._
+_Diff vs the last release (origin/main @ 4a4fdcf)._
 
-## Added (14)
+## Removed (23)
 
-- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_stale_shots(self) -> None`
-- `anim_utils/shots/shots_slots.py::ShotsController.confirm_stale_removal(stale, parent=None) -> bool`
-- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_stale_shots(self) -> None`
-- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_delete_stale(self)`
-- `core_utils/diagnostics/audit_records.py::MaterialAudit(class)`
-- `core_utils/diagnostics/audit_records.py::SceneOverview(class)`
-- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_BLEND(constant)`
-- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_MASKED(constant)`
-- `core_utils/diagnostics/audit_records.py::TRANSPARENCY_OPAQUE(constant)`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.adopt_sidecar(cls, export_path: str, *, base_stem: bool = False) -> bool`
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.inherited_from(cls) -> Optional[str]`
-- `env_utils/maya_connection.py::MayaConnection.close_launched(self, force: bool = False) -> bool`
-- `mat_utils/_mat_utils.py::MatUtils.is_frame_sequence(cls, path: str) -> bool`
-- `node_utils/data_nodes.py::DataNodes.scene_path(cls) -> str`
+- `anim_utils/blendshape_animator/helpers.py::BlendshapeHelpers` — was `(class)`
+- `anim_utils/blendshape_animator/helpers.py::BlendshapeHelpers.list_history` — was `(node: str, type_filter: Optional[str] = None) -> List[str]`
+- `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.reset_defaults` — was `(self) -> None`
+- `edit_utils/curtain.py::CurtainSlots.b001` — was `(self)`
+- `edit_utils/duplicate_grid.py::DuplicateGridSlots.b001` — was `(self)`
+- `edit_utils/duplicate_linear.py::DuplicateLinearSlots.b001` — was `(self)`
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.b001` — was `(self)`
+- `edit_utils/mesh_graph.py::Graph` — was `(class)`
+- `edit_utils/mesh_graph.py::Graph.a_star` — was `(self, start, goal)`
+- `edit_utils/mesh_graph.py::Graph.add_edge` — was `(self, node1, node2, weight=1)`
+- `edit_utils/mesh_graph.py::Graph.add_node` — was `(self, node, data=None)`
+- `edit_utils/mesh_graph.py::Graph.dijkstra` — was `(self, start, goal)`
+- `edit_utils/mesh_graph.py::Graph.find_path` — was `(self, start, goal, algorithm='a_star')`
+- `edit_utils/mesh_graph.py::Graph.heuristic` — was `(self, node1, node2)`
+- `node_utils/attributes/channels/__init__.py::launch` — was `(sb=None, targets=None, filter=None, search=None)`
+- `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.b001` — was `(self)`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b001` — was `(self)`
+- `uv_utils/_cylinder_seams.py::COPLANAR_EPS_DEG` — was `(constant)`
+- `uv_utils/_cylinder_seams.py::DEFAULT_FLAT_ANGLE` — was `(constant)`
+- `uv_utils/_cylinder_seams.py::DEFAULT_TAPER_ANGLE` — was `(constant)`
+- `uv_utils/_cylinder_seams.py::DEFAULT_TRIM_RATIO` — was `(constant)`
+- `uv_utils/_cylinder_seams.py::DEFAULT_VIEW_DIR` — was `(constant)`
+- `uv_utils/_cylinder_seams.py::SHARP_FOLD` — was `(constant)`
+
+## Added (405)
+
+- `anim_utils/_tied_keys.py::TIED_KEYS_ATTR(constant)`
+- `anim_utils/blendshape_animator/history.py::BlendshapeHistory(class)`
+- `anim_utils/blendshape_animator/history.py::BlendshapeHistory.list_history(node: str, type_filter: Optional[str] = None) -> List[str]`
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin(class)`
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin.on_clip_menu(self, menu, clip_id: int) -> None`
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin.on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None`
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin(class)`
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.on_key_menu(self, menu, key_groups: list) -> None`
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None`
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.tangent_from_handle(side: str, dt: float, dv: float) -> tuple`
+- `anim_utils/shots/shot_sequencer/scene_callbacks.py::SceneCallbacksMixin(class)`
+- `anim_utils/shots/shot_sequencer/scene_callbacks.py::SceneCallbacksMixin.remove_callbacks(self) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin(class)`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.delete_track(self, track_names) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.hide_track(self, track_names) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_clip_locked(self, clip_id: int, locked: bool) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_clip_renamed(self, clip_id: int, new_label: str) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_header_menu(self, menu) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_key_selection_changed(self, key_groups: list) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_selection_changed(self, clip_ids: list) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_sub_track_selected(self, rows: list) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_track_menu(self, menu, track_names) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_track_selected(self, track_names: list) -> None`
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.show_track(self, track_name: str) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin(class)`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_shot(self, shot_id: int) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_stale_shots(self) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.merge_shot_with(self, shot_id: int, other_id: int) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.move_shot_to_position(self, shot_id: int, position: int) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None`
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.split_shot_at(self, shot_id: int, time: float) -> None`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController(class)`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController.active_shot_id(self) -> Optional[int]`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController.sequencer(self) -> Optional[ShotSequencer]`
+- `anim_utils/shots/shot_sequencer/transport.py::TransportMixin(class)`
+- `anim_utils/shots/shot_sequencer/transport.py::TransportMixin.on_playhead_moved(self, frame: float) -> None`
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin(class)`
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin.on_redo(self) -> None`
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin.on_undo(self) -> None`
+- `anim_utils/shots/shot_sequencer/widget_sync.py::WidgetSyncMixin(class)`
+- `anim_utils/shots/shot_sequencer/widget_sync.py::WidgetSyncMixin.refresh(self) -> None`
+- `core_utils/_core_utils.py::CoreUtils.temp_option_vars(values: Dict[str, Union[int, float, str]])`
+- `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.find_non_manifold_vertices(objects: NodeSeq) -> dict`
+- `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.repair_non_manifold(cls, objects: NodeSeq, quiet: bool = False) -> dict`
+- `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.select_non_manifold(cls, objects: NodeSeq) -> tuple`
+- `edit_utils/curtain/_curtain.py::CurtainMesh(class)`
+- `edit_utils/curtain/_curtain.py::CurtainMesh.build(self) -> str`
+- `edit_utils/curtain/_curtain.py::CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str`
+- `edit_utils/curtain/_curtain.py::CurtainRig(class)`
+- `edit_utils/curtain/_curtain.py::CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str`
+- `edit_utils/curtain/_curtain.py::Rail(class)`
+- `edit_utils/curtain/_curtain.py::Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]`
+- `edit_utils/curtain/_curtain.py::Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]`
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape(class)`
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.drape(self, u, v, pos, tan, normal) -> Vec`
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.grid_points(self) -> Tuple[int, int, List[Vec]]`
+- `edit_utils/curtain/_curtain_drape.py::CurtainDrape.prepare(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots(class)`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots.b001_init(self, widget)`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots.b002(self)`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots.cmb000_init(self, widget)`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots.header_init(self, widget)`
+- `edit_utils/curtain/curtain_slots.py::CurtainSlots.perform_operation(self, objects, contract)`
+- `edit_utils/duplicate_grid.py::DuplicateGridSlots.b001_init(self, widget)`
+- `edit_utils/duplicate_linear.py::DuplicateLinearSlots.b001_init(self, widget)`
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.b001_init(self, widget)`
+- `edit_utils/macros/_macros.py::AnimationMacros(class)`
+- `edit_utils/macros/_macros.py::AnimationMacros.m_set_selected_keys(objects) -> None`
+- `edit_utils/macros/_macros.py::AnimationMacros.m_unset_selected_keys(objects) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros(class)`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_back_face_culling(objects) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_component_id_display()`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_cycle_background(cls) -> str`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_cycle_display_state(objects) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_frame(cls, steps: int = 2, adjust_clipping: bool = True) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_grid() -> bool`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_grid_and_image_planes() -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_isolate_selected() -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_lighting(cls) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_material_override()`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_normals_display()`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_shading(cls) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_smooth_preview(cls, objects) -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_soft_edge_display()`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_toggle_uv_border_edges(objects)`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_toggle_visibility()`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_wireframe() -> None`
+- `edit_utils/macros/_macros.py::DisplayMacros.m_wireframe_toggle(objects) -> None`
+- `edit_utils/macros/_macros.py::EditMacros(class)`
+- `edit_utils/macros/_macros.py::EditMacros.m_boolean(objects, repair_mesh=True, keep_boolean=True, **kwargs)`
+- `edit_utils/macros/_macros.py::EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)`
+- `edit_utils/macros/_macros.py::EditMacros.m_group(objects=None)`
+- `edit_utils/macros/_macros.py::EditMacros.m_lock_vertex_normals(objects)`
+- `edit_utils/macros/_macros.py::EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None`
+- `edit_utils/macros/_macros.py::EditMacros.m_multi_component() -> None`
+- `edit_utils/macros/_macros.py::EditMacros.m_paste_and_rename() -> None`
+- `edit_utils/macros/_macros.py::EditMacros.m_ungroup(objects=None)`
+- `edit_utils/macros/_macros.py::MacroManager(class)`
+- `edit_utils/macros/_macros.py::MacroManager.apply_bindings(cls, bindings: Dict[str, dict]) -> None`
+- `edit_utils/macros/_macros.py::MacroManager.apply_editor_binding(cls, name: str, sequence: str) -> None`
+- `edit_utils/macros/_macros.py::MacroManager.apply_saved_macros(cls, name: Optional[str] = None) -> None`
+- `edit_utils/macros/_macros.py::MacroManager.call_with_input(func, input_string)`
+- `edit_utils/macros/_macros.py::MacroManager.clear_hotkey(cls, name: str, key: Optional[str] = None) -> None`
+- `edit_utils/macros/_macros.py::MacroManager.delete_preset(cls, name: str) -> bool`
+- `edit_utils/macros/_macros.py::MacroManager.editor_categories(cls) -> List[str]`
+- `edit_utils/macros/_macros.py::MacroManager.export_bindings(cls) -> Dict[str, dict]`
+- `edit_utils/macros/_macros.py::MacroManager.find_conflicts(cls, bindings: Dict[str, dict]) -> Dict[str, List[str]]`
+- `edit_utils/macros/_macros.py::MacroManager.get_active_preset(cls) -> Optional[str]`
+- `edit_utils/macros/_macros.py::MacroManager.get_current_bindings(cls) -> Dict[str, dict]`
+- `edit_utils/macros/_macros.py::MacroManager.get_editor_registry(cls, category: str) -> List[dict]`
+- `edit_utils/macros/_macros.py::MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int`
+- `edit_utils/macros/_macros.py::MacroManager.list_available_macros(cls) -> Dict[str, str]`
+- `edit_utils/macros/_macros.py::MacroManager.list_categories(cls) -> List[str]`
+- `edit_utils/macros/_macros.py::MacroManager.list_presets(cls) -> List[str]`
+- `edit_utils/macros/_macros.py::MacroManager.load_preset(cls, name: str) -> Dict[str, dict]`
+- `edit_utils/macros/_macros.py::MacroManager.macro_category(cls, name: str) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.macro_help(cls, name: str) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.macro_label(cls, name: str) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.maya_key_to_qt_sequence(cls, key: str) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.qt_sequence_to_maya_key(cls, sequence: str) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.save_preset(cls, name: str, bindings: Optional[Dict[str, dict]] = None) -> str`
+- `edit_utils/macros/_macros.py::MacroManager.set_active_preset(cls, name: Optional[str]) -> None`
+- `edit_utils/macros/_macros.py::MacroManager.set_macro(cls, name, key=None, cat=None, ann=None, default=False, delete_existing=True)`
+- `edit_utils/macros/_macros.py::MacroManager.set_macros(cls, *args)`
+- `edit_utils/macros/_macros.py::MacroManager.show_editor(cls, parent=None)`
+- `edit_utils/macros/_macros.py::MacroManager.unset_macro(cls, name: str, key: Optional[str] = None) -> None`
+- `edit_utils/macros/_macros.py::Macros(class)`
+- `edit_utils/macros/_macros.py::SelectionMacros(class)`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_edge_selection() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_face_selection() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_invert_component_selection() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_invert_selection() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_object_selection() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_toggle_UV_select_type() -> None`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_toggle_selectability(objects)`
+- `edit_utils/macros/_macros.py::SelectionMacros.m_vertex_selection() -> None`
+- `edit_utils/macros/_macros.py::UiMacros(class)`
+- `edit_utils/macros/_macros.py::UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None`
+- `env_utils/reference_manager/_reference_manager.py::AssemblyManager(class)`
+- `env_utils/reference_manager/_reference_manager.py::AssemblyManager.convert_references_to_assemblies(cls)`
+- `env_utils/reference_manager/_reference_manager.py::AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str`
+- `env_utils/reference_manager/_reference_manager.py::AssemblyManager.current_references(cls)`
+- `env_utils/reference_manager/_reference_manager.py::AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager(class)`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.current_references(self)`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.get_reference_display_mode(self, ref) -> str`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.get_reference_top_transforms(self, ref)`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.import_references(self, namespaces=None, namespace_mode='remove', scene_data='merge')`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.remove_references(self, namespaces=None)`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.sanitize_namespace(namespace: str) -> str`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool`
+- `env_utils/reference_manager/_reference_manager.py::ReferenceManager.update_references(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController(class)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.block_table_selection_method(method)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.convert_to_assembly(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.current_working_dir(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.delete_scene(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.handle_item_selection(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.is_item_being_edited(self, item)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.new_scene(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.open_scene(self, file_path: str, set_workspace: bool = True)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.prepare_item_for_edit(self, item)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.refresh_file_list(self, invalidate=False)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.rename_scene(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.restore_item_display(self, item)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.save_scene(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.set_maya_project(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.set_workspace(self, workspace_path: str, invalidate: bool = True) -> bool`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.sync_selection_to_references(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.unlink_all(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.unlink_references(self, namespaces)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.unreference_all(self)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.update_current_dir(self, text: Optional[str] = None)`
+- `env_utils/reference_manager/reference_manager_controller.py::ReferenceManagerController.update_table(self, file_names, file_list)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots(class)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.b000(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.b001(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.b006(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_convert_assembly(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_copy_path(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_open_file_location(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_open_scene(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_refresh(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_save_scene(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_toggle_reference(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_unlink_import(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_unlink_import_all(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.btn_unreference_all(self)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk000(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk003(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_filter_folder_structure(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_filter_suffix(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_hide_extension(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_hide_suffix(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_ignore_case(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.chk_show_notes_column(self, checked)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.cmb000(self, index, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.cmb000_init(self, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.header_init(self, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.tbl000_editor_closed(self, editor, hint)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.tbl000_init(self, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.tbl000_item_changed(self, item)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.tbl000_item_double_clicked(self, item)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.txt000_init(self, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.txt001(self, text)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.txt001_init(self, widget)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.txt_subfolder_structure(self, text)`
+- `env_utils/reference_manager/reference_manager_slots.py::ReferenceManagerSlots.txt_suffix(self, text)`
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin(class)`
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.default_output_dir(self) -> str`
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.list_template_modes(self)`
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.template_dir(self) -> Path`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots(class)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b000(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b001(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b002(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.cmb002_init(self, widget)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.header_init(self, widget)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl000(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl001(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl002(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl_graph_material(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.lbl_open_templates_dir(self)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.refresh_templates(self, widget)`
+- `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.rename_template_safe(self, widget, new_name)`
+- `mat_utils/substance_bridge/_substance_engine.py::ROUND_TRIP(constant)`
+- `mat_utils/substance_bridge/_substance_engine.py::SEND_TO(constant)`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine(class)`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.ensure_rpc_plugin(self) -> None`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.find_live_managed(self) -> Optional[SubstanceConnection]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.instances(self) -> List[SubstanceConnection]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.list_template_modes() -> List[Tuple[str, str]]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.list_templates() -> List[Path]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.mesh_map_files(cls, paths: List[str]) -> List[str]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.painter_log_path(self) -> Optional[str]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.painter_path(self) -> Optional[str]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.parse_template(template_path: Path) -> Dict[str, Any]`
+- `mat_utils/substance_bridge/_substance_engine.py::SubstanceEngine.resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]`
+- `mat_utils/substance_bridge/_substance_engine.py::TARGET_AUTO(constant)`
+- `mat_utils/substance_bridge/_substance_engine.py::TARGET_CURRENT(constant)`
+- `mat_utils/substance_bridge/_substance_engine.py::TARGET_NEW(constant)`
+- `node_utils/attributes/channels/channels_slots.py::ChannelsSlots.launch(sb=None, targets=None, filter=None, search=None)`
+- `nurbs_utils/curve_to_tube.py::CurveToTubeSlots.b001_init(self, widget)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig(class)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.auto_recalculate(cls, on=True)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.auto_recalculate_enabled(cls)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.bake(self, start=None, end=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.bake_horizon(self, size=None, spans=None, path=None, *, only_if_changed=False)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.bake_planes(cls, planes=None, start=None, end=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create(cls, targets, light_pos=(5, 10, 5), texture_res=512, axis='auto', source_name=DEFAULT_SOURCE_NAME, recursive=True, mode='orbit', ground_height=0.0, shader_type='standard', rig_type='projected', horizon_size=None, horizon_spans=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_contact_locator(self)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_for_sources(cls, targets, sources, **kwargs)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_horizon_for_sources(cls, targets, sources, **kwargs)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_material(self, shader_type='standard', stingray_opacity_mode='transparent')`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_per_object(cls, targets, sources, **kwargs)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_shadow_plane(self)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.create_silhouette_texture(self, size=512, axis='auto', recursive=True, *, uniform_alpha=True, falloff_power=0.8, vertical_weight=0.3, blur_amount=1.0, path=None, refit=True, source_size=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.current_model(self)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.delete(self, delete_textures=False)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.delete_rigs(cls, planes=None, delete_textures=False)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.ensure_source(cls, source_name=DEFAULT_SOURCE_NAME, position=(5, 10, 5))`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.export_record(cls, ctx)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.find_shadow_planes(cls, nodes=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.for_node(cls, node)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.for_nodes(cls, nodes)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.from_plane(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.get_or_create_shadow_source(self, position=(5, 10, 5), source_name=DEFAULT_SOURCE_NAME)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.has_mesh_geometry(node, recursive=True)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.horizon_output_path(self)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.pack_atlas(cls, planes=None, *, gutter=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.plane_is_atlased(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.plane_is_baked(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.plane_is_live(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.plane_record(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.plane_type(cls, plane)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.planes_for_nodes(cls, nodes)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.planes_lit_by(cls, source)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.rebuild(cls, plane, texture_res=None, recursive=None, shader_type=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.recalculate_stale(cls, planes=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.refresh_export_metadata(cls)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.refresh_silhouette(cls, planes=None, size=None, refit=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.set_source(self, source_name, position=(5, 10, 5), size=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.set_source_softness(cls, source, value)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.setup_expression(self)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.silhouette_is_stale(cls, plane, *, degrees=None, distance=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.source_is_directional(cls, source)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.source_size(cls, source)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.source_softness(cls, source)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.unbake_planes(cls, planes=None)`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.unit_scale()`
+- `rig_utils/shadow_rig/_shadow_rig.py::ShadowRig.unpack_atlas(cls, planes=None)`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview(class)`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.attach(cls, plane, *, language: Optional[str] = None) -> str`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.attached_planes(cls) -> List[str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.classify_device(info: Iterable[str]) -> Optional[str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.detach(cls, plane) -> bool`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.detach_all(cls) -> List[str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.device(cls) -> Optional[str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.effect_text(cls, language: str) -> str`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.is_attached(cls, plane) -> bool`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.language(cls) -> Tuple[Optional[str], str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.prepare_for_export(cls) -> None`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.refusal(cls, device: Optional[str]) -> str`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.restore_snapshot(cls, plane) -> Dict[str, Optional[List[int]]]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.shader_node(cls, plane) -> Optional[str]`
+- `rig_utils/shadow_rig/shadow_preview.py::ShadowPreview.toggle(cls, planes: Sequence[str], on: bool) -> Tuple[List[str], List[str]]`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots(class)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.apply_source(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b001_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b002(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b002_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b003(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b003_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b009(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.b010(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.chk_follow(self, checked)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.chk_follow_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.chk_horizon_preview(self, checked)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.chk_horizon_preview_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.cmb_type_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.header_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.perform_operation(self, objects, contract)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.prepare_operation(self, objects)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.rebuild_rig(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.reproject_sources(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.restore_expression(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.s001(self, value)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.s001_init(self, widget)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.source_from_selection(self)`
+- `rig_utils/shadow_rig/shadow_rig_slots.py::ShadowRigSlots.txt_source_init(self, widget)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig(class)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.bind_joint_chain(self, obj, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None) -> Optional[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.build(self, strategy: str = 'spline', progress: Callable = None, **kwargs)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.constrain_end_with_falloff(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1, profile: Union[str, Callable] = 'smoothstep') -> 'Optional[str]'`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_anchor_controls(self, joints: List[str], size: float = 1.0, enable_stretch: bool = True) -> List[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_anchor_joints(self, centerline: List, radius: float = 1.0) -> List[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_fk_controls(self, joints: List[str], size: float = 1.0, num_controls: int = 5) -> List[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_ik(self, joints: List[str], **kwargs) -> Optional[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_logic_curve(self, centerline: List[List[float]]) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_pole_vector(self, ik_handle, mid_joint: str, offset=(0, 5, 0)) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_settings_control(self, size: float = 1.0) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_spline_controls(self, joints: List[str], centerline: Optional[List] = None, size: float = 1.0, num_controls: int = 3, enable_stretch: bool = True, enable_squash: bool = True, enable_volume: bool = True, enable_twist: bool = True, enable_auto_bend: bool = False, enable_tweaks: bool = True) -> Tuple[List[str], str, str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_spline_drivers(self, centerline: List[List[float]], radius: float = 1.0, num_controls: int = 3) -> Tuple[List[str], List[str], List]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.create_tweak_controls(self, joints: List[str], size: float = 1.0, every_n: int = 1) -> List[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.estimate_tube_radius(self, centerline: List = None) -> Optional[float]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.for_mesh(cls, mesh) -> Optional['TubeRig']`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.for_node(cls, node) -> Optional['TubeRig']`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.from_scene(cls, node) -> Optional['TubeRig']`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.generate_joint_chain(self, centerline: List[List[float]], num_joints: int, reverse: bool = False, **kwargs) -> List[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.rebind_skin(self, skinning_method: str = 'dqs', mesh: Optional[str] = None) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.rename(self, new_name: str) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.resolve_centerline(self, num_joints: int = -1, edges: list = None) -> Tuple[List, int]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.resolve_sizes(self, centerline: List = None, joint_radius: float = -1.0) -> Tuple[float, float]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.rig_group(self) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.rig_name(self) -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.scene_data(cls, node) -> Optional[dict]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.set_custom_space(self, control, target: Optional[str]) -> None`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.setup_auto_bend(self, start_ctrl, mid_ctrl, end_ctrl)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.setup_space_switching(self, control, attr_name: str = 'space') -> str`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.setup_spline_stretch(self, curve, joints, enable_stretch=True, enable_squash=True, enable_volume=True, main_control=None)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.setup_spline_twist(self, ik_handle, start_ctrl, end_ctrl, start_up_loc=None, end_up_loc=None)`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.skin_curve_to_drivers(self, curve, driver_joints) -> Optional[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.skin_mesh(self, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None, skinning_method: str = 'dqs', mesh: Optional[str] = None) -> Optional[str]`
+- `rig_utils/tube_rig/_tube_rig.py::TubeRig.teardown(self, progress: Callable = None) -> None`
+- `rig_utils/tube_rig/strategies.py::AnchorStrategy(class)`
+- `rig_utils/tube_rig/strategies.py::AnchorStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- `rig_utils/tube_rig/strategies.py::FKChainStrategy(class)`
+- `rig_utils/tube_rig/strategies.py::FKChainStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- `rig_utils/tube_rig/strategies.py::SplineIKStrategy(class)`
+- `rig_utils/tube_rig/strategies.py::SplineIKStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- `rig_utils/tube_rig/strategies.py::TubeRigBundle(class)`
+- `rig_utils/tube_rig/strategies.py::TubeStrategy(class)`
+- `rig_utils/tube_rig/strategies.py::TubeStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- `rig_utils/tube_rig/tube_path.py::TubePath(class)`
+- `rig_utils/tube_rig/tube_path.py::TubePath.estimate_radius(mesh, centerline: List) -> Optional[float]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_centerline(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True, rings: Optional[List[List[int]]] = None) -> Tuple[List, int]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_centerline_from_bounding_box(obj, precision=10, smooth=False, window_size=1)`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_centerline_from_surface_normals(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_centerline_using_edges(edge_selection: List[str]) -> List[List[float]]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_edge_loop_centers(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[List[om.MPoint], int]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_end_normals(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[Optional['om.MVector'], Optional['om.MVector']]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.get_vertex_rings(mesh) -> List[List[int]]`
+- `rig_utils/tube_rig/tube_path.py::TubePath.order_cycle(edge_pairs) -> List[int]`
+- `rig_utils/tube_rig/tube_rig_slots.py::RIG_MODES(constant)`
+- `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig(class)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots(class)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.apply_mode(self, index: int)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b000(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b001(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b002(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b003(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b004(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b005(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b006(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.b007(self)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.create_joints_from_tube(self, obj, rig_name: Optional[str] = None)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.get_mode(self) -> RigModeConfig`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.get_strategy(self) -> str`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.get_tube_rig(self, obj, rig_name: Optional[str] = None)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.header_init(self, widget)`
+- `rig_utils/tube_rig/tube_rig_slots.py::TubeRigSlots.txt000_init(self, widget)`
+- `ui_utils/_ui_utils.py::UiUtils.get_editor_types(cls) -> dict`
+- `ui_utils/_ui_utils.py::UiUtils.open_editor(cls, editor: str) -> Optional[str]`
+- `uv_utils/_uv_utils.py::UvUtils.classify_unfold3d_error(error) -> str`
 
 ## Deprecations (11)
 
@@ -33,22 +450,488 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - **HELD** `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.search_dirs` — remove in 0.20.0, not before 2026-10-23
 - **HELD** `mat_utils/render_opacity/render_effects.py::RenderEffects.setup` — remove in 0.20.0, not before 2026-10-23
 - **HELD** `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.format_export_name` — remove in 0.20.0, not before 2026-10-23
-- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.migrate_from_sidecar` — remove in 0.21.0, not before 2026-10-24
+- **HELD** `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.migrate_from_sidecar` — remove in 0.21.0, not before 2026-10-24
 
-## Moved (1)
+## Moved (458)
 
 _Still resolvable at the same call site -- hoisted to a base class or re-exported from another module. NOT a removal: no alias or minor bump is owed._
 
-- `node_utils/data_nodes.py::DataNodes.project_root`
+- `anim_utils/_anim_utils.py::TIED_KEYS_ATTR`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.add_shot_space`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.apply_gap`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.collect_shot_sequences`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.define_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.delete_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.detect_next_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.expand_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.extend_shot_to_fit`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.fit_shot_to_content`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.from_dict`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.hidden_objects`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.insert_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.is_object_hidden`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.ledger`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.markers`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.merge_shots`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_object_in_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_object_keys`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_sequences_to_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.move_shot_to_position`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.reconcile_system_edits`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.resize_object`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.resize_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.resize_shot_bounds`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.respace`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.ripple_downstream`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.ripple_upstream`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.sequence_separation`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.set_object_hidden`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.set_shot_duration`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.set_shot_start`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.shot_by_id`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.shot_by_name`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.shots`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.slide_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.sorted_shots`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.split_shot`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.to_dict`
+- `anim_utils/shots/shot_sequencer/_shot_sequencer.py::ShotSequencer.trim_shot_to_content`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.active_shot_id`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_shot`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_stale_shots`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.delete_track`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.hide_track`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.merge_shot_with`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.move_shot_to_position`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_clip_locked`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_clip_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_clip_renamed`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_gap_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_header_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_key_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_key_selection_changed`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_keys_tangent_dragged`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_playhead_moved`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_redo`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_selection_changed`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_sub_track_selected`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_track_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_track_selected`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_undo`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.on_zone_context_menu`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.refresh`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.remove_callbacks`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.sequencer`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.show_track`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.split_shot_at`
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerController.tangent_from_handle`
+- `core_utils/auto_instancer/instancing_strategy.py::InstancingStrategy.evaluate`
+- `core_utils/auto_instancer/instancing_strategy.py::StrategyConfig`
+- `core_utils/auto_instancer/instancing_strategy.py::StrategyType`
+- `edit_utils/_curtain_drape.py::CurtainDrape`
+- `edit_utils/_curtain_drape.py::CurtainDrape.drape`
+- `edit_utils/_curtain_drape.py::CurtainDrape.grid_points`
+- `edit_utils/_curtain_drape.py::CurtainDrape.prepare`
+- `edit_utils/curtain.py::CurtainMesh`
+- `edit_utils/curtain.py::CurtainMesh.build`
+- `edit_utils/curtain.py::CurtainMesh.create`
+- `edit_utils/curtain.py::CurtainRig`
+- `edit_utils/curtain.py::CurtainRig.attach`
+- `edit_utils/curtain.py::CurtainSlots`
+- `edit_utils/curtain.py::CurtainSlots.b002`
+- `edit_utils/curtain.py::CurtainSlots.cmb000_init`
+- `edit_utils/curtain.py::CurtainSlots.header_init`
+- `edit_utils/curtain.py::CurtainSlots.perform_operation`
+- `edit_utils/curtain.py::Rail`
+- `edit_utils/curtain.py::Rail.from_selection`
+- `edit_utils/curtain.py::Rail.sample_curve`
+- `edit_utils/macros.py::AnimationMacros`
+- `edit_utils/macros.py::AnimationMacros.m_set_selected_keys`
+- `edit_utils/macros.py::AnimationMacros.m_unset_selected_keys`
+- `edit_utils/macros.py::DisplayMacros`
+- `edit_utils/macros.py::DisplayMacros.m_back_face_culling`
+- `edit_utils/macros.py::DisplayMacros.m_component_id_display`
+- `edit_utils/macros.py::DisplayMacros.m_cycle_background`
+- `edit_utils/macros.py::DisplayMacros.m_cycle_display_state`
+- `edit_utils/macros.py::DisplayMacros.m_frame`
+- `edit_utils/macros.py::DisplayMacros.m_grid`
+- `edit_utils/macros.py::DisplayMacros.m_grid_and_image_planes`
+- `edit_utils/macros.py::DisplayMacros.m_isolate_selected`
+- `edit_utils/macros.py::DisplayMacros.m_lighting`
+- `edit_utils/macros.py::DisplayMacros.m_material_override`
+- `edit_utils/macros.py::DisplayMacros.m_normals_display`
+- `edit_utils/macros.py::DisplayMacros.m_shading`
+- `edit_utils/macros.py::DisplayMacros.m_smooth_preview`
+- `edit_utils/macros.py::DisplayMacros.m_soft_edge_display`
+- `edit_utils/macros.py::DisplayMacros.m_toggle_uv_border_edges`
+- `edit_utils/macros.py::DisplayMacros.m_toggle_visibility`
+- `edit_utils/macros.py::DisplayMacros.m_wireframe`
+- `edit_utils/macros.py::DisplayMacros.m_wireframe_toggle`
+- `edit_utils/macros.py::EditMacros`
+- `edit_utils/macros.py::EditMacros.m_boolean`
+- `edit_utils/macros.py::EditMacros.m_combine`
+- `edit_utils/macros.py::EditMacros.m_group`
+- `edit_utils/macros.py::EditMacros.m_lock_vertex_normals`
+- `edit_utils/macros.py::EditMacros.m_merge_vertices`
+- `edit_utils/macros.py::EditMacros.m_multi_component`
+- `edit_utils/macros.py::EditMacros.m_paste_and_rename`
+- `edit_utils/macros.py::EditMacros.m_ungroup`
+- `edit_utils/macros.py::MacroManager`
+- `edit_utils/macros.py::MacroManager.apply_bindings`
+- `edit_utils/macros.py::MacroManager.apply_editor_binding`
+- `edit_utils/macros.py::MacroManager.apply_saved_macros`
+- `edit_utils/macros.py::MacroManager.call_with_input`
+- `edit_utils/macros.py::MacroManager.clear_hotkey`
+- `edit_utils/macros.py::MacroManager.delete_preset`
+- `edit_utils/macros.py::MacroManager.editor_categories`
+- `edit_utils/macros.py::MacroManager.export_bindings`
+- `edit_utils/macros.py::MacroManager.find_conflicts`
+- `edit_utils/macros.py::MacroManager.get_active_preset`
+- `edit_utils/macros.py::MacroManager.get_current_bindings`
+- `edit_utils/macros.py::MacroManager.get_editor_registry`
+- `edit_utils/macros.py::MacroManager.import_bindings`
+- `edit_utils/macros.py::MacroManager.list_available_macros`
+- `edit_utils/macros.py::MacroManager.list_categories`
+- `edit_utils/macros.py::MacroManager.list_presets`
+- `edit_utils/macros.py::MacroManager.load_preset`
+- `edit_utils/macros.py::MacroManager.macro_category`
+- `edit_utils/macros.py::MacroManager.macro_help`
+- `edit_utils/macros.py::MacroManager.macro_label`
+- `edit_utils/macros.py::MacroManager.maya_key_to_qt_sequence`
+- `edit_utils/macros.py::MacroManager.qt_sequence_to_maya_key`
+- `edit_utils/macros.py::MacroManager.save_preset`
+- `edit_utils/macros.py::MacroManager.set_active_preset`
+- `edit_utils/macros.py::MacroManager.set_macro`
+- `edit_utils/macros.py::MacroManager.set_macros`
+- `edit_utils/macros.py::MacroManager.show_editor`
+- `edit_utils/macros.py::MacroManager.unset_macro`
+- `edit_utils/macros.py::Macros`
+- `edit_utils/macros.py::SelectionMacros`
+- `edit_utils/macros.py::SelectionMacros.m_edge_selection`
+- `edit_utils/macros.py::SelectionMacros.m_face_selection`
+- `edit_utils/macros.py::SelectionMacros.m_invert_component_selection`
+- `edit_utils/macros.py::SelectionMacros.m_invert_selection`
+- `edit_utils/macros.py::SelectionMacros.m_object_selection`
+- `edit_utils/macros.py::SelectionMacros.m_toggle_UV_select_type`
+- `edit_utils/macros.py::SelectionMacros.m_toggle_selectability`
+- `edit_utils/macros.py::SelectionMacros.m_vertex_selection`
+- `edit_utils/macros.py::UiMacros`
+- `edit_utils/macros.py::UiMacros.m_toggle_panels`
+- `env_utils/blender_bridge/parameters.py::Parameters.defaults`
+- `env_utils/blender_bridge/parameters.py::Parameters.referenced_keys`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.adopt_sidecar`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.compare`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.inherited_from`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.is_unreadable`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.read`
+- `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.write`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.base_stem`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.build_full_path_set`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.clean_stale_diff`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.compare`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.count_descendants`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.detect_reparenting`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.diff_report_path_for`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.ensure_base_name`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.find_legacy_manifest`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.format_diff_report`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.get_top_level`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.manifest_path_for`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.migrate_legacy`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.read_data`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.read_manifest`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.with_ancestors`
+- `env_utils/hierarchy_sync/scene_data_sidecar.py::SceneDataSidecar.write_manifest`
+- `env_utils/reference_manager.py::AssemblyManager`
+- `env_utils/reference_manager.py::AssemblyManager.convert_references_to_assemblies`
+- `env_utils/reference_manager.py::AssemblyManager.create_assembly_definition`
+- `env_utils/reference_manager.py::AssemblyManager.current_references`
+- `env_utils/reference_manager.py::AssemblyManager.set_active_representation`
+- `env_utils/reference_manager.py::ReferenceManager`
+- `env_utils/reference_manager.py::ReferenceManager.add_reference`
+- `env_utils/reference_manager.py::ReferenceManager.current_references`
+- `env_utils/reference_manager.py::ReferenceManager.get_reference_display_mode`
+- `env_utils/reference_manager.py::ReferenceManager.get_reference_top_transforms`
+- `env_utils/reference_manager.py::ReferenceManager.import_references`
+- `env_utils/reference_manager.py::ReferenceManager.remove_references`
+- `env_utils/reference_manager.py::ReferenceManager.sanitize_namespace`
+- `env_utils/reference_manager.py::ReferenceManager.set_reference_display_mode`
+- `env_utils/reference_manager.py::ReferenceManager.update_references`
+- `env_utils/reference_manager.py::ReferenceManagerController`
+- `env_utils/reference_manager.py::ReferenceManagerController.block_table_selection_method`
+- `env_utils/reference_manager.py::ReferenceManagerController.convert_to_assembly`
+- `env_utils/reference_manager.py::ReferenceManagerController.current_working_dir`
+- `env_utils/reference_manager.py::ReferenceManagerController.delete_scene`
+- `env_utils/reference_manager.py::ReferenceManagerController.handle_item_selection`
+- `env_utils/reference_manager.py::ReferenceManagerController.is_item_being_edited`
+- `env_utils/reference_manager.py::ReferenceManagerController.new_scene`
+- `env_utils/reference_manager.py::ReferenceManagerController.open_scene`
+- `env_utils/reference_manager.py::ReferenceManagerController.prepare_item_for_edit`
+- `env_utils/reference_manager.py::ReferenceManagerController.refresh_file_list`
+- `env_utils/reference_manager.py::ReferenceManagerController.rename_scene`
+- `env_utils/reference_manager.py::ReferenceManagerController.restore_item_display`
+- `env_utils/reference_manager.py::ReferenceManagerController.save_scene`
+- `env_utils/reference_manager.py::ReferenceManagerController.set_maya_project`
+- `env_utils/reference_manager.py::ReferenceManagerController.set_workspace`
+- `env_utils/reference_manager.py::ReferenceManagerController.sync_selection_to_references`
+- `env_utils/reference_manager.py::ReferenceManagerController.unlink_all`
+- `env_utils/reference_manager.py::ReferenceManagerController.unlink_references`
+- `env_utils/reference_manager.py::ReferenceManagerController.unreference_all`
+- `env_utils/reference_manager.py::ReferenceManagerController.update_current_dir`
+- `env_utils/reference_manager.py::ReferenceManagerController.update_table`
+- `env_utils/reference_manager.py::ReferenceManagerSlots`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.b000`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.b001`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.b006`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_convert_assembly`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_copy_path`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_open_file_location`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_open_scene`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_refresh`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_save_scene`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_toggle_reference`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_unlink_import`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_unlink_import_all`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.btn_unreference_all`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk000`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk003`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_filter_folder_structure`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_filter_suffix`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_hide_extension`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_hide_suffix`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_ignore_case`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.chk_show_notes_column`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.cmb000`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.cmb000_init`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.header_init`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.tbl000_editor_closed`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.tbl000_init`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.tbl000_item_changed`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.tbl000_item_double_clicked`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.txt000_init`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.txt001`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.txt001_init`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.txt_subfolder_structure`
+- `env_utils/reference_manager.py::ReferenceManagerSlots.txt_suffix`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.close_file_handlers`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.confirm`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.confirm_check_override`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.generate_log_file_path`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.run_config_from_values`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.setup_file_logging`
+- `env_utils/unity_bridge/parameters.py::Parameters.defaults`
+- `env_utils/unity_bridge/parameters.py::Parameters.referenced_keys`
+- `env_utils/unity_bridge/parameters.py::Parameters.render_context`
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.default_output_dir`
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.list_template_modes`
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.template_dir`
+- `mat_utils/marmoset_bridge/parameters.py::Parameters.defaults`
+- `mat_utils/marmoset_bridge/parameters.py::Parameters.referenced_keys`
+- `mat_utils/marmoset_bridge/parameters.py::Parameters.render_context`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.b000`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.b001`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.b002`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.cmb002_init`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.header_init`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.lbl000`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.lbl001`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.lbl002`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.lbl_graph_material`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.lbl_open_templates_dir`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.refresh_templates`
+- `mat_utils/shader_templates/_shader_templates.py::ShaderTemplatesSlots.rename_template_safe`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.ensure_rpc_plugin`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.find_live_managed`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.instances`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.list_template_modes`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.list_templates`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.mesh_map_files`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.painter_log_path`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.painter_path`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.parse_template`
+- `mat_utils/substance_bridge/_substance_bridge.py::SubstanceBridge.resolve_painter_log_path`
+- `mat_utils/substance_bridge/parameters.py::Parameters.affix_parts`
+- `mat_utils/substance_bridge/parameters.py::Parameters.defaults`
+- `mat_utils/substance_bridge/parameters.py::Parameters.referenced_keys`
+- `rig_utils/shadow_preview.py::ShadowPreview`
+- `rig_utils/shadow_preview.py::ShadowPreview.attach`
+- `rig_utils/shadow_preview.py::ShadowPreview.attached_planes`
+- `rig_utils/shadow_preview.py::ShadowPreview.classify_device`
+- `rig_utils/shadow_preview.py::ShadowPreview.detach`
+- `rig_utils/shadow_preview.py::ShadowPreview.detach_all`
+- `rig_utils/shadow_preview.py::ShadowPreview.device`
+- `rig_utils/shadow_preview.py::ShadowPreview.effect_text`
+- `rig_utils/shadow_preview.py::ShadowPreview.is_attached`
+- `rig_utils/shadow_preview.py::ShadowPreview.language`
+- `rig_utils/shadow_preview.py::ShadowPreview.prepare_for_export`
+- `rig_utils/shadow_preview.py::ShadowPreview.refusal`
+- `rig_utils/shadow_preview.py::ShadowPreview.restore_snapshot`
+- `rig_utils/shadow_preview.py::ShadowPreview.shader_node`
+- `rig_utils/shadow_preview.py::ShadowPreview.toggle`
+- `rig_utils/shadow_rig.py::ShadowRig`
+- `rig_utils/shadow_rig.py::ShadowRig.auto_recalculate`
+- `rig_utils/shadow_rig.py::ShadowRig.auto_recalculate_enabled`
+- `rig_utils/shadow_rig.py::ShadowRig.bake`
+- `rig_utils/shadow_rig.py::ShadowRig.bake_horizon`
+- `rig_utils/shadow_rig.py::ShadowRig.bake_planes`
+- `rig_utils/shadow_rig.py::ShadowRig.create`
+- `rig_utils/shadow_rig.py::ShadowRig.create_contact_locator`
+- `rig_utils/shadow_rig.py::ShadowRig.create_for_sources`
+- `rig_utils/shadow_rig.py::ShadowRig.create_horizon_for_sources`
+- `rig_utils/shadow_rig.py::ShadowRig.create_material`
+- `rig_utils/shadow_rig.py::ShadowRig.create_per_object`
+- `rig_utils/shadow_rig.py::ShadowRig.create_shadow_plane`
+- `rig_utils/shadow_rig.py::ShadowRig.create_silhouette_texture`
+- `rig_utils/shadow_rig.py::ShadowRig.current_model`
+- `rig_utils/shadow_rig.py::ShadowRig.delete`
+- `rig_utils/shadow_rig.py::ShadowRig.delete_rigs`
+- `rig_utils/shadow_rig.py::ShadowRig.ensure_source`
+- `rig_utils/shadow_rig.py::ShadowRig.export_record`
+- `rig_utils/shadow_rig.py::ShadowRig.find_shadow_planes`
+- `rig_utils/shadow_rig.py::ShadowRig.for_node`
+- `rig_utils/shadow_rig.py::ShadowRig.for_nodes`
+- `rig_utils/shadow_rig.py::ShadowRig.from_plane`
+- `rig_utils/shadow_rig.py::ShadowRig.get_or_create_shadow_source`
+- `rig_utils/shadow_rig.py::ShadowRig.has_mesh_geometry`
+- `rig_utils/shadow_rig.py::ShadowRig.horizon_output_path`
+- `rig_utils/shadow_rig.py::ShadowRig.pack_atlas`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_is_atlased`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_is_baked`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_is_live`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_record`
+- `rig_utils/shadow_rig.py::ShadowRig.plane_type`
+- `rig_utils/shadow_rig.py::ShadowRig.planes_for_nodes`
+- `rig_utils/shadow_rig.py::ShadowRig.planes_lit_by`
+- `rig_utils/shadow_rig.py::ShadowRig.rebuild`
+- `rig_utils/shadow_rig.py::ShadowRig.recalculate_stale`
+- `rig_utils/shadow_rig.py::ShadowRig.refresh_export_metadata`
+- `rig_utils/shadow_rig.py::ShadowRig.refresh_silhouette`
+- `rig_utils/shadow_rig.py::ShadowRig.set_source`
+- `rig_utils/shadow_rig.py::ShadowRig.set_source_softness`
+- `rig_utils/shadow_rig.py::ShadowRig.setup_expression`
+- `rig_utils/shadow_rig.py::ShadowRig.silhouette_is_stale`
+- `rig_utils/shadow_rig.py::ShadowRig.source_is_directional`
+- `rig_utils/shadow_rig.py::ShadowRig.source_size`
+- `rig_utils/shadow_rig.py::ShadowRig.source_softness`
+- `rig_utils/shadow_rig.py::ShadowRig.unbake_planes`
+- `rig_utils/shadow_rig.py::ShadowRig.unit_scale`
+- `rig_utils/shadow_rig.py::ShadowRig.unpack_atlas`
+- `rig_utils/shadow_rig.py::ShadowRigSlots`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.apply_source`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b002`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b002_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b003`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b003_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b009`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.b010`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.chk_follow`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.chk_follow_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.chk_horizon_preview`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.chk_horizon_preview_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.cmb_type_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.header_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.perform_operation`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.prepare_operation`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.rebuild_rig`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.reproject_sources`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.restore_expression`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.s001`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.s001_init`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.source_from_selection`
+- `rig_utils/shadow_rig.py::ShadowRigSlots.txt_source_init`
+- `rig_utils/tube_path.py::TubePath`
+- `rig_utils/tube_path.py::TubePath.estimate_radius`
+- `rig_utils/tube_path.py::TubePath.get_centerline`
+- `rig_utils/tube_path.py::TubePath.get_centerline_from_bounding_box`
+- `rig_utils/tube_path.py::TubePath.get_centerline_from_surface_normals`
+- `rig_utils/tube_path.py::TubePath.get_centerline_using_edges`
+- `rig_utils/tube_path.py::TubePath.get_edge_loop_centers`
+- `rig_utils/tube_path.py::TubePath.get_end_normals`
+- `rig_utils/tube_path.py::TubePath.get_vertex_rings`
+- `rig_utils/tube_path.py::TubePath.order_cycle`
+- `rig_utils/tube_rig.py::AnchorStrategy`
+- `rig_utils/tube_rig.py::AnchorStrategy.build`
+- `rig_utils/tube_rig.py::FKChainStrategy`
+- `rig_utils/tube_rig.py::FKChainStrategy.build`
+- `rig_utils/tube_rig.py::RIG_MODES`
+- `rig_utils/tube_rig.py::RigModeConfig`
+- `rig_utils/tube_rig.py::SplineIKStrategy`
+- `rig_utils/tube_rig.py::SplineIKStrategy.build`
+- `rig_utils/tube_rig.py::TubeRig`
+- `rig_utils/tube_rig.py::TubeRig.bind_joint_chain`
+- `rig_utils/tube_rig.py::TubeRig.build`
+- `rig_utils/tube_rig.py::TubeRig.constrain_end_with_falloff`
+- `rig_utils/tube_rig.py::TubeRig.create_anchor_controls`
+- `rig_utils/tube_rig.py::TubeRig.create_anchor_joints`
+- `rig_utils/tube_rig.py::TubeRig.create_fk_controls`
+- `rig_utils/tube_rig.py::TubeRig.create_ik`
+- `rig_utils/tube_rig.py::TubeRig.create_logic_curve`
+- `rig_utils/tube_rig.py::TubeRig.create_pole_vector`
+- `rig_utils/tube_rig.py::TubeRig.create_settings_control`
+- `rig_utils/tube_rig.py::TubeRig.create_spline_controls`
+- `rig_utils/tube_rig.py::TubeRig.create_spline_drivers`
+- `rig_utils/tube_rig.py::TubeRig.create_tweak_controls`
+- `rig_utils/tube_rig.py::TubeRig.estimate_tube_radius`
+- `rig_utils/tube_rig.py::TubeRig.for_mesh`
+- `rig_utils/tube_rig.py::TubeRig.for_node`
+- `rig_utils/tube_rig.py::TubeRig.from_scene`
+- `rig_utils/tube_rig.py::TubeRig.generate_joint_chain`
+- `rig_utils/tube_rig.py::TubeRig.rebind_skin`
+- `rig_utils/tube_rig.py::TubeRig.rename`
+- `rig_utils/tube_rig.py::TubeRig.resolve_centerline`
+- `rig_utils/tube_rig.py::TubeRig.resolve_sizes`
+- `rig_utils/tube_rig.py::TubeRig.rig_group`
+- `rig_utils/tube_rig.py::TubeRig.rig_name`
+- `rig_utils/tube_rig.py::TubeRig.scene_data`
+- `rig_utils/tube_rig.py::TubeRig.set_custom_space`
+- `rig_utils/tube_rig.py::TubeRig.setup_auto_bend`
+- `rig_utils/tube_rig.py::TubeRig.setup_space_switching`
+- `rig_utils/tube_rig.py::TubeRig.setup_spline_stretch`
+- `rig_utils/tube_rig.py::TubeRig.setup_spline_twist`
+- `rig_utils/tube_rig.py::TubeRig.skin_curve_to_drivers`
+- `rig_utils/tube_rig.py::TubeRig.skin_mesh`
+- `rig_utils/tube_rig.py::TubeRig.teardown`
+- `rig_utils/tube_rig.py::TubeRigBundle`
+- `rig_utils/tube_rig.py::TubeRigSlots`
+- `rig_utils/tube_rig.py::TubeRigSlots.apply_mode`
+- `rig_utils/tube_rig.py::TubeRigSlots.b000`
+- `rig_utils/tube_rig.py::TubeRigSlots.b001`
+- `rig_utils/tube_rig.py::TubeRigSlots.b002`
+- `rig_utils/tube_rig.py::TubeRigSlots.b003`
+- `rig_utils/tube_rig.py::TubeRigSlots.b004`
+- `rig_utils/tube_rig.py::TubeRigSlots.b005`
+- `rig_utils/tube_rig.py::TubeRigSlots.b006`
+- `rig_utils/tube_rig.py::TubeRigSlots.b007`
+- `rig_utils/tube_rig.py::TubeRigSlots.create_joints_from_tube`
+- `rig_utils/tube_rig.py::TubeRigSlots.get_mode`
+- `rig_utils/tube_rig.py::TubeRigSlots.get_strategy`
+- `rig_utils/tube_rig.py::TubeRigSlots.get_tube_rig`
+- `rig_utils/tube_rig.py::TubeRigSlots.header_init`
+- `rig_utils/tube_rig.py::TubeRigSlots.txt000_init`
+- `rig_utils/tube_rig.py::TubeStrategy`
+- `rig_utils/tube_rig.py::TubeStrategy.build`
+- `uv_utils/rizom_bridge/parameters.py::Parameters.defaults`
 
-## Signature changed (3)
+## Signature changed (6)
 
-- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.analyze`
-  - was: `(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None) -> List[AssetRecord]`
-  - now: `(self, objects: List[Any] = None, fast_mode: bool = True, progress_callback: Optional[Callable[[int, int, str], None]] = None, profile: AuditProfile = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> List[AssetRecord]`
-- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.format_audit_html`
-  - was: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]`
-  - now: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]`
-- `core_utils/diagnostics/scene_audit.py::SceneAnalyzer.format_audit_text`
-  - was: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None) -> Dict[str, str]`
-  - now: `(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]`
+- `env_utils/blender_bridge/parameters.py::Parameters.render_context`
+  - was: `(values: 'dict[str, Any]') -> 'dict[str, str]'`
+  - now: `(cls, values: 'dict[str, Any]') -> 'dict[str, str]'`
+- `mat_utils/substance_bridge/parameters.py::Parameters.render_cli_context`
+  - was: `(values: 'dict[str, Any]') -> 'dict[str, str]'`
+  - now: `(cls, values: 'dict[str, Any]') -> 'dict[str, str]'`
+- `mat_utils/substance_bridge/parameters.py::Parameters.render_js_context`
+  - was: `(values: 'dict[str, Any]') -> 'dict[str, str]'`
+  - now: `(cls, values: 'dict[str, Any]') -> 'dict[str, str]'`
+- `uv_utils/_uv_utils.py::UvUtils.pack_uvs`
+  - was: `(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None)`
+  - now: `(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))`
+- `uv_utils/rizom_bridge/parameters.py::Parameters.referenced_keys`
+  - was: `(script_text: str) -> 'set[str]'`
+  - now: `(cls, script_text: str) -> 'set[str]'`
+- `uv_utils/rizom_bridge/parameters.py::Parameters.render_context`
+  - was: `(values: 'dict[str, Any]') -> 'dict[str, str]'`
+  - now: `(cls, values: 'dict[str, Any]') -> 'dict[str, str]'`

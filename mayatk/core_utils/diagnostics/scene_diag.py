@@ -53,12 +53,15 @@ class _SceneDiagnosticsInternal:
         if not maya_location:
             return None
         best = None
-        for lib in Path(maya_location, "bin").glob("*OpenColorIO*_*_*"):
-            match = re.search(r"_(\d+)_(\d+)$", lib.stem)
-            if match:
-                version = (int(match.group(1)), int(match.group(2)))
-                if best is None or version > best:
-                    best = version
+        # Windows: bin/OpenColorIOMaya_2_3.dll. Linux: lib/libOpenColorIOMaya_2_3.so
+        # or a soname-versioned lib/libOpenColorIO.so.2.3.
+        for folder in ("bin", "lib"):
+            for lib in Path(maya_location, folder).glob("*OpenColorIO*"):
+                match = re.search(r"OpenColorIO\w*?[_.](?:so\.)?(\d+)[_.](\d+)", lib.name)
+                if match:
+                    version = (int(match.group(1)), int(match.group(2)))
+                    if best is None or version > best:
+                        best = version
         return best
 
 

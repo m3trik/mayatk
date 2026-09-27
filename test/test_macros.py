@@ -970,7 +970,7 @@ class _NoPrefsFlush:
         super().setUp()
         from unittest import mock
 
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         patcher = mock.patch.object(macros.cmds, "savePrefs", create=True)
         patcher.start()
@@ -1209,7 +1209,7 @@ class TestApplyBindingsResilience(QuickTestCase):
 
     def test_one_bad_entry_does_not_abort_the_rest(self):
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         applied = []
 
@@ -1255,7 +1255,7 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
     def test_matching_preset_applies_nothing_and_skips_saveprefs(self):
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         # Live registry already equals the preset (one bound, one unbound).
         live = {
@@ -1299,7 +1299,7 @@ class TestApplyBindingsIdempotent(QuickTestCase):
         re-applied + flushed prefs — on some launches only, which is why the
         save spam seemed random. The target key IS live, so it must be a no-op."""
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         # live_hotkey_map returned an extra chord, not the preset's sht+q...
         live = {"m_object_selection": {"key": "sht+g", "cat": "Edit"}}
@@ -1331,7 +1331,7 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
     def test_real_difference_applies_and_flushes_once(self):
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         live = {"m_wireframe": {"key": "F1", "cat": "Display"}}
         with (
@@ -1356,7 +1356,7 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
     def test_unbound_macro_binds_without_clearing(self):
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         # No live key -> nothing to release; just bind.
         live = {"m_wireframe": {"key": "", "cat": "Display"}}
@@ -1373,7 +1373,7 @@ class TestApplyBindingsIdempotent(QuickTestCase):
 
     def test_chord_swap_does_not_clobber_sibling_target(self):
         from unittest import mock
-        from mayatk.edit_utils import macros
+        from mayatk.edit_utils.macros import _macros as macros
 
         # m_wireframe and m_group swap chords in one apply. Neither stale chord
         # may be cleared — each is the OTHER's target, and set_macro (last write
@@ -1676,22 +1676,22 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch(
-                "mayatk.edit_utils.macros.cmds.viewFit",
+                "mayatk.edit_utils.macros._macros.cmds.viewFit",
                 side_effect=lambda **kw: fits.append(kw),
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.zoom_view",
+                "mayatk.edit_utils.macros._macros.CamUtils.zoom_view",
                 side_effect=lambda **kw: zooms.append(kw),
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.get_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.get_view_state",
                 side_effect=lambda *a, **k: dict(state),
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.set_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.set_view_state",
                 side_effect=restored.append,
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             DisplayMacros.m_frame()
             DisplayMacros.m_frame()
@@ -1713,19 +1713,19 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch(
-                "mayatk.edit_utils.macros.cmds.viewFit",
+                "mayatk.edit_utils.macros._macros.cmds.viewFit",
                 side_effect=lambda **kw: fits.append(kw),
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view") as zoom,
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view") as zoom,
             patch(
-                "mayatk.edit_utils.macros.CamUtils.get_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.get_view_state",
                 return_value={"v": 1},
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.set_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.set_view_state",
                 side_effect=restored.append,
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             DisplayMacros.m_frame(steps=1)
             DisplayMacros.m_frame(steps=1)
@@ -1745,13 +1745,13 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch(
-                "mayatk.edit_utils.macros.cmds.viewFit",
+                "mayatk.edit_utils.macros._macros.cmds.viewFit",
                 side_effect=lambda **kw: fits.append(kw),
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view") as zoom,
-            patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
-            patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view") as zoom,
+            patch("mayatk.edit_utils.macros._macros.CamUtils.get_view_state", return_value={}),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.set_view_state"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             cmds.select(cube_a)
             DisplayMacros.m_frame()
@@ -1767,11 +1767,11 @@ class TestFrameMacro(MayaTkTestCase):
         cmds.select(cube)
 
         with (
-            patch("mayatk.edit_utils.macros.cmds.viewFit"),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
-            patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
-            patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping") as fit,
+            patch("mayatk.edit_utils.macros._macros.cmds.viewFit"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.get_view_state", return_value={}),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.set_view_state"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping") as fit,
         ):
             DisplayMacros.m_frame(adjust_clipping=False)
             fit.assert_not_called()
@@ -1792,17 +1792,17 @@ class TestFrameMacro(MayaTkTestCase):
         views, restored = ["view_A", "view_B"], []
 
         with (
-            patch("mayatk.edit_utils.macros.cmds.viewFit"),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
+            patch("mayatk.edit_utils.macros._macros.cmds.viewFit"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view"),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.get_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.get_view_state",
                 side_effect=lambda *a, **k: views.pop(0),
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.set_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.set_view_state",
                 side_effect=restored.append,
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             cmds.select(cube_a)
             DisplayMacros.m_frame()  # snapshots view_A
@@ -1832,19 +1832,19 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch(
-                "mayatk.edit_utils.macros.cmds.viewFit",
+                "mayatk.edit_utils.macros._macros.cmds.viewFit",
                 side_effect=lambda **kw: fits.append(kw),
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view"),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.get_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.get_view_state",
                 side_effect=lambda *a, **k: views.pop(0),
             ),
             patch(
-                "mayatk.edit_utils.macros.CamUtils.set_view_state",
+                "mayatk.edit_utils.macros._macros.CamUtils.set_view_state",
                 side_effect=restored.append,
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             DisplayMacros.m_frame()  # frame
             clock.now += 10.0  # ... tumble around, work ...
@@ -1897,16 +1897,16 @@ class TestFrameMacro(MayaTkTestCase):
         zooms = []
         try:
             with (
-                patch("mayatk.edit_utils.macros.cmds.viewFit"),
+                patch("mayatk.edit_utils.macros._macros.cmds.viewFit"),
                 patch(
-                    "mayatk.edit_utils.macros.CamUtils.zoom_view",
+                    "mayatk.edit_utils.macros._macros.CamUtils.zoom_view",
                     side_effect=lambda **kw: zooms.append(kw["factor"]),
                 ),
                 patch(
-                    "mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}
+                    "mayatk.edit_utils.macros._macros.CamUtils.get_view_state", return_value={}
                 ),
-                patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
-                patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+                patch("mayatk.edit_utils.macros._macros.CamUtils.set_view_state"),
+                patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
             ):
                 DisplayMacros.m_frame()
                 DisplayMacros.m_frame()
@@ -1923,13 +1923,13 @@ class TestFrameMacro(MayaTkTestCase):
 
         with (
             patch(
-                "mayatk.edit_utils.macros.cmds.viewFit",
+                "mayatk.edit_utils.macros._macros.cmds.viewFit",
                 side_effect=lambda **kw: fits.append(kw),
             ),
-            patch("mayatk.edit_utils.macros.CamUtils.zoom_view"),
-            patch("mayatk.edit_utils.macros.CamUtils.get_view_state", return_value={}),
-            patch("mayatk.edit_utils.macros.CamUtils.set_view_state"),
-            patch("mayatk.edit_utils.macros.CamUtils.fit_camera_clipping"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.zoom_view"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.get_view_state", return_value={}),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.set_view_state"),
+            patch("mayatk.edit_utils.macros._macros.CamUtils.fit_camera_clipping"),
         ):
             DisplayMacros.m_frame()
 

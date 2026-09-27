@@ -423,7 +423,7 @@ class TestSceneExporter(MayaTkTestCase):
 
     def _preview_slots(self, pattern, output_format="fbx"):
         """A panel stand-in whose fields hold *pattern* and a format."""
-        from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+        from pythontk import TooltipFormat
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.sb = SimpleNamespace(tooltip=TooltipFormat)
@@ -10642,6 +10642,26 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
         for key in ("export_visible_objects", "set_linear_unit", "optimize_keys"):
             with self.subTest(row=key):
                 self.assertIsNone(defs[key].get("restore_by"))
+
+
+class TestLogFileName(unittest.TestCase):
+    """``hide_log_file``: Windows hides the log with the file attribute; elsewhere
+    hidden means a dot-prefixed name, which the option used to skip."""
+
+    def test_log_name_per_os(self):
+        exp = SceneExporter.__new__(SceneExporter)
+        exp.export_dir = "exports"
+        for os_name, hide, want in (
+            ("nt", True, "hero.log"),
+            ("posix", True, ".hero.log"),
+            ("posix", False, "hero.log"),
+        ):
+            exp.hide_log_file = hide
+            with self.subTest(os_name=os_name, hide=hide), patch.object(
+                os, "name", os_name
+            ):
+                got = os.path.basename(exp.generate_log_file_path("hero.fbx"))
+                self.assertEqual(got, want)
 
 
 if __name__ == "__main__":

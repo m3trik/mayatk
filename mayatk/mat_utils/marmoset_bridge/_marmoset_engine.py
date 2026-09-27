@@ -20,9 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pythontk as ptk
-from pythontk.core_utils.app_launcher import AppLauncher
-from pythontk.core_utils import script_template
-from pythontk.str_utils._str_utils import StrUtils
+from pythontk import AppLauncher
+from pythontk import StrUtils
 
 from . import template_params
 from .toolbag_log import ToolbagLog
@@ -61,15 +60,15 @@ _TOOLBAG_APP_NAMES = APP.app_names
 # that is exactly how this module's old ``roundtrip`` drifted from the canonical
 # ``round_trip``. Templates carrying the old spelling still load: ``declared_modes`` folds
 # it to the canon on the way in (``script_template._MODE_ALIASES``).
-SEND_TO = script_template.SEND_TO
-ROUND_TRIP = script_template.ROUND_TRIP
+SEND_TO = ptk.SEND_TO
+ROUND_TRIP = ptk.ROUND_TRIP
 _MODES = (SEND_TO, ROUND_TRIP)
 
 
 # ---------------------------------------------------------------------------
 # Template discovery (module-level so UI layers can list templates without a
 # live engine instance). Thin wrappers over the shared
-# :mod:`pythontk.core_utils.script_template` helpers (``_MODES`` allowed).
+# :mod:`pythontk.core_utils.handoff.script_template` helpers (``_MODES`` allowed).
 # ---------------------------------------------------------------------------
 
 
@@ -721,7 +720,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
     @staticmethod
     def list_templates() -> List[Path]:
         """Return user-visible templates in ``templates/`` (skips underscore-prefixed)."""
-        return script_template.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
+        return ptk.ScriptTemplate.list_templates(_TEMPLATE_DIR, ".py")
 
     @staticmethod
     def template_modes(template_path: Path) -> Tuple[str, ...]:
@@ -730,7 +729,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         Falls back to ``("send_to",)`` if the constant is absent so legacy templates
         keep working.
         """
-        return script_template.ScriptTemplate.template_modes(template_path, _MODES)
+        return ptk.ScriptTemplate.template_modes(template_path, _MODES)
 
     @staticmethod
     def list_template_modes() -> List[Tuple[str, str]]:
@@ -740,7 +739,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         one combo entry per (template, mode) pair without baking mode-awareness
         into the combo itself.
         """
-        return script_template.ScriptTemplate.list_template_modes(
+        return ptk.ScriptTemplate.list_template_modes(
             _TEMPLATE_DIR, ".py", _MODES
         )
 

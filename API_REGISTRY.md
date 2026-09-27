@@ -5,12 +5,13 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ## Index
 
 - [`__init__.py`](#__init__)
-- [`anim_utils/_anim_utils.py`](#anim_utils--_anim_utils)
+- [`anim_utils/_anim_utils.py`](#anim_utils--_anim_utils) — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
+- [`anim_utils/_tied_keys.py`](#anim_utils--_tied_keys) — Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
 - [`anim_utils/blendshape_animator/_blendshape_animator.py`](#anim_utils--blendshape_animator--_blendshape_animator) — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - [`anim_utils/blendshape_animator/applicator.py`](#anim_utils--blendshape_animator--applicator) — Applies tween mesh edits back to blendShape in-between targets.
 - [`anim_utils/blendshape_animator/blendshape_animator_slots.py`](#anim_utils--blendshape_animator--blendshape_animator_slots) — Switchboard slots controller for blendshape_animator.ui.
 - [`anim_utils/blendshape_animator/creator.py`](#anim_utils--blendshape_animator--creator) — Creates in-between target meshes for custom blendShape animation curves.
-- [`anim_utils/blendshape_animator/helpers.py`](#anim_utils--blendshape_animator--helpers) — Shared helpers internal to the blendshape_animator subpackage.
+- [`anim_utils/blendshape_animator/history.py`](#anim_utils--blendshape_animator--history) — Construction-history queries shared by the blendshape_animator modules.
 - [`anim_utils/blendshape_animator/keyframes.py`](#anim_utils--blendshape_animator--keyframes) — Core blendShape keyframe animation operations.
 - [`anim_utils/blendshape_animator/recovery.py`](#anim_utils--blendshape_animator--recovery) — Recovery utilities for corrupted blendShape setups.
 - [`anim_utils/blendshape_animator/target.py`](#anim_utils--blendshape_animator--target) — Tween mesh wrappers and registry for blendShape in-between targets.
@@ -30,12 +31,21 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/shot_manifest/shot_manifest_slots.py`](#anim_utils--shots--shot_manifest--shot_manifest_slots) — Switchboard slots for the Shot Manifest UI.
 - [`anim_utils/shots/shot_manifest/table_presenter.py`](#anim_utils--shots--shot_manifest--table_presenter) — Tree-widget presentation mixin for the Shot Manifest controller.
 - [`anim_utils/shots/shot_sequencer/_shot_sequencer.py`](#anim_utils--shots--shot_sequencer--_shot_sequencer) — Shot Sequencer — manages per-shot animation with ripple editing.
+- [`anim_utils/shots/shot_sequencer/clip_menu.py`](#anim_utils--shots--shot_sequencer--clip_menu) — Clip context menus and clip-level key operations.
 - [`anim_utils/shots/shot_sequencer/clip_motion.py`](#anim_utils--shots--shot_sequencer--clip_motion) — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - [`anim_utils/shots/shot_sequencer/gap_manager.py`](#anim_utils--shots--shot_sequencer--gap_manager) — Gap and range-highlight handlers for the shot sequencer controller.
+- [`anim_utils/shots/shot_sequencer/key_menu.py`](#anim_utils--shots--shot_sequencer--key_menu) — Key context menus and key-selection edits.
 - [`anim_utils/shots/shot_sequencer/marker_manager.py`](#anim_utils--shots--shot_sequencer--marker_manager) — Marker persistence for the shot sequencer controller.
+- [`anim_utils/shots/shot_sequencer/scene_callbacks.py`](#anim_utils--shots--shot_sequencer--scene_callbacks) — Maya scene callbacks for the shot sequencer.
+- [`anim_utils/shots/shot_sequencer/scene_selection.py`](#anim_utils--shots--shot_sequencer--scene_selection) — Tracks and the Maya selection.
 - [`anim_utils/shots/shot_sequencer/segment_collector.py`](#anim_utils--shots--shot_sequencer--segment_collector) — Segment collection and attribute extraction for the shot sequencer.
+- [`anim_utils/shots/shot_sequencer/shot_lane.py`](#anim_utils--shots--shot_sequencer--shot_lane) — The shot lane: its context menu and the shot structure edits.
 - [`anim_utils/shots/shot_sequencer/shot_nav.py`](#anim_utils--shots--shot_sequencer--shot_nav) — Shot navigation and combobox synchronization.
+- [`anim_utils/shots/shot_sequencer/shot_sequencer_controller.py`](#anim_utils--shots--shot_sequencer--shot_sequencer_controller) — The Shot Sequencer panel's controller: :class:`ShotSequencerController`.
 - [`anim_utils/shots/shot_sequencer/shot_sequencer_slots.py`](#anim_utils--shots--shot_sequencer--shot_sequencer_slots) — Switchboard slots for the Shot Sequencer UI.
+- [`anim_utils/shots/shot_sequencer/transport.py`](#anim_utils--shots--shot_sequencer--transport) — Transport: the playhead, audio scrub and the transport row.
+- [`anim_utils/shots/shot_sequencer/undo_ledger.py`](#anim_utils--shots--shot_sequencer--undo_ledger) — The shot sequencer's undo ledger.
+- [`anim_utils/shots/shot_sequencer/widget_sync.py`](#anim_utils--shots--shot_sequencer--widget_sync) — Widget sync: rebuilding the sequencer from the scene.
 - [`anim_utils/shots/shots_slots.py`](#anim_utils--shots--shots_slots) — Switchboard slots for the Shots settings UI.
 - [`anim_utils/smart_bake/_smart_bake.py`](#anim_utils--smart_bake--_smart_bake) — Smart bake module for intelligent pre-bake animation processing.
 - [`anim_utils/smart_bake/bake_session.py`](#anim_utils--smart_bake--bake_session) — Persistence and restore engine for SmartBake's nondestructive manifest.
@@ -57,7 +67,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`core_utils/auto_instancer/_auto_instancer.py`](#core_utils--auto_instancer--_auto_instancer) — Scene auto-instancer: convert geometrically identical meshes to instances.
 - [`core_utils/auto_instancer/assembly_reconstructor.py`](#core_utils--auto_instancer--assembly_reconstructor) — Logic for separating and reassembling mesh assemblies.
 - [`core_utils/auto_instancer/geometry_matcher.py`](#core_utils--auto_instancer--geometry_matcher) — Geometry analysis and matching logic for AutoInstancer.
-- [`core_utils/auto_instancer/instancing_strategy.py`](#core_utils--auto_instancer--instancing_strategy) — Instancing strategy logic for AutoInstancer.
+- [`core_utils/auto_instancer/instancing_strategy.py`](#core_utils--auto_instancer--instancing_strategy) — AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
 - [`core_utils/components.py`](#core_utils--components)
 - [`core_utils/diagnostics/animation_diag.py`](#core_utils--diagnostics--animation_diag) — Animation-curve diagnostics and optional repair helpers.
 - [`core_utils/diagnostics/audit_records.py`](#core_utils--diagnostics--audit_records) — Scene-audit data contract: profiles, per-asset records, and the SceneReport tree.
@@ -73,18 +83,18 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`display_utils/_display_utils.py`](#display_utils--_display_utils)
 - [`display_utils/color_id.py`](#display_utils--color_id)
 - [`display_utils/exploded_view.py`](#display_utils--exploded_view)
-- [`edit_utils/_curtain_drape.py`](#edit_utils--_curtain_drape) — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 - [`edit_utils/_edit_utils.py`](#edit_utils--_edit_utils)
 - [`edit_utils/bevel.py`](#edit_utils--bevel)
 - [`edit_utils/bridge.py`](#edit_utils--bridge)
-- [`edit_utils/curtain.py`](#edit_utils--curtain) — Procedural draped-cloth (curtain) generator for Maya.
+- [`edit_utils/curtain/_curtain.py`](#edit_utils--curtain--_curtain) — Procedural draped-cloth (curtain) generator for Maya.
+- [`edit_utils/curtain/_curtain_drape.py`](#edit_utils--curtain--_curtain_drape) — Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
+- [`edit_utils/curtain/curtain_slots.py`](#edit_utils--curtain--curtain_slots) — Curtain panel — the Switchboard slots for ``curtain.ui``.
 - [`edit_utils/cut_on_axis.py`](#edit_utils--cut_on_axis)
 - [`edit_utils/duplicate_grid.py`](#edit_utils--duplicate_grid)
 - [`edit_utils/duplicate_linear.py`](#edit_utils--duplicate_linear)
 - [`edit_utils/duplicate_radial.py`](#edit_utils--duplicate_radial)
 - [`edit_utils/dynamic_pipe.py`](#edit_utils--dynamic_pipe)
-- [`edit_utils/macros.py`](#edit_utils--macros)
-- [`edit_utils/mesh_graph.py`](#edit_utils--mesh_graph)
+- [`edit_utils/macros/_macros.py`](#edit_utils--macros--_macros)
 - [`edit_utils/mirror.py`](#edit_utils--mirror)
 - [`edit_utils/naming/_naming.py`](#edit_utils--naming--_naming)
 - [`edit_utils/naming/naming_slots.py`](#edit_utils--naming--naming_slots) — Switchboard slots for the Naming panel.
@@ -109,19 +119,22 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/hierarchy_sync/_hierarchy_sync.py`](#env_utils--hierarchy_sync--_hierarchy_sync)
 - [`env_utils/hierarchy_sync/hierarchy_baseline.py`](#env_utils--hierarchy_sync--hierarchy_baseline) — The scene's hierarchy baseline, stored in the scene.
 - [`env_utils/hierarchy_sync/hierarchy_sync_slots.py`](#env_utils--hierarchy_sync--hierarchy_sync_slots)
-- [`env_utils/hierarchy_sync/scene_data_sidecar.py`](#env_utils--hierarchy_sync--scene_data_sidecar) — Scene-data sidecar manifest management.
+- [`env_utils/hierarchy_sync/scene_data_sidecar.py`](#env_utils--hierarchy_sync--scene_data_sidecar) — Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
 - [`env_utils/hierarchy_sync/tree_renderer.py`](#env_utils--hierarchy_sync--tree_renderer) — Tree rendering, formatting, and selection management for the hierarchy sync UI.
 - [`env_utils/hierarchy_sync/tree_utils.py`](#env_utils--hierarchy_sync--tree_utils) — Tree widget utilities for hierarchy sync UI operations.
 - [`env_utils/maya_connection.py`](#env_utils--maya_connection) — Maya Connection Module
 - [`env_utils/namespace_sandbox.py`](#env_utils--namespace_sandbox)
 - [`env_utils/pm_doctor.py`](#env_utils--pm_doctor) — Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
-- [`env_utils/reference_manager.py`](#env_utils--reference_manager)
+- [`env_utils/reference_manager/_reference_manager.py`](#env_utils--reference_manager--_reference_manager) — Reference Manager engine — Maya file references, assemblies and workspaces.
+- [`env_utils/reference_manager/reference_manager_controller.py`](#env_utils--reference_manager--reference_manager_controller) — Reference Manager controller — the panel-facing layer over the engine.
+- [`env_utils/reference_manager/reference_manager_slots.py`](#env_utils--reference_manager--reference_manager_slots) — Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 - [`env_utils/scene_exporter/_scene_exporter.py`](#env_utils--scene_exporter--_scene_exporter)
 - [`env_utils/scene_exporter/scene_exporter_slots.py`](#env_utils--scene_exporter--scene_exporter_slots) — Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
 - [`env_utils/scene_exporter/task_manager.py`](#env_utils--scene_exporter--task_manager) — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - [`env_utils/scene_state.py`](#env_utils--scene_state) — Read named sections of live-scene state for transport.
 - [`env_utils/script_output.py`](#env_utils--script_output)
 - [`env_utils/unity_bridge/_unity_bridge.py`](#env_utils--unity_bridge--_unity_bridge) — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
+- [`env_utils/unity_bridge/_unity_panel.py`](#env_utils--unity_bridge--_unity_panel) — What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.
 - [`env_utils/unity_bridge/parameters.py`](#env_utils--unity_bridge--parameters) — User-tunable parameters for the Maya->Unity bridge panel.
 - [`env_utils/unity_bridge/unity_bridge_slots.py`](#env_utils--unity_bridge--unity_bridge_slots) — Slots for the Unity bridge panel.
 - [`env_utils/usd.py`](#env_utils--usd) — USD import / export over Maya's native ``mayaUsd`` runtime.
@@ -133,7 +146,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`light_utils/lightmap_baker/lightmap_baker.py`](#light_utils--lightmap_baker--lightmap_baker) — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - [`light_utils/lightmap_baker/lightmap_baker_slots.py`](#light_utils--lightmap_baker--lightmap_baker_slots) — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - [`light_utils/lightmap_baker/lightmap_records.py`](#light_utils--lightmap_baker--lightmap_records) — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
-- [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils)
+- [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils) — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - [`mat_utils/arnold_bridge.py`](#mat_utils--arnold_bridge) — Arnold render-bridge management.
 - [`mat_utils/bake_sets.py`](#mat_utils--bake_sets) — Scene-stored bake sets: named object sets the bake tools read.
 - [`mat_utils/emissive_groups.py`](#mat_utils--emissive_groups) — Emissive groups — named face sets that gate emissive regions at runtime.
@@ -168,7 +181,9 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map) — Logical texture channel -> per-shader (attribute, output plug), and the one
 - [`mat_utils/shader_converter.py`](#mat_utils--shader_converter) — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
+- [`mat_utils/shader_templates/shader_templates_slots.py`](#mat_utils--shader_templates--shader_templates_slots) — Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
 - [`mat_utils/substance_bridge/_substance_bridge.py`](#mat_utils--substance_bridge--_substance_bridge) — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
+- [`mat_utils/substance_bridge/_substance_engine.py`](#mat_utils--substance_bridge--_substance_engine) — Drive Substance 3D Painter from the outside -- the DCC-free half of the bridge.
 - [`mat_utils/substance_bridge/connection.py`](#mat_utils--substance_bridge--connection) — Substance 3D Painter connection module.
 - [`mat_utils/substance_bridge/parameters.py`](#mat_utils--substance_bridge--parameters) — Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 - [`mat_utils/substance_bridge/substance_bridge_slots.py`](#mat_utils--substance_bridge--substance_bridge_slots) — Slots for the Substance Painter bridge panel.
@@ -187,7 +202,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/texture_path_editor.py`](#mat_utils--texture_path_editor)
 - [`node_utils/_node_utils.py`](#node_utils--_node_utils)
 - [`node_utils/attributes/_attributes.py`](#node_utils--attributes--_attributes) — Consolidated attribute utilities for Maya.
-- [`node_utils/attributes/channels/__init__.py`](#node_utils--attributes--channels--__init__) — Channels — Switchboard UI for inspecting and editing Maya attributes.
 - [`node_utils/attributes/channels/_channels.py`](#node_utils--attributes--channels--_channels) — Channels — Maya attribute query / mutation logic.
 - [`node_utils/attributes/channels/channels_slots.py`](#node_utils--attributes--channels--channels_slots) — UI slots for the Channels UI.
 - [`node_utils/data_nodes.py`](#node_utils--data_nodes) — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
@@ -199,12 +213,15 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`rig_utils/controls.py`](#rig_utils--controls)
 - [`rig_utils/rig_graph_build.py`](#rig_utils--rig_graph_build) — Build a RigGraph in Maya -- Maya as the TARGET of the rig-transfer stack.
 - [`rig_utils/rig_graph_extract.py`](#rig_utils--rig_graph_extract) — Read a Maya rig into a RigGraph -- phase 2 of the rig-transfer stack.
-- [`rig_utils/shadow_preview.py`](#rig_utils--shadow_preview) — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
-- [`rig_utils/shadow_rig.py`](#rig_utils--shadow_rig)
+- [`rig_utils/shadow_rig/_shadow_rig.py`](#rig_utils--shadow_rig--_shadow_rig) — Shadow Rig engine — a projected-shadow rig for engine export.
+- [`rig_utils/shadow_rig/shadow_preview.py`](#rig_utils--shadow_rig--shadow_preview) — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
+- [`rig_utils/shadow_rig/shadow_rig_slots.py`](#rig_utils--shadow_rig--shadow_rig_slots) — Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.
 - [`rig_utils/skinning.py`](#rig_utils--skinning) — Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 - [`rig_utils/telescope_rig.py`](#rig_utils--telescope_rig)
-- [`rig_utils/tube_path.py`](#rig_utils--tube_path) — Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
-- [`rig_utils/tube_rig.py`](#rig_utils--tube_rig)
+- [`rig_utils/tube_rig/_tube_rig.py`](#rig_utils--tube_rig--_tube_rig) — Tube Rig engine — rigs a tube-shaped mesh (hose, cable, piston, tail).
+- [`rig_utils/tube_rig/strategies.py`](#rig_utils--tube_rig--strategies) — Tube Rig build strategies and the bundle they return.
+- [`rig_utils/tube_rig/tube_path.py`](#rig_utils--tube_rig--tube_path) — Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
+- [`rig_utils/tube_rig/tube_rig_slots.py`](#rig_utils--tube_rig--tube_rig_slots) — Tube Rig panel — the Switchboard slots for ``tube_rig.ui``.
 - [`rig_utils/wheel_rig.py`](#rig_utils--wheel_rig)
 - [`ui_utils/_ui_utils.py`](#ui_utils--_ui_utils)
 - [`ui_utils/calculator.py`](#ui_utils--calculator)
@@ -217,16 +234,15 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
 - [`ui_utils/style_setter/_style_setter.py`](#ui_utils--style_setter--_style_setter) — Match Maya's scriptable viewport colors to another DCC's look.
 - [`uv_utils/_auto_unwrap.py`](#uv_utils--_auto_unwrap) — External auto-unwrap round-trip: OBJ out, engine, OBJ back, UVs transferred.
-- [`uv_utils/_cylinder_seams.py`](#uv_utils--_cylinder_seams) — Band-based UV seam placement for cylinder / tube / turned meshes.
 - [`uv_utils/_uv_budget.py`](#uv_utils--_uv_budget) — UV texture-budget analysis: measure the scene, plan with :class:`pythontk.UvBudget`.
-- [`uv_utils/_uv_pack.py`](#uv_utils--_uv_pack) — xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
+- [`uv_utils/_uv_pack.py`](#uv_utils--_uv_pack) — The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 - [`uv_utils/_uv_utils.py`](#uv_utils--_uv_utils)
 - [`uv_utils/rizom_bridge/_rizom_bridge.py`](#uv_utils--rizom_bridge--_rizom_bridge)
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots) — Slots for the RizomUV bridge panel.
 - [`uv_utils/shell_xform.py`](#uv_utils--shell_xform) — Dedicated UV shell-transform panel.
 - [`uv_utils/texture_transfer.py`](#uv_utils--texture_transfer) — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
-- [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils)
+- [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils) — ``XformUtils`` -- the public index of mayatk's transform operations.
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
 - [`xform_utils/pivot_watcher.py`](#xform_utils--pivot_watcher) — Real-time pivot-change notifier built on :class:`ScriptJobManager`.
 
@@ -240,9 +256,10 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
 
-- [`STANDARD_TRANSFORM_ATTRS`](mayatk/mayatk/anim_utils/_anim_utils.py#L37) — constant
-- [`TIED_KEYS_ATTR`](mayatk/mayatk/anim_utils/_anim_utils.py#L849) — constant
-- **[`class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L856)** — Animation utilities for Maya.
+``AnimUtils`` -- the public index of mayatk's key and curve operations.
+
+- [`STANDARD_TRANSFORM_ATTRS`](mayatk/mayatk/anim_utils/_anim_utils.py#L56) — constant
+- **[`class AnimUtils(_AnimUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/anim_utils/_anim_utils.py#L86)** — Animation utilities for Maya.
   - `AnimUtils.scene_animation_range() -> Tuple[float, float]` *(static)* — The scene's AUTHORED animation range, as ``(start, end)``.
   - `AnimUtils.normalize_optimize_level(cls, level)` *(class)* — The canonical :attr:`OPTIMIZE_LEVELS` key *level* names, or None for OFF.
   - `AnimUtils.resolve_optimize_level(cls, level: Union[bool, str, None]) -> Optional[Dict[str, Any]]` *(class)* — Resolve an optimization level into :meth:`optimize_keys` kwargs.
@@ -298,12 +315,19 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
   - `AnimUtils.create_preview_layer(sources: Dict[str, str], gate: Optional[Tuple[float, float]] = None, name: str = 'previewLayer') -> str` *(static)* — Play foreign curves on an object's plugs through a throwaway override layer.
   - `AnimUtils.remove_preview_layer(layer: Optional[str]) -> bool` *(static)* — Delete a layer made by :meth:`create_preview_layer`;
 
+<a id="anim_utils--_tied_keys"></a>
+### `anim_utils/_tied_keys.py`
+
+Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
+
+- [`TIED_KEYS_ATTR`](mayatk/mayatk/anim_utils/_tied_keys.py#L21) — constant
+
 <a id="anim_utils--blendshape_animator--_blendshape_animator"></a>
 ### `anim_utils/blendshape_animator/_blendshape_animator.py`
 
 Main workflow facade for blendShape morph-animation creation, editing, and export.
 
-- **[`class BlendshapeAnimator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/_blendshape_animator.py#L26)** — Main workflow facade for blendShape animations.
+- **[`class BlendshapeAnimator(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/_blendshape_animator.py#L26)** — Main workflow facade for blendShape animations.
   - `BlendshapeAnimator.create(self, base_mesh: Optional[str] = None, target_mesh: Optional[str] = None, start_frame: Optional[int] = None, end_frame: Optional[int] = None, name: str = 'morph', test_setup: bool = True) -> bool` — Set up basic morph animation between two meshes.
   - `BlendshapeAnimator.edit_weight_based(self, weights: Optional[List[float]] = None, count: int = 3, weight_range: Tuple[float, float] = (0.0, 1.0), group_name: Optional[str] = None, name_prefix: Optional[str] = None) -> List[Target]` — Create tweens at specific weights or evenly spaced.
   - `BlendshapeAnimator.edit_frame_based(self, frames: Optional[List[int]] = None, target_frame: Optional[int] = None, group_name: Optional[str] = None, name_prefix: Optional[str] = None) -> List[Target]` — Create tweens at specific animation frames.
@@ -324,7 +348,7 @@ Main workflow facade for blendShape morph-animation creation, editing, and expor
 Applies tween mesh edits back to blendShape in-between targets.
 
 - **[`class ApplyStatus(Enum)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L19)**
-- **[`class Applicator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L25)** — Applies tween mesh edits back to blendShape in-between targets.
+- **[`class Applicator(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/applicator.py#L25)** — Applies tween mesh edits back to blendShape in-between targets.
   - `Applicator.validate_topology(self, tweens: List[Target]) -> List[Target]` — Filter ``tweens`` to those matching base mesh vertex count.
   - `Applicator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]` — Apply tween mesh edits to blendShape in-between targets.
 
@@ -364,27 +388,27 @@ Switchboard slots controller for blendshape_animator.ui.
 
 Creates in-between target meshes for custom blendShape animation curves.
 
-- **[`class Creator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/creator.py#L21)** — Creates in-between target meshes for custom animation curves.
+- **[`class Creator(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/creator.py#L21)** — Creates in-between target meshes for custom animation curves.
   - `Creator.create_weight_based_tweens(self, weights: List[float], group_name: str = Targets.DEFAULT_GROUPS[0], name_prefix: str = 'morph_ib') -> List[Target]` — Create tween meshes at specific weight values.
   - `Creator.create_frame_based_tween(self, target_frame: int, group_name: str = Targets.DEFAULT_GROUPS[0], name_prefix: str = 'tween') -> Optional[Target]` — Create a tween mesh at a specific animation frame.
   - `Creator.tag_tween_mesh(self, mesh: str, weight: float, target_frame: Optional[int] = None) -> None` — Add metadata attributes to ``mesh``.
   - `Creator.get_existing_weights(self) -> Set[float]` — Return the in-between weights already taken by THIS setup.
   - `Creator.find_nearby_weight(self, target_weight: float, existing_weights: Set[float], tolerance: float = 0.01) -> Optional[float]` — Find a free weight within ``tolerance`` of ``target_weight``.
 
-<a id="anim_utils--blendshape_animator--helpers"></a>
-### `anim_utils/blendshape_animator/helpers.py`
+<a id="anim_utils--blendshape_animator--history"></a>
+### `anim_utils/blendshape_animator/history.py`
 
-Shared helpers internal to the blendshape_animator subpackage.
+Construction-history queries shared by the blendshape_animator modules.
 
-- **[`class BlendshapeHelpers`](mayatk/mayatk/anim_utils/blendshape_animator/helpers.py#L13)** — BlendshapeHelpers — module namespace.
-  - `BlendshapeHelpers.list_history(node: str, type_filter: Optional[str] = None) -> List[str]` *(static)* — List the construction history of a node, optionally filtered by node type.
+- **[`class BlendshapeHistory`](mayatk/mayatk/anim_utils/blendshape_animator/history.py#L13)** — BlendshapeHistory — construction-history lookups (the ``blendShape``
+  - `BlendshapeHistory.list_history(node: str, type_filter: Optional[str] = None) -> List[str]` *(static)* — List the construction history of a node, optionally filtered by node type.
 
 <a id="anim_utils--blendshape_animator--keyframes"></a>
 ### `anim_utils/blendshape_animator/keyframes.py`
 
 Core blendShape keyframe animation operations.
 
-- **[`class Keyframes(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/keyframes.py#L17)** — Core blendShape animation functionality.
+- **[`class Keyframes(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/keyframes.py#L17)** — Core blendShape animation functionality.
   - `Keyframes.weight_attr(self) -> str` *(property)* — The blendShape weight attribute this setup animates (e.g.
   - `Keyframes.create_keyframes(self, start_frame: int, end_frame: int) -> bool` — Create linear keyframe animation from weight 0.0 -> 1.0.
   - `Keyframes.test_morph(self) -> bool` — Test the blendShape by temporarily setting weight to 0.5.
@@ -395,7 +419,7 @@ Core blendShape keyframe animation operations.
 
 Recovery utilities for corrupted blendShape setups.
 
-- **[`class Recovery(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/recovery.py#L19)** — Utilities for recovering from corrupted blendShape setups.
+- **[`class Recovery(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/recovery.py#L19)** — Utilities for recovering from corrupted blendShape setups.
   - `Recovery.fix_corrupted_animation(cls, base_mesh: str, target_mesh: str) -> bool` *(class)* — Rebuild corrupted blendShape animation.
   - `Recovery.recover_with_targets(cls, base_mesh: str, target_mesh: str) -> bool` *(class)* — Complete recovery: fix animation AND restore tween customizations.
 
@@ -410,7 +434,7 @@ Tween mesh wrappers and registry for blendShape in-between targets.
   - `Target.base_mesh_name(self) -> str` *(property)* — Get the base mesh name this tween applies to.
   - `Target.target_frame(self) -> Optional[int]` *(property)* — Get target frame if this tween was created from a specific frame.
   - `Target.update_references(self, new_blendshape: str, new_base_mesh: str) -> None` — Update this tween's references to new blendShape/base mesh.
-- **[`class Targets(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/target.py#L68)** — Manages collections of tween meshes.
+- **[`class Targets(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/target.py#L68)** — Manages collections of tween meshes.
   - `Targets.find_all_targets(cls, blendshape: Optional[str] = None, base_mesh: Optional[str] = None) -> List[Target]` *(class)* — Find all tween meshes in the scene (deduplicated).
   - `Targets.group_by_weight(cls, tweens: List[Target]) -> Dict[float, List[Target]]` *(class)* — Group tweens by weight value, handling duplicates.
   - `Targets.update_all_references(cls, new_blendshape: str, new_base_mesh: str) -> int` *(class)* — Rebind tween references after a blendShape rebuild.
@@ -420,7 +444,7 @@ Tween mesh wrappers and registry for blendShape in-between targets.
 
 Mesh and blendShape validation for blendShape animation setup.
 
-- **[`class Validator(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/validator.py#L15)** — Handles validation of meshes and blendShape setups.
+- **[`class Validator(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/blendshape_animator/validator.py#L15)** — Handles validation of meshes and blendShape setups.
   - `Validator.validate_meshes(cls, mesh1: str, mesh2: str) -> bool` *(class)* — Validate that both objects are compatible meshes.
   - `Validator.validate_blendshape(cls, blendshape: str, weight_index: int = 0) -> bool` *(class)* — Validate blendShape node configuration.
 
@@ -429,7 +453,7 @@ Mesh and blendShape validation for blendShape animation setup.
 
 Key Stash — park keyframes outside the working animation, retrieve later (Maya).
 
-- **[`class KeyStash(_KeyStashCore, _KeyStashInternal)`](mayatk/mayatk/anim_utils/key_stash/_key_stash.py#L237)** — :class:`pythontk.KeyStash` with the scene side bound to Maya.
+- **[`class KeyStash(pythontk.core_utils.engines.key_stash.key_stash_model.KeyStash, _KeyStashInternal)`](mayatk/mayatk/anim_utils/key_stash/_key_stash.py#L237)** — :class:`pythontk.KeyStash` with the scene side bound to Maya.
   - `KeyStash.active(cls) -> 'KeyStash'` *(class)* — The active store, auto-installing the Maya backend once.
   - `KeyStash.reconcile(self) -> List[int]` — Bring the record in line with the scene.
   - `KeyStash.merge_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's parked clips merged into the record: reload the
@@ -445,7 +469,7 @@ Key Stash — park keyframes outside the working animation, retrieve later (Maya
 
 Slots for the Key Stash panel (key_stash.ui).
 
-- **[`class KeyStashSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/key_stash/key_stash_slots.py#L19)** — Controller wiring key_stash.ui to the :class:`KeyStash` store.
+- **[`class KeyStashSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/key_stash/key_stash_slots.py#L19)** — Controller wiring key_stash.ui to the :class:`KeyStash` store.
   - `KeyStashSlots.header_init(self, widget) -> None` — Configure header buttons, the refresh action and the help text.
   - `KeyStashSlots.store(self) -> KeyStash` *(property)* — The active store, (re)bound to this panel's change listener.
   - `KeyStashSlots.refresh(self) -> None` — Repaint the clip list from the store.
@@ -460,7 +484,7 @@ Slots for the Key Stash panel (key_stash.ui).
 
 Playblast capture, encoding, and preview-render exports for Maya.
 
-- **[`class PlayblastExporter(ptk.SequenceExporter)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L57)** — Viewport capture and preview-render exports.
+- **[`class PlayblastExporter(pythontk.SequenceExporter)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L57)** — Viewport capture and preview-render exports.
   - `PlayblastExporter.scene_name() -> str` *(static)* — Basename of the current scene without extension;
   - `PlayblastExporter.scene_fps() -> float` *(static)* — The scene frame rate as a float.
   - `PlayblastExporter.sequence_name(self) -> str`
@@ -483,12 +507,12 @@ Dedicated scale-keys module to keep AnimUtils lean and testable.
 <a id="anim_utils--segment_keys"></a>
 ### `anim_utils/segment_keys.py`
 
-- **[`class SegmentKeysInfo`](mayatk/mayatk/anim_utils/segment_keys.py#L22)** — Mixin for reporting animation segment information.
+- **[`class SegmentKeysInfo`](mayatk/mayatk/anim_utils/segment_keys.py#L24)** — Mixin for reporting animation segment information.
   - `SegmentKeysInfo.get_time_ranges(segments: List[Dict[str, Any]]) -> List[Tuple[str, float, float]]` *(static)* — Extract time ranges from segment data.
   - `SegmentKeysInfo.print_time_ranges(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], header: Optional[str] = None, per_segment: bool = False, object_fmt: Optional[str] = None, segment_fmt: Optional[str] = None, by_time: bool = False, csv_output: bool = False)` *(class)* — Print formatted time ranges to stdout.
   - `SegmentKeysInfo.format_time_ranges_text(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], **kwargs) -> str` *(class)* — Return the same output as :meth:`print_time_ranges` as a
   - `SegmentKeysInfo.format_time_ranges_html(cls, source: Union[List[Dict[str, Any]], List[Tuple[str, float, float]]], title: Optional[str] = None, **kwargs) -> str` *(class)* — Wrap :meth:`format_time_ranges_text` in styled HTML suitable
-- **[`class SegmentKeys(SegmentKeysInfo)`](mayatk/mayatk/anim_utils/segment_keys.py#L269)** — Shared helper for collecting and grouping animation segments.
+- **[`class SegmentKeys(SegmentKeysInfo)`](mayatk/mayatk/anim_utils/segment_keys.py#L271)** — Shared helper for collecting and grouping animation segments.
   - `SegmentKeys.collect_segments(cls, objects: List[Any], ignore: Optional[Union[str, List[str]]] = None, split_static: bool = False, selected_keys_only: bool = False, channel_box_attrs: Optional[List[str]] = None, static_tolerance: float = 0.0001, time_range: Optional[Tuple[Optional[float], Optional[float]]] = None, ignore_visibility_holds: bool = False, ignore_holds: bool = False, exclude_next_start: bool = True, motion_only: bool = False, motion_rate: float = 0.001, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]` *(class)* — Collect animation segments from objects.
   - `SegmentKeys.get_scene_info(cls, objects: Optional[List[str]] = None, detailed: bool = True, ignore_holds: bool = True, traversal: Optional[str] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None) -> List[Dict[str, Any]]` *(class)* — Collect animation segments for the scene info report.
   - `SegmentKeys.format_scene_info_text(cls, objects: Optional[List[str]] = None, detailed: bool = True, csv_output: bool = False, by_time: bool = False, ignore_holds: bool = True, traversal: Optional[str] = None) -> str` *(class)* — Plain-text scene-info report.
@@ -535,7 +559,7 @@ Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
   - `MayaScenePersistence.load(self) -> Optional[Dict[str, Any]]` — The stored record, or ``None`` when the scene holds none.
   - `MayaScenePersistence.record_changed(self) -> bool` — Whether the channel differs from what this backend last wrote or read.
   - `MayaScenePersistence.remove_callbacks(self) -> None` — Tear down every SJM subscription owned by this store.
-- **[`class ShotStore(ptk.ShotStore, _ShotStoreInternal)`](mayatk/mayatk/anim_utils/shots/_shots.py#L389)** — :class:`pythontk.ShotStore` with the scene hooks bound to Maya.
+- **[`class ShotStore(pythontk.ShotStore, _ShotStoreInternal)`](mayatk/mayatk/anim_utils/shots/_shots.py#L389)** — :class:`pythontk.ShotStore` with the scene hooks bound to Maya.
   - `ShotStore.active(cls) -> 'ShotStore'` *(class)* — Return the active store, auto-installing the Maya backend once.
   - `ShotStore.undo_queue_top(redo: bool = False) -> str` *(static)* — Name of the entry Maya's undo (or redo) would consume next.
   - `ShotStore.scene_edit(self, label: str = 'edit', snapshot: bool = True)` — Run a boundary-mutating edit as ONE named, undo-paired step.
@@ -555,7 +579,7 @@ Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 
 Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 
-- **[`class ShotManifest(_EngineShotManifest, _ShotManifestInternal)`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L111)** — :class:`pythontk.ShotManifest` with the scene hooks bound to Maya.
+- **[`class ShotManifest(pythontk.core_utils.engines.shots.manifest.manifest_engine.ShotManifest, _ShotManifestInternal)`](mayatk/mayatk/anim_utils/shots/shot_manifest/_shot_manifest.py#L111)** — :class:`pythontk.ShotManifest` with the scene hooks bound to Maya.
   - `ShotManifest.apply_behaviors(self) -> Dict[str, list]` — Apply detected behaviors to Maya objects (fades, audio clips).
   - `ShotManifest.rewire_audio(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]` *(static)* — Reconcile managed DG audio nodes with keyed track state.
   - `ShotManifest.from_csv(cls, filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]` *(class)* — Convenience: parse a CSV and return a ready-to-build engine.
@@ -565,7 +589,7 @@ Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 
 Behaviors — Maya appliers over the engine's pure keying-recipe core.
 
-- **[`class Behaviors(_BehaviorsInternal)`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L144)** — Behaviors — module namespace.
+- **[`class Behaviors(pythontk.core_utils.engines.shots.manifest.behaviors.Behaviors, _BehaviorsInternal)`](mayatk/mayatk/anim_utils/shots/shot_manifest/behaviors/_behaviors.py#L137)** — Behaviors — module namespace.
   - `Behaviors.apply_behavior(obj: str, behavior_name: str, start: float, end: float, attrs: Optional[List[str]] = None, search_path: Optional[Path] = None, source_path: str = '', anchor_override: Optional[str] = None) -> None` *(static)* — Apply a named behavior template to an object over a time range.
   - `Behaviors.verify_behavior(obj: str, behavior_name: str, start: float, end: float, search_path: Optional[Path] = None, keyframe_fn: Optional[Any] = None, anchor_override: Optional[Any] = None) -> bool` *(static)* — Check whether expected behavior keyframes exist on an object.
   - `Behaviors.apply_audio_clip(obj: str, start: float, end: float, source_path: str = '') -> None` *(static)* — Author start/stop keys for an audio track over *(start, end)*.
@@ -607,12 +631,12 @@ Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
 
 Switchboard slots for the Shot Manifest UI.
 
-- **[`class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L52)** — Business logic for the Shot Manifest UI.
+- **[`class ShotManifestController(ManifestTableMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L45)** — Business logic for the Shot Manifest UI.
   - `ShotManifestController.detect(self, gap: Optional[float] = None) -> None` — Detect animation regions in the scene and populate the table.
   - `ShotManifestController.remove_callbacks(self) -> None` — Remove ShotStore listener and ScriptJobManager subscriptions.
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
   - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare CSV steps against the live Maya shots and color the tree.
-- **[`class ShotManifestSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L2043)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotManifestSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_slots.py#L1924)** — Switchboard slot class — routes UI events to the controller.
   - `ShotManifestSlots.header_init(self, widget)` — Header menu is configured once in controller.__init__.
   - `ShotManifestSlots.btn_expand_missing(self)` — Expand all step rows that have missing objects or behaviors.
   - `ShotManifestSlots.btn_expand_extra(self)` — Expand all step rows that have scene-discovered extra objects.
@@ -625,7 +649,7 @@ Switchboard slots for the Shot Manifest UI.
 
 Tree-widget presentation mixin for the Shot Manifest controller.
 
-- **[`class ManifestTableMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/table_presenter.py#L33)** — Presentation methods for the manifest tree widget.
+- **[`class ManifestTableMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/table_presenter.py#L35)** — Presentation methods for the manifest tree widget.
   - `ManifestTableMixin.expand_missing(self) -> None` — Expand all step rows that have missing objects, behaviors, or additional objects.
   - `ManifestTableMixin.expand_extra(self) -> None` — Expand all step rows that have scene-discovered extra objects.
 
@@ -634,56 +658,25 @@ Tree-widget presentation mixin for the Shot Manifest controller.
 
 Shot Sequencer — manages per-shot animation with ripple editing.
 
-- **[`class ShotSequencer`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L70)** — Manages a :class:`ShotStore` and provides ripple editing and
-  - `ShotSequencer.shots(self) -> List[ShotBlock]` *(property)*
-  - `ShotSequencer.hidden_objects(self) -> set` *(property)*
-  - `ShotSequencer.markers(self) -> List[Dict[str, Any]]` *(property)*
-  - `ShotSequencer.is_object_hidden(self, obj_name: str) -> bool`
-  - `ShotSequencer.set_object_hidden(self, obj_name: str, hidden: bool = True) -> None`
-  - `ShotSequencer.sorted_shots(self) -> List[ShotBlock]`
-  - `ShotSequencer.shot_by_id(self, shot_id: int) -> Optional[ShotBlock]`
-  - `ShotSequencer.shot_by_name(self, name: str) -> Optional[ShotBlock]`
-  - `ShotSequencer.define_shot(self, name: str, start: float, end: float, objects: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None, locked: bool = False, description: str = '') -> ShotBlock` — Define a shot manually from a name and range.
+- **[`class ShotSequencer(pythontk.ShotSequencer)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L72)** — Manages a :class:`ShotStore` and provides ripple editing and
   - `ShotSequencer.reconcile_all_shots(self) -> bool` — Re-resolve stale DAG paths across every shot and persist changes.
   - `ShotSequencer.collect_object_segments(self, shot_id: int, ignore: Optional[str] = None, motion_rate: float = 0.001, ignore_holds: bool = True) -> List[Dict[str, Any]]` — Collect per-object animation segments within a shot's range.
-  - `ShotSequencer.collect_shot_sequences(self, shot_id: int, include_audio: bool = True) -> List[Dict[str, Any]]` — Return all sequences (anim + audio) inside a shot's range.
-  - `ShotSequencer.sequence_separation(self) -> float` — Room to leave between a moved sequence and what it lands after.
-  - `ShotSequencer.move_sequences_to_shot(self, sequences: List[Dict[str, Any]], dest_shot_id: int) -> None` — Move *sequences* (anim and/or audio) into *dest_shot_id*.
-  - `ShotSequencer.fit_shot_to_content(self, shot_id: int, mode: str = 'fit', edge: str = 'both', reach: Optional[float] = None) -> tuple[float, float]` — Resize a shot's boundaries to its sequence content, rippling neighbors.
-  - `ShotSequencer.trim_shot_to_content(self, shot_id: int, edge: str = 'both') -> tuple[float, float]` — Shrink shot boundaries inward so they exactly enclose content.
-  - `ShotSequencer.extend_shot_to_fit(self, shot_id: int, edge: str = 'both', reach: Optional[float] = None) -> tuple[float, float]` — Expand shot boundaries outward to enclose all of its sequences.
   - `ShotSequencer.detect_shots(self, objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]` — Detect shot boundaries from existing animation on *objects*.
-  - `ShotSequencer.detect_next_shot(self, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001) -> Optional[Dict[str, Any]]` — Detect the first animation cluster after all existing shots.
-  - `ShotSequencer.move_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float) -> None` — Offset all keyframes of *obj* that fall within [old_start, old_end]
   - `ShotSequencer.move_attribute_keys(self, obj: str, attr: Optional[str], delta: float, times: Optional[List[float]] = None, window: Optional[tuple] = None) -> int` — Shift keys of *obj* by *delta* frames -- one attribute's, or all.
   - `ShotSequencer.move_curve_keys(cls, crv: str, times: list, delta: float, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None` *(class)* — Shift the keys of *crv* at *times* by *delta*, tangents intact.
   - `ShotSequencer.recreate_curve_keys(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None` *(class)* — Cut the keys named by *pairs* and rebuild them at their new times.
   - `ShotSequencer.move_stepped_keys(self, obj: str, old_time: float, new_time: float, attr_name: str | None = None, eps: float = 0.001) -> None` — Move stepped keys at *old_time* to *new_time* via delete-and-recreate.
-  - `ShotSequencer.move_object_in_shot(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float) -> None` — Move one object's keys within a shot, expanding the shot and
   - `ShotSequencer.scale_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Scale (and optionally shift) keyframes of *obj* from
-  - `ShotSequencer.move_shot(self, shot_id: int, new_start: float) -> None` — Move an entire shot (all object keys) to *new_start*, rippling downstream.
-  - `ShotSequencer.slide_shot(self, shot_id: int, new_start: float, direction: str = 'downstream', _enforce: bool = True) -> None` — Slide a shot intact to *new_start*, rippling only in *direction*.
-  - `ShotSequencer.ripple_downstream(self, shot_id: int, after_frame: float, delta: float, carry_gap: bool = True)` — Shift all shots starting at or after *after_frame* by *delta*.
-  - `ShotSequencer.ripple_upstream(self, shot_id: int, before_frame: float, delta: float, carry_gap: bool = True)` — Shift all shots ending at or before *before_frame* by *delta*.
-  - `ShotSequencer.ledger(self)` *(property)* — The store's :class:`~pythontk.ShotEditLedger` (system-write claims).
-  - `ShotSequencer.reconcile_system_edits(self, follow: bool = True) -> Dict[str, int]` — Release every shot-system write whose boundary has moved on.
-  - `ShotSequencer.expand_shot(self, shot_id: int, new_end: float) -> float` — Expand a shot's end frame and ripple downstream shots.
-  - `ShotSequencer.resize_object(self, shot_id: int, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Scale one object's keys and ripple-shift all downstream shots.
   - `ShotSequencer.scale_shot_keys(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Retime every key inside ``[old_start, old_end]`` into the new span.
-  - `ShotSequencer.set_shot_duration(self, shot_id: int, new_duration: float) -> None` — Change a shot's duration and ripple-shift all downstream shots.
-  - `ShotSequencer.resize_shot(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True) -> None` — Resize a shot to [new_start, new_end], scaling all keys and rippling.
-  - `ShotSequencer.resize_shot_bounds(self, shot_id: int, new_start: float, new_end: float, _enforce: bool = True, clamp: bool = True) -> None` — Move a shot's boundaries to ``[new_start, new_end]`` WITHOUT
-  - `ShotSequencer.set_shot_start(self, shot_id: int, new_start: float, ripple: bool = True) -> None` — Move a shot to a new start time.
-  - `ShotSequencer.move_shot_to_position(self, shot_id: int, target_pos: int) -> None` — Move a shot to a new 1-based position in the timeline order.
-  - `ShotSequencer.insert_shot(self, name: str, duration: float, after_shot_id: Optional[int] = None, at_position: Optional[int] = None, gap: Optional[float] = None, objects: Optional[List[str]] = None, description: str = '') -> ShotBlock` — Create a shot BETWEEN existing shots, pushing later ones downstream.
-  - `ShotSequencer.delete_shot(self, shot_id: int, delete_contents: bool = True, close_gap: bool = True) -> Dict[str, Any]` — Remove a shot — by default with its keys, and closing up behind it.
-  - `ShotSequencer.merge_shots(self, shot_ids: List[int], name: Optional[str] = None) -> ShotBlock` — Fuse two or more shots into one spanning all of them.
-  - `ShotSequencer.split_shot(self, shot_id: int, at_frame: float, name: Optional[str] = None, gap: float = 0.0) -> ShotBlock` — Cut a shot in two at *at_frame*, leaving its content where it is.
-  - `ShotSequencer.add_shot_space(self, shot_id: int, frames: float, edge: str = 'leading') -> tuple` — Insert empty room at a shot's head and/or tail, rippling downstream.
-  - `ShotSequencer.respace(self, gap: float = 0, start_frame: float = 1, respect_locks: bool = True) -> None` — Redistribute all shots sequentially with uniform gaps.
-  - `ShotSequencer.apply_gap(self, gap: float, scope: str = 'all', shot_id: Optional[int] = None, respect_locks: bool = True) -> bool` — Re-space shots so the given *gap* separates them, per *scope*.
-  - `ShotSequencer.to_dict(self) -> Dict[str, Any]` — Serialise shots and settings to a plain dict.
-  - `ShotSequencer.from_dict(cls, data: Dict[str, Any]) -> 'ShotSequencer'` *(class)* — Restore from serialised data.
+
+<a id="anim_utils--shots--shot_sequencer--clip_menu"></a>
+### `anim_utils/shots/shot_sequencer/clip_menu.py`
+
+Clip context menus and clip-level key operations.
+
+- **[`class ClipMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_menu.py#L17)** — Clip and gap context menus, and the clip-level key operations they run.
+  - `ClipMenuMixin.on_clip_menu(self, menu, clip_id: int) -> None` — Add domain-specific actions to a clip's context menu.
+  - `ClipMenuMixin.on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None` — Add domain-specific actions to a gap overlay's context menu.
 
 <a id="anim_utils--shots--shot_sequencer--clip_motion"></a>
 ### `anim_utils/shots/shot_sequencer/clip_motion.py`
@@ -717,6 +710,16 @@ Gap and range-highlight handlers for the shot sequencer controller.
   - `GapManagerMixin.on_gap_lock_all(self) -> None` — Lock all gaps so they are preserved during respace.
   - `GapManagerMixin.on_gap_unlock_all(self) -> None` — Unlock all gaps so they follow the global gap value.
 
+<a id="anim_utils--shots--shot_sequencer--key_menu"></a>
+### `anim_utils/shots/shot_sequencer/key_menu.py`
+
+Key context menus and key-selection edits.
+
+- **[`class KeyMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/key_menu.py#L22)** — Key context menus, tangent edits and drags, and the key-selection edits.
+  - `KeyMenuMixin.on_key_menu(self, menu, key_groups: list) -> None` — Add the key actions to a key's context menu.
+  - `KeyMenuMixin.tangent_from_handle(side: str, dt: float, dv: float) -> tuple` *(static)* — ``(angle_degrees, weight)`` of the tangent a dragged handle stands for.
+  - `KeyMenuMixin.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None` — Write the tangents a dragged handle asks for on the keys' curves.
+
 <a id="anim_utils--shots--shot_sequencer--marker_manager"></a>
 ### `anim_utils/shots/shot_sequencer/marker_manager.py`
 
@@ -727,6 +730,32 @@ Marker persistence for the shot sequencer controller.
   - `MarkerManagerMixin.on_marker_moved(self, marker_id: int, new_time: float) -> None` — Update persisted marker time.
   - `MarkerManagerMixin.on_marker_changed(self, marker_id: int) -> None` — Update persisted marker note/color.
   - `MarkerManagerMixin.on_marker_removed(self, marker_id: int) -> None` — Remove marker from persistent store.
+
+<a id="anim_utils--shots--shot_sequencer--scene_callbacks"></a>
+### `anim_utils/shots/shot_sequencer/scene_callbacks.py`
+
+Maya scene callbacks for the shot sequencer.
+
+- **[`class SceneCallbacksMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_callbacks.py#L24)** — Scene event hooks: undo/redo, key edits and time changes refresh the widget.
+  - `SceneCallbacksMixin.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
+
+<a id="anim_utils--shots--shot_sequencer--scene_selection"></a>
+### `anim_utils/shots/shot_sequencer/scene_selection.py`
+
+Tracks and the Maya selection.
+
+- **[`class SceneSelectionMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_selection.py#L23)** — Tracks, and the DCC selection that follows the sequencer's.
+  - `SceneSelectionMixin.hide_track(self, track_names) -> None` — Hide one or more tracks by name, persist, and rebuild the widget.
+  - `SceneSelectionMixin.show_track(self, track_name: str) -> None` — Un-hide a track by object name, persist, and rebuild the widget.
+  - `SceneSelectionMixin.delete_track(self, track_names) -> None` — Permanently remove objects from all shots and rebuild the widget.
+  - `SceneSelectionMixin.on_selection_changed(self, clip_ids: list) -> None` — Select the corresponding Maya objects when clips are clicked.
+  - `SceneSelectionMixin.on_track_selected(self, track_names: list) -> None` — Select Maya objects when track labels are clicked in the header.
+  - `SceneSelectionMixin.on_sub_track_selected(self, rows: list) -> None` — Select a channel when its sub-row label is clicked in the header.
+  - `SceneSelectionMixin.on_clip_locked(self, clip_id: int, locked: bool) -> None` — Persist per-object clip lock and propagate to sibling clips.
+  - `SceneSelectionMixin.on_track_menu(self, menu, track_names) -> None` — Add Maya-specific actions to the track header context menu.
+  - `SceneSelectionMixin.on_header_menu(self, menu) -> None` — Add settings actions to the header background context menu.
+  - `SceneSelectionMixin.on_key_selection_changed(self, key_groups: list) -> None` — Sync the Maya Graph Editor selection to match the sequencer.
+  - `SceneSelectionMixin.on_clip_renamed(self, clip_id: int, new_label: str) -> None` — Handle inline rename — currently a no-op (shot clips removed).
 
 <a id="anim_utils--shots--shot_sequencer--segment_collector"></a>
 ### `anim_utils/shots/shot_sequencer/segment_collector.py`
@@ -740,6 +769,19 @@ Segment collection and attribute extraction for the shot sequencer.
   - `SegmentCollector.extract_attributes(segments) -> list` *(static)* — Extract attribute names from animation curves in the given segments.
   - `SegmentCollector.build_curve_preview(crv, t_start, t_end)` *(static)* — Extract Bézier curve shape data for a single anim curve.
 
+<a id="anim_utils--shots--shot_sequencer--shot_lane"></a>
+### `anim_utils/shots/shot_sequencer/shot_lane.py`
+
+The shot lane: its context menu and the shot structure edits.
+
+- **[`class ShotLaneMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_lane.py#L14)** — The shot lane's menus and the shot structure edits they run.
+  - `ShotLaneMixin.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None` — Build a context menu specific to the clicked zone.
+  - `ShotLaneMixin.delete_shot(self, shot_id: int) -> None` — Delete *shot_id* with its contents, closing the timeline behind it.
+  - `ShotLaneMixin.delete_stale_shots(self) -> None` — Delete every stale shot, after naming them (``ShotStore.remove_stale_shots``).
+  - `ShotLaneMixin.move_shot_to_position(self, shot_id: int, position: int) -> None` — Re-slot *shot_id* at 1-based *position*, pushing the rest along.
+  - `ShotLaneMixin.merge_shot_with(self, shot_id: int, other_id: int) -> None` — Fuse two neighbouring shots into one spanning both.
+  - `ShotLaneMixin.split_shot_at(self, shot_id: int, time: float) -> None` — Cut *shot_id* in two at *time*, leaving its content where it is.
+
 <a id="anim_utils--shots--shot_sequencer--shot_nav"></a>
 ### `anim_utils/shots/shot_sequencer/shot_nav.py`
 
@@ -749,44 +791,23 @@ Shot navigation and combobox synchronization.
   - `ShotNavMixin.select_shot(self, shot_id: int) -> None` — Set Maya's playback range to the shot and select its objects.
   - `ShotNavMixin.on_shot_block_clicked(self, shot_name: str) -> None` — Select a shot by name when its block is clicked in the shot lane.
 
+<a id="anim_utils--shots--shot_sequencer--shot_sequencer_controller"></a>
+### `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py`
+
+The Shot Sequencer panel's controller: :class:`ShotSequencerController`.
+
+- **[`class ShotSequencerController(SceneCallbacksMixin, UndoLedgerMixin, ShotLaneMixin, ClipMenuMixin, KeyMenuMixin, WidgetSyncMixin, SceneSelectionMixin, TransportMixin, GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_controller.py#L55)** — Business logic controller bridging SequencerWidget ↔ ShotSequencer.
+  - `ShotSequencerController.sequencer(self) -> Optional[ShotSequencer]` *(property)* — Return the ShotSequencer, lazily creating one from the active store.
+  - `ShotSequencerController.active_shot_id(self) -> Optional[int]` *(property)* — Return the shot_id currently selected, or the first shot's id.
+
 <a id="anim_utils--shots--shot_sequencer--shot_sequencer_slots"></a>
 ### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py`
 
 Switchboard slots for the Shot Sequencer UI.
 
-- **[`class ShotSequencerController(GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L56)** — Business logic controller bridging SequencerWidget ↔ ShotSequencer.
-  - `ShotSequencerController.sequencer(self) -> Optional[ShotSequencer]` *(property)* — Return the ShotSequencer, lazily creating one from the active store.
-  - `ShotSequencerController.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
-  - `ShotSequencerController.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None` — Build a context menu specific to the clicked zone.
-  - `ShotSequencerController.delete_shot(self, shot_id: int) -> None` — Delete *shot_id* with its contents, closing the timeline behind it.
-  - `ShotSequencerController.delete_stale_shots(self) -> None` — Delete every stale shot, after naming them (``ShotStore.remove_stale_shots``).
-  - `ShotSequencerController.move_shot_to_position(self, shot_id: int, position: int) -> None` — Re-slot *shot_id* at 1-based *position*, pushing the rest along.
-  - `ShotSequencerController.merge_shot_with(self, shot_id: int, other_id: int) -> None` — Fuse two neighbouring shots into one spanning both.
-  - `ShotSequencerController.split_shot_at(self, shot_id: int, time: float) -> None` — Cut *shot_id* in two at *time*, leaving its content where it is.
-  - `ShotSequencerController.active_shot_id(self) -> Optional[int]` *(property)* — Return the shot_id currently selected, or the first shot's id.
-  - `ShotSequencerController.on_undo(self) -> None` — Handle undo_requested from the widget — delegate to Maya undo.
-  - `ShotSequencerController.on_redo(self) -> None` — Handle redo_requested from the widget — delegate to Maya redo.
-  - `ShotSequencerController.on_clip_menu(self, menu, clip_id: int) -> None` — Add domain-specific actions to a clip's context menu.
-  - `ShotSequencerController.on_key_menu(self, menu, key_groups: list) -> None` — Add the key actions to a key's context menu.
-  - `ShotSequencerController.tangent_from_handle(side: str, dt: float, dv: float) -> tuple` *(static)* — ``(angle_degrees, weight)`` of the tangent a dragged handle stands for.
-  - `ShotSequencerController.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None` — Write the tangents a dragged handle asks for on the keys' curves.
-  - `ShotSequencerController.on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None` — Add domain-specific actions to a gap overlay's context menu.
-  - `ShotSequencerController.refresh(self) -> None` — Clear cached segments and rebuild the sequencer widget.
-  - `ShotSequencerController.hide_track(self, track_names) -> None` — Hide one or more tracks by name, persist, and rebuild the widget.
-  - `ShotSequencerController.show_track(self, track_name: str) -> None` — Un-hide a track by object name, persist, and rebuild the widget.
-  - `ShotSequencerController.delete_track(self, track_names) -> None` — Permanently remove objects from all shots and rebuild the widget.
-  - `ShotSequencerController.on_selection_changed(self, clip_ids: list) -> None` — Select the corresponding Maya objects when clips are clicked.
-  - `ShotSequencerController.on_track_selected(self, track_names: list) -> None` — Select Maya objects when track labels are clicked in the header.
-  - `ShotSequencerController.on_sub_track_selected(self, rows: list) -> None` — Select a channel when its sub-row label is clicked in the header.
-  - `ShotSequencerController.on_clip_locked(self, clip_id: int, locked: bool) -> None` — Persist per-object clip lock and propagate to sibling clips.
-  - `ShotSequencerController.on_track_menu(self, menu, track_names) -> None` — Add Maya-specific actions to the track header context menu.
-  - `ShotSequencerController.on_header_menu(self, menu) -> None` — Add settings actions to the header background context menu.
-  - `ShotSequencerController.on_key_selection_changed(self, key_groups: list) -> None` — Sync the Maya Graph Editor selection to match the sequencer.
-  - `ShotSequencerController.on_clip_renamed(self, clip_id: int, new_label: str) -> None` — Handle inline rename — currently a no-op (shot clips removed).
-  - `ShotSequencerController.on_playhead_moved(self, frame: float) -> None` — Sync the Maya playhead to the widget playhead.
-- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4302)** — Lightweight dialog for creating or editing a shot.
+- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L43)** — Lightweight dialog for creating or editing a shot.
   - `ShotEditDialog.show(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot', validate=None)` *(static)* — Show a modal dialog and return the result tuple or ``None``.
-- **[`class ShotSequencerSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L4393)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotSequencerSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L134)** — Switchboard slot class — routes UI events to the controller.
   - `ShotSequencerSlots.header_init(self, widget)` — Configure header menu.
   - `ShotSequencerSlots.btn_colors(self)` — Open the attribute color configuration dialog.
   - `ShotSequencerSlots.cmb_shot(self, index)` — Handle direct combobox selection of a shot or marker.
@@ -794,12 +815,37 @@ Switchboard slots for the Shot Sequencer UI.
   - `ShotSequencerSlots.btn_shortcuts(self)` — Open the sequencer shortcut editor.
   - `ShotSequencerSlots.btn_shot_settings(self)` — Open the shared shots settings panel.
 
+<a id="anim_utils--shots--shot_sequencer--transport"></a>
+### `anim_utils/shots/shot_sequencer/transport.py`
+
+Transport: the playhead, audio scrub and the transport row.
+
+- **[`class TransportMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/transport.py#L68)** — The playhead, audible scrubbing and the transport button row.
+  - `TransportMixin.on_playhead_moved(self, frame: float) -> None` — Sync the Maya playhead to the widget playhead.
+
+<a id="anim_utils--shots--shot_sequencer--undo_ledger"></a>
+### `anim_utils/shots/shot_sequencer/undo_ledger.py`
+
+The shot sequencer's undo ledger.
+
+- **[`class UndoLedgerMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/undo_ledger.py#L17)** — Shot-boundary restore points, and how one undo/redo splits between them and the DCC.
+  - `UndoLedgerMixin.on_undo(self) -> None` — Handle undo_requested from the widget — delegate to Maya undo.
+  - `UndoLedgerMixin.on_redo(self) -> None` — Handle redo_requested from the widget — delegate to Maya redo.
+
+<a id="anim_utils--shots--shot_sequencer--widget_sync"></a>
+### `anim_utils/shots/shot_sequencer/widget_sync.py`
+
+Widget sync: rebuilding the sequencer from the scene.
+
+- **[`class WidgetSyncMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/widget_sync.py#L33)** — Rebuilding the widget from the scene: tracks, clips, sub-rows, decoration.
+  - `WidgetSyncMixin.refresh(self) -> None` — Clear cached segments and rebuild the sequencer widget.
+
 <a id="anim_utils--shots--shots_slots"></a>
 ### `anim_utils/shots/shots_slots.py`
 
 Switchboard slots for the Shots settings UI.
 
-- **[`class ShotsController(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L24)** — Business logic for the Shots settings panel.
+- **[`class ShotsController(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L24)** — Business logic for the Shots settings panel.
   - `ShotsController.remove_callbacks(self) -> None` — Remove store listeners and invalidation subscription (call on teardown).
   - `ShotsController.refresh_state(self) -> None` — Central enable/disable refresh for all Shots UI widgets.
   - `ShotsController.on_detection_changed(self, value: float) -> None`
@@ -822,7 +868,7 @@ Switchboard slots for the Shots settings UI.
   - `ShotsController.on_trim_all_shots(self, edge: str = 'both') -> None` — Trim empty space from every shot, at *edge*.
   - `ShotsController.on_shift_all_shots(self, start: float) -> None` — Shift every shot so the first one starts on *start*.
   - `ShotsController.on_add_space(self, edge: str = 'leading') -> None` — Pad the active shot with ``spn_space`` frames of room at *edge*.
-- **[`class ShotsSlots(ptk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L1237)** — Switchboard slot class — routes UI events to the controller.
+- **[`class ShotsSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shots_slots.py#L1157)** — Switchboard slot class — routes UI events to the controller.
   - `ShotsSlots.header_init(self, widget)` — Configure header help text.
   - `ShotsSlots.spn_detection(self, value)` — Detection threshold changed.
   - `ShotsSlots.cmb_detection_mode(self, index)` — Detection mode combobox changed.
@@ -911,11 +957,10 @@ Persistence and restore engine for SmartBake's nondestructive manifest.
 
 Slots for the Smart Bake tool panel (smart_bake.ui).
 
-- **[`class SmartBakeSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/anim_utils/smart_bake/smart_bake_slots.py#L18)** — Controller wiring smart_bake.ui to the SmartBake engine.
+- **[`class SmartBakeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/anim_utils/smart_bake/smart_bake_slots.py#L18)** — Controller wiring smart_bake.ui to the SmartBake engine.
   - `SmartBakeSlots.cmb_scope_init(self, widget) -> None`
   - `SmartBakeSlots.cmb_backup_init(self, widget) -> None`
   - `SmartBakeSlots.header_init(self, widget) -> None` — Configure header menu, refresh button, and help text.
-  - `SmartBakeSlots.reset_defaults(self) -> None` — Header menu: reset every field in this panel to its registry default.
   - `SmartBakeSlots.b000(self, widget) -> None` — Bake.
   - `SmartBakeSlots.b001(self, widget) -> None` — Unbake.
 
@@ -955,7 +1000,7 @@ Unified audio system for Maya scenes.
 - [`MARKER_ATTR`](mayatk/mayatk/audio_utils/_audio_utils.py#L71) — constant
 - [`RESERVED_TRACK_IDS`](mayatk/mayatk/audio_utils/_audio_utils.py#L74) — constant
 - **[`class TrackEvent`](mayatk/mayatk/audio_utils/_audio_utils.py#L32)** — One keyed play-event on a track.
-- **[`class AudioUtils(ptk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L85)** — Unified audio system API for Maya scenes.
+- **[`class AudioUtils(pythontk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L85)** — Unified audio system API for Maya scenes.
   - `AudioUtils.get_snap_frames() -> bool` *(static)* — Return the global whole-frame snap default for key writes.
   - `AudioUtils.set_snap_frames(value: bool) -> None` *(static)* — Set the global whole-frame snap default for key writes.
   - `AudioUtils.validate_track_id(track_id: str) -> None` *(static)* — Raise ``ValueError`` if *track_id* violates schema rules.
@@ -1002,7 +1047,7 @@ Unified audio system for Maya scenes.
 
 Scene-wide audio event manager — thin facade over ``audio_utils``.
 
-- **[`class AudioClips(ptk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L47)** — Scene-wide audio event facade.
+- **[`class AudioClips(pythontk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L47)** — Scene-wide audio event facade.
   - `AudioClips.sync(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]` *(class)* — Reconcile DG nodes and rebuild the composite WAV.
   - `AudioClips.rebuild_composite(cls) -> Optional[str]` *(class)* — Rebuild the scene-wide composite WAV from keyed start events.
   - `AudioClips.remove(cls) -> int` *(class)* — Delete every managed DG node, the composite, and all tracks.
@@ -1098,7 +1143,7 @@ Consumer-facing segment discovery for sequencer + manifest.
 <a id="cam_utils--_cam_utils"></a>
 ### `cam_utils/_cam_utils.py`
 
-- **[`class CamUtils(ptk.HelpMixin)`](mayatk/mayatk/cam_utils/_cam_utils.py#L19)**
+- **[`class CamUtils(pythontk.HelpMixin)`](mayatk/mayatk/cam_utils/_cam_utils.py#L19)**
   - `CamUtils.group_cameras(name='cameras', non_default=True, root_only=False, hide_group=False)` *(static)* — Group cameras in the scene based on the provided parameters.
   - `CamUtils.toggle_safe_frames(cls)` *(class)* — Toggle display of the film gate for the current camera.
   - `CamUtils.get_current_cam()` *(static)* — Get the currently active camera.
@@ -1115,12 +1160,13 @@ Consumer-facing segment discovery for sequencer + manifest.
 
 - **[`class BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L21)** — Plain-data bounding box with ``MVector`` extents.
   - `BoundingBox.corners(self)` *(property)* — The box's 8 corner ``MVector``s (every min/max combination per axis).
-- **[`class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L188)**
+- **[`class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L188)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.undo_disabled()` *(static)* — Run a block without recording anything into the undo queue.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
   - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — A decorator to pass the current selection to the target parameter if None is given.
   - `CoreUtils.preserved_selection()` *(static)* — Restore the viewport selection after a scene-mutating block.
+  - `CoreUtils.temp_option_vars(values: Dict[str, Union[int, float, str]])` *(static)* — Set Maya optionVars for a block, then put the user's values back.
   - `CoreUtils.undoable(fn=None, *, name: str = '', suspend_refresh: bool = False)` *(static)* — A decorator to place a function into Maya's undo chunk.
   - `CoreUtils.reparent(func: Callable) -> Callable` *(static)* — A decorator to manage reparenting of Maya nodes before and after an operation.
   - `CoreUtils.wrap_control(control_name, container)` *(static)* — Embed a Maya Native UI Object.
@@ -1145,11 +1191,11 @@ Consumer-facing segment discovery for sequencer + manifest.
 
 Scene auto-instancer: convert geometrically identical meshes to instances.
 
-- **[`class InstanceCandidate`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L48)** — Holds information about a transform candidate for instancing.
+- **[`class InstanceCandidate`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L47)** — Holds information about a transform candidate for instancing.
   - `InstanceCandidate.transform(self) -> str` *(property)*
   - `InstanceCandidate.exists(self) -> bool`
-- **[`class InstanceGroup`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L81)** — A group of objects that are geometrically identical.
-- **[`class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal)`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L141)** — Convert matching meshes into instances.
+- **[`class InstanceGroup`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L80)** — A group of objects that are geometrically identical.
+- **[`class AutoInstancer(pythontk.LoggingMixin, _AutoInstancerInternal)`](mayatk/mayatk/core_utils/auto_instancer/_auto_instancer.py#L132)** — Convert matching meshes into instances.
   - `AutoInstancer.default_summary() -> Dict[str, object]` *(static)* — A zeroed run-summary — the shape of :attr:`last_run_summary`.
   - `AutoInstancer.format_summary(summary: Dict[str, object], output_count: int) -> str` *(static)* — Human-readable, DCC-agnostic description of a run *summary*.
   - `AutoInstancer.tolerance(self)` *(property)*
@@ -1205,12 +1251,9 @@ Geometry analysis and matching logic for AutoInstancer.
 <a id="core_utils--auto_instancer--instancing_strategy"></a>
 ### `core_utils/auto_instancer/instancing_strategy.py`
 
-Instancing strategy logic for AutoInstancer.
+AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
 
-- **[`class StrategyType(Enum)`](mayatk/mayatk/core_utils/auto_instancer/instancing_strategy.py#L17)**
-- **[`class StrategyConfig`](mayatk/mayatk/core_utils/auto_instancer/instancing_strategy.py#L25)**
-- **[`class InstancingStrategy`](mayatk/mayatk/core_utils/auto_instancer/instancing_strategy.py#L33)** — Determines the best instancing strategy for a group of objects.
-  - `InstancingStrategy.evaluate(self, group_size: int, mesh_node: Optional[object] = None, triangle_count: Optional[int] = None) -> StrategyType` — Evaluate the strategy for a given group.
+- **[`class InstancingStrategy(pythontk.InstancingStrategy)`](mayatk/mayatk/core_utils/auto_instancer/instancing_strategy.py#L23)** — :class:`pythontk.InstancingStrategy` counting triangles in the Maya scene.
 
 <a id="core_utils--components"></a>
 ### `core_utils/components.py`
@@ -1223,7 +1266,7 @@ Instancing strategy logic for AutoInstancer.
   - `GetComponentsMixin.convert_int_to_component(cls, obj, integers, component_type, returned_type='str', flatten=False)` *(class)* — Convert the given integers to components of the given object.
   - `GetComponentsMixin.filter_components(cls, components, inc=None, exc=None, flatten=False)` *(class)* — Filter the given components.
   - `GetComponentsMixin.get_components(cls, objects, component_type, returned_type='str', inc=None, exc=None, randomize=0, flatten=False)` *(class)* — Get the components of the given type from the given object(s).
-- **[`class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L457)**
+- **[`class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L457)**
   - `Components.get_mesh_transforms(objects) -> List[str]` *(static)* — Full paths of every mesh TRANSFORM in *objects*, descendants included.
   - `Components.get_standoff_distances(cls, objects, target, sample_limit: Optional[int] = None) -> Dict[str, float]` *(class)* — Measure how far each mesh in *objects* stands off *target*'s surface.
   - `Components.map_components_to_objects(components_list)` *(static)* — Map a list of components to their respective objects.
@@ -1316,13 +1359,16 @@ Mesh diagnostics and repair helpers.
 - **[`class MeshDiagnostics`](mayatk/mayatk/core_utils/diagnostics/mesh_diag.py#L19)** — Operations for inspecting and fixing common mesh issues.
   - `MeshDiagnostics.clean_geometry(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> list` *(static)* — Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.
   - `MeshDiagnostics.get_ngons(objects: Optional[NodeSeq] = None, repair: bool = False) -> list` *(static)* — Find N-gons and optionally convert them to quads.
+  - `MeshDiagnostics.find_non_manifold_vertices(objects: NodeSeq) -> dict` *(static)* — Map each mesh in *objects* to its non-manifold vertices, via ``polyInfo``.
+  - `MeshDiagnostics.select_non_manifold(cls, objects: NodeSeq) -> tuple` *(class)* — Select what makes *objects* non-manifold: its vertices, else its UVs.
+  - `MeshDiagnostics.repair_non_manifold(cls, objects: NodeSeq, quiet: bool = False) -> dict` *(class)* — Auto-repair non-manifold geometry AND UVs on *objects*.
 
 <a id="core_utils--diagnostics--scene_audit"></a>
 ### `core_utils/diagnostics/scene_audit.py`
 
 Scene audit engine — game-readiness analysis over meshes, materials, and textures.
 
-- **[`class SceneAnalyzer(ptk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_audit.py#L73)** — Analyzes scene objects for performance expectations in game engines.
+- **[`class SceneAnalyzer(pythontk.LoggingMixin)`](mayatk/mayatk/core_utils/diagnostics/scene_audit.py#L73)** — Analyzes scene objects for performance expectations in game engines.
   - `SceneAnalyzer.run_audit(cls, adaptive: bool = False, verbose: bool = True) -> None` *(class)* — Run a full scene audit and print the report.
   - `SceneAnalyzer.format_audit_text(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]` *(class)* — Run the audit and return the formatted report as a
   - `SceneAnalyzer.format_audit_html(cls, adaptive: bool = False, objects: Optional[List[Any]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, sections: Optional[List[str]] = None, scope: Optional[str] = None) -> Dict[str, str]` *(class)* — Run the audit and return a section-keyed dict of HTML
@@ -1335,7 +1381,7 @@ Scene audit engine — game-readiness analysis over meshes, materials, and textu
 
 Scene repair helpers: OCIO / color management, unknown nodes and plugins,
 
-- **[`class SceneDiagnostics(_SceneDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L65)** — Operations for inspecting and fixing common scene issues.
+- **[`class SceneDiagnostics(_SceneDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/scene_diag.py#L68)** — Operations for inspecting and fixing common scene issues.
   - `SceneDiagnostics.fix_ocio(cls, dry_run: bool = False, verbose: bool = True, prefer_env_ocio: bool = True, prefer_aces: bool = True, fix_color_spaces: bool = True) -> dict` *(class)* — Repair Maya OCIO/Color Management preferences.
   - `SceneDiagnostics.fix_missing_color_spaces(cls, fallback_color_space: Optional[str] = None, fallback_raw_space: Optional[str] = None, auto_detect: bool = True, dry_run: bool = False, verbose: bool = True, scan_all: bool = True, force_update: bool = False) -> Dict[str, Any]` *(class)* — Fix missing color space errors on file texture nodes.
   - `SceneDiagnostics.fix_unknown_plugins(dry_run: bool = False, verbose: bool = True) -> Dict[str, List[str]]` *(static)* — Fixes the 'Unable to Save Scene' issue by removing unknown nodes and plugins.
@@ -1382,13 +1428,13 @@ UV diagnostics and repair helpers.
 
 Hermetic preview with replay-on-commit (H1 design).
 
-- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L70)** — User-facing operation failure for the Preview message box.
-- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L87)** — Captures and reverses side effects of a previewed operation.
+- **[`class OperationError(Exception)`](mayatk/mayatk/core_utils/preview.py#L73)** — User-facing operation failure for the Preview message box.
+- **[`class CleanupContract`](mayatk/mayatk/core_utils/preview.py#L90)** — Captures and reverses side effects of a previewed operation.
   - `CleanupContract.snapshot_created(self) -> Set[str]` — Diff the scene against the entry snapshot: what exists now that
   - `CleanupContract.add_file(self, path) -> None`
   - `CleanupContract.record_modification(self, node: str, attr: str) -> None`
   - `CleanupContract.rollback(self) -> None`
-- **[`class Preview(_PreviewInternal)`](mayatk/mayatk/core_utils/preview.py#L519)** — Hermetic preview orchestrator (H1).
+- **[`class Preview(_PreviewInternal)`](mayatk/mayatk/core_utils/preview.py#L522)** — Hermetic preview orchestrator (H1).
   - `Preview.cleanup_all_instances(cls) -> None` *(class)*
   - `Preview.init_show_hide_behavior(self, enable_on_show: bool, disable_on_hide: bool) -> None`
   - `Preview.conditionally_enable(self) -> None`
@@ -1411,7 +1457,7 @@ Hermetic preview with replay-on-commit (H1 design).
 
 Centralized Maya event subscription manager.
 
-- **[`class ScriptJobManager`](mayatk/mayatk/core_utils/script_job_manager.py#L76)** — Centralized Maya scriptJob event dispatcher.
+- **[`class ScriptJobManager`](mayatk/mayatk/core_utils/script_job_manager.py#L79)** — Centralized Maya scriptJob event dispatcher.
   - `ScriptJobManager.instance(cls) -> 'ScriptJobManager'` *(class)* — Return the module-wide singleton, creating it on first access.
   - `ScriptJobManager.reset(cls) -> None` *(class)* — Tear down the singleton and allow a fresh one to be created.
   - `ScriptJobManager.subscribe(self, event: str, callback: Callable, *, owner: Any = None, ephemeral: bool = False) -> int` — Register *callback* for a Maya scriptJob *event*.
@@ -1437,7 +1483,7 @@ Put OpenMaya edits on Maya's undo queue, as one ordinary undo step.
 <a id="display_utils--_display_utils"></a>
 ### `display_utils/_display_utils.py`
 
-- **[`class DisplayUtils(ptk.HelpMixin)`](mayatk/mayatk/display_utils/_display_utils.py#L23)**
+- **[`class DisplayUtils(pythontk.HelpMixin)`](mayatk/mayatk/display_utils/_display_utils.py#L23)**
   - `DisplayUtils.add_to_isolation(func: Callable) -> Callable` *(static)* — Decorator: add a function's newly created node(s) to every isolated viewport.
   - `DisplayUtils.is_templated(obj: Union[str, object]) -> bool` *(static)* — Check if a given object is templated.
   - `DisplayUtils.set_visibility(cls, elements: Union[str, object, List], visibility: bool = True, include_ancestors: bool = True, affect_layers: bool = True) -> None` *(class)* — Sets the visibility of specified elements in the Maya scene.
@@ -1501,20 +1547,10 @@ Put OpenMaya edits on Maya's undo queue, as one ordinary undo step.
   - `ExplodedViewSlots.b002(self)` — Un-explode all button
   - `ExplodedViewSlots.b003(self)` — Toggle Exlode
 
-<a id="edit_utils--_curtain_drape"></a>
-### `edit_utils/_curtain_drape.py`
-
-Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
-
-- **[`class CurtainDrape(_CurtainDrapeInternal)`](mayatk/mayatk/edit_utils/_curtain_drape.py#L69)** — Drape a grid into a pleated, gravity-sagged curtain — pure math.
-  - `CurtainDrape.prepare(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]` — Precompute the per-build state and return ``(u_segs, v_segs, frames)``.
-  - `CurtainDrape.grid_points(self) -> Tuple[int, int, List[Vec]]` — The full draped grid: ``(u_segs, v_segs, points)``.
-  - `CurtainDrape.drape(self, u, v, pos, tan, normal) -> Vec` — Place one cloth vertex.
-
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(ptk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L641)**
+- **[`class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L641)**
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.ungroup_objects(objects=None) -> List[str]` *(static)* — Inverse of `group_objects` — dissolve the given group(s) (or selection).
@@ -1545,9 +1581,9 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
 <a id="edit_utils--bevel"></a>
 ### `edit_utils/bevel.py`
 
-- **[`class Bevel`](mayatk/mayatk/edit_utils/bevel.py#L9)**
+- **[`class Bevel`](mayatk/mayatk/edit_utils/bevel.py#L12)**
   - `Bevel.bevel(edges, width=0.5, segments=1, autoFit=True, depth=1, mitering=0, miterAlong=0, chamfer=True, worldSpace=True, smoothingAngle=30, fillNgons=True, mergeVertices=True, mergeVertexTolerance=0.0001, miteringAngle=180, angleTolerance=180)` *(static)* — Bevels the given edges with highly customizable options for topology,
-- **[`class BevelSlots`](mayatk/mayatk/edit_utils/bevel.py#L110)**
+- **[`class BevelSlots`](mayatk/mayatk/edit_utils/bevel.py#L113)**
   - `BevelSlots.header_init(self, widget)` — Configure header help text.
   - `BevelSlots.perform_operation(self, objects, contract)`
 
@@ -1562,32 +1598,48 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `BridgeSlots.header_init(self, widget)` — Configure header help text.
   - `BridgeSlots.perform_operation(self, objects, contract)`
 
-<a id="edit_utils--curtain"></a>
-### `edit_utils/curtain.py`
+<a id="edit_utils--curtain--_curtain"></a>
+### `edit_utils/curtain/_curtain.py`
 
 Procedural draped-cloth (curtain) generator for Maya.
 
-- **[`class Rail(ptk.Polyline)`](mayatk/mayatk/edit_utils/curtain.py#L78)** — Rail-polyline geometry — the line a curtain hangs from.
+- **[`class Rail(pythontk.Polyline)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L70)** — Rail-polyline geometry — the line a curtain hangs from.
   - `Rail.from_selection(objects) -> Optional[Tuple[List[Vec], bool]]` *(static)* — Resolve a rail polyline from a Maya selection.
   - `Rail.sample_curve(shape: str, count: int = 200) -> Tuple[List[Vec], bool]` *(static)* — Sample a NURBS curve into a dense polyline (resampled later by length).
-- **[`class CurtainMesh(CurtainDrape)`](mayatk/mayatk/edit_utils/curtain.py#L167)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
+- **[`class CurtainMesh(CurtainDrape)`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L159)** — Generate a pleated, gravity-draped curtain mesh from a rail polyline.
   - `CurtainMesh.create(cls, rail: Sequence[Vec], **opts) -> str` *(class)*
   - `CurtainMesh.build(self) -> str` — Create the curtain mesh and return its transform name.
-- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain.py#L383)** — Make a curve drive a finished curtain.
+- **[`class CurtainRig`](mayatk/mayatk/edit_utils/curtain/_curtain.py#L375)** — Make a curve drive a finished curtain.
   - `CurtainRig.attach(curtain: str, curve: str, dropoff: float, cluster: bool = True) -> str` *(static)* — Wire-deform *curtain* with *curve* and add per-CV cluster controls.
-- **[`class CurtainSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain.py#L445)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
+
+<a id="edit_utils--curtain--_curtain_drape"></a>
+### `edit_utils/curtain/_curtain_drape.py`
+
+Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
+
+- **[`class CurtainDrape(_CurtainDrapeInternal)`](mayatk/mayatk/edit_utils/curtain/_curtain_drape.py#L70)** — Drape a grid into a pleated, gravity-sagged curtain — pure math.
+  - `CurtainDrape.prepare(self) -> Tuple[int, int, List[Tuple[Vec, Vec, Vec]]]` — Precompute the per-build state and return ``(u_segs, v_segs, frames)``.
+  - `CurtainDrape.grid_points(self) -> Tuple[int, int, List[Vec]]` — The full draped grid: ``(u_segs, v_segs, points)``.
+  - `CurtainDrape.drape(self, u, v, pos, tan, normal) -> Vec` — Place one cloth vertex.
+
+<a id="edit_utils--curtain--curtain_slots"></a>
+### `edit_utils/curtain/curtain_slots.py`
+
+Curtain panel — the Switchboard slots for ``curtain.ui``.
+
+- **[`class CurtainSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/curtain/curtain_slots.py#L33)** — Switchboard slot wiring for the curtain UI (hermetic preview + presets).
   - `CurtainSlots.header_init(self, widget)` — Configure header help text (the preset combo lives in the panel).
   - `CurtainSlots.cmb000_init(self, widget)` — Wire the in-panel preset selector (built-in + user tiers).
-  - `CurtainSlots.b001(self)` — Reset to Defaults.
+  - `CurtainSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `CurtainSlots.b002(self)` — Set Position to the bounding-box center of the selected object(s).
   - `CurtainSlots.perform_operation(self, objects, contract)` — Build the curtain from the resolved rail (Preview entry point).
 
 <a id="edit_utils--cut_on_axis"></a>
 ### `edit_utils/cut_on_axis.py`
 
-- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L11)**
+- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L14)**
   - `CutOnAxis.perform_cut_on_axis(objects, axis='-x', cuts=0, cut_offset=0, cut_spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, delete=False, mirror=False, pivot='manip', axis_frame=None)` *(static)* — Iterates over provided objects and performs cut or delete operations based on the axis specified.
-- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L70)**
+- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L73)**
   - `CutOnAxisSlots.header_init(self, widget)` — Configure header help text.
   - `CutOnAxisSlots.toggle_weight_ui(self)` — Enable the weight fields only for the modes that consume them.
   - `CutOnAxisSlots.perform_operation(self, objects, contract)`
@@ -1595,11 +1647,11 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--duplicate_grid"></a>
 ### `edit_utils/duplicate_grid.py`
 
-- **[`class DuplicateGrid(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L17)**
+- **[`class DuplicateGrid(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L17)**
   - `DuplicateGrid.duplicate_grid(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: Union[float, Tuple[float, float, float]] = 0, mode: str = 'instance') -> Union[str, List[str]]` *(class)* — Duplicate objects in a grid pattern.
-- **[`class DuplicateGridSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L259)**
+- **[`class DuplicateGridSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L259)**
   - `DuplicateGridSlots.header_init(self, widget)` — Configure header help text.
-  - `DuplicateGridSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
+  - `DuplicateGridSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `DuplicateGridSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--duplicate_linear"></a>
@@ -1610,19 +1662,19 @@ Procedural draped-cloth (curtain) generator for Maya.
 - **[`class DuplicateLinearSlots`](mayatk/mayatk/edit_utils/duplicate_linear.py#L134)**
   - `DuplicateLinearSlots.header_init(self, widget)` — Configure header help text.
   - `DuplicateLinearSlots.toggle_weight_ui(self)` — Disable weight UI components if the current calculation mode doesn't use them.
-  - `DuplicateLinearSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
+  - `DuplicateLinearSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `DuplicateLinearSlots.perform_operation(self, objects, contract)` — Perform the linear duplication operation.
 
 <a id="edit_utils--duplicate_radial"></a>
 ### `edit_utils/duplicate_radial.py`
 
-- **[`class DuplicateRadial(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L22)**
+- **[`class DuplicateRadial(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L22)**
   - `DuplicateRadial.duplicate_radial(objects: List[str], num_copies: int, start_angle: float = 0, end_angle: float = 360, weight_bias: float = 0.5, weight_curve: float = 0.5, rotate_axis: str = 'y', offset: Tuple[float, float, float] = (0, 0, 0), translate: Tuple[float, float, float] = (0, 0, 0), rotate: Tuple[float, float, float] = (0, 0, 0), scale: Tuple[float, float, float] = (1, 1, 1), pivot: Union[str, Tuple[float, float, float]] = 'object', keep_original: bool = False, instance: bool = False, combine: bool = False, suffix: bool = True) -> Dict[str, List[str]]` *(static)* — Duplicate objects in a radial pattern.
-- **[`class DuplicateRadialSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L306)**
+- **[`class DuplicateRadialSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L306)**
   - `DuplicateRadialSlots.header_init(self, widget)` — Configure header help text.
   - `DuplicateRadialSlots.s015_init(self, widget)` — Initialize Weight Bias.
   - `DuplicateRadialSlots.s016_init(self, widget)` — Initialize Weight Curve.
-  - `DuplicateRadialSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
+  - `DuplicateRadialSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `DuplicateRadialSlots.perform_operation(self, objects, contract)` — Perform the radial duplication operation.
   - `DuplicateRadialSlots.regroup_copies(self)` — Regroup the committed copies under a fresh ``*_array`` group.
 
@@ -1635,10 +1687,10 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DynamicPipeSlots.header_init(self, widget)` — Configure header help text.
   - `DynamicPipeSlots.b000(self)` — Initialize Pipe — build pipe from the current ordered selection.
 
-<a id="edit_utils--macros"></a>
-### `edit_utils/macros.py`
+<a id="edit_utils--macros--_macros"></a>
+### `edit_utils/macros/_macros.py`
 
-- **[`class MacroManager(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/macros.py#L26)** — Assign macro functions to hotkeys.
+- **[`class MacroManager(pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/macros/_macros.py#L26)** — Assign macro functions to hotkeys.
   - `MacroManager.set_macros(cls, *args)` *(class)* — Extends `set_macro` to accept a list of strings representing positional and keyword arguments.
   - `MacroManager.call_with_input(func, input_string)` *(static)* — Parses an input string into positional and keyword arguments, and
   - `MacroManager.set_macro(cls, name, key=None, cat=None, ann=None, default=False, delete_existing=True)` *(class)* — Sets a default runtime command with a keyboard shortcut.
@@ -1667,7 +1719,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `MacroManager.export_bindings(cls) -> Dict[str, dict]` *(class)* — The persist-worthy subset of the live bindings — every macro with a
   - `MacroManager.import_bindings(cls, data: Optional[Dict[str, dict]]) -> int` *(class)* — Apply a loaded binding set (the preset ``value_applier``): release
   - `MacroManager.show_editor(cls, parent=None)` *(class)* — Open the Macro Manager — the unified uitk ``ShortcutEditor`` over
-- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros.py#L873)**
+- **[`class DisplayMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L873)**
   - `DisplayMacros.m_component_id_display()` *(static)* — Toggle Component Id Display through vertices, edges, faces, UVs, and off.
   - `DisplayMacros.m_normals_display()` *(static)* — Toggle face normals, vertex normals, tangents, and off.
   - `DisplayMacros.m_soft_edge_display()` *(static)* — Toggle Soft Edge Display.
@@ -1686,7 +1738,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
   - `DisplayMacros.m_cycle_background(cls) -> str` *(class)* — Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros.py#L1668)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1668)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1695,7 +1747,7 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros.py#L1945)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1945)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1704,28 +1756,17 @@ Procedural draped-cloth (curtain) generator for Maya.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros.py#L2108)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2108)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros.py#L2144)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2144)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros.py#L2171)**
-
-<a id="edit_utils--mesh_graph"></a>
-### `edit_utils/mesh_graph.py`
-
-- **[`class Graph`](mayatk/mayatk/edit_utils/mesh_graph.py#L5)**
-  - `Graph.add_node(self, node, data=None)` — Adds a node to the graph along with its associated data.
-  - `Graph.add_edge(self, node1, node2, weight=1)` — Adds an edge between two specified nodes with an optional weight.
-  - `Graph.heuristic(self, node1, node2)` — Calculates the default heuristic between two nodes.
-  - `Graph.find_path(self, start, goal, algorithm='a_star')` — Finds a path from start node to goal node using the specified algorithm.
-  - `Graph.a_star(self, start, goal)` — Implements the A* algorithm to find the shortest path from start to goal node.
-  - `Graph.dijkstra(self, start, goal)` — Implements Dijkstra's algorithm to find the shortest path from start to goal node.
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2171)**
 
 <a id="edit_utils--mirror"></a>
 ### `edit_utils/mirror.py`
 
-- **[`class MirrorSlots(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L12)**
+- **[`class MirrorSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/mirror.py#L12)**
   - `MirrorSlots.header_init(self, widget)` — Configure header help text.
   - `MirrorSlots.prepare_operation(self, objects)` — Break instance links once, before the preview contract exists.
   - `MirrorSlots.perform_operation(self, objects, contract)`
@@ -1733,7 +1774,7 @@ Procedural draped-cloth (curtain) generator for Maya.
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
 
-- **[`class Naming(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)** — Batch find / rename / suffix scene nodes.
+- **[`class Naming(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/naming/_naming.py#L20)** — Batch find / rename / suffix scene nodes.
   - `Naming.SUFFIX_TYPES(cls) -> Tuple[Tuple[str, str, str, str], ...]` — ``(keyword, affix, label, type key)`` -- the live convention, joined
   - `Naming.affix_rules(cls, overrides: Optional[Dict[str, str]] = None, modes: Optional[Dict[str, str]] = None) -> Dict[str, 'ptk.AffixRule']` *(class)* — ``{Maya type key: AffixRule}`` -- the convention bound to this host.
   - `Naming.rename(cls, objects: Union[str, 'object', List[Union[str, 'object']]], to: str, fltr: str = '', regex: bool = False, ignore_case: bool = False, retain_suffix: bool = False, valid_suffixes: Optional[List[str]] = None, collapse_padding: bool = True, dry_run: bool = False) -> List[str]` *(class)* — Rename scene objects based on specified patterns and filters, ensuring compliance with Maya's namin…
@@ -1778,7 +1819,7 @@ Switchboard slots for the Naming panel.
 
 Primitive creation utilities for Maya.
 
-- **[`class Primitives`](mayatk/mayatk/edit_utils/primitives.py#L24)** — Utilities for creating primitive objects in Maya.
+- **[`class Primitives`](mayatk/mayatk/edit_utils/primitives.py#L27)** — Utilities for creating primitive objects in Maya.
   - `Primitives.create_default_primitive(cls, baseType, subType, **kwargs)` *(class)* — Create a primitive object with flexible parameters.
   - `Primitives.create_circle(axis='y', numPoints=12, radius=5, center=[0, 0, 0], mode=0, name='pCircle', history=False)` *(static)* — Create a circular polygon plane.
 
@@ -1789,17 +1830,17 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 
 - **[`class EIA310`](mayatk/mayatk/edit_utils/rack_builder.py#L52)** — EIA-310-D / IEC 60297-3-100 rack dimensions, in millimetres.
   - `EIA310.u_to_mm(cls, u: float) -> float` *(class)* — Rack units → millimetres.
-- **[`class OccupantSpec(ptk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L77)** — One piece of installed rack gear, described by its front panel.
-- **[`class BaySpec(ptk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L100)** — A single rack bay: a mounting frame holding an ordered occupant stack.
-- **[`class RackSpec(ptk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L118)** — A complete equipment cabinet — one or more bays inside an enclosure.
-- **[`class RackBuilder(ptk.LoggingMixin)`](mayatk/mayatk/edit_utils/rack_builder.py#L149)** — Emit Maya geometry for a :class:`RackSpec`.
+- **[`class OccupantSpec(pythontk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L77)** — One piece of installed rack gear, described by its front panel.
+- **[`class BaySpec(pythontk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L100)** — A single rack bay: a mounting frame holding an ordered occupant stack.
+- **[`class RackSpec(pythontk.SchemaSpec)`](mayatk/mayatk/edit_utils/rack_builder.py#L118)** — A complete equipment cabinet — one or more bays inside an enclosure.
+- **[`class RackBuilder(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/rack_builder.py#L149)** — Emit Maya geometry for a :class:`RackSpec`.
   - `RackBuilder.build(self, group: bool = True) -> str` — Build the whole rack;
   - `RackBuilder.from_dict(cls, data: dict) -> 'RackBuilder'` *(class)* — Build directly from a raw spec ``dict`` (validated by RackSpec).
 
 <a id="edit_utils--selection"></a>
 ### `edit_utils/selection.py`
 
-- **[`class Selection(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/edit_utils/selection.py#L19)** — Utilities for advanced Maya selection operations.
+- **[`class Selection(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/selection.py#L19)** — Utilities for advanced Maya selection operations.
   - `Selection.select_by_type(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]` *(static)* — Select objects by type with comprehensive type support.
   - `Selection.select_children(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select the immediate children of the given objects.
   - `Selection.select_hierarchy_above(objects: List[Union[str, object]]) -> Set[object]` *(static)* — Select all parent objects in the hierarchy above the given objects.
@@ -1810,7 +1851,7 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 <a id="edit_utils--snap"></a>
 ### `edit_utils/snap.py`
 
-- **[`class Snap(ptk.HelpMixin)`](mayatk/mayatk/edit_utils/snap.py#L16)** — Vertex and mesh snapping utilities.
+- **[`class Snap(pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/snap.py#L16)** — Vertex and mesh snapping utilities.
   - `Snap.snap_to_closest_vertex(obj1, obj2, tolerance=10.0, freeze_transforms=False)` *(static)* — Snap the vertices from object one to the closest verts on object two.
   - `Snap.snap_to_surface(source_meshes, target_mesh, offset: float = None, threshold: float = None, invert: bool = False) -> int` *(static)* — Snap source mesh vertices to the closest point on a target surface.
   - `Snap.snap_to_grid(objects=None, grid_size: float = 1.0, axes: str = 'xyz') -> int` *(static)* — Snap object pivots or vertices to the nearest grid point.
@@ -1826,7 +1867,7 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 <a id="env_utils--_env_utils"></a>
 ### `env_utils/_env_utils.py`
 
-- **[`class EnvUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L16)**
+- **[`class EnvUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L16)**
   - `EnvUtils.get_env_info(key=None)` *(static)* — Fetch information about the current Maya environment.
   - `EnvUtils.saved_scene_path() -> str` *(static)* — The open scene's path, or ``""`` when it has never been saved.
   - `EnvUtils.default_artifact_dir(cls) -> str` *(class)* — Return a sensible default directory for exported/baked artifacts.
@@ -1878,8 +1919,8 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 
 Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 
-- [`DEFAULTS`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L68) — constant
-- **[`class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L179)** — Export the Maya selection and run a chosen Blender import template.
+- [`DEFAULTS`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L67) — constant
+- **[`class BlenderBridge(MayaExportMixin, pythontk.ScriptLaunchBridge)`](mayatk/mayatk/env_utils/blender_bridge/_blender_bridge.py#L186)** — Export the Maya selection and run a chosen Blender import template.
   - `BlenderBridge.blender_path(self) -> Optional[str]` *(property)*
   - `BlenderBridge.params_defaults(self) -> Dict[str, Any]`
   - `BlenderBridge.render_context(self, params: Dict[str, Any]) -> Dict[str, str]`
@@ -1899,13 +1940,13 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
 
 Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 
-- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L75) — constant
-- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L85) — constant
-- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L88) — constant
-- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L98) — constant
-- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L104) — constant
-- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L108) — constant
-- **[`class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L405)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L74) — constant
+- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L84) — constant
+- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L87) — constant
+- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L97) — constant
+- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L103) — constant
+- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L107) — constant
+- **[`class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L404)** — Engine: convert a .blend to FBX via headless Blender, then import it.
   - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
   - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
   - `BlenderSceneImport.find_scenes(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]` *(static)* — Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.
@@ -1939,12 +1980,10 @@ Slots for the Blender bridge panel.
 
 Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
-- [`PARAMS`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L38) — constant
-- **[`class Parameters`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L466)** — Parameters — module namespace.
-  - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
-  - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
+- [`PARAMS`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L34) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/env_utils/blender_bridge/parameters.py#L462)** — Parameters — module namespace.
   - `Parameters.affix_parts(value: 'Any', *, default: str = 'suffix') -> 'tuple[str, str]'` *(static)* — ``(prefix, suffix)`` for an ``affix`` param value (delegates to uitk).
-  - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
+  - `Parameters.render_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
 
 <a id="env_utils--blender_bridge--templates--_bake_scene"></a>
 ### `env_utils/blender_bridge/templates/_bake_scene.py`
@@ -2100,7 +2139,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 <a id="env_utils--devtools"></a>
 ### `env_utils/devtools.py`
 
-- **[`class DevTools(CoreUtils)`](mayatk/mayatk/env_utils/devtools.py#L22)** — Tools for inspecting Maya's environment and debugging.
+- **[`class DevTools(CoreUtils)`](mayatk/mayatk/env_utils/devtools.py#L25)** — Tools for inspecting Maya's environment and debugging.
   - `DevTools.echo_all(state=True)` *(static)* — Toggle the 'Echo All Commands' state in the Script Editor.
   - `DevTools.find_mel(name)` *(static)* — Find the file path of a MEL procedure or script.
   - `DevTools.find_python(name)` *(static)* — Find the file path of a Python module or object.
@@ -2112,7 +2151,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
   - `DevTools.list_mel_globals(pattern='')` *(static)* — List global MEL variables whose names match a pattern.
   - `DevTools.get_mel_global(var_name, type_hint='string')` *(static)* — Get the value of a global MEL variable.
   - `DevTools.source_mel(path)` *(static)* — Source a MEL script.
-- **[`class WidgetInspector(CoreUtils)`](mayatk/mayatk/env_utils/devtools.py#L467)** — Deep PyQt/PySide inspection tools for reverse-engineering Maya widgets.
+- **[`class WidgetInspector(CoreUtils)`](mayatk/mayatk/env_utils/devtools.py#L479)** — Deep PyQt/PySide inspection tools for reverse-engineering Maya widgets.
   - `WidgetInspector.from_maya_control(cls, control_name)` *(class)* — Resolve a Maya control name to a QWidget.
   - `WidgetInspector.from_mel_global(cls, var_name)` *(class)* — Resolve a MEL global variable that holds a control name to a QWidget.
   - `WidgetInspector.main_window()` *(static)* — Return Maya's main window as a QWidget.
@@ -2135,7 +2174,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 <a id="env_utils--fbx_utils"></a>
 ### `env_utils/fbx_utils.py`
 
-- **[`class FbxUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L53)** — Low-level utilities for FBX import/export operations in Maya.
+- **[`class FbxUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L53)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
   - `FbxUtils.embed_media_write_cwd()` *(static)* — Yield with the process CWD at the workspace root when the live FBX
   - `FbxUtils.reset_import()` *(static)* — Reset the FBX plugin's global IMPORT options to factory defaults.
@@ -2183,13 +2222,13 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
 <a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 
-- [`MAYA_DEFAULT_CAMERAS`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L31) — constant
-- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L49)** — Builds hierarchy path maps for Maya transforms.
+- [`MAYA_DEFAULT_CAMERAS`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L34) — constant
+- **[`class HierarchyMapBuilder`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L52)** — Builds hierarchy path maps for Maya transforms.
   - `HierarchyMapBuilder.build_path_map(root, exclude_namespace_prefixes: List[str] = None, strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a mapping of hierarchical paths to transform nodes.
   - `HierarchyMapBuilder.build_path_map_from_nodes(nodes: List[Any], strip_namespaces: bool = False) -> Dict[str, Any]` *(static)* — Build a path map from an arbitrary list of transform node names.
-- **[`class MayaObjectMatcher(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L164)** — Maya-specific object matching with fuzzy logic and container searches.
+- **[`class MayaObjectMatcher(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L167)** — Maya-specific object matching with fuzzy logic and container searches.
   - `MayaObjectMatcher.find_matches(self, target_objects: List[str], imported_transforms: List, dry_run: bool = False) -> Tuple[List, Dict]` — Find matching objects using exact and fuzzy matching.
-- **[`class HierarchySync(ptk.LoggingMixin, _HierarchySyncInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L346)** — Core hierarchy analysis and repair manager.
+- **[`class HierarchySync(pythontk.LoggingMixin, _HierarchySyncInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L349)** — Core hierarchy analysis and repair manager.
   - `HierarchySync.analyze_hierarchies(self, current_tree_root=None, reference_tree_root=None, reference_objects: List = None, filter_meshes: bool = True, filter_cameras: bool = False, filter_lights: bool = False, inc_names: Optional[List[str]] = None, exc_names: Optional[List[str]] = None, inc_types: Optional[List[str]] = None, exc_types: Optional[List[str]] = None) -> Dict[str, Any]` — Analyze differences between current and reference hierarchies.
   - `HierarchySync.create_stubs(self, paths: Optional[List[str]] = None) -> List[str]` — Create empty transform stubs for missing hierarchy paths.
   - `HierarchySync.quarantine_extras(self, group: str = '_QUARANTINE', paths: Optional[List[str]] = None, skip_animated: bool = True) -> List[str]` — Move extra (scene-only) items to a root-level quarantine group.
@@ -2204,7 +2243,7 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
   - `HierarchySync.filter_path_map_by_cameras(path_map: Dict[str, Any]) -> Dict[str, Any]` *(static)* — Remove Maya default cameras from *path_map*.
   - `HierarchySync.filter_path_map_by_types(path_map: Dict[str, Any], node_types: List[str], exclude: bool = True) -> Dict[str, Any]` *(static)* — Filter *path_map* by shape node types.
   - `HierarchySync.select_objects_in_maya(object_names: List[str]) -> int` *(static)* — Select objects in Maya scene by name.
-- **[`class ObjectSwapper(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L2267)** — Handles cross-scene object operations like push/pull.
+- **[`class ObjectSwapper(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/_hierarchy_sync.py#L2160)** — Handles cross-scene object operations like push/pull.
   - `ObjectSwapper.pull_objects_from_scene(self, target_objects: List[str], source_file: Union[str, Path], backup: bool = True) -> bool` — Pull objects from source scene into current scene.
 
 <a id="env_utils--hierarchy_sync--hierarchy_baseline"></a>
@@ -2212,19 +2251,13 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
 
 The scene's hierarchy baseline, stored in the scene.
 
-- **[`class HierarchyBaseline`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_baseline.py#L51)** — Read, compare and roll forward the scene's hierarchy baseline.
-  - `HierarchyBaseline.read(cls) -> Set[str]` *(class)* — Every path the scene has recorded, across all scopes.
-  - `HierarchyBaseline.inherited_from(cls) -> Optional[str]` *(class)* — Who recorded the baseline this scene holds but does not own.
-  - `HierarchyBaseline.is_unreadable(cls) -> bool` *(class)* — The channel holds something, but no baseline could be read from it.
-  - `HierarchyBaseline.compare(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> Tuple[bool, List[str], List[str], bool]` *(class)* — Diff *current_paths* against the baseline, scoped to what is exporting.
-  - `HierarchyBaseline.write(cls, current_paths: Set[str], roots: Optional[Sequence[str]] = None) -> bool` *(class)* — Roll the exported scope forward, leaving every other scope intact.
-  - `HierarchyBaseline.adopt_sidecar(cls, export_path: str, *, base_stem: bool = False) -> bool` *(class)* — Give the scene what *export_path* last shipped, where its own
+- **[`class HierarchyBaseline(pythontk.HierarchyBaselineStore)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_baseline.py#L51)** — Read, compare and roll forward the scene's hierarchy baseline.
   - `HierarchyBaseline.migrate_from_sidecar(cls, export_dir: str) -> int` *(class)* **DEPRECATED (remove in 0.21.0)** — Adopt every on-disk baseline in *export_dir* into the scene, once.
 
 <a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
 ### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
 
-- **[`class HierarchySyncController(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L21)** — Controller for hierarchy management operations.
+- **[`class HierarchySyncController(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L25)** — Controller for hierarchy management operations.
   - `HierarchySyncController.workspace(self) -> Optional[str]` *(property)* — Get the current workspace directory.
   - `HierarchySyncController.reference_path(self) -> str` *(property)* — The current reference scene path.
   - `HierarchySyncController.analyze_hierarchies(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool` — Analyze hierarchies and perform comparison.
@@ -2238,7 +2271,7 @@ The scene's hierarchy baseline, stored in the scene.
   - `HierarchySyncController.log_diff_results(self)` — Log detailed hierarchy difference analysis results using rich formatting.
   - `HierarchySyncController.get_recent_reference_scenes(self) -> List[str]` — Get recent reference scenes from settings.
   - `HierarchySyncController.save_recent_reference_scene(self, scene_path: str)` — Save reference scene to recent list.
-- **[`class HierarchySyncSlots(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1159)** — Slots class for hierarchy management UI operations.
+- **[`class HierarchySyncSlots(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1055)** — Slots class for hierarchy management UI operations.
   - `HierarchySyncSlots.header_init(self, widget)` — Initialize the header widget.
   - `HierarchySyncSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
   - `HierarchySyncSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
@@ -2267,36 +2300,19 @@ The scene's hierarchy baseline, stored in the scene.
 <a id="env_utils--hierarchy_sync--scene_data_sidecar"></a>
 ### `env_utils/hierarchy_sync/scene_data_sidecar.py`
 
-Scene-data sidecar manifest management.
+Scene-data sidecar -- Maya's scene hooks over ``ptk.SceneDataSidecarBase``.
 
-- **[`class SceneDataSidecar`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L77)** — Manages the scene-data sidecar file stored alongside export files.
-  - `SceneDataSidecar.base_stem(cls, export_path: str) -> str` *(class)* — Return the export stem with any trailing ``_vNN`` suffix stripped.
-  - `SceneDataSidecar.manifest_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the sidecar manifest path for an export file.
-  - `SceneDataSidecar.diff_report_path_for(cls, export_path: str, *, base_stem: bool = False) -> str` *(class)* — Return the v2-era on-disk diff report path for an export file.
-  - `SceneDataSidecar.find_legacy_manifest(cls, export_path: str) -> Optional[str]` *(class)* — Return the path of a legacy per-version sidecar to migrate from.
-  - `SceneDataSidecar.ensure_base_name(cls, export_path: str) -> Optional[str]` *(class)* — Migrate a legacy per-version manifest to the base-stem name.
-  - `SceneDataSidecar.migrate_legacy(cls, export_path: str, *, base_stem: bool = False) -> Optional[str]` *(class)* — Idempotently bring on-disk sidecars up to the current naming.
-  - `SceneDataSidecar.with_ancestors(paths) -> set` *(static)* — *paths* closed under ancestors: ``A|B|C`` also yields ``A`` and ``A|B``.
+- **[`class SceneDataSidecar(pythontk.SceneDataSidecarBase)`](mayatk/mayatk/env_utils/hierarchy_sync/scene_data_sidecar.py#L24)** — The scene-data sidecar stored alongside Maya exports.
   - `SceneDataSidecar.build_clean_path_set(cls, objects) -> set` *(class)* — Build a set of namespace-stripped hierarchy paths from DAG long paths.
   - `SceneDataSidecar.expand_to_descendants(objects) -> list` *(static)* — Return *objects* plus all their DAG descendants (full paths).
-  - `SceneDataSidecar.get_top_level(paths) -> list` *(static)* — Return only paths whose ancestor is *not* also in the set.
-  - `SceneDataSidecar.detect_reparenting(missing: list, extra: list) -> list` *(static)* — Detect nodes that were reparented rather than added/removed.
-  - `SceneDataSidecar.write_manifest(cls, export_path: str, paths, *, data: Optional[dict] = None, last_diff: Optional[dict] = None, base_stem: bool = False) -> Optional[str]` *(class)* — Write the sidecar manifest for *export_path*.
-  - `SceneDataSidecar.read_manifest(cls, export_path: str, *, base_stem: bool = False) -> Optional[Set[str]]` *(class)* — Read the hierarchy paths from the manifest for *export_path*.
-  - `SceneDataSidecar.read_data(cls, export_path: str, *, base_stem: bool = False) -> Optional[dict]` *(class)* — Read the ``data_export`` snapshot from the manifest for *export_path*.
-  - `SceneDataSidecar.count_descendants(top_path: str, all_paths) -> int` *(static)* — Count *top_path* plus its descendants in *all_paths*.
-  - `SceneDataSidecar.format_diff_report(cls, missing: list, extra: list, reparented: list = None) -> str` *(class)* — Return the human-readable hierarchy diff report as text.
-  - `SceneDataSidecar.clean_stale_diff(cls, export_path: str, *, base_stem: bool = False) -> None` *(class)* — Remove a leftover v2-era on-disk diff report.
   - `SceneDataSidecar.drop_intermediate(nodes) -> list` *(static)* — *nodes* minus intermediate shapes (``…ShapeOrig`` and kin).
-  - `SceneDataSidecar.build_full_path_set(cls, objects) -> set` *(class)* — Expand *objects* to descendants, drop intermediates, clean, dedupe.
-  - `SceneDataSidecar.compare(cls, export_path: str, current_paths: set, *, base_stem: bool = False) -> Tuple[bool, list, list]` *(class)* — Compare *current_paths* against the stored hierarchy baseline.
 
 <a id="env_utils--hierarchy_sync--tree_renderer"></a>
 ### `env_utils/hierarchy_sync/tree_renderer.py`
 
 Tree rendering, formatting, and selection management for the hierarchy sync UI.
 
-- **[`class HierarchyTreeRenderer(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_renderer.py#L26)** — Owns all QTreeWidget population, diff-colour formatting, ignore
+- **[`class HierarchyTreeRenderer(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_renderer.py#L29)** — Owns all QTreeWidget population, diff-colour formatting, ignore
   - `HierarchyTreeRenderer.populate_current_scene_tree(self, tree_widget)` — Populate the current scene hierarchy tree.
   - `HierarchyTreeRenderer.populate_reference_tree(self, tree_widget, transforms, reference_name='Reference Scene')` — Populate the reference hierarchy tree with pre-fetched transforms.
   - `HierarchyTreeRenderer.show_reference_placeholder(self, tree_widget, reference_name='Reference Scene')` — Show a 'Browse for Reference Scene' placeholder in an empty tree.
@@ -2316,7 +2332,7 @@ Tree rendering, formatting, and selection management for the hierarchy sync UI.
 
 Tree widget utilities for hierarchy sync UI operations.
 
-- **[`class TreePathMatcher(ptk.LoggingMixin, _TreePathMatcherInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L46)** — Tree path matching functionality for UI tree widgets.
+- **[`class TreePathMatcher(pythontk.LoggingMixin, _TreePathMatcherInternal)`](mayatk/mayatk/env_utils/hierarchy_sync/tree_utils.py#L46)** — Tree path matching functionality for UI tree widgets.
   - `TreePathMatcher.build_tree_index(self, widget)` — Build tree indices for fast item lookup.
   - `TreePathMatcher.find_path_matches(self, target_path: str, by_full: dict, by_clean_full: dict, by_last: dict, prefer_cleaned: bool = False, strict: bool = False)` — Find tree items matching a target path using multiple strategies.
   - `TreePathMatcher.log_matching_debug(self, path, candidates, strategy, prefix='')` — Log debug information about path matching.
@@ -2354,21 +2370,21 @@ Maya Connection Module
 <a id="env_utils--namespace_sandbox"></a>
 ### `env_utils/namespace_sandbox.py`
 
-- **[`class FBXImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L11)** — Handles FBX-specific import operations (.fbx files).
+- **[`class FBXImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L14)** — Handles FBX-specific import operations (.fbx files).
   - `FBXImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is an FBX file.
   - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import an FBX file isolated into *namespace*.
   - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file into a fresh namespace for analysis.
-- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L104)** — Handles Maya-specific import operations (.ma/.mb files).
+- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L107)** — Handles Maya-specific import operations (.ma/.mb files).
   - `MayaImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is a Maya file (.ma or .mb).
   - `MayaImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import Maya file with namespace - original logic.
   - `MayaImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import Maya file for analysis purposes.
-- **[`class CameraTracker(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L287)** — Tracks cameras before and after import operations for proper cleanup.
+- **[`class CameraTracker(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L290)** — Tracks cameras before and after import operations for proper cleanup.
   - `CameraTracker.capture_pre_import_state(self)` — Capture camera state before import.
   - `CameraTracker.capture_post_import_state(self)` — Capture camera state after import.
   - `CameraTracker.get_imported_cameras(self, namespace_filter=None)` — Get cameras that were imported (optionally filtered by namespace).
   - `CameraTracker.cleanup_imported_cameras(self, namespace_filter=None, preserve_user_cameras=True)` — Clean up imported cameras with optional preservation of user cameras.
   - `CameraTracker.reset(self)` — Reset tracking state.
-- **[`class NamespaceSandbox(ptk.LoggingMixin, _NamespaceSandboxInternal)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L449)** — Handles temporary importing and namespace management for Maya scenes.
+- **[`class NamespaceSandbox(pythontk.LoggingMixin, _NamespaceSandboxInternal)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L452)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
   - `NamespaceSandbox.get_supported_formats(cls) -> List[str]` *(class)* — Extensions (``.ma``, ``.mb``, ``.fbx``) the importers accept.
@@ -2394,15 +2410,17 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 - [`find_shadows()`](mayatk/mayatk/env_utils/pm_doctor.py#L31) — ``[(name, user_site_version, bundled_version)]`` for shadowed dists.
 - [`main()`](mayatk/mayatk/env_utils/pm_doctor.py#L56)
 
-<a id="env_utils--reference_manager"></a>
-### `env_utils/reference_manager.py`
+<a id="env_utils--reference_manager--_reference_manager"></a>
+### `env_utils/reference_manager/_reference_manager.py`
 
-- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager.py#L85)**
+Reference Manager engine — Maya file references, assemblies and workspaces.
+
+- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L74)**
   - `AssemblyManager.current_references(cls)` *(class)* — Get the current scene references.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager.py#L366)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L355)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool`
@@ -2412,7 +2430,13 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
   - `ReferenceManager.get_reference_display_mode(self, ref) -> str` — Return the active display mode for the reference's top-level transforms.
   - `ReferenceManager.set_reference_display_mode(self, ref, mode: str) -> bool` — Set the display override mode on the reference's top-level transforms.
   - `ReferenceManager.remove_references(self, namespaces=None)` — Remove references based on their namespaces.
-- **[`class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L1043)** — Controller that bridges Maya reference functionality with UI interactions.
+
+<a id="env_utils--reference_manager--reference_manager_controller"></a>
+### `env_utils/reference_manager/reference_manager_controller.py`
+
+Reference Manager controller — the panel-facing layer over the engine.
+
+- **[`class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_controller.py#L46)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.block_table_selection_method(method)`
   - `ReferenceManagerController.prepare_item_for_edit(self, item)` — Prepare an item for editing by showing the full filename.
@@ -2434,7 +2458,13 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
   - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
-- **[`class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager.py#L3019)** — UI event handlers and widget initialization for the Reference Manager interface.
+
+<a id="env_utils--reference_manager--reference_manager_slots"></a>
+### `env_utils/reference_manager/reference_manager_slots.py`
+
+Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
+
+- **[`class ReferenceManagerSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_slots.py#L31)** — UI event handlers and widget initialization for the Reference Manager interface.
   - `ReferenceManagerSlots.header_init(self, widget)` — Initialize the header for the reference manager.
   - `ReferenceManagerSlots.tbl000_init(self, widget)` — Table setup: (re)wire signals every show, one-time context-menu build, then populate.
   - `ReferenceManagerSlots.tbl000_item_double_clicked(self, item)` — Handle double-click to prepare item for editing.
@@ -2472,19 +2502,13 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
 
-- **[`class SceneExporter(ptk.LoggingMixin)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L33)**
-  - `SceneExporter.confirm(self, question: str) -> bool` — Yes/no consent for an export-time side effect (a tool download).
-  - `SceneExporter.confirm_check_override(self) -> bool` — Ask, at the failure point, whether to export despite failed checks.
-  - `SceneExporter.run_config_from_values(self, values: Dict[str, Any], override_checks: bool = False, ignore_groups_case_sensitive: bool = False) -> Dict[str, Any]` — Widget values -> the inputs :meth:`perform_export` takes.
+- **[`class SceneExporter(pythontk.SceneExporterBase)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L32)** — Maya's Scene Exporter: the export write, its scope and its FBX /
   - `SceneExporter.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: Optional[str] = None, hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[int, int, Optional[str]], Any]] = None) -> bool` — Perform the export operation, including initialization and task management.
   - `SceneExporter.name_context(self, name_regex: Optional[str] = None) -> Dict[str, str]` — Live value for every token in :attr:`NAME_TOKENS` but the counter.
   - `SceneExporter.resolve_export_path(self, pattern: Optional[str] = None, export_dir: Optional[str] = None, output_format: str = 'fbx', name_regex: Optional[str] = None, report: bool = True, version_format: str = '', timestamp: bool = False) -> Dict[str, Any]` — Resolve the Output Filename field into the file(s) an export writes.
   - `SceneExporter.generate_export_path(self, version_format: str = '', extension: str = '.fbx', output_format: Optional[str] = None) -> str` — The full export path, from the fields :meth:`perform_export` stamps.
   - `SceneExporter.format_export_name(self, name: str, name_regex: Optional[str] = None) -> str` **DEPRECATED (remove in 0.20.0)** — *name* reshaped by the retired free-standing RegEx field.
-  - `SceneExporter.generate_log_file_path(self, export_path: str) -> str` — Generate the log file path based on the export path.
-  - `SceneExporter.setup_file_logging(self, log_file_path: str)` — Setup file logging to log actions during export.
-  - `SceneExporter.close_file_handlers(self)` — Close and remove file handlers after logging is complete.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
 
@@ -2598,33 +2622,37 @@ Read named sections of live-scene state for transport.
 
 Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 
-- **[`class UnityBridge(MayaExportMixin, ptk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L37)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
+- **[`class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L37)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
   - `UnityBridge.list_template_modes(self)`
   - `UnityBridge.params_defaults(self)`
   - `UnityBridge.list_delivery_modes(cls) -> List[Tuple[str, str]]` *(class)* — ``[(mode_stem, ""), ...]`` for the panel's delivery combo.
+
+<a id="env_utils--unity_bridge--_unity_panel"></a>
+### `env_utils/unity_bridge/_unity_panel.py`
+
+What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.
+
+- **[`class UnityPanelMixin`](mayatk/mayatk/env_utils/unity_bridge/_unity_panel.py#L34)** — Unity-panel behavior shared by the three Unity Slots classes.
+  - `UnityPanelMixin.template_dir(self) -> Path` *(property)*
+  - `UnityPanelMixin.list_template_modes(self)`
+  - `UnityPanelMixin.default_output_dir(self) -> str`
 
 <a id="env_utils--unity_bridge--parameters"></a>
 ### `env_utils/unity_bridge/parameters.py`
 
 User-tunable parameters for the Maya->Unity bridge panel.
 
-- [`PARAMS`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L29) — constant
-- **[`class Parameters`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L167)** — Parameters — module namespace.
-  - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
-  - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
-  - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for substitution (kept for API parity;
+- [`PARAMS`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L24) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L162)** — Parameters — module namespace.
 
 <a id="env_utils--unity_bridge--unity_bridge_slots"></a>
 ### `env_utils/unity_bridge/unity_bridge_slots.py`
 
 Slots for the Unity bridge panel.
 
-- **[`class UnityBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L47)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class UnityBridgeSlots(UnityPanelMixin, MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L41)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `UnityBridgeSlots.params_module(self)` *(property)*
-  - `UnityBridgeSlots.template_dir(self) -> Path` *(property)*
   - `UnityBridgeSlots.make_bridge(self)` — Build the engine, or ``None`` when the optional unitytk is absent.
-  - `UnityBridgeSlots.list_template_modes(self)`
-  - `UnityBridgeSlots.default_output_dir(self) -> str`
   - `UnityBridgeSlots.b000(self)` — Run the selected template: export-and-copy, or script management.
 
 <a id="env_utils--usd"></a>
@@ -2633,7 +2661,7 @@ Slots for the Unity bridge panel.
 USD import / export over Maya's native ``mayaUsd`` runtime.
 
 - **[`class UsdReadRefused(RuntimeError)`](mayatk/mayatk/env_utils/usd.py#L38)** — A stage refused for a LIVE read -- a reference or an open -- because its
-- **[`class UsdUtils(ptk.HelpMixin)`](mayatk/mayatk/env_utils/usd.py#L53)** — Low-level USD import/export utilities over the ``mayaUsd`` plugin.
+- **[`class UsdUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/usd.py#L53)** — Low-level USD import/export utilities over the ``mayaUsd`` plugin.
   - `UsdUtils.load_plugin()` *(static)* — Ensure the ``mayaUsdPlugin`` plugin is loaded.
   - `UsdUtils.is_usd_file(file_path: str) -> bool` *(static)* — True when *file_path* is a USD layer/package (delegates to pythontk).
   - `UsdUtils.sanitize_prim_name(name: str) -> str` *(static)* — *name* as ``mayaUSDExport`` spells the prim (probe-verified: ``ref:nsCube``
@@ -2657,12 +2685,12 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
 
 Push the Maya selection to a live browser / WebXR preview.
 
-- **[`class WebXrPreview(MayaExportMixin, ptk.PreviewBridge)`](mayatk/mayatk/env_utils/webxr_preview.py#L50)** — Live browser / WebXR preview of the Maya selection.
+- **[`class WebXrPreview(MayaExportMixin, pythontk.PreviewBridge)`](mayatk/mayatk/env_utils/webxr_preview.py#L50)** — Live browser / WebXR preview of the Maya selection.
 
 <a id="env_utils--workspace_manager"></a>
 ### `env_utils/workspace_manager.py`
 
-- **[`class WorkspaceManager(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_manager.py#L13)** — Shared workspace management utilities for UI components.
+- **[`class WorkspaceManager(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_manager.py#L16)** — Shared workspace management utilities for UI components.
   - `WorkspaceManager.current_workspace(self)` *(property)* — Get the current Maya workspace with fallback handling.
   - `WorkspaceManager.current_working_dir(self)` *(property)* — Get the current working directory.
   - `WorkspaceManager.recursive_search(self)` *(property)* — Whether to search recursively for files.
@@ -2675,7 +2703,7 @@ Push the Maya selection to a live browser / WebXR preview.
 <a id="env_utils--workspace_map"></a>
 ### `env_utils/workspace_map.py`
 
-- **[`class WorkspaceMap(WorkspaceManager, ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L13)** — Maps and displays Maya workspaces in a tree structure.
+- **[`class WorkspaceMap(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L13)** — Maps and displays Maya workspaces in a tree structure.
   - `WorkspaceMap.current_working_dir(self)` *(property)* — Get the current working directory for workspace discovery.
   - `WorkspaceMap.recursive_search(self)` *(property)* — Whether to search recursively for workspaces.
   - `WorkspaceMap.workspace_data(self) -> Dict[str, Dict]` *(property)* — Get cached workspace data, rebuilding if needed.
@@ -2684,12 +2712,12 @@ Push the Maya selection to a live browser / WebXR preview.
   - `WorkspaceMap.get_filtered_workspaces(self, filter_text: str = None) -> List[Dict]` — Get a filtered list of workspaces.
   - `WorkspaceMap.create_project(self, name: str) -> Optional[ptk.Workspace]` — Create a project named *name* under the current root, built from the
   - `WorkspaceMap.mark_root_as_project(self) -> Optional[ptk.Workspace]` — Mark the current ROOT directory as a shared Maya/Blender project —
-- **[`class WorkspaceMapController(WorkspaceMap, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L242)** — Controller for the WorkspaceMap UI components.
+- **[`class WorkspaceMapController(WorkspaceMap, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L242)** — Controller for the WorkspaceMap UI components.
   - `WorkspaceMapController.update_current_dir(self, text: Optional[str] = None)` — Update the current working directory from UI input.
   - `WorkspaceMapController.refresh_tree(self, invalidate: bool = False)` — Refresh the workspace tree.
   - `WorkspaceMapController.selected_workspace(self) -> Optional[Dict]` — The workspace record under the tree cursor, or None (a directory
   - `WorkspaceMapController.open_selected_workspace(self) -> Optional[str]` — Set Maya's project to the selected workspace.
-- **[`class WorkspaceMapSlots(ptk.HelpMixin, ptk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L370)** — UI slots for the WorkspaceMap interface.
+- **[`class WorkspaceMapSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/workspace_map.py#L370)** — UI slots for the WorkspaceMap interface.
   - `WorkspaceMapSlots.header_init(self, widget)` — Project creation actions + header help text.
   - `WorkspaceMapSlots.txt000_init(self, widget)` — Initialize the directory input widget.
   - `WorkspaceMapSlots.txt001_init(self, widget)` — Initialize the filter input widget.
@@ -2709,7 +2737,7 @@ Push the Maya selection to a live browser / WebXR preview.
 
 Light utilities — building real scene lights from the geometry that represents them.
 
-- **[`class LightUtils(_LightUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L233)** — Scene-light authoring (mirror of ``btk.LightUtils``).
+- **[`class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L233)** — Scene-light authoring (mirror of ``btk.LightUtils``).
   - `LightUtils.environment_lights(cls) -> List[str]` *(class)* — Every environment (image-based) light SHAPE in the scene.
   - `LightUtils.all_lights(cls) -> List[str]` *(class)* — Every light SHAPE in the scene -- Maya's and Arnold's.
   - `LightUtils.contributing_lights(cls) -> List[str]` *(class)* — The scene's light SHAPES that can actually light a render.
@@ -2725,7 +2753,7 @@ Light utilities — building real scene lights from the geometry that represents
 
 Arnold HDR environment manager.
 
-- **[`class HdrManager(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L59)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
+- **[`class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L59)** — Manage a single ``aiSkyDomeLight`` + connected ``file`` texture.
   - `HdrManager.arnold_loaded() -> bool` *(static)* — True if ``mtoa`` is *already* loaded — cheap, side-effect-free query.
   - `HdrManager.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin can be loaded right now.
   - `HdrManager.ensure_plugin_loaded(cls) -> bool` *(class)* — Backward-compat alias for :meth:`arnold_available`.
@@ -2746,7 +2774,7 @@ Arnold HDR environment manager.
   - `HdrManager.specular(self) -> float` *(property)* — Specular contribution scale (``aiSpecular``);
   - `HdrManager.create_network(self, hdrMap: str = '', hdrMapVisibility: bool = False, intensity: Optional[float] = None, exposure: Optional[float] = None, rotation: Optional[float] = None, resolution: Optional[int] = None, samples: Optional[int] = None, diffuse: Optional[float] = None, specular: Optional[float] = None, preview: Optional[bool] = None) -> Optional[str]` — Apply settings to the (lazily-created) skydome network.
   - `HdrManager.clear(self) -> None` — Remove the skydome and its connected file/place2d nodes.
-- **[`class HdrManagerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L524)** — Switchboard slots for the HDR Manager UI.
+- **[`class HdrManagerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/hdr_manager.py#L524)** — Switchboard slots for the HDR Manager UI.
   - `HdrManagerSlots.header_init(self, widget) -> None` — Configure header menu and refresh button.
   - `HdrManagerSlots.cmb000_init(self, widget) -> None` — Wire the HDR dropdown: option-box plugins, context menu, auto-refresh.
   - `HdrManagerSlots.hdr_map(self) -> Optional[str]` *(property)* — Selected HDR file path from the combobox.
@@ -2776,7 +2804,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - **[`class LightmapBakeResult`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L70)** — What one :meth:`LightmapBaker.bake` did -- the same shape in mayatk and blendertk.
   - `LightmapBakeResult.files(self) -> List[str]` *(property)* — The distinct map files, sorted: an atlas 40 objects share counts once.
   - `LightmapBakeResult.folders(self) -> List[str]` *(property)* — The distinct folders the maps landed in, compared the way the disk does.
-- **[`class LightmapBaker(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L122)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
+- **[`class LightmapBaker(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L122)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
   - `LightmapBaker.device(self) -> Optional[str]` *(property)* — Which device Arnold bakes on -- ``"GPU"``, ``"CPU"``, ``"AUTO"``, or
   - `LightmapBaker.adaptive(self) -> bool` *(property)* — Whether a GPU bake spends its samples adaptively: the preset's AA on
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
@@ -2810,7 +2838,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 
 The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 
-- **[`class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker_slots.py#L29)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
+- **[`class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker_slots.py#L29)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
   - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Wire the Preset combo: uitk's preset template over the shared store.
   - `LightmapBakerSlots.btn_reset_defaults_init(self, widget) -> None` — Wire Reset to Defaults to uitk's shared reset grammar.
@@ -2834,7 +2862,7 @@ The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 
 The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 
-- **[`class LightmapRecords(ptk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L57)** — Maya's lightmap markers and manifest, and the files they name.
+- **[`class LightmapRecords(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L57)** — Maya's lightmap markers and manifest, and the files they name.
   - `LightmapRecords.baked_objects(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — The objects :meth:`revert` would take the lightmap from.
   - `LightmapRecords.commit(cls, mapping: Dict[str, str], scale_offsets: Optional[Dict[str, List[float]]] = None, intensity: float = 1.0) -> Dict[str, str]` *(class)* — Record a lighting-only bake for the engine (fully non-destructive).
   - `LightmapRecords.revert(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — Undo :meth:`commit` -- drop the markers and republish.
@@ -2854,7 +2882,9 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
 <a id="mat_utils--_mat_utils"></a>
 ### `mat_utils/_mat_utils.py`
 
-- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L1067)**
+``MatUtils`` -- the public index of mayatk's material and texture operations.
+
+- **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L73)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and tile/frame tokens.
   - `MatUtils.get_mats(objs=None, as_strings=True, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the materials assigned to a given list of objects or components.
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
@@ -2912,20 +2942,20 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `MatUtils.convert_bump_to_normal(bump_file_node, output_path: Optional[str] = None, intensity: float = 1.0, format_type: str = 'opengl', create_file_node: bool = True, node_name: Optional[str] = None) -> Optional[str]` *(static)* — Convert a bump/height file node's texture to a normal map on disk.
   - `MatUtils.validate_normal_map_setup(normal_file_node, material=None) -> Dict[str, Any]` *(static)* — Validate normal map file node setup and provide recommendations.
   - `MatUtils.graph_materials(materials: Union[str, List[str], object], mode: str = 'showUpAndDownstream') -> None` *(static)* — Open the Hypershade and graph the specified materials.
+  - `MatUtils.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
   - `MatUtils.probe_texture_path(cls, path: str) -> Optional[str]` *(class)* — The one concrete file *path*'s tile/frame pattern denotes, or None.
   - `MatUtils.has_path_token(cls, path: str) -> bool` *(class)* — Does *path* carry a tile/frame token — i.e.
   - `MatUtils.is_frame_sequence(cls, path: str) -> bool` *(class)* — Does *path*'s token count FRAMES (``<f>`` / ``<frame>``), not tiles?
   - `MatUtils.token_wildcard(cls, path: str, wildcard: Optional[str] = '*') -> str` *(class)* — *path* with every tile/frame token replaced by *wildcard*.
   - `MatUtils.texture_tiles(cls, path: str) -> List[str]` *(class)* — Every file on disk *path*'s tile/frame pattern denotes, sorted.
   - `MatUtils.apply_uv_tiling(cls, file_nodes) -> List[str]` *(class)* — Switch each file node reading ONE tile of a set to that set's tiling mode.
-  - `MatUtils.get_texture_file_node(material, attr_name, _depth=0)` *(static)* — Locate the file texture node feeding a material attribute.
 
 <a id="mat_utils--arnold_bridge"></a>
 ### `mat_utils/arnold_bridge.py`
 
 Arnold render-bridge management.
 
-- **[`class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L55)** — Add, remove, query, and rebuild Arnold ``aiStandardSurface`` bridges.
+- **[`class ArnoldBridge(pythontk.LoggingMixin, _ArnoldBridgeInternal)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L55)** — Add, remove, query, and rebuild Arnold ``aiStandardSurface`` bridges.
   - `ArnoldBridge.add(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None, force: bool = False) -> List[str]` — Attach an Arnold bridge to every base material in scope.
   - `ArnoldBridge.remove(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]` — Delete the Arnold bridge from every base material in scope.
   - `ArnoldBridge.rebuild(self, materials: Optional[Union[str, List[str]]] = None, objects: Optional[Union[str, List[str]]] = None) -> List[str]` — Remove and re-add the bridge — resyncs it to the base material's
@@ -2933,7 +2963,7 @@ Arnold render-bridge management.
   - `ArnoldBridge.get_bridge(self, material: str) -> Optional[str]` — Return the Arnold shader bridging *material* -- the first of its
   - `ArnoldBridge.has_bridge(self, material: str) -> bool` — True if any of *material*'s shading groups has an Arnold bridge.
   - `ArnoldBridge.unrenderable_materials(cls) -> List[str]` *(class)* — The materials Arnold would render as error magenta as the scene
-- **[`class ArnoldBridgeSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L747)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
+- **[`class ArnoldBridgeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/arnold_bridge.py#L747)** — Switchboard slots for the ``arnold_bridge.ui`` panel.
   - `ArnoldBridgeSlots.header_init(self, widget) -> None` — Configure the header menu and help text.
   - `ArnoldBridgeSlots.cmb000_init(self, widget) -> None` — Populate the Scope combobox (Selected Objects is the default).
   - `ArnoldBridgeSlots.b000(self) -> None` — Add Network.
@@ -2960,7 +2990,7 @@ Scene-stored bake sets: named object sets the bake tools read.
 
 Emissive groups — named face sets that gate emissive regions at runtime.
 
-- **[`class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L214)** — Author, bake, and export named emissive face-groups (see module doc).
+- **[`class EmissiveGroups(_EmissiveGroupsInternal, pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L214)** — Author, bake, and export named emissive face-groups (see module doc).
   - `EmissiveGroups.add_group(cls, name: str, faces=None, default: float = 1.0) -> str` *(class)* — Create a group from faces (or the selection), or extend an existing one.
   - `EmissiveGroups.remove_group(cls, name: str) -> None` *(class)* — Delete a group's set, registry entry, and any keyable weight attr;
   - `EmissiveGroups.list_groups(cls) -> Dict[str, dict]` *(class)* — ``{name: {"slot", "default", "faces"(count), "missing"(set gone),
@@ -2979,7 +3009,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `EmissiveGroups.discard_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's groups were dropped: delete the member sets it
   - `EmissiveGroups.export_record(cls, ctx: 'ptk.ExportContext') -> Optional['ptk.Record']` *(class)* — The ``emissive_groups`` manifest record, or ``None`` when no group
   - `EmissiveGroups.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Republish the ``emissive_groups`` channel on the ``data_export``
-- **[`class EmissiveGroupsSlots(ptk.LoggingMixin, ptk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L817)** — Switchboard slots for the ``emissive_groups.ui`` panel.
+- **[`class EmissiveGroupsSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L817)** — Switchboard slots for the ``emissive_groups.ui`` panel.
   - `EmissiveGroupsSlots.header_init(self, widget) -> None`
   - `EmissiveGroupsSlots.txt000_init(self, widget) -> None` — Group-name field — clearable back to the auto-derived name.
   - `EmissiveGroupsSlots.tbl000_init(self, widget) -> None` — Table setup: one-time construction, then (re)wire signals and populate.
@@ -3002,7 +3032,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(ptk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L723)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+- **[`class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L723)** — A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
   - `GameShader.resolve_opacity_sources(self, textures: List[str], type_cache: Dict[str, Optional[str]], config: Dict[str, Any] = None, shader_type: str = 'stingray', name: str = '') -> Tuple[List[str], List[str], List[tuple]]` — Settle where this set's opacity lives, before anything is wired.
   - `GameShader.setup_stringray_node(self, name: str, opacity: bool = False, opacity_mode: str = None) -> object` — Create a StingrayPBS shader node with the right ShaderFX graph loaded.
@@ -3035,7 +3065,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
 
 Map image files to textured polygon planes in Maya.
 
-- **[`class ImageToPlane(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/image_to_plane/_image_to_plane.py#L24)** — Create textured polygon planes from image files.
+- **[`class ImageToPlane(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/image_to_plane/_image_to_plane.py#L24)** — Create textured polygon planes from image files.
   - `ImageToPlane.create(cls, image_paths: List[str], mat_type: str = 'stingray', suffix: Optional[str] = None, prefix: str = '', plane_height: float = 10.0, axis: Optional[List[float]] = None, group: bool = False, group_name: str = 'imagePlanes_GRP', stingray_opacity_mode: str = 'transparent', mask_threshold: float = 0.5, roughness: float = 0.0) -> Dict[str, object]` *(class)* — Create textured planes for one or more images.
   - `ImageToPlane.remove(cls, objects=None) -> int` *(class)* — Remove planes and their materials created by this tool.
 
@@ -3053,7 +3083,7 @@ Switchboard slots for the Image to Plane UI.
 
 Maya-side glue for the Marmoset Toolbag engine.
 
-- **[`class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L240)** — Export the Maya selection to Marmoset Toolbag with templated automation.
+- **[`class MarmosetBridge(pythontk.HandoffBridge, _MarmosetBridgeInternal)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_bridge.py#L240)** — Export the Maya selection to Marmoset Toolbag with templated automation.
   - `MarmosetBridge.toolbag_path(self) -> Optional[str]` *(property)*
   - `MarmosetBridge.params_defaults(self) -> Dict[str, Any]`
   - `MarmosetBridge.render_template(self, *args, **kwargs) -> Optional[str]` — Render a Toolbag script body (delegates to the engine deliverer).
@@ -3069,10 +3099,10 @@ Maya-side glue for the Marmoset Toolbag engine.
 
 Drive Marmoset Toolbag from the outside -- launch + templated automation.
 
-- [`APP`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L45) — constant
-- [`SEND_TO`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L64) — constant
-- [`ROUND_TRIP`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L65) — constant
-- **[`class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L76)** — Export-agnostic Marmoset Toolbag automation -- a hand-off :class:`pythontk.Deliverer`.
+- [`APP`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L44) — constant
+- [`SEND_TO`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L63) — constant
+- [`ROUND_TRIP`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L64) — constant
+- **[`class MarmosetEngine(pythontk.Deliverer, pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/marmoset_bridge/_marmoset_engine.py#L75)** — Export-agnostic Marmoset Toolbag automation -- a hand-off :class:`pythontk.Deliverer`.
   - `MarmosetEngine.toolbag_path(self) -> Optional[str]` *(property)* — Resolve the Toolbag executable path.
   - `MarmosetEngine.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (script prints + tracebacks).
   - `MarmosetEngine.preflight(self, bridge, request) -> bool` — Validate the (template, mode) before the bridge produces its payload.
@@ -3202,12 +3232,9 @@ Toolbag-specific system ops.
 
 Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
-- [`PARAMS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L32) — constant
-- [`SUPERSESSIONS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L390) — constant
-- **[`class Parameters`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L409)** — Parameters — module namespace.
-  - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
-  - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
-  - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Python literals.
+- [`PARAMS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L24) — constant
+- [`SUPERSESSIONS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L382) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L401)** — Parameters — module namespace.
 
 <a id="mat_utils--marmoset_bridge--template_params"></a>
 ### `mat_utils/marmoset_bridge/template_params.py`
@@ -3306,7 +3333,7 @@ Marmoset Toolbag log-file resolution, classification, and live tailing.
 <a id="mat_utils--mat_manifest"></a>
 ### `mat_utils/mat_manifest.py`
 
-- **[`class MatManifest(ptk.HelpMixin)`](mayatk/mayatk/mat_utils/mat_manifest.py#L18)** — Builds and restores a material-to-texture manifest for bridge workflows.
+- **[`class MatManifest(pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/mat_manifest.py#L18)** — Builds and restores a material-to-texture manifest for bridge workflows.
   - `MatManifest.build(cls, objects: List) -> Dict[str, Any]` *(class)* — Build a manifest from the materials assigned to *objects*.
   - `MatManifest.restore(cls, mat_name: str, manifest: Dict[str, Any], source_mat_name: Optional[str] = None) -> int` *(class)* — Reconnect file textures to *mat_name* from a previously built manifest.
 
@@ -3327,7 +3354,7 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
 
-- **[`class MatUpdater(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L25)** — Updates existing materials with processed textures.
+- **[`class MatUpdater(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L25)** — Updates existing materials with processed textures.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, shader_type: Optional[str] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
@@ -3343,7 +3370,7 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--render_opacity--attribute_mode"></a>
 ### `mat_utils/render_opacity/attribute_mode.py`
 
-- **[`class OpacityAttributeMode(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/attribute_mode.py#L22)** — Implements the 'attribute' mode for the render-effect channels.
+- **[`class OpacityAttributeMode(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/attribute_mode.py#L22)** — Implements the 'attribute' mode for the render-effect channels.
   - `OpacityAttributeMode.create(cls, objects, spec: ChannelSpec = OPACITY) -> Dict[str, Dict]` *(class)* — Add the channel's attribute(s) on each transform (no keyframes).
   - `OpacityAttributeMode.has_channel(cls, obj, spec: ChannelSpec = OPACITY) -> bool` *(class)* — Whether *obj* carries the channel's attribute.
   - `OpacityAttributeMode.channels_on(cls, obj) -> List[ChannelSpec]` *(class)* — Every channel *obj* carries.
@@ -3377,13 +3404,13 @@ The per-object render-effect channel table.
 
 Clean up what the retired viewport "material mode" left in a scene.
 
-- **[`class OpacityMaterialMode(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/material_mode.py#L48)** — Migration for the retired viewport material mode: :meth:`remove` only.
+- **[`class OpacityMaterialMode(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/material_mode.py#L48)** — Migration for the retired viewport material mode: :meth:`remove` only.
   - `OpacityMaterialMode.remove(cls, objects, spec: Optional[ChannelSpec] = None) -> List[str]` *(class)* — Undo the old mode's work on *objects*' materials, for *spec* or every channel.
 
 <a id="mat_utils--render_opacity--render_effects"></a>
 ### `mat_utils/render_opacity/render_effects.py`
 
-- **[`class RenderEffects(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/render_effects.py#L28)** — Per-object render-effect channels for engine-ready control.
+- **[`class RenderEffects(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/render_effects.py#L28)** — Per-object render-effect channels for engine-ready control.
   - `RenderEffects.channel_records(cls, objects=None) -> Dict[str, Dict[str, Dict]]` *(class)* — ``{long transform: {attribute: {"value", "keys"}}}`` -- every
   - `RenderEffects.apply_channel_records(cls, node: str, records: Dict[str, Dict]) -> int` *(class)* — Land :meth:`channel_records` records on *node*;
   - `RenderEffects.objects_with_visibility_keys(cls, objects) -> List` *(class)* — Return the subset of *objects* that have keyframes on visibility.
@@ -3442,25 +3469,31 @@ Logical texture channel -> per-shader (attribute, output plug), and the one
 
 Retype a material in place — legacy Maya shaders to an exportable PBR one.
 
-- **[`class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal)`](mayatk/mayatk/mat_utils/shader_converter.py#L125)** — Convert materials between shader types, preserving textures and assignments.
+- **[`class ShaderConverter(pythontk.LoggingMixin, _ShaderConverterInternal)`](mayatk/mayatk/mat_utils/shader_converter.py#L125)** — Convert materials between shader types, preserving textures and assignments.
   - `ShaderConverter.read_channels(cls, shader: str) -> Dict[str, Dict[str, Any]]` *(class)* — What drives each logical channel of *shader*.
   - `ShaderConverter.convert(cls, materials=None, target: str = 'stingray', opacity_mode: str = None, delete_source: bool = True, name_suffix: str = '', verbose: bool = False) -> Dict[str, Optional[str]]` *(class)* — Retype *materials*, keeping their textures and geometry assignments.
 
 <a id="mat_utils--shader_templates--_shader_templates"></a>
 ### `mat_utils/shader_templates/_shader_templates.py`
 
-- **[`class GraphCollector(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L57)** — Walk a shading network and serialize it to placeholder-keyed graph info.
+- **[`class GraphCollector(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L56)** — Walk a shading network and serialize it to placeholder-keyed graph info.
   - `GraphCollector.collect_graph(self, nodes)`
-- **[`class GraphSaver(GraphCollector)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L201)**
+- **[`class GraphSaver(GraphCollector)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L200)**
   - `GraphSaver.save_graph(self, nodes: List[str], file_path: str, exclude_types: Optional[List[str]] = None) -> None`
-- **[`class GraphRestorer(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L251)**
+- **[`class GraphRestorer(_ShaderTemplatesInternal)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L250)**
   - `GraphRestorer.load_yaml(self)` — Load and return graph configuration from a YAML file.
   - `GraphRestorer.restore_graph(self)` — Restore the graph based on the YAML configuration and textures.
   - `GraphRestorer.restore_connections(self)` — Connect nodes as specified in the graph configuration.
-- **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L509)** — Facade class for managing shader templates.
+- **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L508)** — Facade class for managing shader templates.
   - `ShaderTemplates.save_template(nodes, file_path, exclude_types=None, logger=None)` *(static)* — Save the specified nodes as a shader template.
   - `ShaderTemplates.restore_template(file_path, texture_paths=None, name=None, logger=None)` *(static)* — Restore a shader template from a file.
-- **[`class ShaderTemplatesSlots(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L556)**
+
+<a id="mat_utils--shader_templates--shader_templates_slots"></a>
+### `mat_utils/shader_templates/shader_templates_slots.py`
+
+Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
+
+- **[`class ShaderTemplatesSlots(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/shader_templates_slots.py#L26)**
   - `ShaderTemplatesSlots.header_init(self, widget)` — Initialize the header widget.
   - `ShaderTemplatesSlots.lbl_graph_material(self)` — Graph the last restored material in the Hypershade.
   - `ShaderTemplatesSlots.lbl_open_templates_dir(self)` — Open the shader templates directory in file explorer.
@@ -3479,32 +3512,44 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 
 Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 
-- [`SEND_TO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L57) — constant
-- [`ROUND_TRIP`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L58) — constant
-- [`TARGET_AUTO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L70) — constant
-- [`TARGET_NEW`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L71) — constant
-- [`TARGET_CURRENT`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L72) — constant
-- **[`class SubstanceBridge(ptk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L189)** — Export Maya selection to Substance Painter via a chosen template.
-  - `SubstanceBridge.painter_path(self) -> Optional[str]` *(property)* — Resolve the Painter executable path via :func:`find_painter_exe`.
-  - `SubstanceBridge.painter_log_path(self) -> Optional[str]` *(property)* — Path to Painter's application ``log.txt``, or *None* if absent.
-  - `SubstanceBridge.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
-  - `SubstanceBridge.find_live_managed(self) -> Optional[SubstanceConnection]` — Return the most-recently-launched managed instance whose RPC pings.
+- [`SEND_TO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L60) — constant
+- [`ROUND_TRIP`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L61) — constant
+- [`TARGET_AUTO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L62) — constant
+- [`TARGET_NEW`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L63) — constant
+- [`TARGET_CURRENT`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L64) — constant
+- **[`class SubstanceBridge(SubstanceEngine)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_bridge.py#L112)** — Export Maya selection to Substance Painter via a chosen template.
   - `SubstanceBridge.send(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, output_name: Optional[str] = None, painter_exe: Optional[str] = None, fbx_options: Optional[Dict[str, Any]] = None, preset_file: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, target: Union[str, int] = TARGET_AUTO, params: Optional[Dict[str, Any]] = None, **legacy_kwargs: Any) -> Optional[Dict[str, Any]]` — Export *objects*, render *template* in *mode*, hand off to Painter.
-  - `SubstanceBridge.ensure_rpc_plugin(self) -> None` — Install -- or refresh -- the Painter-side substance_rpc plugin.
-  - `SubstanceBridge.mesh_map_files(cls, paths: List[str]) -> List[str]` *(class)* — The subset of *paths* Painter can actually use as mesh maps.
   - `SubstanceBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx``.
-  - `SubstanceBridge.list_templates() -> List[Path]` *(static)* — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
-  - `SubstanceBridge.parse_template(template_path: Path) -> Dict[str, Any]` *(static)* — Read a template's metadata constants without executing the file.
-  - `SubstanceBridge.list_template_modes() -> List[Tuple[str, str]]` *(static)* — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
-  - `SubstanceBridge.resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]` *(static)* — Return the path to Painter's application log.
+
+<a id="mat_utils--substance_bridge--_substance_engine"></a>
+### `mat_utils/substance_bridge/_substance_engine.py`
+
+Drive Substance 3D Painter from the outside -- the DCC-free half of the bridge.
+
+- [`SEND_TO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L61) — constant
+- [`ROUND_TRIP`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L62) — constant
+- [`TARGET_AUTO`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L74) — constant
+- [`TARGET_NEW`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L75) — constant
+- [`TARGET_CURRENT`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L76) — constant
+- **[`class SubstanceEngine(pythontk.HandoffBridge)`](mayatk/mayatk/mat_utils/substance_bridge/_substance_engine.py#L143)** — The DCC-free Substance Painter hand-off;
+  - `SubstanceEngine.painter_path(self) -> Optional[str]` *(property)* — Resolve the Painter executable path via :func:`find_painter_exe`.
+  - `SubstanceEngine.painter_log_path(self) -> Optional[str]` *(property)* — Path to Painter's application ``log.txt``, or *None* if absent.
+  - `SubstanceEngine.instances(self) -> List[SubstanceConnection]` *(property)* — Live snapshot of managed connections (oldest -> newest, dead pruned).
+  - `SubstanceEngine.find_live_managed(self) -> Optional[SubstanceConnection]` — Return the most-recently-launched managed instance whose RPC pings.
+  - `SubstanceEngine.ensure_rpc_plugin(self) -> None` — Install -- or refresh -- the Painter-side substance_rpc plugin.
+  - `SubstanceEngine.mesh_map_files(cls, paths: List[str]) -> List[str]` *(class)* — The subset of *paths* Painter can actually use as mesh maps.
+  - `SubstanceEngine.list_templates() -> List[Path]` *(static)* — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
+  - `SubstanceEngine.parse_template(template_path: Path) -> Dict[str, Any]` *(static)* — Read a template's metadata constants without executing the file.
+  - `SubstanceEngine.list_template_modes() -> List[Tuple[str, str]]` *(static)* — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
+  - `SubstanceEngine.resolve_painter_log_path(painter_exe: Optional[str] = None) -> Optional[str]` *(static)* — Return the path to Painter's application log.
 
 <a id="mat_utils--substance_bridge--connection"></a>
 ### `mat_utils/substance_bridge/connection.py`
 
 Substance 3D Painter connection module.
 
-- [`APP`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L50) — constant
-- **[`class SubstanceConnection(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L64)** — Launch Painter and expose its stdio, log, and RPC under one object.
+- [`APP`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L55) — constant
+- **[`class SubstanceConnection(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/substance_bridge/connection.py#L75)** — Launch Painter and expose its stdio, log, and RPC under one object.
   - `SubstanceConnection.open(self) -> 'SubstanceConnection'` — Launch Painter and start readers, tailer, and RPC client.
   - `SubstanceConnection.close(self, terminate: bool = False, timeout: float = 5.0) -> None` — Stop readers and tailer;
   - `SubstanceConnection.is_alive(self) -> bool` — True if Painter is reachable through this connection.
@@ -3517,13 +3562,10 @@ Substance 3D Painter connection module.
 
 Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
-- [`PARAMS`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L75) — constant
-- **[`class Parameters`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L255)** — Parameters — module namespace.
-  - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
-  - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
-  - `Parameters.affix_parts(value: 'Any', *, default: str = 'prefix') -> 'tuple[str, str]'` *(static)* — ``(prefix, suffix)`` for an ``affix`` param value (delegates to uitk).
-  - `Parameters.render_cli_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
-  - `Parameters.render_js_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
+- [`PARAMS`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L86) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/mat_utils/substance_bridge/parameters.py#L266)** — Parameters — module namespace.
+  - `Parameters.render_cli_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``LAUNCH_ARGS`` -- raw, no quoting.
+  - `Parameters.render_js_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``RPC_SCRIPT`` -- JS-literal quoting/escaping.
 
 <a id="mat_utils--substance_bridge--substance_bridge_slots"></a>
 ### `mat_utils/substance_bridge/substance_bridge_slots.py`
@@ -3546,8 +3588,8 @@ Slots for the Substance Painter bridge panel.
 
 HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 
-- [`DEFAULT_RPC_PORT`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/client.py#L32) — constant
-- **[`class PainterRpcClient(RpcClient)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/client.py#L35)** — RPC client bound to the substance_rpc plugin's defaults.
+- [`DEFAULT_RPC_PORT`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/client.py#L37) — constant
+- **[`class PainterRpcClient(RpcClient)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/client.py#L40)** — RPC client bound to the substance_rpc plugin's defaults.
   - `PainterRpcClient.wait_until_ready(self, timeout: float = 60.0, poll_interval: float = 0.5) -> bool` — Poll ``/health`` until the plugin answers, or *timeout* expires.
   - `PainterRpcClient.invoke(self, op: str, timeout: Optional[float] = None, **kwargs: Any) -> Any` — :meth:`RpcClient.invoke` with this client's default timeout.
   - `PainterRpcClient.eval_js(self, script: str) -> Any` — Evaluate *script* in Painter's JS engine (``alg.*`` API surface).
@@ -3561,8 +3603,8 @@ HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 
 Install the substance_rpc plugin into Painter's user plugin folder.
 
-- [`PLUGIN_NAME`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L27) — constant
-- **[`class Installer(_InstallerInternal)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L87)** — Installer — module namespace.
+- [`PLUGIN_NAME`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L33) — constant
+- **[`class Installer(_InstallerInternal)`](mayatk/mayatk/mat_utils/substance_bridge/substance_rpc/installer.py#L110)** — Installer — module namespace.
   - `Installer.user_plugin_dir() -> Optional[Path]` *(static)* — Resolve Painter's Python plugins folder.
   - `Installer.is_installed() -> bool` *(static)* — True if the plugin is present at the resolved user plugin dir.
   - `Installer.is_current() -> bool` *(static)* — True if the installed plugin matches the one this package ships.
@@ -3691,7 +3733,7 @@ Render the current Painter project via Iray (JS body unverified).
 
 Bake an object's shaded surface (material under scene lighting) to a texture.
 
-- **[`class TextureBaker(ptk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L66)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
+- **[`class TextureBaker(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/texture_baker.py#L66)** — Bake scene lighting per object to a texture file (PNG, EXR, ...).
   - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
   - `TextureBaker.ensure_arnold(cls) -> bool` *(class)* — Load mtoa if it isn't loaded, then answer :meth:`arnold_available`.
   - `TextureBaker.default_output_dir(subdir: str = 'baked_textures') -> str` *(static)* — ``<subdir>`` next to the saved scene, else under the workspace root.
@@ -3705,7 +3747,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
 
-- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L25)**
+- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L24)**
   - `TexturePathEditorSlots.header_init(self, widget)` — Initialize the header menu.
   - `TexturePathEditorSlots.tb_set_texture_directory_init(self, widget)` — Populate the Set Directory option-box with the relocate-mode combobox.
   - `TexturePathEditorSlots.tb_normalize_paths_init(self, widget)` — Populate the Normalize Paths option-box with the external-mode combobox.
@@ -3734,7 +3776,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 <a id="node_utils--_node_utils"></a>
 ### `node_utils/_node_utils.py`
 
-- **[`class NodeUtils(ptk.HelpMixin)`](mayatk/mayatk/node_utils/_node_utils.py#L37)**
+- **[`class NodeUtils(pythontk.HelpMixin)`](mayatk/mayatk/node_utils/_node_utils.py#L37)**
   - `NodeUtils.get_type(cls, objects: Union[str, Any, List[Any]]) -> Union[str, List[str]]` *(class)* — Get the object type as a string.
   - `NodeUtils.get_inherited_types(node: str) -> List[str]` *(static)* — Get the inheritance hierarchy for a node type.
   - `NodeUtils.is_mesh(cls, objects, filter: bool = False)` *(class)* — Return True for each object that is a transform node with a mesh shape child.
@@ -3786,7 +3828,7 @@ Consolidated attribute utilities for Maya.
 
 - **[`class AttributeTemplate`](mayatk/mayatk/node_utils/attributes/_attributes.py#L36)** — Defines the configuration for a Maya attribute.
 - **[`class Preset(NamedTuple)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L63)** — A named bundle of attributes loaded from a YAML template.
-- **[`class Attributes(ptk.HelpMixin)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L78)** — Consolidated utility for managing Maya node attributes.
+- **[`class Attributes(pythontk.HelpMixin)`](mayatk/mayatk/node_utils/attributes/_attributes.py#L78)** — Consolidated utility for managing Maya node attributes.
   - `Attributes.has_attr(node: str, attr: str) -> bool` *(static)* — Return True if *attr* exists on *node*.
   - `Attributes.set_plug_literal(plug: str, value: str) -> None` *(static)* — Write *value* to a string *plug* VERBATIM, bypassing DG expansion.
   - `Attributes.set_plug(plug: str, value: Any, force: bool = False) -> None` *(static)* — Write *value* to *plug*, optionally bypassing a lock.
@@ -3829,19 +3871,12 @@ Consolidated attribute utilities for Maya.
   - `Attributes.add_enum_field(nodes, attr_name, new_label)` *(static)* — Append a new enum field *new_label* to *attr_name*.
   - `Attributes.delete_enum_field(nodes, attr_name, label)` *(static)* — Remove the enum field *label* from *attr_name*.
 
-<a id="node_utils--attributes--channels--__init__"></a>
-### `node_utils/attributes/channels/__init__.py`
-
-Channels — Switchboard UI for inspecting and editing Maya attributes.
-
-- [`launch(sb=None, targets=None, filter=None, search=None)`](mayatk/mayatk/node_utils/attributes/channels/__init__.py#L15) — Open the Channels UI, optionally pre-targeted.
-
 <a id="node_utils--attributes--channels--_channels"></a>
 ### `node_utils/attributes/channels/_channels.py`
 
 Channels — Maya attribute query / mutation logic.
 
-- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L17)** — Maya attribute query / mutation logic.
+- **[`class Channels`](mayatk/mayatk/node_utils/attributes/channels/_channels.py#L20)** — Maya attribute query / mutation logic.
   - `Channels.is_pinned(self)` *(property)*
   - `Channels.single_object_mode(self)` *(property)*
   - `Channels.pin_targets(self, nodes)` — Pin the manager to a fixed node list;
@@ -3893,8 +3928,9 @@ Channels — Maya attribute query / mutation logic.
 
 UI slots for the Channels UI.
 
-- **[`class ChannelsSlots`](mayatk/mayatk/node_utils/attributes/channels/channels_slots.py#L25)** — Switchboard slots for the Channels UI.
-  - `ChannelsSlots.apply_launch_config(self, targets=None, filter=None, search=None)` — Configure the window from a :func:`launch` call.
+- **[`class ChannelsSlots`](mayatk/mayatk/node_utils/attributes/channels/channels_slots.py#L28)** — Switchboard slots for the Channels UI.
+  - `ChannelsSlots.launch(sb=None, targets=None, filter=None, search=None)` *(static)* — Open the Channels UI, optionally pre-targeted.
+  - `ChannelsSlots.apply_launch_config(self, targets=None, filter=None, search=None)` — Configure the window from a :meth:`launch` call.
   - `ChannelsSlots.header_init(self, widget)` — Populate the header menu with global actions.
   - `ChannelsSlots.show_create_menu(self, *args)` — Show the *Create Attribute* popup.
   - `ChannelsSlots.cmb000_init(self, widget)` — Populate filter combobox and wire its option_box invert action.
@@ -3907,7 +3943,7 @@ UI slots for the Channels UI.
 
 The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 
-- **[`class DataNodes(ptk.SceneStoreBase)`](mayatk/mayatk/node_utils/data_nodes.py#L46)** — The two shared scene data nodes, as a ``ptk.SceneStoreBase``.
+- **[`class DataNodes(pythontk.SceneStoreBase)`](mayatk/mayatk/node_utils/data_nodes.py#L46)** — The two shared scene data nodes, as a ``ptk.SceneStoreBase``.
   - `DataNodes.ensure_internal(cls) -> str` *(class)* — Get or create the shared network node.
   - `DataNodes.ensure_export(cls) -> str` *(class)* — Get or create the shared FBX export transform.
   - `DataNodes.get_internal_node(cls, create: bool = True) -> Optional[str]` *(class)* — The ``data_internal`` node (created when *create*), else ``None``.
@@ -3925,7 +3961,7 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 <a id="nurbs_utils--_nurbs_utils"></a>
 ### `nurbs_utils/_nurbs_utils.py`
 
-- **[`class NurbsUtils(ptk.HelpMixin)`](mayatk/mayatk/nurbs_utils/_nurbs_utils.py#L22)**
+- **[`class NurbsUtils(pythontk.HelpMixin)`](mayatk/mayatk/nurbs_utils/_nurbs_utils.py#L22)**
   - `NurbsUtils.loft(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)` *(class)* — Create a loft between two selections.
   - `NurbsUtils.create_curve_between_two_objs(cls, start, end)` *(class)* — Create a bezier curve between starting and end object(s).
   - `NurbsUtils.duplicate_along_curve(path, start, count=6, geometry='Instancer')` *(static)* — Duplicate objects along a given curve using MASH.
@@ -3942,11 +3978,11 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 
 Sweep a circular profile along NURBS curve(s) to build a tube.
 
-- **[`class CurveToTube(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L54)** — Extrude a circular profile along NURBS curve(s) to build a tube.
+- **[`class CurveToTube(pythontk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L54)** — Extrude a circular profile along NURBS curve(s) to build a tube.
   - `CurveToTube.create(cls, curves, output_type: str = 'nurbs', radius: float = 1.0, sections: int = 8, path_divisions: int = 1, degree: int = 3, caps: bool = True, quads: bool = True, live: bool = False, cleanup: bool = True, name: str = 'tube') -> List[str]` *(class)* — Build a tube along each selected curve.
-- **[`class CurveToTubeSlots(ptk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L704)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
+- **[`class CurveToTubeSlots(pythontk.LoggingMixin)`](mayatk/mayatk/nurbs_utils/curve_to_tube.py#L704)** — Switchboard slot wiring for the Curve to Tube UI (hermetic preview).
   - `CurveToTubeSlots.header_init(self, widget)` — Configure header help text.
-  - `CurveToTubeSlots.b001(self)` — Reset to Defaults.
+  - `CurveToTubeSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `CurveToTubeSlots.perform_operation(self, objects, contract)` — Build the tube(s) from the selected curves (Preview entry point).
 
 <a id="nurbs_utils--image_tracer"></a>
@@ -3974,7 +4010,7 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
 
 Render-control helpers.
 
-- **[`class RenderUtils(ptk.HelpMixin)`](mayatk/mayatk/render_utils/_render_utils.py#L29)** — Renderer enumeration / selection and Render-View control.
+- **[`class RenderUtils(pythontk.HelpMixin)`](mayatk/mayatk/render_utils/_render_utils.py#L29)** — Renderer enumeration / selection and Render-View control.
   - `RenderUtils.get_available_renderers(cls) -> List[Dict[str, object]]` *(class)* — Renderers the user can pick.
   - `RenderUtils.current_renderer() -> str` *(static)* — The scene's active renderer (``defaultRenderGlobals.currentRenderer``).
   - `RenderUtils.set_renderer(cls, name: str) -> None` *(class)* — Make *name* the active renderer, loading its plugin if required.
@@ -3986,7 +4022,7 @@ Render-control helpers.
 <a id="rig_utils--_rig_utils"></a>
 ### `rig_utils/_rig_utils.py`
 
-- **[`class RigUtils(ptk.HelpMixin)`](mayatk/mayatk/rig_utils/_rig_utils.py#L25)**
+- **[`class RigUtils(pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/_rig_utils.py#L25)**
   - `RigUtils.create_helper(name: str, helper_type: str = 'locator', parent: Optional[str] = None, position: Tuple[float, float, float] = (0.0, 0.0, 0.0), cleanup: bool = False) -> Optional[str]` *(static)* — Create a hidden helper object (e.g., locator, joint) with a consistent naming convention.
   - `RigUtils.create_group(objects=[], name='', zero_translation=False, zero_rotation=False, zero_scale=False)` *(static)* — Create a group containing any given objects.
   - `RigUtils.create_locator(*, scale: float = 1, parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create a locator with the given scale.
@@ -4007,7 +4043,7 @@ Render-control helpers.
 ### `rig_utils/controls.py`
 
 - **[`class ControlNodes`](mayatk/mayatk/rig_utils/controls.py#L23)**
-- **[`class Controls(ptk.HelpMixin)`](mayatk/mayatk/rig_utils/controls.py#L59)** — Factory for creating NURBS animation controls.
+- **[`class Controls(pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/controls.py#L59)** — Factory for creating NURBS animation controls.
   - `Controls.register_preset(cls, name: str, builder: Callable[..., str]) -> None` *(class)* — Register a new control preset.
   - `Controls.shapes(cls) -> List[str]` *(class)* — Sorted names of the registered presets (for a UI combo / validation).
   - `Controls.create(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]` *(class)* — Create a NURBS control.
@@ -4019,7 +4055,7 @@ Render-control helpers.
 
 Build a RigGraph in Maya -- Maya as the TARGET of the rig-transfer stack.
 
-- **[`class RigGraphBuilder(_RigGraphBuilderInternal, ptk.HelpMixin)`](mayatk/mayatk/rig_utils/rig_graph_build.py#L368)** — Plan a RigGraph against Maya and build what the plan allows.
+- **[`class RigGraphBuilder(_RigGraphBuilderInternal, pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/rig_graph_build.py#L368)** — Plan a RigGraph against Maya and build what the plan allows.
   - `RigGraphBuilder.capability(cls) -> Dict[str, Any]` *(class)* — What Maya can build, as data the planner reads (section 9.2).
   - `RigGraphBuilder.scope(self)` — Yield with the scene's current time restored afterwards.
   - `RigGraphBuilder.linear_unit() -> str` *(static)* — The scene's linear unit, as the verifier's vocabulary spells it.
@@ -4034,35 +4070,16 @@ Build a RigGraph in Maya -- Maya as the TARGET of the rig-transfer stack.
 
 Read a Maya rig into a RigGraph -- phase 2 of the rig-transfer stack.
 
-- **[`class RigGraphExtractor(_RigGraphExtractorInternal, ptk.HelpMixin)`](mayatk/mayatk/rig_utils/rig_graph_extract.py#L801)** — Extract a Maya scene's rig logic into a RigGraph document (plain dict).
+- **[`class RigGraphExtractor(_RigGraphExtractorInternal, pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/rig_graph_extract.py#L801)** — Extract a Maya scene's rig logic into a RigGraph document (plain dict).
   - `RigGraphExtractor.extract(self, objects: Optional[Sequence[str]] = None) -> Dict[str, Any]` — Read the scene's drivers into a RigGraph envelope.
   - `RigGraphExtractor.machinery(self, rig: Optional[Dict[str, Any]] = None, scope: Optional[Sequence[str]] = None) -> Tuple[Dict[str, str], Tuple[str, ...]]` — Name the rig apparatus a bake leaves inert: ``({dag path: kind}, kept)``.
 
-<a id="rig_utils--shadow_preview"></a>
-### `rig_utils/shadow_preview.py`
+<a id="rig_utils--shadow_rig--_shadow_rig"></a>
+### `rig_utils/shadow_rig/_shadow_rig.py`
 
-A live Viewport 2.0 preview of a horizon rig: the artist drags the light
+Shadow Rig engine — a projected-shadow rig for engine export.
 
-- **[`class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_preview.py#L381)** — Attach / detach the live horizon preview on shadow planes (module doc).
-  - `ShadowPreview.device(cls) -> Optional[str]` *(class)* — The live Viewport 2.0 device, or None headless.
-  - `ShadowPreview.language(cls) -> Tuple[Optional[str], str]` *(class)* — ``(language, refusal)``: the shader language this session can
-  - `ShadowPreview.shader_node(cls, plane) -> Optional[str]` *(class)* — The plane's preview shader node, or None.
-  - `ShadowPreview.is_attached(cls, plane) -> bool` *(class)*
-  - `ShadowPreview.attached_planes(cls) -> List[str]` *(class)* — Every plane in the scene wearing a preview.
-  - `ShadowPreview.restore_snapshot(cls, plane) -> Dict[str, Optional[List[int]]]` *(class)* — The real shading assignment a preview stands in for (``{}`` when
-  - `ShadowPreview.attach(cls, plane, *, language: Optional[str] = None) -> str` *(class)* — Show the live preview on *plane* (a horizon rig's plane).
-  - `ShadowPreview.detach(cls, plane) -> bool` *(class)* — Restore the plane's real material and delete the preview's nodes.
-  - `ShadowPreview.toggle(cls, planes: Sequence[str], on: bool) -> Tuple[List[str], List[str]]` *(class)* — Attach (*on*) or detach the preview on *planes*;
-  - `ShadowPreview.detach_all(cls) -> List[str]` *(class)* — Detach every preview in the scene;
-  - `ShadowPreview.prepare_for_export(cls) -> None` *(class)* — Stand every preview down, then republish the shadow record: no
-  - `ShadowPreview.classify_device(info: Iterable[str]) -> Optional[str]` *(static)* — ``"dx11"``, ``"glcore"``, ``"gl"`` (legacy) or None, from the lines
-  - `ShadowPreview.effect_text(cls, language: str) -> str` *(class)* — The complete effect for *language*: Maya's prologue around the
-  - `ShadowPreview.refusal(cls, device: Optional[str]) -> str` *(class)* — Why a preview cannot be shown on *device* (empty when it can).
-
-<a id="rig_utils--shadow_rig"></a>
-### `rig_utils/shadow_rig.py`
-
-- **[`class ShadowRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig.py#L24)** — Projected shadow for engine export (Unity, WebXR).
+- **[`class ShadowRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig/_shadow_rig.py#L31)** — Projected shadow for engine export (Unity, WebXR).
   - `ShadowRig.has_mesh_geometry(node, recursive=True)` *(static)* — Does *node* carry (or, with *recursive*, contain) mesh geometry a
   - `ShadowRig.create_contact_locator(self)` — Create a locator at the lowest point of the combined objects to act as the shadow anchor.
   - `ShadowRig.ensure_source(cls, source_name=DEFAULT_SOURCE_NAME, position=(5, 10, 5))` *(class)* — The transform named *source_name*, created as a locator if absent.
@@ -4110,14 +4127,41 @@ A live Viewport 2.0 preview of a horizon rig: the artist drags the light
   - `ShadowRig.create_for_sources(cls, targets, sources, **kwargs)` *(class)* — One shadow rig per source — N lights cast N shadows.
   - `ShadowRig.create_horizon_for_sources(cls, targets, sources, **kwargs)` *(class)* — :meth:`create_for_sources` for the ``horizon`` rig type.
   - `ShadowRig.create_per_object(cls, targets, sources, **kwargs)` *(class)* — One rig per target per source — the panel's *Per object* planes.
-- **[`class ShadowRigSlots`](mayatk/mayatk/rig_utils/shadow_rig.py#L2963)**
+
+<a id="rig_utils--shadow_rig--shadow_preview"></a>
+### `rig_utils/shadow_rig/shadow_preview.py`
+
+A live Viewport 2.0 preview of a horizon rig: the artist drags the light
+
+- **[`class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig/shadow_preview.py#L381)** — Attach / detach the live horizon preview on shadow planes (module doc).
+  - `ShadowPreview.device(cls) -> Optional[str]` *(class)* — The live Viewport 2.0 device, or None headless.
+  - `ShadowPreview.language(cls) -> Tuple[Optional[str], str]` *(class)* — ``(language, refusal)``: the shader language this session can
+  - `ShadowPreview.shader_node(cls, plane) -> Optional[str]` *(class)* — The plane's preview shader node, or None.
+  - `ShadowPreview.is_attached(cls, plane) -> bool` *(class)*
+  - `ShadowPreview.attached_planes(cls) -> List[str]` *(class)* — Every plane in the scene wearing a preview.
+  - `ShadowPreview.restore_snapshot(cls, plane) -> Dict[str, Optional[List[int]]]` *(class)* — The real shading assignment a preview stands in for (``{}`` when
+  - `ShadowPreview.attach(cls, plane, *, language: Optional[str] = None) -> str` *(class)* — Show the live preview on *plane* (a horizon rig's plane).
+  - `ShadowPreview.detach(cls, plane) -> bool` *(class)* — Restore the plane's real material and delete the preview's nodes.
+  - `ShadowPreview.toggle(cls, planes: Sequence[str], on: bool) -> Tuple[List[str], List[str]]` *(class)* — Attach (*on*) or detach the preview on *planes*;
+  - `ShadowPreview.detach_all(cls) -> List[str]` *(class)* — Detach every preview in the scene;
+  - `ShadowPreview.prepare_for_export(cls) -> None` *(class)* — Stand every preview down, then republish the shadow record: no
+  - `ShadowPreview.classify_device(info: Iterable[str]) -> Optional[str]` *(static)* — ``"dx11"``, ``"glcore"``, ``"gl"`` (legacy) or None, from the lines
+  - `ShadowPreview.effect_text(cls, language: str) -> str` *(class)* — The complete effect for *language*: Maya's prologue around the
+  - `ShadowPreview.refusal(cls, device: Optional[str]) -> str` *(class)* — Why a preview cannot be shown on *device* (empty when it can).
+
+<a id="rig_utils--shadow_rig--shadow_rig_slots"></a>
+### `rig_utils/shadow_rig/shadow_rig_slots.py`
+
+Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.
+
+- **[`class ShadowRigSlots`](mayatk/mayatk/rig_utils/shadow_rig/shadow_rig_slots.py#L24)**
   - `ShadowRigSlots.header_init(self, widget)` — Configure header help text.
   - `ShadowRigSlots.cmb_type_init(self, widget)` — A rig type the panel only plans for is listed but not selectable.
   - `ShadowRigSlots.txt_source_init(self, widget)` — Source Name's option box: the two actions about the source --
   - `ShadowRigSlots.b003_init(self, widget)` — Recalculate Silhouette's option box: the deeper updates of an
   - `ShadowRigSlots.b002_init(self, widget)` — Bake to Keyframes' option box: Restore Expression, its inverse.
   - `ShadowRigSlots.prepare_operation(self, objects)` — Preview's one-shot precondition, run at enable outside any
-  - `ShadowRigSlots.b001(self)` — Reset to Defaults: Resets all UI widgets to their default values.
+  - `ShadowRigSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
   - `ShadowRigSlots.chk_follow_init(self, widget)` — Follow Source arms the engine's watcher from the box's (saved)
   - `ShadowRigSlots.chk_follow(self, checked)` — Follow Source: re-render a silhouette as soon as its source -- or
   - `ShadowRigSlots.s001_init(self, widget)` — Softness shows the scene's value for the first Source Name -- its
@@ -4140,11 +4184,11 @@ A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 
 Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 
-- **[`class CurveWeights(ptk.HelpMixin)`](mayatk/mayatk/rig_utils/skinning.py#L50)** — Analytic, ring-uniform skin weights for a joint chain along a curve.
+- **[`class CurveWeights(pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/skinning.py#L50)** — Analytic, ring-uniform skin weights for a joint chain along a curve.
   - `CurveWeights.effective_degree(degree: int, num_joints: int) -> int` *(static)* — The basis degree actually solvable: *degree* clamped to [1, num_joints - 1].
   - `CurveWeights.joint_stations(cls, joints: List[str], curve) -> List[float]` *(class)* — Arc length of each joint's closest curve point, in input order.
   - `CurveWeights.solve(cls, geometry, joints: List[str], curve: Optional[str] = None, centerline: Optional[Sequence] = None, profile: Union[str, Callable] = 'smoothstep', degree: int = 3, rings: Optional[Sequence[Sequence[int]]] = None) -> Tuple[List[float], List[str]]` *(class)* — Compute per-component weights from arc-length stations along a curve.
-- **[`class SkinUtils(ptk.HelpMixin)`](mayatk/mayatk/rig_utils/skinning.py#L305)** — Skinning: binding, batch weight I/O, transfer, falloffs, delta mush.
+- **[`class SkinUtils(pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/skinning.py#L305)** — Skinning: binding, batch weight I/O, transfer, falloffs, delta mush.
   - `SkinUtils.get_skin_cluster(mesh) -> Optional[str]` *(static)* — Return the first skinCluster in the mesh's history, or None.
   - `SkinUtils.get_influences(cls, skin_cluster, long_names: bool = False) -> List[str]` *(class)* — Influence names in PHYSICAL order (``MFnSkinCluster.influenceObjects()``).
   - `SkinUtils.bind(cls, mesh, joints, bind_method: str = 'closest', skinning_method: str = 'classic', max_influences: int = 4, dropoff_rate: float = 4.0, weight_distribution: float = 0.5, remove_unused_influences: bool = False, heatmap_falloff: float = 0.68, bind_fallback: bool = True, support_non_rigid: bool = True, name: Optional[str] = None) -> str` *(class)* — Smooth-bind *mesh* to *joints* with the full skinCluster arg surface.
@@ -4174,46 +4218,22 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 - **[`class TelescopeRigBundle`](mayatk/mayatk/rig_utils/telescope_rig.py#L22)** — Record of everything one ``setup_telescope_rig`` build created.
   - `TelescopeRigBundle.to_json(self) -> str`
   - `TelescopeRigBundle.from_json(cls, payload: str) -> 'TelescopeRigBundle'` *(class)* — Rebuild a bundle from :meth:`to_json` output, ignoring unknown keys
-- **[`class TelescopeRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L58)** — Telescope Rig
+- **[`class TelescopeRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L58)** — Telescope Rig
   - `TelescopeRig.setup_telescope_rig(self, base_locator: Optional[Union[str, List[str]]] = None, end_locator: Optional[Union[str, List[str]]] = None, segments: Optional[List[str]] = None, collapsed_distance: Optional[float] = None, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
   - `TelescopeRig.scene_bundles(cls) -> List[TelescopeRigBundle]` *(class)* — Every telescope-rig bundle stamped into the current scene.
   - `TelescopeRig.find_bundles(cls, nodes) -> List[TelescopeRigBundle]` *(class)* — Bundles whose locators or segments intersect *nodes*.
   - `TelescopeRig.teardown(self, bundle: Optional[TelescopeRigBundle] = None) -> bool` — Remove a telescope rig built by this class.
-- **[`class TelescopeRigSlots(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L838)**
+- **[`class TelescopeRigSlots(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L838)**
   - `TelescopeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TelescopeRigSlots.build_rig(self)`
   - `TelescopeRigSlots.remove_rig(self)`
 
-<a id="rig_utils--tube_path"></a>
-### `rig_utils/tube_path.py`
+<a id="rig_utils--tube_rig--_tube_rig"></a>
+### `rig_utils/tube_rig/_tube_rig.py`
 
-Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
+Tube Rig engine — rigs a tube-shaped mesh (hose, cable, piston, tail).
 
-- **[`class TubePath(_TubePathInternal)`](mayatk/mayatk/rig_utils/tube_path.py#L72)** — Pure geometry analysis for tube-like meshes.
-  - `TubePath.get_centerline(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True, rings: Optional[List[List[int]]] = None) -> Tuple[List, int]` *(static)* — Unified centerline dispatcher — picks the best algorithm.
-  - `TubePath.order_cycle(edge_pairs) -> List[int]` *(static)* — Walk ``edge_pairs`` into cyclic vertex order, or ``[]``.
-  - `TubePath.get_vertex_rings(mesh) -> List[List[int]]` *(static)* — Vertex-index groups, one per circumferential edge loop.
-  - `TubePath.get_edge_loop_centers(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[List[om.MPoint], int]` *(static)* — Extract centerline by finding all edge loops (cross-sections) of a tube mesh.
-  - `TubePath.get_end_normals(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[Optional['om.MVector'], Optional['om.MVector']]` *(static)* — Unit normals of the tube's two end cross-sections, pointing along
-  - `TubePath.estimate_radius(mesh, centerline: List) -> Optional[float]` *(static)* — Estimate the tube's radius: median distance from interior
-  - `TubePath.get_centerline_using_edges(edge_selection: List[str]) -> List[List[float]]` *(static)* — Derive centerline points from selected edges of the tube.
-  - `TubePath.get_centerline_from_surface_normals(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]` *(static)* — Calculate centerline by iteratively averaging opposing surface hits.
-  - `TubePath.get_centerline_from_bounding_box(obj, precision=10, smooth=False, window_size=1)` *(static)* — Calculate the centerline of an object using the cross-section of its largest bounding box axis.
-
-<a id="rig_utils--tube_rig"></a>
-### `rig_utils/tube_rig.py`
-
-- [`RIG_MODES`](mayatk/mayatk/rig_utils/tube_rig.py#L3840) — constant
-- **[`class TubeRigBundle`](mayatk/mayatk/rig_utils/tube_rig.py#L42)**
-- **[`class TubeStrategy(ABC)`](mayatk/mayatk/rig_utils/tube_rig.py#L60)**
-  - `TubeStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
-- **[`class FKChainStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig.py#L66)** — Joints → nested FK controls → parametric skin.
-  - `FKChainStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
-- **[`class SplineIKStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig.py#L98)** — Joints → spline-IK control rig → parametric skin along the IK curve.
-  - `SplineIKStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
-- **[`class AnchorStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig.py#L143)** — Two end joints → anchor controls with distance stretch → parametric skin.
-  - `AnchorStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
-- **[`class TubeRig(ptk.LoggingMixin, _TubeRigInternal)`](mayatk/mayatk/rig_utils/tube_rig.py#L497)** — Rig engine for tube-shaped meshes: joints, IK, controls, skinning.
+- **[`class TubeRig(pythontk.LoggingMixin, _TubeRigInternal)`](mayatk/mayatk/rig_utils/tube_rig/_tube_rig.py#L370)** — Rig engine for tube-shaped meshes: joints, IK, controls, skinning.
   - `TubeRig.for_mesh(cls, mesh) -> Optional['TubeRig']` *(class)* — Look up an existing TubeRig instance bound to *mesh*, or return None.
   - `TubeRig.for_node(cls, node) -> Optional['TubeRig']` *(class)* — Find the TubeRig owning *node* — the rigged mesh itself, or
   - `TubeRig.scene_data(cls, node) -> Optional[dict]` *(class)* — The ``DATA_ATTR`` record on *node* as a dict, or None.
@@ -4247,8 +4267,46 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
   - `TubeRig.create_pole_vector(self, ik_handle, mid_joint: str, offset=(0, 5, 0)) -> str`
   - `TubeRig.bind_joint_chain(self, obj, joints: List[str], curve: Optional[str] = None, centerline: Optional[List] = None) -> Optional[str]` — Bind the joint chain to a polygon tube with smooth skinning.
   - `TubeRig.constrain_end_with_falloff(self, joints: 'List[str]', anchor: str, falloff: float = 5.0, joint_index: int = -1, profile: Union[str, Callable] = 'smoothstep') -> 'Optional[str]'` — Constrains a joint in the chain to an anchor and applies distance-based skin weight falloff.
-- **[`class RigModeConfig`](mayatk/mayatk/rig_utils/tube_rig.py#L3815)** — Defines a rig mode's strategy and available options.
-- **[`class TubeRigSlots`](mayatk/mayatk/rig_utils/tube_rig.py#L3898)**
+
+<a id="rig_utils--tube_rig--strategies"></a>
+### `rig_utils/tube_rig/strategies.py`
+
+Tube Rig build strategies and the bundle they return.
+
+- **[`class TubeRigBundle`](mayatk/mayatk/rig_utils/tube_rig/strategies.py#L24)**
+- **[`class TubeStrategy(ABC)`](mayatk/mayatk/rig_utils/tube_rig/strategies.py#L42)**
+  - `TubeStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- **[`class FKChainStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig/strategies.py#L48)** — Joints → nested FK controls → parametric skin.
+  - `FKChainStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- **[`class SplineIKStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig/strategies.py#L80)** — Joints → spline-IK control rig → parametric skin along the IK curve.
+  - `SplineIKStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+- **[`class AnchorStrategy(TubeStrategy)`](mayatk/mayatk/rig_utils/tube_rig/strategies.py#L125)** — Two end joints → anchor controls with distance stretch → parametric skin.
+  - `AnchorStrategy.build(self, rig: 'TubeRig', **kwargs) -> TubeRigBundle`
+
+<a id="rig_utils--tube_rig--tube_path"></a>
+### `rig_utils/tube_rig/tube_path.py`
+
+Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
+
+- **[`class TubePath(_TubePathInternal)`](mayatk/mayatk/rig_utils/tube_rig/tube_path.py#L74)** — Pure geometry analysis for tube-like meshes.
+  - `TubePath.get_centerline(mesh, num_joints: int = 10, precision: int = 10, edges: list = None, use_surface_normals: bool = True, rings: Optional[List[List[int]]] = None) -> Tuple[List, int]` *(static)* — Unified centerline dispatcher — picks the best algorithm.
+  - `TubePath.order_cycle(edge_pairs) -> List[int]` *(static)* — Walk ``edge_pairs`` into cyclic vertex order, or ``[]``.
+  - `TubePath.get_vertex_rings(mesh) -> List[List[int]]` *(static)* — Vertex-index groups, one per circumferential edge loop.
+  - `TubePath.get_edge_loop_centers(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[List[om.MPoint], int]` *(static)* — Extract centerline by finding all edge loops (cross-sections) of a tube mesh.
+  - `TubePath.get_end_normals(mesh, rings: Optional[List[List[int]]] = None) -> Tuple[Optional['om.MVector'], Optional['om.MVector']]` *(static)* — Unit normals of the tube's two end cross-sections, pointing along
+  - `TubePath.estimate_radius(mesh, centerline: List) -> Optional[float]` *(static)* — Estimate the tube's radius: median distance from interior
+  - `TubePath.get_centerline_using_edges(edge_selection: List[str]) -> List[List[float]]` *(static)* — Derive centerline points from selected edges of the tube.
+  - `TubePath.get_centerline_from_surface_normals(mesh, num_points: int = 10, iterations: int = 3) -> List[om.MPoint]` *(static)* — Calculate centerline by iteratively averaging opposing surface hits.
+  - `TubePath.get_centerline_from_bounding_box(obj, precision=10, smooth=False, window_size=1)` *(static)* — Calculate the centerline of an object using the cross-section of its largest bounding box axis.
+
+<a id="rig_utils--tube_rig--tube_rig_slots"></a>
+### `rig_utils/tube_rig/tube_rig_slots.py`
+
+Tube Rig panel — the Switchboard slots for ``tube_rig.ui``.
+
+- [`RIG_MODES`](mayatk/mayatk/rig_utils/tube_rig/tube_rig_slots.py#L61) — constant
+- **[`class RigModeConfig`](mayatk/mayatk/rig_utils/tube_rig/tube_rig_slots.py#L36)** — Defines a rig mode's strategy and available options.
+- **[`class TubeRigSlots`](mayatk/mayatk/rig_utils/tube_rig/tube_rig_slots.py#L119)**
   - `TubeRigSlots.txt000_init(self, widget)` — Rig-name field — optional, so clearing back to auto-naming is a state.
   - `TubeRigSlots.header_init(self, widget)` — Configure header help text.
   - `TubeRigSlots.apply_mode(self, index: int)` — Apply mode values and constraints to UI widgets.
@@ -4268,7 +4326,7 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 <a id="rig_utils--wheel_rig"></a>
 ### `rig_utils/wheel_rig.py`
 
-- **[`class WheelRig(ptk.LoggingMixin)`](mayatk/mayatk/rig_utils/wheel_rig.py#L22)** — Handles basic wheel rigging by linking rotation to linear control movement.
+- **[`class WheelRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/wheel_rig.py#L22)** — Handles basic wheel rigging by linking rotation to linear control movement.
   - `WheelRig.rig_name(self) -> str` *(property)*
   - `WheelRig.get_expressions(self, filter_by_rig: bool = False) -> List[object]` — Return all expression nodes connected to the control.
   - `WheelRig.delete_expressions(self, filter_by_rig: bool = True) -> None` — Delete expression nodes associated with this rig.
@@ -4290,7 +4348,9 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 <a id="ui_utils--_ui_utils"></a>
 ### `ui_utils/_ui_utils.py`
 
-- **[`class UiUtils`](mayatk/mayatk/ui_utils/_ui_utils.py#L7)**
+- **[`class UiUtils`](mayatk/mayatk/ui_utils/_ui_utils.py#L12)**
+  - `UiUtils.get_editor_types(cls) -> dict` *(class)* — The friendly-name -> runtime-command map understood by :meth:`open_editor`.
+  - `UiUtils.open_editor(cls, editor: str) -> Optional[str]` *(class)* — Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a
   - `UiUtils.get_main_window()` *(static)* — Get the main Maya window as a QMainWindow instance.
   - `UiUtils.get_menu_name(qt_object_name: str) -> Optional[str]` *(static)* — Retrieve the internal Maya name of a menu given its Qt object name.
   - `UiUtils.get_panel(*args, **kwargs)` *(static)* — Returns panel and panel configuration information.
@@ -4305,14 +4365,14 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 <a id="ui_utils--calculator"></a>
 ### `ui_utils/calculator.py`
 
-- **[`class CalculatorController`](mayatk/mayatk/ui_utils/calculator.py#L11)**
+- **[`class CalculatorController`](mayatk/mayatk/ui_utils/calculator.py#L14)**
   - `CalculatorController.calculate(expression)` *(static)* — Safely evaluate a math expression (delegates to the shared engine).
   - `CalculatorController.get_fps_value()` *(static)*
   - `CalculatorController.get_current_time()` *(static)*
   - `CalculatorController.frames_to_sec(cls, frames)` *(class)*
   - `CalculatorController.sec_to_frames(cls, seconds)` *(class)*
   - `CalculatorController.convert_unit(value, from_unit, to_unit)` *(static)* — Convert a length value between units (delegates to the shared engine).
-- **[`class CalculatorSlots`](mayatk/mayatk/ui_utils/calculator.py#L71)**
+- **[`class CalculatorSlots`](mayatk/mayatk/ui_utils/calculator.py#L74)**
   - `CalculatorSlots.header_init(self, widget)` — Configure header help text.
   - `CalculatorSlots.on_convert_units(self)`
   - `CalculatorSlots.on_input(self, text)`
@@ -4329,7 +4389,7 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 
 Maya's answers to uitk's cancellation contract.
 
-- **[`class MayaCancelProvider(CancelProvider)`](mayatk/mayatk/ui_utils/cancel_provider.py#L51)** — Maya host strategy for :class:`uitk.CancelManager`.
+- **[`class MayaCancelProvider(CancelProvider)`](mayatk/mayatk/ui_utils/cancel_provider.py#L54)** — Maya host strategy for :class:`uitk.CancelManager`.
   - `MayaCancelProvider.report_warning(cls, message: str) -> None` *(class)*
   - `MayaCancelProvider.report_info(cls, message: str) -> None` *(class)*
   - `MayaCancelProvider.create_sources(self, scope, label: str = '')` — Maya's Esc peek first, then uitk's key-hold fallback.
@@ -4342,7 +4402,7 @@ Maya's answers to uitk's cancellation contract.
 
 Programmatic access to Maya's Channel Box.
 
-- **[`class ChannelBox`](mayatk/mayatk/ui_utils/channel_box.py#L29)** — Query, select, and hook into Maya's Channel Box programmatically.
+- **[`class ChannelBox`](mayatk/mayatk/ui_utils/channel_box.py#L32)** — Query, select, and hook into Maya's Channel Box programmatically.
   - `ChannelBox.connect_selection_changed(cls, callback)` *(class)* — Connect *callback* to the Channel Box's Qt selection signal.
   - `ChannelBox.disconnect_selection_changed(cls, callback)` *(class)* — Disconnect a previously connected *callback*.
   - `ChannelBox.get_selected_attrs(cls, sections='all')` *(class)* — Return attribute names currently selected in the channel box.
@@ -4370,8 +4430,8 @@ Programmatic access to Maya's Channel Box.
 
 Maya hotkey collision checker for the uitk ShortcutEditor.
 
-- [`MACRO_HOTKEY_SET`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L53) — constant
-- **[`class HotkeyCollisions(_HotkeyCollisionsInternal)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L222)** — HotkeyCollisions — module namespace.
+- [`MACRO_HOTKEY_SET`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L56) — constant
+- **[`class HotkeyCollisions(_HotkeyCollisionsInternal)`](mayatk/mayatk/ui_utils/hotkey_collisions.py#L225)** — HotkeyCollisions — module namespace.
   - `HotkeyCollisions.parse_qt_sequence(sequence: str) -> Optional[dict]` *(static)* — Convert a Qt key sequence string to ``cmds.hotkey`` query kwargs.
   - `HotkeyCollisions.keystring_to_token(ks: list) -> str` *(static)* — Convert an ``assignCommand`` keyString array to a Maya hotkey token.
   - `HotkeyCollisions.live_hotkey_map() -> dict` *(static)* — Return ``{runtime_command: maya_key_token}`` for the active hotkey set.
@@ -4391,7 +4451,7 @@ Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`
 
-- **[`class MayaNativeMenus(ptk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L19)** — Handles Maya's menu retrieval and embedding into UI components.
+- **[`class MayaNativeMenus(pythontk.LoggingMixin)`](mayatk/mayatk/ui_utils/maya_native_menus.py#L23)** — Handles Maya's menu retrieval and embedding into UI components.
   - `MayaNativeMenus.get_menu(self, menu_key: str) -> Optional[QtWidgets.QWidget]` — Retrieve a Maya menu, populated synchronously, and return its wrapper.
   - `MayaNativeMenus.display_menu(self, menu_key: str)` — Displays the specified Maya menu in a standalone window.
 
@@ -4420,8 +4480,8 @@ Reusable helper for resolving Maya node icons at runtime.
 
 Match Maya's scriptable viewport colors to another DCC's look.
 
-- [`STYLES_DIR`](mayatk/mayatk/ui_utils/style_setter/_style_setter.py#L59) — constant
-- **[`class StyleSetter(_StyleSetterInternal)`](mayatk/mayatk/ui_utils/style_setter/_style_setter.py#L106)** — Public namespace for the style-setter helpers (``mtk.StyleSetter.set_style("Blender")`` …).
+- [`STYLES_DIR`](mayatk/mayatk/ui_utils/style_setter/_style_setter.py#L62) — constant
+- **[`class StyleSetter(_StyleSetterInternal)`](mayatk/mayatk/ui_utils/style_setter/_style_setter.py#L109)** — Public namespace for the style-setter helpers (``mtk.StyleSetter.set_style("Blender")`` …).
   - `StyleSetter.list_styles()` *(static)* — Names of the shipped color styles (e.g.
   - `StyleSetter.set_style(name, persist=False)` *(static)* — Switch Maya's viewport colors to the named style — a targeted overlay of just the keys
   - `StyleSetter.list_templates()` *(static)* — Ordered ``{display_name: token}`` of everything a style-selector combo offers: each shipped
@@ -4434,18 +4494,6 @@ External auto-unwrap round-trip: OBJ out, engine, OBJ back, UVs transferred.
 
 - [`IMPORT_NAMESPACE`](mayatk/mayatk/uv_utils/_auto_unwrap.py#L23) — constant
 - **[`class AutoUnwrapResult`](mayatk/mayatk/uv_utils/_auto_unwrap.py#L27)** — Per-object outcome of an :meth:`auto_unwrap` run.
-
-<a id="uv_utils--_cylinder_seams"></a>
-### `uv_utils/_cylinder_seams.py`
-
-Band-based UV seam placement for cylinder / tube / turned meshes.
-
-- [`DEFAULT_TAPER_ANGLE`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L69) — constant
-- [`COPLANAR_EPS_DEG`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L73) — constant
-- [`DEFAULT_FLAT_ANGLE`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L81) — constant
-- [`DEFAULT_TRIM_RATIO`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L86) — constant
-- [`SHARP_FOLD`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L91) — constant
-- [`DEFAULT_VIEW_DIR`](mayatk/mayatk/uv_utils/_cylinder_seams.py#L96) — constant
 
 <a id="uv_utils--_uv_budget"></a>
 ### `uv_utils/_uv_budget.py`
@@ -4467,15 +4515,15 @@ UV texture-budget analysis: measure the scene, plan with :class:`pythontk.UvBudg
 <a id="uv_utils--_uv_pack"></a>
 ### `uv_utils/_uv_pack.py`
 
-xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
+The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 
-- [`RESIDUAL_TOLERANCE`](mayatk/mayatk/uv_utils/_uv_pack.py#L58) — constant
-- **[`class PackUvsResult`](mayatk/mayatk/uv_utils/_uv_pack.py#L62)** — Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.
+- [`RESIDUAL_TOLERANCE`](mayatk/mayatk/uv_utils/_uv_pack.py#L64) — constant
+- **[`class PackUvsResult`](mayatk/mayatk/uv_utils/_uv_pack.py#L68)** — Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.
 
 <a id="uv_utils--_uv_utils"></a>
 ### `uv_utils/_uv_utils.py`
 
-- **[`class UvUtils(ptk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L22)**
+- **[`class UvUtils(pythontk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L22)**
   - `UvUtils.calculate_uv_padding(map_size: int, normalize: bool = False, factor: int = 256) -> float` *(static)* — The texture gutter for a given map size — Maya-side name for the ecosystem rule.
   - `UvUtils.udim_to_tile(udim: int) -> Tuple[int, int]` *(static)* — UDIM tile number to its (u, v) tile offset — Maya-side name for the
   - `UvUtils.orient_shells(objects)` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
@@ -4497,7 +4545,8 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
   - `UvUtils.cut_cylinder_seams(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Cut auto UV seams for cylinder / tube unwrapping on each mesh.
   - `UvUtils.cut_uv_edges(edges, history: bool = True)` *(static)* — Cut (split) UV shells along the given edges, spanning any number of objects.
   - `UvUtils.auto_unwrap(cls, objects=None, method: str = 'hard', map_size: int = 4096, pack: Optional[bool] = None, orient: bool = True, engine_params: Optional[dict] = None)` *(class)* — Automatically unwrap meshes with an external unwrapping engine.
-  - `UvUtils.pack_uvs(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None)` *(class)* — Pack existing UV shells with the external xatlas engine.
+  - `UvUtils.pack_uvs(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))` *(class)* — Pack existing UV shells into a UDIM tile (or a grid of tiles).
+  - `UvUtils.classify_unfold3d_error(error) -> str` *(static)* — A short, human-readable reason for an Unfold3D failure.
   - `UvUtils.analyze_uv_budget(cls, objects=None, map_size: int = 4096, density: Optional[float] = None, scale: Optional[float] = None, pages: Optional[int] = None, density_from: str = 'preserve', group_by: str = 'mesh', collapse_stacked: bool = True, read_textures: bool = True, mip_levels: int = 0, padding_factor: int = 256, fill: Optional[float] = None, level: bool = False, alternates: bool = True)` *(class)* — How many texture maps these surfaces need, and at what texel density.
   - `UvUtils.unwrap_cylinder(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.
   - `UvUtils.get_texel_density(objects, map_size)` *(static)* — Calculate the texel density for the given objects' faces.
@@ -4517,7 +4566,7 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 
 - [`APP`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L37) — constant
-- **[`class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L83)**
+- **[`class RizomUVBridge(pythontk.LoggingMixin, _RizomUVBridgeInternal)`](mayatk/mayatk/uv_utils/rizom_bridge/_rizom_bridge.py#L83)**
   - `RizomUVBridge.rizom_path(self)` *(property)* — Resolve the RizomUV executable path.
   - `RizomUVBridge.rizom_version(self) -> 'tuple[int, ...]'` *(property)* — The installed Rizom version, parsed from the install-dir name.
   - `RizomUVBridge.export_path(self)` *(property)* — Lazy initialization of the export path.
@@ -4531,18 +4580,17 @@ xatlas pack round-trip: UV arrays out, :class:`pythontk.UvPack`, per-shell
 
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
-- [`PARAMS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L41) — constant
-- [`DERIVED_KEYS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L476) — constant
-- [`HOST_TOKEN_DEFAULTS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L483) — constant
-- [`MIN_VERSIONS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L681) — constant
-- [`FBX_USE_UV_SET_NAMES_MIN_VERSION`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L691) — constant
-- **[`class Parameters`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L492)** — Parameters — module namespace.
+- [`PARAMS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L40) — constant
+- [`DERIVED_KEYS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L475) — constant
+- [`HOST_TOKEN_DEFAULTS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L482) — constant
+- [`MIN_VERSIONS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L685) — constant
+- [`FBX_USE_UV_SET_NAMES_MIN_VERSION`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L695) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L491)** — Parameters — module namespace.
   - `Parameters.expand_includes(script_text: str) -> str` *(static)* — Expand ``__PACK_BLOCK__``-style include tokens to their partial's text.
   - `Parameters.preset_min_version(script_text: str) -> 'tuple[int, ...] | None'` *(static)* — Minimum Rizom version a preset declares, or ``None`` if ungated.
-  - `Parameters.referenced_keys(script_text: str) -> 'set[str]'` *(static)* — Registered keys present in *script_text* (delegates to uitk.bridge).
-  - `Parameters.defaults() -> 'dict[str, Any]'` *(static)* — Return ``{key: default}`` for every registered parameter.
+  - `Parameters.referenced_keys(cls, script_text: str) -> 'set[str]'` *(class)* — Registered keys present in *script_text* (delegates to uitk.bridge).
   - `Parameters.derived_values(values: 'dict[str, Any]') -> 'dict[str, float]'` *(static)* — Return the computed pack-gutter tokens (see :data:`DERIVED_KEYS`).
-  - `Parameters.render_context(values: 'dict[str, Any]') -> 'dict[str, str]'` *(static)* — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
+  - `Parameters.render_context(cls, values: 'dict[str, Any]') -> 'dict[str, str]'` *(class)* — Format *values* for ``StrUtils.replace_delimited`` using Lua literals.
   - `Parameters.strip_unsupported(script_text: str, version: 'tuple[int, ...]') -> str` *(static)* — Drop every line that references a placeholder requiring a newer Rizom.
 
 <a id="uv_utils--rizom_bridge--rizom_bridge_slots"></a>
@@ -4563,7 +4611,7 @@ Slots for the RizomUV bridge panel.
 
 Dedicated UV shell-transform panel.
 
-- **[`class ShellXformSlots(ptk.LoggingMixin)`](mayatk/mayatk/uv_utils/shell_xform.py#L37)** — Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
+- **[`class ShellXformSlots(pythontk.LoggingMixin)`](mayatk/mayatk/uv_utils/shell_xform.py#L37)** — Switchboard slots for the Shell Xform panel (``shell_xform.ui``).
   - `ShellXformSlots.header_init(self, widget)` — Header menu — Open UV Editor + panel help.
   - `ShellXformSlots.cmb_move_scope_init(self, widget)` — Move scope — how far one arrow press travels, plus the snap button.
   - `ShellXformSlots.b023(self)` — Move To UV Space: Left
@@ -4600,7 +4648,7 @@ Dedicated UV shell-transform panel.
 
 Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 
-- **[`class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal)`](mayatk/mayatk/uv_utils/texture_transfer.py#L323)** — Move textures between UV layouts of the same mesh(es) -- see module doc.
+- **[`class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`](mayatk/mayatk/uv_utils/texture_transfer.py#L323)** — Move textures between UV layouts of the same mesh(es) -- see module doc.
   - `TextureTransfer.transfer(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None) -> Dict[str, Dict[str, str]]` — Transfer the source material(s)' maps onto the target UV layout.
   - `TextureTransfer.default_output_dir(cls) -> str` *(class)* — Where the maps go when the caller names no directory.
   - `TextureTransfer.output_base_dir() -> Optional[str]` *(static)* — The directory a RELATIVE output entry is resolved against.
@@ -4619,7 +4667,9 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 <a id="xform_utils--_xform_utils"></a>
 ### `xform_utils/_xform_utils.py`
 
-- **[`class XformUtils(_XformUtilsInternal, ptk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L1225)** — Transform utilities for Maya objects.
+``XformUtils`` -- the public index of mayatk's transform operations.
+
+- **[`class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L54)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
   - `XformUtils.drop_to_grid(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(class)* — Align objects to Y origin on the grid using a helper plane.
@@ -4679,7 +4729,7 @@ Matrix utilities for Maya rigging and animation.
 - [`SPACE_OBJECT`](mayatk/mayatk/xform_utils/matrices.py#L46) — constant
 - [`SPACE_WORLD`](mayatk/mayatk/xform_utils/matrices.py#L47) — constant
 - **[`class MatricesError(RuntimeError)`](mayatk/mayatk/xform_utils/matrices.py#L72)** — Base exception for matrix utility operations.
-- **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, ptk.HelpMixin, _MatricesInternal)`](mayatk/mayatk/xform_utils/matrices.py#L1180)** — Matrix utilities for Maya rigging and animation.
+- **[`class Matrices(_MatrixMath, _DagTransforms, _NodeBuilders, pythontk.HelpMixin, _MatricesInternal)`](mayatk/mayatk/xform_utils/matrices.py#L1180)** — Matrix utilities for Maya rigging and animation.
   - `Matrices.get_matrix(node: str, attr: str = 'worldMatrix', index: int = 0) -> List[float]` *(static)* — Return a 16-element flat list for a matrix attribute on *node*.
   - `Matrices.set_matrix(node: str, attr: str, value, index: int = 0) -> None` *(static)* — Set a matrix attribute on *node* from an MMatrix or 16-element iterable.
   - `Matrices.identity() -> 'MMatrix'` *(static)* — Return a 4x4 identity matrix.
@@ -4713,7 +4763,7 @@ Matrix utilities for Maya rigging and animation.
 
 Real-time pivot-change notifier built on :class:`ScriptJobManager`.
 
-- **[`class PivotWatcher(_PivotWatcherInternal)`](mayatk/mayatk/xform_utils/pivot_watcher.py#L105)** — Fire *callback* on intentional manipulator-pivot drags.
+- **[`class PivotWatcher(_PivotWatcherInternal)`](mayatk/mayatk/xform_utils/pivot_watcher.py#L108)** — Fire *callback* on intentional manipulator-pivot drags.
   - `PivotWatcher.owner(self) -> Any` *(property)*
   - `PivotWatcher.started(self) -> bool` *(property)*
   - `PivotWatcher.start(self) -> None` — Subscribe to the watched events (idempotent).

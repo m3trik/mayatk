@@ -1,7 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
 # from this package:
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.core_utils.preview import Preview

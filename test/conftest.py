@@ -104,7 +104,6 @@ if not _HAVE_REAL_MAYA:
 import os  # noqa: E402
 
 import pythontk as ptk  # noqa: E402
-from pythontk.core_utils.user_config import CONFIG_ROOT_ENV_VAR  # noqa: E402
 
 # Process-level isolation first -- no real browser launch (the WebXR preview
 # bridge opens one per push), one throwaway temp root -- so the store below
@@ -116,4 +115,4 @@ ptk.TestSandbox.activate()
 # only the primitive's age-gated sweep ever reclaims the dir. The store must
 # stay referenced so its session-exit cleanup fires.
 _config_store = ptk.TempArtifacts("mayatk_test_config", policy="session")
-os.environ[CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()
+os.environ[ptk.UserConfig.CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()

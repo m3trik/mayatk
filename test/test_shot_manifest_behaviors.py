@@ -16,8 +16,6 @@ from pathlib import Path
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     Behaviors,
     BehaviorSpec,
-    load_behavior,
-    list_behaviors,
 )
 from mayatk.anim_utils.shots._shots import ShotBlock
 
@@ -25,7 +23,7 @@ from mayatk.anim_utils.shots._shots import ShotBlock
 class BehaviorSpecTest(unittest.TestCase):
     def test_shipped_behaviors_validate_clean(self):
         for name in ("fade_in", "fade_out", "set_clip"):
-            res = BehaviorSpec.validate(load_behavior(name))
+            res = BehaviorSpec.validate(Behaviors.load_behavior(name))
             self.assertTrue(res.ok, f"{name}: errors={res.errors}")
 
     def test_skeleton_is_valid(self):
@@ -46,14 +44,14 @@ class BehaviorSpecTest(unittest.TestCase):
 
 class BehaviorDiscoveryTest(unittest.TestCase):
     def test_list_includes_builtins(self):
-        names = list_behaviors()
+        names = Behaviors.list_behaviors()
         for n in ("fade_in", "fade_out", "set_clip"):
             self.assertIn(n, names)
 
     def test_kind_filter(self):
-        self.assertIn("set_clip", list_behaviors(kind="audio"))
-        self.assertNotIn("fade_in", list_behaviors(kind="audio"))
-        self.assertIn("fade_in", list_behaviors(kind="scene"))
+        self.assertIn("set_clip", Behaviors.list_behaviors(kind="audio"))
+        self.assertNotIn("fade_in", Behaviors.list_behaviors(kind="audio"))
+        self.assertIn("fade_in", Behaviors.list_behaviors(kind="scene"))
 
     def test_search_path_override_is_single_tier(self):
         with tempfile.TemporaryDirectory() as d:
@@ -61,9 +59,10 @@ class BehaviorDiscoveryTest(unittest.TestCase):
                 json.dumps({"description": "a custom one", "kind": ["scene"]}),
                 encoding="utf-8",
             )
-            self.assertEqual(list_behaviors(search_path=Path(d)), ["custom"])
+            self.assertEqual(Behaviors.list_behaviors(search_path=Path(d)), ["custom"])
             self.assertEqual(
-                load_behavior("custom", Path(d))["description"], "a custom one"
+                Behaviors.load_behavior("custom", Path(d))["description"],
+                "a custom one",
             )
 
 

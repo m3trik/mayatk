@@ -133,3 +133,114 @@ class MeshDiagnostics:
             cmds.polyQuad(n_gons, angle=30, kgb=1, ktb=1, khe=1, ws=1)
 
         return n_gons
+
+    @staticmethod
+    def find_non_manifold_vertices(objects: NodeSeq) -> dict:
+        """Map each mesh in *objects* to its non-manifold vertices, via ``polyInfo``.
+
+        Native ``polyInfo`` is instant, unlike ``EditUtils.find_non_manifold_vertex``
+        whose per-vertex Python scan is too slow for the heavy meshes that trip
+        Unfold. The vertex twin of :meth:`UvDiagnostics.find_non_manifold_uvs`.
+
+        Returns:
+            dict: ``{mesh_shape: [vertex_components]}`` -- only meshes that have
+            any; empty dict when there are none.
+        """
+        by_mesh = {}
+        if not objects:
+            return by_mesh
+        if not isinstance(objects, (list, tuple, set)):
+            objects = [objects]
+        for shape in cmds.ls(objects, dag=True, type="mesh", noIntermediate=True) or []:
+            verts = cmds.polyInfo(shape, nonManifoldVertices=True) or []
+            if verts:
+                by_mesh[shape] = cmds.ls(verts, flatten=True)
+        return by_mesh
+
+    @classmethod
+    def select_non_manifold(cls, objects: NodeSeq) -> tuple:
+        """Select what makes *objects* non-manifold: its vertices, else its UVs.
+
+        Unfold rejects non-manifold *UVs* with the same error as bad geometry, so
+        when no vertex is flagged the UV scan is what locates the problem. The
+        component select mode is switched to match (vertex or UV), so the
+        selection is visible.
+
+        Returns:
+            tuple: ``(kind, components)`` -- kind ``"vertices"`` or ``"uvs"`` for
+            what was selected, or ``(None, [])`` when nothing is non-manifold (the
+            selection is left alone).
+        """
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+        verts = [
+            v for vs in cls.find_non_manifold_vertices(objects).values() for v in vs
+        ]
+        if verts:
+            cmds.selectMode(component=True)
+            cmds.selectType(vertex=True)
+            cmds.select(verts, replace=True)
+            return "vertices", verts
+        uvs = [
+            uv
+            for us in UvDiagnostics.find_non_manifold_uvs(objects).values()
+            for uv in us
+        ]
+        if uvs:
+            cmds.selectMode(component=True)
+            cmds.selectType(polymeshUV=True)
+            cmds.select(uvs, replace=True)
+            return "uvs", uvs
+        return None, []
+
+    @classmethod
+    def repair_non_manifold(cls, objects: NodeSeq, quiet: bool = False) -> dict:
+        """Auto-repair non-manifold geometry AND UVs on *objects*.
+
+        Geometry goes through Mesh Cleanup (:meth:`clean_geometry`); non-manifold
+        *UVs* -- which block Unfold with the same error, but which Cleanup cannot
+        touch -- are repaired by re-mapping the affected faces
+        (:meth:`UvDiagnostics.repair_non_manifold_uvs`). Either step failing is
+        logged and survived: the caller's retry then reports what is left.
+
+        Parameters:
+            objects: The meshes to repair.
+            quiet: Suppress the per-mesh console breakdown.
+
+        Returns:
+            dict: ``{"total", "fixed", "remaining"}`` counts of non-manifold
+            components (vertices + UVs), for a one-line mention in a result.
+        """
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+        def log(message):
+            if not quiet:
+                print(f"# Repair non-manifold: {message} #")
+
+        before_verts = cls.find_non_manifold_vertices(objects)
+        before_uvs = UvDiagnostics.find_non_manifold_uvs(objects)
+        total = sum(len(v) for v in before_verts.values()) + sum(
+            len(v) for v in before_uvs.values()
+        )
+        for shape, verts in before_verts.items():
+            log(f"{shape}: {len(verts)} non-manifold vertex(es)")
+        for shape, uvs in before_uvs.items():
+            log(f"{shape}: {len(uvs)} non-manifold UV(s)")
+
+        try:
+            cls.clean_geometry(objects, repair=True, nonmanifold=True)
+        except (RuntimeError, ValueError) as exc:
+            log(f"cleanup failed: {exc}")
+        # Unconditional: it re-scans internally (no-op on clean meshes), and the
+        # pre-scan above can't see UV corruption the Cleanup pass just exposed.
+        try:
+            UvDiagnostics.repair_non_manifold_uvs(objects)
+        except (RuntimeError, ValueError) as exc:
+            log(f"UV repair failed: {exc}")
+
+        remaining = sum(
+            len(v) for v in cls.find_non_manifold_vertices(objects).values()
+        ) + sum(len(v) for v in UvDiagnostics.find_non_manifold_uvs(objects).values())
+        fixed = total - remaining
+        log(f"repaired {fixed} component(s), {remaining} remaining")
+        return {"total": total, "fixed": fixed, "remaining": remaining}

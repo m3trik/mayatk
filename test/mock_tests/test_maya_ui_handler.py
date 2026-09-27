@@ -76,6 +76,98 @@ class _InstancesSandbox(unittest.TestCase):
         return handler
 
 
+class TestShelfBootstrapOwnsItsSwitchboard(_InstancesSandbox):
+    """A handler that builds its own switchboard (the shelf path) must be that
+    switchboard's ``"ui"`` handler. A bare ``Switchboard()`` auto-registers a
+    plain ``UiHandler`` there instead, so the UI Browser opened from the shelf
+    launched every row -- and rendered every *Copy launch code* -- through the
+    generic base rather than ``MayaUiHandler``."""
+
+    def test_self_built_switchboard_registers_this_handler_as_ui(self):
+        import uitk
+        from uitk.handlers.ui_handler import UiHandler
+
+        built = {}
+
+        class _RecordingSwitchboard:
+            def __init__(self, **kwargs):
+                built.update(kwargs)
+
+        def _bare_init(self, switchboard=None, **_kwargs):
+            self.sb = switchboard
+
+        # The post-init wiring installs process-wide sinks: stubbed.
+        inert = staticmethod(lambda *a, **k: False)
+        with (
+            patch.object(uitk, "Switchboard", _RecordingSwitchboard),
+            patch.object(UiHandler, "__init__", _bare_init),
+            patch.multiple(
+                MayaUiHandler,
+                _install_deprecation_sink=inert,
+                _install_record_path_rebase=inert,
+            ),
+        ):
+            handler = MayaUiHandler()
+        self.assertIs((built.get("handlers") or {}).get("ui"), handler)
+        self.assertIsInstance(handler.sb, _RecordingSwitchboard)
+
+
+class TestHostWindowDeclared(_InstancesSandbox):
+    """uitk names no host, so an application-scoped shortcut prefers whatever
+    main window the host DECLARES. Only tentacle's launcher declared Maya's, so
+    mayatk's own panels -- the shelf path, no tentacle -- lost the always-up
+    owner when uitk's hard-coded ``MayaWindow`` went away."""
+
+    def test_the_handler_declares_mayas_main_window(self):
+        import uitk
+        from uitk.handlers.ui_handler import UiHandler
+        from uitk.managers.shortcut_manager import ShortcutManager
+
+        def _bare_init(self, switchboard=None, **_kwargs):
+            self.sb = switchboard
+
+        inert = staticmethod(lambda *a, **k: False)
+        ShortcutManager.unregister_host_window("MayaWindow")
+        try:
+            with (
+                patch.object(uitk, "Switchboard", lambda **kw: MagicMock()),
+                patch.object(UiHandler, "__init__", _bare_init),
+                patch.multiple(
+                    MayaUiHandler,
+                    _install_deprecation_sink=inert,
+                    _install_record_path_rebase=inert,
+                ),
+            ):
+                MayaUiHandler()
+            self.assertIn("MayaWindow", ShortcutManager.host_window_names())
+        finally:
+            ShortcutManager.unregister_host_window("MayaWindow")
+
+    def test_the_handler_names_its_preset_folder(self):
+        """uitk's Preset Editor names no app either: the host labels its own."""
+        import uitk
+        from uitk import PresetEditor
+        from uitk.handlers.ui_handler import UiHandler
+
+        def _bare_init(self, switchboard=None, **_kwargs):
+            self.sb = switchboard
+
+        inert = staticmethod(lambda *a, **k: False)
+        with (
+            patch.dict(PresetEditor.APP_LABELS),
+            patch.object(uitk, "Switchboard", lambda **kw: MagicMock()),
+            patch.object(UiHandler, "__init__", _bare_init),
+            patch.multiple(
+                MayaUiHandler,
+                _install_deprecation_sink=inert,
+                _install_record_path_rebase=inert,
+            ),
+        ):
+            PresetEditor.APP_LABELS.pop("mayatk", None)
+            MayaUiHandler()
+            self.assertEqual(PresetEditor.APP_LABELS.get("mayatk"), "Maya")
+
+
 class TestInstanceLiveness(_InstancesSandbox):
     def test_skips_dead_switchboard_handler(self):
         self.fabricate(alive=False)  # older, torn-down session

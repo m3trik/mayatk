@@ -15,7 +15,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.anim_utils.blendshape_animator.applicator import Applicator, ApplyStatus
 from mayatk.anim_utils.blendshape_animator.creator import Creator
-from mayatk.anim_utils.blendshape_animator.helpers import BlendshapeHelpers
+from mayatk.anim_utils.blendshape_animator.history import BlendshapeHistory
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.recovery import Recovery
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets
@@ -86,7 +86,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.target_mesh = target_mesh
 
         try:
-            history = BlendshapeHelpers.list_history(
+            history = BlendshapeHistory.list_history(
                 base_mesh, type_filter="blendShape"
             )
             if history:
@@ -475,10 +475,10 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 # type-filtered cmds.delete over listHistory would also
                 # delete the weight animCurve (nodeType 'animCurveTU'),
                 # destroying the morph animation this function exports.
-                before = set(BlendshapeHelpers.list_history(self.base_mesh))
+                before = set(BlendshapeHistory.list_history(self.base_mesh))
                 cmds.bakePartialHistory(self.base_mesh, prePostDeformers=True)
                 removed = len(
-                    before - set(BlendshapeHelpers.list_history(self.base_mesh))
+                    before - set(BlendshapeHistory.list_history(self.base_mesh))
                 )
                 if removed:
                     self.logger.info(
@@ -525,7 +525,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
                 cls.logger.error("No base mesh provided and nothing selected.")
                 return None
 
-        history = BlendshapeHelpers.list_history(base_mesh, type_filter="blendShape")
+        history = BlendshapeHistory.list_history(base_mesh, type_filter="blendShape")
         if not history:
             cls.logger.error(f"No blendShape found on {base_mesh}")
             return None

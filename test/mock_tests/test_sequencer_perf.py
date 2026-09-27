@@ -60,7 +60,7 @@ _app = QtWidgets.QApplication.instance()
 if _app is None:
     _app = QtWidgets.QApplication(sys.argv)
 
-from uitk.widgets.sequencer._sequencer import SequencerWidget
+from uitk import SequencerWidget
 from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import ShotSequencer
 from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (

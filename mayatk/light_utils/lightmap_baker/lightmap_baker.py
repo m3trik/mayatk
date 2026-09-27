@@ -1683,28 +1683,18 @@ class LightmapBaker(ptk.LoggingMixin):
     def _move_into_place(source: str, destination: str) -> None:
         """Move *source* onto *destination*, never deleting what is there first.
 
-        Staged beside the destination, then swapped in by one ``os.replace``,
-        so a failure anywhere leaves the destination's old file as it was --
-        the object keeps its map. Deleting first and moving second lost both
-        when the move failed (a full disk, a folder the user cannot write). A
-        swap that fails puts the source back, for the caller's next name.
+        ``ptk.FileUtils.move_file`` stages it beside the destination and swaps it
+        in, so a failure leaves the destination's old file as it was -- the object
+        keeps its map -- and a swap that fails puts the source back, for the
+        caller's next name.
 
         Raises:
             OSError: The move or the swap failed; *destination* is untouched.
         """
-        stem, ext = os.path.splitext(os.path.basename(destination))
-        staged = os.path.join(
-            os.path.dirname(destination), f".{stem}.{os.getpid()}.part{ext}"
+        destination = os.path.abspath(destination)
+        ptk.FileUtils.move_file(
+            source, os.path.dirname(destination), new_name=os.path.basename(destination)
         )
-        shutil.move(source, staged)
-        try:
-            os.replace(staged, destination)
-        except OSError:
-            try:
-                shutil.move(staged, source)
-            except OSError:
-                pass
-            raise
 
     def _atlas_gutter(self) -> int:
         """Bleed margin (px) freed around each rect, scaled to the atlas resolution."""
@@ -1957,7 +1947,7 @@ class LightmapBaker(ptk.LoggingMixin):
                 if keep_sources:
                     shutil.copy2(src, atlas_path)
                 else:
-                    os.replace(src, atlas_path)
+                    ptk.FileUtils.replace_file(src, atlas_path)
             out[objs[0]] = (atlas_path, list(self._IDENTITY_SCALE_OFFSET))
             return
 
@@ -2661,7 +2651,7 @@ class LightmapBaker(ptk.LoggingMixin):
             )
             if not ok:
                 raise RuntimeError(f"failed to write EXR: {path}")
-            os.replace(staged, path)
+            ptk.FileUtils.replace_file(staged, path)
         finally:
             if os.path.exists(staged):
                 os.remove(staged)

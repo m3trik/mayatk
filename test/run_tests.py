@@ -229,7 +229,8 @@ class _TeeStream:
 
 
 def find_mayapy(explicit: Optional[str] = None) -> Optional[str]:
-    """Locate mayapy.exe: explicit arg > MAYATK_MAYAPY env > newest install > PATH."""
+    """Locate mayapy: explicit arg > MAYATK_MAYAPY env > $MAYA_LOCATION > newest
+    install (Windows Program Files, Linux /usr/autodesk, macOS /Applications) > PATH."""
     if explicit:
         if Path(explicit).exists():
             return explicit
@@ -240,7 +241,12 @@ def find_mayapy(explicit: Optional[str] = None) -> Optional[str]:
 
         found = AppLauncher.resolve_app_path(
             env_vars=("MAYATK_MAYAPY",),
-            scan_globs=("{program_files}/Autodesk/Maya20*/bin/mayapy.exe",),
+            location_env_vars=(("MAYA_LOCATION", ("bin", "mayapy{exe}")),),
+            scan_globs=(
+                "{program_files}/Autodesk/Maya20*/bin/mayapy.exe",
+                "/usr/autodesk/maya20*/bin/mayapy",
+                "/Applications/Autodesk/maya20*/Maya.app/Contents/bin/mayapy",
+            ),
         )
         if found:
             return found
@@ -655,6 +661,16 @@ except Exception as e:
         )
         env.pop("PYTHONHOME", None)
         env.pop("VIRTUAL_ENV", None)
+        # No display to open (a Linux CI or SSH host): the suite driver's
+        # QApplication would abort the chunk from C++ on the xcb plug-in, which
+        # reads as a native crash and defers module after module to the GUI pass.
+        if (
+            sys.platform.startswith("linux")
+            and not env.get("QT_QPA_PLATFORM")
+            and not env.get("DISPLAY")
+            and not env.get("WAYLAND_DISPLAY")
+        ):
+            env["QT_QPA_PLATFORM"] = "offscreen;minimal"
         return env
 
     def _run_headless(
@@ -1005,7 +1021,8 @@ except Exception as e:
         except ImportError:
             return f"cpus={cpus} (process census unavailable)"
         counts = []
-        for name in ("maya.exe", "mayapy.exe", "blender.exe"):
+        # Bare names: the program on every OS (maya.exe / maya.bin, ...).
+        for name in ("maya", "mayapy", "blender"):
             try:
                 counts.append(
                     f"{name}={len(AppLauncher.get_running_processes(name) or [])}"
@@ -1027,7 +1044,7 @@ except Exception as e:
         except ImportError:
             return f"pid {pid} (pythontk unavailable)"
         try:
-            alive = pid in (AppLauncher.get_running_processes("maya.exe") or [])
+            alive = pid in (AppLauncher.get_running_processes("maya") or [])
         except Exception:
             alive = "?"
         try:

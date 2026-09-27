@@ -38,7 +38,7 @@ class TestAudioReproFromScene(MayaTkTestCase):
         from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
             ShotManifest,
         )
-        from mayatk.anim_utils.shots.shot_manifest.mapping import Mapping
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
         from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
         from mayatk.audio_utils._audio_utils import AudioUtils as au
 

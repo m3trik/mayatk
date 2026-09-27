@@ -65,6 +65,16 @@ class EnvUtils(ptk.HelpMixin):
 
         available_keys = {
             "install_path": lambda: os.environ.get("MAYA_LOCATION"),
+            # This Maya's own interpreter (bin/mayapy[.exe]).
+            "mayapy": lambda: (
+                os.path.join(
+                    os.environ["MAYA_LOCATION"],
+                    "bin",
+                    "mayapy.exe" if sys.platform == "win32" else "mayapy",
+                )
+                if os.environ.get("MAYA_LOCATION")
+                else None
+            ),
             "presets_path": lambda: os.path.normpath(
                 cmds.internalVar(userPresetsDir=True)
             ),
@@ -238,11 +248,17 @@ class EnvUtils(ptk.HelpMixin):
         if not maya_install_path:
             raise EnvironmentError("MAYA_LOCATION environment variable not set.")
 
-        # Setting Environment Variables
-        os.environ["PYTHONHOME"] = os.path.join(maya_install_path, "Python")
         os.environ["PATH"] = (
-            os.path.join(maya_install_path, "bin") + ";" + os.environ["PATH"]
+            os.path.join(maya_install_path, "bin") + os.pathsep + os.environ["PATH"]
         )
+        if sys.platform != "win32":
+            # Linux/macOS Maya keeps its interpreter under lib/python3.x, found
+            # by mayapy itself: the Windows layout below does not exist there,
+            # and a PYTHONHOME pointed at it breaks every python child process.
+            return
+
+        # Setting Environment Variables (Windows layout)
+        os.environ["PYTHONHOME"] = os.path.join(maya_install_path, "Python")
 
         # List of paths to append
         paths_to_add = [
@@ -314,13 +330,14 @@ class EnvUtils(ptk.HelpMixin):
             query (bool): Query the status of the VRay plugin.
         """
 
-        def is_loaded(plugin="vrayformaya.mll"):
+        # No extension: Maya resolves .mll / .so / .bundle per OS.
+        def is_loaded(plugin="vrayformaya"):
             return EnvUtils.is_plugin_loaded(plugin)
 
         if query:
             return is_loaded()
 
-        vray = ["vrayformaya.mll", "vrayformayapatch.mll"]
+        vray = ["vrayformaya", "vrayformayapatch"]
         try:
             if load:
                 for plugin in vray:

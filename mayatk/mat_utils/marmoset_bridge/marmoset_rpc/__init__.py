@@ -30,20 +30,13 @@ Adding an op is one decorator + function in the plugin file
 (``plugin_src/marmoset_rpc/__init__.py``). See that module's docstring.
 """
 
-from .connection import (  # noqa: F401
-    MarmosetConnection,
-    DEFAULT_HOST,
-    DEFAULT_PORT,
-)
-from .installer import Installer
-from .job import BatchJob, Call, Result
+from pythontk.core_utils.module_resolver import lazy_exports
 
-__all__ = [
-    "MarmosetConnection",
-    "DEFAULT_HOST",
-    "DEFAULT_PORT",
-    "Installer",
-    "Call",
-    "Result",
-    "BatchJob",
-]
+lazy_exports(
+    globals(),
+    {
+        "connection": ("MarmosetConnection", "DEFAULT_HOST", "DEFAULT_PORT"),
+        "installer": "Installer",
+        "job": ("BatchJob", "Call", "Result"),
+    },
+)

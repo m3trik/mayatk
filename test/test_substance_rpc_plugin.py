@@ -749,5 +749,37 @@ class TestReloadServesTheFullSurface(unittest.TestCase):
         )
 
 
+class TestInstallerDocumentsDir(unittest.TestCase):
+    """Painter finds its user plugin folder through Qt's Documents location,
+    which on Linux is the XDG user-dirs entry (a localized desktop names it
+    e.g. ``~/Dokumente``), not a hard-coded ``~/Documents``."""
+
+    def test_linux_follows_the_xdg_user_dirs_entry(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from mayatk.mat_utils.substance_bridge.substance_rpc import installer
+
+        with tempfile.TemporaryDirectory() as home:
+            docs = os.path.join(home, "Dokumente")
+            os.makedirs(docs)
+            os.makedirs(os.path.join(home, "Documents"))
+            config = os.path.join(home, ".config")
+            os.makedirs(config)
+            with open(os.path.join(config, "user-dirs.dirs"), "w") as f:
+                f.write("# written by xdg-user-dirs-update\n")
+                f.write('XDG_DOCUMENTS_DIR="$HOME/Dokumente"\n')
+            real_expanduser = os.path.expanduser
+            with patch.object(installer.sys, "platform", "linux"), patch.dict(
+                os.environ, {"XDG_CONFIG_HOME": ""}
+            ), patch.object(
+                installer.os.path,
+                "expanduser",
+                lambda p: home + p[1:] if p.startswith("~") else real_expanduser(p),
+            ):
+                got = installer._InstallerInternal._documents_dir()
+        self.assertEqual(os.path.normpath(str(got)), os.path.normpath(docs))
+
+
 if __name__ == "__main__":
     unittest.main()

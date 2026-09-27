@@ -29,8 +29,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-import maya.cmds as cmds
-import maya.api.OpenMaya as om
+try:
+    import maya.cmds as cmds
+    import maya.api.OpenMaya as om
+except Exception:
+    cmds = om = None
 
 from uitk.managers.cancel_manager import CancelProvider
 

@@ -26,7 +26,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from conftest import mock_cmds  # noqa: E402,F401  (side effect: maya mocks)
 
 import pythontk as ptk  # noqa: E402
-from uitk.widgets.mixins.tooltip_mixin import TooltipFormat  # noqa: E402
+from pythontk import TooltipFormat  # noqa: E402
 
 _WORKSPACE = Path(__file__).parent.parent.parent.absolute()
 for _subdir in ("pythontk", "uitk", "mayatk"):

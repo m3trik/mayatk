@@ -27,7 +27,7 @@ from unittest import mock
 
 import maya.cmds as cmds
 
-from pythontk.core_utils.app_launcher import AppLauncher
+from pythontk import AppLauncher
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.env_utils.fbx_utils import FbxUtils
@@ -1676,8 +1676,6 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
 
         # Capture every AppLauncher.launch call so the test can assert on
         # the args without spawning a real process.
-        from pythontk.core_utils import app_launcher as _al
-
         self._launch_calls = []
 
         def _fake_launch(app_identifier, args=None, cwd=None, detached=True, env=None):
@@ -1694,13 +1692,11 @@ class TestRizomBridgeSendFlow(MayaTkTestCase):
 
             return _Proc()
 
-        self._real_launch = _al.AppLauncher.launch
-        _al.AppLauncher.launch = staticmethod(_fake_launch)
+        self._real_launch = AppLauncher.launch
+        AppLauncher.launch = staticmethod(_fake_launch)
 
     def tearDown(self):
-        from pythontk.core_utils import app_launcher as _al
-
-        _al.AppLauncher.launch = self._real_launch
+        AppLauncher.launch = self._real_launch
         # Best-effort: drop the test sandbox; ignore stragglers because
         # Rizom's mtime watch can hold a handle briefly on real hardware.
         import shutil

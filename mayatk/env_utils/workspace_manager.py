@@ -1,6 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 import os
 from typing import Optional
 

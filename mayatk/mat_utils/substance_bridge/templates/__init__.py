@@ -17,4 +17,10 @@ Each ``*.py`` sibling is a template descriptor consumed by
 Templates are parsed via :mod:`ast` (literals only, no execution), so the
 files can contain placeholder tokens that would otherwise be syntax errors
 inside a JS string.
+
+**Vendored twin -- keep code-identical.** The ``templates/`` folder is
+duplicated under ``mayatk/mat_utils/substance_bridge/templates/`` (the
+SSoT: edit it there) and ``blendertk/mat_utils/substance_bridge/templates/``;
+mirror every change -- a new template too -- into both. Drift fails
+``extapps/test/test_vendor_sync.py``.
 """

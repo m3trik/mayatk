@@ -1,10 +1,14 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
-import maya.mel as mel
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 from typing import Optional
 from qtpy import QtWidgets
 import pythontk as ptk
+from uitk import Bootstrap
 from uitk.widgets.mainWindow import MainWindow
 
 # Shared menu-embed widgets (moved to uitk so blendertk's harvested menus reuse
@@ -409,7 +413,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
             FramelessWindowHint=True,
             WindowStaysOnTopHint=True,
         )
-        window.set_attributes(WA_TranslucentBackground=True)
+        Bootstrap.set_translucent(window)  # opaque where nothing composites (X11)
         window.setProperty("class", "translucentBgWithBorder")
 
         widget.fit_to_window()

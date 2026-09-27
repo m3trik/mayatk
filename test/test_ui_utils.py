@@ -10,7 +10,10 @@ Tests for UIUtils class functionality including:
 """
 
 import unittest
+from unittest import mock
+
 import maya.cmds as cmds
+import maya.mel as mel
 import mayatk as mtk
 
 from base_test import MayaTkTestCase, skipIfBatch
@@ -61,6 +64,51 @@ class TestUIUtils(MayaTkTestCase):
         cmds.select(cube, replace=True)
         mtk.UiUtils.reveal_in_outliner([])
         self.assertEqual(cmds.ls(selection=True), [cube])
+
+
+class TestEditorRegistry(MayaTkTestCase):
+    """UiUtils.get_editor_types / open_editor -- the mirror of blendertk's pair.
+
+    ``mel.eval`` is stubbed: opening a real editor window is GUI-only, and what
+    is pinned here is the lookup and the None-on-failure contract.
+    """
+
+    @skipIfBatch("runtime commands are registered by the GUI's startup")
+    def test_every_editor_maps_to_a_runtime_command(self):
+        editors = mtk.UiUtils.get_editor_types()
+        self.assertEqual(editors["UV Editor"], "TextureViewWindow")
+        for name, command in editors.items():
+            self.assertTrue(
+                cmds.runTimeCommand(command, exists=True)
+                or mel.eval(f'exists "{command}"'),
+                f"{name}: {command} is not a runtime command or MEL procedure",
+            )
+
+    def test_a_copy_is_returned(self):
+        mtk.UiUtils.get_editor_types()["UV Editor"] = "nope"
+        self.assertEqual(
+            mtk.UiUtils.get_editor_types()["UV Editor"], "TextureViewWindow"
+        )
+
+    def test_open_runs_the_mapped_command_or_a_raw_one(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertEqual(mtk.UiUtils.open_editor("Graph Editor"), "GraphEditor")
+            self.assertEqual(
+                mtk.UiUtils.open_editor("OutlinerWindow"), "OutlinerWindow"
+            )
+        self.assertEqual(
+            [c.args[0] for c in ev.call_args_list], ["GraphEditor", "OutlinerWindow"]
+        )
+
+    def test_a_failed_open_returns_none(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.mel, "eval", side_effect=RuntimeError("Cannot find procedure")
+        ):
+            self.assertIsNone(mtk.UiUtils.open_editor("XGen Editor"))
 
 
 if __name__ == "__main__":

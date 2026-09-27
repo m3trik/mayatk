@@ -3789,7 +3789,7 @@ class TestTwistUpAxisChoice(unittest.TestCase):
 
     @staticmethod
     def _axis(points):
-        from mayatk.rig_utils.tube_rig import _TubeRigInternal
+        from mayatk.rig_utils.tube_rig._tube_rig import _TubeRigInternal
 
         return _TubeRigInternal._twist_up_axis(points)
 

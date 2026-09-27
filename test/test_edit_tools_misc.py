@@ -3,7 +3,6 @@
 """Test Suite for misc edit_utils tool modules.
 
 Covers:
-    - Graph + dijkstra + a_star (mesh_graph.py — pure Python)
     - Primitives.create_default_primitive (primitives.py)
     - Selection.select_by_type / select_children / select_hierarchy_*
       / get_available_selection_types / get_selection_categories (selection.py)
@@ -16,92 +15,10 @@ import unittest
 
 import maya.cmds as cmds
 
-from mayatk.edit_utils.mesh_graph import Graph
 from mayatk.edit_utils.primitives import Primitives
 from mayatk.edit_utils.selection import Selection
 
 from base_test import MayaTkTestCase, QuickTestCase
-
-
-class TestGraph(QuickTestCase):
-    """Pure-Python pathfinding graph — no Maya needed."""
-
-    def _build_simple_graph(self):
-        # Layout (4 nodes, distances as edge weights):
-        #   1 -- 1 --> 2
-        #   |         |
-        #   3         1
-        #   |         |
-        #   3 -- 1 --> 4
-        g = Graph()
-        for n in (1, 2, 3, 4):
-            g.add_node(n, data=(n, 0, 0))
-        g.add_edge(1, 2, weight=1)
-        g.add_edge(1, 3, weight=3)
-        g.add_edge(2, 4, weight=1)
-        g.add_edge(3, 4, weight=1)
-        return g
-
-    def test_add_node_without_data_raises(self):
-        g = Graph()
-        with self.assertRaises(ValueError):
-            g.add_node(1, data=None)
-
-    def test_add_edge_with_missing_node_raises(self):
-        g = Graph()
-        g.add_node(1, data=(0, 0, 0))
-        with self.assertRaises(ValueError):
-            g.add_edge(1, 2, weight=1)
-
-    def test_add_edge_creates_undirected_edge(self):
-        g = Graph()
-        g.add_node(1, data=(0, 0, 0))
-        g.add_node(2, data=(1, 0, 0))
-        g.add_edge(1, 2, weight=5)
-        self.assertEqual(g.nodes[1][2], 5)
-        self.assertEqual(g.nodes[2][1], 5)
-
-    def test_a_star_finds_shortest_path(self):
-        g = self._build_simple_graph()
-        path = g.a_star(1, 4)
-        # Optimal path: 1 -> 2 -> 4 (cost 2). Both A* and Dijkstra agree.
-        self.assertEqual(path[0], 1)
-        self.assertEqual(path[-1], 4)
-        # Sum of edge weights along path should be 2
-        cost = sum(g.nodes[a][b] for a, b in zip(path, path[1:]))
-        self.assertEqual(cost, 2)
-
-    def test_dijkstra_finds_shortest_path(self):
-        g = self._build_simple_graph()
-        path = g.dijkstra(1, 4)
-        self.assertEqual(path[0], 1)
-        self.assertEqual(path[-1], 4)
-        cost = sum(g.nodes[a][b] for a, b in zip(path, path[1:]))
-        self.assertEqual(cost, 2)
-
-    def test_find_path_dispatches_by_algorithm(self):
-        g = self._build_simple_graph()
-        a = g.find_path(1, 4, algorithm="a_star")
-        d = g.find_path(1, 4, algorithm="dijkstra")
-        self.assertEqual(a[-1], 4)
-        self.assertEqual(d[-1], 4)
-
-    def test_find_path_unknown_algorithm_raises(self):
-        g = Graph()
-        with self.assertRaises(ValueError):
-            g.find_path(1, 2, algorithm="bfs")
-
-    def test_no_path_returns_empty(self):
-        g = Graph()
-        g.add_node(1, data=(0, 0, 0))
-        g.add_node(2, data=(1, 0, 0))
-        # No edge between 1 and 2 — no path exists
-        self.assertEqual(g.a_star(1, 2), [])
-        self.assertEqual(g.dijkstra(1, 2), [])
-
-    def test_default_heuristic_returns_zero(self):
-        g = Graph()
-        self.assertEqual(g.heuristic(1, 2), 0)
 
 
 class TestPrimitives(MayaTkTestCase):

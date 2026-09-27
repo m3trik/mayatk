@@ -16,8 +16,11 @@ Separation of concerns
 
 import logging
 
-import maya.cmds as cmds
-import maya.mel as mel
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 
 from qtpy import QtWidgets, QtCore
 

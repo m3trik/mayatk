@@ -3,7 +3,7 @@
 """Clip motion, resize, and key-scaling logic for the shot sequencer.
 
 Provides :class:`ClipMotionMixin` (mixed into
-:class:`~.shot_sequencer_slots.ShotSequencerController`) plus two
+:class:`~.shot_sequencer_controller.ShotSequencerController`) plus two
 standalone helpers:
 
 * :func:`curves_for_attr` — find anim curves driving a specific attribute.

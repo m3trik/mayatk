@@ -12,8 +12,8 @@ viewer, without a re-render. It weighs the proposal (an SDF atlas the engine
 blends) against the alternatives and ends with the plan of record and the
 contracts the three sides are built against.
 
-Owners: pythontk (the bake), mayatk / blendertk (`rig_utils/shadow_rig.py`,
-the panel), unitytk (`templates/ShadowPlaneController.cs`), pythontk's WebXR
+Owners: pythontk (the bake), mayatk / blendertk (`rig_utils/shadow_rig/`,
+the engine and panel), unitytk (`templates/ShadowPlaneController.cs`), pythontk's WebXR
 viewer (`net_utils/preview/viewer.html`). The projected rig's physics lives in
 `pythontk.ShadowProjection`; everything below reuses it.
 
@@ -745,7 +745,7 @@ Same name (`ShadowPreview`: `attach` / `detach` / `toggle` /
 `prepare_for_export`, the panel's **Live Horizon Preview** box), same
 behaviour, a different mechanism where the DCCs leave no choice:
 
-| | Maya (`mayatk/rig_utils/shadow_preview.py`) | Blender (`blendertk/rig_utils/shadow_preview.py`) |
+| | Maya (`mayatk/rig_utils/shadow_rig/shadow_preview.py`) | Blender (`blendertk/rig_utils/shadow_rig/shadow_preview.py`) |
 |:--|:--|:--|
 | Mechanism | a hardware **material**: `dx11Shader` + `.fx` on DirectX 11, `GLSLShader` + `.ogsfx` on OpenGL Core Profile, the effect written beside the horizon PNG so a saved scene rebinds it; legacy OpenGL (Pixel Shader 4) refused with the message that says so. Both bind the map's **16-bit promotion** (`<map>_preview16.png`, written beside it, refreshed after a re-bake): VP2's OpenGL path sRGB-decodes any 8-bit texture a `GLSLShader` samples -- Raw colour space, colour management and `MayaGammaCorrection` change nothing (measured: R came back as the piecewise sRGB decode of its byte, A untouched) -- and a 16-bit texture has no sRGB format to decode | a `gpu.shader.create_from_info` **overlay** in a `SpaceView3D` `POST_VIEW` handler (EEVEE nodes cannot bit-test a data map); the plane hidden while it stands in; refused headless, where the GPU module has no backend |
 | What it borrows | the plane's shading-group *membership* only -- the real network stays wired and `_plane_shading_groups` reads the snapshot, so the silhouette's file node, the opacity chain and the export record are the same with it on | the plane's viewport visibility only; nothing the record reads |

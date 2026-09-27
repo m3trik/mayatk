@@ -3,7 +3,7 @@
 """Marker persistence for the shot sequencer controller.
 
 Provides :class:`MarkerManagerMixin` — mixed into
-:class:`~.shot_sequencer_slots.ShotSequencerController` to persist
+:class:`~.shot_sequencer_controller.ShotSequencerController` to persist
 marker add/move/change/remove events to the underlying
 :class:`ShotSequencer` model.
 """

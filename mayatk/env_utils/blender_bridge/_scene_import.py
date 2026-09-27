@@ -53,7 +53,6 @@ import sys
 from typing import Mapping, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import pythontk as ptk
-from pythontk.core_utils import script_template as _templates
 
 from mayatk.env_utils.blender_bridge._blender_bridge import _SPEC, _TEMPLATE_DIR
 
@@ -559,7 +558,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         else:
             context["OUT_FBX"] = str(out_path).replace("\\", "/")
             context["EMBED_TEXTURES"] = repr(bool(embed_textures))
-        return _templates.ScriptTemplate.render_template(self._template(via), context)
+        return ptk.ScriptTemplate.render_template(self._template(via), context)
 
     def convert(
         self,
@@ -1596,7 +1595,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """Render the Maya-side intermediate->.ma bake script (exposed for
         tests/preview). *src_path* may be a USD or FBX intermediate -- the template
         dispatches on extension."""
-        return _templates.ScriptTemplate.render_template(
+        return ptk.ScriptTemplate.render_template(
             _BAKE_TEMPLATE,
             {
                 "SRC_FILE": str(src_path).replace("\\", "/"),

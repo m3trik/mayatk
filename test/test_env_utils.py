@@ -14,6 +14,7 @@ Tests for EnvUtils class functionality including:
 """
 
 import os
+import sys
 import unittest
 import unittest.mock
 from mayatk.env_utils._env_utils import EnvUtils
@@ -121,6 +122,15 @@ class TestEnvUtils(MayaTkTestCase):
         for key in keys_to_test:
             val = EnvUtils.get_env_info(key)
             self.assertIsNotNone(val, f"Failed to get {key}")
+
+    def test_get_env_info_mayapy_is_this_mayas_interpreter(self):
+        """``bin/mayapy.exe`` on Windows, ``bin/mayapy`` on Linux: tentacle's
+        updater and version check hard-coded the ``.exe``, so on Linux both ran
+        an interpreter that does not exist."""
+        mayapy = EnvUtils.get_env_info("mayapy")
+        self.assertTrue(mayapy and os.path.isfile(mayapy), mayapy)
+        expected = "mayapy.exe" if sys.platform == "win32" else "mayapy"
+        self.assertEqual(os.path.basename(mayapy).lower(), expected)
 
     def test_get_env_info_paths(self):
         """Test getting path-related environment info."""

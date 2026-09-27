@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""``ShadowPreview`` (``rig_utils/shadow_preview.py``), the device-free half.
+"""``ShadowPreview`` (``rig_utils/shadow_rig/shadow_preview.py``), the device-free half.
 
 A ``GLSLShader`` / ``dx11Shader`` only compiles on a Viewport 2.0 device, and
 mayapy has none, so what runs here is everything AROUND the effect: the
@@ -28,13 +28,13 @@ import maya.cmds as cmds
 import numpy as np
 
 try:
-    from mayatk.rig_utils.shadow_preview import ShadowPreview
+    from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
     from mayatk.rig_utils.shadow_rig import ShadowRig
 except ImportError:
     import sys
 
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from mayatk.rig_utils.shadow_preview import ShadowPreview
+    from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
     from mayatk.rig_utils.shadow_rig import ShadowRig
 
 import pythontk as ptk

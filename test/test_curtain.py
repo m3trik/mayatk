@@ -1,6 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tests for mayatk.edit_utils.curtain.
+"""Tests for mayatk.edit_utils.curtain (the tool subpackage).
 
 Separation of concerns mirrors the module: :class:`Rail` (rail geometry),
 :class:`CurtainMesh` (the drape/deformation), and :class:`CurtainRig` (the
@@ -20,48 +20,48 @@ try:
 except ImportError:
     QtWidgets = None
 
+import pythontk as ptk
+
 from base_test import MayaTkTestCase
 from mayatk.edit_utils.curtain import (
     CurtainMesh,
     Rail,
     CurtainRig,
     CurtainSlots,
-    catenary_shape,
-    sag_profile,
-    _PRESETS_DIR,
 )
+from mayatk.edit_utils.curtain.curtain_slots import _PRESETS_DIR
 
 
 class CatenaryMathTest(MayaTkTestCase):
     """The gravity model rests on a true catenary profile."""
 
     def test_endpoints_and_center(self):
-        self.assertAlmostEqual(catenary_shape(0.0, 1.5), 1.0, places=9)
-        self.assertAlmostEqual(catenary_shape(1.0, 1.5), 0.0, places=9)
-        self.assertAlmostEqual(catenary_shape(-1.0, 1.5), 0.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary(0.0, 1.5), 1.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary(1.0, 1.5), 0.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary(-1.0, 1.5), 0.0, places=9)
 
     def test_tension_zero_is_parabola(self):
-        self.assertAlmostEqual(catenary_shape(0.5, 0.0), 0.75, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary(0.5, 0.0), 0.75, places=9)
 
     def test_clamped_outside_span(self):
-        self.assertAlmostEqual(catenary_shape(2.0, 1.5), 0.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary(2.0, 1.5), 0.0, places=9)
 
     def test_peak_is_one_for_any_tension(self):
         # Depth is owned by gravity; tension only reshapes, so the center peaks
         # at 1 regardless of tension.
         for tens in (0.1, 1.5, 5.0):
-            self.assertAlmostEqual(catenary_shape(0.0, tens), 1.0, places=9)
+            self.assertAlmostEqual(ptk.MathUtils.catenary(0.0, tens), 1.0, places=9)
 
     def test_higher_tension_deepens_midspan(self):
         # Higher tension holds the curve fuller across the middle (flat top,
         # steep only near the supports) -> a larger normalized value mid-span,
         # i.e. a deeper, heavier-looking drape. The two converge to 0 only at
         # the supports.
-        shallow = catenary_shape(0.5, 0.5)
-        deep = catenary_shape(0.5, 4.0)
+        shallow = ptk.MathUtils.catenary(0.5, 0.5)
+        deep = ptk.MathUtils.catenary(0.5, 4.0)
         self.assertGreater(deep, shallow)
         self.assertAlmostEqual(
-            catenary_shape(1.0, 0.5), catenary_shape(1.0, 4.0), places=9
+            ptk.MathUtils.catenary(1.0, 0.5), ptk.MathUtils.catenary(1.0, 4.0), places=9
         )
 
 
@@ -71,20 +71,20 @@ class SagProfileTest(MayaTkTestCase):
     def test_no_round_matches_catenary(self):
         for t in (-1.0, -0.5, 0.0, 0.3, 1.0):
             self.assertAlmostEqual(
-                sag_profile(t, 1.5, 0.0), catenary_shape(t, 1.5), places=9
+                ptk.MathUtils.catenary_sag(t, 1.5, 0.0), ptk.MathUtils.catenary(t, 1.5), places=9
             )
 
     def test_endpoints_zero_center_one(self):
-        self.assertAlmostEqual(sag_profile(0.0, 1.5, 1.0), 1.0, places=9)
-        self.assertAlmostEqual(sag_profile(-1.0, 1.5, 1.0), 0.0, places=9)
-        self.assertAlmostEqual(sag_profile(1.0, 1.5, 1.0), 0.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary_sag(0.0, 1.5, 1.0), 1.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary_sag(-1.0, 1.5, 1.0), 0.0, places=9)
+        self.assertAlmostEqual(ptk.MathUtils.catenary_sag(1.0, 1.5, 1.0), 0.0, places=9)
 
     def test_rounding_flattens_endpoint_slope(self):
         # Near the support the rounded profile rises quadratically (zero slope)
         # while the crisp catenary rises ~linearly, so it sits lower there.
         eps = 1e-3
-        cat = catenary_shape(-1.0 + eps, 3.0)
-        rnd = sag_profile(-1.0 + eps, 3.0, 1.0)
+        cat = ptk.MathUtils.catenary(-1.0 + eps, 3.0)
+        rnd = ptk.MathUtils.catenary_sag(-1.0 + eps, 3.0, 1.0)
         self.assertLess(rnd, cat)
 
 

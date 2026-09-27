@@ -1185,7 +1185,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         the only things there are to get wrong -- and the preview runs the
         function that writes the deliverable, not a lookalike of it."""
         from unittest.mock import MagicMock
-        from pythontk.file_utils.mesh_convert.glb_fades import CHANNELS as GLTF
+        from pythontk import GlbFades
+
+        GLTF = GlbFades.CHANNELS
 
         widget = MagicMock()
         self.slot.tb000_init(widget)
@@ -1937,7 +1939,9 @@ class TestHighlightColourStops(MayaTkTestCase):
         """End to end across three packages: Maya attribute -> published key ->
         emissiveFactor. Each half was covered and the JOIN was not, which is
         exactly where a renamed key would have gone unnoticed."""
-        from pythontk.file_utils.mesh_convert.glb_fades import CHANNELS as GLTF
+        from pythontk import GlbFades
+
+        GLTF = GlbFades.CHANNELS
 
         RenderEffects.key_pulse(
             [self.cube],
@@ -2009,7 +2013,9 @@ class TestChannelTableJoin(unittest.TestCase):
 
     def test_the_published_stop_keys_agree(self):
         from mayatk.mat_utils.render_opacity.channels import CHANNELS as MAYA
-        from pythontk.file_utils.mesh_convert.glb_fades import CHANNELS as GLTF
+        from pythontk import GlbFades
+
+        GLTF = GlbFades.CHANNELS
 
         for name, spec in MAYA.items():
             row = GLTF.get(name)

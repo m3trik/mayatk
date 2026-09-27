@@ -4858,7 +4858,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         the label's count -- not as one opaque group name."""
         from types import SimpleNamespace
 
-        from uitk.widgets.mixins.tooltip_mixin import TooltipFormat
+        from pythontk import TooltipFormat
 
         group = cmds.group(empty=True, name="hoverGroup")
         cmds.parent(cmds.polyCube(name="hoverA")[0], group)

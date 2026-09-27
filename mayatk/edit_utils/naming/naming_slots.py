@@ -40,8 +40,11 @@ class NamingSlots(Naming):
     SCOPES = ("Selection", "Scene", "Directory", "Files")
 
     # Suffix-by-type option box: display groups of (engine keyword, field
-    # objectName). Literal on purpose — the parity sweep unrolls it — and the
-    # objectNames are persisted user settings: never renumber them.
+    # objectName) — 1:1 with blendertk's table. uitk's NamingConventionEditor
+    # builds these rows, so the parity sweep does not see them; the mirror is
+    # held by TestHostParity in
+    # mayatk/test/mock_tests/test_naming_convention_binding.py. The objectNames
+    # are persisted user settings: never renumber them.
     SUFFIX_GROUPS = (
         (
             "Transforms",
@@ -106,6 +109,11 @@ class NamingSlots(Naming):
             ),
         ),
     )
+
+    # Convention rows this host shows but cannot apply ({convention key:
+    # tooltip}); every entry names a Maya node type, so none here. Blendertk
+    # greys out the ones with no Blender object type behind them.
+    CONVENTION_DISABLED = {}
 
     msg_intro = (
         "<u>Naming</u><br>• Pick a <b>Scope</b> in the header menu: the current "
@@ -860,30 +868,41 @@ class NamingSlots(Naming):
         self._run(self.strip_chars, objects, **kwargs)
 
     # ------------------------------------------------------------------
-    # Suffix By Type
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # Suffix By Type — convention editor
     # ------------------------------------------------------------------
     #
-    # These 19 fields are the front door to ``pythontk.NamingConvention``, the
-    # one definition of "what affix marks a mesh / a material / a group" that
-    # every other tool in the toolset reads. Editing a field here writes the
-    # convention; it does NOT die on this panel's widget objectNames the way the
-    # old per-widget persistence did, where a user's real convention was
-    # invisible to game_shader, image_to_plane, rig_utils and the rest.
+    # These fields are the front door to ``pythontk.NamingConvention``, the one
+    # definition of "what affix marks a mesh / a material / a group" that every
+    # other tool in the toolset reads. The editor is uitk's
+    # ``NamingConventionEditor``; this panel supplies only its data: the rows
+    # (SUFFIX_GROUPS by convention key, then CONVENTION_GROUPS), their tooltips
+    # and the rows this host cannot apply (CONVENTION_DISABLED).
 
     @classmethod
-    def _convention_rows(cls):
-        """``(engine keyword, convention key, label)`` for every editable row."""
-        return [
-            (kw, ck, ptk.NamingConvention.label(ck))
-            for kw, ck, _tk in cls.SUFFIX_BINDINGS
-        ]
+    def _convention_groups(cls):
+        """The editor's display groups: ``((title, ((key, objectName), ...)), ...)``.
+
+        The node-type rows are SUFFIX_GROUPS with each engine keyword mapped to
+        its convention key (``SUFFIX_BINDINGS``); the edit-only rows follow.
+        """
+        keys = {kw: ck for kw, ck, _tk in cls.SUFFIX_BINDINGS}
+        node_rows = tuple(
+            (group, tuple((keys[kw], name) for kw, name in fields))
+            for group, fields in cls.SUFFIX_GROUPS
+        )
+        return node_rows + tuple(cls.CONVENTION_GROUPS)
 
     @staticmethod
-    def _convention_tooltip(label):
+    def _convention_tooltip(key, label):
+        """A row's tooltip: a node-type row, or an edit-only (artifact) row."""
+        if key in ptk.NamingConvention.ARTIFACT_KEYS:
+            return (
+                f"Affix for {label.lower()}s — part of the <b>shared naming "
+                "convention</b>, read by the tools that write them.<br><br>Not a "
+                "scene node type, so <i>Suffix By Type</i> never renames anything "
+                "with it; this row exists so the convention can be edited in one "
+                "place."
+            )
         return (
             f"Affix for {label.lower()}s. Leave empty to skip this type.<br><br>"
             "This is the <b>shared naming convention</b> — every tool that offers "
@@ -892,108 +911,38 @@ class NamingSlots(Naming):
             "trails, a trailing '_' leads) / Suffix / Prefix."
         )
 
-    def _wire_convention_field(self, field, convention_key):
-        """Give *field* a placement picker and write its edits to the convention."""
-        rule = ptk.NamingConvention.get(convention_key)
-        # The convention doc is this field's store now, so per-widget state
-        # persistence has to stand down: it would restore the value this panel
-        # saved BEFORE the convention existed, over the top of the convention,
-        # and the next edit would write that stale value back into the SSoT.
-        field.restore_state = False
-        field.setText(rule.text)
-        field.option_box.set_affix(
-            default=rule.mode,
-            # This panel EDITS the convention, so it must not also offer the
-            # "follow the convention" state — that would be a field bound to
-            # itself. The three manual modes are exactly the placement choice.
-            settings_key=False,  # the convention doc is the store, not QSettings
-            on_change=lambda mode, k=convention_key, f=field: self._save_convention(
-                k, f.text(), mode, f
-            ),
-        )
-        field.editingFinished.connect(
-            lambda k=convention_key, f=field: self._save_convention(
-                k, f.text(), f.option_box.affix_mode, f
-            )
-        )
-
-    def _save_convention(self, convention_key, text, mode, field=None):
-        """Persist one row to the shared convention (no-op when unchanged).
-
-        A bare token typed into the field is delimited first — the engine
-        concatenates verbatim and must not guess, so the field that accepts
-        free text is where to be forgiving — and the delimited spelling is
-        reflected back, so the row shows what was actually stored.
-        """
-        text = ptk.StrUtils.delimit_affix(text, mode)
-        if field is not None and field.text() != text:
-            field.setText(text)
-        rule = ptk.NamingConvention.get(convention_key)
-        if (rule.text, rule.mode) == (text, mode):
-            return
-        ptk.NamingConvention.set(convention_key, text, mode)
-        self.logger.debug(
-            f"[naming] convention {convention_key!r} -> {text!r} ({mode})"
-        )
-
-    def _build_convention_only_rows(self, widget):
-        """Add the edit-only convention rows (no node type, so no rename)."""
-        for group, rows in self.CONVENTION_GROUPS:
-            widget.option_box.menu.add("Separator", setTitle=group)
-            for ck, name in rows:
-                label = ptk.NamingConvention.label(ck)
-                field = widget.option_box.menu.add(
-                    "QLineEdit",
-                    setPlaceholderText=f"{label} Affix",
-                    setText=ptk.NamingConvention.affix(ck),
-                    setObjectName=name,
-                    setToolTip=(
-                        f"Affix for {label.lower()}s — part of the <b>shared "
-                        "naming convention</b>, read by the tools that write "
-                        "them.<br><br>Not a scene node type, so "
-                        "<i>Suffix By Type</i> never renames anything with it; "
-                        "this row exists so the convention can be edited in one "
-                        "place."
-                    ),
-                )
-                self._wire_convention_field(field, ck)
-
     def tb003_init(self, widget):
         """Initialize Suffix By Type — the editor for the shared naming convention."""
-        widget.option_box.menu.setTitle("Suffix By Type")
-        rows = {kw: (ck, label) for kw, ck, label in self._convention_rows()}
-        for group, fields in self.SUFFIX_GROUPS:
-            widget.option_box.menu.add("Separator", setTitle=group)
-            for kw, name in fields:
-                ck, label = rows[kw]
-                field = widget.option_box.menu.add(
-                    "QLineEdit",
-                    setPlaceholderText=f"{label} Affix",
-                    setText=ptk.NamingConvention.affix(ck),
-                    setObjectName=name,
-                    setToolTip=self._convention_tooltip(label),
-                )
-                self._wire_convention_field(field, ck)
-        self._build_convention_only_rows(widget)
-        widget.option_box.menu.add(
+        from uitk import NamingConventionEditor
+
+        menu = widget.option_box.menu
+        menu.setTitle("Suffix By Type")
+        self._convention_editor = NamingConventionEditor(
+            menu,
+            self._convention_groups(),
+            tooltip=self._convention_tooltip,
+            disabled=self.CONVENTION_DISABLED,
+            logger=self.logger,
+        ).build()
+        menu.add(
             "Separator",
             setTitle="Suffix Options",
         )
-        widget.option_box.menu.add(
+        menu.add(
             "QCheckBox",
             setText="Strip Trailing Padding",
             setObjectName="tb003_chk004",
             setChecked=True,
             setToolTip="Strip orphaned trailing underscores and, only when underscores were at the end, also strip exposed trailing digits. Preserves intentional '_02' numbering.",
         )
-        widget.option_box.menu.add(
+        menu.add(
             "QCheckBox",
             setText="Strip Trailing Integers",
             setObjectName="tb003_chk002",
             setChecked=False,
             setToolTip="Strip any trailing integers. ie. '123' of 'cube123'",
         )
-        widget.option_box.menu.add(
+        menu.add(
             "QCheckBox",
             setText="Strip Trailing Underscores",
             setObjectName="tb003_chk003",

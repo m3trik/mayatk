@@ -8,7 +8,7 @@ this module re-exports it so mayatk-internal imports and the public path
 
 Two-stage discipline for every multi-shot operation:
     1. Build a :class:`MovePlan` from the current :class:`ShotStore`.
-    2. Hand the plan to :func:`_shot_apply.apply`.
+    2. Hand the plan to :meth:`ShotApply.apply` (``_shot_apply``).
 
 The split exists because interleaved resolve → mutate loops (the old
 ``respace`` / ``_ripple_*`` shape) corrupted keyframes when a shot's
@@ -16,15 +16,17 @@ new envelope overlapped an unmoved neighbor's old envelope.  Keeping
 planning pure makes that bug unwritable here.
 """
 
-from pythontk.core_utils.engines.shots.shot_plan import (  # noqa: F401
-    _EPS,
-    _INF,
+from pythontk import (  # noqa: F401
     GapRetime,
     MovePlan,
     ShotBoundaryConflict,
     ShotMove,
     ShotPlanner,
 )
+
+# The planner's unbounded-envelope sentinel, under the private name this
+# package's modules already import it by.
+_INF = ShotPlanner.UNBOUNDED
 
 __all__ = [
     "ShotMove",

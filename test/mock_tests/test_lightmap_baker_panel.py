@@ -152,5 +152,59 @@ class TestLightmapBakerPanelLoads(unittest.TestCase):
         self.assertTrue(button.isEnabled())
 
 
+class TestScopeWords(unittest.TestCase):
+    """Which scene read each Scope word takes, before ``resolve_meshes``.
+
+    Stubbed reads (``cmds.ls`` + ``DisplayUtils.is_visible``) and a stub panel:
+    the reads themselves run against a real scene in ``test_lightmap_baker.py``
+    (instanced paths, hidden and templated meshes). What is pinned here is the
+    word -> read mapping, and that the Scene/Visible words gather EVERY DAG path
+    of every mesh (an instanced shape is one node under several transforms).
+    """
+
+    def _pool(self, label):
+        from unittest import mock
+
+        from mayatk.display_utils._display_utils import DisplayUtils
+        from mayatk.light_utils.lightmap_baker import lightmap_baker_slots as mod
+
+        calls = []
+
+        def ls(*args, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("selection"):
+                return ["|sel"]
+            return ["|seen", "|hidden"]
+
+        stub = mod.LightmapBakerSlots.__new__(mod.LightmapBakerSlots)
+        stub._scope = lambda: label
+        with (
+            mock.patch.object(mod, "cmds", mock.Mock(ls=ls)),
+            mock.patch.object(mod.TextureBaker, "resolve_meshes", staticmethod(list)),
+            mock.patch.object(
+                DisplayUtils, "is_visible", staticmethod(lambda path: path == "|seen")
+            ),
+        ):
+            return stub._scope_objects(), calls
+
+    def test_selected_reads_the_selection(self):
+        pool, calls = self._pool("selected")
+        self.assertEqual(pool, ["|sel"])
+        self.assertEqual(calls, [{"selection": True, "long": True}])
+
+    def test_scene_reads_every_mesh_path(self):
+        pool, calls = self._pool("scene")
+        self.assertEqual(pool, ["|seen", "|hidden"])
+        self.assertTrue(calls[0].get("allPaths") and calls[0].get("type") == "mesh")
+
+    def test_visible_filters_the_scene_read(self):
+        pool, _calls = self._pool("visible")
+        self.assertEqual(pool, ["|seen"])
+
+    def test_an_unknown_word_never_widens(self):
+        pool, _calls = self._pool("bogus")
+        self.assertEqual(pool, ["|sel"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

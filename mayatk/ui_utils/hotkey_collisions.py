@@ -21,7 +21,10 @@ to "free" every session (see :func:`_find_bound_command`).
 
 from typing import List, Optional
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 
 
 # Qt single-character keys come through as upper-case glyphs ("S"); Maya's
@@ -376,9 +379,7 @@ class HotkeyCollisions(_HotkeyCollisionsInternal):
             A list of ``CollisionConflict`` entries (imported lazily so the
             module is still importable when uitk isn't installed).
         """
-        from uitk.widgets.editors.shortcut_editor.registry_editor import (
-            CollisionConflict,
-        )
+        from uitk import CollisionConflict
 
         conflicts: List = []
 
@@ -397,15 +398,20 @@ class HotkeyCollisions(_HotkeyCollisionsInternal):
             desc += f" (hotkey set: {set_name})"
 
         # Maya's binding can be cleared, but only in an editable (user) set. On the
-        # locked factory set we leave clear_action None and say why, so the editor
-        # disables its "free Maya binding" option rather than no-opping.
+        # locked factory set we leave clear_action None and say why
+        # (``clear_blocked``), so the editor disables its "free Maya binding"
+        # option rather than no-opping.
         clear = None
+        blocked = ""
         if editable:
             clear = lambda p=dict(parsed): (
                 _HotkeyCollisionsInternal._unbind_maya_hotkey(p)
             )
         else:
             desc += " — locked set; switch to a custom Maya hotkey set to clear it"
+            blocked = (
+                "Switch Maya to a custom (non-default) hotkey set to clear its binding."
+            )
 
         conflicts.append(
             CollisionConflict(
@@ -413,6 +419,8 @@ class HotkeyCollisions(_HotkeyCollisionsInternal):
                 description=desc,
                 breaks_binding=False,  # external — coexists unless explicitly cleared
                 clear_action=clear,
+                label="Maya",
+                clear_blocked=blocked,
             )
         )
         return conflicts

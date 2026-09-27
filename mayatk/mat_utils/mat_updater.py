@@ -1523,7 +1523,7 @@ class MatUpdaterSlots(MatUpdater):
             # header options or the selection have moved on since. Only
             # ``dry_run`` differs between the two calls.
             #
-            # No ``total=`` needed — :func:`SwitchboardUtilsMixin.progress_adapter`
+            # No ``total=`` needed — :meth:`Switchboard.progress_adapter`
             # auto-syncs the bar from ``update_materials``'s callback total
             # on the first tick. Also avoids ``len(None)`` when materials
             # defaults to "all scene materials".

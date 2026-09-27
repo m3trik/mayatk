@@ -11,7 +11,10 @@ import re
 from pathlib import Path
 from typing import Dict, Any
 
-import maya.cmds as cmds
+try:
+    import maya.cmds as cmds
+except Exception:
+    cmds = None
 from qtpy import QtCore, QtWidgets, QtGui
 import pythontk as ptk
 

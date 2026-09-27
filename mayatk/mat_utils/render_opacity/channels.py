@@ -9,7 +9,7 @@ attribute. Nothing here shows the channel in the viewport: lookdev is the
 WebXR push, which shows the deliverable itself (see ``material_mode.py`` for
 why the in-scene preview was retired). The glTF
 half of the table -- which material property the ramp lands on -- lives in
-``pythontk.file_utils.mesh_convert.glb_fades.CHANNELS``, joined by name, so
+``ptk.GlbFades.CHANNELS``, joined by name, so
 the two packages cannot each describe the same channel differently.
 
 Adding an effect is adding a row here, a YAML preset beside ``opacity.yaml``,

@@ -2,6 +2,9 @@
 # coding=utf-8
 """Tests for mayatk.mat_utils.substance_bridge._substance_bridge.
 
+Also the home of the vendored ``_substance_engine`` (``SubstanceEngine``, which
+``SubstanceBridge`` subclasses): its behavior is exercised through the bridge.
+
 No Maya runtime required -- covers template discovery, metadata parsing,
 type validation, and mode filtering. The full bridge.send() flow needs
 Maya for FBX export and is covered separately by the Maya test suite.
@@ -546,7 +549,7 @@ class TestRenderTemplateJs(unittest.TestCase):
             output_dir="/tmp/render_test",
             params=params,
         )
-        from pythontk.str_utils._str_utils import StrUtils as _StrUtils
+        from pythontk import StrUtils as _StrUtils
 
         return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
 
@@ -595,7 +598,7 @@ class TestBakeLightingTemplateJs(unittest.TestCase):
             output_dir="/tmp/bake_test",
             params=params,
         )
-        from pythontk.str_utils._str_utils import StrUtils as _StrUtils
+        from pythontk import StrUtils as _StrUtils
 
         return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
 

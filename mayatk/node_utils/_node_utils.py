@@ -1203,36 +1203,30 @@ class NodeUtils(ptk.HelpMixin):
                     cmds.delete(node_name)
                 pass
 
-        original_shading_group = cmds.optionVar(query="createMaterialsWithShadingGroup")
-        original_placement = cmds.optionVar(query="createTexturesWithPlacement")
-        cmds.optionVar(
-            intValue=("createMaterialsWithShadingGroup", create_shading_group)
-        )
-        cmds.optionVar(intValue=("createTexturesWithPlacement", create_placement_nodes))
+        # createRenderNodeCB reads these; a var the user never set stays unset.
+        creation_prefs = {
+            "createMaterialsWithShadingGroup": create_shading_group,
+            "createTexturesWithPlacement": create_placement_nodes,
+        }
+        with CoreUtils.temp_option_vars(creation_prefs):
+            try:
+                if not mel.eval('exists "createRenderNodeCB"'):
+                    try:
+                        mel.eval('source "createRenderNode.mel"')
+                    except Exception:
+                        pass
 
-        try:
-            if not mel.eval('exists "createRenderNodeCB"'):
-                try:
-                    mel.eval('source "createRenderNode.mel"')
-                except Exception:
-                    pass
-
-            node_name = mel.eval(
-                f'createRenderNodeCB "-{classification}" "{category}" "{node_type}" ""'
-            )
-            if name and node_name:
-                node_name = cmds.rename(node_name, name)
-            if node_name:
-                Attributes.set_attributes(node_name, quiet=False, **attributes)
-            return node_name
-        except Exception as e:
-            print(f"Failed to create node of type '{node_type}'. Error: {e}")
-            return None
-        finally:
-            cmds.optionVar(
-                intValue=("createMaterialsWithShadingGroup", original_shading_group)
-            )
-            cmds.optionVar(intValue=("createTexturesWithPlacement", original_placement))
+                node_name = mel.eval(
+                    f'createRenderNodeCB "-{classification}" "{category}" "{node_type}" ""'
+                )
+                if name and node_name:
+                    node_name = cmds.rename(node_name, name)
+                if node_name:
+                    Attributes.set_attributes(node_name, quiet=False, **attributes)
+                return node_name
+            except Exception as e:
+                print(f"Failed to create node of type '{node_type}'. Error: {e}")
+                return None
 
     @staticmethod
     def incoming_connections(sources: List[str]) -> List[Tuple[str, str]]:

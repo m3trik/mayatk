@@ -1,7 +1,10 @@
 # !/usr/bin/python
 # coding=utf-8
-import maya.cmds as cmds
-import maya.mel as mel
+try:
+    import maya.cmds as cmds
+    import maya.mel as mel
+except Exception:
+    cmds = mel = None
 
 import pythontk as ptk
 
