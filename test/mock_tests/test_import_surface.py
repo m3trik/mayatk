@@ -31,6 +31,13 @@ MAYA_BOUND = {
     ),
 }
 
+# What a Maya install provides (PyMEL is also banned outright): a module that
+# cannot find one of these needs Maya to import. Any other missing top-level
+# package is an optional third-party one this machine lacks -- scipy for the
+# auto instancer, PyYAML for the shader templates -- which fails the same way
+# inside Maya, so it is not this test's finding.
+_MAYA_ROOTS = frozenset({"maya", "pymel", "ufe", "mtoa", "arnold", "mayaUsd"})
+
 _PROBE = r"""
 import importlib, json, sys
 failed = {}
@@ -38,7 +45,8 @@ for name in json.loads(sys.stdin.read()):
     try:
         importlib.import_module(name)
     except BaseException as error:
-        failed[name] = f"{type(error).__name__}: {error}"
+        missing = error.name if isinstance(error, ModuleNotFoundError) else None
+        failed[name] = [f"{type(error).__name__}: {error}", missing]
 print("@@RESULT@@" + json.dumps(failed))
 """
 
@@ -90,7 +98,16 @@ class TestImportSurface(unittest.TestCase):
         self.assertTrue(
             marker, f"the probe died (rc={proc.returncode}):\n{proc.stderr[-3000:]}"
         )
-        failed = json.loads(marker[-1][len("@@RESULT@@") :])
+        failed = {}
+        for name, (error, missing) in json.loads(
+            marker[-1][len("@@RESULT@@") :]
+        ).items():
+            root = (missing or "").partition(".")[0]
+            if missing and root not in _MAYA_ROOTS and root != "mayatk":
+                with self.subTest(module=name):
+                    self.skipTest(f"needs {root!r}, which is not installed here")
+                continue
+            failed[name] = error
         self.assertEqual(
             failed,
             {},
