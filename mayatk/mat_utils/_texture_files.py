@@ -26,25 +26,6 @@ from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.env_utils._env_utils import EnvUtils
 
 
-# Directory names pruned during recursive texture searches. Keeps the walk
-# off cloud-sync caches, Windows system folders, version control
-# noise, and Python bytecode caches — all of which can hold stale duplicates
-# of legitimate textures that would otherwise pollute the candidate set.
-_TEXTURE_WALK_SKIP_DIRS = frozenset(
-    {
-        ".dropbox.cache",
-        ".dropbox",
-        "$RECYCLE.BIN",
-        "System Volume Information",
-        ".git",
-        ".svn",
-        ".hg",
-        "node_modules",
-        "__pycache__",
-    }
-)
-
-
 class _TextureFilesInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
@@ -952,11 +933,11 @@ class _TextureFilesInternal:
 
         results = []
 
-        for root, dirs, files in os.walk(source_dir):
-            # Prune sync caches / system / VCS dirs in-place so os.walk
-            # never descends into them. Skip noise + stale duplicates.
-            dirs[:] = [d for d in dirs if d not in _TEXTURE_WALK_SKIP_DIRS]
-
+        # Never into a folder of stale copies -- sync caches, the OS's trash and
+        # volume folders, VCS, bytecode, ``_superseded`` -- compared without
+        # case: the one pruning every texture walk shares with blendertk's
+        # (``ptk.FileDependencies.walk``).
+        for root, _dirs, files in ptk.FileDependencies.walk(source_dir):
             if progress_callback:
                 progress_callback(len(results), 0, f"Scanning: {root}")
 

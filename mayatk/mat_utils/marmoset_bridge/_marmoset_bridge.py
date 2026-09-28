@@ -869,7 +869,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
     def _retire_previous_network(
         self, previous: str, shading_group: str, wanted_name: str
     ) -> str:
-        """Delete the earlier bake's *previous* shader; give its name to the rebuild.
+        """Delete the earlier bake's *previous* shader once unworn; its name goes to the rebuild.
 
         Maya uniquifies the rebuild to ``<name>1`` while the old material still
         holds the name, so without this the scene accumulates one dead
@@ -900,6 +900,19 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         for sg in cmds.listConnections(previous, type="shadingEngine") or []:
             if sg not in doomed:
                 doomed.append(sg)
+        # Still worn: a partial re-bake leaves the earlier material on meshes
+        # this bake did not touch (the targets have already moved to the
+        # rebuild). Deleting it took their shading group with it -- measured,
+        # such a mesh came back in NO shading engine at all. It stays until
+        # nothing wears it; the rebuild keeps its uniquified name meanwhile.
+        worn = [m for sg in doomed[1:] for m in cmds.sets(sg, query=True) or []]
+        if worn:
+            self.logger.warning(
+                f"The previous bake's '{previous}' is still worn by "
+                f"{len(worn)} member(s) outside this bake, so it stays; the "
+                f"rebuild is '{rebuilt}'."
+            )
+            return rebuilt
         try:
             cmds.delete(doomed)
         except RuntimeError as e:
@@ -913,8 +926,44 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             f"Replaced the previous bake's '{previous}' "
             f"(re-bakes overwrite rather than accumulate)."
         )
-        MatUtils.claim_material_name(shading_group, wanted_name)
+        # The reclaim renames the shading group along with the shader
+        # (``M_BAKED1SG`` -> ``M_BAKEDSG``) and returns its new name; reading
+        # the old one raised on every re-bake, after the delete, and aborted
+        # the texture sets still to come.
+        shading_group = MatUtils.claim_material_name(shading_group, wanted_name)
         return self._surface_shader(shading_group)
+
+    @staticmethod
+    def _source_members(mat_name: str, targets: Sequence[str]) -> List[str]:
+        """Where *mat_name* sits on *targets*: whole meshes or face ranges.
+
+        A target wearing several materials (one texture set each) must get
+        every baked set back on the faces its source covered; assigning the
+        whole mesh let the last set clobber the others (measured: faces 0-2
+        of ``MA`` and 3-5 of ``MB`` all came back ``MB_BAKED``). Read from the
+        source material's shading groups as Maya stores them -- compact face
+        ranges, never flattened -- and filtered to each target's own transform
+        and shapes, since a shading group is shared across meshes. A target
+        the source no longer sits on (reassigned since the send) is taken
+        whole, as before.
+        """
+        source_sgs = (
+            cmds.listConnections(mat_name, type="shadingEngine") or []
+            if cmds.objExists(mat_name)
+            else []
+        )
+        members: List[str] = []
+        for target in targets:
+            owners = set(cmds.ls(target, long=True) or [])
+            owners.update(cmds.listRelatives(target, shapes=True, fullPath=True) or [])
+            held = [
+                m
+                for sg in dict.fromkeys(source_sgs)
+                for m in cmds.ls(cmds.sets(sg, query=True) or [], long=True) or []
+                if m.split(".", 1)[0] in owners
+            ]
+            members.extend(held or [target])
+        return members
 
     @staticmethod
     def _surface_shader(shading_group: str) -> str:
@@ -1042,6 +1091,9 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
                         f"the project and re-point the file nodes:\n  "
                         + "\n  ".join(stranded)
                     )
+            # Captured before the rebuild moves anything: where the source
+            # material sits on each target, face by face.
+            members = self._source_members(mat_name, targets)
             shader_name = self.baked_material_name(mat_name)
             # A re-bake's material is named off the PREVIOUS bake's output
             # (``mat_BAKED``), so the packing recorded against the original
@@ -1095,10 +1147,10 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
             shading_group = ""
             if cmds.nodeType(node_s) == "shadingEngine":
                 shading_group = node_s
-                cmds.sets(targets, edit=True, forceElement=node_s)
+                cmds.sets(members, edit=True, forceElement=node_s)
                 node_s = self._surface_shader(node_s)
             else:
-                MatUtils.assign_mat(targets, node_s)
+                MatUtils.assign_mat(members, node_s)
             # The meshes now wear the new network, so the earlier bake's is
             # safe to retire -- and its name is free for the rebuild to claim,
             # which is what keeps a re-bake at 'mat_BAKED' instead of walking

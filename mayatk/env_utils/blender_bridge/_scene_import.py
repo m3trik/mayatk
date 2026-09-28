@@ -904,6 +904,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         manifest = ptk.HandoffManifest.read(payload_path)
         manifest_path = manifest.path
+        # What Maya's importers (and pxr) are handed: Maya opens files through the
+        # ANSI code page, and the payload sits under %TEMP% ("File not found" under
+        # a Cyrillic TEMP on cp1252). The 8.3 form where that differs; the sidecar
+        # is read by Python.
+        maya_path = ptk.AppLauncher.ansi_safe_path(payload_path)
         has_manifest = os.path.isfile(manifest_path)
         if manifest.unreadable:
             # Not fatal -- the payload's geometry still lands -- but every
@@ -925,7 +930,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         plan.add(
             None,
             "Adopting the scene clock",
-            lambda: self._apply_scene_manifest(manifest_path, payload_path),
+            lambda: self._apply_scene_manifest(manifest_path, maya_path),
             when=bool(adopt_scene),
         )
         # Before the records: a claim names the curves this replay creates (an
@@ -973,14 +978,14 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 ns, n = "_usd_pull", 1
                 while cmds.namespace(exists=ns):
                     ns, n = f"_usd_pull{n}", n + 1
-                new_nodes = UsdUtils.import_scene(payload_path, namespace=ns)
+                new_nodes = UsdUtils.import_scene(maya_path, namespace=ns)
                 # Empties -> correct node types, the USD way round: every
                 # Empty arrives SHAPELESS (Xform prims), so the point markers
                 # get their locator shapes back from the manifest's ``empties``
                 # section / the children heuristic (see the method).
                 self._restore_usd_locators(new_nodes, manifest_path)
             else:
-                new_nodes = self._import_fbx(payload_path, fbx_options)
+                new_nodes = self._import_fbx(maya_path, fbx_options)
                 # Empties -> correct node types (the importer makes every FBX
                 # null a locator; see the method). The manifest's ``empties``
                 # section, when the conversion wrote one, overrides the
@@ -1598,8 +1603,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         return ptk.ScriptTemplate.render_template(
             _BAKE_TEMPLATE,
             {
-                "SRC_FILE": str(src_path).replace("\\", "/"),
-                "OUT_MA": str(out_path).replace("\\", "/"),
+                # child_path: forward slashes, and the 8.3 form of any folder the
+                # ANSI code page cannot hold -- mayapy opens files through it.
+                "SRC_FILE": ptk.ScriptTemplate.child_path(src_path),
+                "OUT_MA": ptk.ScriptTemplate.child_path(out_path),
                 # The child is the same Maya build, so the parent's importable set
                 # is valid there -- this is what makes the shared manifest replay
                 # (mayatk in the child) reliable rather than best-effort.
@@ -1781,7 +1788,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         # partial sweep (without it the panel silently forgets the row is referenced).
         self._write_bake_source(got.path, src)
         self.logger.info(f"Baked {src_path} -> {got.path}")
-        return got.path
+        # The host references this file through Maya, which opens files through the
+        # ANSI code page: under a TEMP it cannot hold (Cyrillic on cp1252) the
+        # reference loaded nothing. Its 8.3 form, where that differs.
+        return ptk.AppLauncher.ansi_safe_path(got.path)
 
     def _write_bake_source(self, baked_path: str, src: str) -> None:
         """Record beside *baked_path* which foreign scene it was baked from."""

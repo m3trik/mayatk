@@ -483,6 +483,24 @@ class TestMachinery(MayaTkTestCase):
             self.assertNotIn(kept, kinds)
         self.assertIn("|rig|ik_curve", kinds)
 
+    def test_a_controller_wired_straight_into_a_joint_is_apparatus(self):
+        """No constraint and no utility node: only the controller tag says the
+        curve is a control -- and a tagged transform holding a mesh is still
+        content."""
+        cmds.select(clear=True)
+        joint = cmds.joint(name="wired_jnt")
+        part = cmds.polyCube(name="wired_part", constructionHistory=False)[0]
+        cmds.parent(part, joint)
+        ctrl = cmds.circle(name="wired_CTRL", constructionHistory=False)[0]
+        cmds.connectAttr(f"{ctrl}.rotateZ", f"{joint}.rotateZ")
+        cmds.controller(ctrl)
+        prop = cmds.polySphere(name="tagged_prop", constructionHistory=False)[0]
+        cmds.controller(prop)
+        kinds, _kept = self.extractor.machinery()
+        self.assertEqual(kinds.get("|wired_CTRL"), "control")
+        for survivor in ("|wired_jnt", "|wired_jnt|wired_part", "|tagged_prop"):
+            self.assertNotIn(survivor, kinds)
+
     def test_a_scope_limits_the_answer_to_what_ships(self):
         kinds, _kept = self.extractor.machinery(scope=["rig"])
         self.assertEqual(

@@ -1886,6 +1886,89 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         self.assertEqual(list(result), [cmds.ls(planes[0], long=True)[0]])
         self.assertNotIn("re-bake one per call", "\n".join(caught.output))
 
+    def _rtt_writing(self, skip=lambda i, n: False):
+        """A fake RTT that writes one map per selected shape, in SELECTION
+        order -- measured: RTT renders a call's shapes one at a time in the
+        order they were selected, each file appearing when its render
+        starts. ``skip(i, n)`` leaves out the i-th of n selected members."""
+
+        def render(**kwargs):
+            selected = cmds.ls(selection=True, long=True)
+            self.calls.append(kwargs["resolution"])
+            for i, obj in enumerate(selected):
+                if skip(i, len(selected)):
+                    continue
+                shape = cmds.listRelatives(obj, shapes=True)[0]
+                with open(os.path.join(kwargs["folder"], f"{shape}.exr"), "wb") as fh:
+                    fh.write(b"x" * 64)
+
+        return render
+
+    def _bake_with(self, baker, planes, render, **kwargs):
+        with (
+            mock.patch.object(TextureBaker, "_resolve_backend", return_value="arnold"),
+            mock.patch.object(
+                baker, "_pinned_render_settings", return_value=contextlib.nullcontext()
+            ),
+            mock.patch.object(cmds, "arnoldRenderToTexture", render, create=True),
+        ):
+            with self.assertLogs(baker.logger, level="WARNING") as caught:
+                result = baker.bake(
+                    planes, output_dir=self.tmp, backend="arnold", batch=True, **kwargs
+                )
+        return result, "\n".join(caught.output)
+
+    def test_a_batch_stopped_after_its_first_map_renders_no_more(self):
+        """Esc after the first of three maps: the call wrote one and returned.
+        That used to read as a finished part -- the two it never reached went
+        round again one render (and one more Esc) per call. Nothing renders
+        again, and the one map it wrote is not kept either: its file appears
+        when its render STARTS, so its presence does not say it finished."""
+        planes = self._planes(3)
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        result, log = self._bake_with(
+            baker, planes, self._rtt_writing(skip=lambda i, n: n > 1 and i > 0)
+        )
+        self.assertEqual(self.calls, [16], "a stopped call must not start more renders")
+        self.assertEqual(result, {})
+        self.assertNotIn("re-bake one per call", log)
+        self.assertIn("stops here", log)
+
+    def test_a_batch_stopped_partway_keeps_the_maps_it_finished(self):
+        """Stopped during the second of three maps, in the first of two parts:
+        the first map is kept, the second (cut short) is not, and neither the
+        third member nor the second part renders."""
+        planes = self._planes(4)
+        longs = [cmds.ls(p, long=True)[0] for p in planes]
+        sizes = {longs[0]: 16, longs[1]: 16, longs[2]: 16, longs[3]: 32}
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        result, log = self._bake_with(
+            baker,
+            planes,
+            self._rtt_writing(skip=lambda i, n: n > 1 and i > 1),
+            size=sizes,
+        )
+        self.assertEqual(self.calls, [16], "no re-bake, and the next part never starts")
+        self.assertEqual(list(result), [longs[0]])
+        self.assertNotIn("re-bake one per call", log)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp, "stop1Shape.exr")),
+            "the map the stop cut short is not left behind",
+        )
+
+    def test_a_member_missing_mid_call_is_not_a_stop(self):
+        """Only a stop leaves the maps a PREFIX of the call's order. A member
+        missing from the middle (a map RTT wrote under a name no rule
+        predicted, say) is not one: it bakes again per object as before."""
+        planes = self._planes(3)
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        result, log = self._bake_with(
+            baker, planes, self._rtt_writing(skip=lambda i, n: n > 1 and i == 1)
+        )
+        self.assertEqual(self.calls, [16, 16], "the missing member re-bakes once")
+        self.assertEqual(len(result), 3)
+        self.assertIn("re-bake one per call", log)
+
     def test_a_stopped_per_object_render_ends_the_bake(self):
         planes = self._planes(3)
         baker = TextureBaker(resolution=16, samples=1, file_format="exr")

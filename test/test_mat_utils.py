@@ -2184,6 +2184,21 @@ class TestFindTextureFilesByName(MayaTkTestCase):
 
         self.assertEqual([p.lower() for p in found], [wanted.lower()])
 
+    def test_a_folder_of_stale_copies_is_never_searched(self):
+        """The walk prunes what ``ptk.FileDependencies.WALK_SKIP_DIRS`` names,
+        without case: the list here spelled ``$RECYCLE.BIN`` as FAT does, so
+        NTFS's ``$Recycle.Bin`` -- and a freedesktop ``.Trash-1000`` -- were
+        walked, and a deleted copy of a texture could be bound (2026-09-27)."""
+        wanted = self._write("maps", "wood.png")
+        for folder in ("$Recycle.Bin", ".Trash-1000", "_superseded", ".dropbox.cache"):
+            self._write(folder, "wood.png")
+
+        found = MatUtils.find_texture_files(
+            filenames=["wood.png"], source_dir=self.root, quiet=True
+        )
+
+        self.assertEqual([p.lower() for p in found], [wanted.lower()])
+
     def test_every_token_spelling_matches_its_tiles(self):
         tiles = [
             self._write("t_u1_v1.png"),

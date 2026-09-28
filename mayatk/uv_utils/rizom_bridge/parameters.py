@@ -426,13 +426,23 @@ PARAMS: "dict[str, AttributeSpec]" = {
 # Preset-level version gate: a ``-- @min_rizom: X.Y`` marker in a preset's
 # leading comment hides the WHOLE preset (combo entry + execution) below
 # that Rizom version. Token-level ``MIN_VERSIONS`` gating strips single
-# lines, which can't express a preset whose core mechanism (e.g. the
-# ZomPack ``WorkingSet`` field in pack_into_existing) doesn't exist on
-# older Rizom -- stripping the line would silently change semantics
-# instead of failing loudly.
+# lines, which can't express a preset whose core mechanism (e.g.
+# unwrap_hybrid's SharpEdges + QuasiDevelopable pair, which access-violates
+# 2020.1) doesn't exist on older Rizom -- stripping the line would silently
+# change semantics instead of failing loudly.
 _PRESET_MIN_VERSION_RE = re.compile(
     r"^--\s*@min_rizom:\s*(\d+(?:\.\d+)*)\s*$", re.MULTILINE
 )
+
+# Preset-level knob opt-out: a ``-- @ignores: KEY, KEY`` marker names
+# registered params a preset's Lua overrides although an include still spells
+# their tokens -- pack_into_existing.lua reaches the shared pack block's
+# Pre-scale / Layout Scale / Tile Coverage / Translate tokens, and its
+# match-density branch sets all four itself. :meth:`Parameters.referenced_keys`
+# leaves them out, so the panel does not offer a knob that does nothing. The
+# values still render (a hidden row keeps sending its value), which is why the
+# Lua, not the marker, is what must ignore them.
+_PRESET_IGNORES_RE = re.compile(r"^--\s*@ignores:\s*(.+?)\s*$", re.MULTILINE)
 
 # Inline per-LINE version range: ``... , -- @min_rizom_line: 2022.0`` keeps
 # the line only on Rizom >= that version; ``-- @max_rizom_line: 2021.9999``
@@ -478,7 +488,10 @@ DERIVED_KEYS = ("PACK_SPACING", "PACK_MARGIN")
 # has nothing to say -- so a preset that references one stays valid Lua for
 # every caller, the headless probe included. ``PACK_SUBSET`` is the Lua list of
 # material tags marking the shells a pack may move (see pack.lua); ``nil`` =
-# every island packs.
+# every island packs. ``PACK_SELECT_NAMES`` -- the same tag list, for
+# select_objects= (pack_into_existing.lua) -- has NO default on purpose: a
+# ``nil`` there would plain-pack the very layout the preset keeps, so the
+# bridge refuses a run without select_objects instead.
 HOST_TOKEN_DEFAULTS = {"PACK_SUBSET": "nil"}
 
 
@@ -547,9 +560,15 @@ class Parameters(ParamRegistry):
 
         Includes are expanded first so tokens living only inside a shared
         partial (``templates/pack_block.lua``) are still discovered for panel
-        visibility.
+        visibility; keys the preset's ``@ignores`` marker names are left out
+        (see :data:`_PRESET_IGNORES_RE`).
         """
-        return super().referenced_keys(cls.expand_includes(script_text))
+        ignored = {
+            key.strip()
+            for keys in _PRESET_IGNORES_RE.findall(script_text or "")
+            for key in keys.split(",")
+        }
+        return super().referenced_keys(cls.expand_includes(script_text)) - ignored
 
     @staticmethod
     def derived_values(values: "dict[str, Any]") -> "dict[str, float]":

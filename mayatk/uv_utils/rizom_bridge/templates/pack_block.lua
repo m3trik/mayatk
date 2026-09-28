@@ -56,6 +56,20 @@
 -- rest, and a filing without FreezeIslands re-centres every island in its tile.
 local subset = PACK_SUBSET
 
+-- Match density: a preset packing INTO an existing layout (pack_into_existing.lua)
+-- also sets the PACK_MATCH_DENSITY global. The subset then takes the FIXED
+-- islands' texel density instead of the Pre-scale knob's, always translates,
+-- and the fit below only ever SHRINKS it (when the free space is too small at
+-- that density), never grows it to fill the tile. The density is set in two
+-- steps: a Scaling.Mode 2 pack evens the subset's islands out among themselves,
+-- then one uniform scale takes them to sqrt(sum UV area / sum 3D area) of the
+-- fixed islands. Scaling.Mode 4 alone matches the fixed islands per island, but
+-- only those in the tile being packed: with none there (a pack into an empty
+-- UDIM) it left the subset at its incoming density (probed 2026-09-27, 2020.1).
+-- The knobs this overrides (Pre-scale, Translate) are hidden for such a preset
+-- by its ignores marker.
+local match = subset and PACK_MATCH_DENSITY
+
 -- Placement: the target UDIM tile, and the fraction of it the layout occupies
 -- (anchored bottom-left). Probe-verified on 2020.1: ZomDeform takes a row-major
 -- 3x3 UV transform {su,0,tu, 0,sv,tv, 0,0,1} and WorkingSet="Visible" needs no
@@ -67,6 +81,7 @@ local tile_v = math.floor((udim - 1001) / 10)
 local su = (area == 1 or area == 3) and 0.5 or 1.0
 local sv = (area == 2 or area == 3) and 0.5 or 1.0
 local rotate = __PACK_ROTATE_ENABLE__
+local translate = match or __PACK_TRANSLATE__
 
 local function pack(scaling_mode, layout_mode)
     ZomPack({
@@ -83,7 +98,7 @@ local function pack(scaling_mode, layout_mode)
             Mode=(not rotate) and 0 or nil,
             Enable=rotate, -- @min_rizom_line: 2022.0
         },
-        Translate=__PACK_TRANSLATE__,
+        Translate=translate,
         LayoutScalingMode=layout_mode,
         MaxMutations=__PACK_MAX_MUTATIONS__,
         Resolution=__PACK_RESOLUTION__,
@@ -135,10 +150,13 @@ else
     -- Bounds of the subset, read back through ZomGet("Lib.Mesh.Islands") --
     -- one of the two probed-safe paths (indexing below it, Islands.0, crashes
     -- 2020.1). nil when nothing is selected.
+    local function selected(island)
+        return island.TopoStable and island.TopoStable.Selected
+    end
     local function extent()
         local umin, umax, vmin, vmax = math.huge, -math.huge, math.huge, -math.huge
         for _, island in pairs(ZomGet("Lib.Mesh.Islands")) do
-            if island.TopoStable and island.TopoStable.Selected then
+            if selected(island) then
                 local b = island.BBoxUV
                 umin = math.min(umin, b[1])
                 umax = math.max(umax, b[2])
@@ -150,6 +168,22 @@ else
             return nil
         end
         return umin, umax, vmin, vmax
+    end
+
+    -- Texel density (UV length per 3D length) of the islands keep() accepts,
+    -- area-weighted -- sqrt(sum UV area / sum 3D area) -- from the same tree
+    -- (per-island AreaUV / Area3D). nil when they cover no area.
+    local function density(keep)
+        local uv, xyz = 0, 0
+        for _, island in pairs(ZomGet("Lib.Mesh.Islands")) do
+            if keep(island) then
+                uv = uv + island.AreaUV
+                xyz = xyz + island.Area3D
+            end
+        end
+        if uv > 0 and xyz > 0 then
+            return math.sqrt(uv / xyz)
+        end
     end
 
     -- A tag that reached no island packs NOTHING: with an empty selection
@@ -214,18 +248,24 @@ else
 
         -- Pack, then read the subset's bounds back (they feed the next
         -- gather). Returns its extent over the tile, from the tile origin
-        -- where the packer anchors: <= 1 fits.
+        -- where the packer anchors: <= fit fits.
         local function pack_and_measure(scaling_mode)
             pack(scaling_mode, 0)
             umin, umax, vmin, vmax = extent()
             return math.max(umax - math.min(umin, 0), vmax - math.min(vmin, 0))
         end
 
-        if __PACK_TRANSLATE__ then
+        -- A fit keeps the tile margin a plain pack keeps: accepting an extent
+        -- of 1.0 let the subset run into it (measured 0.99963 / 0.99985
+        -- against the plain pack's 0.998047, i.e. 1 - margin).
+        local fit = 1.0 - __PACK_MARGIN__
+
+        if translate then
             -- With the fixed islands pinned, LayoutScalingMode must stay 0, and
             -- the packer then keeps the subset at its pre-scaled size, growing
             -- its box past the tile when that is too big. So fit it here:
-            -- bisect for the largest scale whose pack still lands in the tile.
+            -- bisect for the largest scale whose pack still lands in the tile
+            -- -- capped at the pre-scaled size itself when matching density.
             local scale = 1.0
             local function pack_at(s)
                 gather(s / scale)
@@ -233,29 +273,47 @@ else
                 return pack_and_measure(0) -- Scaling.Mode 0: keep the size set
             end
 
-            -- The Pre-scale knob applies once, here; every refit keeps sizes.
+            -- The Pre-scale applies once, here; every refit keeps sizes.
             gather(1.0)
-            local over = pack_and_measure(__SCALING_MODE__)
+            local over = pack_and_measure(match and 2 or __SCALING_MODE__)
+            if match then
+                -- Mode 2 evened the subset's islands out among themselves; one
+                -- uniform scale then puts them at the layout's density -- the
+                -- fixed islands' in the target tile, or all of theirs when the
+                -- tile holds none.
+                local function fixed(island)
+                    return not selected(island)
+                end
+                local function fixed_here(island)
+                    local b = island.BBoxUV
+                    local cu, cv = (b[1] + b[2]) / 2, (b[3] + b[4]) / 2
+                    return fixed(island) and cu >= 0 and cu < 1 and cv >= 0 and cv < 1
+                end
+                local want, have = density(fixed_here) or density(fixed), density(selected)
+                if want and have then
+                    over = pack_at(want / have)
+                end
+            end
             local lo, hi
-            if over <= 1.0 then lo = 1.0 else hi = 1.0 end
+            if over <= fit then lo = scale else hi = scale end
             for _ = 1, 8 do -- bracket the best scale
-                if lo and hi then break end
+                if lo and (hi or match) then break end
                 local guess = math.min(math.max(scale / math.max(over, 1e-6), scale / 16), scale * 16)
                 if lo then guess = math.max(guess, lo * 1.05) else guess = math.min(guess, hi * 0.95) end
                 over = pack_at(guess)
-                if over <= 1.0 then lo = guess else hi = guess end
+                if over <= fit then lo = guess else hi = guess end
             end
             if lo and hi then
                 for _ = 1, 6 do -- bisect to ~1%
                     local mid = math.sqrt(lo * hi)
                     over = pack_at(mid)
-                    if over <= 1.0 then lo = mid else hi = mid end
+                    if over <= fit then lo = mid else hi = mid end
                 end
             end
             for _ = 1, 3 do -- finish on a pack that fits
-                if over <= 1.0 or not lo then break end
+                if over <= fit or not lo then break end
                 over = pack_at(lo)
-                if over > 1.0 then lo = lo * 0.97 end
+                if over > fit then lo = lo * 0.97 end
             end
         else
             -- Translate off: nothing is moved, so the subset is only pre-scaled

@@ -10,7 +10,8 @@ records them and answers for them afterwards:
   instance, so every copy of a shared shape carries its own atlas rect):
   :meth:`LightmapRecords.commit`, :meth:`LightmapRecords.revert`,
   :meth:`LightmapRecords.baked_objects`,
-  :meth:`LightmapRecords.superseding` (what a re-bake leaves behind, deleted),
+  :meth:`LightmapRecords.superseding` (what a re-bake leaves behind, set
+  aside),
   and :meth:`LightmapRecords.migrate_legacy` for markers older than the
   rect-binding contract.
 * **The manifest** -- the ``lightmap_metadata`` record that rides the FBX on
@@ -213,8 +214,9 @@ class LightmapRecords(ptk.LoggingMixin):
 
         This scene's ``ptk.SceneRecords.LIGHTMAP_WRITERS`` record, stamped by
         :meth:`commit`. ``""`` is a map committed while the scene was unsaved
-        -- its own only while it still is (a Save As copy carries the same
-        ``""``). A map with no entry was committed before the record existed,
+        -- its own while it still is; the first save stamps it with the file
+        written (``DataNodes.install_path_rebase``). A map with no entry was
+        committed before the record existed,
         or its folder was lifted off a legacy marker
         (:meth:`migrate_folder_hints`) -- another scene's, for all this scene
         can tell.
@@ -410,7 +412,7 @@ class LightmapRecords(ptk.LoggingMixin):
         TRANSFORM and records the map's folder and writer (this scene) in the
         private records, then republishes the scene manifest onto the shared
         ``data_export`` carrier so it rides the FBX. Files are never touched:
-        a re-bake deletes the maps it superseded around its commit
+        a re-bake sets aside the maps it superseded around its commit
         (:meth:`superseding`).
 
         Parameters:
@@ -555,7 +557,7 @@ class LightmapRecords(ptk.LoggingMixin):
     @classmethod
     @contextlib.contextmanager
     def superseding(cls, objects: List[str]) -> Iterator[List[str]]:
-        """Around a re-bake's :meth:`commit`: delete the maps *objects* stop reading.
+        """Around a re-bake's :meth:`commit`: set aside the maps *objects* stop reading.
 
         A re-bake that changes where or how its maps are written -- another
         output folder, Beside Material Textures, another name affix,
@@ -565,9 +567,11 @@ class LightmapRecords(ptk.LoggingMixin):
         against folders finds (the production room once bound a 17-day-old
         atlas that way), and beside the textures one takes its own name, so
         the next bake that returns to it writes ``_1``. The maps *objects*
-        read on entry are deleted on a clean exit once no marker in the scene
-        reads them (:meth:`ptk.FileDependencies.remove_superseded`); a block
-        that raises deletes nothing.
+        read on entry are set aside on a clean exit once no marker in the
+        scene reads them (:meth:`ptk.FileDependencies.remove_superseded`): to
+        the Recycle Bin, else a ``_superseded`` folder beside them -- never
+        deleted, since no scene can see another file's reads. A block that
+        raises moves nothing.
 
         Only this scene's own maps are candidates: recorded in its folder
         record AND written by it (``DataNodes.written_here``) -- never a map
@@ -575,13 +579,14 @@ class LightmapRecords(ptk.LoggingMixin):
         one committed before writers were recorded -- and never one a
         REFERENCED object reads, which its own file may name too. A map an
         excluded, failed or out-of-scope object still reads is read, and
-        stays. The deletion cannot be undone; the commit's markers can.
+        stays. Undo does not bring a map back (restore it from the Recycle
+        Bin); the commit's markers it does.
 
         Parameters:
             objects: The transforms the block commits new maps for.
 
         Yields:
-            A list, filled with the deleted paths on exit.
+            A list, filled with the set-aside paths on exit.
         """
         retired: List[str] = []
         before = cls._written_reads(objects)
@@ -591,15 +596,16 @@ class LightmapRecords(ptk.LoggingMixin):
         retired.extend(ptk.FileDependencies.remove_superseded(before, cls._reads()))
         if retired:
             cls.logger.info(
-                "Deleted %d superseded lightmap(s) nothing reads any more: %s",
+                "Set aside %d superseded lightmap(s) nothing reads any more -- "
+                "in the Recycle Bin, or a _superseded folder beside them: %s",
                 len(retired),
                 ", ".join(os.path.basename(p) for p in retired),
             )
 
     @classmethod
     def _written_reads(cls, objects: List[str]) -> List[str]:
-        """The map files *objects* read now that are this scene's to delete once
-        superseded (:meth:`superseding`)."""
+        """The map files *objects* read now that are this scene's to set aside
+        once superseded (:meth:`superseding`)."""
         if cmds is None or not objects:
             return []
         from mayatk.node_utils.data_nodes import DataNodes

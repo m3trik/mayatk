@@ -236,6 +236,67 @@ class TestResolveMissingValidation(MayaTkTestCase):
             self.slot._resolve_missing_textures(modes=["bogus"])
 
 
+class TestResolveMissingSkipsStaleCopies(MayaTkTestCase):
+    """Resolve Missing Textures indexes sourceimages through
+    ``ptk.FileDependencies.walk``: it walked everything, so a texture whose
+    only same-named file sat in a sync cache, the Recycle Bin or a
+    ``_superseded`` folder was bound to that stale copy (2026-09-27)."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = ptk.TempArtifacts("tpe_stale", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.tmp_root = tmp.dir_path()
+        self.si_dir = os.path.join(self.tmp_root, "sourceimages")
+        os.makedirs(self.si_dir)
+        original = EnvUtils.get_env_info
+        self.addCleanup(setattr, EnvUtils, "get_env_info", staticmethod(original))
+        roots = {"sourceimages": self.si_dir, "workspace": self.tmp_root}
+        EnvUtils.get_env_info = staticmethod(lambda k: roots.get(k) or original(k))
+        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        self.slot._previous_paths = {}
+        self.slot.ui = SimpleNamespace(tbl000=SimpleNamespace(init_slot=lambda: None))
+
+    def _write(self, *parts):
+        path = os.path.join(self.si_dir, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "wb").close()
+        return path
+
+    def _missing_node(self):
+        node = cmds.shadingNode("file", asTexture=True, name="stale_file")
+        missing = os.path.join(self.tmp_root, "gone", "wood.png").replace("\\", "/")
+        cmds.setAttr(f"{node}.fileTextureName", missing, type="string")
+        return node, missing
+
+    def test_a_stale_copy_alone_leaves_the_texture_missing(self):
+        """One copy at a time: several would read as ambiguous and hide it."""
+        for folder in (".dropbox.cache", "$Recycle.Bin", "_superseded", ".git"):
+            with self.subTest(folder=folder):
+                copy = self._write(folder, "wood.png")
+                node, missing = self._missing_node()
+                try:
+                    self.slot._resolve_missing_textures(
+                        modes=["stem"], file_nodes=[node]
+                    )
+                    got = cmds.getAttr(f"{node}.fileTextureName")
+                finally:
+                    os.remove(copy)
+                    cmds.delete(node)
+                self.assertEqual(got, missing)
+
+    def test_a_live_copy_beside_them_resolves(self):
+        for folder in (".dropbox.cache", "_superseded"):
+            self._write(folder, "wood.png")
+        self._write("maps", "wood.png")
+        node, _missing = self._missing_node()
+        self.slot._resolve_missing_textures(modes=["stem"], file_nodes=[node])
+        self.assertTrue(
+            cmds.getAttr(f"{node}.fileTextureName").endswith("maps/wood.png"),
+            cmds.getAttr(f"{node}.fileTextureName"),
+        )
+
+
 class TestNormalizeToRelative(MayaTkTestCase):
     """Behavioral tests for _normalize_to_relative across path categories."""
 

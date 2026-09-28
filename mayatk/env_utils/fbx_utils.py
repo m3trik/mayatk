@@ -814,6 +814,11 @@ class FbxUtils(ptk.HelpMixin):
             "ShadowRig",
             "export_record",
         ),
+        ptk.SceneRecords.ARTICULATION: (
+            "mayatk.rig_utils.articulated_rig._articulated_rig",
+            "ArticulatedRig",
+            "export_record",
+        ),
         ptk.SceneRecords.EMISSIVE_GROUPS: (
             "mayatk.mat_utils.emissive_groups",
             "EmissiveGroups",

@@ -1906,30 +1906,59 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.sb.message_box(f"Rename failed: {html.escape(str(e))}")
 
     @classmethod
-    def _delete_prompt(cls, paths) -> str:
+    def _delete_prompt(cls, paths, permanent=()) -> str:
         """Confirmation text for deleting *paths*.
 
         Names each file in full: the row label can hide the suffix/extension, so a
         count alone ("Delete 1 file(s)?") gives no way to confirm WHICH file is about
-        to be removed -- and deletion is permanent (no recycle bin).
+        to be removed. And it says where each goes: the platform's trash
+        (``ptk.FileUtils.trash_name``), or, for *permanent* -- the ones no trash
+        would take (a network share, a removable drive) -- gone for good, which
+        it says cannot be undone.
 
         Parameters:
             paths (list): Full paths of the files queued for deletion.
+            permanent (list): Those of *paths* that would be deleted for good.
 
         Returns:
             str: HTML prompt naming the file(s).
         """
+        trash = ptk.FileUtils.trash_name()
+        gone = {os.path.normcase(os.path.abspath(p)) for p in permanent}
+        marks = [os.path.normcase(os.path.abspath(p)) in gone for p in paths]
         names = [os.path.basename(p) for p in paths]
         if len(names) == 1:
-            return f"Delete <hl>{names[0]}</hl>?"
-        shown = names[: cls.DELETE_PROMPT_MAX_NAMES]
-        listed = "<br>".join(f"&bull; {n}" for n in shown)
+            if marks[0]:
+                return (
+                    f"Delete <hl>{names[0]}</hl> permanently?<br>The {trash} "
+                    "will not take it, so this cannot be undone."
+                )
+            return f"Move <hl>{names[0]}</hl> to the {trash}?"
+        mixed = any(marks) and not all(marks)
+        shown = list(zip(names, marks))[: cls.DELETE_PROMPT_MAX_NAMES]
+        listed = "<br>".join(
+            f"&bull; {n}" + (f" (permanently: no {trash})" if mark and mixed else "")
+            for n, mark in shown
+        )
         if len(names) > len(shown):
             listed += f"<br>&bull; ...and {len(names) - len(shown)} more"
-        return f"Delete {len(names)} file(s)?<br>{listed}"
+        if all(marks):
+            return (
+                f"Delete {len(names)} file(s) permanently?<br>{listed}<br>The "
+                f"{trash} will not take them, so this cannot be undone."
+            )
+        if mixed:
+            return (
+                f"Delete {len(names)} file(s)?<br>{listed}<br>The rest go to the "
+                f"{trash}; the marked ones cannot be undone."
+            )
+        return f"Move {len(names)} file(s) to the {trash}?<br>{listed}"
 
     def delete_scene(self):
-        """Delete the scene file at the right-clicked row."""
+        """Delete the scene file at the right-clicked row: to the Recycle Bin
+        (``ptk.FileUtils.move_to_trash``), or -- a drive with none, confirmed as
+        permanent -- for good. A trash that refuses it after all asks again,
+        as permanent, before anything is lost."""
         t = self.ui.tbl000
         row = self._context_menu_row
         if row is None or not (0 <= row < t.rowCount()):
@@ -1945,10 +1974,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         if not files_to_delete:
             return
 
-        if (
-            self.sb.message_box(self._delete_prompt(files_to_delete), "Yes", "No")
-            != "Yes"
-        ):
+        permanent = [p for p in files_to_delete if not ptk.FileUtils.can_trash(p)]
+        prompt = self._delete_prompt(files_to_delete, permanent)
+        if self.sb.message_box(prompt, "Yes", "No") != "Yes":
             return
 
         # {name} in the folder structure = per-scene folders,
@@ -1956,70 +1984,105 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         _case_style, _suffix, structure_text = self._naming_options()
         use_folder = "{name}" in structure_text
 
-        for path in files_to_delete:
-            try:
-                os.remove(path)
-                self.logger.info(f"Deleted file: {path}")
-
-                # Remove the file's metadata sidecar too (ptk.Metadata's
-                # "<file>.metadata.json" convention) so it doesn't outlive the
-                # scene it describes -- especially when sibling scenes keep the
-                # folder alive below.
-                sidecar = path + ".metadata.json"
-                if os.path.exists(sidecar):
-                    try:
-                        os.remove(sidecar)
-                    except OSError as e:
-                        self.logger.warning(f"Could not remove sidecar {sidecar}: {e}")
-
-                if use_folder:
-                    parent_dir = os.path.dirname(path)
-                    # Deletion is permanent (no recycle bin), so the per-scene
-                    # folder goes only when ALL of these hold:
-                    # 1. Ownership: the folder is named for this scene (the
-                    #    per-scene layout of the {name} structure). Case-
-                    #    insensitive: Windows filenames -- "Env_v1.ma" in
-                    #    folder "env" is scene-owned.
-                    # 2. Not the project's own structure: "scenes_final.ma"
-                    #    loose in a scenes root named "scenes" passes (1), and
-                    #    must never take the root (or the workspace) with it.
-                    # 3. Empty, now the scene and its sidecar are gone. Anything
-                    #    left keeps it -- another version ("Env_v2.ma"), a
-                    #    subfolder, and every file that is not a Maya scene (an
-                    #    FBX or USD row of this same panel, a playblast): the
-                    #    prompt named one file, so rmdir, never rmtree.
-                    file_base = os.path.splitext(os.path.basename(path))[0].lower()
-                    parent_name = os.path.basename(os.path.normpath(parent_dir)).lower()
-                    owns_folder = bool(parent_name) and file_base.startswith(
-                        parent_name
-                    )
-                    try:
-                        leftovers = os.listdir(parent_dir)
-                    except OSError:
-                        leftovers = None  # cannot inspect: leave the folder alone
-
-                    if (
-                        owns_folder
-                        and leftovers == []
-                        and not self._is_workspace_structure(parent_dir)
-                    ):
-                        try:
-                            os.rmdir(parent_dir)
-                            self.logger.info(
-                                f"Deleted empty scene folder: {parent_dir}"
-                            )
-                        except OSError as e:
-                            self.logger.warning(
-                                f"Could not remove scene folder {parent_dir}: {e}"
-                            )
-                    else:
-                        self.logger.debug(
-                            f"Keeping folder '{parent_dir}'; not scene-owned, the "
-                            f"project's own structure, not empty, or it could not "
-                            f"be inspected (owns={owns_folder}, left={leftovers})."
-                        )
-
-            except Exception as e:
-                self.logger.error(f"Delete failed for {path}: {e}")
+        refused = [
+            p
+            for p in files_to_delete
+            if self._remove_scene_file(p, p in permanent, use_folder) is None
+        ]
+        if refused and (
+            self.sb.message_box(self._delete_prompt(refused, refused), "Yes", "No")
+            == "Yes"
+        ):
+            for path in refused:
+                self._remove_scene_file(path, True, use_folder)
 
         self.refresh_file_list()
+
+    def _discard(self, path: str, permanent: bool) -> Optional[bool]:
+        """*path* to the trash, or -- *permanent* -- deleted. True when it is
+        gone, ``None`` when the trash would not take it (it is untouched)."""
+        if permanent:
+            os.remove(path)
+            return True
+        return None if ptk.FileUtils.move_to_trash(path) is None else True
+
+    def _remove_scene_file(
+        self, path: str, permanent: bool, use_folder: bool
+    ) -> Optional[bool]:
+        """Remove one scene (:meth:`delete_scene`) with its metadata sidecar,
+        and its per-scene folder once that is empty.
+
+        Returns:
+            True when it is gone; ``None`` when the trash would not take it
+            (nothing touched); False when it could not be removed (logged).
+        """
+        try:
+            if self._discard(path, permanent) is None:
+                return None
+            where = (
+                "Deleted" if permanent else f"Moved to the {ptk.FileUtils.trash_name()}"
+            )
+            self.logger.info(f"{where}: {path}")
+
+            # The file's metadata sidecar goes with it (ptk.Metadata's
+            # "<file>.metadata.json" convention), the same way, so it neither
+            # outlives the scene it describes -- especially when sibling scenes
+            # keep the folder alive below -- nor misses a restore of it.
+            sidecar = path + ".metadata.json"
+            if os.path.exists(sidecar):
+                try:
+                    if self._discard(sidecar, permanent) is None:
+                        self.logger.warning(
+                            f"Kept sidecar {sidecar}: no trash takes it."
+                        )
+                except OSError as e:
+                    self.logger.warning(f"Could not remove sidecar {sidecar}: {e}")
+
+            if use_folder:
+                parent_dir = os.path.dirname(path)
+                # The per-scene folder goes only when ALL of these hold (a
+                # permanent delete cannot be taken back, and a restore from the
+                # Recycle Bin puts the scene back where it was):
+                # 1. Ownership: the folder is named for this scene (the
+                #    per-scene layout of the {name} structure). Case-
+                #    insensitive: Windows filenames -- "Env_v1.ma" in
+                #    folder "env" is scene-owned.
+                # 2. Not the project's own structure: "scenes_final.ma"
+                #    loose in a scenes root named "scenes" passes (1), and
+                #    must never take the root (or the workspace) with it.
+                # 3. Empty, now the scene and its sidecar are gone. Anything
+                #    left keeps it -- another version ("Env_v2.ma"), a
+                #    subfolder, and every file that is not a Maya scene (an
+                #    FBX or USD row of this same panel, a playblast): the
+                #    prompt named one file, so rmdir, never rmtree.
+                file_base = os.path.splitext(os.path.basename(path))[0].lower()
+                parent_name = os.path.basename(os.path.normpath(parent_dir)).lower()
+                owns_folder = bool(parent_name) and file_base.startswith(parent_name)
+                try:
+                    leftovers = os.listdir(parent_dir)
+                except OSError:
+                    leftovers = None  # cannot inspect: leave the folder alone
+
+                if (
+                    owns_folder
+                    and leftovers == []
+                    and not self._is_workspace_structure(parent_dir)
+                ):
+                    try:
+                        os.rmdir(parent_dir)
+                        self.logger.info(f"Deleted empty scene folder: {parent_dir}")
+                    except OSError as e:
+                        self.logger.warning(
+                            f"Could not remove scene folder {parent_dir}: {e}"
+                        )
+                else:
+                    self.logger.debug(
+                        f"Keeping folder '{parent_dir}'; not scene-owned, the "
+                        f"project's own structure, not empty, or it could not "
+                        f"be inspected (owns={owns_folder}, left={leftovers})."
+                    )
+
+        except Exception as e:
+            self.logger.error(f"Delete failed for {path}: {e}")
+            return False
+        return True

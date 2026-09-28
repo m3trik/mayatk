@@ -994,6 +994,25 @@ def _resolved_image_file(bpy, image):
     return path if os.path.isfile(path) else None
 
 
+def _maya_openable(path):
+    """*path* in a form Maya can open, or *path* itself.
+
+    Maya reads file paths through the SYSTEM ANSI code page: an image in a
+    project folder it cannot hold (Cyrillic on cp1252) became a file node
+    reading "proj ???/..." with outSize 0. pythontk's
+    ``AppLauncher.ansi_safe_path`` swaps such folders for their 8.3 names; where
+    pythontk is not importable the path passes unchanged.
+    """
+    if not path:
+        return path
+    _extend_sys_path()
+    try:
+        from pythontk.core_utils.app_launcher import AppLauncher
+    except Exception:  # noqa: BLE001 -- degrade, never fail the conversion
+        return path
+    return AppLauncher.ansi_safe_path(path)
+
+
 def _material_files(bpy, mat):
     """(files, image_node_count) -- every image-texture file feeding *mat*.
 
@@ -1013,7 +1032,7 @@ def _material_files(bpy, mat):
             if node.bl_idname == "ShaderNodeTexImage":
                 if node.image is not None:
                     node_count += 1
-                path = _resolved_image_file(bpy, node.image)
+                path = _maya_openable(_resolved_image_file(bpy, node.image))
                 if path and path not in files:
                     files.append(path)
             elif node.bl_idname == "ShaderNodeGroup":
@@ -1021,6 +1040,96 @@ def _material_files(bpy, mat):
 
     walk(mat.node_tree if mat.use_nodes else None, set())
     return files, node_count
+
+
+# Principled input -> the manifest's logical-channel vocabulary (resolved Maya-side
+# through ``ptk.MapRegistry.resolve_type_from_channel``). Copy of blendertk's
+# ``MayaBridge._PRINCIPLED_CHANNELS``; both socket spellings survive a Blender rename.
+# ``Normal`` is absent on purpose -- see ``_material_slots``.
+_PRINCIPLED_CHANNELS = {
+    "Base Color": "baseColor",
+    "Metallic": "metallic",
+    "Roughness": "roughness",
+    "Alpha": "opacity",
+    "Emission Color": "emission",
+    "Emission": "emission",
+    "Specular IOR Level": "specular",
+    "Specular": "specular",
+}
+
+
+def _material_slots(bpy, mat):
+    """{logical channel: file} for images whose destination is UNAMBIGUOUS.
+
+    Dependency-free copy of blendertk's ``MayaBridge._material_slots`` (this script
+    cannot import blendertk; mayatk's ``test_scene_import`` runs both over the same
+    graphs). The Maya side places textures by FILENAME, and a file named after a
+    product ("crate.png") classifies to nothing -- this map, traced from the graph,
+    is what lets the rebuild wire it anyway. Each image OUTPUT SOCKET is followed
+    forward to a Principled input through the converter nodes (Normal Map, Bump,
+    Invert, Separate Color, AO multiply); only a socket reaching exactly one channel
+    counts, and only a channel exactly one image claims is kept -- a packed map's
+    identity lives in its filename. ``Normal`` counts only through a Normal Map
+    (normal) or a Bump (bump) node. Node groups are not traced.
+    """
+    if not getattr(mat, "use_nodes", False) or mat.node_tree is None:
+        return {}
+
+    tree = mat.node_tree
+    outgoing = {}
+    by_socket = {}
+    for link in tree.links:
+        outgoing.setdefault(link.from_node.name, []).append(link)
+        by_socket.setdefault((link.from_node.name, link.from_socket.name), []).append(
+            link
+        )
+
+    def follow(links, via_bump, via_normal_map, seen):
+        found = set()
+        for link in links:
+            to_node = link.to_node
+            if to_node.bl_idname == "ShaderNodeBsdfPrincipled":
+                socket = link.to_socket.name
+                if socket == "Normal":
+                    if via_normal_map:
+                        found.add("normal")
+                    elif via_bump:
+                        found.add("bump")
+                else:
+                    channel = _PRINCIPLED_CHANNELS.get(socket)
+                    if channel:
+                        found.add(channel)
+                continue
+            if to_node.name in seen:
+                continue
+            found |= follow(
+                outgoing.get(to_node.name, []),
+                via_bump or to_node.bl_idname == "ShaderNodeBump",
+                via_normal_map or to_node.bl_idname == "ShaderNodeNormalMap",
+                seen | {to_node.name},
+            )
+        return found
+
+    candidates = {}
+    for node in tree.nodes:
+        if node.bl_idname != "ShaderNodeTexImage" or node.image is None:
+            continue
+        path = _resolved_image_file(bpy, node.image)
+        if not path:
+            continue
+        for socket in node.outputs:
+            links = by_socket.get((node.name, socket.name))
+            if not links:
+                continue
+            channels = follow(links, False, False, {node.name})
+            if len(channels) == 1:
+                candidates.setdefault(next(iter(channels)), []).append(path)
+
+    return {
+        channel: paths[0]
+        for channel, paths in candidates.items()
+        if len(set(paths)) == 1
+    }
 
 
 def collect_texture_manifest(bpy):
@@ -1067,6 +1176,13 @@ def collect_texture_manifest(bpy):
                 "fbx_material": mat.name,
                 "objects": [obj.name],
                 "files": files,
+                # Rides ALONGSIDE files, as blendertk's send manifest does: the
+                # Maya-side rebuild classifies by filename first and rescues only
+                # the images that classify to nothing through these.
+                "slots": {
+                    channel: _maya_openable(path)
+                    for channel, path in _material_slots(bpy, mat).items()
+                },
             }
             by_material[mat.name] = entry
             entries.append(entry)
@@ -1249,8 +1365,8 @@ def scene_data_sections(bpy, spell):
     any other tool record, so they cross as data and ``mtk.BlenderSceneImport``
     lands them 1:1. blendertk writes them (``DataNodes.transfer_sections`` over
     ``pythontk.RecordTransfer``), names spelled by *spell* as the carrier will
-    write them -- the ONE optional toolkit import in this otherwise
-    dependency-free script, guarded like the mayapy twins' mayatk pre-passes:
+    write them -- an optional toolkit import, guarded like this script's
+    pythontk ones and the mayapy twins' mayatk pre-passes:
     without blendertk nothing is carried, and a printed line says so.
     """
     _extend_sys_path()

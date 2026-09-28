@@ -168,9 +168,9 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                     "detached. Save manually inside RizomUV when done.",
                     "<b>pack_into_existing</b> — packs the selection's "
                     "shells into the empty space of the layout shared by "
-                    "every mesh using the selection's material(s); the "
-                    "existing shells don't move. Requires RizomUV 2022.2+ "
-                    "(hidden from the dropdown on older installs).",
+                    "every mesh using the selection's material(s), at that "
+                    "layout's texel density (shrunk only if they don't fit); "
+                    "the existing shells don't move.",
                 ],
             ),
             (
@@ -187,7 +187,8 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             ),
         ],
         "notes": [
-            "<b>pack</b> honours a shell selection: select the faces or UVs "
+            "<b>pack</b> and <b>pack_into_existing</b> honour a shell "
+            "selection: select the faces or UVs "
             "of the shells to pack (any part of a shell picks all of it) and "
             "only those move -- the objects' other shells stay exactly where "
             "they are and are packed around. The other presets work on whole "
@@ -225,7 +226,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
         Presets carrying an ``@min_rizom`` header marker above the
         installed Rizom version are omitted entirely (mirrors the
         bridge-side gate in ``process_with_rizomuv``) -- e.g.
-        ``pack_into_existing`` needs the >= 2022.2 pack API.
+        ``unwrap_hybrid`` needs the >= 2022 segmenter pair.
         """
         version = self.bridge.rizom_version
         pairs = []
@@ -252,7 +253,7 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # the existing layout: the processed object set expands to every mesh
     # sharing the selection's materials (the material defines "the map"),
     # and the selection itself becomes select_objects= so only its
-    # islands move. Version-gated >= 2022.2 via its @min_rizom header.
+    # islands (its shells, for a component selection) move.
     PACK_INTO_EXISTING_PRESET = "pack_into_existing"
 
     def b000(self):
@@ -303,7 +304,10 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                     )
                 elif preset == self.PACK_INTO_EXISTING_PRESET:
                     all_objs, new_objs = RizomUVBridge.expand_by_materials(selection)
-                    if len(all_objs) <= len(new_objs):
+                    # A component selection leaves its meshes' other shells
+                    # in the layout; the bridge refuses one that leaves none.
+                    partial = any("." in str(item) for item in selection)
+                    if len(all_objs) <= len(new_objs) and not partial:
                         self.bridge.logger.warning(
                             "No other meshes share the selection's "
                             "material(s) -- there is no existing layout to "
@@ -311,15 +315,14 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
                         )
                         return
                     self.bridge.logger.info(
-                        f"Packing {len(new_objs)} object(s) into the layout "
-                        f"of {len(all_objs) - len(new_objs)} other mesh(es) "
-                        "sharing their material(s)."
+                        "Packing the selection into the layout of the "
+                        f"{len(all_objs)} mesh(es) sharing its material(s)."
                     )
                     self.bridge.process_with_rizomuv(
                         all_objs,
                         preset=preset,
                         params=params,
-                        select_objects=new_objs,
+                        select_objects=selection,
                     )
                 else:
                     self.bridge.process_with_rizomuv(

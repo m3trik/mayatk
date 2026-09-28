@@ -191,8 +191,9 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="bool",
         default=True,
         tooltip=(
-            "After a roundtrip bake, build a StingrayPBS network from each\n"
-            "baked texture set and assign it to the bake-target meshes."
+            "After a roundtrip bake, rebuild each baked texture set as a\n"
+            "material and assign it to the bake-target meshes (a re-bake\n"
+            "replaces it rather than adding another)."
         ),
     ),
     # ------------------------------------------------------------------
@@ -207,7 +208,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
                 "Set From Selection",
                 "set_bake_source_from_selection",
                 "Store the current selection as this scene's bake source\n"
-                "(an objectSet; saves with the scene, shared with the\n"
+                "(a set saved with the scene, shared with the\n"
                 "Substance bridge). The bake exports it as a companion FBX\n"
                 "and pairs it as the bake-from side -- no name suffixes\n"
                 "needed.",
@@ -228,8 +229,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
             ),
         ],
         tooltip=(
-            "The scene's bake source (a scene objectSet shared with the\n"
-            "Substance bridge) -- the geometry whose detail and textures\n"
+            "The scene's bake source (a set saved with the scene, shared\n"
+            "with the Substance bridge) -- the geometry whose detail and textures\n"
             "bake onto the target. Define it once from a selection; bake\n"
             "sends then export it automatically as the bake-from side."
         ),

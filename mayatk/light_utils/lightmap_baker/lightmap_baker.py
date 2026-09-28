@@ -83,8 +83,9 @@ class LightmapBakeResult:
             hidden objects.
         unbaked: Objects the bake was asked for and produced nothing for (a
             cancel, a failed render). They keep any map they already had.
-        retired: Map files the bake superseded and deleted -- what its
-            objects read before, that nothing reads now
+        retired: Map files the bake superseded and set aside (the Recycle
+            Bin, or a ``_superseded`` folder beside them) -- what its objects
+            read before, that nothing reads now
             (:meth:`LightmapRecords.superseding`).
         refused: Why nothing was baked, as a sentence for the artist, or
             ``None``.
@@ -460,7 +461,7 @@ class LightmapBaker(ptk.LoggingMixin):
            wrote -- once, so re-recording them can never apply it twice.
         5. :meth:`LightmapRecords.commit` records each map with its rect, and
            the maps the baked objects read before -- when this scene wrote
-           them and nothing reads them now -- are deleted
+           them and nothing reads them now -- are set aside
            (:meth:`LightmapRecords.superseding`): a bake after an output
            option changed leaves no old maps behind.
         6. :meth:`bake_verdict` reads the finished maps' level.
@@ -469,8 +470,8 @@ class LightmapBaker(ptk.LoggingMixin):
         cancel, a failed render) keeps the map it had, and that map is intact:
         a bake never writes a file another object reads
         (:meth:`LightmapRecords.claims`), so the only file it replaces is one
-        read by the very objects it rewrote -- and the only files it deletes
-        are ones no object reads any more.
+        read by the very objects it rewrote -- and the only files it sets
+        aside are ones no object reads any more.
 
         Parameters:
             objects: Mesh transforms, their shapes or components; ``None``

@@ -347,7 +347,9 @@ class _TextureTasksMixin(_TaskDataMixin):
         index: Dict[str, List[str]] = {}
         src_dir = EnvUtils.get_env_info("sourceimages")
         if src_dir and os.path.isdir(src_dir):
-            for walk_root, _dirs, files in os.walk(src_dir):
+            # Never into a folder of stale copies (a set-aside ``_superseded``
+            # map, the Recycle Bin, a sync cache): a lone copy there was rebound.
+            for walk_root, _dirs, files in ptk.FileDependencies.walk(src_dir):
                 for f in files:
                     index.setdefault(f.lower(), []).append(
                         os.path.join(walk_root, f).replace("\\", "/")

@@ -119,6 +119,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self._import_created: set = set()
         # Per-run placeholder overrides (set by process_with_rizomuv)
         self._params: dict = {}
+        # What this run may move, per shape (see _moving_shells); empty = every
+        # mesh sent. Decides whose unchanged UVs are worth a warning.
+        self._moving: dict = {}
 
     @property
     def rizom_path(self):
@@ -299,21 +302,21 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                     Keys map to ``__KEY__`` tokens in the script (see
                     ``parameters.PARAMS`` for the registered set).
                     Unknown keys are passed through verbatim.
-            select_objects: Subset of *objects* whose islands the script
-                    should select in Rizom (rendered into the script's
-                    ``PACK_SELECT_NAMES`` token as a Lua table of exported
-                    island-group names). Required by presets that operate
-                    on a sub-selection -- e.g. ``pack_into_existing`` packs
-                    these objects' islands into the gaps left by the rest.
+            select_objects: What moves, for a preset that packs a subset of
+                    *objects* INTO the layout the rest of them form
+                    (``pack_into_existing``, which requires it): objects move
+                    whole, components name the UV shells that move (as for
+                    ``pack``). Their faces carry the subset tag the preset's
+                    ``PACK_SELECT_NAMES`` token receives; every other shell of
+                    *objects* stays exactly where it is and is packed around.
             skip_instances: When True (default), collapse true DAG instances
                     (transforms sharing one shape) to a single representative
                     before export. RizomUV would otherwise unwrap each copy
                     independently and the UV transfer back onto the shared
                     shape is last-write-wins -- wasteful and non-deterministic.
                     The transfer to the representative propagates to every
-                    instance automatically (shared shape). Ignored when a
-                    preset selects a sub-set of islands (the select-objects
-                    mapping needs every named object exported).
+                    instance automatically (shared shape), and the subset tag
+                    is keyed by shape, so it survives whichever instance stays.
         """
         from mayatk.uv_utils.rizom_bridge import parameters as _params
 
@@ -330,9 +333,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         if resolved is not None:
             self.script_path = resolved
 
-        # Preset-level version gate (e.g. pack_into_existing needs the
-        # ZomPack WorkingSet field, absent below 2022.2). Fails loudly
-        # instead of letting an unsupported field no-op or crash Rizom.
+        # Preset-level version gate (e.g. unwrap_hybrid's segmenter pair
+        # access-violates 2020.1). Fails loudly instead of letting an
+        # unsupported field no-op or crash Rizom.
         required = _params.Parameters.preset_min_version(resolved or "")
         if required and self.rizom_version < required:
             raise RuntimeError(
@@ -341,8 +344,8 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 f"{'.'.join(map(str, self.rizom_version))} ({self.rizom_path})."
             )
 
-        # Presets that select a sub-set of islands need to know which
-        # objects that is -- refuse to render a script whose selection
+        # Presets that pack a sub-set of islands INTO the rest need to know
+        # which objects that is -- refuse to render a script whose selection
         # token would otherwise survive as a Lua syntax error.
         needs_selection = bool(resolved) and "__PACK_SELECT_NAMES__" in resolved
         if needs_selection and not select_objects:
@@ -357,7 +360,10 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # else, say that the whole object is processed rather than widen the
         # selection silently -- that silence was the live report (every shell
         # packed after some were deliberately left out of the selection).
-        shell_subset, picked, total = self._shell_subset(objects)
+        # select_objects names the subset instead when the preset takes it.
+        shell_subset, picked, total = (
+            ({}, 0, 0) if needs_selection else self._shell_subset(objects)
+        )
         if shell_subset and not (resolved and "__PACK_SUBSET__" in resolved):
             self.logger.warning(
                 f"'{preset or 'script'}' works on whole objects: all shells of "
@@ -377,12 +383,11 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                     "shells fill the free space of the whole target tile."
                 )
 
-        # Collapse true DAG instances to one representative per shared shape
-        # (unless a preset needs every named object exported for its
-        # island-group selection). The UV transfer to the representative's
-        # shape propagates to all instances -- see the docstring. The shell
-        # subset is keyed by shape, so it survives whichever instance stays.
-        if skip_instances and not needs_selection and len(original_transforms) > 1:
+        # Collapse true DAG instances to one representative per shared shape.
+        # The UV transfer to the representative's shape propagates to all
+        # instances -- see the docstring. The shell subset is keyed by shape,
+        # so it survives whichever instance stays.
+        if skip_instances and len(original_transforms) > 1:
             deduped = NodeUtils.filter_duplicate_instances(original_transforms)
             if len(deduped) < len(original_transforms):
                 self.logger.info(
@@ -391,6 +396,16 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                     "unwrapped; the result applies to all instances."
                 )
                 original_transforms = deduped
+
+        # What may move, per shape (see _moving_shells); empty = a plain run.
+        if needs_selection:
+            moving = self._moving_shells(select_objects)
+            self._check_pack_into(moving, original_transforms)
+        elif shell_subset:
+            moving = self._moving_shells(original_transforms, shell_subset)
+        else:
+            moving = {}
+        self._moving = moving
 
         self._params = params or {}
 
@@ -408,15 +423,11 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             # export duplicates are created and deleted inside this block, so
             # nothing it touches outlives the call.
             with CoreUtils.undo_disabled():
-                subset_tag = self._export_objects(original_transforms, shell_subset)
+                subset_tag = self._export_objects(original_transforms, moving)
                 if subset_tag:
+                    token = "PACK_SELECT_NAMES" if needs_selection else "PACK_SUBSET"
                     self._params = dict(self._params)
-                    self._params["PACK_SUBSET"] = self._lua_strings([subset_tag])
-                if needs_selection:
-                    self._params = dict(self._params)
-                    self._params.setdefault(
-                        "PACK_SELECT_NAMES", self._select_names_lua(select_objects)
-                    )
+                    self._params[token] = self._lua_strings([subset_tag])
 
             self._execute_uv_script()
 
@@ -494,8 +505,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             except Exception as opt_err:  # noqa: BLE001 - best-effort, never blocks the import
                 self.logger.debug(f"FBX import options not pinned: {opt_err}")
 
-            # Use Maya's file command for reliable namespace import
-            import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{self.export_path}";'
+            # Use Maya's file command for reliable namespace import. Maya opens
+            # files through the ANSI code page: under a folder it cannot hold (a
+            # Cyrillic user name, so %TEMP%) the export failed with "Could not
+            # save file" -- every Maya file op here takes the ANSI-safe spelling.
+            fbx_path = Path(AppLauncher.ansi_safe_path(self.export_path)).as_posix()
+            import_cmd = f'file -import -type "FBX" -ignoreVersion -mergeNamespacesOnClash false -namespace "{import_namespace}" -options "fbx" -pr "{fbx_path}";'
             self.logger.debug(f"Executing command: {import_cmd}")
             mel.eval(import_cmd)
 
@@ -547,7 +562,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 existing_transforms = set(cmds.ls(type="transform") or [])
 
                 mel.eval(
-                    f'file -import -type "FBX" -ignoreVersion -options "fbx" -pr "{self.export_path}";'
+                    f'file -import -type "FBX" -ignoreVersion -options "fbx" -pr "{Path(AppLauncher.ansi_safe_path(self.export_path)).as_posix()}";'
                 )
 
                 new_transforms = set(cmds.ls(type="transform") or [])
@@ -583,7 +598,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         return imported_transforms
 
-    def _export_objects(self, objects, shell_subset=None):
+    def _export_objects(self, objects, moving=None):
         """Export specified Maya objects to an FBX file after duplicating with a unique suffix.
 
         Strategy:
@@ -596,11 +611,11 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
            name under different parents (``|grpA|mesh`` / ``|grpB|mesh``)
            would otherwise collapse to the same map key and cross-wire the
            UV transfer on re-import.
-        2. With a *shell_subset* (see :meth:`_shell_subset`), tag the faces
-           that may move with one throwaway material on the copies: the FBX
-           carries it per polygon, and the preset's ``Materials`` selection
-           turns it back into Rizom's island selection. A copy whose original
-           is absent from the subset is tagged whole -- it packs whole.
+        2. With *moving* (see :meth:`_moving_shells`), tag the faces that may
+           move with one throwaway material on the copies: the FBX carries it
+           per polygon, and the preset's ``Materials`` selection turns it back
+           into Rizom's island selection. A copy whose shape is absent from
+           *moving* is left untagged -- every shell of it stays fixed.
         3. Export only the duplicated (suffixed) transforms so re-import will not overwrite originals.
         4. Delete the duplicates and the tag locally (their data lives inside the exported file now).
         5. Later, on import, we detect suffixed names and map them back to originals for UV transfer.
@@ -618,7 +633,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 "No mesh geometry found in the objects supplied for export."
             )
 
-        tag = self._make_subset_tag() if shell_subset else None
+        tag = self._make_subset_tag() if moving else None
         duplicates = []
         try:
             for i, orig in enumerate(original_transforms):
@@ -660,7 +675,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             if tag:
                 # Outside the per-copy guard on purpose: a copy that silently
                 # missed its tag would ship with every shell FIXED.
-                self._tag_subset_faces(duplicates, shell_subset, tag[1])
+                self._tag_subset_faces(duplicates, moving, tag[1])
 
             # Ensure the export directory exists
             export_dir = Path(self.export_path).parent
@@ -681,7 +696,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 # no producer stamps ``data_export`` into the user's scene.
                 with FbxUtils.scratch_export():
                     cmds.file(
-                        self.export_path,
+                        AppLauncher.ansi_safe_path(
+                            self.export_path
+                        ),  # see _import_objects
                         exportSelected=True,
                         type="FBX export",
                         force=True,
@@ -758,6 +775,47 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             total += cmds.polyEvaluate(node, uvShell=True) or len(shells)
         return subset, picked, total
 
+    @classmethod
+    def _moving_shells(cls, objects, shell_subset=None) -> dict:
+        """What a subset pack may move: ``{shape uuid: face ids | None}``.
+
+        Every mesh *objects* names moves whole (``None``), except the ones
+        *shell_subset* covers partly (see :meth:`_shell_subset`; computed from
+        *objects* when omitted), which move only those faces' shells. A shape
+        absent from the result stays FIXED.
+        """
+        if shell_subset is None:
+            shell_subset = cls._shell_subset(objects)[0]
+        moving = {
+            cls._shape_uuid(t): None for t in Components.get_mesh_transforms(objects)
+        }
+        moving.pop(None, None)
+        moving.update(shell_subset)
+        return moving
+
+    @classmethod
+    def _check_pack_into(cls, moving, transforms) -> None:
+        """Refuse a pack INTO a layout that *moving* leaves no part of.
+
+        Raises:
+            ValueError: *moving* names no shell of *transforms* (select_objects
+                outside the objects sent), or every shell of them (no layout
+                to pack into: its density is undefined, and a plain pack is
+                what that would be).
+        """
+        states = [moving.get(cls._shape_uuid(t), False) for t in transforms]
+        if not any(state is not False for state in states):
+            raise ValueError(
+                "select_objects did not match any exported object -- they "
+                "must be a subset of the objects passed for processing."
+            )
+        if all(state is None for state in states):
+            raise ValueError(
+                "Every shell sent is selected to move: there is no existing "
+                "layout to pack into. Send the meshes that form the layout "
+                "too, or use the 'pack' preset."
+            )
+
     @staticmethod
     def _lua_strings(names) -> str:
         """*names* as a Lua table of string literals: ``{"a", "b"}``."""
@@ -779,11 +837,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
         return mat, sg
 
-    def _tag_subset_faces(self, duplicates, shell_subset, shading_group) -> None:
+    def _tag_subset_faces(self, duplicates, moving, shading_group) -> None:
         """Assign *shading_group* to each export copy's faces that may move."""
         for dup in duplicates:
             orig = self._export_name_map[CoreUtils.short_name(CoreUtils.leaf_name(dup))]
-            faces = shell_subset.get(self._shape_uuid(orig))
+            uuid = self._shape_uuid(orig)
+            if uuid not in moving:
+                continue  # fixed: none of its shells move
+            faces = moving[uuid]
             if faces is None:
                 members = [f"{dup}.f[*]"]
             else:
@@ -842,9 +903,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         self.logger.debug(f"Executing command: {exe} -cfi {self.script_path}")
         try:
+            # RizomUV reads its command line in the ANSI code page: a -cfi script
+            # under a folder that page cannot hold (a Cyrillic user name) hung
+            # the run to the timeout.
             result = AppLauncher.run(
                 exe,
-                args=["-cfi", self.script_path],
+                args=["-cfi", AppLauncher.ansi_safe_path(self.script_path)],
                 timeout=self.timeout,
             )
         except subprocess.TimeoutExpired as e:
@@ -1109,8 +1173,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # Fingerprint first: a transfer that reports success and lands nothing
         # is the failure mode this run has to be able to name. Live history
         # around a deformer used to eat the write silently, and the panel
-        # signed the run off as applied -- see _warn_unchanged.
-        before = {d: self._uv_fingerprint(d) for _, d in pairs}
+        # signed the run off as applied -- see _warn_unchanged. Only the meshes
+        # the run was meant to move: the fixed side of a subset pack comes back
+        # unchanged by design.
+        before = {
+            d: self._uv_fingerprint(d) for _, d in pairs if self._meant_to_move(d)
+        }
         src_list = [s for s, _ in pairs]
         dst_list = [d for _, d in pairs]
         # These pairs are already verified 1:1 correspondences (via
@@ -1122,8 +1190,15 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # Count what ``transfer_uvs`` REPORTS doing (it answers one tuple per
         # transfer performed), not what it was asked to do -- the whole point
         # of carrying a count out is to stop assuming the two are equal.
+        # ``preserve_uv_ids``: ``transferAttributes`` renumbers every target's
+        # UV ids to the FBX import's order, the meshes RizomUV never moved
+        # included (measured: a fixed cube's id table shifted by 0.4 with every
+        # face keeping its UVs). A mesh back unchanged is now not written, and
+        # one whose UVs only moved keeps its ids; a re-cut layout transfers.
         try:
-            done = UvUtils.transfer_uvs(src_list, dst_list, match_by_similarity=False)
+            done = UvUtils.transfer_uvs(
+                src_list, dst_list, match_by_similarity=False, preserve_uv_ids=True
+            )
             self.logger.debug("Batch UV transfer completed successfully!")
             transferred = len(done)
         except Exception as batch_err:
@@ -1133,7 +1208,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
             transferred = 0
             for s, d in pairs:
                 try:
-                    done = UvUtils.transfer_uvs([s], [d], match_by_similarity=False)
+                    done = UvUtils.transfer_uvs(
+                        [s], [d], match_by_similarity=False, preserve_uv_ids=True
+                    )
                     self.logger.debug(f"Pairwise UV transfer success: {s} -> {d}")
                     transferred += len(done)
                 except Exception as pair_err:
@@ -1143,6 +1220,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         self._warn_unchanged(before)
         return transferred
+
+    def _meant_to_move(self, mesh) -> bool:
+        """Whether this run was meant to move any of *mesh*'s UVs.
+
+        Every mesh sent, in a plain run; in a subset pack only those
+        :attr:`_moving` names -- a shape absent from it is fixed.
+        """
+        return not self._moving or self._shape_uuid(mesh) in self._moving
 
     @staticmethod
     def _uv_fingerprint(mesh):
@@ -1267,35 +1352,14 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
                 except Exception as node_err:  # noqa: BLE001
                     self.logger.warning(f"Could not delete {label} {node}: {node_err}")
 
-    def _select_names_lua(self, select_objects) -> str:
-        """Render *select_objects* as a Lua table of exported group names.
-
-        Must run after :meth:`_export_objects` -- it resolves each object
-        through ``_export_name_map`` to the suffixed duplicate name the FBX
-        (and therefore Rizom's imported island groups) actually carries.
-        """
-        # Both sides resolve through the SAME normalizer as the export set, so
-        # the comparison is full-path against full-path -- a short name would
-        # re-expand to every node that happens to share its leaf.
-        sel_set = set(Components.get_mesh_transforms(select_objects) or [])
-        names = [
-            dup for dup, orig in self._export_name_map.items() if str(orig) in sel_set
-        ]
-        if not names:
-            raise ValueError(
-                "select_objects did not match any exported object -- "
-                "they must be a subset of the objects passed for processing."
-            )
-        return self._lua_strings(names)
-
     @staticmethod
     def expand_by_materials(objects) -> "tuple[list[str], list[str]]":
         """Expand *objects* to every mesh sharing their assigned materials.
 
         Companion to the ``pack_into_existing`` preset: the caller selects
-        only the NEW meshes; the full set Rizom needs (so the existing
-        layout is present as the locked forbidden area) is every mesh that
-        uses the same material(s) -- the material defines "the map".
+        only the NEW meshes (or shells); the full set Rizom needs (so the
+        existing layout is present as the fixed, packed-around area) is every
+        mesh that uses the same material(s) -- the material defines "the map".
 
         Returns ``(all_objects, selected_objects)`` as long names, where
         *selected_objects* is the normalized input (the pack subset).
@@ -1354,7 +1418,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         """
         from mayatk.uv_utils.rizom_bridge import parameters as _params
 
-        export_path_normalized = str(self.export_path).replace("\\", "/")
+        # RizomUV 2020.1 reads the UTF-8 bytes of a Lua path as ANSI, so any
+        # non-ASCII component (even an "e-acute" cp1252 holds) makes ZomLoad /
+        # ZomSave hang to the timeout: name the payload by its 8.3 form.
+        export_path_normalized = str(
+            AppLauncher.ansi_safe_path(self.export_path, ascii_only=True)
+        ).replace("\\", "/")
         is_fbx = Path(self.export_path).suffix.lower() == ".fbx"
         version = self.rizom_version
 
@@ -1537,7 +1606,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         # doesn't terminate when the script finishes).
         proc = AppLauncher.launch(
             exe,
-            args=["-cfi", send_script_path],
+            args=["-cfi", AppLauncher.ansi_safe_path(send_script_path)],
             detached=True,
         )
         if proc is None:
@@ -1568,7 +1637,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         try:
             with FbxUtils.scratch_export():  # not a deliverable: no preparers
                 cmds.file(
-                    export_path,
+                    AppLauncher.ansi_safe_path(export_path),  # see _import_objects
                     exportSelected=True,
                     type="FBX export",
                     force=True,
@@ -1588,7 +1657,12 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         """
         from mayatk.uv_utils.rizom_bridge import parameters as _params
 
-        export_path_normalized = str(export_path).replace("\\", "/")
+        # RizomUV 2020.1 reads the UTF-8 bytes of a Lua path as ANSI, so any
+        # non-ASCII component (even an "e-acute" cp1252 holds) makes ZomLoad /
+        # ZomSave hang to the timeout: name the payload by its 8.3 form.
+        export_path_normalized = str(
+            AppLauncher.ansi_safe_path(export_path, ascii_only=True)
+        ).replace("\\", "/")
         is_fbx = Path(export_path).suffix.lower() == ".fbx"
         version = self.rizom_version
 
@@ -1677,7 +1751,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         self.logger.info(f"Binding {len(existing)} texture(s) in RizomUV.")
         lines = []
         for path in existing:
-            normalized = str(path).replace("\\", "/")
+            # ASCII inside the Lua, as for the FBX (see _construct_send_script).
+            normalized = str(AppLauncher.ansi_safe_path(path, ascii_only=True))
+            normalized = normalized.replace("\\", "/")
             lines.append(
                 f'pcall(function() ZomLoadTexture({{File={{Path="{normalized}"}}}}) end)'
             )

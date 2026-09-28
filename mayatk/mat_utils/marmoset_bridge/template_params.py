@@ -50,7 +50,7 @@ DEFAULTS: Dict[str, Any] = {
     "MAP_METALNESS": True,
     "MAP_EMISSIVE": False,
     # Source/target pairing. BAKE_SOURCE_SET is the panel's action row
-    # (Set/Select/Clear the scene's bake-source objectSet) -- a command
+    # (Set/Select/Clear the scene's bake-source set) -- a command
     # widget, not a value; the empty default keeps its echo token
     # substitutable.
     "BAKE_SOURCE_SET": "",
@@ -75,8 +75,8 @@ DEFAULTS: Dict[str, Any] = {
     "CAGE_STANDOFFS": {},
     "CAGE_HOST_DIAGONAL": 0.0,
     "IGNORE_BACKFACES": True,
-    # Host-side: wire the roundtrip's baked maps into a StingrayPBS material
-    # assigned to the bake-target meshes. Echo-referenced by bake.py.
+    # Host-side: wire the roundtrip's baked maps into a material assigned
+    # to the bake-target meshes. Echo-referenced by bake.py.
     "ASSIGN_MATERIAL": True,
     # Look-dev
     "SKY_PRESET": "Marmoset Skies/Hangar.tbsky",

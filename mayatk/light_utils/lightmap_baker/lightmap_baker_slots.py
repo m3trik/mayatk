@@ -930,8 +930,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if result.retired:
             n = len(result.retired)
             notes.append(
-                f" Deleted {n} superseded map{'s' if n != 1 else ''} "
-                "nothing reads any more."
+                f" Moved {n} superseded map{'s' if n != 1 else ''} nothing reads "
+                "any more to the Recycle Bin (or a _superseded folder beside them)."
             )
         if result.unbaked:
             notes.append(

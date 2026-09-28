@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-7794%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-7895%20passed-brightgreen.svg)](../test/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -41,7 +41,7 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `node_utils` | `NodeUtils`, `Attributes`, Channels tool, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
-| `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow rigs |
+| `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow / [articulated](articulated_rig.md) rigs |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
 | `uv_utils` | UV utilities, Rizom bridge |
 | `xform_utils` | Transforms, matrices, pivot watcher |
@@ -132,6 +132,7 @@ One-click hand-offs that export the selection and drive the target app with a te
 - `NamespaceSandbox` — import files into disposable namespaces for analysis or object swapping, with guaranteed cleanup.
 - `HierarchySync` — diff a working scene against a reference and repair it: create stubs, quarantine extras, fix fuzzy renames and reparents.
 - `TubeRig` / `WheelRig` / `ShadowRig` — rig builders: FK / spline-IK / anchor chains from a mesh centerline, expression-driven wheel rotation, fake contact shadows.
+- `ArticulatedRig` — rigid parts on hinge / swivel / ball / slide joints, proposed from the geometry; the skeleton ships with an `articulation` record so a hand can grab it in Unity and the WebXR preview, solved as the Maya Grab Tool solves it.
 - `ImageTracer` — trace images or Blue Pencil strokes into curves and meshes.
 - `DevTools` / `WidgetInspector` — grep Maya's MEL source and globals; walk, snapshot, and diff Maya's live Qt widget tree.
 - `StyleSetter` — restyle Maya's scriptable viewport colors to match another DCC.
@@ -172,6 +173,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 - **[Lightmap Baker](lightmap_baker.md)** — Arnold lighting baked into engine lightmaps: the panel, presets shared with the headless API, the Exclude set, where the maps land, and how the engine binds them.
+- **[Articulated Rig](articulated_rig.md)** — a prop of rigid parts (a lamp, a magnifier arm) rigged from its geometry: the joint types and how they are found, the rig, the `articulation` record the Unity and WebXR runtimes pose, and grab semantics.
 - **[Emissive groups → Unity](emissive_groups.md)** — runtime-toggleable emissive regions: one all-on emissive map, per-group gating via vertex-color or mask-texture encoding; cross-package SSoT (pythontk region-mask engine, blendertk mirror, unitytk templates).
 - **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk) — what `WebXrPreview` builds and what survives the trip: lightmap carriage through a slot-less format, the `SceneState` sidecar sections that repair FBX translation loss, normal-map wiring, and the size/GPU-memory budget.
 
