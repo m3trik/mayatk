@@ -210,6 +210,9 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`nurbs_utils/image_tracer.py`](#nurbs_utils--image_tracer)
 - [`render_utils/_render_utils.py`](#render_utils--_render_utils) — Render-control helpers.
 - [`rig_utils/_rig_utils.py`](#rig_utils--_rig_utils)
+- [`rig_utils/articulated_rig/_articulated_rig.py`](#rig_utils--articulated_rig--_articulated_rig) — Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
+- [`rig_utils/articulated_rig/articulated_rig_slots.py`](#rig_utils--articulated_rig--articulated_rig_slots) — Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.
+- [`rig_utils/articulated_rig/grab_tool.py`](#rig_utils--articulated_rig--grab_tool) — The viewport grab for articulated rigs: press on a rigged part, drag, let go.
 - [`rig_utils/controls.py`](#rig_utils--controls)
 - [`rig_utils/rig_graph_build.py`](#rig_utils--rig_graph_build) — Build a RigGraph in Maya -- Maya as the TARGET of the rig-transfer stack.
 - [`rig_utils/rig_graph_extract.py`](#rig_utils--rig_graph_extract) — Read a Maya rig into a RigGraph -- phase 2 of the rig-transfer stack.
@@ -949,8 +952,9 @@ Persistence and restore engine for SmartBake's nondestructive manifest.
   - `BakeSessionStore.reconnect(src: str, dst: str, factor: Optional[float] = None) -> None` *(static)* — Connect *src* to *dst* and put the recorded conversion *factor*
   - `BakeSessionStore.snapshot_connections(plug: str) -> List[List[dict]]` *(static)* — Record incoming connection pairs for *plug* (and its parent compound).
   - `BakeSessionStore.snapshot_conversions(node: str, channels: Iterable[str]) -> Dict[str, Any]` *(static)* — Record the unit-conversion factor on each of *node*'s *channels*.
+  - `BakeSessionStore.remove_override_layer(session: dict, layer: Optional[str] = None, warnings: Optional[List[str]] = None) -> Optional[str]` *(static)* — Delete a bake's override layer and put back the conversions it hid.
   - `BakeSessionStore.restore_session(session: dict) -> 'RestoreResult'` *(static)* — Reverse everything recorded in *session*.
-- **[`class RestoreResult`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L1070)** — Result container for ``SmartBake.restore()``.
+- **[`class RestoreResult`](mayatk/mayatk/anim_utils/smart_bake/bake_session.py#L1100)** — Result container for ``SmartBake.restore()``.
 
 <a id="anim_utils--smart_bake--smart_bake_slots"></a>
 ### `anim_utils/smart_bake/smart_bake_slots.py`
@@ -2006,17 +2010,17 @@ Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as 
 Open a .blend / glTF headlessly (blender --background) and export it as FBX for a Maya import.
 
 - [`open_source(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L296) — Load SRC_PATH into the conversion session.
-- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L376) — Manifest entries for every textured material on an exportable object,
-- [`sanitize_names(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L453) — Rename objects and materials to names Maya can hold;
-- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L534) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
-- [`collect_visibility(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L616) — ``{object name: [[frame, visibility], ...]}`` -- the manifest's ``visibility``
-- [`collect_empties(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L694) — ``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
-- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L717) — The scene's time setup -- the manifest's ``scene`` section, the one part
-- [`write_texture_manifest(entries, scene_materials, empties, scene, path, scene_data=None, rig=None, visibility=None, instances=None)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L745) — Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
-- [`stand_in_dropped_objects(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L800) — Give every object the FBX exporter would drop an Empty that ships instead.
-- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L850) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
-- [`scene_data_sections(bpy, spell)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L897) — The scene's portable records as manifest sections (``shots``,
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L1064)
+- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L485) — Manifest entries for every textured material on an exportable object,
+- [`sanitize_names(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L569) — Rename objects and materials to names Maya can hold;
+- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L650) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
+- [`collect_visibility(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L732) — ``{object name: [[frame, visibility], ...]}`` -- the manifest's ``visibility``
+- [`collect_empties(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L810) — ``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
+- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L833) — The scene's time setup -- the manifest's ``scene`` section, the one part
+- [`write_texture_manifest(entries, scene_materials, empties, scene, path, scene_data=None, rig=None, visibility=None, instances=None)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L861) — Sidecar for what FBX cannot carry, consumed by BlenderSceneImport:
+- [`stand_in_dropped_objects(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L916) — Give every object the FBX exporter would drop an Empty that ships instead.
+- [`export_fbx(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L966) — Full-fidelity FBX export with per-flag tolerance across Blender versions.
+- [`scene_data_sections(bpy, spell)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L1013) — The scene's portable records as manifest sections (``shots``,
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L1180)
 - [`SRC_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L43) — constant
 - [`OUT_FBX`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L44) — constant
 - [`EMBED_TEXTURES`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L45) — constant
@@ -2025,7 +2029,7 @@ Open a .blend / glTF headlessly (blender --background) and export it as FBX for 
 - [`EXTRA_SYS_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L51) — constant
 - [`RIG_MODE`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L54) — constant
 - [`RIG_CAPABILITY`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L55) — constant
-- [`FBX_DROPPED_TYPES`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L797) — constant
+- [`FBX_DROPPED_TYPES`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene.py#L913) — constant
 
 <a id="env_utils--blender_bridge--templates--_import_scene_usd"></a>
 ### `env_utils/blender_bridge/templates/_import_scene_usd.py`
@@ -2047,12 +2051,12 @@ Open a .blend headlessly (blender --background) and export it as USD for a Maya 
 - [`collect_visibility(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L847) — ``{object name: [[frame, visibility], ...]}`` -- the manifest's ``visibility``
 - [`hide_is_animated(obj)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L925) — True when *obj*'s show/hide is keyed.
 - [`collect_empties(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L941) — ``[{name, display_type}, ...]`` for the scene's Empties (node-type sidecar).
-- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1026) — Manifest entries for every textured material on an exportable object,
-- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1096) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
-- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1153) — The scene's time setup -- the manifest's ``scene`` section, the one part
-- [`write_manifest(bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None, visibility=None)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1181) — Sidecar beside the USD carrying what the flat export cannot: instance
-- [`scene_data_sections(bpy, spell)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1244) — The scene's portable records as manifest sections (``shots``,
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1411)
+- [`collect_texture_manifest(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1135) — Manifest entries for every textured material on an exportable object,
+- [`collect_instance_groups(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1212) — Blender linked duplicates -> ``[[sanitized prim names sharing one mesh], ...]``.
+- [`scene_settings(bpy)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1269) — The scene's time setup -- the manifest's ``scene`` section, the one part
+- [`write_manifest(bpy, scene, materials=None, scene_materials=None, scene_data=None, rig=None, visibility=None)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1297) — Sidecar beside the USD carrying what the flat export cannot: instance
+- [`scene_data_sections(bpy, spell)`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1360) — The scene's portable records as manifest sections (``shots``,
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L1527)
 - [`SRC_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L42) — constant
 - [`OUT_USD`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L43) — constant
 - [`INCLUDE_ANIMATION`](mayatk/mayatk/env_utils/blender_bridge/templates/_import_scene_usd.py#L44) — constant
@@ -2457,7 +2461,7 @@ Reference Manager controller — the panel-facing layer over the engine.
   - `ReferenceManagerController.convert_to_assembly(self)`
   - `ReferenceManagerController.save_scene(self)` — Save the current scene to the workspace, prompting for a name.
   - `ReferenceManagerController.rename_scene(self)` — Rename the scene file at the right-clicked row.
-  - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row.
+  - `ReferenceManagerController.delete_scene(self)` — Delete the scene file at the right-clicked row: to the Recycle Bin
 
 <a id="env_utils--reference_manager--reference_manager_slots"></a>
 ### `env_utils/reference_manager/reference_manager_slots.py`
@@ -2665,7 +2669,7 @@ USD import / export over Maya's native ``mayaUsd`` runtime.
   - `UsdUtils.load_plugin()` *(static)* — Ensure the ``mayaUsdPlugin`` plugin is loaded.
   - `UsdUtils.is_usd_file(file_path: str) -> bool` *(static)* — True when *file_path* is a USD layer/package (delegates to pythontk).
   - `UsdUtils.sanitize_prim_name(name: str) -> str` *(static)* — *name* as ``mayaUSDExport`` spells the prim (probe-verified: ``ref:nsCube``
-  - `UsdUtils.export(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True, material_names: str = 'shader') -> str` *(class)* — Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
+  - `UsdUtils.export(cls, file_path: str, objects: Optional[List] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True, material_names: str = 'shader', prune_static: bool = False) -> str` *(class)* — Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
   - `UsdUtils.name_materials_after_shaders(cls, file_path: str, mapping: Optional[Dict[str, str]] = None) -> int` *(class)* — Rename the layer's ``Material`` prims from their SHADING GROUP to their
   - `UsdUtils.sampling_frame_range(cls, objects: Optional[List[str]] = None) -> Optional[Tuple[float, float]]` *(class)* — The frames a USD export is worth sampling, or ``None`` for a static one.
   - `UsdUtils.options_string(options: Dict[str, Any]) -> str` *(static)* — *options* as a ``cmds.file`` translator options string: ``key=value``
@@ -2804,7 +2808,7 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - **[`class LightmapBakeResult`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L70)** — What one :meth:`LightmapBaker.bake` did -- the same shape in mayatk and blendertk.
   - `LightmapBakeResult.files(self) -> List[str]` *(property)* — The distinct map files, sorted: an atlas 40 objects share counts once.
   - `LightmapBakeResult.folders(self) -> List[str]` *(property)* — The distinct folders the maps landed in, compared the way the disk does.
-- **[`class LightmapBaker(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L122)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
+- **[`class LightmapBaker(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L123)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
   - `LightmapBaker.device(self) -> Optional[str]` *(property)* — Which device Arnold bakes on -- ``"GPU"``, ``"CPU"``, ``"AUTO"``, or
   - `LightmapBaker.adaptive(self) -> bool` *(property)* — Whether a GPU bake spends its samples adaptively: the preset's AA on
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
@@ -2862,11 +2866,11 @@ The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 
 The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 
-- **[`class LightmapRecords(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L57)** — Maya's lightmap markers and manifest, and the files they name.
+- **[`class LightmapRecords(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L58)** — Maya's lightmap markers and manifest, and the files they name.
   - `LightmapRecords.baked_objects(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — The objects :meth:`revert` would take the lightmap from.
   - `LightmapRecords.commit(cls, mapping: Dict[str, str], scale_offsets: Optional[Dict[str, List[float]]] = None, intensity: float = 1.0) -> Dict[str, str]` *(class)* — Record a lighting-only bake for the engine (fully non-destructive).
   - `LightmapRecords.revert(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — Undo :meth:`commit` -- drop the markers and republish.
-  - `LightmapRecords.superseding(cls, objects: List[str]) -> Iterator[List[str]]` *(class)* — Around a re-bake's :meth:`commit`: delete the maps *objects* stop reading.
+  - `LightmapRecords.superseding(cls, objects: List[str]) -> Iterator[List[str]]` *(class)* — Around a re-bake's :meth:`commit`: set aside the maps *objects* stop reading.
   - `LightmapRecords.migrate_legacy(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — Bring markers older than the rect-binding contract up to date, losslessly.
   - `LightmapRecords.migrate_folder_hints(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — Lift a legacy marker's ``dir`` into the private folder record.
   - `LightmapRecords.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]` *(class)* — The ``lightmap_metadata`` record for this scene, or ``None`` when no
@@ -3233,8 +3237,8 @@ Toolbag-specific system ops.
 Registry of user-tunable Marmoset Toolbag parameters exposed to the bridge UI.
 
 - [`PARAMS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L24) — constant
-- [`SUPERSESSIONS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L382) — constant
-- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L401)** — Parameters — module namespace.
+- [`SUPERSESSIONS`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L383) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/mat_utils/marmoset_bridge/parameters.py#L402)** — Parameters — module namespace.
 
 <a id="mat_utils--marmoset_bridge--template_params"></a>
 ### `mat_utils/marmoset_bridge/template_params.py`
@@ -3955,7 +3959,8 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
   - `DataNodes.dump_export_nodes(cls, decode: bool = True) -> Dict[str, Dict[str, object]]` *(class)* — Every ``data_export`` carrier's channels, keyed by node (long path).
   - `DataNodes.carriers_in(cls, namespace: str) -> Dict[ptk.Scope, str]` *(class)* — The carriers a referenced module keeps under *namespace*
   - `DataNodes.scene_path(cls) -> str` *(class)* — The open scene's file, ``""`` while unsaved
-  - `DataNodes.install_path_rebase(cls) -> bool` *(class)* — Keep the path records spelled from the scene's own project across a
+  - `DataNodes.install_path_rebase(cls) -> bool` *(class)* — Keep the path records spelled from the project of whichever file
+  - `DataNodes.ensure_path_rebase(cls) -> bool` *(class)* — :meth:`install_path_rebase` unless a copy of it already is.
   - `DataNodes.remove_path_rebase(cls) -> None` *(class)* — Remove the re-base hook's callbacks (every copy's, by id).
 
 <a id="nurbs_utils--_nurbs_utils"></a>
@@ -4038,6 +4043,73 @@ Render-control helpers.
   - `RigUtils.get_joint_chain_from_root(root_joint: Union[str, List[str]], reverse: bool = False) -> List[str]` *(static)* — Get the joint chain from the root joint or the first joint in the list if more than one joint is gi…
   - `RigUtils.invert_joint_chain(root_joint, keep_original=False)` *(static)* — Create a new joint chain with the same positions as the original, but with reversed hierarchy.
   - `RigUtils.rebind_skin_clusters(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> Dict[str, list]` *(class)* — Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.
+
+<a id="rig_utils--articulated_rig--_articulated_rig"></a>
+### `rig_utils/articulated_rig/_articulated_rig.py`
+
+Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
+
+- **[`class ArticulatedRig(pythontk.LoggingMixin, _ArticulatedRigInternal)`](mayatk/mayatk/rig_utils/articulated_rig/_articulated_rig.py#L297)** — One articulated rig in the scene, bound to its rig group.
+  - `ArticulatedRig.group(self) -> str` *(property)*
+  - `ArticulatedRig.spec(self) -> Dict[str, Any]` *(property)* — The stamped plan (a fresh copy): name, links, joints, parts.
+  - `ArticulatedRig.name(self) -> str` *(property)*
+  - `ArticulatedRig.scene_data(cls, node) -> Optional[Dict[str, Any]]` *(class)* — The :attr:`DATA_ATTR` plan on *node*, or None.
+  - `ArticulatedRig.scene_rigs(cls) -> List['ArticulatedRig']` *(class)* — Every articulated rig in the scene (duplicated records skipped).
+  - `ArticulatedRig.for_node(cls, node) -> Optional['ArticulatedRig']` *(class)* — The rig *node* belongs to -- its group, a joint, a control, a part
+  - `ArticulatedRig.analyze(cls, nodes, root=None, ordered: bool = False) -> Dict[str, Any]` *(class)* — Propose a rig for *nodes*: one link per part, and how and where
+  - `ArticulatedRig.create(cls, links: Sequence[Any], joints: Optional[Sequence[Dict[str, Any]]] = None, name: Optional[str] = None, parent: Optional[str] = None) -> 'ArticulatedRig'` *(class)* — Build a rig.
+  - `ArticulatedRig.teardown(self) -> None` — Remove the rig and hand every part back exactly as it was: its
+  - `ArticulatedRig.rebuild(self, spec: Optional[Dict[str, Any]] = None) -> 'ArticulatedRig'` — Build the rig again from *spec* (default: its own plan), carrying
+  - `ArticulatedRig.insert_joint(self, members, joint_type: Optional[str] = None, **fields) -> 'ArticulatedRig'` — Split a link: *members* leave the link they ride and get a joint of
+  - `ArticulatedRig.remove_joint(self, joint_id: str) -> 'ArticulatedRig'` — Fold *joint_id*'s link back into the link it hangs off: its parts
+  - `ArticulatedRig.edit_joint(self, joint_id: str, **fields) -> 'ArticulatedRig'` — Change a joint's ``type``, ``position``, ``aim`` or ``normal``
+  - `ArticulatedRig.set_limits(self, joint_id: str, channel: str, minimum: Optional[float], maximum: Optional[float]) -> None` — Bound one channel (degrees, or a slide's units in the rig's space);
+  - `ArticulatedRig.set_limit_from_pose(self, joint_id: str, channel: str, side: str) -> float` — Take the control's current value as its *side* (``"min"`` or
+  - `ArticulatedRig.joint_ids(self) -> List[str]` — The joints' ids -- each its link's first part -- parent first.
+  - `ArticulatedRig.joint_id_of(self, node) -> Optional[str]` — The id of the joint *node* is -- its control, its joint -- or rides
+  - `ArticulatedRig.joint(self, joint_id: str) -> str` — The joint node of *joint_id*.
+  - `ArticulatedRig.control(self, joint_id: str) -> str` — The control of *joint_id*.
+  - `ArticulatedRig.state(self, slots: Optional[Sequence[Tuple[str, str]]] = None) -> List[float]` — The controls' channel values, in :meth:`model` state order.
+  - `ArticulatedRig.set_state(self, values: Sequence[float], key: Optional[bool] = None, slots: Optional[Sequence[Tuple[str, str]]] = None) -> None` — Pose the rig: *values* onto the controls, keyed when *key*
+  - `ArticulatedRig.record(self) -> Dict[str, Any]` — This rig's entry in the ``articulation`` record: each joint's rest
+  - `ArticulatedRig.model(self) -> 'ptk.ArticulationModel'` — The runtime model of this rig -- what the engines pose.
+  - `ArticulatedRig.export_record(cls, ctx) -> Optional['ptk.Record']` *(class)* — The ``articulation`` record for this scene, or None when it has no
+  - `ArticulatedRig.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Publish the ``articulation`` record now -- the authoring-time half
+  - `ArticulatedRig.grab_begin(self, node, point: Sequence[float]) -> Dict[str, Any]` — Take hold of *node* (a part, or anything under one) at the world
+  - `ArticulatedRig.held_point(self, hold: Dict[str, Any]) -> Tuple[float, float, float]` — Where a hold's point is now, in world space.
+  - `ArticulatedRig.pose_to(self, node, target: Sequence[float], point: Optional[Sequence[float]] = None, key: Optional[bool] = None, attempts: int = 8) -> float` — Bring a part's *point* (default its rotate pivot) to the world
+  - `ArticulatedRig.grab_to(self, hold: Dict[str, Any], target: Sequence[float], turn: Optional[Sequence[float]] = None, key: Optional[bool] = None) -> List[float]` — Move a hold's point to the world *target* and pose the rig there.
+
+<a id="rig_utils--articulated_rig--articulated_rig_slots"></a>
+### `rig_utils/articulated_rig/articulated_rig_slots.py`
+
+Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.
+
+- **[`class ArticulatedRigSlots(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/articulated_rig/articulated_rig_slots.py#L32)** — Slots for the Articulated Rig panel.
+  - `ArticulatedRigSlots.header_init(self, widget)`
+  - `ArticulatedRigSlots.refresh_table(self)`
+  - `ArticulatedRigSlots.btn_analyze(self)`
+  - `ArticulatedRigSlots.btn_build(self)`
+  - `ArticulatedRigSlots.btn_grab(self)`
+  - `ArticulatedRigSlots.btn_insert(self)`
+  - `ArticulatedRigSlots.btn_fold(self)`
+  - `ArticulatedRigSlots.btn_limits_from_pose(self)`
+  - `ArticulatedRigSlots.btn_clear_limits(self)`
+  - `ArticulatedRigSlots.btn_rebuild(self)`
+  - `ArticulatedRigSlots.btn_remove(self)`
+
+<a id="rig_utils--articulated_rig--grab_tool"></a>
+### `rig_utils/articulated_rig/grab_tool.py`
+
+The viewport grab for articulated rigs: press on a rigged part, drag, let go.
+
+- **[`class ArticulatedRigGrab(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/articulated_rig/grab_tool.py#L32)** — Grab and drag the parts of articulated rigs in the viewport.
+  - `ArticulatedRigGrab.activate(cls) -> str` *(class)* — Make the grab the current tool.
+  - `ArticulatedRigGrab.pick(origin: Sequence[float], direction: Sequence[float]) -> Optional[Tuple[ArticulatedRig, str, Tuple[float, float, float]]]` *(static)* — The rigged part a world ray hits first: ``(rig, part, point)``, or
+  - `ArticulatedRigGrab.press(self, origin: Sequence[float], direction: Sequence[float]) -> bool` — Take hold of whatever rigged part the ray hits.
+  - `ArticulatedRigGrab.drag(self, origin: Sequence[float], direction: Sequence[float]) -> Optional[list]` — Move the held point to where the ray crosses the camera-facing plane
+  - `ArticulatedRigGrab.release(self) -> None` — Let go: key the rig's controls when Auto Key is on, and close the
+  - `ArticulatedRigGrab.ray(cls, point: Sequence[float]) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]` *(class)* — The world pick ray through a dragger point, from the active view's
 
 <a id="rig_utils--controls"></a>
 ### `rig_utils/controls.py`
@@ -4555,7 +4627,7 @@ The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
   - `UvUtils.restore_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None` *(static)* — Restore UVs captured by ``snapshot_uv_sets``.
   - `UvUtils.discard_uv_snapshot(snapshots: Sequence[UvSnapshot]) -> None` *(static)* — Delete the snapshot UV sets without restoring them.
   - `UvUtils.find_uv_snapshots(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap', stale_only: bool = False) -> List[UvSnapshot]` *(static)* — The snapshot UV sets ``snapshot_uv_sets`` left on *objects*.
-  - `UvUtils.transfer_uvs(cls, source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1, match_by_similarity: bool = True, sample_space: str = 'auto') -> List[Tuple[str, str, str]]` *(class)* — Transfers UVs from source meshes to target meshes.
+  - `UvUtils.transfer_uvs(cls, source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1, match_by_similarity: bool = True, sample_space: str = 'auto', preserve_uv_ids: bool = False) -> List[Tuple[str, str, str]]` *(class)* — Transfers UVs from source meshes to target meshes.
   - `UvUtils.transfer_uvs_to_similar(cls, source: Union[str, object], candidates: Optional[List[Union[str, object]]] = None, tolerance: float = 0.9) -> List[str]` *(class)* — Transfer UVs from one source mesh to every geometrically similar mesh.
   - `UvUtils.reorder_uv_sets(obj: str, new_order: list[str]) -> None` *(static)* — Reorder UV sets of the given object to match the specified new order.
   - `UvUtils.apply_uv_layout(layouts: dict, uv_set: str = None, quiet: bool = False) -> dict` *(static)* — Write UV layouts authored in ANOTHER application onto these meshes.
@@ -4581,11 +4653,11 @@ The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 
 - [`PARAMS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L40) — constant
-- [`DERIVED_KEYS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L475) — constant
-- [`HOST_TOKEN_DEFAULTS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L482) — constant
-- [`MIN_VERSIONS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L685) — constant
-- [`FBX_USE_UV_SET_NAMES_MIN_VERSION`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L695) — constant
-- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L491)** — Parameters — module namespace.
+- [`DERIVED_KEYS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L485) — constant
+- [`HOST_TOKEN_DEFAULTS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L495) — constant
+- [`MIN_VERSIONS`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L704) — constant
+- [`FBX_USE_UV_SET_NAMES_MIN_VERSION`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L714) — constant
+- **[`class Parameters(ParamRegistry)`](mayatk/mayatk/uv_utils/rizom_bridge/parameters.py#L504)** — Parameters — module namespace.
   - `Parameters.expand_includes(script_text: str) -> str` *(static)* — Expand ``__PACK_BLOCK__``-style include tokens to their partial's text.
   - `Parameters.preset_min_version(script_text: str) -> 'tuple[int, ...] | None'` *(static)* — Minimum Rizom version a preset declares, or ``None`` if ungated.
   - `Parameters.referenced_keys(cls, script_text: str) -> 'set[str]'` *(class)* — Registered keys present in *script_text* (delegates to uitk.bridge).

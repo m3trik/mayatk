@@ -1000,6 +1000,20 @@ class RigGraphExtractor(_RigGraphExtractorInternal, ptk.HelpMixin):
             seeds.update((cmds.ls(path, long=True) or []) if path else ())
         for node_type in ("constraint", "ikHandle", "ikEffector"):
             seeds.update(cmds.ls(type=node_type, long=True) or [])
+        # A controller tag names an animation control outright: the rig's UI,
+        # whatever wires it to what it moves. A control wired STRAIGHT into a
+        # joint's channels -- no constraint, no utility node -- is in no graph
+        # record, so without this every control of such a rig shipped (measured:
+        # all five of an ArticulatedRig's, 2026-09-27). A tagged transform that
+        # holds content is still content: the classifier keeps it.
+        for tag in cmds.ls(type="controller") or []:
+            for control in (
+                cmds.listConnections(
+                    f"{tag}.controllerObject", source=True, destination=False
+                )
+                or []
+            ):
+                seeds.update(cmds.ls(control, long=True) or [])
 
         kinds = ptk.RigMachinery.classify(nodes, seeds=seeds, protected=protected)
         # Every DAG node, shapes included: a USD payload lands each shape as

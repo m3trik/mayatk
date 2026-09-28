@@ -77,6 +77,7 @@ outside its divergence ledger.
 | `audio_manifest` | `data_export` | 2 | authored | Audio Clips | `shot_metadata` | unity | re-derived | audio events with the frames they fire on, scoped to their clip |
 | `lightmap_metadata` | `data_export` | 1 | authored | Lightmap Baker | -- | unity, glb | re-derived | per-object baked-lightmap records: map file name, uvIndex, intensity, scaleOffset, and the object's scene hierarchy (which tells apart objects that share a name) |
 | `shadow_metadata` | `data_export` | 2 | authored | Shadow Rig | -- | unity, glb | re-derived | projected-shadow planes: per plane, the plane node name, its silhouette texture file name, and the authored intensity |
+| `articulation` | `data_export` | 1 | authored | Articulated Rig | -- | unity, glb | re-derived | articulated rigs: per rig its joints (node name, parent, rest translate and orient, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides -- the ArticulationModel a runtime poses |
 | `emissive_groups` | `data_export` | 1 | authored | Emissive Groups | -- | unity | re-derived | named emissive material groups and their weights |
 | `visibility_tracks` | `data_export` | 1 | derived | Render Effects | `shot_metadata` | glb, verifier | re-derived | keyed visibility per node, as stepped on/off frames, with the authored opacity ramp and each take's first/last authored frame |
 | `handoff` | `data_export` | 1 | derived | Export | -- | -- | re-derived | the standalone-reader contract: what each channel present on the carrier holds |
@@ -152,7 +153,7 @@ older scene loses it at its next shots publish. Until then it still reads:
 
 **A Save As copy carries every record verbatim.** Nothing in the scene data
 tells the copy from its source, so a record that must -- which scene file wrote
-the lightmaps a re-bake may delete (`lightmap_writers`), which scene recorded
+the lightmaps a re-bake may set aside (`lightmap_writers`), which scene recorded
 the hierarchy baseline -- stamps its writer (`DataNodes.writer_stamp`: the scene
 file spelled from its own project, `""` while unsaved) and asks
 `DataNodes.written_here(stamp)`: this file, or one that is gone (the scene was
@@ -160,8 +161,11 @@ renamed or moved), is this scene's; another file still on disk is a Save As
 source's. The stamp is a path, declared as one (`RecordSpec.paths`; the
 baseline's `paths=("scene",)` names its one path beside a path set and a hash),
 so a save into another project re-spells it and the copy still names its
-source. The Scene Exporter's hierarchy check sets a source's baseline aside,
-and the copy's first export records its own.
+source. The stamps are declared too (`RecordSpec.stamps`; the baseline's
+`stamps=("scene",)`): a scene's FIRST save stamps every `""` with the file it
+writes (`ptk.SceneRecords.stamp_unsaved`), else whatever was made before it
+was nobody's once saved. The Scene Exporter's hierarchy check sets a source's
+baseline aside, and the copy's first export records its own.
 
 ## Crossing into another scene
 
@@ -244,7 +248,7 @@ ships:
 | `DataNodes.get_internal_node(create=True)` / `get_export_node(create=True)` / `get_export_nodes()` | resolve a carrier without creating it; the plural is for shipping |
 | `DataNodes.transfer_sections(spell, objects)` / `receive_sections(manifest, resolve, **adapters)` | the portable records as a hand-off sidecar's sections, and landing them (inherited from `ptk.SceneStoreBase`) |
 | `DataNodes.carriers_in(namespace)` / `merge_plan(carriers)` / `merge_carriers(carriers, rename, source_path_base=)` / `discard_carriers(carriers)` | another scene's carriers: find them, ask what a merge would keep, merge or drop them |
-| `DataNodes.project_root()` / `project_root_of(path)` / `rebase_paths(old, new)` / `install_path_rebase()` | the project the `paths=True` records are spelled from (the scene file's, `None` while unsaved), and re-spelling them when a save moves the scene |
+| `DataNodes.project_root()` / `project_root_of(path)` / `rebase_paths(old, new)` / `install_path_rebase()` / `ensure_path_rebase()` | the project the `paths=True` records are spelled from (the scene file's, `None` while unsaved), and re-spelling them for whichever file is written -- a save, a first save's stamps, a copy |
 | `DataNodes.OWNERS` | record key -> the DCC class keeping state beside it (its crossing hooks) |
 
 Legacy audio migration (pre-`DataNodes` `audio_events*` carriers and the old
@@ -299,9 +303,13 @@ never be duplicated into the sidecar.
    (`ptk.FileUtils.portable_path` from `DataNodes.project_root()`; `../`
    chains included, absolute only on another drive or while unsaved), and
    every route that moves the record re-spells it -- a save into another
-   project (the save hook `DataNodes.install_path_rebase`, installed by
-   `MayaUiHandler`), a hand-off (sent absolute, landed from the receiving
-   scene's project) and a module merge (from the module's project).
+   project, a copy (an autosave, an Export All / Selection to `.ma` / `.mb`,
+   written spelled for its own project and handed back after), a hand-off
+   (sent absolute, landed from the receiving scene's project) and a module
+   merge (from the module's project). The save hook is
+   `DataNodes.install_path_rebase`, installed by `MayaUiHandler` and, in any
+   other session (mayapy, batch), by the private carrier's first touch
+   (`DataNodes.ensure_path_rebase`).
    Keeps state beside the record? One row in each DCC's
    `DataNodes.OWNERS` with the hooks it needs ([Crossing into another
    scene](#crossing-into-another-scene)).

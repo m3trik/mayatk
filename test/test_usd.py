@@ -656,5 +656,383 @@ class TestUsdLiveRead(MayaTkTestCase):
         )
 
 
+class TestSampledExport(MayaTkTestCase):
+    """An animated export writes what ONE ``mayaUSDExport`` pass writes -- pinned
+    against mayaUsd itself, prim for prim and sample for sample.
+
+    mayaUsd 0.30 runs every prim writer at every sampled frame, and two interchange
+    flags make that real work on prims that never move (``_maya_usd_export`` says
+    which), so a sampled export is split: a one-frame pass with every flag, then
+    the sampled pass without visibility (and, with ``prune_static``, without the
+    static subtrees), merged back with visibility resampled -- mayaUsd's visibility
+    rule restated. Production module, 2026-09-27: the export went 944 s -> 638 s
+    with the layer unchanged. The scene here holds every visibility shape that pass
+    treats differently, each one probed against its own single pass.
+    """
+
+    FRAMES = (1.0, 30.0)
+
+    #: The mayaUsd ``UsdUtils._animated_visibility`` restates, and the only one the
+    #: split export was proven equal to one pass on (these tests, and a production
+    #: pull diffed sample for sample).
+    PROVEN_MAYAUSD = "0.30.0"
+
+    def test_the_visibility_rule_was_proven_on_the_loaded_mayausd(self):
+        """A tripwire, not a feature test: the restated visibility writer can only
+        be checked at the first frame, and a prim it misses whose first value
+        equals the fallback would slip through. So a different mayaUsd fails HERE
+        rather than exporting a quietly different layer."""
+        loaded = cmds.pluginInfo("mayaUsdPlugin", query=True, version=True)
+        self.assertEqual(
+            loaded,
+            self.PROVEN_MAYAUSD,
+            f"mayaUsd {loaded} is loaded, but UsdUtils._animated_visibility restates "
+            f"mayaUsd {self.PROVEN_MAYAUSD}'s UsdMayaPrimWriter::Write. Re-read its "
+            "visibility code, re-run the split-export equivalence proof "
+            "(TestSampledExport, and a production pull diffed against ONE "
+            "mayaUSDExport pass: 0 differences), then bump PROVEN_MAYAUSD.",
+        )
+
+    def setUp(self):
+        super().setUp()
+        UsdUtils.load_plugin()
+        self.out = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "temp_tests",
+            "usd_sampled_" + self._testMethodName,
+        )
+        shutil.rmtree(self.out, ignore_errors=True)
+        os.makedirs(self.out)
+        self.addCleanup(shutil.rmtree, self.out, True)
+
+    # ---- the scene ----------------------------------------------------------
+    @staticmethod
+    def _keys(node, attr, pairs, step=True):
+        for time, value in pairs:
+            cmds.setKeyframe(node, attribute=attr, time=time, value=value)
+        if step:
+            cmds.keyTangent(node, attribute=attr, outTangentType="step")
+
+    @staticmethod
+    def _shape(node):
+        return cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+
+    @staticmethod
+    def _cube(name, parent):
+        node = cmds.polyCube(name=name, constructionHistory=False)[0]
+        return cmds.parent(node, parent)[0]
+
+    def _visibility_cases(self):
+        """One of every visibility shape mayaUsd 0.30 writes differently, a mover
+        with static children, a skinned mesh beside a static prop, a static block."""
+        keys, shape, cube = self._keys, self._shape, self._cube
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=30, minTime=1, maxTime=30
+        )
+        root = cmds.group(empty=True, name="root")
+        # a group: samples only, the fallback-equal default never authored
+        blink = cmds.group(empty=True, name="blink_grp", parent=root)
+        keys(blink, "visibility", [(1, 1), (10, 0), (20, 1)])
+        cube("blink_child", blink)
+        # a merged mesh keyed on its TRANSFORM, then on its SHAPE: shape AND parent
+        keys(cube("xvis_mesh", root), "visibility", [(1, 0), (8, 1)])
+        keys(shape(cube("svis_mesh", root)), "visibility", [(1, 1), (15, 0)])
+        hidden = cube("hidden_shape_mesh", root)
+        cmds.setAttr(shape(hidden) + ".visibility", 0)
+        keys(hidden, "visibility", [(1, 1), (25, 0)])
+        # driven through a set-driven key (a node between curve and plug)
+        driver = cmds.group(empty=True, name="driver", parent=root)
+        keys(driver, "translateX", [(1, 0), (30, 10)], step=False)
+        sdk = cmds.group(empty=True, name="sdk_grp", parent=root)
+        for value, visible in ((0, 1), (5, 0)):
+            cmds.setDrivenKeyframe(
+                sdk + ".visibility",
+                currentDriver=driver + ".translateX",
+                driverValue=value,
+                value=visible,
+            )
+        # an expression: NOT animated to mayaUsd; a flat curve: animated to it
+        expr = cmds.group(empty=True, name="expr_grp", parent=root)
+        cmds.expression(string="%s.visibility = (frame %% 10) < 5;" % expr)
+        keys(
+            cmds.group(empty=True, name="flat_hidden", parent=root),
+            "visibility",
+            [(1, 0), (30, 0)],
+        )
+        # an unmerged transform (a child beside its shape): a prim per shape
+        unmerged = cube("unmerged_mesh", root)
+        cmds.group(empty=True, name="um_child", parent=unmerged)
+        keys(unmerged, "visibility", [(1, 1), (5, 0), (9, 1)])
+        # an instanced shape: both instances
+        source = cube("inst_src", root)
+        cmds.instance(source, name="inst_dup")
+        keys(shape(source), "visibility", [(1, 1), (22, 0)])
+        # a curve control, a camera, a locator -- merged shapes of other writers
+        for node, pairs in (
+            (cmds.circle(name="ctl_crv")[0], [(1, 0), (6, 1)]),
+            (cmds.camera(name="cam_vis")[0], [(1, 1), (8, 0)]),
+            (cmds.spaceLocator(name="loc_vis")[0], [(1, 1), (12, 0)]),
+        ):
+            keys(cmds.parent(node, root)[0], "visibility", pairs)
+        cmds.setAttr(
+            cmds.group(empty=True, name="static_hidden", parent=root) + ".visibility", 0
+        )
+        mover = cmds.group(empty=True, name="mover", parent=root)
+        keys(mover, "translateY", [(1, 0), (30, 5)], step=False)
+        for i in range(6):
+            cube("static%d" % i, mover if i % 2 else root)
+        # a keyed skeleton skinning a cylinder, a static prop in the same SkelRoot
+        # (a SkelRoot's extent is written by whichever mesh last changed), and a
+        # keyed joint's visibility (the skeleton writer writes none)
+        rig = cmds.group(empty=True, name="rig_grp", parent=root)
+        cmds.select(clear=True)
+        joints = [
+            cmds.joint(name="rig_jnt%d" % i, position=(0, i * 2, 0)) for i in range(3)
+        ]
+        cylinder = cmds.polyCylinder(
+            name="rig_skin", height=4, subdivisionsY=4, constructionHistory=False
+        )[0]
+        cmds.move(0, 2, 0, cylinder)
+        cmds.skinCluster(joints, cylinder, toSelectedBones=True)
+        cmds.parent(joints[0], rig)
+        cmds.parent(cylinder, rig)
+        cube("rig_prop", rig)
+        self._keys(joints[1], "rotateZ", [(1, 0), (30, 45)], step=False)
+        keys(joints[0], "visibility", [(1, 1), (17, 0)])
+        block = cmds.group(empty=True, name="static_block", parent=root)
+        for i in range(4):
+            cmds.move(i, 0, 0, cube("block%d" % i, block))
+        cmds.currentTime(12)  # defaults are read HERE, not at frame one
+
+    # ---- the export and its reference ---------------------------------------
+    def _export(self, selection_only=False, prune_static=False, **flags):
+        """``(path, calls)``: the split export, every ``mayaUSDExport`` recorded as
+        ``(flags, {static node: intermediateObject at the call})``."""
+        from unittest import mock
+
+        real = cmds.mayaUSDExport
+        calls = []
+        watched = [n for n in ("static_block", "rig_prop") if cmds.objExists(n)]
+
+        def record(**kwargs):
+            calls.append(
+                (
+                    {k: v for k, v in kwargs.items() if k != "file"},
+                    {n: cmds.getAttr(n + ".intermediateObject") for n in watched},
+                )
+            )
+            return real(**kwargs)
+
+        path = os.path.join(self.out, "sampled.usd")
+        options = dict(UsdUtils.INTERCHANGE_EXPORT_OPTIONS, frameRange=self.FRAMES)
+        options.update(flags)
+        with mock.patch("maya.cmds.mayaUSDExport", side_effect=record):
+            UsdUtils.export(
+                path,
+                options=options,
+                selection_only=selection_only,
+                material_names="shading_group",
+                prune_static=prune_static,
+            )
+        return path, calls
+
+    def _one_pass(self, selection_only=False, **flags):
+        path = os.path.join(self.out, "one_pass.usd")
+        options = dict(UsdUtils.INTERCHANGE_EXPORT_OPTIONS, **flags)
+        cmds.mayaUSDExport(
+            file=path, selection=selection_only, frameRange=self.FRAMES, **options
+        )
+        return path
+
+    @staticmethod
+    def _usd_state(path):
+        """Every prim's type and child order, every attribute's authored default,
+        time samples and connections, every relationship's targets, and the layer's
+        time range, keyed by path. Property ORDER is not compared: Usd never
+        exposes it (a prim lists its properties by name), and a spec grafted in
+        lands last."""
+        from pxr import Sdf
+
+        def plain(value):
+            if isinstance(value, str) or not hasattr(value, "__len__"):
+                return value
+            return tuple(plain(v) for v in value)
+
+        layer = Sdf.Layer.FindOrOpen(str(path))
+        layer.Reload()
+        found = []
+        layer.Traverse(layer.pseudoRoot.path, found.append)
+        state = {"<range>": (layer.startTimeCode, layer.endTimeCode)}
+        for p in found:
+            spec = layer.GetObjectAtPath(p)
+            if p.IsPrimPath():
+                state[str(p)] = (spec.typeName, tuple(spec.nameChildren.keys()))
+            elif isinstance(spec, Sdf.AttributeSpec):
+                state[str(p)] = (
+                    plain(spec.default) if spec.HasDefaultValue() else None,
+                    tuple(
+                        (t, plain(layer.QueryTimeSample(p, t)))
+                        for t in layer.ListTimeSamplesForPath(p)
+                    ),
+                    tuple(spec.connectionPathList.GetAddedOrExplicitItems()),
+                )
+            elif isinstance(spec, Sdf.RelationshipSpec):
+                state[str(p)] = tuple(spec.targetPathList.GetAddedOrExplicitItems())
+        return state
+
+    def _assert_one_pass(self, mine, theirs):
+        """*mine* is *theirs*; returns ``(sampled attributes, samples)``."""
+        a, b = self._usd_state(mine), self._usd_state(theirs)
+        self.assertEqual(sorted(set(a) ^ set(b)), [], "prims/properties differ")
+        self.assertEqual(
+            {k: (a[k], b[k]) for k in b if a[k] != b[k]}, {}, "values differ"
+        )
+        tracks = [v for v in b.values() if isinstance(v, tuple) and len(v) == 3]
+        tracks = [v for v in tracks if v[1]]
+        self.assertGreater(len(tracks), 10, "the scene must sample for real")
+        return len(tracks), sum(len(v[1]) for v in tracks)
+
+    def _sampled_visibility(self, path):
+        state = self._usd_state(path)
+        return sorted(k for k, v in state.items() if k.endswith(".visibility") and v[1])
+
+    # ---- the tests ----------------------------------------------------------
+    def test_a_sampled_export_writes_what_one_pass_writes(self):
+        self._visibility_cases()
+        path, calls = self._export()
+        self.assertEqual(cmds.currentTime(query=True), 12)
+        shared = dict(UsdUtils.INTERCHANGE_EXPORT_OPTIONS, exportBlendShapes=False)
+        self.assertEqual(
+            [flags for flags, _ in calls],
+            [
+                dict(shared, selection=False, frameRange=(1.0, 1.0)),
+                dict(
+                    shared,
+                    selection=False,
+                    frameRange=self.FRAMES,
+                    exportVisibility=False,
+                ),
+            ],
+            "a one-frame pass with every flag, then the sampled pass without "
+            "visibility (and without blendshapes: the scene has none)",
+        )
+        self.assertEqual(sorted(os.listdir(self.out)), ["sampled.usd"])
+        attrs, samples = self._assert_one_pass(path, self._one_pass())
+        # 12 sampled visibility tracks: blink, xvis, svis, hidden-shape, sdk, the
+        # unmerged transform AND its shape's own prim, both instances, curve,
+        # camera, locator (flat_hidden: a default only; the expression and the
+        # joint: nothing).
+        self.assertEqual(len(self._sampled_visibility(path)), 12)
+        print(f"  split == one pass: {attrs} sampled attributes, {samples} samples")
+
+    def test_a_selection_export_samples_its_own_scope(self):
+        """Visibility keyed OUTSIDE the selection must not stop the split; inside
+        it, the selected node, its descendants and its ancestors all count."""
+        self._visibility_cases()
+        cmds.select(["|root|blink_grp", "|root|unmerged_mesh", "|root|mover"])
+        path, calls = self._export(selection_only=True)
+        self.assertEqual(len(calls), 2, [flags for flags, _ in calls])
+        cmds.select(["|root|blink_grp", "|root|unmerged_mesh", "|root|mover"])
+        self._assert_one_pass(path, self._one_pass(selection_only=True))
+        self.assertEqual(
+            self._sampled_visibility(path),
+            [
+                "/root/blink_grp.visibility",
+                "/root/unmerged_mesh.visibility",
+                "/root/unmerged_mesh/unmerged_meshShape.visibility",
+            ],
+        )
+
+    def test_prune_static_leaves_static_subtrees_out_and_writes_one_pass(self):
+        """The sampled pass runs without the subtrees that never move -- here a
+        static block and a static prop inside the SkelRoot, whose extent follows
+        the last mesh written -- and every flag is back afterwards."""
+        self._visibility_cases()
+        path, calls = self._export(prune_static=True)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][1], {"static_block": False, "rig_prop": False})
+        self.assertEqual(
+            calls[1][1],
+            {"static_block": True, "rig_prop": True},
+            "the sampled pass must run with the static subtrees left out",
+        )
+        self.assertFalse(cmds.getAttr("static_block.intermediateObject"))
+        self.assertFalse(cmds.getAttr("rig_prop.intermediateObject"))
+        self._assert_one_pass(path, self._one_pass())
+
+    def test_blendshapes_stay_where_the_scene_has_one(self):
+        """The blendshape flag is dropped only when NO mesh could export one."""
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=30, minTime=1, maxTime=30
+        )
+        group = cmds.group(empty=True, name="bs_grp")
+        base = cmds.polyPlane(name="bs_base", constructionHistory=False)[0]
+        target = cmds.polyPlane(name="bs_target", constructionHistory=False)[0]
+        cmds.move(0, 1, 0, target + ".vtx[0]", relative=True)
+        blend = cmds.blendShape(target, base, name="bs")[0]
+        cmds.delete(target)
+        cmds.parent(base, group)
+        cmds.setKeyframe(blend, attribute="w[0]", time=1, value=0.0)
+        cmds.setKeyframe(blend, attribute="w[0]", time=30, value=1.0)
+        self._keys(group, "visibility", [(1, 1), (10, 0)])
+        cmds.currentTime(1)
+        path, calls = self._export()
+        self.assertTrue(all(flags["exportBlendShapes"] for flags, _ in calls), calls)
+        state = self._usd_state(path)
+        weights = [k for k in state if k.endswith(".blendShapeWeights")]
+        self.assertTrue(weights and all(len(state[k][1]) > 1 for k in weights))
+        a, b = self._usd_state(path), self._usd_state(self._one_pass())
+        self.assertEqual(
+            {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)},
+            {},
+        )
+
+    def test_a_verdict_that_misses_falls_back_to_one_pass(self):
+        """The restated visibility rule is checked against mayaUsd's own on the
+        first frame. Should it miss a prim (a newer mayaUsd, a node kind never
+        probed), the export runs as ONE pass -- slower, never different."""
+        from unittest import mock
+
+        self._visibility_cases()
+        with mock.patch.object(UsdUtils, "_animated_visibility", return_value={}):
+            path, calls = self._export(prune_static=True)
+        self.assertEqual(len(calls), 3, [flags for flags, _ in calls])
+        self.assertEqual(calls[-1][0]["frameRange"], self.FRAMES)
+        self.assertTrue(calls[-1][0]["exportVisibility"])
+        self.assertFalse(any(calls[-1][1].values()), "a fallback prunes nothing")
+        self._assert_one_pass(path, self._one_pass())
+
+    def test_a_flag_that_moves_prims_exports_in_one_pass(self):
+        """The split finds prims by DAG path: a flag that puts them elsewhere
+        (here namespaces stripped) sends the export through one plain pass."""
+        self._visibility_cases()
+        _, calls = self._export(stripNamespaces=True)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0][0]["exportVisibility"])
+
+    def test_a_flag_that_blinds_the_one_frame_pass_exports_in_one_pass(self):
+        """``staticSingleSample`` writes the one-frame pass's lone samples as
+        defaults, so that pass no longer shows what moves: an expression-driven
+        transform (not animated to ``MAnimUtil``) read as static, sat out the
+        sampled pass under ``prune_static``, and shipped frozen (measured: its
+        translate a default where one pass samples 30 frames). It takes one pass."""
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=30, minTime=1, maxTime=30
+        )
+        group = cmds.group(empty=True, name="quiet_grp")
+        cube = cmds.parent(cmds.polyCube(name="expr_cube", ch=False)[0], group)[0]
+        cmds.expression(string="%s.translateY = frame * 0.5;" % cube)
+        mover = cmds.group(empty=True, name="mover")
+        self._keys(mover, "translateX", [(1, 0), (30, 5)], step=False)
+        path, calls = self._export(prune_static=True, staticSingleSample=True)
+        a = self._usd_state(path)
+        b = self._usd_state(self._one_pass(staticSingleSample=True))
+        self.assertEqual(
+            {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)},
+            {},
+        )
+        self.assertEqual(len(calls), 1, [flags for flags, _ in calls])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

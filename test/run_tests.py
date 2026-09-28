@@ -165,6 +165,10 @@ GUI_REQUIRED = {
         "loads the key_stash panel through MayaUiHandler, whose construction "
         "needs a GUI Maya (see test_maya_ui_handler)"
     ),
+    "test_articulated_rig_panel": (
+        "loads the articulated_rig panel; its uitk TableWidget hard-crashes "
+        "mayapy (see test_emissive_groups_panel)"
+    ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
     "test_uv_rizom_bridge": "native-crashes mayapy (2026-07-17 full run)",
@@ -649,6 +653,36 @@ except Exception as e:
     # Headless (mayapy) execution
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _isolate_temp() -> Optional[str]:
+        """Route this run's temp into one throwaway root; returns it.
+
+        A chunk's Maya reads TEMP once, at startup, and files its crash-save
+        there: a process that leaves through a crash (a native fault, or the
+        DLL-detach fault ``os._exit`` runs into) writes an
+        ``untitled[Recovered-...].ma`` plus a ``MayaCrashLog*.dmp`` into ITS
+        TEMP (measured 2026-09-27). The suite driver's own
+        ``TestSandbox.activate()`` comes after that read, so every crashing
+        chunk -- the case the resume machinery exists for -- littered the
+        user's temp dir. :meth:`TestSandbox.temp` sets ``TEMP``/``TMP`` here, in
+        the runner, so every chunk (and the GUI pass) inherits the root, which
+        goes at this process's exit. Mirror of blendertk's runner.
+
+        Best-effort by design: an unimportable pythontk is already a failing
+        run, and it must fail on its own modules rather than here.
+        """
+        try:
+            from pythontk.core_utils.test_sandbox import TestSandbox
+
+            root = TestSandbox.temp()
+        except Exception as error:  # noqa: BLE001
+            print(f"[WARN] temp isolation unavailable ({error}); chunks use real TEMP.")
+            return None
+        # Announced so a module can ASSERT it inherited the redirect.
+        os.environ["MAYATK_TEST_TEMP_ROOT"] = root
+        print(f"Temp: {root}")
+        return root
+
     def _child_env(self) -> dict:
         """Environment for mayapy children.
 
@@ -788,9 +822,17 @@ except Exception as e:
                 gate_held = True
 
                 log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+                # Driver + config paths ride in the env, not on the command line:
+                # mayapy decodes that in the ANSI code page, so a checkout under a
+                # folder with a non-ASCII letter named files that do not exist.
+                from pythontk import AppLauncher
+
+                shim_args, child_env = AppLauncher.python_args_via_env(
+                    [str(DRIVER_PATH), str(cfg_path)], self._child_env()
+                )
                 try:
                     proc = subprocess.Popen(
-                        [mayapy, str(DRIVER_PATH), str(cfg_path)],
+                        [mayapy, *shim_args],
                         stdout=log_file,
                         # Closed stdin: a chunk that inherits the launching
                         # console reads as interactive, and the exporter's
@@ -800,7 +842,7 @@ except Exception as e:
                         stdin=subprocess.DEVNULL,
                         stderr=subprocess.STDOUT,
                         cwd=str(SCRIPTS_ROOT),
-                        env=self._child_env(),
+                        env=child_env,
                     )
                 except OSError as e:
                     print(
@@ -1420,6 +1462,11 @@ finally:
 
         phases_ok = True
         all_ran = True
+        # Before anything is spawned: every chunk (and the GUI pass) inherits it.
+        # Not under --no-wait: that Maya outlives this run, and the root with it
+        # would go at this process's exit.
+        if not no_wait:
+            self._isolate_temp()
 
         if headless_modules:
             h_ok, deferred = self._run_headless(

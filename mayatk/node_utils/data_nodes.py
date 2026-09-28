@@ -278,10 +278,14 @@ class DataNodes(ptk.SceneStoreBase):
 
     @classmethod
     def _carrier(cls, scope: ptk.Scope, create: bool = False) -> Optional[str]:
-        """The carrier node of *scope*, created on demand when *create*."""
+        """The carrier node of *scope*, created on demand when *create*. The
+        private carrier's first touch in a session installs the path hook
+        (:meth:`ensure_path_rebase`): its records are what the hook keeps
+        spelled for where the scene is written."""
         if cmds is None:
             return None
         if _Scope(scope) is _Scope.PRIVATE:
+            cls.ensure_path_rebase()
             return cls.get_internal_node(create)
         return cls.get_export_node(create)
 
@@ -589,9 +593,16 @@ class DataNodes(ptk.SceneStoreBase):
 
         return EnvUtils.saved_scene_path()
 
+    #: The files a copy of the scene carries its private records in: Maya
+    #: scenes. An FBX or an OBJ export writes no network node, so there is
+    #: nothing to spell for it.
+    _SCENE_EXTENSIONS = (".ma", ".mb")
+
     @staticmethod
     def _rebase_state() -> dict:
-        """The re-base hook's ids and remembered project, kept where a reload
+        """The re-base hook's ids, the project and file the scene had at its
+        last open, new or save (``base``, ``scene``), and the records a copy
+        being written must hand back (``pending``) -- kept where a reload
         cannot reach (``__main__``, as ``FbxUtils`` keeps its bracket)."""
         import __main__
 
@@ -599,21 +610,36 @@ class DataNodes(ptk.SceneStoreBase):
         if state is None:
             state = {"ids": [], "base": None}
             __main__._mayatk_record_path_rebase = state
+        state.setdefault("scene", "")  # a state an older copy of this made
+        state.setdefault("pending", None)
+        state.setdefault("clean", False)
         return state
 
     @classmethod
     def install_path_rebase(cls) -> bool:
-        """Keep the path records spelled from the scene's own project across a
-        save into another one (a Save As): the project is remembered at every
-        open, new and save, and just before a save the records are re-spelled
-        from it to the project of the file being written
-        (:meth:`rebase_paths`). A plain save normalizes (an entry that arrived
-        absolute is spelled relative).
+        """Keep the path records spelled from the project of whichever file
+        is written (:meth:`respell_for_write`). The project and file are
+        remembered at every open, new and save, and:
 
-        Session-scoped, idempotent and reload-proof: a reinstall first removes
-        whatever a previous copy of this module registered, by id. Installed
-        at the UI handler's runtime init point (``MayaUiHandler``), never on
-        import. Returns False without Maya's API.
+        - a save of the open scene (a Save As renames it first) re-spells the
+          records from the remembered project to the new file's, and the
+          scene's FIRST save stamps every writer stamp still ``""`` with the
+          file written (``ptk.SceneRecords.stamp_unsaved``) -- else whatever
+          was baked before it was nobody's once saved;
+        - a COPY -- an Export All / Selection to a ``.ma`` / ``.mb``, and an
+          autosave, which Maya writes as an export too (``kBeforeExport`` /
+          ``kAfterExport``, never ``kBeforeSave``: measured in a fresh GUI
+          Maya 2025) -- is written spelled for ITS project, and the open
+          scene gets its own spelling back once it is written. A copy stamps
+          nothing: an unsaved scene's export keeps ``""`` and owns nothing.
+
+        A plain save normalizes (an entry that arrived absolute is spelled
+        relative). Session-scoped, idempotent and reload-proof: a reinstall
+        first removes whatever a previous copy of this module registered, by
+        id. The UI handler installs it at its runtime init point
+        (``MayaUiHandler``); any other session at its first touch of the
+        private carrier (:meth:`ensure_path_rebase`); never on import.
+        Returns False without Maya's API.
         """
         try:
             import maya.api.OpenMaya as om
@@ -621,15 +647,33 @@ class DataNodes(ptk.SceneStoreBase):
             return False
         state = cls._rebase_state()
         cls.remove_path_rebase()
-        state["base"] = cls.project_root()
+        cls._remember_project()
         message = om.MSceneMessage
         state["ids"] = [
             message.addCallback(message.kAfterOpen, cls._remember_project),
             message.addCallback(message.kAfterNew, cls._remember_project),
-            message.addCallback(message.kAfterSave, cls._remember_project),
             message.addCallback(message.kBeforeSave, cls._rebase_before_save),
+            message.addCallback(message.kAfterSave, cls._after_save),
+            message.addCallback(message.kBeforeExport, cls._rebase_before_export),
+            message.addCallback(message.kAfterExport, cls._restore_after_copy),
         ]
         return True
+
+    @classmethod
+    def ensure_path_rebase(cls) -> bool:
+        """:meth:`install_path_rebase` unless a copy of it already is.
+
+        What the private carrier's first touch calls (:meth:`_carrier`), so
+        every session that reads or writes a record keeps the path records
+        spelled for where its saves go -- a mayapy script or a batch job as
+        much as a session the UI handler started, where a save into another
+        project used to leave every entry spelled from the old one.
+        """
+        if cmds is None:
+            return False
+        if cls._rebase_state()["ids"]:
+            return True
+        return cls.install_path_rebase()
 
     @classmethod
     def remove_path_rebase(cls) -> None:
@@ -646,7 +690,20 @@ class DataNodes(ptk.SceneStoreBase):
 
     @classmethod
     def _remember_project(cls, *_args) -> None:
-        cls._rebase_state()["base"] = cls.project_root()
+        """The scene's project and file now, and no copy pending: another
+        scene is open, or this one was just written."""
+        state = cls._rebase_state()
+        state["base"] = cls.project_root()
+        state["scene"] = cls.scene_path()
+        state["pending"] = None
+        state["clean"] = False
+
+    @staticmethod
+    def _same_path(a: str, b: str) -> bool:
+        """Whether two spellings name one path (case and separators aside)."""
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
+            os.path.abspath(b)
+        )
 
     @classmethod
     def _rebase_before_save(cls, *_args) -> None:
@@ -654,6 +711,7 @@ class DataNodes(ptk.SceneStoreBase):
         raises: a record left spelled from the old project must not cost the
         save."""
         try:
+            cls._restore_after_copy()  # a copy whose after-callback never came
             # The file being written: Maya's own answer during the callback --
             # API 1.0's MFileIO; API 2.0 has no MFileIO at all (measured,
             # mayapy 2025) -- else the scene name (a Save As renamed it first).
@@ -662,14 +720,13 @@ class DataNodes(ptk.SceneStoreBase):
             before = getattr(om1.MFileIO, "beforeSaveFilename", None)
             current = cmds.file(query=True, sceneName=True) or ""
             target = (before() if before else "") or current
-            if not current or os.path.normcase(
-                os.path.abspath(target)
-            ) != os.path.normcase(os.path.abspath(current)):
-                # An autosave or a copy -- an UNTITLED scene's too: a save of
-                # the open scene names it first. The open scene stays put.
+            if not current or not cls._same_path(target, current):
+                # A save of the open scene names it first, so this writes a
+                # copy and the open scene stays put. (Not an autosave: Maya
+                # writes that as an export -- _rebase_before_export.)
+                cls._respell_copy(target)
                 return
-            new_base = cls.project_root_of(target)
-            if new_base is None:
+            if cls.project_root_of(target) is None:
                 return
             from mayatk.core_utils._core_utils import CoreUtils
 
@@ -677,9 +734,80 @@ class DataNodes(ptk.SceneStoreBase):
             # Not an undo step: an undone re-spelling would name the files
             # from the project the scene no longer lives in.
             with CoreUtils.undo_disabled():
-                cls.rebase_paths(state["base"], new_base)
-            state["base"] = new_base
+                cls.respell_for_write(
+                    target, state["base"], first_save=not state["scene"]
+                )
+            state["base"] = cls.project_root_of(target)
         except Exception:  # noqa: BLE001 - a save never fails on this
             logger.warning(
                 "Scene-record paths were not re-spelled for the save.", exc_info=True
+            )
+
+    @classmethod
+    def _after_save(cls, *_args) -> None:
+        """After any save: a copy written through ``kBeforeSave`` hands the
+        open scene its own spelling back, then the scene's project and file
+        are remembered."""
+        cls._restore_after_copy()
+        cls._remember_project()
+
+    @classmethod
+    def _rebase_before_export(cls, *_args) -> None:
+        """An export into a Maya scene is a copy (:meth:`_respell_copy`) --
+        an autosave included, which Maya writes as an export (measured: the
+        autosave path is ``beforeExportFilename``). Never raises: an export
+        must not fail on this."""
+        try:
+            cls._restore_after_copy()
+            import maya.OpenMaya as om1
+
+            cls._respell_copy(om1.MFileIO.beforeExportFilename())
+        except Exception:  # noqa: BLE001 - an export never fails on this
+            logger.warning(
+                "Scene-record paths were not re-spelled for the export.",
+                exc_info=True,
+            )
+
+    @classmethod
+    def _respell_copy(cls, target: str) -> None:
+        """Spell the path records for *target*, a copy of the open scene being
+        written -- an autosave, an export to a Maya scene -- and hold what
+        they were until it is (:meth:`_restore_after_copy`). A copy into the
+        scene's own project needs nothing, and a copy stamps nothing: it is
+        not the scene's first save."""
+        if os.path.splitext(target or "")[1].lower() not in cls._SCENE_EXTENSIONS:
+            return
+        state = cls._rebase_state()
+        new_base = cls.project_root_of(target)
+        if new_base is None or (
+            state["base"] and cls._same_path(state["base"], new_base)
+        ):
+            return
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            state["clean"] = not cmds.file(query=True, modified=True)
+            state["pending"] = cls.respell_for_write(target, state["base"])
+
+    @classmethod
+    def _restore_after_copy(cls, *_args) -> None:
+        """Once a copy is written, the open scene's own spelling back, exactly
+        (:meth:`restore_path_records`); nothing after any other write. A scene
+        that had no unsaved change before the copy has none after: the
+        re-spelling and this hand-back are not edits. Never raises."""
+        state = cls._rebase_state()
+        pending, state["pending"] = state.get("pending"), None
+        clean, state["clean"] = state.get("clean"), False
+        if not pending:
+            return
+        try:
+            from mayatk.core_utils._core_utils import CoreUtils
+
+            with CoreUtils.undo_disabled():
+                cls.restore_path_records(pending)
+            if clean:
+                cmds.file(modified=False)
+        except Exception:  # noqa: BLE001 - the write already happened
+            logger.warning(
+                "Scene-record paths were not restored after a copy.", exc_info=True
             )

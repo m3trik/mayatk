@@ -9,7 +9,7 @@ except ImportError:
 import os
 from functools import partial
 
-from pythontk import FileUtils, ImgUtils
+from pythontk import FileDependencies, FileUtils, ImgUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
 from uitk.widgets.footer import FooterStatusController
@@ -2763,7 +2763,9 @@ class TexturePathEditorSlots:
             return
 
         index = []
-        for root, _, files in os.walk(sourceimages):
+        # Never into a folder of stale copies (a sync cache, the Recycle Bin,
+        # _superseded): a lone copy there was bound as the missing texture.
+        for root, _, files in FileDependencies.walk(sourceimages):
             for f in files:
                 stem = os.path.splitext(f)[0]
                 if stem:

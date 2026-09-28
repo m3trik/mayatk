@@ -848,5 +848,118 @@ class TestBakeClassification(MayaTkTestCase):
         self.assertEqual(list(buckets), ["matB"])
 
 
+class TestBakedMaterialAssignment(MayaTkTestCase):
+    """``_assign_baked_materials`` against real shading groups (Toolbag stubbed).
+
+    The mock suite's stand-ins answered what the code expected: a reclaim that
+    renames nothing, a shading group with no members left, a whole-mesh
+    target. Measured in a fresh mayapy (2026-09-27), all three were wrong:
+
+    - every re-bake that replaced its previous material RAISED after deleting
+      it (``_retire_previous_network`` read the shading group under the name
+      the reclaim had just changed), aborting the remaining texture sets;
+    - a partial re-bake deleted the earlier ``<mat>_BAKED`` while meshes
+      outside the bake still wore it, leaving them with NO shading group;
+    - a target wearing two materials per face came back wearing the LAST
+      set whole, the other set's faces clobbered.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+
+        self.maps = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "temp_tests",
+            "marmoset_assign_maps",
+        )
+        shutil.rmtree(self.maps, ignore_errors=True)
+        os.makedirs(self.maps)
+        self.addCleanup(shutil.rmtree, self.maps, ignore_errors=True)
+        self.bridge = MarmosetBridge(toolbag_path="unused.exe")
+        self.warnings = []
+        self.bridge.logger = unittest.mock.MagicMock()
+        self.bridge.logger.warning.side_effect = lambda msg, *a: self.warnings.append(
+            str(msg) % a if a else str(msg)
+        )
+
+    def _png(self, name, rgb):
+        from PIL import Image
+
+        path = os.path.join(self.maps, name).replace("\\", "/")
+        Image.new("RGB", (4, 4), rgb).save(path)
+        return path
+
+    @staticmethod
+    def _material(name):
+        shader = cmds.shadingNode("standardSurface", asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        return shader, sg
+
+    @staticmethod
+    def _shaders_on(mesh):
+        """``{surface shader: faces}`` on *mesh* (``None`` = the whole mesh)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        out = {}
+        for sg, faces in MatUtils.get_shading_assignments(mesh).items():
+            for shader in cmds.listConnections(f"{sg}.surfaceShader") or []:
+                out[shader] = sorted(faces) if faces else None
+        return out
+
+    def test_a_rebake_replaces_its_previous_material_without_raising(self):
+        cube = cmds.ls(cmds.polyCube(name="rebake_cube")[0], long=True)[0]
+        _, sg = self._material("N_BAKED")
+        cmds.sets(cube, edit=True, forceElement=sg)
+        created = self.bridge._assign_baked_materials(
+            [self._png("N_Base_Color.png", (40, 40, 200))],
+            {"N_BAKED": [cube]},
+            aliases={"N_BAKED": "N"},
+            output_dir=self.maps,
+        )
+        self.assertEqual(created, {"N_BAKED": "N_BAKED"})
+        self.assertEqual(self._shaders_on(cube), {"N_BAKED": None})
+        self.assertFalse(cmds.objExists("N_BAKED1"))
+
+    def test_a_partial_rebake_keeps_the_material_another_mesh_wears(self):
+        baked = cmds.ls(cmds.polyCube(name="partial_baked")[0], long=True)[0]
+        other = cmds.ls(cmds.polyCube(name="partial_other")[0], long=True)[0]
+        _, sg = self._material("M_BAKED")
+        cmds.sets([baked, other], edit=True, forceElement=sg)
+        created = self.bridge._assign_baked_materials(
+            [self._png("M_Base_Color.png", (200, 40, 40))],
+            {"M_BAKED": [baked]},
+            aliases={"M_BAKED": "M"},
+            output_dir=self.maps,
+        )
+        self.assertEqual(self._shaders_on(other), {"M_BAKED": None})
+        self.assertTrue(created.get("M_BAKED"))
+        self.assertEqual(self._shaders_on(baked), {created["M_BAKED"]: None})
+        self.assertNotEqual(created["M_BAKED"], "M_BAKED")
+        self.assertTrue(any("still worn" in w for w in self.warnings), self.warnings)
+
+    def test_a_multi_material_target_gets_each_set_on_its_own_faces(self):
+        cube = cmds.ls(cmds.polyCube(name="multi_target")[0], long=True)[0]
+        _, sg_a = self._material("MA")
+        _, sg_b = self._material("MB")
+        cmds.sets(f"{cube}.f[0:2]", edit=True, forceElement=sg_a)
+        cmds.sets(f"{cube}.f[3:5]", edit=True, forceElement=sg_b)
+        created = self.bridge._assign_baked_materials(
+            [
+                self._png("MA_Base_Color.png", (200, 40, 40)),
+                self._png("MB_Base_Color.png", (40, 200, 40)),
+            ],
+            {"MA": [cube], "MB": [cube]},
+            output_dir=self.maps,
+        )
+        self.assertEqual(created, {"MA": "MA_BAKED", "MB": "MB_BAKED"})
+        self.assertEqual(
+            self._shaders_on(cube), {"MA_BAKED": [0, 1, 2], "MB_BAKED": [3, 4, 5]}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

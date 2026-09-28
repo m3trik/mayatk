@@ -2627,7 +2627,9 @@ class TestShearedMatrixFlatten(unittest.TestCase):
                 value=(1.3 + 0.1 * i) if stretched else 1.0,
             )
             cmds.setKeyframe(world, attribute="inputRotateZ", time=1, value=10 + 20 * i)
-            cmds.setKeyframe(world, attribute="inputRotateZ", time=30, value=40 + 25 * i)
+            cmds.setKeyframe(
+                world, attribute="inputRotateZ", time=30, value=40 + 25 * i
+            )
             if parent == rig:
                 cmds.connectAttr(f"{world}.outputMatrix", f"{joint}.offsetParentMatrix")
             else:
@@ -2676,9 +2678,7 @@ class TestShearedMatrixFlatten(unittest.TestCase):
         # shear, and move there with world-fitted keys.
         self.assertEqual(sorted(result.flattened), sorted(joints[1:]))
         for now in result.flattened.values():
-            self.assertEqual(
-                cmds.listRelatives(now, parent=True, fullPath=True), [rig]
-            )
+            self.assertEqual(cmds.listRelatives(now, parent=True, fullPath=True), [rig])
             self.assertIn(now, result.baked)
             self.assertFalse(
                 cmds.listConnections(
@@ -3609,6 +3609,215 @@ class TestRestoreUnderChangedWorkingUnit(unittest.TestCase):
         restored = self._conversion_factor(f"{grp}.rotateY")
         self.assertIsNotNone(restored, "the angular conversion was dropped")
         self.assertAlmostEqual(restored, authored, places=9)
+
+
+class TestFailedBakeLeavesNoState(unittest.TestCase):
+    """A bake that fails part-way hands the scene back as it found it.
+
+    The restore manifest was persisted only at the END of ``bake()``, so a phase
+    that raised after the override layer existed left the layer, the cut
+    offsetParentMatrix drive and its baked t/r/s curves in the scene with no
+    session to reverse them -- and the layer write had already inserted a
+    cf=100 unitConversion under the exporter's metres, latent until the orphan
+    layer was deleted (auto-bend ty 400.0 for an authored 4.0; measured
+    2026-09-27). A bake that keyed nothing handed its layer to the caller,
+    whose bare delete under metres made the same x100 at once.
+
+    Faults are injected by WRAPPING the real phase (it runs, then raises), so
+    the scene holds everything that phase wrote.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        self._units = cmds.currentUnit(q=True, linear=True)
+        cmds.currentUnit(linear="cm")  # author in cm, whatever the prefs say
+        cmds.playbackOptions(minTime=1, maxTime=10)
+
+    def tearDown(self):
+        if self.maya_available:
+            cmds.currentUnit(linear=self._units)
+            cmds.file(new=True, force=True)
+
+    @staticmethod
+    def _raising_after(fn):
+        """*fn* runs for real, then raises -- a fault after its writes."""
+
+        def wrapper(*args, **kwargs):
+            fn(*args, **kwargs)
+            raise RuntimeError(f"injected after {fn.__name__}")
+
+        return wrapper
+
+    def _rig(self):
+        """The loom auto-bend channel plus an offsetParentMatrix drive."""
+        grp = TestRestoreUnderChangedWorkingUnit._auto_bend_network()
+        mdrv = cmds.spaceLocator(name="mdrv_LOC")[0]
+        cmds.setKeyframe(mdrv, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(mdrv, attribute="translateY", time=10, value=5)
+        mm = cmds.createNode("multMatrix", name="opm_mm")
+        cmds.connectAttr(f"{mdrv}.worldMatrix[0]", f"{mm}.matrixIn[0]")
+        opm = cmds.group(empty=True, name="opm_GRP")
+        cmds.connectAttr(f"{mm}.matrixSum", f"{opm}.offsetParentMatrix")
+        return grp, opm
+
+    @staticmethod
+    def _ty(node, frame):
+        cmds.currentTime(frame)
+        return cmds.getAttr(f"{node}.translateY")
+
+    def _assert_unbaked(self, grp, opm=None, authored=None):
+        """No layer, no session, the drive wired as authored, factor 1.0."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        layers = [
+            name
+            for name in cmds.ls(type="animLayer") or []
+            if name.startswith("SmartBake")
+        ]
+        self.assertEqual(layers, [], "the bake's override layer was left behind")
+        self.assertEqual(BakeSessionStore.list_ids(), [])
+        factor = TestRestoreUnderChangedWorkingUnit._conversion_factor(
+            f"{grp}.translateY"
+        )
+        self.assertAlmostEqual(
+            1.0 if factor is None else factor,
+            1.0,
+            places=9,
+            msg=f"the failed bake rescaled the auto-bend channel by {factor}x",
+        )
+        if authored is not None:
+            self.assertAlmostEqual(self._ty(grp, 10), authored, places=6)
+        if opm:
+            self.assertEqual(
+                cmds.listConnections(
+                    f"{opm}.offsetParentMatrix", source=True, plugs=True
+                ),
+                ["opm_mm.matrixSum"],
+                "the cut offsetParentMatrix drive was not reconnected",
+            )
+            self.assertEqual(
+                cmds.listConnections(opm, source=True, type="animCurve") or [],
+                [],
+                "the matrix pass's baked t/r/s curves were left behind",
+            )
+
+    def test_a_bake_that_raises_after_its_layer_rolls_back(self):
+        """Every phase has run (the flatten is last); the rollback reverses it
+        under the exporter's metres and the error still reaches the caller."""
+        from unittest.mock import patch
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        grp, opm = self._rig()
+        authored = self._ty(grp, 10)
+        cmds.currentUnit(linear="m")  # what the exporter leaves in force
+        try:
+            with patch.object(
+                SmartBake,
+                "_apply_flatten",
+                self._raising_after(SmartBake._apply_flatten),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "injected"):
+                    SmartBake(objects=[grp, opm], use_override_layer=True).execute()
+        finally:
+            cmds.currentUnit(linear="cm")
+        self._assert_unbaked(grp, opm, authored)
+
+    def test_a_failed_rollback_keeps_the_session_for_a_manual_restore(self):
+        """The bake's own error still propagates; the manifest is persisted so
+        ``SmartBake.restore`` can finish what the rollback could not."""
+        from unittest.mock import patch
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        grp, opm = self._rig()
+        authored = self._ty(grp, 10)
+        cmds.currentUnit(linear="m")
+        try:
+            with (
+                patch.object(
+                    SmartBake,
+                    "_apply_flatten",
+                    self._raising_after(SmartBake._apply_flatten),
+                ),
+                patch.object(
+                    BakeSessionStore,
+                    "restore_session",
+                    side_effect=RuntimeError("rollback broke"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "injected"):
+                    SmartBake(objects=[grp, opm], use_override_layer=True).execute()
+            self.assertEqual(len(BakeSessionStore.list_ids()), 1)
+            self.assertTrue(SmartBake.restore().success)
+        finally:
+            cmds.currentUnit(linear="cm")
+        self._assert_unbaked(grp, opm, authored)
+
+    def test_a_raise_before_the_matrix_cut_leaves_no_stash(self):
+        """The matrix pass stashed each object's t/r/s curves up front, but the
+        session only learnt of a stash once its object's drive was cut: a raise
+        in between (the sampling, the flatten's plan) left a locked, registered
+        ``__smartBakeStash`` node the rollback could not see."""
+        from unittest.mock import patch
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        grp, opm = self._rig()
+        cmds.setKeyframe(opm, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(opm, attribute="translateX", time=10, value=3)
+        curve = cmds.listConnections(f"{opm}.translateX", type="animCurve")
+        with patch.object(
+            SmartBake,
+            "_prepare_flatten",
+            self._raising_after(SmartBake._prepare_flatten),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "injected"):
+                SmartBake(objects=[grp, opm], use_override_layer=True).execute()
+        self.assertEqual(cmds.ls("*__smartBakeStash*"), [])
+        self.assertEqual(
+            cmds.listConnections(f"{opm}.translateX", type="animCurve"), curve
+        )
+        self._assert_unbaked(grp)
+
+    def test_a_bake_that_keys_nothing_removes_its_own_layer(self):
+        """Every bakeResults group fails (caught per group), so nothing is
+        baked and no session is recorded -- the layer the failed calls wrote
+        into goes with the bake, its conversions re-pinned, instead of reaching
+        a caller that could only delete it under the export's unit."""
+        from unittest.mock import patch
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        grp = TestRestoreUnderChangedWorkingUnit._auto_bend_network()
+        authored = self._ty(grp, 10)
+        real = AnimUtils.bake.__func__
+        cmds.currentUnit(linear="m")
+        try:
+            with (
+                patch.object(SmartBake, "SAMPLE_LAYER_BAKE", False),
+                patch.object(AnimUtils, "bake", classmethod(self._raising_after(real))),
+            ):
+                result = SmartBake(objects=[grp], use_override_layer=True).execute()
+        finally:
+            cmds.currentUnit(linear="cm")
+        self.assertFalse(result.baked, "the fixture baked something")
+        self.assertIsNone(result.session_id)
+        self.assertIsNone(result.override_layer)
+        self._assert_unbaked(grp, authored=authored)
 
 
 # -----------------------------------------------------------------------------

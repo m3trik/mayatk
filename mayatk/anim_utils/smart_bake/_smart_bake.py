@@ -2146,7 +2146,7 @@ class SmartBake(_SmartBakeInternal):
         if session is not None:
             for obj, _, source_plug, channels in targets:
                 originals: Dict[str, float] = {}
-                stashes: List[dict] = []
+                to_stash: List[str] = []
                 connections: List[List[dict]] = []
                 for channel in channels:
                     channel_plug = f"{obj}.{channel}"
@@ -2160,7 +2160,7 @@ class SmartBake(_SmartBakeInternal):
                         or []
                     )
                     if curves:
-                        stashes.append(BakeSessionStore.stash_curve(curves[0]))
+                        to_stash.append(curves[0])
                     else:
                         originals[channel] = cmds.getAttr(channel_plug)
                     connections.extend(
@@ -2171,7 +2171,8 @@ class SmartBake(_SmartBakeInternal):
                     "source": BakeSessionStore.plug_ref(source_plug),
                     "channels": list(channels),
                     "originals": originals,
-                    "stashes": stashes,
+                    "stashes": [],  # filled as the object joins the session
+                    "_to_stash": to_stash,
                     "_connections": connections,
                 }
 
@@ -2244,11 +2245,9 @@ class SmartBake(_SmartBakeInternal):
         # in-place bake and its warning.
         flatten = self._prepare_flatten(sheared, frames, [e[0] for e in targets])
         if flatten:
-            for obj in flatten["objects"]:
-                # The flatten records its own cuts and values; a stash made
-                # for the in-place bake it replaces would never be reclaimed.
-                for record in pending.pop(obj, {}).get("stashes", []):
-                    BakeSessionStore.discard_stash(record)
+            # The flatten records its own cuts and values; the in-place bake it
+            # replaces has stashed nothing yet (stashes are made as an object
+            # joins the session, below).
             targets = [e for e in targets if e[0] not in flatten["objects"]]
             sheared = [obj for obj in sheared if obj not in flatten["objects"]]
 
@@ -2256,6 +2255,19 @@ class SmartBake(_SmartBakeInternal):
         # set would sample-and-write against a moving target.
         surviving: List[Tuple[str, str, str, List[str]]] = []
         for obj, plug, source_plug, channels in targets:
+            # Joined BEFORE this object's first mutation: a raise part-way
+            # through the set then still finds every cut drive in the session
+            # (bake's rollback). A refusal below takes it back out.
+            joined = pending.get(obj)
+            mark = len(session["connections"]) if joined is not None else 0
+            if joined is not None:
+                session["connections"].extend(joined.pop("_connections", []))
+                session["matrix"].append(joined)
+                # Stashed only once joined: a stash node made up front was
+                # left behind, locked and registered, by a raise before this
+                # object's turn (the sampling, the flatten's plan).
+                for curve in joined.pop("_to_stash", []):
+                    joined["stashes"].append(BakeSessionStore.stash_curve(curve))
             try:
                 cmds.disconnectAttr(source_plug, plug)
                 cmds.setAttr(plug, self.IDENTITY_MATRIX, type="matrix")
@@ -2327,17 +2339,12 @@ class SmartBake(_SmartBakeInternal):
                 surviving.append((obj, plug, source_plug, channels))
             except RuntimeError as e:
                 cmds.warning(f"SmartBake: could not neutralise '{plug}': {e}")
+                if joined is not None:  # the last joined, nothing since
+                    del session["matrix"][-1]
+                    del session["connections"][mark:]
                 for record in pending.pop(obj, {}).get("stashes", []):
                     BakeSessionStore.discard_stash(record)
                 result.skip(obj, f"matrix: could not neutralise {plug} ({e})")
-
-        if session is not None:
-            for obj, _, _, _ in surviving:
-                record = pending.get(obj)
-                if record is None:
-                    continue
-                session["connections"].extend(record.pop("_connections", []))
-                session["matrix"].append(record)
 
         # Every bake channel's live input was severed above, so the complete
         # folded local lands on the plugs whichever writer keys it.
@@ -2447,7 +2454,9 @@ class SmartBake(_SmartBakeInternal):
         chain = {(cmds.ls(obj, long=True) or [obj])[0] for obj in sheared}
         for path in list(chain):
             chain.update(
-                cmds.listRelatives(path, allDescendents=True, type="joint", fullPath=True)
+                cmds.listRelatives(
+                    path, allDescendents=True, type="joint", fullPath=True
+                )
                 or []
             )
         qualifies = WorldFitBake.similarity_ancestors(chain, frames)
@@ -2812,6 +2821,11 @@ class SmartBake(_SmartBakeInternal):
                         pass
         return muted
 
+    #: The bake in progress, ``(result, session)``, from the moment its manifest
+    #: exists until :meth:`bake` returns: what :meth:`_roll_back` reverses when a
+    #: phase raises.
+    _in_flight: Optional[Tuple[BakeResult, Optional[dict]]] = None
+
     @CoreUtils.undoable
     def bake(
         self,
@@ -2820,14 +2834,86 @@ class SmartBake(_SmartBakeInternal):
     ) -> BakeResult:
         """Execute baking on analyzed objects.
 
+        Transactional: each phase records what it changes in the session
+        manifest BEFORE changing it, so a phase that raises is reversed from
+        that manifest (:meth:`_roll_back`) and its error re-raised -- the scene
+        is handed back as the bake found it, override layer or Scene Keys.
+        That takes a restorable bake (the default): with ``restorable=False``
+        or ``delete_inputs`` nothing is recorded to reverse, so only the
+        override layer goes (a saved backup is the way back). A bake that keys
+        nothing removes its own override layer.
+
         Parameters:
             analysis: Pre-computed analysis. If None, runs analyze().
             time_range: Custom time range. If None, auto-detects from drivers.
 
         Returns:
             BakeResult dataclass with baked, skipped, time_range, deleted,
-            override_layer, backup_path, and muted_drivers.
+            override_layer (None when nothing was baked), backup_path, and
+            muted_drivers.
+
+        Raises:
+            Whatever a phase raised, after the rollback.
         """
+        self._in_flight = None
+        try:
+            return self._bake(analysis, time_range)
+        except BaseException:
+            if self._in_flight is not None:
+                self._roll_back(*self._in_flight)
+            raise
+        finally:
+            self._in_flight = None
+
+    @staticmethod
+    def _roll_back(result: BakeResult, session: Optional[dict]) -> None:
+        """Reverse a bake that raised part-way, from the manifest it had built.
+
+        Every phase records its change before making it, so the session holds
+        whatever ran, and :meth:`BakeSessionStore.restore_session` reverses it
+        under whatever working unit is live (it re-pins the recorded conversion
+        factors -- the exporter's metres made a bare layer delete a cf=100).
+        Without a restorable session only the override layer is removed.
+
+        Never raises: the caller re-raises the bake's own error, which a
+        rollback failure must not mask. A session it could not reverse is
+        persisted instead, so ``SmartBake.restore('<id>')`` can finish it.
+        """
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        try:
+            if session is not None and session.get("restorable", True):
+                restored = BakeSessionStore.restore_session(session)
+                for warning in restored.warnings:
+                    cmds.warning(f"SmartBake rollback: {warning}")
+            elif result.override_layer:
+                BakeSessionStore.remove_override_layer(
+                    session or {}, layer=result.override_layer
+                )
+        except Exception as error:  # noqa: BLE001 -- never masks the bake's error
+            if session is None:
+                cmds.warning(f"SmartBake: rolling back a failed bake failed ({error}).")
+                return
+            try:
+                BakeSessionStore.push(session)
+            except Exception as push_error:  # noqa: BLE001 -- see above
+                cmds.warning(
+                    f"SmartBake: rolling back a failed bake failed ({error}), and "
+                    f"its session could not be saved either ({push_error})."
+                )
+                return
+            cmds.warning(
+                f"SmartBake: rolling back a failed bake failed ({error}); its "
+                f"session is saved -- finish it with "
+                f"SmartBake.restore('{session['id']}')."
+            )
+
+    def _bake(
+        self,
+        analysis: Optional[Dict[str, BakeAnalysis]],
+        time_range: Optional[Tuple[int, int]],
+    ) -> BakeResult:
+        """:meth:`bake`'s phases, run under its rollback."""
         if analysis is None:
             analysis = self.analyze()
 
@@ -2925,6 +3011,11 @@ class SmartBake(_SmartBakeInternal):
                             }
                         )
 
+        # Nothing is mutated above this line; from here on a raise is reversed
+        # from `session` (bake's rollback), which every phase below writes
+        # BEFORE it changes the scene.
+        self._in_flight = (result, session)
+
         # Split inherited-visibility objects from standard driven channels.
         # These get their own dedicated layer and frame-by-frame sampling.
         inherited_vis_objects = {}
@@ -3005,6 +3096,11 @@ class SmartBake(_SmartBakeInternal):
         if self.use_override_layer and remaining_to_bake:
             override_layer = self._create_override_layer()
             result.override_layer = override_layer
+            if session is not None:
+                # Recorded now, not at the push: the rollback deletes it.
+                session["override_layer"] = bake_session.BakeSessionStore.node_ref(
+                    override_layer
+                )
 
         start, end = time_range
 
@@ -3353,12 +3449,11 @@ class SmartBake(_SmartBakeInternal):
 
         # Persist the restore manifest — only when the bake actually
         # changed something worth reversing.
+        baked_anything = bool(result.baked or result.visibility_curves)
         if session is not None:
-            if result.baked or result.visibility_curves:
-                if override_layer and cmds.objExists(override_layer):
-                    session["override_layer"] = bake_session.BakeSessionStore.node_ref(
-                        override_layer
-                    )
+            if baked_anything:
+                if not (override_layer and cmds.objExists(override_layer)):
+                    session["override_layer"] = None  # recorded at creation; gone
                 bake_session.BakeSessionStore.push(session)
                 result.session_id = session["id"]
             else:
@@ -3368,6 +3463,16 @@ class SmartBake(_SmartBakeInternal):
                 for entry in session["visibility"]:
                     if entry.get("stash"):
                         bake_session.BakeSessionStore.discard_stash(entry["stash"])
+        if override_layer and not baked_anything:
+            # A bake that keyed nothing leaves no layer: the calls that failed
+            # may have wired plugs into it, and a caller holding only its name
+            # could delete it only under its own working unit -- the exporter's
+            # metres rebuilt the auto-bend link at cf=100. The recorded factors
+            # are re-pinned here instead.
+            bake_session.BakeSessionStore.remove_override_layer(
+                session or {}, layer=override_layer
+            )
+            result.override_layer = None
 
         # An object can be skipped by more than one phase — report it once.
         self._account_for_unbaked(

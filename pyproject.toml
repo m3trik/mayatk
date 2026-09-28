@@ -78,3 +78,30 @@ ignore = ["E402"]  # house pattern: try-guarded DCC imports precede the other im
 
 [tool.ruff.lint.per-file-ignores]
 "**/templates/**" = ["F821"]  # exec-templates carry __PLACEHOLDER__ tokens substituted at run time
+
+[tool.m3trik.layers]
+# CODE_STANDARD section 0 (Parts): this package's parts, top first; the last is
+# the kernel. A part is a package-relative path and the longest declared prefix
+# wins, so a tenant can rank above its own folder. A module may import its own
+# part or any part below it; "a | b" makes peers of one rank. Checked by
+# m3trik/scripts/check_layers.py against a frozen baseline of today's exceptions.
+order = [
+    "core_utils/diagnostics",
+    "core_utils/auto_instancer",
+    "anim_utils",
+    "rig_utils",
+    "nurbs_utils",
+    "edit_utils",
+    "env_utils",
+    "cam_utils",
+    "light_utils",
+    "uv_utils",
+    "mat_utils",
+    "audio_utils",
+    "display_utils",
+    "node_utils",
+    "xform_utils",
+    "ui_utils",
+    "render_utils",
+    "core_utils",
+]

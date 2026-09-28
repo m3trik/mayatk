@@ -19,6 +19,7 @@ import json
 import math
 import os
 import re
+import sys
 import tempfile
 import types
 import unittest
@@ -3428,6 +3429,54 @@ class TestPullTemplateCopiesMatchTheirSource(MayaTkTestCase):
         follower = cmds.polyCube()[0]
         cmds.parentConstraint(cube, follower)
         self.assertEqual(_same("unkeyed driver"), (1.0, 50.0))  # the full range
+
+    # ---- the USD export: ONE implementation, mayatk's -------------------------
+    # The split export (blendshape gate, visibility resampled, static subtrees
+    # left out of the sampled pass) lives in ``UsdUtils._maya_usd_export``, pinned
+    # against mayaUsd by ``test_usd.TestSampledExport``. The template only hands
+    # it the flag table -- and runs one plain pass where mayatk is missing.
+
+    def _export_usd(self):
+        export = self._template_function("_import_scene_usd.py", "export_usd")
+        export.__globals__["OUT_USD"] = "X:/pull/out.usd"
+        return export
+
+    def test_usd_template_exports_through_usdutils(self):
+        """The flag table plus the frame range, the whole scene, shading-group
+        material names (this route's spelling), and ``prune_static``: its scene is
+        a throwaway conversion copy."""
+        import logging
+
+        from mayatk.env_utils.usd import UsdUtils
+
+        log = logging.getLogger("mayatk.env_utils.usd")
+        level, handlers = log.level, list(log.handlers)
+        self.addCleanup(setattr, log, "handlers", handlers)
+        self.addCleanup(log.setLevel, level)
+        fake = mock.MagicMock()
+        with mock.patch.object(UsdUtils, "export") as spy:
+            self._export_usd()(fake, (1.0, 30.0))
+        spy.assert_called_once_with(
+            "X:/pull/out.usd",
+            options=dict(UsdUtils.INTERCHANGE_EXPORT_OPTIONS, frameRange=(1.0, 30.0)),
+            selection_only=False,
+            material_names="shading_group",
+            prune_static=True,
+        )
+        fake.mayaUSDExport.assert_not_called()
+
+    def test_usd_template_runs_one_plain_pass_without_mayatk(self):
+        """A mayapy without mayatk still converts: one ``mayaUSDExport``."""
+        from mayatk.env_utils.usd import UsdUtils
+
+        fake = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {"mayatk.env_utils.usd": None}):
+            self._export_usd()(fake, (1.0, 30.0))
+        fake.mayaUSDExport.assert_called_once_with(
+            file="X:/pull/out.usd",
+            frameRange=(1.0, 30.0),
+            **UsdUtils.INTERCHANGE_EXPORT_OPTIONS,
+        )
 
 
 class TestBridgeMirrorsTheBlenderBaker(unittest.TestCase):

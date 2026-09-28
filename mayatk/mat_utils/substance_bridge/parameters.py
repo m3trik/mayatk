@@ -124,7 +124,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
                 "Set From Selection",
                 "set_bake_source_from_selection",
                 "Store the current selection as this scene's bake source\n"
-                "(an objectSet; saves with the scene, shared with the\n"
+                "(a set saved with the scene, shared with the\n"
                 "Marmoset bridge). A non-empty set ships automatically --\n"
                 "there is no second checkbox to remember.",
             ),
@@ -143,8 +143,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
             ),
         ],
         tooltip=(
-            "The scene's bake source (a scene objectSet shared with the\n"
-            "Marmoset bridge). Define it once from a selection; it lives\n"
+            "The scene's bake source (a set saved with the scene, shared\n"
+            "with the Marmoset bridge). Define it once from a selection; it lives\n"
             "in the scene, independent of the Scope above.\n\n"
             "Whenever the set has members, a send also exports them to a\n"
             "companion ``<name>_source.fbx`` and wires it into Painter's\n"

@@ -219,6 +219,123 @@ class TestChunkChildStdin(unittest.TestCase):
         self.assertEqual(len(calls), 1, "one mayapy per chunk attempt")
         self.assertIs(calls[0][1].get("stdin"), rt.subprocess.DEVNULL)
 
+    def test_the_chunk_command_line_carries_no_path(self):
+        """mayapy decodes its command line in the ANSI code page (measured on Maya
+        2025: "Jos\\u00e9" arrived as "Jos\\udce9", Cyrillic as "???"), so a checkout
+        under such a folder handed it a driver that does not exist. The driver and
+        its config ride in the env instead (``AppLauncher.python_args_via_env``)."""
+        import json
+
+        runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(runner.results_file.unlink, True)
+        runner.temp_test_dir.mkdir(exist_ok=True)
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            raise OSError("launch refused by the test")
+
+        driver = Path("X:/Jos\u00e9 \u0416\u0443\u043a/_suite_driver.py")
+        popen = mock.patch.object(rt.subprocess, "Popen", side_effect=fake_popen)
+        with mock.patch.object(rt, "DRIVER_PATH", driver), popen:
+            with contextlib.redirect_stdout(io.StringIO()):
+                runner._run_chunk(
+                    "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+                )
+        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            self.addCleanup(stale.unlink, True)
+        cmd, kwargs = calls[0]
+        self.assertTrue(all(str(part).isascii() for part in cmd), cmd)
+        from pythontk import AppLauncher
+
+        argv = json.loads(kwargs["env"][AppLauncher.PYTHON_ARGV_VAR])
+        self.assertEqual(argv[0], str(driver))
+        self.assertTrue(argv[1].endswith(".json"), argv)
+        self.assertEqual(
+            kwargs["env"].get("PYTHONPATH"), runner._child_env()["PYTHONPATH"]
+        )
+
+
+class TestChunkTempIsolation(unittest.TestCase):
+    """A chunk's Maya reads TEMP once, at startup, and files its crash-save there.
+
+    Measured 2026-09-27 (fresh mayapy, TEMP = a counting dir): a process that
+    leaves through a crash -- ``os._exit``, which runs Maya's faulting DLL
+    detach, or a native crash -- writes ``untitled[Recovered-...].ma``, a
+    ``MayaCrashLog*.dmp`` and its log into ITS TEMP. The runner handed chunks
+    the real TEMP (``os.environ.copy()``): the suite driver's own
+    ``TestSandbox.activate()`` runs after Maya has read it, so a crashing chunk
+    -- the case the resume machinery exists for -- littered the user's temp
+    dir. The runner now isolates TEMP before it spawns anything, like
+    blendertk's runner, so every chunk inherits the throwaway root.
+
+    Hermetic: the "real" TEMP here is a test-owned folder, and the process-wide
+    sandbox state is restored afterwards.
+    """
+
+    def setUp(self):
+        import shutil
+        import tempfile
+
+        from pythontk.core_utils.test_sandbox import TestSandbox
+
+        self.real = str(TEST_DIR / "temp_tests" / f"realtemp_{os.getpid()}")
+        os.makedirs(self.real, exist_ok=True)
+        self.addCleanup(shutil.rmtree, self.real, True)
+        for patcher in (
+            mock.patch.dict(os.environ, {"TEMP": self.real, "TMP": self.real}),
+            mock.patch.object(tempfile, "tempdir", self.real),
+            mock.patch.dict(TestSandbox._state, {"temp_dir": None, "temp_store": None}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(self.runner.results_file.unlink, True)
+
+    def test_a_chunk_is_handed_the_sandbox_temp(self):
+        root = self.runner._isolate_temp()
+        env = self.runner._child_env()
+        self.assertTrue(root and os.path.isdir(root), root)
+        self.assertNotEqual(os.path.normcase(root), os.path.normcase(self.real))
+        for key in ("TEMP", "TMP"):
+            self.assertEqual(os.path.normcase(env[key]), os.path.normcase(root))
+
+    def test_a_crashing_chunk_files_its_recovered_scene_inside_the_sandbox(self):
+        import glob
+        import subprocess
+
+        mayapy = rt.find_mayapy()
+        if not mayapy:
+            self.skipTest("mayapy not installed")
+        self.runner._isolate_temp()
+        env = self.runner._child_env()
+        script = os.path.join(self.real, "crash_like_a_chunk.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(
+                "import os\n"
+                "import maya.standalone\n"
+                "maya.standalone.initialize(name='python')\n"
+                "import maya.cmds as cmds\n"
+                "cmds.polyCube()\n"
+                "os._exit(0)  # the teardown crash a native-crashing chunk also takes\n"
+            )
+        env.update(
+            MAYA_SKIP_USERSETUP_PY="1", MAYA_DISABLE_CIP="1", MAYA_DISABLE_CER="1"
+        )
+        subprocess.run([mayapy, script], env=env, capture_output=True, timeout=600)
+
+        def crash_files(folder):
+            # The recovered scene, and the crash log + dump written beside it. The
+            # scene copy is not written on every crash (measured: skipped in one of
+            # two identical runs); the crash log always is.
+            return glob.glob(os.path.join(folder, "*[[]Recovered-*")) + glob.glob(
+                os.path.join(folder, "MayaCrashLog*")
+            )
+
+        child_temp = env["TEMP"]
+        self.assertEqual(crash_files(self.real), [], "landed in the real TEMP")
+        self.assertTrue(crash_files(child_temp), os.listdir(child_temp))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

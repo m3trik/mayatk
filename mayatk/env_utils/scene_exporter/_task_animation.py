@@ -99,6 +99,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         # FIRST (LIFO): its matrix records reconnect offsetParentMatrix to
         # whatever drove it at bake time, which for flattened chains is the
         # flatten task's rewrap node -- a node the flatten restore deletes.
+        # Nothing is staged for a bake that raised: bake() rolled it back
+        # before the error reached here, in write-back mode too (a partial
+        # bake is never a kept edit).
         if result.session_id:
             self._bake_session_id = result.session_id
         if result.override_layer:
@@ -694,9 +697,12 @@ class _AnimationTasksMixin(_TaskDataMixin):
         offsetParentMatrix wiring, which composed on top of kept keys would
         double-transform those nodes. Otherwise the session manifest is
         restored (layer deleted, IK handles re-enabled, baked visibility put
-        back); a bake recorded without one falls back to deleting its
-        override layer. Never raises: a failure is logged, and every other
-        staged restore still runs.
+        back); when that restore fails, or a bake recorded none, the override
+        layer is still removed, through the restore's own layer step
+        (``BakeSessionStore.remove_override_layer``), so the unit conversions
+        the session recorded are re-pinned under the export's working unit.
+        Never raises: a failure is logged, and every other staged restore still
+        runs.
         """
         from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
 
@@ -744,11 +750,22 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 self.logger.error(f"SmartBake restore failed: {e}")
         if layer:
             try:
-                if cmds.objExists(layer):
-                    cmds.delete(layer)
-                    self.logger.info(
-                        f"Deleted bake override layer '{layer}' — scene restored."
-                    )
+                # Through the restore's own layer step, fed the session the
+                # store still holds (a restore that failed never popped it):
+                # this runs under the export's working unit, where a bare
+                # delete let Maya rebuild the driver links at cf=100.
+                from mayatk.anim_utils.smart_bake.bake_session import (
+                    BakeSessionStore,
+                )
+
+                record = (BakeSessionStore.peek(session) if session else None) or {}
+                warnings = []
+                if BakeSessionStore.remove_override_layer(
+                    record, layer=layer, warnings=warnings
+                ):
+                    self.logger.info(f"Deleted bake override layer '{layer}'.")
+                for warning in warnings:
+                    self.logger.warning(f"Bake override layer: {warning}")
             except Exception as e:  # noqa: BLE001 -- see above
                 self.logger.error(
                     f"Bake override layer '{layer}' could not be deleted: {e}"

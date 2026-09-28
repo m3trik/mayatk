@@ -827,6 +827,67 @@ class BakeSessionStore(_BakeSessionStoreInternal):
         }
 
     @staticmethod
+    def remove_override_layer(
+        session: dict,
+        layer: Optional[str] = None,
+        warnings: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """Delete a bake's override layer and put back the conversions it hid.
+
+        Deleting the layer makes MAYA rebuild each driver link, sizing any
+        implicit unitConversion from the CURRENT working unit -- metres during
+        an export, where the scene authored them in centimetres (a cf=100 on
+        the loom auto-bend channels). So the factors the session recorded
+        before the bake (``layer_conversions``) are re-pinned right after.
+        Step 1 of :meth:`restore_session`, and the whole of what a caller
+        holding only the layer has left to do when that restore fails.
+
+        Parameters:
+            session: The bake's manifest, or ``{}`` when none was recorded (the
+                layer is then deleted with nothing to re-pin).
+            layer: The layer to delete. Default: the session's
+                ``override_layer``, whose absence is warned about.
+            warnings: Appended to, one line per item that could not be put back.
+
+        Returns:
+            The deleted layer's name, or None when there was none to delete.
+        """
+        warnings = warnings if warnings is not None else []
+        layer_ref = session.get("override_layer")
+        if layer is None:
+            if not layer_ref:
+                return None
+            layer = BakeSessionStore.resolve_ref(layer_ref)
+            if not layer or not cmds.objExists(layer):
+                warnings.append(
+                    f"Override layer '{layer_ref.get('name')}' not found — "
+                    "already deleted?"
+                )
+                return None
+        if not cmds.objExists(layer):
+            return None
+        cmds.delete(layer)
+        for entry in session.get("layer_conversions", []):
+            obj = BakeSessionStore.resolve_ref(entry.get("ref"))
+            if not obj:
+                warnings.append(
+                    f"Layer-baked object '{entry.get('ref', {}).get('name')}' not "
+                    "found — unit conversions on it were not restored."
+                )
+                continue
+            for channel, factor in (entry.get("conv") or {}).items():
+                try:
+                    _BakeSessionStoreInternal._pin_conversion(
+                        f"{obj}.{channel}", factor
+                    )
+                except RuntimeError as e:
+                    warnings.append(
+                        f"Could not restore the unit conversion on "
+                        f"'{obj}.{channel}': {e}"
+                    )
+        return layer
+
+    @staticmethod
     def restore_session(session: dict) -> "RestoreResult":
         """Reverse everything recorded in *session*. See module docstring."""
         result = RestoreResult(session_id=session.get("id"))
@@ -862,40 +923,9 @@ class BakeSessionStore(_BakeSessionStoreInternal):
 
         # 1. Override layer — deleting it removes the baked layer curves and
         # blend nodes; Maya restores the direct driver connections.
-        layer_ref = session.get("override_layer")
-        if layer_ref:
-            layer = BakeSessionStore.resolve_ref(layer_ref)
-            if layer and cmds.objExists(layer):
-                cmds.delete(layer)
-                result.restored_layer = layer
-                # Maya rebuilt the driver links itself as the layer went away,
-                # sizing any implicit unitConversion from the CURRENT working
-                # unit — metres during an export, where the scene authored them
-                # in centimetres. Put the recorded arithmetic back.
-                for entry in session.get("layer_conversions", []):
-                    obj = BakeSessionStore.resolve_ref(entry.get("ref"))
-                    if not obj:
-                        result.warnings.append(
-                            f"Layer-baked object "
-                            f"'{entry.get('ref', {}).get('name')}' not found — "
-                            "unit conversions on it were not restored."
-                        )
-                        continue
-                    for channel, factor in (entry.get("conv") or {}).items():
-                        try:
-                            _BakeSessionStoreInternal._pin_conversion(
-                                f"{obj}.{channel}", factor
-                            )
-                        except RuntimeError as e:
-                            result.warnings.append(
-                                f"Could not restore the unit conversion on "
-                                f"'{obj}.{channel}': {e}"
-                            )
-            else:
-                result.warnings.append(
-                    f"Override layer '{layer_ref.get('name')}' not found — "
-                    "already deleted?"
-                )
+        result.restored_layer = BakeSessionStore.remove_override_layer(
+            session, warnings=result.warnings
+        )
 
         # 2. Base-layer baked curves — delete before reconnecting so orphaned
         # baked curves don't linger after force-connects.

@@ -446,7 +446,14 @@ class SceneExporter(ptk.SceneExporterBase):
             self._progress_note("Preparing export…")
             # Run tasks and checks
             if tasks:
-                checks_passed = self.task_manager.run_tasks(tasks)
+                try:
+                    checks_passed = self.task_manager.run_tasks(tasks)
+                except Exception as e:
+                    # A raising task stops the run before its write, as a failed
+                    # check does: the staged edits unwind in the finally below,
+                    # and what the tasks kept is named before the error goes on.
+                    self._warn_stopped_before_write(f"Export stopped by an error: {e}.")
+                    raise
                 if not checks_passed:
                     # Offer the escape hatch HERE, while the staged scene the
                     # write needs is still standing, rather than leaving the

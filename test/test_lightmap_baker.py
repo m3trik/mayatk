@@ -3629,7 +3629,7 @@ class TestBakeWorkflow(MayaTkTestCase):
 
 @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
 class TestSupersededMaps(MayaTkTestCase):
-    """A re-bake deletes the maps it superseded -- and only its own.
+    """A re-bake sets aside the maps it superseded -- and only its own.
 
     Changing where or how maps are written (the folder, the name affix, the
     packing) gave the objects new files and left the old ones on disk, read by
@@ -3641,6 +3641,15 @@ class TestSupersededMaps(MayaTkTestCase):
         super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="lm_superseded_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # A re-bake sets what it superseded aside -- into this machine's
+        # Recycle Bin wherever the volume has one. Pinned per test to a volume
+        # with none, so the leftovers land in ``_superseded`` inside the
+        # scratch folder, never in the user's bin (a module fixture is not
+        # enough: the suite driver never runs one, and a run filled the bin).
+        # ``ptk.FileUtils.move_to_trash`` has its own tests in pythontk.
+        no_trash = mock.patch.object(ptk.FileUtils, "move_to_trash", return_value=None)
+        no_trash.start()
+        self.addCleanup(no_trash.stop)
 
     @staticmethod
     def _cube(name):
@@ -3694,6 +3703,75 @@ class TestSupersededMaps(MayaTkTestCase):
         self.assertEqual(self._paths(atlas.retired), self._paths(per_object.values()))
         for path in per_object.values():
             self.assertFalse(os.path.exists(path), path)
+
+    def test_a_superseded_map_is_set_aside_never_deleted(self):
+        """BACKLOG 2026-09-23, decided 2026-09-27: no scene can see another
+        scene file's reads -- a Save As copy's source, an Explorer copy -- so
+        what a re-bake retires must stay one restore away: the Recycle Bin,
+        else a ``_superseded`` folder beside the map (pinned here)."""
+        cube = self._cube("supAside")
+        old = self._bake([cube]).maps[cube]
+        with open(old, "rb") as fh:
+            baked = fh.read()
+
+        self._bake([cube], suffix="_LM")
+
+        aside = os.path.join(
+            os.path.dirname(old),
+            ptk.FileDependencies.SUPERSEDED_DIR,
+            os.path.basename(old),
+        )
+        self.assertFalse(os.path.exists(old))
+        with open(aside, "rb") as fh:
+            self.assertEqual(fh.read(), baked)
+
+    def test_a_map_set_aside_is_never_found_again_by_the_texture_walk(self):
+        """It keeps its name beside the folder it left: a walk that found it
+        would bind the stale map the re-bake retired."""
+        cube = self._cube("supWalk")
+        old = self._bake([cube]).maps[cube]
+        self._bake([cube], suffix="_LM")
+        self.assertEqual(
+            LightmapRecords._find_files([os.path.basename(old)], self.tmp), []
+        )
+
+    def test_a_superseded_map_goes_to_the_trash_where_there_is_one(self):
+        cube = self._cube("supTrash")
+        old = self._bake([cube]).maps[cube]
+        bin_dir = os.path.join(self.tmp, "bin")
+        os.makedirs(bin_dir)
+
+        def trash(path):
+            target = os.path.join(bin_dir, os.path.basename(path))
+            os.replace(path, target)
+            return target
+
+        with mock.patch.object(ptk.FileUtils, "move_to_trash", side_effect=trash):
+            result = self._bake([cube], suffix="_LM")
+
+        self.assertEqual(self._paths(result.retired), self._paths([old]))
+        self.assertTrue(os.path.isfile(os.path.join(bin_dir, os.path.basename(old))))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(os.path.dirname(old), ptk.FileDependencies.SUPERSEDED_DIR)
+            )
+        )
+
+    def test_maps_baked_before_the_first_save_are_its_own_once_saved(self):
+        """BACKLOG 2026-09-23: a map committed while the scene was unsaved
+        was stamped ``""``, the scene's own only while it still is -- so once
+        saved, a re-bake never retired it (measured: the old map stayed,
+        ``retired == []``). The first save stamps it with the file written."""
+        cube = self._cube("supFirstSave")
+        old = self._bake([cube]).maps[cube]
+        self.assertEqual(set(LightmapRecords._writers().values()), {""})
+        self._save_as("first.ma")
+        self.assertEqual(set(LightmapRecords._writers().values()), {"first.ma"})
+
+        result = self._bake([cube], suffix="_LM")
+
+        self.assertFalse(os.path.exists(old))
+        self.assertEqual(self._paths(result.retired), self._paths([old]))
 
     def test_a_same_place_rebake_deletes_nothing(self):
         cube = self._cube("supSame")
@@ -4760,13 +4838,15 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertIn("1 excluded", ui.footer.text)
         self.assertIn("1 hidden", ui.footer.text)
 
-    def test_the_footer_counts_the_superseded_maps_it_deleted(self):
+    def test_the_footer_counts_the_superseded_maps_it_set_aside(self):
         s = self._slots(_SlotUi())
         result = lmb_module.LightmapBakeResult(
             maps={"|a": "C:/out/a_Lightmap.exr"},
             retired=["C:/out/old_Lightmap.exr", "C:/out/old_Lightmap_1.exr"],
         )
-        self.assertIn("Deleted 2 superseded maps", s._bake_report(result))
+        report = s._bake_report(result)
+        self.assertIn("Moved 2 superseded maps", report)
+        self.assertIn("Recycle Bin", report)
 
     def test_scene_scope_reaches_every_instance(self):
         """An instanced shape is ONE node under several transforms, and a

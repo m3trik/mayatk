@@ -1524,7 +1524,8 @@ class TextureBaker(ptk.LoggingMixin):
         overwrite each other), when the caller falls back to the per-object
         loop -- or when a render was cancelled before it wrote anything,
         when it must not: the two are told apart by
-        :attr:`_batch_cancelled`, set here.
+        :attr:`_batch_cancelled`, set here. A part stopped PART-WAY sets it
+        too, keeping the maps it finished (:meth:`_finished_before_stop`).
         """
         self._batch_cancelled = False
         longs: List[str] = []
@@ -1658,9 +1659,34 @@ class TextureBaker(ptk.LoggingMixin):
                     )
                     cancelled = self._batch_cancelled = True
                     break
-                by_stem.update(
-                    (os.path.splitext(os.path.basename(p))[0], p) for p in written
-                )
+                stems = {os.path.splitext(os.path.basename(p))[0]: p for p in written}
+                order = [s for m in members for s in predicted[m]]
+                finished = self._finished_before_stop(order, stems)
+                if finished is not None:
+                    # Stopped part-way (Esc after a map or more): the members
+                    # it never reached must not go round again per object --
+                    # one render, and one more Esc, each -- and the last map
+                    # it began is not a finished one (see
+                    # _finished_before_stop), so it goes too.
+                    cut = stems[order[finished]]
+                    self.logger.warning(
+                        "Arnold stopped on map %d of the %d in this call "
+                        "(render cancelled): keeping the %d before it, "
+                        "dropping %s, which the stop may have cut short. The "
+                        "bake stops here.",
+                        finished + 1,
+                        len(order),
+                        finished,
+                        os.path.basename(cut),
+                    )
+                    try:
+                        os.remove(cut)
+                    except OSError:
+                        pass
+                    by_stem.update((s, stems[s]) for s in order[:finished])
+                    cancelled = self._batch_cancelled = True
+                    break
+                by_stem.update(stems)
         finally:
             if prev_sel:
                 cmds.select(prev_sel, replace=True)
@@ -1737,6 +1763,33 @@ class TextureBaker(ptk.LoggingMixin):
         if not cancelled:
             self._tick(on_progress, total, total, last_leaf)
         return results
+
+    @staticmethod
+    def _finished_before_stop(order: List[str], written: Any) -> Optional[int]:
+        """How many of a call's maps a STOPPED render finished; ``None`` when it was not stopped.
+
+        *order* is the RTT stems a call was asked for, in the order it renders
+        them; *written* the stems it wrote. Measured on mtoa 5.4.5 (headless
+        and GUI): RTT renders a call's shapes ONE AT A TIME, in the order they
+        were selected, and each shape's file appears when its render STARTS
+        and fills as it goes (0 bytes while rendering). So a call stopped
+        part-way has written exactly a prefix of *order*, every map in it
+        finished except the LAST, which is the one the stop may have cut
+        short: Arnold's own interrupt of a running shape left a full-coverage
+        map rendered with fewer samples (its mean 0.7% off the finished one,
+        indistinguishable by content), its abort an all-zero one. That last
+        one is not counted as finished.
+
+        Anything else is not a stop and answers ``None``: every map written
+        (done), none (the caller's own stop test), a member missing from the
+        MIDDLE, or a file no stem predicted -- a naming rule not yet met, which
+        the per-object re-bake exists to catch.
+        """
+        got = set(written)
+        count = len(got)
+        if not got or count >= len(order) or got != set(order[:count]):
+            return None
+        return count - 1
 
     @staticmethod
     def _first_shading_group(obj: str) -> Optional[str]:

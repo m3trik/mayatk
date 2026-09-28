@@ -229,6 +229,7 @@ DEFAULT_INCLUDE = {
     "rig_utils.telescope_rig": "TelescopeRig",
     "rig_utils.wheel_rig": "WheelRig",
     "rig_utils.tube_rig._tube_rig": "TubeRig",
+    "rig_utils.articulated_rig._articulated_rig": "ArticulatedRig",
     "rig_utils.tube_rig.strategies": ["TubeStrategy", "TubeRigBundle"],
     "rig_utils.tube_rig.tube_path": "TubePath",
     "rig_utils.skinning": ["SkinUtils", "CurveWeights"],

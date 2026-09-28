@@ -819,17 +819,24 @@ class TestProjectRelativePaths(MayaTkTestCase):
         cmds.file(save=True, force=True)
         self.assertEqual(spec.load(DataNodes), {"1": "../../library/lm/hit.wav"})
 
-    def test_an_untitled_scenes_autosave_respells_nothing(self):
-        """An autosave writes an UNTITLED scene elsewhere without naming it:
-        the open scene still has no project, so its paths stay absolute and
-        the remembered project stays none. (The GUI's untitled scene name is
-        empty; mocked alike here, since batch reports a phantom instead.)"""
+    def test_an_untitled_scenes_autosave_is_a_copy_spelled_for_its_folder(self):
+        """An autosave writes an UNTITLED scene elsewhere without naming it: a
+        copy (BACKLOG 2026-09-23). The file written reads its paths from ITS
+        project, so they are spelled for it while it is written; the open
+        scene still has no project, so its paths are absolute again after,
+        and the remembered project stays none. Maya writes an autosave as an
+        EXPORT -- measured in a fresh GUI Maya 2025: ``kBeforeExport`` with
+        the autosave path as ``beforeExportFilename``, then ``kAfterExport``,
+        never ``kBeforeSave`` -- so that is the sequence driven here. (The
+        GUI's untitled scene name is empty; mocked alike here, since batch
+        reports a phantom instead.)"""
         import maya.OpenMaya as om1
 
         spec = ptk.SceneRecords.LIGHTMAP_DIRS
         spelled = ptk.FileUtils.portable_path(self.lib, None)
         spec.save(DataNodes, {"lib.exr": spelled})
         autosave = os.path.join(self.proj_a, "autosave", "untitled.0001.ma")
+        os.makedirs(os.path.dirname(autosave), exist_ok=True)
         real_file = cmds.file
 
         def scene_file(*args, **kwargs):
@@ -839,17 +846,102 @@ class TestProjectRelativePaths(MayaTkTestCase):
 
         with (
             mock.patch.object(
-                om1.MFileIO, "beforeSaveFilename", return_value=autosave, create=True
+                om1.MFileIO, "beforeExportFilename", return_value=autosave, create=True
             ),
             mock.patch.object(cmds, "file", side_effect=scene_file),
         ):
-            DataNodes._rebase_before_save()
+            DataNodes._rebase_before_export()
+            written = spec.load(DataNodes)
+            DataNodes._restore_after_copy()
+        self.assertEqual(written, {"lib.exr": "../../library/lm"})
         self.assertEqual(spec.load(DataNodes), {"lib.exr": spelled})
         self.assertIsNone(DataNodes._rebase_state()["base"])
 
+    def test_an_export_to_a_maya_scene_is_spelled_for_its_own_project(self):
+        """BACKLOG 2026-09-23: Export All into another project wrote the
+        records spelled from the SOURCE's project, so the exported scene
+        resolved every map under ITS project -- a folder that is not there
+        (measured: ``sourceimages/lm`` read from project b). Spelled for the
+        export while it is written; the open scene keeps its own."""
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec.save(DataNodes, {"in.exr": "sourceimages/lm"})
+        export = os.path.join(self.proj_b, "scenes", "export.ma")
+        cmds.file(export, exportAll=True, type="mayaAscii", force=True)
+        self.assertEqual(spec.load(DataNodes), {"in.exr": "sourceimages/lm"})
+        cmds.file(export, open=True, force=True)
+        moved = spec.load(DataNodes)
+        self.assertTrue(
+            self._same(os.path.join(self.proj_b, moved["in.exr"]), self.maps), moved
+        )
+
+    def test_an_export_leaves_a_saved_scene_unmodified(self):
+        """The copy's re-spelling and the hand-back are writes to the open
+        scene, which is exactly what it was once they are done: an Export All
+        of a saved scene must not leave it asking to be saved."""
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec.save(DataNodes, {"in.exr": "sourceimages/lm"})
+        cmds.file(save=True, force=True)
+        self.assertFalse(cmds.file(query=True, modified=True))
+        export = os.path.join(self.proj_b, "scenes", "export.ma")
+        cmds.file(export, exportAll=True, type="mayaAscii", force=True)
+        self.assertEqual(spec.load(DataNodes), {"in.exr": "sourceimages/lm"})
+        self.assertFalse(cmds.file(query=True, modified=True))
+
+    def test_an_export_to_another_format_touches_no_record(self):
+        """An FBX or an OBJ carries no private record: nothing to spell."""
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec.save(DataNodes, {"in.exr": "sourceimages/lm"})
+        DataNodes._respell_copy(os.path.join(self.proj_b, "scenes", "shot.fbx"))
+        self.assertEqual(spec.load(DataNodes), {"in.exr": "sourceimages/lm"})
+        self.assertIsNone(DataNodes._rebase_state()["pending"])
+
+    def test_a_first_save_stamps_what_was_made_unsaved(self):
+        """BACKLOG 2026-09-23: a writer stamp made while unsaved (``""``) is
+        the scene's own only while it still is, so everything stamped before
+        the first save was nobody's after it. The first save stamps the file
+        it writes; a later Save As copy then names its source."""
+        spec = ptk.SceneRecords.LIGHTMAP_WRITERS
+        spec.save(DataNodes, {"a.exr": ""})
+        self._save_as(os.path.join(self.proj_a, "scenes", "first.ma"))
+        self.assertEqual(spec.load(DataNodes), {"a.exr": "scenes/first.ma"})
+        self.assertTrue(DataNodes.written_here("scenes/first.ma"))
+        self._save_as(os.path.join(self.proj_a, "scenes", "second.ma"))
+        self.assertEqual(spec.load(DataNodes), {"a.exr": "scenes/first.ma"})
+        self.assertFalse(DataNodes.written_here("scenes/first.ma"), "a copy's")
+
+    def test_an_export_of_an_unsaved_scene_stamps_nothing(self):
+        """A copy of an unsaved scene is not its first save: the export keeps
+        ``""`` (owns nothing) and so does the open scene."""
+        spec = ptk.SceneRecords.LIGHTMAP_WRITERS
+        spec.save(DataNodes, {"a.exr": ""})
+        export = os.path.join(self.proj_b, "scenes", "export.ma")
+        cmds.file(export, exportAll=True, type="mayaAscii", force=True)
+        self.assertEqual(spec.load(DataNodes), {"a.exr": ""})
+        cmds.file(export, open=True, force=True)
+        self.assertEqual(spec.load(DataNodes), {"a.exr": ""})
+
+    def test_a_headless_session_installs_the_hook_at_its_first_record(self):
+        """BACKLOG 2026-09-23: only the UI handler installed the hook, so a
+        mayapy or batch session saving into another project left every entry
+        spelled from the old one. The private carrier's first touch installs
+        it now."""
+        DataNodes.remove_path_rebase()
+        self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        spec = ptk.SceneRecords.LIGHTMAP_DIRS
+        spec.save(DataNodes, {"in.exr": "sourceimages/lm"})
+        self.assertTrue(DataNodes._rebase_state()["ids"], "installed by the write")
+        self._save_as(os.path.join(self.proj_b, "scenes", "shot.ma"))
+        moved = spec.load(DataNodes)
+        self.assertTrue(
+            self._same(os.path.join(self.proj_b, moved["in.exr"]), self.maps), moved
+        )
+
     def test_install_is_idempotent_and_remove_takes_it_out(self):
         DataNodes.install_path_rebase()
-        self.assertEqual(len(DataNodes._rebase_state()["ids"]), 4)
+        self.assertEqual(len(DataNodes._rebase_state()["ids"]), 6)
         DataNodes.remove_path_rebase()
         self.assertEqual(DataNodes._rebase_state()["ids"], [])
 

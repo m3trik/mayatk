@@ -1608,3 +1608,115 @@ class TestFlattenInfluences(MayaTkTestCase):
         self.assertEqual(joints[0], root)
         self.assertNotIn(root, mesh_joints)
         self.assertEqual(joints[1:], mesh_joints, "no reordering, only the root")
+
+
+class TestSampleLocalsReusesRepeatedMatrices(MayaTkTestCase):
+    """``flatten_influences`` samples its influences at every frame of the export
+    range, and on a production module 86% of those rows repeated the previous one.
+    ``WorldFitBake.sample_locals`` now repeats the previous row for a local matrix
+    EQUAL to the previous one instead of decomposing it again -- so what is pinned
+    is that the rows are the ones a decomposition of every frame gives, on a rig
+    that holds still for stretches (an animated ancestor, an IK handle constrained
+    to a locator whose parent moves) beside a decoy that moves on every frame.
+
+    Skipping the still frames outright (no time change, no matrix pull) was tried
+    first and REFUSED: on the production module it changed three sampled tracks
+    (a frame that evaluates identically inputs-wise need not evaluate identically),
+    so the evaluation stays and only its decomposition is reused."""
+
+    FRAMES = [float(f) for f in range(1, 41)]
+
+    @staticmethod
+    def _key(node, attr, pairs):
+        for time, value in pairs:
+            cmds.setKeyframe(
+                node,
+                attribute=attr,
+                time=time,
+                value=value,
+                inTangentType="linear",
+                outTangentType="linear",
+            )
+
+    def _build(self):
+        cmds.playbackOptions(
+            animationStartTime=1, animationEndTime=40, minTime=1, maxTime=40
+        )
+        world = cmds.group(empty=True, name="ss_world")
+        top = cmds.group(empty=True, name="ss_top")  # moves on 11-20 and 31-40
+        self._key(top, "translateX", [(1, 0), (10, 0), (20, 5), (30, 5), (40, 9)])
+        cmds.select(clear=True)
+        first = [cmds.joint(name="ss_a%d" % i, position=(0, i, 0)) for i in range(3)]
+        cmds.parent(first[0], top)
+        rig = cmds.group(empty=True, name="ss_rig")
+        cmds.select(clear=True)
+        second = [
+            cmds.joint(name="ss_b%d" % i, position=(4, i * 2, 1 - i % 2))
+            for i in range(3)
+        ]
+        cmds.parent(second[0], rig)
+        handle = cmds.ikHandle(
+            startJoint="ss_b0", endEffector="ss_b2", solver="ikRPsolver", name="ss_ik"
+        )[0]
+        driver = cmds.group(empty=True, name="ss_ctl_grp")  # moves on 6-8
+        target = cmds.spaceLocator(name="ss_ctl")[0]
+        cmds.parent(target, driver)
+        cmds.xform(target, worldSpace=True, translation=(4, 4, 0))
+        cmds.pointConstraint(target, handle)
+        self._key(driver, "translateY", [(1, 0), (5, 0), (8, -1)])
+        decoy = cmds.polyCube(name="ss_decoy", constructionHistory=False)[0]
+        self._key(decoy, "translateZ", [(1, 0), (40, 39)])
+        cmds.currentTime(1)
+        return [
+            (path, cmds.ls(path, uuid=True)[0], cmds.ls(world, long=True)[0], True)
+            for path in cmds.ls(
+                ["ss_a0", "ss_a1", "ss_a2", "ss_b0", "ss_b1", "ss_b2"], long=True
+            )
+        ]
+
+    def test_a_repeated_matrix_repeats_the_row_it_would_have_decomposed_to(self):
+        from unittest import mock
+
+        import maya.api.OpenMaya as om2
+
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        plan = self._build()
+        real = om2.MTransformationMatrix
+        with mock.patch(
+            "maya.api.OpenMaya.MTransformationMatrix", side_effect=real
+        ) as spy:
+            rows = WorldFitBake.sample_locals(plan, self.FRAMES)
+        decomposed = spy.call_count
+        # Every frame on its own -- nothing to repeat -- is the reference (the
+        # rotations here stay far from the euler wrap, which a lone frame skips).
+        reference = {key: [] for key in rows}
+        for frame in self.FRAMES:
+            for key, value in WorldFitBake.sample_locals(plan, [frame]).items():
+                reference[key].extend(value)
+        self.assertEqual(rows, reference)
+        total = len(plan) * len(self.FRAMES)
+        self.assertLess(decomposed, total // 2, f"{decomposed} of {total}")
+        moving = [key for key, value in rows.items() if value[0] != value[-1]]
+        self.assertEqual(len(moving), 6, "every influence must really move")
+
+    def test_flatten_influences_keeps_worlds_through_the_holds(self):
+        """The bake keys the reused rows: the flattened joints sit where they sat,
+        at every frame, holds included."""
+        self._build()
+        mesh = cmds.polyCylinder(name="ss_skin", height=4, subdivisionsY=4)[0]
+        cmds.skinCluster(["ss_a0", "ss_a1", "ss_a2"], mesh, toSelectedBones=True)
+        joints = cmds.ls(["ss_a0", "ss_a1", "ss_a2"], long=True)
+        uuids = cmds.ls(joints, uuid=True)
+        before = {}
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            before[frame] = [cmds.xform(j, q=True, ws=True, m=True) for j in joints]
+        SkinUtils.flatten_influences(frames=self.FRAMES)
+        worst = 0.0
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            now = [cmds.xform(cmds.ls(u)[0], q=True, ws=True, m=True) for u in uuids]
+            for a, b in zip(before[frame], now):
+                worst = max(worst, max(abs(x - y) for x, y in zip(a, b)))
+        self.assertLess(worst, 1e-5)

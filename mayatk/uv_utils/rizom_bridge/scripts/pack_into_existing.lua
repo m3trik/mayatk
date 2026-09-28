@@ -1,52 +1,42 @@
--- Pack the SELECTED objects' islands into the EMPTY space of an existing
--- UV layout. Everything else sharing their material stays put and is
--- treated as occupied space; the new islands keep the scale they arrive
--- with, so texel density matches the layout they join. Needs RizomUV
--- 2022.2 or newer.
+-- Pack the SELECTED shells into the FREE space of an existing UV layout.
+-- Every other island sent -- the rest of the layout -- stays exactly where it
+-- is and is packed around as occupied space; the packed islands take the
+-- layout's texel density, so they join it rather than being fitted to fill it.
 --
--- The unselected islands are the locked "forbidden area" (official Pack
--- semantics for WorkingSet Visible&Selected); Scaling.Mode=0 +
--- LayoutScalingMode=0 is what preserves the incoming scale.
+-- The host sends the whole layout (tentacle's Pack op: every mesh sharing the
+-- selection's materials) and tags the faces of the objects / shells passed as
+-- select_objects= with a throwaway material, which the selection token below
+-- renders as a Lua list. The rest is templates/pack_block.lua's shell subset
+-- (the probe-verified fixed-island recipe) with its match-density variant:
+--   * density: every packed island ends at the texel density of the fixed
+--     islands in the target tile -- sqrt(sum UV area / sum 3D area) over them,
+--     or over all of them when the tile holds none (probed 2026-09-27 on
+--     2020.1: new islands arriving at a half and a quarter of the layout's
+--     density both land on it to 5 digits);
+--   * no fit: a subset that fits at that density is final; one that does not
+--     is shrunk uniformly to the largest scale that does (inside the tile
+--     margin), never grown -- so a full layout lowers the new shells' density
+--     instead of spilling them out of the tile.
+-- Keep Stacked groups the SUBSET only (see keep_stacked_block.lua), so a new
+-- island landing on a fixed one is never welded to it.
 --
--- The bridge renders the selection token below as a Lua table of exported
--- island-group names for the objects passed as select_objects= (tentacle's
--- Pack op derives that set from the selection, and sends every mesh
--- sharing the selection's materials so Rizom sees the whole layout).
+-- Rebuilt 2026-09-27. The first version selected the new objects' island
+-- GROUPS by name and was gated to RizomUV >= 2022.2: on 2020.1 that selection
+-- is a silent no-op with or without List=true, and the pack after it moved
+-- nothing (0 of 19 islands; new islands left overlapping fixed ones). The
+-- material tag works on 2020.1, so the gate is gone.
 --
--- Requires RizomUV >= 2022.2, and likely misbehaves there too: on 2020.1
--- island-group name selection is a silent no-op, with or without the
--- List=true the call below omits (probed 2026-09-23), and ZomPack with an
--- EMPTY selection packs every island. The WorkingSet field itself IS
--- honored on 2020.1 given an island selection -- templates/pack_block.lua's
--- shell subset (a material tag selects the islands) is the probe-verified
--- recipe to rebuild this on. Version-gated meanwhile: hidden from the panel
--- combo and refused by the bridge below the gate.
--- @min_rizom: 2022.2
-
+-- The Pre-scale / Layout Scale / Tile Coverage / Translate knobs do nothing
+-- here (density is matched, the fixed islands pin the layout scale, the free
+-- space is the whole target tile, and the subset always moves), so the marker
+-- below hides them from the panel.
+-- @ignores: SCALING_MODE, LAYOUT_SCALING_MODE, UV_AREA, PACK_TRANSLATE
 --
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__
 
-ZomSelect({
-    PrimType="IslandGroup",
-    IslandGroupMode="Group",
-    Names=__PACK_SELECT_NAMES__,
-    Select=true,
-    ResetBefore=true,
-})
+PACK_SUBSET = __PACK_SELECT_NAMES__
+PACK_MATCH_DENSITY = true
 
-ZomPack({
-    WorkingSet="Visible&Selected",
-    ProcessTileSelection=false,
-    RecursionDepth=1,
-    RootGroup="RootGroup",
-    Scaling={Mode=0, Mix=false},
-    Rotate={
-        Step=__ROTATE_STEP__,
-        Enable=__PACK_ROTATE_ENABLE__,
-    },
-    Translate=true,
-    LayoutScalingMode=0,
-    MaxMutations=__PACK_MAX_MUTATIONS__,
-    Resolution=__PACK_RESOLUTION__,
-})
+__KEEP_STACKED_BLOCK__
+__PACK_BLOCK__

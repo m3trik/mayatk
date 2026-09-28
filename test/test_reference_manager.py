@@ -1043,23 +1043,28 @@ class TestDisplayName(unittest.TestCase):
 
 
 class TestDeletePrompt(unittest.TestCase):
-    """ReferenceManagerController._delete_prompt names the file(s) being deleted.
+    """ReferenceManagerController._delete_prompt names the file(s) being deleted,
+    and says where they go.
 
     A bare count ("Delete 1 file(s)?") gave no way to confirm WHICH file was about
-    to be permanently removed, especially with the suffix/extension hidden.
+    to be removed, especially with the suffix/extension hidden. Since 2026-09-27
+    Delete sends a scene to the Recycle Bin; a drive with none deletes it for
+    good, and the prompt says so.
     """
 
-    def prompt(self, paths):
-        return ref_mgr.ReferenceManagerController._delete_prompt(paths)
+    def prompt(self, paths, permanent=()):
+        return ref_mgr.ReferenceManagerController._delete_prompt(paths, permanent)
 
     def test_single_file_is_named_in_full(self):
         msg = self.prompt(["C:/proj/scenes/hero_lod0.ma"])
         self.assertIn("hero_lod0.ma", msg)
         self.assertNotIn("C:/proj", msg, "the prompt names the file, not the path")
+        self.assertIn(ptk.FileUtils.trash_name(), msg)
+        self.assertNotIn("permanent", msg)
 
     def test_multiple_files_are_listed(self):
         msg = self.prompt(["C:/proj/a.ma", "C:/proj/b.mb"])
-        self.assertIn("Delete 2 file(s)?", msg)
+        self.assertIn("2 file(s)", msg)
         self.assertIn("a.ma", msg)
         self.assertIn("b.mb", msg)
 
@@ -1067,10 +1072,22 @@ class TestDeletePrompt(unittest.TestCase):
         cap = ref_mgr.ReferenceManagerController.DELETE_PROMPT_MAX_NAMES
         paths = [f"C:/proj/file{i}.ma" for i in range(cap + 3)]
         msg = self.prompt(paths)
-        self.assertIn(f"Delete {cap + 3} file(s)?", msg)
+        self.assertIn(f"{cap + 3} file(s)", msg)
         self.assertIn("file0.ma", msg)
         self.assertNotIn(f"file{cap}.ma", msg, "names past the cap are folded away")
         self.assertIn("and 3 more", msg)
+
+    def test_a_drive_with_no_trash_says_the_delete_is_permanent(self):
+        msg = self.prompt(["Z:/share/hero.ma"], permanent=["Z:/share/hero.ma"])
+        self.assertIn("permanently", msg)
+        self.assertIn("cannot be undone", msg)
+
+    def test_a_mixed_selection_marks_the_file_that_goes_for_good(self):
+        msg = self.prompt(
+            ["C:/proj/a.ma", "Z:/share/b.ma"], permanent=["Z:/share/b.ma"]
+        )
+        self.assertIn("b.ma (permanently", msg)
+        self.assertNotIn("a.ma (permanently", msg)
 
 
 class TestMatchesNotesFilter(unittest.TestCase):
@@ -2685,7 +2702,16 @@ class TestDeleteRemovesOnlyWhatItNames(_OnDiskRename, unittest.TestCase):
     def _delete(self):
         controller = self._controller(answer=None)
         controller.sb.message_box = lambda msg, *b: "Yes"  # confirm the delete
-        controller.delete_scene()
+        # Never the machine's Recycle Bin (Delete trashes since 2026-09-27): a
+        # drive "with none" deletes for good, which is all the folder rule needs
+        # (TestDeleteGoesToTheTrash covers the trash itself).
+        with (
+            patch.object(ptk.FileUtils, "can_trash", return_value=False),
+            patch.object(
+                ptk.FileUtils, "move_to_trash", side_effect=AssertionError("real trash")
+            ),
+        ):
+            controller.delete_scene()
 
     def test_the_last_scene_takes_its_emptied_folder_along(self):
         self.old = self._touch("hero", "hero_v01.ma")
@@ -2703,6 +2729,70 @@ class TestDeleteRemovesOnlyWhatItNames(_OnDiskRename, unittest.TestCase):
         self.old = self._touch("scenes_final.ma")
         self._delete()
         self.assertTrue(os.path.isdir(self.scenes), "the scenes root was removed")
+
+
+class TestDeleteGoesToTheTrash(_OnDiskRename, unittest.TestCase):
+    """Delete sends the scene -- and its sidecar -- to the Recycle Bin
+    (2026-09-27, the maintainer's Recycle Bin decision): it removed them for
+    good. A drive with no trash keeps confirm-then-delete, and says it is
+    permanent; a trash that then refuses asks again, as permanent, before
+    anything is lost. The trash here is a scratch folder, never the machine's.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bin = os.path.join(self._store.dir_path(), "bin")
+        os.makedirs(self.bin)
+
+    def _to_bin(self, path):
+        target = os.path.join(self.bin, os.path.basename(path))
+        os.replace(path, target)
+        return target
+
+    def _delete(self, can_trash=True, trash=None, answers=("Yes",)):
+        controller = self._controller(answer=None)
+        prompts, replies = [], iter(answers)
+        controller.sb.message_box = lambda msg, *b: (
+            prompts.append(msg),
+            next(replies, "No"),
+        )[1]
+        with (
+            patch.object(ptk.FileUtils, "can_trash", return_value=can_trash),
+            patch.object(
+                ptk.FileUtils, "move_to_trash", side_effect=trash or self._to_bin
+            ) as moved,
+        ):
+            controller.delete_scene()
+        return prompts, moved
+
+    def test_the_scene_and_its_sidecar_go_to_the_trash(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._touch("hero", "hero_v01.ma.metadata.json")
+        prompts, _moved = self._delete()
+        self.assertIn(ptk.FileUtils.trash_name(), prompts[0])
+        self.assertEqual(
+            sorted(os.listdir(self.bin)), ["hero_v01.ma", "hero_v01.ma.metadata.json"]
+        )
+        self.assertEqual(self._listing(), [], "its emptied folder goes, as before")
+
+    def test_a_drive_with_no_trash_asks_as_permanent_then_deletes(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        prompts, moved = self._delete(can_trash=False)
+        self.assertIn("permanently", prompts[0])
+        self.assertFalse(os.path.exists(self.old))
+        moved.assert_not_called()
+
+    def test_a_trash_that_refuses_asks_again_before_anything_is_lost(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        prompts, _moved = self._delete(trash=lambda path: None, answers=("Yes", "No"))
+        self.assertEqual(len(prompts), 2, prompts)
+        self.assertIn("permanently", prompts[1])
+        self.assertTrue(os.path.isfile(self.old), "'No' keeps it")
+
+    def test_a_refused_file_confirmed_again_is_deleted(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        self._delete(trash=lambda path: None, answers=("Yes", "Yes"))
+        self.assertFalse(os.path.exists(self.old))
 
 
 class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):

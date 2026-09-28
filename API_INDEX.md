@@ -204,7 +204,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/smart_bake/bake_session.py` — Persistence and restore engine for SmartBake's nondestructive manifest.
 - `class BakeSessionStore(_BakeSessionStoreInternal)`
-  - methods: load, save, push, peek, pop, list_ids, merge_carrier, discard_carrier, new_session_id, node_ref, resolve_ref, plug_ref, resolve_plug, stash_curve, unstash_curve, discard_stash, collect_upstream_curves, trace_source, reconnect, snapshot_connections, snapshot_conversions, restore_session
+  - methods: load, save, push, peek, pop, list_ids, merge_carrier, discard_carrier, new_session_id, node_ref, resolve_ref, plug_ref, resolve_plug, stash_curve, unstash_curve, discard_stash, collect_upstream_curves, trace_source, reconnect, snapshot_connections, snapshot_conversions, remove_override_layer, restore_session
 - `class RestoreResult`
 
 ### `anim_utils/smart_bake/smart_bake_slots.py` — Slots for the Smart Bake tool panel (smart_bake.ui).
@@ -1036,7 +1036,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py` — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - `class DataNodes(pythontk.SceneStoreBase)`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, scene_path, install_path_rebase, remove_path_rebase
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, scene_path, install_path_rebase, ensure_path_rebase, remove_path_rebase
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(pythontk.HelpMixin)`
@@ -1063,6 +1063,18 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `rig_utils/_rig_utils.py`
 - `class RigUtils(pythontk.HelpMixin)`
   - methods: create_helper, create_group, create_locator, create_locator_at_object, remove_locator, restore_rig_anchors, connect_switch_to_constraint, create_ik_handle, create_pole_vector, get_ik_handles_for_joint, ik_handles_by_joint, joint_in_ik_chain, get_joint_chain_from_root, invert_joint_chain, rebind_skin_clusters
+
+### `rig_utils/articulated_rig/_articulated_rig.py` — Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
+- `class ArticulatedRig(pythontk.LoggingMixin, _ArticulatedRigInternal)`
+  - methods: group, spec, name, scene_data, scene_rigs, for_node, analyze, create, teardown, rebuild, insert_joint, remove_joint, edit_joint, set_limits, set_limit_from_pose, joint_ids, joint_id_of, joint, control, state, set_state, record, model, export_record, refresh_export_metadata, grab_begin, held_point, pose_to, grab_to
+
+### `rig_utils/articulated_rig/articulated_rig_slots.py` — Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.
+- `class ArticulatedRigSlots(pythontk.LoggingMixin)`
+  - methods: header_init, refresh_table, btn_analyze, btn_build, btn_grab, btn_insert, btn_fold, btn_limits_from_pose, btn_clear_limits, btn_rebuild, btn_remove
+
+### `rig_utils/articulated_rig/grab_tool.py` — The viewport grab for articulated rigs: press on a rigged part, drag, let go.
+- `class ArticulatedRigGrab(pythontk.LoggingMixin)`
+  - methods: activate, pick, press, drag, release, ray
 
 ### `rig_utils/controls.py`
 - `class ControlNodes`

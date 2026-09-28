@@ -26,6 +26,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 import maya.cmds as cmds
@@ -228,6 +229,388 @@ class TestSceneImportRendering(unittest.TestCase):
         self.assertEqual(
             si._LAUNCH_ARGS, ("--background", "--factory-startup", "--python")
         )
+
+    def test_the_bake_hands_mayapy_its_script_off_the_command_line(self):
+        """mayapy decodes its command line in the ANSI code page, and the bake
+        script lives under %TEMP%, which holds the user's name: the bake takes the
+        runner's interpreter default, which carries the path in the child env
+        (``AppLauncher.python_args_via_env``). A ``[script]`` argv here reopens
+        "can't open file" for a user whose name has an accented letter."""
+        from unittest import mock
+
+        seen = {}
+
+        def fake_run(app_exe, script_text, **kwargs):
+            seen.update(kwargs)
+            return "ran"
+
+        with mock.patch.object(
+            ptk.ScriptRunner, "run_script_to_artifact", side_effect=fake_run
+        ):
+            BlenderSceneImport._run_bake_script(
+                "mayapy", "pass", artifact="x.ma", timeout=None
+            )
+        self.assertIsNone(seen.get("launch_args"))
+
+    def test_the_bake_paths_are_ones_maya_can_open(self):
+        """Maya opens and saves through the ANSI code page: under a TEMP folder
+        that page cannot hold (Cyrillic on cp1252) the bake's ``cmds.file`` said
+        "File not found" / "An invalid path was specified". The intermediate and
+        the ``.ma`` reach the template in their 8.3 form, names kept."""
+        where = self._cyrillic_dir()
+        src = os.path.join(where, "conv.fbx")
+        with open(src, "w") as fh:
+            fh.write("fbx")
+        out = os.path.join(where, "baked.ma")
+        eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        script = eng.render_bake_script(src, out)
+        got_src = re.search(r'SRC_FILE = r"(.*)"', script).group(1)
+        got_out = re.search(r'OUT_MA = r"(.*)"', script).group(1)
+        for path in (got_src, got_out):  # one component: its 8.3 name is ASCII
+            self.assertTrue(path.isascii(), ascii(path))
+        self.assertTrue(os.path.samefile(got_src, src))
+        self.assertTrue(os.path.samefile(os.path.dirname(got_out), where))
+        self.assertEqual(os.path.basename(got_out), "baked.ma")
+
+    def _cyrillic_dir(self):
+        """A folder cp1252 cannot hold, or a skip where 8.3 names are unavailable."""
+        if os.name != "nt":
+            self.skipTest("the ANSI code page is Windows'")
+        here = os.path.dirname(os.path.abspath(__file__))
+        root = os.path.join(here, "temp_tests", f"host {os.getpid()}")
+        where = os.path.join(root, "Jos\u00e9 \u0416\u0443\u043a")
+        os.makedirs(where)
+        self.addCleanup(shutil.rmtree, root, True)
+        if not (ptk.AppLauncher._short_name(where) or "").isascii():
+            self.skipTest("no 8.3 short names on this volume")
+        return where
+
+    def test_the_host_imports_the_payload_through_a_path_maya_can_open(self):
+        """The HOST Maya reads the Blender conversion's payload from %TEMP% too:
+        with TEMP under "José Жук" its ``cmds.file`` import said "File not found"
+        (measured, fresh mayapy host). It is handed the 8.3 form."""
+        from unittest import mock
+
+        where = self._cyrillic_dir()
+        payload = os.path.join(where, "conv.fbx")
+        with open(payload, "w") as fh:
+            fh.write("fbx")
+        seen = []
+        eng = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        with mock.patch.object(
+            BlenderSceneImport,
+            "_import_fbx",
+            side_effect=lambda p, o=None: seen.append(p) or [],
+        ):
+            eng.import_payload(payload, via="fbx")
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(seen[0].isascii(), ascii(seen[0]))
+        self.assertTrue(os.path.samefile(seen[0], payload))
+
+    def test_the_manifest_hands_maya_texture_paths_it_can_open(self):
+        """The pull's manifest lists each material's image files for the Maya-side
+        rebuild. An image in a project folder the ANSI code page cannot hold
+        (Cyrillic on cp1252) became a file node reading "proj ???/..." with outSize
+        0 (measured: fresh mayapy host, real Blender child). The Blender-side
+        producer writes the 8.3 form -- in BOTH conversion templates."""
+        import ast
+        import glob
+        import sys
+
+        where = self._cyrillic_dir()
+        png = os.path.join(where, "crate_BaseColor.png")
+        with open(png, "wb") as fh:
+            fh.write(b"png")
+        node = SimpleNamespace(
+            bl_idname="ShaderNodeTexImage",
+            image=SimpleNamespace(filepath=png, library=None),
+        )
+        tree = type("Tree", (), {"nodes": [node]})()  # hashable, as a node tree is
+        mat = SimpleNamespace(use_nodes=True, node_tree=tree)
+        bpy = SimpleNamespace(path=SimpleNamespace(abspath=lambda p, library=None: p))
+        wanted = {"_material_files", "_resolved_image_file", "_maya_openable"}
+        wanted |= {"_extend_sys_path"}
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            tree = ast.parse(template.read_text(encoding="utf-8"))
+            body = [
+                n
+                for n in tree.body
+                if (isinstance(n, ast.FunctionDef) and n.name in wanted)
+                or (
+                    isinstance(n, ast.Assign)
+                    and any(
+                        isinstance(t, ast.Name) and t.id == "_TILE_TOKENS"
+                        for t in n.targets
+                    )
+                )
+            ]
+            ns = {"os": os, "re": re, "glob": glob, "sys": sys, "EXTRA_SYS_PATH": []}
+            exec(compile(ast.Module(body, []), str(template), "exec"), ns)
+            files, count = ns["_material_files"](bpy, mat)
+            with self.subTest(template=template.name):
+                self.assertEqual(count, 1)
+                self.assertEqual(len(files), 1)
+                self.assertTrue(files[0].isascii(), ascii(files[0]))
+                self.assertTrue(os.path.samefile(files[0], png))
+                self.assertEqual(os.path.basename(files[0]), "crate_BaseColor.png")
+
+    def test_the_bake_returns_a_path_the_host_can_reference(self):
+        """``bake_scene`` returns the ``.ma`` the host passes to
+        ``cmds.file(reference=True)``; under TEMP "José Жук" that reference loaded
+        nothing (measured). It returns the 8.3 form."""
+        from unittest import mock
+
+        where = self._cyrillic_dir()
+        src = os.path.join(where, "scene.fbx")
+        baked = os.path.join(where, "baked.ma")
+        for path in (src, baked):
+            with open(path, "w") as fh:
+                fh.write("x")
+        got = SimpleNamespace(path=baked, hit=True, scratch=None)
+        with mock.patch.object(ptk.CachedArtifact, "get", return_value=got):
+            result = BlenderSceneImport(blender_path="X:/fake/b.exe").bake_scene(src)
+        self.assertTrue(result.isascii(), ascii(result))
+        self.assertTrue(os.path.samefile(result, baked))
+
+
+class TestPullManifestSlots(unittest.TestCase):
+    """The pull's manifest carries a ``slots`` map, as blendertk's send does.
+
+    The Maya-side rebuild places each texture by its FILENAME, and a file named
+    after a product ("crate.png") classifies to nothing. blendertk's send
+    manifests an explicit ``{channel: file}`` map traced from the material graph,
+    which ``_rebuild_material`` uses to rescue exactly those files; the pull's
+    Blender-side templates wrote ``files`` only. Measured 2026-09-27 (fresh
+    Blender child, fresh mayapy host): a cube whose only texture is ``crate.png``
+    wired to Base Color came back with NO file node, on the FBX and the USD
+    carrier alike.
+
+    The templates cannot import blendertk (the target's Blender may not have it),
+    so they carry a dependency-free copy of ``MayaBridge._material_slots``; the
+    drift guard below runs blendertk's own method -- lifted from its source by
+    AST -- and the copy over the same graphs.
+    """
+
+    TEMPLATES = (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD)
+    BTK_BRIDGE = (
+        Path(__file__).resolve().parents[2]
+        / "blendertk"
+        / "blendertk"
+        / "env_utils"
+        / "maya_bridge"
+        / "_maya_bridge.py"
+    )
+
+    # -- a duck-typed Blender material graph ------------------------------------
+    class _Socket:
+        def __init__(self, name):
+            self.name = name
+
+    class _Node:
+        def __init__(self, name, bl_idname, outputs=(), image=None):
+            self.name = name
+            self.bl_idname = bl_idname
+            self.outputs = [TestPullManifestSlots._Socket(n) for n in outputs]
+            self.image = image
+
+    class _Link:
+        def __init__(self, from_node, from_socket, to_node, to_socket):
+            self.from_node = from_node
+            self.from_socket = TestPullManifestSlots._Socket(from_socket)
+            self.to_node = to_node
+            self.to_socket = TestPullManifestSlots._Socket(to_socket)
+
+    def _image(self, name, path):
+        return self._Node(
+            name,
+            "ShaderNodeTexImage",
+            ("Color", "Alpha"),
+            SimpleNamespace(filepath=path, library=None),
+        )
+
+    def _material(self, nodes, links):
+        tree = type("Tree", (), {})()  # hashable, as a node tree is
+        tree.nodes, tree.links = nodes, links
+        return SimpleNamespace(use_nodes=True, node_tree=tree)
+
+    def _graphs(self):
+        """Named cases, mirroring blendertk's own slot-trace checks."""
+        d = self.tmp
+        paths = {n: os.path.join(d, n) for n in ("crate.png", "orm.png", "nrm.png")}
+        for p in paths.values():
+            with open(p, "w") as fh:
+                fh.write("x")
+        L = self._Link
+        cases = {}
+        bsdf = self._Node("BSDF", "ShaderNodeBsdfPrincipled")
+        img = self._image("img", paths["crate.png"])
+        cases["direct base color"] = (
+            [img, bsdf],
+            [L(img, "Color", bsdf, "Base Color")],
+        )
+        bsdf = self._Node("BSDF", "ShaderNodeBsdfPrincipled")
+        img = self._image("img", paths["crate.png"])
+        cases["color + alpha off one image"] = (
+            [img, bsdf],
+            [L(img, "Color", bsdf, "Base Color"), L(img, "Alpha", bsdf, "Alpha")],
+        )
+        bsdf = self._Node("BSDF", "ShaderNodeBsdfPrincipled")
+        img = self._image("img", paths["nrm.png"])
+        nmap = self._Node("nmap", "ShaderNodeNormalMap")
+        cases["normal map chain"] = (
+            [img, nmap, bsdf],
+            [L(img, "Color", nmap, "Color"), L(nmap, "Normal", bsdf, "Normal")],
+        )
+        bsdf = self._Node("BSDF", "ShaderNodeBsdfPrincipled")
+        img = self._image("img", paths["orm.png"])
+        sep = self._Node("sep", "ShaderNodeSeparateColor")
+        cases["packed map"] = (
+            [img, sep, bsdf],
+            [
+                L(img, "Color", sep, "Color"),
+                L(sep, "Green", bsdf, "Roughness"),
+                L(sep, "Blue", bsdf, "Metallic"),
+            ],
+        )
+        bsdf = self._Node("BSDF", "ShaderNodeBsdfPrincipled")
+        a = self._image("a", paths["crate.png"])
+        b = self._image("b", paths["orm.png"])
+        mix = self._Node("mix", "ShaderNodeMix")
+        cases["two images into one channel"] = (
+            [a, b, mix, bsdf],
+            [
+                L(a, "Color", mix, "A"),
+                L(b, "Color", mix, "B"),
+                L(mix, "Result", bsdf, "Base Color"),
+            ],
+        )
+        return {k: self._material(*v) for k, v in cases.items()}, paths
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.mkdtemp(prefix="mtk_slots_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.bpy = SimpleNamespace(
+            path=SimpleNamespace(abspath=lambda p, library=None: p)
+        )
+
+    def _template_ns(self, template):
+        """The template's manifest collectors, compiled on their own."""
+        import glob
+        import sys
+
+        wanted = {
+            "_resolved_image_file",
+            "_maya_openable",
+            "_extend_sys_path",
+            "_material_files",
+            "_material_slots",
+        }
+        tree = ast.parse(template.read_text(encoding="utf-8"))
+        body = [
+            n
+            for n in tree.body
+            if (isinstance(n, ast.FunctionDef) and n.name in wanted)
+            or (
+                isinstance(n, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name)
+                    and t.id in ("_TILE_TOKENS", "_PRINCIPLED_CHANNELS")
+                    for t in n.targets
+                )
+            )
+        ]
+        ns = {"os": os, "re": re, "glob": glob, "sys": sys, "EXTRA_SYS_PATH": []}
+        exec(compile(ast.Module(body, []), str(template), "exec"), ns)
+        return ns
+
+    def _blendertk_slots(self):
+        """blendertk's ``MayaBridge._material_slots`` + its channel table, lifted
+        from its source (the method is exec'd against a stub ``cls``)."""
+        if not self.BTK_BRIDGE.is_file():
+            self.skipTest("blendertk source not beside mayatk")
+        from typing import Dict, List
+
+        tree = ast.parse(self.BTK_BRIDGE.read_text(encoding="utf-8"))
+        cls_node = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.ClassDef) and n.name == "MayaBridge"
+        )
+        method = next(
+            n
+            for n in cls_node.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_material_slots"
+        )
+        method.decorator_list = []
+        table = next(
+            n
+            for n in cls_node.body
+            if isinstance(n, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "_PRINCIPLED_CHANNELS"
+                for t in n.targets
+            )
+        )
+        ns = {"Dict": Dict, "List": List}
+        exec(compile(ast.Module([table, method], []), str(self.BTK_BRIDGE), "exec"), ns)
+        stub = type(
+            "Stub",
+            (),
+            {
+                "_PRINCIPLED_CHANNELS": ns["_PRINCIPLED_CHANNELS"],
+                "_resolved_image_file": staticmethod(
+                    lambda image: image.filepath if image else None
+                ),
+            },
+        )
+        channels = ns["_PRINCIPLED_CHANNELS"]
+        return (lambda mat: ns["_material_slots"](stub, mat)), channels
+
+    def test_the_copy_traces_what_blendertk_traces(self):
+        btk_slots, btk_channels = self._blendertk_slots()
+        graphs, _ = self._graphs()
+        for template in self.TEMPLATES:
+            ns = self._template_ns(template)
+            with self.subTest(template=template.name, part="channel table"):
+                self.assertEqual(ns["_PRINCIPLED_CHANNELS"], btk_channels)
+            for name, mat in graphs.items():
+                with self.subTest(template=template.name, case=name):
+                    self.assertEqual(
+                        ns["_material_slots"](self.bpy, mat), btk_slots(mat)
+                    )
+
+    def test_the_pull_manifest_carries_a_slot_for_a_token_less_texture(self):
+        graphs, paths = self._graphs()
+        mat = graphs["color + alpha off one image"]
+        mat.name = "A5CrateMat"
+        obj = SimpleNamespace(
+            type="MESH",
+            name="A5Crate",
+            material_slots=[SimpleNamespace(material=mat)],
+        )
+        bpy = SimpleNamespace(
+            path=self.bpy.path,
+            context=SimpleNamespace(scene=SimpleNamespace(objects=[obj])),
+        )
+        for template in self.TEMPLATES:
+            ns = self._template_ns(template)
+            tree = ast.parse(template.read_text(encoding="utf-8"))
+            collect = next(
+                n
+                for n in tree.body
+                if isinstance(n, ast.FunctionDef)
+                and n.name == "collect_texture_manifest"
+            )
+            exec(compile(ast.Module([collect], []), str(template), "exec"), ns)
+            entries, _ = ns["collect_texture_manifest"](bpy)
+            with self.subTest(template=template.name):
+                self.assertEqual(len(entries), 1)
+                self.assertEqual(
+                    entries[0].get("slots"),
+                    {"baseColor": paths["crate.png"], "opacity": paths["crate.png"]},
+                )
 
 
 class TestSendReceiversShareOneConsumerCall(unittest.TestCase):
@@ -4134,7 +4517,9 @@ class TestUsdPullRouteContracts(unittest.TestCase):
 
         for name in (
             "_resolved_image_file",
+            "_maya_openable",
             "_material_files",
+            "_material_slots",
             "collect_texture_manifest",
         ):
             self.assertEqual(dump(text, name), dump(fbx_text, name), name)

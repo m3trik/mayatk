@@ -35,9 +35,9 @@
 -- obstacle (measured 2026-09-23: a moved stack landed on a fixed stacked pair),
 -- and only the subset's own stacks have to move as units. Pack-only
 -- opt-in, NOT part of pack_block.lua: the unwrap_*.lua presets reach the
--- pack with freshly flattened islands whose placement is meaningless. Left
--- out of pack_into_existing.lua too -- new islands landing centred on a
--- locked island of the existing layout would be welded to it.
+-- pack with freshly flattened islands whose placement is meaningless.
+-- pack_into_existing.lua carries it too: it is always a subset pack, so only
+-- the new islands' own stacks group -- none is welded to a fixed island.
 --
 -- Rizom's own Stack Similar (ZomTopoCopy Mode="Stack") is the natural
 -- Rizom-side alternative but access-violates 2020.1 headless (probed on

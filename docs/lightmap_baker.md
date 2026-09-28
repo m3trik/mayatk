@@ -87,7 +87,7 @@ same steps:
    record it (`LightmapRecords.commit`): a JSON marker (`lightmapInfo`) on
    each transform, and a scene manifest on the `data_export` node that rides
    the FBX (see [Scene data nodes](data_nodes.md)). The maps the objects read
-   before, and that nothing reads now, are deleted (see
+   before, and that nothing reads now, are set aside (see
    [When the maps move](#when-the-maps-move)).
 7. Measure the finished maps (`LightmapBaker.bake_verdict`). A bake that
    comes back essentially unlit, or blown out, is still recorded, because it
@@ -259,15 +259,23 @@ search, and gather the maps into one folder.
 
 Re-bake after changing the Output Directory, Beside Material Textures, the
 Name affix or the Packing, and the objects get new files. The old ones are
-deleted once nothing reads them (`LightmapRecords.superseding`), and the
+set aside once nothing reads them (`LightmapRecords.superseding`), and the
 footer says how many. A same-place re-bake just writes over its own maps.
+
+Set aside, never deleted: each goes to the Recycle Bin (the trash on Linux
+and macOS), or, where the drive has none -- a network share, a removable
+drive -- into a `_superseded` folder beside it. A scene cannot see what
+another scene file reads, so a map another file still uses (a Save As
+copy's source, a copy made in Explorer) is one restore away. The texture
+searches never look inside `_superseded` (pythontk's
+`FileUtils.move_to_trash`, `FileDependencies.set_aside`).
 
 Left behind, an old map was more than clutter. A tool that finds maps by
 name can pick up the stale copy, and beside the textures a leftover keeps
 its name taken, so going back to it wrote `_1`.
 
-Only this scene's own maps are deleted. Each commit records which scene file
-wrote the map, and a map is kept when:
+Only this scene's own maps are set aside. Each commit records which scene
+file wrote the map, and a map is kept when:
 
 - another object still reads it: an excluded object, one the bake didn't
   finish, or one outside the Scope;
@@ -278,7 +286,9 @@ wrote the map, and a map is kept when:
 - a referenced object reads it, since the referenced file may name it too.
 
 A scene saved under a new name, with the old file gone, still owns what it
-wrote. Revert deletes nothing.
+wrote, and so does a scene baked before its first save: the first save stamps
+the file it writes on every map baked while it was unsaved. Revert moves
+nothing.
 
 ## Revert
 
@@ -319,7 +329,7 @@ returns a `LightmapBakeResult`, the same shape in blendertk:
 | `excluded` | Objects the Exclude set left out. |
 | `hidden` | Objects left out because Arnold renders nothing of them (hidden or templated). Always empty in blendertk, which bakes hidden objects. |
 | `unbaked` | Objects asked for that the bake didn't finish. They keep the map they had. |
-| `retired` | Map files the bake superseded and deleted. |
+| `retired` | Map files the bake superseded and set aside (the Recycle Bin, or a `_superseded` folder beside them). |
 | `refused` | Why nothing was baked, as a sentence, or `None`. |
 | `verdict` | A warning about the maps' level, or `None`. |
 
@@ -347,9 +357,10 @@ store `bounces` for `gi_depth`), the Exclude set (a stamped collection that
 changes nothing about what renders), Beside Material Textures, Bounces,
 Adaptive Sampling, the four switches on the fields they qualify, Reset to
 Defaults and the confirmed Revert. The engine matches too: `bake()` with its
-preflight and verdict, `bake_targets`, the file claims, the deletion of
-superseded maps (a linked object's map is kept, as a referenced one's is
-here), the legacy migration, and `LightmapRecords`. It returns the same
+preflight and verdict, `bake_targets`, the file claims, setting superseded
+maps aside (a linked object's map is kept, as a referenced one's is here), a
+linked library's own folder record (as a referenced module's is read here),
+the legacy migration, and `LightmapRecords`. It returns the same
 `LightmapBakeResult`, whose two copies `check_dcc_twins.py` keeps identical.
 
 The differences are the renderer's. Cycles has no GI Samples: one sample count

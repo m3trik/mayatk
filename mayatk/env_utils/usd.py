@@ -207,8 +207,12 @@ class UsdUtils(ptk.HelpMixin):
         options: Optional[Dict[str, Any]] = None,
         selection_only: bool = True,
         material_names: str = "shader",
+        prune_static: bool = False,
     ) -> str:
         """Export to a USD file (``.usd``/``.usda``/``.usdc``/``.usdz``).
+
+        An animated export (``frameRange`` in *options*) writes the layer one
+        ``mayaUSDExport`` pass would, faster: see :meth:`_maya_usd_export`.
 
         Parameters:
             file_path: Destination path (``.usd`` appended when no USD
@@ -226,6 +230,12 @@ class UsdUtils(ptk.HelpMixin):
                 ``"shading_group"`` (``mayaUSDExport``'s own ``crate_matSG``,
                 what a Maya-to-Maya round trip through mayaUsd expects). See
                 :meth:`name_materials_after_shaders`.
+            prune_static: Also leave the subtrees that never move out of the
+                sampled pass, by marking them ``intermediateObject`` for its
+                duration (:meth:`_static_roots`). The layer is the same; the
+                flags are put back, but each flip is an undoable edit, and a
+                reference edit on a referenced node -- so it is for a scene
+                opened to be converted, not a user's working scene.
 
         Returns:
             The absolute path of the exported file.
@@ -260,7 +270,7 @@ class UsdUtils(ptk.HelpMixin):
             store = ptk.TempArtifacts("mtk_usdz_export", policy="scoped")
             tmp_layer = store.path(extension=".usda")
             try:
-                cls._maya_usd_export(tmp_layer, selection_only, opts)
+                cls._maya_usd_export(tmp_layer, selection_only, opts, prune_static)
                 if material_names == "shader":
                     cls.name_materials_after_shaders(tmp_layer)
                 result = ptk.UsdzPackager.from_layer(tmp_layer, file_path)
@@ -269,7 +279,7 @@ class UsdUtils(ptk.HelpMixin):
             logger.info(f"Exported USDZ: {result}")
             return result
 
-        cls._maya_usd_export(file_path, selection_only, opts)
+        cls._maya_usd_export(file_path, selection_only, opts, prune_static)
         if material_names == "shader":
             cls.name_materials_after_shaders(file_path)
         logger.info(f"Exported USD: {file_path}")
@@ -370,32 +380,545 @@ class UsdUtils(ptk.HelpMixin):
         layer.Save()
         return len(renames)
 
-    @staticmethod
-    def _maya_usd_export(file_path: str, selection_only: bool, opts: Dict[str, Any]):
-        """``cmds.mayaUSDExport`` with per-flag tolerance across mayaUsd versions.
+    #: ``mayaUSDExport`` flags that put prims somewhere other than their DAG path,
+    #: sample other than every whole frame, hide what moves from the one-frame
+    #: pass, or run caller code once per pass. The sampled export
+    #: (:meth:`_sampled_export`) finds prims BY DAG path, resamples whole frames
+    #: and reads motion off the one-frame pass's samples (``staticSingleSample``
+    #: writes each lone sample as a default: an expression-driven subtree then
+    #: read as static and shipped frozen), and it runs two passes (a callback
+    #: would run twice), so any of these sends an export through one plain pass.
+    _UNSPLIT_FLAGS = (
+        "exportRoots",
+        "rootPrim",
+        "rootPrimType",
+        "parentScope",
+        "stripNamespaces",
+        "worldspace",
+        "exportInstances",
+        "frameStride",
+        "frameSample",
+        "staticSingleSample",
+        "melPerFrameCallback",
+        "melPostCallback",
+        "pythonPerFrameCallback",
+        "pythonPostCallback",
+    )
+
+    @classmethod
+    def _maya_usd_export(
+        cls,
+        file_path: str,
+        selection_only: bool,
+        opts: Dict[str, Any],
+        prune_static: bool = False,
+    ):
+        """``cmds.mayaUSDExport`` with per-flag tolerance across mayaUsd versions,
+        and an animated export split so that prims which never move stop costing
+        time at every frame.
+
+        mayaUsd (0.30, read from its source) runs EVERY prim writer at EVERY
+        sampled frame, moving or not, and two interchange flags make that real
+        work: ``exportBlendShapes`` walks each mesh's whole upstream graph for a
+        blendShape (and warns when it finds none), and ``exportVisibility`` asks
+        each writer whether its parent merges, iterating the parent's children.
+        So ``exportBlendShapes`` is dropped when the scene holds no blendShape
+        (no mesh could export one: the layer is the same), and a sampled export
+        goes through :meth:`_sampled_export`, which writes what one pass would
+        and falls back to that pass whenever it cannot prove it.
 
         ``cmds`` rejects the whole call on ONE unknown flag (``TypeError``), so a
         flag this mayaUsd doesn't know is dropped with a log line and the call
-        retried -- the mirror of blendertk's ``_filter_op_options`` (Blender
-        renames USD kwargs between majors; mayaUsd adds flags between releases).
-        Never drops ``file``.
+        retried (:meth:`_mayausd`) -- the mirror of blendertk's
+        ``_filter_op_options`` (Blender renames USD kwargs between majors;
+        mayaUsd adds flags between releases). Never drops ``file``.
         """
         opts = dict(opts)
+        if opts.get("exportBlendShapes") and not cmds.ls(type="blendShape"):
+            opts["exportBlendShapes"] = False
+        if opts.get("frameRange") and cls._sampled_export(
+            file_path, selection_only, opts, prune_static
+        ):
+            return None
+        return cls._mayausd(file_path, selection_only, opts)
+
+    @staticmethod
+    def _mayausd(
+        file_path: str, selection_only: bool, opts: Dict[str, Any], **overrides
+    ):
+        """One ``cmds.mayaUSDExport`` of *opts* with *overrides*. A flag this mayaUsd
+        does not know is dropped from *opts* too, so a later pass of the same
+        export neither retries nor re-reports it."""
+        call = dict(opts, **overrides)
         while True:
             try:
                 return cmds.mayaUSDExport(
-                    file=file_path, selection=selection_only, **opts
+                    file=file_path, selection=selection_only, **call
                 )
             except TypeError as error:
                 match = re.search(r"'(\w+)'", str(error))
                 key = match.group(1) if match else None
-                if key and key in opts:
+                if key and key in call:
                     logger.warning(
                         f"USD export flag unknown to this mayaUsd dropped: {key}"
                     )
-                    del opts[key]
+                    del call[key]
+                    opts.pop(key, None)
                     continue
                 raise
+
+    @classmethod
+    def _sampled_export(
+        cls,
+        file_path: str,
+        selection_only: bool,
+        opts: Dict[str, Any],
+        prune_static: bool = False,
+    ) -> bool:
+        """Write *file_path* as one sampled ``mayaUSDExport`` pass would, in three
+        steps; ``False`` (nothing proven, *file_path* to be overwritten) whenever
+        the result cannot be shown to be that pass's.
+
+        1. A ONE-frame pass with every flag: the whole layer as the full pass
+           writes it, but for the length of each sampled attribute's samples.
+        2. The sampled pass WITHOUT visibility -- and, with *prune_static*,
+           without the subtrees that never move (:meth:`_static_roots`).
+        3. The first layer, with what the second wrote for every prim it holds,
+           and the prims whose visibility mayaUsd samples resampled here
+           (:meth:`_animated_visibility`) -- :meth:`_merge_samples`, which also
+           holds every check.
+
+        Measured on a production module (4742 frames, 5775 prims): 776-944 s in
+        one pass, 638 s with visibility apart, 198 s with *prune_static* too
+        (2722 of 3754 DAG nodes left out; the sampled pass at 38 ms a frame), the
+        layer the same to the last sample.
+        """
+        if any(opts.get(flag) for flag in cls._UNSPLIT_FLAGS):
+            return False
+        visibility = opts.get("exportVisibility", True)
+        if not (visibility or prune_static):
+            return False
+        try:
+            from pxr import Sdf  # noqa: F401 -- Maya's own USD
+        except ImportError:
+            return False
+        start, end = (float(v) for v in opts["frameRange"])
+        # mayaUsd's own time samples: the start, then every whole frame to the end.
+        frames = [start + i for i in range(int(math.floor(end - start + 1e-6)) + 1)]
+        current = cmds.currentTime(query=True)
+        store = ptk.TempArtifacts("mtk_usd_sampled", policy="scoped")
+        flipped: Dict[str, Any] = {}
+        try:
+            return cls._split_export(
+                file_path,
+                store.path(extension=".usd"),
+                selection_only,
+                opts,
+                frames,
+                current,
+                flipped if prune_static else None,
+            )
+        except Exception:  # noqa: BLE001 -- a shortcut never fails an export
+            logger.warning("USD: split export failed; one pass instead.", exc_info=True)
+            return False
+        finally:
+            for node, value in flipped.items():
+                try:
+                    cmds.setAttr(f"{node}.intermediateObject", value)
+                except RuntimeError:
+                    logger.warning(f"USD: {node} kept intermediateObject on.")
+            cmds.currentTime(current, update=True)
+            store.cleanup()
+
+    @classmethod
+    def _split_export(
+        cls,
+        file_path: str,
+        reference: str,
+        selection_only: bool,
+        opts: Dict[str, Any],
+        frames: List[float],
+        current: float,
+        flipped: Optional[Dict[str, Any]],
+    ) -> bool:
+        """:meth:`_sampled_export`'s steps. Its own frame, so every layer it opens is
+        released before the caller removes the reference file. *flipped*, when
+        given, receives ``{node: its intermediateObject}`` for each subtree left
+        out of the sampled pass (the caller puts them back)."""
+        from pxr import Sdf
+
+        cls._mayausd(reference, selection_only, opts, frameRange=(frames[0],) * 2)
+        ref = Sdf.Layer.FindOrOpen(reference)
+        scope = cls._export_scope() if selection_only else None
+        writers: Dict[str, List[str]] = {}
+        if opts.get("exportVisibility", True):
+            writers = cls._animated_visibility(ref, scope)
+            if writers is None:
+                logger.info("USD: an animated visibility has no prim; one pass.")
+                return False
+        if flipped is not None:
+            for node in cls._static_roots(ref, writers, scope):
+                try:
+                    flipped[node] = cmds.getAttr(f"{node}.intermediateObject")
+                    cmds.setAttr(f"{node}.intermediateObject", True)
+                except RuntimeError:
+                    flipped.pop(node, None)  # locked or connected: it stays in
+        cls._mayausd(file_path, selection_only, opts, exportVisibility=False)
+        for node, value in list(flipped.items()) if flipped else []:
+            cmds.setAttr(f"{node}.intermediateObject", value)
+            del flipped[node]
+        # mayaUsd writes through this process's layer registry (a layer held open
+        # at the path is cleared and rewritten -- probed), so this is current.
+        sampled = Sdf.Layer.FindOrOpen(file_path)
+        merged = cls._merge_samples(ref, sampled, writers, frames, current)
+        if merged is None:
+            return False
+        times = sampled.startTimeCode, sampled.endTimeCode
+        sampled.TransferContent(merged)
+        sampled.startTimeCode, sampled.endTimeCode = times
+        sampled.Save()
+        logger.info(
+            f"USD: sampled {len(frames)} frame(s) in a split export"
+            + (f", {len(writers)} visibility track(s) resampled" if writers else "")
+        )
+        return True
+
+    @classmethod
+    def _merge_samples(
+        cls,
+        ref: Any,
+        sampled: Any,
+        writers: Dict[str, List[str]],
+        frames: List[float],
+        current: float,
+    ) -> Optional[Any]:
+        """The full pass's layer, from its two halves.
+
+        *ref* (the one-frame pass) gives every prim and every default the full
+        pass writes at the default time. Each attribute of a prim *sampled* (the
+        full-range pass) also wrote is taken whole from *sampled*: its samples,
+        and any default a writer re-authors at every frame (blendshape weights end
+        on the LAST frame's). A SkelRoot's ``extent`` keeps *ref*'s default --
+        every mesh writes it there, so a mesh left out changes which wrote last --
+        and takes *sampled*'s samples, written only by a mesh whose bounds change.
+        Each *writers* prim's visibility is resampled (:meth:`_visibility_layer`).
+        A prim only *sampled* wrote (a materials scope that follows the first
+        root) contributes nothing. ``None`` unless each of these holds:
+
+        * a prim both wrote carries the same attributes in both, visibility aside
+          (leaving a subtree out cannot have re-merged a shape into its parent);
+        * each attribute *ref* samples (visibility aside) is sampled in *sampled*,
+          the same at the first frame, where *ref*'s one sample lies;
+        * every visibility *ref* samples belongs to *writers*, and theirs,
+          resampled at the first frame, is *ref*'s exactly.
+        """
+        from pxr import Sdf
+
+        start = frames[0]
+        found = []
+        ref.Traverse(ref.pseudoRoot.path, found.append)
+        in_ref = {
+            p for p in found if p.IsPropertyPath() and ref.GetNumTimeSamplesForPath(p)
+        }
+        tracks = {Sdf.Path(w).AppendProperty("visibility") for w in writers}
+        for path in sorted(in_ref - tracks):
+            if path.name == "visibility":
+                logger.info(f"USD: {path} is sampled unasked; one pass.")
+                return None
+            if not sampled.GetNumTimeSamplesForPath(path) or not cls._same(
+                ref.QueryTimeSample(path, start),
+                sampled.QueryTimeSample(path, start),
+            ):
+                logger.info(f"USD: {path} differs at frame {start:g}; one pass.")
+                return None
+        shared = []
+        for path in (p for p in found if p.IsPrimPath()):
+            theirs = sampled.GetPrimAtPath(path)
+            if theirs is None:
+                continue  # left out: all of it is in *ref*
+            names = set(theirs.attributes.keys())
+            if names != set(ref.GetPrimAtPath(path).attributes.keys()) - {"visibility"}:
+                logger.info(f"USD: {path} is written differently apart; one pass.")
+                return None
+            shared.append((path, theirs.typeName == "SkelRoot", names))
+
+        merged = Sdf.Layer.CreateAnonymous(".usd")
+        merged.TransferContent(ref)
+        for prim, skel_root, names in shared:
+            for name in names:
+                path = prim.AppendProperty(name)
+                if skel_root and name == "extent":
+                    merged.GetAttributeAtPath(path).ClearInfo("timeSamples")
+                    for time in sampled.ListTimeSamplesForPath(path):
+                        merged.SetTimeSample(
+                            path, time, sampled.QueryTimeSample(path, time)
+                        )
+                elif not Sdf.CopySpec(sampled, path, merged, path):
+                    return None
+        if writers:
+            first = cls._visibility_layer(ref, writers, frames[:1], current)
+            if any(
+                cls._attr_state(first, p) != cls._attr_state(ref, p) for p in tracks
+            ):
+                logger.info("USD: resampled visibility differs; one pass.")
+                return None
+            full = cls._visibility_layer(ref, writers, frames, current)
+            for path in tracks:
+                if full.GetAttributeAtPath(path):
+                    if not Sdf.CopySpec(full, path, merged, path):
+                        return None
+                elif merged.GetAttributeAtPath(path):
+                    prim = merged.GetPrimAtPath(path.GetPrimPath())
+                    prim.RemoveProperty(prim.properties["visibility"])
+        return merged
+
+    @staticmethod
+    def _same(a: Any, b: Any) -> bool:
+        """``a == b`` for two USD values, arrays included (a Vt array may compare
+        element-wise)."""
+        try:
+            return bool(a == b)
+        except (TypeError, ValueError):
+            return list(a) == list(b)
+
+    @staticmethod
+    def _export_scope() -> set:
+        """Every DAG path a selection export writes: the selected nodes, all their
+        descendants, and every ancestor (written as the path to them)."""
+        selected = cmds.ls(selection=True, long=True, type="dagNode") or []
+        scope = set(selected)
+        scope.update(
+            cmds.listRelatives(selected, allDescendents=True, fullPath=True) or []
+            if selected
+            else []
+        )
+        for node in selected:
+            parts = node.split("|")
+            scope.update("|".join(parts[:i]) for i in range(2, len(parts)))
+        return scope
+
+    @classmethod
+    def _prim_path(cls, dag_path: str) -> str:
+        """*dag_path*'s prim path as ``mayaUSDExport`` writes it (merged, not
+        re-rooted): each segment through :meth:`sanitize_prim_name`."""
+        return "/" + "/".join(
+            cls.sanitize_prim_name(s) for s in dag_path.split("|") if s
+        )
+
+    @classmethod
+    def _animated_visibility(
+        cls, layer: Any, scope: Optional[set] = None
+    ) -> Optional[Dict[str, List[str]]]:
+        """``{prim path: [visibility plugs]}`` for every prim whose visibility mayaUsd
+        samples, or ``None`` when one of them has no prim in *layer*. *scope*
+        limits the nodes asked (a selection export's :meth:`_export_scope`).
+
+        mayaUsd 0.30's ``UsdMayaPrimWriter::Write``, restated from its source: a
+        prim's visibility is its node's ``visibility``, AND its transform's when
+        the prim is a shape merged into it, and it is sampled when either plug is
+        animated by ``UsdMayaUtil::isPlugAnimated`` -- ``MAnimUtil`` on the plug
+        or on the node driving it (so an expression drives nothing, and a flat
+        curve still does). A joint writes none (the skeleton writer). Merged or
+        not is read off *layer*: an unmerged shape keeps a prim of its own.
+
+        Proven on mayaUsd 0.30.0 only, and a missed prim whose first value equals
+        the fallback would pass the frame-one check: ``test_usd`` pins that
+        version, so an upgrade fails until the equivalence proof is re-run.
+        """
+        import maya.api.OpenMaya as om
+        import maya.api.OpenMayaAnim as oma
+
+        def animated(plug):
+            if oma.MAnimUtil.isAnimated(plug):
+                return True
+            if plug.isDestination:
+                source = plug.source()
+                return not source.isNull and oma.MAnimUtil.isAnimated(source.node())
+            return False
+
+        nodes = cmds.ls(dag=True, long=True, allPaths=True, noIntermediate=True) or []
+        if scope is not None:
+            nodes = [n for n in nodes if n in scope]
+        shapes = set(cmds.ls(nodes, shapes=True, long=True) or [])
+        joints = set(cmds.ls(nodes, type="joint", long=True) or [])
+        writers: Dict[str, set] = {}
+        for node in nodes:
+            if node in joints:
+                continue
+            selection = om.MSelectionList()
+            selection.add(node)
+            try:
+                plug = om.MFnDependencyNode(selection.getDependNode(0)).findPlug(
+                    "visibility", True
+                )
+            except RuntimeError:
+                continue
+            if not animated(plug):
+                continue
+            plugs = [node]
+            if node in shapes:
+                path = cls._prim_path(node)
+                if not layer.GetPrimAtPath(path):  # merged into its transform's
+                    path = cls._prim_path(node.rsplit("|", 1)[0])
+                    plugs.append(node.rsplit("|", 1)[0])
+            else:
+                path = cls._prim_path(node)
+                children = (
+                    cmds.listRelatives(
+                        node, shapes=True, noIntermediate=True, fullPath=True
+                    )
+                    or []
+                )
+                if len(children) == 1 and not layer.GetPrimAtPath(
+                    cls._prim_path(children[0])
+                ):
+                    plugs.append(children[0])  # merged: its shape writes the prim
+            if not layer.GetPrimAtPath(path):
+                return None
+            writers.setdefault(path, set()).update(p + ".visibility" for p in plugs)
+        return {path: sorted(plugs) for path, plugs in writers.items()}
+
+    @classmethod
+    def _static_roots(
+        cls,
+        layer: Any,
+        writers: Dict[str, List[str]],
+        scope: Optional[set] = None,
+    ) -> List[str]:
+        """The topmost transforms whose whole subtree can sit out a sampled pass.
+
+        Read off *layer*, the one-frame pass: a subtree qualifies when no prim
+        in it has a sample there or a visibility track (*writers*), none is a
+        skeleton prim or bound to one, no node in it is animated to
+        ``MAnimUtil`` or a joint, and it hangs under no shape's transform
+        (leaving it out would make that transform mergeable, moving its shape's
+        prim). A transform with several parents, or whose prim path another
+        node shares, stays in; so does every node a selection names, and its
+        ancestors.
+        """
+        import maya.api.OpenMaya as om
+        import maya.api.OpenMayaAnim as oma
+        from pxr import Sdf
+
+        found = []
+        layer.Traverse(layer.pseudoRoot.path, found.append)
+        hot = {Sdf.Path(w) for w in writers}
+        for path in found:
+            if path.IsPropertyPath():
+                if layer.GetNumTimeSamplesForPath(path) or (
+                    path.name == "skel:skeleton"
+                    or path.name.startswith("primvars:skel:")
+                ):
+                    hot.add(path.GetPrimPath())
+            elif path.IsPrimPath() and layer.GetPrimAtPath(path).typeName in (
+                "SkelRoot",
+                "Skeleton",
+                "SkelAnimation",
+            ):
+                hot.add(path)
+        warm = set()
+        for path in hot:
+            warm.update(path.GetAncestorsRange())
+
+        transforms = cmds.ls(type="transform", long=True) or []
+        if scope is not None:
+            transforms = [t for t in transforms if t in scope]
+        pinned = set()
+        for node in cmds.ls(type="joint", long=True) or []:
+            parts = node.split("|")
+            pinned.update("|".join(parts[:i]) for i in range(2, len(parts) + 1))
+        for node in (
+            cmds.ls(selection=True, long=True, type="dagNode") or [] if scope else []
+        ):
+            parts = node.split("|")
+            pinned.update("|".join(parts[:i]) for i in range(2, len(parts) + 1))
+        for node in cmds.ls(type="shape", long=True, noIntermediate=True) or []:
+            pinned.update(
+                c
+                for c in cmds.listRelatives(
+                    node.rsplit("|", 1)[0],
+                    children=True,
+                    type="transform",
+                    fullPath=True,
+                )
+                or []
+            )
+        # Anything MAnimUtil calls animated stays in, whatever the one frame shows
+        # (a track that starts on its default writes nothing at the first frame).
+        for node in transforms + (cmds.ls(shapes=True, long=True) or []):
+            selection = om.MSelectionList()
+            selection.add(node)
+            if oma.MAnimUtil.isAnimated(selection.getDependNode(0)):
+                parts = node.split("|")
+                pinned.update("|".join(parts[:i]) for i in range(2, len(parts) + 1))
+
+        owners: Dict[str, int] = {}
+        for node in transforms:
+            key = cls._prim_path(node)
+            owners[key] = owners.get(key, 0) + 1
+        roots = []
+        chosen = set()
+        for node in sorted(transforms, key=lambda n: n.count("|")):
+            path = cls._prim_path(node)
+            if (
+                node in pinned
+                or owners[path] != 1
+                or not layer.GetPrimAtPath(path)
+                or Sdf.Path(path) in warm
+                or len(cmds.listRelatives(node, allParents=True) or []) > 1
+                or any(node.startswith(r + "|") for r in chosen)
+            ):
+                continue
+            chosen.add(node)
+            roots.append(node)
+        return roots
+
+    @staticmethod
+    def _visibility_layer(
+        layer: Any,
+        writers: Dict[str, List[str]],
+        frames: List[float],
+        current: float,
+    ) -> Any:
+        """A scratch layer holding each *writers* prim's visibility as mayaUsd
+        authors it: read at *current* for the default (mayaUsd reads it before
+        stepping), then at each of *frames*, all through
+        ``UsdUtils.SparseValueWriter`` -- the writer mayaUsd authors through, so a
+        fallback-equal default and a held value come out the same. Prims keep
+        *layer*'s types: the fallback is the schema's."""
+        from pxr import Sdf, Usd, UsdGeom
+        from pxr import UsdUtils as PxrUsdUtils
+
+        scratch = Sdf.Layer.CreateAnonymous(".usda")
+        stage = Usd.Stage.Open(scratch)
+        attrs = {}
+        for path in writers:
+            prim = stage.DefinePrim(path, layer.GetPrimAtPath(path).typeName)
+            attrs[path] = UsdGeom.Imageable(prim).CreateVisibilityAttr(None, True)
+        writer = PxrUsdUtils.SparseValueWriter()
+        for time in [None] + list(frames):
+            cmds.currentTime(current if time is None else time, update=True)
+            code = Usd.TimeCode.Default() if time is None else Usd.TimeCode(time)
+            for path, plugs in writers.items():
+                visible = all(cmds.getAttr(plug) for plug in plugs)
+                token = (
+                    UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+                )
+                writer.SetAttribute(attrs[path], token, code)
+        return scratch
+
+    @staticmethod
+    def _attr_state(layer: Any, path: Any) -> Optional[tuple]:
+        """``(default, [(time, value)...])`` authored for *path* in *layer* -- ``None``
+        when nothing is (no spec, or a spec holding neither)."""
+        spec = layer.GetAttributeAtPath(path)
+        samples = [
+            (t, layer.QueryTimeSample(path, t))
+            for t in layer.ListTimeSamplesForPath(path)
+        ]
+        if not spec or (not spec.HasDefaultValue() and not samples):
+            return None
+        return (spec.default if spec.HasDefaultValue() else None, samples)
 
     @classmethod
     def sampling_frame_range(

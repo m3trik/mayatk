@@ -799,6 +799,154 @@ class TestSceneExporter(MayaTkTestCase):
             log_output,
         )
 
+    def test_a_task_that_raises_names_the_repairs_its_run_kept(self):
+        """A raising task stops the run before its write as a failed check does,
+        and used to say nothing of what stayed: the kept edits were reported
+        only on a failed check or a cancel. The error still propagates.
+        Added: 2026-09-27
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        self._require_fbx()
+        shape = cmds.listRelatives(self.sphere, shapes=True, fullPath=True)[0]
+        cmds.rename(shape, "notConformed")
+        log_output = self._capture_log(logging.WARNING)
+
+        def broken_bake(manager):
+            raise RuntimeError("the bake broke")
+
+        with patch.object(TaskManager, "smart_bake", broken_bake):
+            with self.assertRaisesRegex(RuntimeError, "the bake broke"):
+                self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=cmds.ls(self.sphere, long=True),
+                    output_name="Raised",
+                    tasks={"conform_shape_names": True, "smart_bake": True},
+                )
+        stopped = [m for m in log_output if "Export stopped" in m]
+        self.assertEqual(len(stopped), 1, log_output)
+        self.assertIn("repaired node and shape names", stopped[0])
+
+    def _auto_bend_rig(self):
+        """The loom auto-bend channel (``multiplyDivide.outputX -> translateY``,
+        worldMatrix-rooted so SmartBake takes it to the override layer) and an
+        offsetParentMatrix drive; authored in cm. Returns (objects, grp)."""
+        cmds.currentUnit(linear="cm")
+        cmds.playbackOptions(minTime=1, maxTime=10)
+        start = cmds.spaceLocator(name="start_CTRL")[0]
+        end = cmds.spaceLocator(name="end_CTRL")[0]
+        cmds.setKeyframe(end, attribute="translateX", time=1, value=10)
+        cmds.setKeyframe(end, attribute="translateX", time=10, value=2)
+        dist = cmds.createNode("distanceBetween", name="ab_dist")
+        cmds.connectAttr(f"{start}.worldMatrix[0]", f"{dist}.inMatrix1")
+        cmds.connectAttr(f"{end}.worldMatrix[0]", f"{dist}.inMatrix2")
+        pma = cmds.createNode("plusMinusAverage", name="ab_sub")
+        cmds.setAttr(f"{pma}.operation", 2)
+        cmds.setAttr(f"{pma}.input1D[0]", 10.0)
+        cmds.connectAttr(f"{dist}.distance", f"{pma}.input1D[1]")
+        md = cmds.createNode("multiplyDivide", name="ab_mult")
+        cmds.connectAttr(f"{pma}.output1D", f"{md}.input1X")
+        cmds.setAttr(f"{md}.input2X", 0.5)
+        grp = cmds.group(empty=True, name="mid_autoBend_GRP")
+        cmds.connectAttr(f"{md}.outputX", f"{grp}.translateY")
+        mdrv = cmds.spaceLocator(name="mdrv_LOC")[0]
+        cmds.setKeyframe(mdrv, attribute="translateY", time=1, value=0)
+        cmds.setKeyframe(mdrv, attribute="translateY", time=10, value=5)
+        mm = cmds.createNode("multMatrix", name="opm_mm")
+        cmds.connectAttr(f"{mdrv}.worldMatrix[0]", f"{mm}.matrixIn[0]")
+        opm = cmds.group(empty=True, name="opm_GRP")
+        cmds.connectAttr(f"{mm}.matrixSum", f"{opm}.offsetParentMatrix")
+        return cmds.ls([start, end, grp, mdrv, opm], long=True), grp
+
+    def _assert_bake_undone(self, grp, authored):
+        """No bake layer, the unit back to cm, the auto-bend channel at its
+        authored factor (1.0) and value."""
+        layers = [
+            name
+            for name in cmds.ls(type="animLayer") or []
+            if name.startswith("SmartBake")
+        ]
+        self.assertEqual(layers, [], "the bake's override layer was left behind")
+        self.assertEqual(cmds.currentUnit(q=True, linear=True), "cm")
+        src = cmds.listConnections(
+            f"{grp}.translateY", source=True, destination=False, plugs=True
+        )[0]
+        node = src.partition(".")[0]
+        factor = (
+            cmds.getAttr(f"{node}.conversionFactor")
+            if cmds.nodeType(node) == "unitConversion"
+            else 1.0
+        )
+        self.assertAlmostEqual(
+            factor, 1.0, places=9, msg=f"the export rescaled the channel x{factor}"
+        )
+        cmds.currentTime(10)
+        self.assertAlmostEqual(cmds.getAttr(f"{grp}.translateY"), authored, places=6)
+
+    def test_a_bake_that_raises_hands_the_scene_back_unbaked(self):
+        """The export's own error handling left a raising bake in the scene:
+        the restore was staged only once ``bake()`` returned a session, and the
+        session was recorded only at its end. Measured 2026-09-27: the layer,
+        the cut offsetParentMatrix drive, nine baked curves, and a cf=100 node
+        the layer write inserted under metres (ty 400.0 for an authored 4.0
+        once the orphan layer went).
+        Added: 2026-09-27
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        self._require_fbx()
+        objects, grp = self._auto_bend_rig()
+        cmds.currentTime(10)
+        authored = cmds.getAttr(f"{grp}.translateY")
+        real = SmartBake._apply_flatten
+
+        def raising_flatten(*args, **kwargs):
+            real(*args, **kwargs)
+            raise RuntimeError("injected after the flatten")
+
+        try:
+            with patch.object(SmartBake, "_apply_flatten", raising_flatten):
+                with self.assertRaisesRegex(RuntimeError, "injected"):
+                    self.exporter.perform_export(
+                        export_dir=self.temp_dir,
+                        objects=objects,
+                        output_name="BakeRaised",
+                        tasks={"set_linear_unit": "m", "smart_bake": True},
+                    )
+        finally:
+            if cmds.currentUnit(q=True, linear=True) != "cm":
+                cmds.currentUnit(linear="cm")
+                self.fail("the staged working-unit restore did not run")
+        self._assert_bake_undone(grp, authored)
+        self.assertEqual(
+            cmds.listConnections("opm_GRP.offsetParentMatrix", plugs=True),
+            ["opm_mm.matrixSum"],
+        )
+
+    def test_the_bake_fallback_repins_the_recorded_conversions(self):
+        """When ``SmartBake.restore`` fails, the fallback deletes the override
+        layer -- under the export's metres, where Maya rebuilds the driver link
+        at cf=100. It re-pins the factors the session recorded, as the restore
+        itself does.
+        Added: 2026-09-27
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        self._require_fbx()
+        objects, grp = self._auto_bend_rig()
+        cmds.currentTime(10)
+        authored = cmds.getAttr(f"{grp}.translateY")
+        with patch.object(
+            SmartBake, "restore", side_effect=RuntimeError("restore broke")
+        ):
+            self.exporter.perform_export(
+                export_dir=self.temp_dir,
+                objects=objects,
+                output_name="FallbackRepins",
+                tasks={"set_linear_unit": "m", "smart_bake": True},
+            )
+        self._assert_bake_undone(grp, authored)
+
     def test_key_edits_are_recorded_as_kept_only_in_write_back_mode(self):
         """Animation Output at Scene Keys (In Place) keeps every key edit, so a
         run that stops before its write names them; Export Copies restores
@@ -1712,6 +1860,24 @@ class TestSceneExporter(MayaTkTestCase):
         all_msgs = " ".join(r.getMessage() for r in warnings)
         self.assertIn("missing_texture", all_msgs)
         self.exporter.logger.removeHandler(handler)
+
+    def test_resolve_invalid_texture_paths_never_binds_a_set_aside_copy(self):
+        """A superseded lightmap is set aside into ``_superseded`` under its own
+        name (2026-09-27), and the Recycle Bin and sync caches hold stale copies
+        too: the hunt walks with ``ptk.FileDependencies.walk``, which never
+        enters them, so a lone copy there is not rebound as the missing file."""
+        sourceimages = self._set_project(self.temp_dir)
+        aside = os.path.join(sourceimages, "lm", "_superseded")
+        os.makedirs(aside, exist_ok=True)
+        with open(os.path.join(aside, "stale_map.png"), "w") as f:
+            f.write("dummy")
+        broken = "/nonexistent/path/stale_map.png"
+        file_node = self._assign_texture(self.cube, broken)
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        self.exporter.task_manager.resolve_invalid_texture_paths()
+
+        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), broken)
 
     # ------------------------------------------------------------------
     # convert_to_relative_paths — scoped to sourceimages; externals untouched
@@ -10657,8 +10823,9 @@ class TestLogFileName(unittest.TestCase):
             ("posix", False, "hero.log"),
         ):
             exp.hide_log_file = hide
-            with self.subTest(os_name=os_name, hide=hide), patch.object(
-                os, "name", os_name
+            with (
+                self.subTest(os_name=os_name, hide=hide),
+                patch.object(os, "name", os_name),
             ):
                 got = os.path.basename(exp.generate_log_file_path("hero.fbx"))
                 self.assertEqual(got, want)

@@ -251,6 +251,129 @@ def write_stacked_subset_obj(path: Path) -> None:
     path.write_text("\n".join(out) + "\n", encoding="ascii")
 
 
+FIXED_DENSITY = 0.1  # UV length per 3D length of write_subset_obj's fixed quads
+
+
+def write_into_existing_obj(
+    path: Path, sides=(0.05, 0.06, 0.07, 0.08, 0.09, 0.10), densities=None
+) -> None:
+    """pack_into_existing's input: ``probe_existing`` = :func:`write_subset_obj`'s
+    three fixed quads (density :data:`FIXED_DENSITY`), ``probe_new`` = one quad
+    per entry of *sides* arriving at HALF that density (or per *densities*),
+    outside the tile, and carrying the subset material (the host's tag on
+    select_objects). Matched to the layout's density each new quad doubles its
+    UV side. Face order: 0-2 fixed, then the new quads."""
+    verts, vts, faces = [], [], []
+
+    def quad(x0, u0, v0, s, density, tag):
+        bv, bt = len(verts) + 1, len(vts) + 1
+        w = s / density
+        verts.extend([(x0, 0, 0), (x0 + w, 0, 0), (x0 + w, w, 0), (x0, w, 0)])
+        vts.extend([(u0, v0), (u0 + s, v0), (u0 + s, v0 + s), (u0, v0 + s)])
+        faces.append(f"usemtl {tag}")
+        faces.append("f " + " ".join(f"{bv + k}/{bt + k}" for k in range(4)))
+
+    faces.append("o probe_existing")
+    for i, (u0, v0, s) in enumerate(
+        ((0.40, 0.40, 0.25), (0.05, 0.70, 0.20), (0.75, 0.05, 0.15))
+    ):
+        quad(i * 10.0, u0, v0, s, FIXED_DENSITY, "fixed_mat")
+    faces.append("o probe_new")
+    for i, s in enumerate(sides):
+        quad(
+            100 + i * 30.0,
+            1.2 + (i % 4) * 0.3,
+            (i // 4) * 0.3 - 0.4,
+            s,
+            densities[i] if densities else FIXED_DENSITY / 2,
+            SUBSET_TAG,
+        )
+    lines = ["# probe pack into existing"]
+    lines += [f"v {x} {y} {z}" for x, y, z in verts]
+    lines += [f"vt {u:.6f} {v:.6f}" for u, v in vts]
+    path.write_text("\n".join(lines + faces) + "\n", encoding="ascii")
+
+
+def write_into_full_obj(path: Path) -> None:
+    """:func:`write_into_existing_obj` with twelve new quads too big to fit at
+    the layout's density: the pack must shrink them, uniformly."""
+    write_into_existing_obj(path, sides=tuple(0.10 + 0.01 * i for i in range(12)))
+
+
+def write_into_mixed_obj(path: Path) -> None:
+    """:func:`write_into_existing_obj` with new quads arriving at two different
+    densities (a half and a quarter of the layout's): each must still land at
+    the layout's."""
+    write_into_existing_obj(
+        path,
+        sides=(0.03, 0.04, 0.05, 0.03, 0.04, 0.05),
+        densities=tuple(FIXED_DENSITY / (2, 4)[i % 2] for i in range(6)),
+    )
+
+
+def face_densities(path: Path):
+    """Per-face UV length per 3D length (first edge) of an OBJ."""
+    vs, vts, out = [], [], []
+    for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = ln.split()
+        if not parts:
+            continue
+        if parts[0] == "v":
+            vs.append(tuple(float(x) for x in parts[1:4]))
+        elif parts[0] == "vt":
+            vts.append((float(parts[1]), float(parts[2])))
+        elif parts[0] == "f":
+            (a3, auv), (b3, buv) = [
+                (int(t.split("/")[0]), int(t.split("/")[1])) for t in parts[1:3]
+            ]
+            out.append(
+                math.dist(vts[auv - 1], vts[buv - 1])
+                / math.dist(vs[a3 - 1], vs[b3 - 1])
+            )
+    return out
+
+
+def check_into_existing(
+    writer=write_into_existing_obj,
+    shrunk=False,
+    region=(0.0, 1.0, 0.0, 1.0),
+    fixed=range(3),
+):
+    """Case checker for pack_into_existing: :func:`check_subset` (fixed shells
+    bit-identical, packed ones in *region* over no fixed shell and no other),
+    plus the density contract -- every packed shell at the fixed shells'
+    density, or (*shrunk*: the layout was too full) all at ONE lower density --
+    and the tile margin kept."""
+    margin = float(
+        _params.Parameters.derived_values({"PACK_RESOLUTION": 1024})["PACK_MARGIN"]
+    )
+
+    def _check(obj_path: Path):
+        dens = face_densities(obj_path)
+        packed = [i for i in range(len(dens)) if i not in fixed]
+        base = check_subset(region=region, fixed=fixed, packed=packed, writer=writer)
+        issue = base(obj_path)
+        problems = [issue] if issue else []
+        got = [dens[i] for i in packed]
+        if not got:
+            return "no packed shells to measure"
+        lo, hi = min(got), max(got)
+        if hi / lo > 1.001:
+            problems.append(f"packed densities differ: {lo:.5f}..{hi:.5f}")
+        if shrunk and not hi < FIXED_DENSITY * 0.999:
+            problems.append(f"expected a shrink below {FIXED_DENSITY}, got {hi:.5f}")
+        if not shrunk and abs(hi / FIXED_DENSITY - 1) > 1e-3:
+            problems.append(f"density {hi:.5f} != the layout's {FIXED_DENSITY}")
+        faces = face_uvs(obj_path)
+        u0, _, v0, _ = region
+        reach = max(max(u - u0, v - v0) for i in packed for u, v in faces[i])
+        if reach > 1.0 - margin + 1e-6:
+            problems.append(f"packed shells reach {reach:.6f} > 1 - margin")
+        return "; ".join(problems) or None
+
+    return _check
+
+
 def write_strips_obj(path: Path, deg: float = 30.0) -> None:
     """Twelve thin 8:1 strips whose UVs sit rotated ``deg`` degrees."""
     verts, vts, faces = [], [], []
@@ -687,6 +810,29 @@ ZomUnfold({PrimType="Edge", MinAngle=1e-05, Mix=1, Iterations=10, PreIterations=
 #     honours WorkingSet="Visible&Selected" (groups only the subset), which is
 #     how keep_stacked_block.lua keeps fixed islands ungrouped
 #     (case pack_subset_keep_stacked).
+#   ZomPack Scaling.Mode 4 (subset) . SAFE and REAL (probed 2026-09-27): in a
+#     Visible&Selected pack at LayoutScalingMode 0 it sets EACH selected island
+#     to sqrt(sum UV area / sum 3D area) of the unselected islands filed in the
+#     tile being packed (fixed at 0.1/0.1/0.2 -> 0.1075, at 0.1/0.2/0.4 ->
+#     0.1301, exactly); with none in that tile (a pack into an empty UDIM) it
+#     leaves the subset at its incoming density. Mode 0 keeps the incoming
+#     density, Mode 1 sets the 3D area, Mode 2 evens the subset out among
+#     itself (it ignores the fixed islands), Mode 3 lands between. Shipped as
+#     pack_block.lua's match-density step: Mode 2, then one uniform scale to
+#     the fixed islands' density read from the island tree (AreaUV / Area3D
+#     per island), so an empty target tile matches too (pack_into_existing*).
+#   pack_into_existing, pre-2026-09-27 (IslandGroup Names selection, gated
+#     >= 2022.2 in the preset) . NO-OP on 2020.1 with the gate bypassed, with
+#     or without List=true: 0 of 19 islands moved, 4 new-over-fixed overlaps
+#     left in place when the new islands started inside the tile.
+#   Another RizomUV already open ..... SAFE (2026-09-27, scratch on C:): two
+#     simultaneous headless -cfi runs completed 4/4 (32-41 s); a run with an
+#     interactive RizomUV open took 20.9 s, with a send-style -cfi session open
+#     23.3 s. Intermittent hangs to the timeout DO occur (3 of 5 cases in one
+#     parallel batch, two single runs with scratch on the synced O: drive, one
+#     10-minute Blender-bridge run) and passed on rerun; cause not isolated
+#     (other agents' RizomUV runs overlapped some). A TIMEOUT alone does not
+#     implicate a Lua change -- rerun it before blaming the script.
 #   Lua syntax error ................ CRASH 0xC00000FF, like an unknown field:
 #     an unterminated string in a probe script took 2020.1 down before any
 #     statement ran -- a crash code alone does not implicate the API.
@@ -753,18 +899,10 @@ def main() -> int:
         # Needs >= 2022 (both segmenters in one Auto block); auto-skipped
         # below its @min_rizom gate.
         "unwrap_hybrid": write_cube_obj,
-        # Needs a >= 2022.2 Rizom (island-group selection + pack WorkingSet);
-        # auto-skipped below the preset's @min_rizom gate. NOTE: uses OBJ
-        # o-groups as stand-ins for the FBX island groups the production
-        # bridge sends -- confirm on a gated-in install that they resolve.
-        "pack_into_existing": write_cube_obj,
+        # pack_into_existing needs its host-injected subset tag: cases below.
     }
     # Per-preset placeholder overrides (defaults otherwise).
-    preset_overrides = {
-        # Bridge-injected selection token; a probe run has no Maya-side
-        # export map, so name the probe mesh's group directly.
-        "pack_into_existing": {"PACK_SELECT_NAMES": '{"probe_cube"}'},
-    }
+    preset_overrides = {}
     for preset, writer in preset_meshes.items():
         lua = (_SCRIPT_DIR / f"{preset}.lua").read_text(encoding="utf-8")
         required = _params.Parameters.preset_min_version(lua)
@@ -848,6 +986,90 @@ def main() -> int:
             write_subset_obj,
             {"PACK_SUBSET": '{"NO_SUCH_TAG"}'},
             check_untouched(write_subset_obj),
+        )
+    )
+
+    # Pack into existing: the tagged (new) shells land in the free space at the
+    # fixed shells' texel density -- arriving at half of it -- and the fixed
+    # shells come back bit-identical; a layout too full for them shrinks them
+    # uniformly instead of spilling them. Keep Stacked moves a new stack as one
+    # unit, the knobs the preset ignores change nothing, and an untagged run
+    # moves nothing.
+    into = (_SCRIPT_DIR / "pack_into_existing.lua").read_text(encoding="utf-8")
+    into_token = {"PACK_SELECT_NAMES": '{"%s"}' % SUBSET_TAG}
+    cases.append(
+        (
+            "pack_into_existing",
+            into,
+            write_into_existing_obj,
+            into_token,
+            check_into_existing(),
+        )
+    )
+    cases.append(
+        (
+            "pack_into_existing_full",
+            into,
+            write_into_full_obj,
+            into_token,
+            check_into_existing(writer=write_into_full_obj, shrunk=True),
+        )
+    )
+    cases.append(
+        (
+            "pack_into_existing_mixed",
+            into,
+            write_into_mixed_obj,
+            into_token,
+            check_into_existing(writer=write_into_mixed_obj),
+        )
+    )
+    cases.append(
+        (
+            "pack_into_existing_udim1002",
+            into,
+            write_into_existing_obj,
+            dict(into_token, TARGET_UDIM=1002),
+            check_into_existing(region=(1.0, 2.0, 0.0, 1.0)),
+        )
+    )
+    cases.append(
+        (
+            "pack_into_existing_keep_stacked",
+            into,
+            write_stacked_subset_obj,
+            dict(into_token, PACK_KEEP_STACKED=True),
+            check_subset(
+                fixed=[i for i in range(12) if i not in STACKED_SUBSET],
+                packed=STACKED_SUBSET,
+                writer=write_stacked_subset_obj,
+                stack=(4, 5, 6),
+            ),
+        )
+    )
+    # Hidden in the panel, but their widgets still send a value.
+    cases.append(
+        (
+            "pack_into_existing_ignored_knobs",
+            into,
+            write_into_existing_obj,
+            dict(
+                into_token,
+                PACK_TRANSLATE=False,
+                SCALING_MODE=0,
+                LAYOUT_SCALING_MODE=2,
+                UV_AREA=3,
+            ),
+            check_into_existing(),
+        )
+    )
+    cases.append(
+        (
+            "pack_into_existing_missing_tag",
+            into,
+            write_into_existing_obj,
+            {"PACK_SELECT_NAMES": '{"NO_SUCH_TAG"}'},
+            check_untouched(write_into_existing_obj),
         )
     )
 

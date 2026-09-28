@@ -2319,6 +2319,113 @@ class UvUtils(ptk.HelpMixin):
         fn.updateSurface()
 
     @classmethod
+    def _transfer_uvs_by_id(
+        cls, source: str, target: str, tolerance: float = 1e-6
+    ) -> Optional[str]:
+        """Copy *source*'s UVs onto *target*'s OWN UV ids, when their layouts agree.
+
+        The layouts agree when both meshes share topology (the same vertices per
+        face, in order) and the same UV partition: two face-vertices share a UV
+        id on one mesh exactly when they share one on the other. The UVs then
+        only MOVED (a pack), and each target id takes its new value -- ids,
+        assignments and anything keyed on them survive, which
+        ``transferAttributes`` does not do (it renumbers the target to the
+        source's order). Seams cut or welded mean the layout itself changed.
+
+        Parameters:
+            source (str): The mesh read, current UV set.
+            target (str): The mesh written, current UV set.
+            tolerance (float): UV distance below which two values are one.
+
+        Returns:
+            ``"unchanged"`` when every face-vertex already holds the source's
+            UV (nothing is written), ``"ids"`` when the values were written in
+            place, or None when the layouts differ (nothing is written; the
+            caller transfers instead).
+        """
+        live = NodeUtils.get_shape(target)
+        if not live:
+            return None
+        src, dst = CoreUtils.get_mfn_mesh(source), CoreUtils.get_mfn_mesh(live)
+        s_counts, s_verts = src.getVertices()
+        d_counts, d_verts = dst.getVertices()
+        if list(s_counts) != list(d_counts) or list(s_verts) != list(d_verts):
+            return None
+        s_set, d_set = cls._current_uv_set(source), cls._current_uv_set(target)
+        s_counts, s_ids = src.getAssignedUVs(s_set)
+        d_counts, d_ids = dst.getAssignedUVs(d_set)
+        if list(s_counts) != list(d_counts) or len(s_ids) != len(d_ids):
+            return None
+        s_us, s_vs = src.getUVs(s_set)
+        d_us, d_vs = dst.getUVs(d_set)
+        us, vs = list(d_us), list(d_vs)
+        d_of, s_of = {}, {}
+        changed = False
+        for s_id, d_id in zip(s_ids, d_ids):
+            # One id per id, both ways: a cut splits one target id across two
+            # source ids, a weld joins two into one.
+            if (
+                d_of.setdefault(s_id, d_id) != d_id
+                or s_of.setdefault(d_id, s_id) != s_id
+            ):
+                return None
+            u, v = s_us[s_id], s_vs[s_id]
+            if abs(u - d_us[d_id]) > tolerance or abs(v - d_vs[d_id]) > tolerance:
+                changed = True
+            us[d_id], vs[d_id] = u, v
+        if not changed:
+            return "unchanged"
+        return (
+            "ids"
+            if cls._set_uv_values(target, d_set, us, vs, d_counts, d_ids)
+            else None
+        )
+
+    @classmethod
+    def _set_uv_values(cls, target: str, uv_set: str, us, vs, counts, ids) -> bool:
+        """Write *us* / *vs* onto *target*'s existing UV ids in *uv_set* (recorded).
+
+        Lands where it sticks: on an undeformed mesh its construction history is
+        deleted first (what the transfer path does after ``transferAttributes``);
+        on a deformed one it goes to the input shape the stack reads, whose
+        history is baked the way :meth:`NodeUtils.bake_onto_input_shape` does it.
+
+        Returns:
+            False when the input shape's UV layout is not the visible one's, so
+            the ids planned against cannot be written there (nothing written).
+        """
+        from mayatk.core_utils.undo_recorder import UndoRecorder
+
+        if NodeUtils.get_deformers(target):
+            NodeUtils.delete_history(target)
+            shape = NodeUtils.get_input_shape(target)
+            if not shape or shape == NodeUtils.get_shape(target):
+                return False
+            fn = CoreUtils.get_mfn_mesh(shape)
+            if uv_set not in fn.getUVSetNames():
+                return False
+            got_counts, got_ids = fn.getAssignedUVs(uv_set)
+            if list(got_counts) != list(counts) or list(got_ids) != list(ids):
+                return False
+        else:
+            shape = NodeUtils.get_shape(target)
+            if cmds.listConnections(f"{shape}.inMesh", source=True, destination=False):
+                cmds.delete(target, constructionHistory=True)
+                shape = NodeUtils.get_shape(target)
+        with (
+            UndoRecorder.record() as recorder,
+            recorder.state(
+                lambda: cls._uv_sets_state(shape, [uv_set]),
+                lambda state: cls._put_uv_sets(shape, state),
+            ),
+        ):
+            fn = CoreUtils.get_mfn_mesh(shape)
+            fn.setUVs(us, vs, uv_set)
+            fn.updateSurface()
+        cmds.dgdirty(shape)
+        return True
+
+    @classmethod
     @CoreUtils.undoable
     def transfer_uvs(
         cls,
@@ -2327,6 +2434,7 @@ class UvUtils(ptk.HelpMixin):
         tolerance: float = 0.1,
         match_by_similarity: bool = True,
         sample_space: str = "auto",
+        preserve_uv_ids: bool = False,
     ) -> List[Tuple[str, str, str]]:
         """Transfers UVs from source meshes to target meshes. This method is
         topology-agnostic and can work with different mesh structures.
@@ -2352,11 +2460,20 @@ class UvUtils(ptk.HelpMixin):
                 Object rather than world, because a UV donor is normally staged off to
                 the side of its target, and world space would then sample the whole
                 target from whichever corner of the source happens to be nearest.
+            preserve_uv_ids (bool): Keep the target's UV ids where its UV layout
+                survives. ``transferAttributes`` renumbers the target's ``map[]`` ids
+                to the source's order, which breaks anything keyed on them. With
+                this on, a topology pair whose UVs share one partition (the UVs
+                only moved, as in a pack) takes the new values on its own ids, and
+                one whose face-vertices already hold the source's UVs is not
+                written at all; a pair whose seams differ is transferred as before.
 
         Returns:
             List[Tuple[str, str, str]]: One ``(source, target, sample_space_used)`` per
-            transfer performed. Empty when similarity matching paired nothing -- the
-            caller can't otherwise distinguish that from a completed run.
+            transfer performed -- with *preserve_uv_ids*, ``"ids"`` for a write onto
+            the target's own ids and ``"unchanged"`` for a pair left as it was.
+            Empty when similarity matching paired nothing -- the caller can't
+            otherwise distinguish that from a completed run.
 
         Note:
             A target carrying DEFORMERS keeps them: the UVs are baked into its
@@ -2406,6 +2523,12 @@ class UvUtils(ptk.HelpMixin):
                 )
             else:
                 space = sample_space
+
+            if preserve_uv_ids and space == "topology":
+                kept = cls._transfer_uvs_by_id(source_name, target_name)
+                if kept is not None:
+                    transferred.append((source_name, target_name, kept))
+                    continue
 
             # A rigged target must keep its deformers: the old unconditional
             # `delete(ch=True)` here is Maya's Delete History, so unwrapping a
