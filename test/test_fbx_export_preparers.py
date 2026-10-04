@@ -44,6 +44,9 @@ def _export_selected_ascii(nodes, fname="mtk_preparers.fbx"):
         with open(out, encoding="utf-8", errors="ignore") as f:
             return f.read()
     finally:
+        # Sticky session state: left on, every later write in this mayapy
+        # (the next test module in the chunk) wrote ASCII too.
+        mel.eval("FBXExportInAscii -v false")
         if os.path.exists(out):
             os.remove(out)
 
@@ -280,6 +283,58 @@ class TestSessionHook(MayaTkTestCase):
         ):
             _export_selected_ascii([cube])
         self.assertEqual(seen, ["shots", ("audio", "A")])
+
+
+class TestSessionHookSplitStagesTheProxies(MayaTkTestCase):
+    """A File > Export that splits takes resamples every curve
+    (``FbxUtils.apply_takes``), so the fades Unity used to rebuild from sparse
+    visibility pairs would arrive one frame long: the hook stages the
+    curve-proxy transport whenever it splits, as the bracketed writers do,
+    and removes it after the write. Added: 2026-10-04."""
+
+    def setUp(self):
+        super().setUp()
+        _clear_export_state()
+        ShotStore.clear_active()
+
+    def tearDown(self):
+        ShotStore.disable_auto_export()
+        ShotStore.clear_active()
+        _clear_export_state()
+        super().tearDown()
+
+    def _faded_cube(self):
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+
+        cube = self.create_test_cube("fadeHost")
+        RenderEffects.create(objects=[cube], mode="attribute")
+        for frame, value in ((1, 0.0), (30, 1.0), (60, 0.0)):
+            cmds.setKeyframe(cube, attribute="opacity", time=frame, value=value)
+        return cube
+
+    def test_a_split_export_ships_the_opacity_proxy(self):
+        cube = self._faded_cube()
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("FadeIn", 1, 30)
+        store.define_shot("FadeOut", 31, 60)
+        DataNodes.ensure_export()
+        ShotStore.enable_auto_export()
+
+        text = _export_selected_ascii([cube, DataNodes.EXPORT], "mtk_split_proxy.fbx")
+
+        self.assertIn("FadeOut", text, "precondition: the takes were split")
+        self.assertIn("fadeHost__opacity", text, "the split shipped no curve proxy")
+        self.assertEqual(cmds.ls("fadeHost__opacity"), [], "the proxy outlived the write")
+
+    def test_an_export_that_splits_nothing_stages_nothing(self):
+        """No declared take, no resample: a bare File > Export stays as it was."""
+        cube = self._faded_cube()
+        FbxUtils.enable_auto_takes()
+
+        text = _export_selected_ascii([cube], "mtk_no_split.fbx")
+
+        self.assertNotIn("__opacity", text)
 
 
 class TestProducerContract(MayaTkTestCase):

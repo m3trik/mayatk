@@ -9,6 +9,7 @@ Tests for the non-animating Channels-based implementation.
 import unittest
 from unittest.mock import patch
 import maya.cmds as cmds
+import pythontk as ptk
 from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
 from base_test import MayaTkTestCase
 
@@ -825,9 +826,9 @@ class TestPrepareForExport(MayaTkTestCase):
 
 
 class TestRenderEffectsSlots(MayaTkTestCase):
-    """The panel's two key tools create their channel on demand and each
-    option box carries a remove action -- there is no separate Create /
-    Manage section any more.
+    """The panel's two pages key their channel on demand, each with its Key /
+    remove / WebXR row; the fields that say HOW an effect is keyed are the
+    scene's effect recipe.
 
     Regression kept from 2026-05-07: the slot wrappers must accept the plain
     string node names ``cmds.ls(selection=True)`` returns (a PyMEL ``.name()``
@@ -846,26 +847,41 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self.slot = res.RenderEffectsSlots.__new__(res.RenderEffectsSlots)
         self.slot.ui = MagicMock()
         self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = False
-        self.slot.ui.header.menu.chk_delete_vis_keys.isChecked.return_value = False
         self.slot.sb = MagicMock()
+        # Real widgets take a real tooltip.
+        self.slot.sb.tooltip.fmt = lambda **_kwargs: "tip"
         self.slot._sel_token = None
-        self.slot._pulse_menu = None
-        self.slot._remove_actions = {}
-        self.slot._mode_menus = {}
+        self.slot._pages = {}
+        self.slot._mode_combos = {}
+        self.slot.ui.stk_effects.currentIndex.return_value = 1  # the Pulse page
         self.slot._mode_fields = {}
         self.slot._mode_hooks = {}
-        # The colour row is the tool's only colour editor now, so a slot under
-        # test needs one. Stubbed rather than built: what belongs here is the
-        # slot's READING of it, and the widget has its own suite in uitk.
+        self.slot._focus = None
+        self.slot._recipe = None
+        self.slot._unwatch_recipe = None
+        # The colour row is the tool's only colour editor, so a slot under test
+        # needs one. Stubbed rather than built: what belongs here is the slot's
+        # READING of it, and the widget has its own suite in uitk.
         self.slot._pulse_ramp = MagicMock()
         self.slot._pulse_ramp.decided.return_value = ((0.2, 0.5, 1.0), (0.0, 0.0, 0.0))
         self.slot._on_selection_changed = MagicMock()
 
-    def _set_mode(self, mode):
-        """Put both option boxes in *mode*, without building either.
+    # ---- harness ---------------------------------------------------------
 
-        The layout IS the mode now, so this states it where the tool reads
-        it rather than stubbing a combo box the tool no longer asks.
+    def _recipe(self, **fields):
+        """Set the scene's effect recipe for this test (restored after)."""
+        import mayatk as mtk
+
+        store = mtk.RenderEffects.scene_store().active()
+        before = store.effect_recipe
+        self.addCleanup(setattr, store, "effect_recipe", before)
+        store.update_effect_recipe(**fields)
+        return store
+
+    def _set_mode(self, mode):
+        """Put both pages in *mode*, without building either.
+
+        The layout IS the mode, so this states it where the tool reads it.
         """
         from uitk import FieldVisibility
 
@@ -874,62 +890,184 @@ class TestRenderEffectsSlots(MayaTkTestCase):
             fields.define(mode, ())
             fields.mode = mode
 
-    def _fade_widget(self, frames=10, ends_at_cursor=False, direction="in"):
+    def _fade_page(
+        self, frames=10, ends_at_cursor=False, direction="in", delete_vis=False
+    ):
+        """The fade page's own fields; the length is the recipe's."""
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
-        widget = MagicMock()
-        widget.option_box.menu.s000.value.return_value = frames
-        widget.option_box.menu.chk000.isChecked.return_value = ends_at_cursor
-        widget.option_box.menu.cmb_direction.currentData.return_value = direction
-        return widget
+        page = SimpleNamespace(
+            chk000=MagicMock(),
+            cmb_direction=MagicMock(),
+            chk_delete_vis_keys=MagicMock(),
+        )
+        page.chk000.isChecked.return_value = ends_at_cursor
+        page.cmb_direction.currentData.return_value = direction
+        page.chk_delete_vis_keys.isChecked.return_value = delete_vis
+        self.slot._pages["opacity"] = page
+        self._recipe(fade_frames=frames)
+        return page
 
-    def _pulse_widget(self, seconds=4.0, period=2.0, duty=50, gaps=(0.72, 0.72)):
-        """The pulse box asks for SECONDS now -- every field in it does."""
+    def _pulse_page(self, seconds=4.0, period=2.0, duty=50, gaps=(0.72, 0.72)):
+        """The pulse page's own fields (SECONDS); the cadence is the recipe's."""
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
-        widget = MagicMock()
-        widget.option_box.menu.s001.value.return_value = seconds
-        widget.option_box.menu.s002.value.return_value = period
-        widget.option_box.menu.s003.value.return_value = duty
-        widget.option_box.menu.s004.value.return_value = gaps[0]
-        widget.option_box.menu.s005.value.return_value = gaps[1]
-        widget.option_box.menu.chk001.isChecked.return_value = False
-        return widget
+        page = SimpleNamespace(s001=MagicMock(), chk001=MagicMock())
+        page.s001.value.return_value = seconds
+        page.chk001.isChecked.return_value = False
+        self.slot._pages["highlight"] = page
+        self._recipe(
+            pulse_period=period,
+            pulse_duty=duty / 100.0,
+            pulse_lead_in=gaps[0],
+            pulse_lead_out=gaps[1],
+        )
+        return page
 
-    def test_option_box_init_registers_a_remove_action_per_tool(self):
-        """Live-Maya regression (2026-09-05): the actions were keyed by the
-        ChannelSpec, a frozen dataclass holding a dict -- unhashable -- so
-        both option-box inits raised and the pulse tool never wired."""
+    def _build(self, channel):
+        """Build *channel*'s page for real, into a FormRows."""
+        from qtpy import QtWidgets
+        from uitk.widgets.form_rows import FormRows
+
+        if QtWidgets.QApplication.instance() is None:
+            self.skipTest("a page is real widgets; no QApplication here")
+        rows = FormRows()
+        self.addCleanup(rows.deleteLater)
+        self.slot._pages[channel] = rows
+        getattr(self.slot, self.slot.BUILDERS[channel])(rows)
+        return rows
+
+    # ---- pages -----------------------------------------------------------
+
+    def test_the_pages_hold_settings_and_the_window_holds_the_actions(self):
+        """Key, the remove and WebXR are one row under the pages, not a row
+        per page."""
+        from qtpy import QtWidgets
+
+        for channel in ("opacity", "highlight"):
+            rows = self._build(channel)
+            self.assertEqual(rows.findChildren(QtWidgets.QPushButton), [], channel)
+
+    def test_key_runs_the_shown_pages_keyer(self):
         from unittest.mock import MagicMock
 
-        fade, pulse = MagicMock(), MagicMock()
-        self.slot.tb000_init(fade)
-        self.slot.tb001_init(pulse)
+        for index, keyer in ((0, "_key_fade_page"), (1, "_key_pulse_page")):
+            self.slot.ui.stk_effects.currentIndex.return_value = index
+            setattr(self.slot, keyer, MagicMock())
+            self.slot.b000()
+            getattr(self.slot, keyer).assert_called_once_with()
 
-        self.assertEqual(set(self.slot._remove_actions), {"opacity", "highlight"})
-        for widget in (fade, pulse):
-            kwargs = widget.option_box.set_action.call_args.kwargs
-            self.assertEqual(kwargs["icon"], "circle_remove")
+    def test_the_action_row_follows_the_shown_page(self):
+        """Key's text and the remove's gate are the page on show's -- and the
+        manifest's text while focused on that effect."""
+        RenderEffects.create([self.cube], mode="attribute", channel="opacity")
+        cmds.select(self.cube, replace=True)
+        self.slot._focus = None
+        self.slot.ui.stk_effects.currentIndex.return_value = 0
+        self.slot._sync_actions()
+        self.slot.ui.b000.setText.assert_called_with("Key Opacity Fade")
+        self.slot.ui.btn_remove.setEnabled.assert_called_with(True)
 
-    def test_option_box_init_ends_each_box_with_a_preview_button(self):
-        """A button INSIDE the box, last, rather than an eye action beside the
-        remove one: the eye read as "show me the object's effect", and what
-        this shows is the box's settings."""
+        self.slot.ui.stk_effects.currentIndex.return_value = 1
+        self.slot._sync_actions()
+        self.slot.ui.b000.setText.assert_called_with("Key Highlight Pulse")
+        self.slot.ui.btn_remove.setEnabled.assert_called_with(False)
+
+        self.slot._focus = {
+            "channel": "highlight",
+            "objects": [],
+            "apply": lambda: "",
+            "apply_text": "Apply to 'Lid' in S01",
+            "title": "Lid · S01",
+        }
+        self.slot._sync_actions()
+        self.slot.ui.b000.setText.assert_called_with("Apply to 'Lid' in S01")
+
+    def test_each_page_opens_on_create(self):
+        """Create is the safe default: it acts on what is selected. Revise
+        reaches objects the artist may not have selected, so it is chosen --
+        and never restored from the user's settings."""
+        for channel in ("opacity", "highlight"):
+            self._build(channel)
+            combo = self.slot._mode_combos[channel]
+            self.assertEqual(combo.itemData(0), self.res.CREATE)
+            self.assertEqual(combo.currentData(), self.res.CREATE)
+            self.assertFalse(combo.restore_state)
+
+    def test_revise_hides_the_fields_it_cannot_write(self):
+        """A page offering to re-time a signed-off pulse under the word
+        'revise' would be offering to re-key it."""
+        self._build("highlight")
+        fields = self.slot._mode_fields["highlight"]
+
+        fields.mode = self.res.REVISE
+        self.assertNotIn("s001", fields.visible, "the cadence lives in keys")
+        self.assertIn("pulse_colors", fields.visible)
+
+        fields.mode = self.res.CREATE
+        self.assertIn("s001", fields.visible, "Create keys, so it may re-time")
+
+    def test_revise_hides_only_what_creates_the_channel(self):
+        """A fade IS its keys: there is no part of it Revise could restate
+        without re-keying, so every field the fade needs shows in both modes.
+        Revise hides only Delete Visibility Keys, which acts when Key GIVES an
+        object the channel -- something Revise never does."""
+        self._build("opacity")
+        fields = self.slot._mode_fields["opacity"]
+
+        self.assertEqual(fields.keys, ("chk_delete_vis_keys",))
+        fields.mode = self.res.CREATE
+        self.assertEqual(fields.visible, ("chk_delete_vis_keys",))
+        fields.mode = self.res.REVISE
+        self.assertEqual(fields.visible, ())
+
+    def test_the_pulse_page_carries_one_colour_editor(self):
+        """Regression: the tool had TWO colour sections that disagreed about
+        what they could show. The page's row is the only one."""
+        from uitk.widgets.editors.color_editor import ColorRampEditor
+
+        rows = self._build("highlight")
+        self.assertEqual(len(rows.findChildren(ColorRampEditor)), 1)
+
+    def test_the_header_offers_no_second_colour_entry_point(self):
+        """The header button opened a window that no longer exists."""
         from unittest.mock import MagicMock
 
-        for init in (self.slot.tb000_init, self.slot.tb001_init):
-            widget = MagicMock()
-            init(widget)
-            calls = widget.option_box.menu.add.call_args_list
-            buttons = [
-                c.kwargs
-                for c in calls
-                if c.kwargs.get("setObjectName") == "btn_preview"
-            ]
-            self.assertEqual(len(buttons), 1)
-            self.assertEqual(buttons[0]["setText"], "Preview in WebXR")
-            self.assertIs(calls[-1].kwargs, buttons[0], "under every field it reads")
-            widget.option_box.add_action.assert_not_called()
+        header = MagicMock()
+        self.slot.header_init(header)
+
+        names = [c.kwargs.get("setObjectName") for c in header.menu.add.call_args_list]
+        self.assertNotIn("b_highlight_color", names)
+
+    def test_the_fade_page_previews_the_exporters_own_alpha(self):
+        """The fade has no colour to choose, so its length and direction are
+        the only things there are to get wrong -- and the preview runs the
+        function that writes the deliverable, not a lookalike of it."""
+        from pythontk import GlbFades
+
+        self._build("opacity")
+        preview = self.slot._fade_preview
+        self.assertEqual(preview._values, GlbFades.CHANNELS["opacity"].values)
+        self.assertEqual(len(preview.composite(0.5)), 4, "alpha rides the fourth lane")
+
+    def test_the_fade_preview_tracks_the_recipe(self):
+        """A preview animating at some other length than the one being keyed
+        gives away the only thing it is there to show."""
+        import mayatk as mtk
+
+        rows = self._build("opacity")
+        fps = float(mtk.AudioUtils.get_fps() or 30.0)
+        self._recipe(fade_frames=60)
+        rows.cmb_direction.setCurrentIndex(rows.cmb_direction.findData("out"))
+        self.slot._sync_fade_shape()
+
+        shape = self.slot._fade_preview.shape
+        self.assertAlmostEqual(shape["duration"], 60 / fps, places=5)
+        self.assertEqual(shape["direction"], "out")
+
+    # ---- WebXR -----------------------------------------------------------
 
     def _push_preview(self, spec, applied=True):
         """Run the preview action with the bridge stubbed; return its ``push``.
@@ -961,9 +1099,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
     @staticmethod
     def _published_ramp(keys):
         """*keys* as the visibility channel publishes them: every float
-        rounded to ``MeshConvert.VISIBILITY_TRACK_DIGITS`` places (the
-        channel's contract since 2026-09-18 -- a planned 14.4 arrives as
-        14.399999999999999, and the extra digits are noise, not data)."""
+        rounded to ``MeshConvert.VISIBILITY_TRACK_DIGITS`` places."""
         import pythontk as ptk
 
         digits = ptk.MeshConvert.VISIBILITY_TRACK_DIGITS
@@ -973,9 +1109,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         import pythontk as ptk
         import mayatk as mtk
 
-        self.slot._fade_menu = self._fade_widget(
-            frames=15, direction="auto"
-        ).option_box.menu
+        self._fade_page(frames=15, direction="auto")
         push = self._push_preview(self.res.OPACITY)
 
         self.slot.sb.message_box.assert_not_called()
@@ -1002,16 +1136,14 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
     def test_the_webxr_preview_shows_the_pulse_alone_over_an_existing_effect(self):
         """The preview has nothing to do with existing keys or effects: an object
-        that already fades previews the pulse as the box is set, with no trace of
-        its fade in the push, and its fade keys are exactly as they were."""
+        that already fades previews the pulse as the page is set, with no trace
+        of its fade in the push, and its fade keys are exactly as they were."""
         import pythontk as ptk
         import mayatk as mtk
 
         mtk.RenderEffects.key_fade([self.cube], start=1, end=15)
         before = cmds.keyframe(f"{self.cube}.opacity", q=True, kc=True)
-        self.slot._pulse_menu = self._pulse_widget(
-            seconds=4.0, period=2.0, duty=50, gaps=(0.5, 0.25)
-        ).option_box.menu
+        self._pulse_page(seconds=4.0, period=2.0, duty=50, gaps=(0.5, 0.25))
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
         push = self._push_preview(self.res.HIGHLIGHT)
 
@@ -1042,11 +1174,10 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
     def test_a_push_that_dropped_the_overlay_is_reported_not_claimed(self):
         """Live report (2026-09-13): every push looked the same whatever the
-        box said. A bridge that predates the overlay knob sweeps it into the
-        export bag and publishes the scene as it stands, with no error
-        anywhere -- so the slot reads the result's ``data_export`` and says so
-        rather than announcing a preview of settings the page never got."""
-        self.slot._fade_menu = self._fade_widget().option_box.menu
+        page said. A bridge that predates the overlay knob publishes the scene
+        as it stands with no error anywhere -- so the slot reads the result's
+        ``data_export`` and says so."""
+        self._fade_page()
         push = self._push_preview(self.res.OPACITY, applied=False)
 
         push.assert_called_once()
@@ -1058,24 +1189,44 @@ class TestRenderEffectsSlots(MayaTkTestCase):
             "not the opacity settings", self.slot.ui.footer.setText.call_args.args[0]
         )
 
+    # ---- keying ------------------------------------------------------------
+
     def test_key_fade_creates_the_opacity_channel_on_demand(self):
-        self.slot.tb000(self._fade_widget())
+        self._fade_page()
+        self.slot._key_fade_page()
 
         self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
         self.assertEqual(cmds.keyframe(f"{self.cube}.opacity", q=True, kc=True), 2)
         self.slot.sb.message_box.assert_not_called()
 
-    def test_the_pulse_option_box_gaps_reach_the_keys(self):
-        """The two gap fields are seconds; the slot hands them to the writer in
-        frames. A hard cut on one side and a one-second lead on the other are
-        both readable straight off the curve."""
+    def test_the_fade_page_owns_delete_visibility_keys(self):
+        """An option only the fade reads lives on the fade page, not in the
+        header every effect shares."""
+        self._fade_page(delete_vis=True)
+        with patch.object(RenderEffects, "key_fade", return_value=[]) as key_fade:
+            self.slot._key_fade_page()
+        self.assertTrue(key_fade.call_args.kwargs["delete_visibility_keys"])
+
+    def test_the_fade_is_as_long_as_the_recipe_says(self):
+        """The page's Frames field IS the scene's recipe -- the length the
+        manifest's fades key too."""
+        cmds.currentTime(30)
+        self._fade_page(frames=12, ends_at_cursor=True)
+        self.slot._key_fade_page()
+        self.assertEqual(
+            cmds.keyframe(f"{self.cube}.opacity", q=True, tc=True), [18.0, 30.0]
+        )
+
+    def test_the_recipe_leads_reach_the_keys(self):
+        """The two leads are the recipe's seconds; the slot hands them to the
+        writer in frames. A hard cut on one side and a one-second lead on the
+        other are both readable straight off the curve."""
         import mayatk as mtk
 
         fps = float(mtk.AudioUtils.get_fps() or 30.0)
         cmds.currentTime(10)
-        self.slot.tb001(
-            self._pulse_widget(seconds=200 / 30.0, period=2.0, gaps=(1.0, 0.0))
-        )
+        self._pulse_page(seconds=200 / 30.0, period=2.0, gaps=(1.0, 0.0))
+        self.slot._key_pulse_page()
         plug = f"{self.cube}.highlight"
         keys = list(
             zip(
@@ -1091,8 +1242,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         )
 
     def test_key_pulse_creates_the_highlight_channel_on_demand(self):
+        self._pulse_page()
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertTrue(cmds.attributeQuery("highlight", node=self.cube, exists=True))
         self.assertGreater(cmds.keyframe(f"{self.cube}.highlight", q=True, kc=True), 4)
@@ -1102,122 +1254,6 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         )
         self.slot.sb.message_box.assert_not_called()
 
-    def test_the_pulse_option_box_carries_one_colour_editor(self):
-        """Regression: the tool had TWO colour sections -- a compact row in the
-        option box and a fuller window behind an icon -- which disagreed about
-        what they could show. The box is the only one now, and the window's
-        launcher is gone with it."""
-        from unittest.mock import MagicMock
-
-        pulse = MagicMock()
-        self.slot.tb001_init(pulse)
-
-        icons = [
-            c.kwargs.get("icon") for c in pulse.option_box.set_action.call_args_list
-        ]
-        self.assertNotIn("theme", icons, "the retired colour window still has a door")
-        self.assertIn("circle_remove", icons, "the remove action was dropped")
-
-    def test_the_header_offers_no_second_colour_entry_point(self):
-        """The header button opened a window that no longer exists."""
-        from unittest.mock import MagicMock
-
-        header = MagicMock()
-        self.slot.header_init(header)
-
-        names = [c.kwargs.get("setObjectName") for c in header.menu.add.call_args_list]
-        self.assertNotIn("b_highlight_color", names)
-
-    def test_each_option_box_opens_on_create(self):
-        """Create is the safe default: it acts on what is selected. Revise
-        reaches objects the artist may not have selected, so it is chosen."""
-        from unittest.mock import MagicMock
-
-        for init in (self.slot.tb000_init, self.slot.tb001_init):
-            widget = MagicMock()
-            init(widget)
-            # ``_add_mode`` keeps the combo ``menu.add`` returned, and every
-            # other ``add`` on this mock menu returns that SAME object -- so
-            # the fade box's direction items land on the same call list. The
-            # mode row is added first, so its two are the first two.
-            combo = widget.option_box.menu.add.return_value
-            self.assertEqual(
-                [c.args[1] for c in combo.addItem.call_args_list][:2],
-                [self.res.CREATE, self.res.REVISE],
-                "Create must be the first item, and so the opening one",
-            )
-
-    def test_revise_hides_the_fields_it_cannot_write(self):
-        """A box offering to re-time a signed-off pulse under the word
-        'revise' would be offering to re-key it."""
-        from unittest.mock import MagicMock
-
-        pulse = MagicMock()
-        self.slot.tb001_init(pulse)
-        self.addCleanup(self.slot._pulse_ramp.deleteLater)
-        fields = self.slot._mode_fields["highlight"]
-
-        fields.mode = self.res.REVISE
-        self.assertNotIn("s001", fields.visible, "the cadence lives in keys")
-        self.assertIn("pulse_colors", fields.visible)
-
-        fields.mode = self.res.CREATE
-        self.assertIn("s001", fields.visible, "Create keys, so it may re-time")
-
-    def test_the_fade_box_hides_nothing_in_either_mode(self):
-        """A fade IS its keys: there is no part of it Revise could restate
-        without re-keying, so the mode narrows the target and hides nothing."""
-        from unittest.mock import MagicMock
-
-        widget = MagicMock()
-        self.slot.tb000_init(widget)
-        self.addCleanup(self.slot._fade_preview.deleteLater)
-        fields = self.slot._mode_fields["opacity"]
-
-        for mode in (self.res.CREATE, self.res.REVISE):
-            fields.mode = mode
-            self.assertEqual(
-                fields.keys, (), f"{mode} gates a field the fade always needs"
-            )
-
-    def test_the_fade_box_previews_the_exporters_own_alpha(self):
-        """The fade has no colour to choose, so its length and direction are
-        the only things there are to get wrong -- and the preview runs the
-        function that writes the deliverable, not a lookalike of it."""
-        from unittest.mock import MagicMock
-        from pythontk import GlbFades
-
-        GLTF = GlbFades.CHANNELS
-
-        widget = MagicMock()
-        self.slot.tb000_init(widget)
-        preview = self.slot._fade_preview
-        self.addCleanup(preview.deleteLater)
-
-        self.assertEqual(preview._values, GLTF["opacity"].values)
-        self.assertEqual(len(preview.composite(0.5)), 4, "alpha rides the fourth lane")
-
-    def test_the_fade_preview_tracks_the_box(self):
-        """A preview animating at some other length than the one being keyed
-        gives away the only thing it is there to show."""
-        from unittest.mock import MagicMock
-
-        widget = MagicMock()
-        self.slot.tb000_init(widget)
-        self.addCleanup(self.slot._fade_preview.deleteLater)
-        menu = self.slot._fade_menu
-        import mayatk as mtk
-
-        fps = float(mtk.AudioUtils.get_fps() or 30.0)
-
-        menu.s000.value.return_value = 60
-        menu.cmb_direction.currentData.return_value = "out"
-        self.slot._sync_fade_shape()
-
-        shape = self.slot._fade_preview.shape
-        self.assertAlmostEqual(shape["duration"], 60 / fps, places=5)
-        self.assertEqual(shape["direction"], "out")
-
     def test_revise_re_keys_only_objects_that_already_fade(self):
         """Opacity's Revise rewrites keys, which is the whole of what a fade
         is -- but it must not give the channel to anything new."""
@@ -1225,8 +1261,9 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         RenderEffects.create([self.cube], mode="attribute", channel="opacity")
         cmds.select([self.cube, plain], replace=True)
         self._set_mode(self.res.REVISE)
+        self._fade_page(frames=20)
 
-        self.slot.tb000(self._fade_widget(frames=20))
+        self.slot._key_fade_page()
 
         self.assertGreater(cmds.keyframe(f"{self.cube}.opacity", q=True, kc=True), 0)
         self.assertFalse(
@@ -1234,25 +1271,64 @@ class TestRenderEffectsSlots(MayaTkTestCase):
             "Revise must not spread the channel to an object that lacked it",
         )
 
+    # ---- focus -------------------------------------------------------------
+
+    def test_focused_key_runs_the_manifests_re_key_not_the_playhead(self):
+        """From a manifest row, Key re-keys the object's behaviors where the
+        build places them; the page's own playhead keying never runs."""
+        calls = []
+        self._pulse_page()
+        self.slot._focus = {
+            "channel": "highlight",
+            "objects": [self.cube],
+            "apply": lambda: calls.append("apply") or "re-keyed",
+            "apply_text": "Apply",
+            "title": "slot_cube",
+        }
+        self.slot._key_pulse_page()
+        self.assertEqual(calls, ["apply"])
+        self.assertFalse(cmds.attributeQuery("highlight", node=self.cube, exists=True))
+        self.assertEqual(self.slot.ui.footer.setText.call_args.args[0], "re-keyed")
+
+    def test_a_focused_revise_still_recolours(self):
+        """A highlight's Revise writes colours, not keys -- the manifest's
+        re-key is not what it means."""
+        calls = []
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        self._set_mode(self.res.REVISE)
+        self.slot._focus = {
+            "channel": "highlight",
+            "objects": [self.cube],
+            "apply": lambda: calls.append("apply"),
+            "apply_text": "Apply",
+            "title": "slot_cube",
+        }
+        self.slot._pulse_ramp.decided.return_value = ((0.02, 0.17, 0.43), None)
+        self.slot._key_pulse_page()
+        self.assertEqual(calls, [])
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.02, 0.17, 0.43],
+        )
+
+    # ---- the selection job -----------------------------------------------
+
     def test_the_remove_action_is_gated_on_what_it_would_act_on(self):
         """Pre-existing: the action was gated on the RAW selection while
         ``_remove_channel`` operates on the Last-Selected-Only subset, so
         picking a highlighted object and then a plain one left the action live
         over a target with nothing to remove."""
-        from unittest.mock import MagicMock
-
         plain = cmds.polyCube(name="slot_gate_plain")[0]
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select([self.cube, plain], replace=True)
         self.slot.ui.header.menu.chk_last_selected.isChecked.return_value = True
-        action = MagicMock()
-        self.slot._remove_actions = {"highlight": action}
+        self.slot._focus = None
         self.slot.ui.isVisible.return_value = True
         del self.slot._on_selection_changed  # use the real one, not the stub
 
         self.slot._on_selection_changed()
 
-        action.widget.setEnabled.assert_called_with(False)
+        self.slot.ui.btn_remove.setEnabled.assert_called_with(False)
 
     def test_the_selection_is_read_once_per_change(self):
         """Four consumers asked the same question separately, so picking
@@ -1261,8 +1337,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         cmds.select(self.cube, replace=True)
-        self.slot._remove_actions = {"highlight": MagicMock()}
-        self.slot._mode_menus = {"highlight": MagicMock()}
+        self.slot._focus = None
+        self.slot._mode_combos = {"highlight": MagicMock()}
         self.slot.ui.isVisible.return_value = True
         del self.slot._on_selection_changed
 
@@ -1273,41 +1349,47 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
         self.assertEqual(len(reads), 1, "the selection was read more than once")
 
-    def test_the_readout_says_what_apply_will_do(self):
-        """The tool button's label cannot say WHO it is about to act on, and
-        that is the whole difference between the two modes."""
-        from unittest.mock import MagicMock
+    def _footer_said(self):
+        """The footer's resting line, as read (tags dropped)."""
+        import re
 
-        menu = MagicMock()
-        self.slot._mode_menus["highlight"] = menu
+        said = self.slot.ui.footer.setDefaultStatusText.call_args.args[0]
+        return re.sub(r"<[^>]+>", "", said)
+
+    def test_the_readout_says_what_key_will_do(self):
+        """The Key button's label cannot say WHO it is about to act on, and
+        that is the whole difference between the two modes."""
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         plain = cmds.polyCube(name="slot_plain")[0]
         cmds.select([self.cube, plain], replace=True)
 
         self._set_mode(self.res.CREATE)
         self.slot._update_apply_readout(self.res.HIGHLIGHT)
-        self.assertIn("2 selected", menu.lbl_apply.setText.call_args.args[0])
+        self.assertIn("2 selected", self._footer_said())
 
         self._set_mode(self.res.REVISE)
         self.slot._update_apply_readout(self.res.HIGHLIGHT)
-        said = menu.lbl_apply.setText.call_args.args[0]
+        said = self._footer_said()
         self.assertIn("1 of 2 selected", said, "only one of them carries it")
-        self.assertIn("keys untouched", said)
+        self.assertTrue(said.startswith("Re-colours"), said)
 
     def test_the_fade_readout_admits_that_revise_re_keys(self):
-        """Opacity's Revise rewrites keys and the highlight's does not. The
-        difference is invisible until it has cost something."""
-        from unittest.mock import MagicMock
-
-        menu = MagicMock()
-        self.slot._mode_menus["opacity"] = menu
+        """Opacity's Revise rewrites keys and the highlight's does not; the
+        verb says which. The difference is invisible until it has cost
+        something."""
+        self.slot.ui.stk_effects.currentIndex.return_value = 0  # the Fade page
         self._set_mode(self.res.REVISE)
         RenderEffects.create([self.cube], mode="attribute", channel="opacity")
         cmds.select(self.cube, replace=True)
 
         self.slot._update_apply_readout(self.res.OPACITY)
 
-        self.assertIn("keys are rewritten", menu.lbl_apply.setText.call_args.args[0])
+        self.assertTrue(self._footer_said().startswith("Re-keys the fade"))
+
+    def test_only_the_shown_page_writes_the_footer(self):
+        self.slot.ui.stk_effects.currentIndex.return_value = 0  # the Fade page
+        self.slot._update_apply_readout(self.res.HIGHLIGHT)
+        self.slot.ui.footer.setDefaultStatusText.assert_not_called()
 
     def test_revise_reaches_only_objects_that_already_carry_the_channel(self):
         """The point of the mode: change this, do not spread it."""
@@ -1326,6 +1408,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self.assertEqual(
             sorted(self.slot._targets(self.res.HIGHLIGHT)), sorted([self.cube, plain])
         )
+
+    # ---- the colour row ------------------------------------------------------
 
     def test_revise_seeds_the_row_from_what_is_authored(self):
         """Seeding from the authored value is what makes this a revision
@@ -1358,7 +1442,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
     def test_switching_into_revise_reads_the_scene_when_nothing_is_selected(self):
         """The hole this closes: with no selection the row showed colours
-        nobody had read off these objects, and Apply -- whose scope here is
+        nobody had read off these objects, and Key -- whose scope here is
         every highlighted object -- would have written them over all of them."""
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         RenderEffects.set_channel_color([self.cube], color=(0.02, 0.17, 0.43))
@@ -1381,19 +1465,49 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
         self.slot._pulse_ramp.set_colors.assert_not_called()
 
-    def test_create_does_not_reseed_the_row(self):
-        """Those colours are what the next pulse will be keyed with. An artist
-        who picked one must not have it replaced by clicking an object."""
+    def test_create_shows_the_recipes_colours(self):
+        """Create keys with the scene's recipe, so the row shows its colours --
+        not the clicked object's, and not a seed the recipe never had."""
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
         RenderEffects.set_channel_color([self.cube], color=(1.0, 0.0, 0.0))
         cmds.select(self.cube, replace=True)
+        self._recipe(pulse_bright=(0.0, 1.0, 0.0), pulse_dim=(0.1, 0.0, 0.0))
         self._set_mode(self.res.CREATE)
         self.slot._pulse_ramp.editors = ()
 
         self.slot._sync_highlight_mode()
 
-        self.slot._pulse_ramp.set_colors.assert_not_called()
+        seeded = self.slot._pulse_ramp.set_colors.call_args.args[0]
+        self.assertEqual(seeded, ((0.0, 1.0, 0.0), (0.1, 0.0, 0.0)))
         self.assertIsNone(self.slot._pulse_ramp.set_reference.call_args.args[0])
+
+    def test_a_create_colour_is_the_recipes_and_no_objects(self):
+        """In Create a committed colour is what the next pulse -- and a
+        channel the manifest's Build creates -- is coloured with. It writes
+        the scene's recipe, never the selection."""
+        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
+        cmds.select(self.cube, replace=True)
+        store = self._recipe()
+        self._set_mode(self.res.CREATE)
+        self.slot._pulse_ramp.decided.return_value = ((0.0, 0.0, 1.0), None)
+
+        self.slot._on_pulse_color_committed(0, None)
+
+        self.assertEqual(store.effect_recipe.pulse_bright, (0.0, 0.0, 1.0))
+        self.assertEqual(
+            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
+            [0.9, 0.1, 0.1],
+            "the page stages a look; only Key writes the objects",
+        )
+
+    def test_a_revise_colour_is_never_the_recipes(self):
+        store = self._recipe()
+        before = store.effect_recipe.pulse_bright
+        self._set_mode(self.res.REVISE)
+        self.slot._pulse_ramp.decided.return_value = ((0.0, 0.0, 1.0), None)
+        self.slot._on_pulse_color_committed(0, None)
+        self.assertEqual(store.effect_recipe.pulse_bright, before)
 
     def test_revise_writes_the_selection(self):
         RenderEffects.create([self.cube], mode="attribute", channel="highlight")
@@ -1401,7 +1515,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = ((0.02, 0.17, 0.43), None)
 
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertEqual(
             [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
@@ -1417,7 +1531,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
         self.slot.sb.message_box.return_value = "No"
 
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertEqual(
             [round(c, 6) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
@@ -1426,7 +1540,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         )
 
         self.slot.sb.message_box.return_value = "Yes"
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertEqual(
             [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
@@ -1470,42 +1584,12 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = ((1.0, 0.0, 0.0), None)
 
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertEqual(
             [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColorDim")[0]],
             [0.1, 0.1, 0.1],
             "an unstated end must be left exactly as authored",
-        )
-
-    def test_the_colour_row_writes_nothing_on_its_own(self):
-        """An editor that wrote as it was dragged is what made setting a look
-        and changing one feel like two different acts -- and it wrote to
-        whatever happened to be selected while the artist was only picking a
-        colour for the NEXT pulse. The tool button is the only writer now."""
-        from unittest.mock import MagicMock
-        from qtpy import QtWidgets
-
-        if QtWidgets.QApplication.instance() is None:
-            self.skipTest("the colour row is a real widget; no QApplication here")
-
-        RenderEffects.create([self.cube], mode="attribute", channel="highlight")
-        RenderEffects.set_channel_color([self.cube], color=(0.9, 0.1, 0.1))
-        cmds.select(self.cube, replace=True)
-
-        pulse = MagicMock()
-        self.slot.tb001_init(pulse)
-        ramp = self.slot._pulse_ramp
-        self.addCleanup(ramp.deleteLater)
-
-        # Act on the editor the way an artist does, rather than reading its
-        # wiring: what matters is that the scene does not move.
-        ramp.editor(0).color = (0.0, 0.0, 1.0)
-
-        self.assertEqual(
-            [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
-            [0.9, 0.1, 0.1],
-            "the box stages a value; only the tool button writes",
         )
 
     def test_revise_with_nothing_decided_writes_nothing(self):
@@ -1520,7 +1604,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         self._set_mode(self.res.REVISE)
         self.slot._pulse_ramp.decided.return_value = (None, None)
 
-        self.slot.tb001(self._pulse_widget())
+        self.slot._key_pulse_page()
 
         self.assertEqual(
             [round(c, 3) for c in cmds.getAttr(f"{self.cube}.highlightColor")[0]],
@@ -1535,19 +1619,25 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         from unittest.mock import MagicMock
 
         self.slot._cycle_readout = MagicMock()
-        self.slot._pulse_menu = MagicMock()
-        self.slot._pulse_menu.s001.value.return_value = 4.0
-        self.slot._pulse_menu.s002.value.return_value = 2.0
+        page = self._pulse_page(seconds=4.0, period=2.0, gaps=(0.0, 0.0))
         self.slot._update_cycle_readout()
         self.assertNotIn("cut", self.slot._cycle_readout.setText.call_args.args[0])
 
-        self.slot._pulse_menu.s001.value.return_value = 5.0
+        page.s001.value.return_value = 5.0
         self.slot._update_cycle_readout()
         self.assertIn("cut", self.slot._cycle_readout.setText.call_args.args[0])
 
+        # The leads come out of the length: 5 s less two 0.5 s leads is a
+        # train of exactly two 2 s cycles.
+        self._recipe(pulse_lead_in=0.5, pulse_lead_out=0.5)
+        self.slot._update_cycle_readout()
+        self.assertNotIn("cut", self.slot._cycle_readout.setText.call_args.args[0])
+
     def test_remove_action_strips_one_channel_and_leaves_the_other(self):
-        self.slot.tb000(self._fade_widget())
-        self.slot.tb001(self._pulse_widget())
+        self._fade_page()
+        self._pulse_page()
+        self.slot._key_fade_page()
+        self.slot._key_pulse_page()
 
         self.slot._remove_channel(self.res.OPACITY)
 
@@ -1761,6 +1851,98 @@ class TestHighlightChannel(MayaTkTestCase):
             cmds.attributeQuery("highlightColor", node=self.cube, exists=True)
         )
         self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+
+class TestEffectWriters(MayaTkTestCase):
+    """``apply_effect`` -- the Shot Manifest's writer -- and the scene recipe
+    the hand tools key with: one plan, one writer, nothing deleted."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="film")  # 24 fps
+        self.cube = cmds.polyCube(name="fx_cube")[0]
+        # The recipe lives on the shot store, which sits above mat_utils.
+        self.store_cls = RenderEffects.scene_store()
+        self.store_cls._active = None
+
+    def tearDown(self):
+        self.store_cls._active = None
+        super().tearDown()
+
+    def _keys(self, attr):
+        plug = f"{self.cube}.{attr}"
+        return list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True) or [],
+                cmds.keyframe(plug, q=True, vc=True) or [],
+            )
+        )
+
+    def _curve(self, attr):
+        return cmds.keyframe(f"{self.cube}.{attr}", q=True, name=True)[0]
+
+    def _rgb(self, attr):
+        return [round(c, 6) for c in cmds.getAttr(f"{self.cube}.{attr}")[0]]
+
+    def test_a_fade_is_the_recipes_length_where_it_is_placed(self):
+        recipe = ptk.EffectRecipe(fade_frames=12)
+        RenderEffects.apply_effect(self.cube, "fade_in", 10, 100, recipe, fps=24)
+        RenderEffects.apply_effect(self.cube, "fade_out", 10, 100, recipe, fps=24)
+        self.assertEqual(
+            self._keys("opacity"),
+            [(10.0, 0.0), (22.0, 1.0), (88.0, 1.0), (100.0, 0.0)],
+        )
+
+    def test_it_returns_every_key_it_wrote_the_mirror_included(self):
+        recipe = ptk.EffectRecipe(fade_frames=10)
+        written = RenderEffects.apply_effect(self.cube, "fade_in", 0, 50, recipe, 24)
+        opacity, vis = self._curve("opacity"), self._curve("visibility")
+        self.assertEqual(
+            sorted(written),
+            sorted([(opacity, 0.0), (opacity, 10.0), (vis, 0.0), (vis, 10.0)]),
+        )
+
+    def test_a_pulse_keys_the_recipes_plan_over_the_range(self):
+        recipe = ptk.EffectRecipe(pulse_period=2.0, pulse_duty=0.5)
+        RenderEffects.apply_effect(self.cube, "pulse", 0, 240, recipe, fps=24)
+        self.assertEqual(self._keys("highlight"), recipe.plan("pulse", 0, 240, 24))
+
+    def test_it_deletes_nothing(self):
+        """The build releases its own keys first; a key it does not hold is
+        the animator's and stays."""
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
+        cmds.setKeyframe(f"{self.cube}.highlight", time=500, value=0.5)
+        RenderEffects.apply_effect(self.cube, "pulse", 0, 240, fps=24)
+        self.assertIn((500.0, 0.5), self._keys("highlight"))
+
+    def test_a_channel_it_creates_takes_the_recipes_colours(self):
+        recipe = ptk.EffectRecipe(pulse_bright=(1, 0, 0), pulse_dim=(0, 0, 0.5))
+        RenderEffects.apply_effect(self.cube, "pulse", 0, 100, recipe, fps=24)
+        self.assertEqual(self._rgb("highlightColor"), [1.0, 0.0, 0.0])
+        self.assertEqual(self._rgb("highlightColorDim"), [0.0, 0.0, 0.5])
+
+    def test_an_existing_channel_keeps_its_colours(self):
+        """A revised object keeps its colours through a rebuild."""
+        RenderEffects.create(objects=[self.cube], mode="attribute", channel="highlight")
+        RenderEffects.set_channel_color([self.cube], (0.0, 1.0, 0.0))
+        recipe = ptk.EffectRecipe(pulse_bright=(1, 0, 0))
+        RenderEffects.apply_effect(self.cube, "pulse", 0, 100, recipe, fps=24)
+        self.assertEqual(self._rgb("highlightColor"), [0.0, 1.0, 0.0])
+
+    def test_an_effect_without_a_channel_says_so(self):
+        with self.assertRaises(ValueError):
+            RenderEffects.apply_effect(self.cube, "clip", 0, 10)
+
+    def test_the_hand_tools_key_with_the_scene_recipe(self):
+        """The panel's Key and the manifest's build key one recipe."""
+        store = self.store_cls.active()
+        store.update_effect_recipe(fade_frames=8, pulse_period=2.0, pulse_duty=0.5)
+        RenderEffects.key_fade([self.cube], start=20)
+        self.assertEqual(self._keys("opacity"), [(20.0, 0.0), (28.0, 1.0)])
+        RenderEffects.key_pulse([self.cube], start=0, end=240)
+        self.assertEqual(
+            self._keys("highlight"), store.effect_recipe.plan("pulse", 0, 240, 24)
+        )
 
 
 class TestChannelColourRevision(MayaTkTestCase):

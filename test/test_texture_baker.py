@@ -29,6 +29,20 @@ def _arnold_loadable():
         return False
 
 
+def _write_map(path, coverage=1.0):
+    """Write a map shaped like RTT's: a float RGBA EXR whose alpha is *coverage*.
+
+    A fake RTT must write a map that reads -- the bake judges what it renders
+    (an all-zero or unreadable map is a render Arnold aborted).
+    """
+    os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+    import cv2
+    import numpy as np
+
+    if not cv2.imwrite(path, np.full((4, 4, 4), coverage, np.float32)):
+        raise OSError(f"could not write {path}")
+
+
 class TestArnoldAvailable(MayaTkTestCase):
     def test_returns_bool_without_raising(self):
         # Regression #1: must not raise even when mtoa is loaded.
@@ -55,29 +69,29 @@ class TestEnsureArnold(MayaTkTestCase):
         )
 
     def test_an_installed_but_unloaded_mtoa_is_loaded(self):
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.core_utils.plugins._plugins import Plugins
 
         with (
             self._probe(False, True),
-            mock.patch.object(EnvUtils, "load_plugin") as load,
+            mock.patch.object(Plugins, "load") as load,
         ):
             self.assertTrue(TextureBaker.ensure_arnold())
         load.assert_called_once_with("mtoa")
 
     def test_a_loaded_mtoa_is_not_loaded_again(self):
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.core_utils.plugins._plugins import Plugins
 
-        with self._probe(True), mock.patch.object(EnvUtils, "load_plugin") as load:
+        with self._probe(True), mock.patch.object(Plugins, "load") as load:
             self.assertTrue(TextureBaker.ensure_arnold())
         load.assert_not_called()
 
     def test_an_mtoa_that_cannot_load_is_no_arnold(self):
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.core_utils.plugins._plugins import Plugins
 
         with (
             self._probe(False),
             mock.patch.object(
-                EnvUtils, "load_plugin", side_effect=ValueError("not installed")
+                Plugins, "load", side_effect=Plugins.LoadError("not installed")
             ),
         ):
             self.assertFalse(TextureBaker.ensure_arnold())
@@ -133,53 +147,8 @@ class TestArnoldBakeOutputNaming(MayaTkTestCase):
         self.assertEqual(os.path.basename(path), "suffixCube_Lightmap.exr")
 
 
-class TestBakeUvSetTargeting(MayaTkTestCase):
-    """uv_set= must decide the layout the bake actually renders.
-
-    Arnold ignores the scene's current UV set (probe-measured), so its paths
-    pass RTT's own uv_set flag; the current-set switch remains as
-    convertSolidTx's targeting plus the missing-set warning, and is restored
-    after the bake. The content-position tests are the real contract: where
-    the EXR's nonzero texels land names the layout that rendered.
-    """
-
-    @staticmethod
-    def _current(shape):
-        return (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
-
-    def _cube_with_lightmap_set(self):
-        cube = cmds.polyCube(name="uvTargetCube")[0]
-        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
-        cmds.polyUVSet(shape, create=True, uvSet="lightmap")
-        # map1 stays current after a create.
-        cmds.polyUVSet(shape, currentUVSet=True, uvSet="map1")
-        return cube, shape
-
-    def test_set_makes_current_and_returns_prior(self):
-        cube, shape = self._cube_with_lightmap_set()
-        baker = TextureBaker()
-        prev = baker._set_current_uv_set(cube, "lightmap")
-        self.assertEqual(self._current(shape), "lightmap")
-        self.assertEqual(list(prev.values()), ["map1"])
-        baker._restore_uv_sets(prev)
-        self.assertEqual(self._current(shape), "map1")
-
-    def test_missing_set_returns_empty_and_leaves_current(self):
-        cube, shape = self._cube_with_lightmap_set()
-        prev = TextureBaker()._set_current_uv_set(cube, "nope")
-        self.assertEqual(prev, {})
-        self.assertEqual(self._current(shape), "map1")
-
-    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
-    def test_bake_into_uv_set_restores_current(self):
-        cube, shape = self._cube_with_lightmap_set()
-        tmp = tempfile.mkdtemp(prefix="bake_uvset_")
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        result = TextureBaker(resolution=64, samples=2, file_format="exr").bake(
-            [cube], output_dir=tmp, backend="arnold", uv_set="lightmap"
-        )
-        self.assertTrue(result)  # produced a file
-        self.assertEqual(self._current(shape), "map1")  # scene left as found
+class _LayoutFixtures:
+    """Fixtures for tests that read WHERE a bake landed in its map."""
 
     def _quadrant_plane(self, name):
         """Plane whose map1 fills 0-1 and whose lightmap set sits in the
@@ -220,6 +189,55 @@ class TestBakeUvSetTargeting(MayaTkTestCase):
         flat = cmds.shadingNode("aiFlat", asShader=True)
         cmds.setAttr(f"{flat}.color", 1, 1, 1, type="double3")
         return flat
+
+
+class TestBakeUvSetTargeting(_LayoutFixtures, MayaTkTestCase):
+    """uv_set= must decide the layout the bake actually renders.
+
+    Arnold ignores the scene's current UV set (probe-measured), so its paths
+    pass RTT's own uv_set flag; the current-set switch remains as
+    convertSolidTx's targeting plus the missing-set warning, and is restored
+    after the bake. The content-position tests are the real contract: where
+    the EXR's nonzero texels land names the layout that rendered.
+    """
+
+    @staticmethod
+    def _current(shape):
+        return (cmds.polyUVSet(shape, query=True, currentUVSet=True) or [None])[0]
+
+    def _cube_with_lightmap_set(self):
+        cube = cmds.polyCube(name="uvTargetCube")[0]
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        # A layout to bake into: an EMPTY set renders nothing, no map.
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="map1")
+        return cube, shape
+
+    def test_set_makes_current_and_returns_prior(self):
+        cube, shape = self._cube_with_lightmap_set()
+        baker = TextureBaker()
+        prev = baker._set_current_uv_set(cube, "lightmap")
+        self.assertEqual(self._current(shape), "lightmap")
+        self.assertEqual(list(prev.values()), ["map1"])
+        baker._restore_uv_sets(prev)
+        self.assertEqual(self._current(shape), "map1")
+
+    def test_missing_set_returns_empty_and_leaves_current(self):
+        cube, shape = self._cube_with_lightmap_set()
+        prev = TextureBaker()._set_current_uv_set(cube, "nope")
+        self.assertEqual(prev, {})
+        self.assertEqual(self._current(shape), "map1")
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_bake_into_uv_set_restores_current(self):
+        cube, shape = self._cube_with_lightmap_set()
+        tmp = tempfile.mkdtemp(prefix="bake_uvset_")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        result = TextureBaker(resolution=64, samples=2, file_format="exr").bake(
+            [cube], output_dir=tmp, backend="arnold", uv_set="lightmap"
+        )
+        self.assertTrue(result)  # produced a file
+        self.assertEqual(self._current(shape), "map1")  # scene left as found
 
     @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
     def test_bake_renders_the_requested_set_not_the_current_one(self):
@@ -879,8 +897,7 @@ class TestPinnedRenderSettings(MayaTkTestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
 
         def fake_rtt(**kwargs):  # RTT writes ONE file: Y's predicted name
-            with open(os.path.join(kwargs["folder"], "yStem.exr"), "wb") as fh:
-                fh.write(b"exr")
+            _write_map(os.path.join(kwargs["folder"], "yStem.exr"))
 
         def stem(long_name, shape):
             return "yStem" if long_name == y else "x_predicted_nothing"
@@ -909,8 +926,7 @@ class TestPinnedRenderSettings(MayaTkTestCase):
             fh.write(b"theirs")
 
         def fake_rtt(**kwargs):
-            with open(os.path.join(kwargs["folder"], "keepOutRtt.exr"), "wb") as fh:
-                fh.write(b"ours")
+            _write_map(os.path.join(kwargs["folder"], "keepOutRtt.exr"))
 
         baker = TextureBaker(resolution=16, samples=1, file_format="exr")
         with (
@@ -1484,6 +1500,40 @@ class TestArnoldTranslationGuard(MayaTkTestCase):
         for node in set(standins):
             self.assertFalse(cmds.objExists(node), "guard must delete its bridge")
 
+    def test_guard_stand_in_bakes_no_ambient_occlusion(self):
+        """The stand-in leaves a game material's AO map out of its albedo: the
+        bake traces the occlusion the map approximates, so multiplied in, every
+        bounce darkened twice (production office ceilings: 0.77x)."""
+        shader, sg, _cube = self._stingray_sg("aoRack")
+        for name, attr in (
+            ("aoRack_BaseColor.png", "TEX_color_map"),
+            ("aoRack_AO.png", "TEX_ao_map"),
+        ):
+            if not cmds.attributeQuery(attr, node=shader, exists=True):
+                self.skipTest(f"StingrayPBS has no {attr}")
+            fn = cmds.shadingNode("file", asTexture=True)
+            cmds.setAttr(f"{fn}.fileTextureName", name, type="string")
+            cmds.connectAttr(f"{fn}.outColor", f"{shader}.{attr}", force=True)
+        with TextureBaker(resolution=16, samples=1).arnold_translation_guard():
+            standin = self._override_source(sg)
+            mult = cmds.listConnections(f"{standin}.baseColor", type="aiMultiply")
+            self.assertTrue(mult, "the stand-in has no base-colour multiply")
+            self.assertTrue(
+                cmds.listConnections(
+                    f"{mult[0]}.input1", source=True, destination=False
+                ),
+                "the stand-in lost the base colour map",
+            )
+            self.assertFalse(
+                any(
+                    cmds.listConnections(
+                        f"{mult[0]}.{plug}", source=True, destination=False
+                    )
+                    for plug in ("input2", "input2R", "input2G", "input2B")
+                ),
+                "the stand-in multiplies AO into the bake's albedo",
+            )
+
     def test_guard_fills_the_groups_an_authored_bridge_misses_and_puts_them_back(
         self,
     ):
@@ -1690,6 +1740,126 @@ def _cv2_available() -> bool:
         return False
 
 
+class TestBakeRegion(_LayoutFixtures, MayaTkTestCase):
+    """``region=``: Arnold renders only part of the layout (RTT's u/v start/scale).
+
+    Measured (mtoa 5.4.5, a UV-colour shader): the map is then exactly a map
+    whose uv extent is the region, rows top-down. Added 2026-10-02 so a reused
+    layout covering a third of its square renders a third of the texels.
+    """
+
+    def test_the_region_rides_the_rtt_call(self):
+        tb = TextureBaker(resolution=64)
+        kw = tb._rtt_kwargs("C:/out", None, region=(0.2, 0.1, 0.5, 0.7))
+        self.assertAlmostEqual(kw["u_start"], 0.2)
+        self.assertAlmostEqual(kw["v_start"], 0.1)
+        self.assertAlmostEqual(kw["u_scale"], 0.3)
+        self.assertAlmostEqual(kw["v_scale"], 0.6)
+        self.assertNotIn("u_start", tb._rtt_kwargs("C:/out", None))
+
+    def test_unresolved_whole_and_degenerate_regions_bake_the_square(self):
+        tb = TextureBaker(resolution=64)
+        self.assertIsNone(tb._resolve_region("|a", None))
+        self.assertIsNone(tb._resolve_region("|a", {"|a": (0, 0, 1, 1)}))
+        self.assertIsNone(tb._resolve_region("|a", {"|a": (0.5, 0, 0.5, 1)}))
+        self.assertEqual(
+            tb._resolve_region("|a", lambda _n: (0, 0, 0.5, 1)), (0.0, 0.0, 0.5, 1.0)
+        )
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_regional_objects_batch_by_their_region(self):
+        """Objects sharing a region share ONE call; each region is its own part.
+
+        A region used to take its object out of the batch -- a production
+        room's 42 wall instances, one layout and one region between them, paid
+        42 scene translations (1.85 s each at mobile, 45% of its render time,
+        2026-10-03). The region joins the uv-set flag and the bake size as what
+        a call cannot vary, and each part carries its own."""
+        quads = []
+        for i in range(2):
+            plane = self._quadrant_plane(f"regionQuad{i}")
+            cmds.move(5.0 * i, 0, 0, plane)  # coplanar twins bake to zeros
+            quads.append(cmds.ls(plane, long=True)[0])
+        full = cmds.polyPlane(name="regionFull", sx=1, sy=1)[0]
+        cmds.move(10.0, 0, 0, full)
+        shape = cmds.listRelatives(full, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        full = cmds.ls(full, long=True)[0]
+        import pythontk as ptk
+
+        tmp = self.enterContext(
+            ptk.TempArtifacts("bake_region_batch", policy="scoped")
+        ).dir_path()
+        real = cmds.arnoldRenderToTexture
+        calls = []
+
+        def rtt(*args, **kwargs):
+            calls.append(kwargs.get("u_start"))
+            return real(*args, **kwargs)
+
+        with mock.patch.object(cmds, "arnoldRenderToTexture", side_effect=rtt):
+            result = TextureBaker(
+                resolution=32, samples=1, file_format="exr", extend_edges=False
+            ).bake(
+                quads + [full],
+                output_dir=tmp,
+                backend="arnold",
+                batch=True,
+                uv_set="lightmap",
+                region={q: (0.5, 0.5, 1.0, 1.0) for q in quads},
+                # Unlit and flat: what lands where is the only signal.
+                shader=self._white_flat(),
+            )
+        self.assertEqual(set(result), set(quads) | {full})
+        self.assertEqual(sorted(calls, key=str), [0.5, None], calls)
+        for obj in quads + [full]:  # a region fills the map it renders
+            cover, _u, _v = self._content_is_quadrant(result[obj])
+            self.assertGreater(cover, 0.85, obj)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_a_region_past_the_unit_square_renders_exactly(self):
+        """RTT takes u/v_start below 0 and a scale past 1, and maps it linearly.
+
+        What ``LightmapBaker._plan_regions`` relies on to give an island that
+        touches its square's edge the same full pad as any other side (clamped,
+        that side kept a fraction of a texel and its row baked 1-3% off).
+        Measured on mtoa 5.5 (u/v_start -0.25, scale 1.5: fit -0.249 + 1.4965 x),
+        so the layout's 0-1 square lands in the middle two thirds."""
+        full = cmds.polyPlane(name="beyondFull", sx=1, sy=1)[0]
+        shape = cmds.listRelatives(full, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        full = cmds.ls(full, long=True)[0]
+        import pythontk as ptk
+
+        tmp = self.enterContext(
+            ptk.TempArtifacts("bake_region_beyond", policy="scoped")
+        ).dir_path()
+        result = TextureBaker(
+            resolution=48, samples=1, file_format="exr", extend_edges=False
+        ).bake(
+            [full],
+            output_dir=tmp,
+            backend="arnold",
+            uv_set="lightmap",
+            region={full: (-0.25, -0.25, 1.25, 1.25)},
+            shader=self._white_flat(),
+        )
+        import numpy as np
+
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+
+        img = cv2.imread(result[full], cv2.IMREAD_UNCHANGED)[..., :3].max(-1)
+        # Half-max: the bake's gaussian spreads an edge over two texels; its
+        # midpoint is where the square's edge lies.
+        inside = img > 0.5 * img.max()
+        cols = np.nonzero(inside.any(0))[0] / img.shape[1]
+        rows = np.nonzero(inside.any(1))[0] / img.shape[0]
+        for lo, hi in ((cols.min(), cols.max()), (rows.min(), rows.max())):
+            self.assertAlmostEqual(lo, 0.25 / 1.5, delta=0.03)
+            self.assertAlmostEqual(hi, 1.25 / 1.5, delta=0.03)
+
+
 class TestInstancedTargetsBakePerObject(MayaTkTestCase):
     """With ``shader=``, an instanced target bakes in a call of its own."""
 
@@ -1859,10 +2029,7 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
             if kwargs["resolution"] == 16:  # the first part renders...
                 for obj in cmds.ls(selection=True, long=True):
                     shape = cmds.listRelatives(obj, shapes=True)[0]
-                    with open(
-                        os.path.join(kwargs["folder"], f"{shape}.exr"), "wb"
-                    ) as fh:
-                        fh.write(b"x" * 64)
+                    _write_map(os.path.join(kwargs["folder"], f"{shape}.exr"))
             # ...the second returns with nothing written (Esc).
 
         with (
@@ -1886,11 +2053,12 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         self.assertEqual(list(result), [cmds.ls(planes[0], long=True)[0]])
         self.assertNotIn("re-bake one per call", "\n".join(caught.output))
 
-    def _rtt_writing(self, skip=lambda i, n: False):
+    def _rtt_writing(self, skip=lambda i, n: False, empty=lambda i, n: False):
         """A fake RTT that writes one map per selected shape, in SELECTION
         order -- measured: RTT renders a call's shapes one at a time in the
         order they were selected, each file appearing when its render
-        starts. ``skip(i, n)`` leaves out the i-th of n selected members."""
+        starts. ``skip(i, n)`` leaves out the i-th of n selected members;
+        ``empty(i, n)`` writes it all-zero (what an aborted render leaves)."""
 
         def render(**kwargs):
             selected = cmds.ls(selection=True, long=True)
@@ -1899,8 +2067,10 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
                 if skip(i, len(selected)):
                     continue
                 shape = cmds.listRelatives(obj, shapes=True)[0]
-                with open(os.path.join(kwargs["folder"], f"{shape}.exr"), "wb") as fh:
-                    fh.write(b"x" * 64)
+                _write_map(
+                    os.path.join(kwargs["folder"], f"{shape}.exr"),
+                    0.0 if empty(i, len(selected)) else 1.0,
+                )
 
         return render
 
@@ -1969,6 +2139,56 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         self.assertEqual(len(result), 3)
         self.assertIn("re-bake one per call", log)
 
+    def test_a_batch_map_that_rendered_nothing_ends_the_call(self):
+        """A render Arnold aborts on an error still writes each map it began,
+        all-zero, and returns normally: the batch claimed them, and a
+        production room would have shipped black lightmaps (2026-10-03). The
+        first such map ends the call as a stop does: the maps before it are
+        kept, it and every map after it go, and nothing renders again."""
+        planes = self._planes(3)
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+        result, log = self._bake_with(
+            baker, planes, self._rtt_writing(empty=lambda i, n: n > 1 and i >= 1)
+        )
+        self.assertEqual(
+            self.calls, [16], "an aborted call must not start more renders"
+        )
+        self.assertEqual(list(result), [cmds.ls(planes[0], long=True)[0]])
+        self.assertIn("rendered nothing", log)
+        self.assertEqual(
+            [f for f in os.listdir(self.tmp) if "Shape" in f],
+            [],
+            "no map that rendered nothing is left behind",
+        )
+
+    def test_a_per_object_map_cut_short_is_no_map(self):
+        """An abort can also leave the map cut short -- an EXR header and no
+        pixels, which does not read. That is no map either, and the bake
+        stops there rather than starting the next object's render."""
+        planes = self._planes(2)
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+
+        def cut_short(**kwargs):
+            self.calls.append(kwargs["resolution"])
+            obj = cmds.ls(selection=True, long=True)[0]
+            shape = cmds.listRelatives(obj, shapes=True)[0]
+            with open(os.path.join(kwargs["folder"], f"{shape}.exr"), "wb") as fh:
+                fh.write(b"\x76\x2f\x31\x01" + b"\0" * 60)  # EXR magic, no image
+
+        with (
+            mock.patch.object(TextureBaker, "_resolve_backend", return_value="arnold"),
+            mock.patch.object(
+                baker, "_pinned_render_settings", return_value=contextlib.nullcontext()
+            ),
+            mock.patch.object(cmds, "arnoldRenderToTexture", cut_short, create=True),
+        ):
+            with self.assertLogs(baker.logger, level="WARNING") as caught:
+                result = baker.bake(planes, output_dir=self.tmp, backend="arnold")
+        self.assertEqual(result, {})
+        self.assertEqual(self.calls, [16], "the next object's render must not start")
+        self.assertIn("rendered nothing", "\n".join(caught.output))
+        self.assertEqual(os.listdir(self.tmp), [], "the cut-short map is not kept")
+
     def test_a_stopped_per_object_render_ends_the_bake(self):
         planes = self._planes(3)
         baker = TextureBaker(resolution=16, samples=1, file_format="exr")
@@ -2023,6 +2243,470 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         self.assertEqual(len(self.calls), 1, "the next object's render must not start")
         with open(os.path.join(self.tmp, f"{planes[0]}_LM.exr"), "rb") as fh:
             self.assertEqual(fh.read(), b"old")
+
+
+class TestOutputSpace(MayaTkTestCase):
+    """Maps come out in linear Rec.709, whatever space the scene renders in.
+
+    Arnold renders -- and RTT writes -- in the scene's rendering space, ACEScg
+    by default, while everything that reads a baked map (game engines, glTF,
+    the WebXR preview) reads linear Rec.709: a pure-red sRGB texture baked to
+    (0.611, 0.070, 0.021), and a production room's lightmap shipped its
+    lighting tint ~30% under-saturated (mtoa 5.5, 2026-10-02).
+    """
+
+    def _red_plane(self, folder):
+        import numpy as np
+
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+
+        png = os.path.join(folder, "red_srgb.png")
+        red = np.zeros((8, 8, 3), np.uint8)
+        red[..., 2] = 255  # BGR
+        cv2.imwrite(png, red)
+        plane = cmds.polyPlane(name="cmPlane", width=2, height=2, sx=1, sy=1)[0]
+        tex = cmds.shadingNode("file", asTexture=True, name="cmRedFile")
+        cmds.setAttr(tex + ".fileTextureName", png, type="string")
+        cmds.setAttr(tex + ".colorSpace", "sRGB", type="string")
+        util = cmds.shadingNode("aiUtility", asShader=True, name="cmUtil")
+        cmds.setAttr(util + ".shadeMode", 2)  # flat: the texture, unlit
+        cmds.setAttr(util + ".colorMode", 0)
+        cmds.connectAttr(tex + ".outColor", util + ".color")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="cmSG")
+        cmds.connectAttr(util + ".outColor", sg + ".surfaceShader")
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return plane
+
+    def _baked_centre(self, **kwargs):
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+        import pythontk as ptk
+
+        folder = self.enterContext(
+            ptk.TempArtifacts("bake_output_space", policy="scoped")
+        ).dir_path()
+        plane = self._red_plane(folder)
+        out = os.path.join(folder, "bakes")
+        result = TextureBaker(
+            resolution=32, samples=1, file_format="exr", **kwargs
+        ).bake([plane], output_dir=out, backend="arnold")
+        img = cv2.imread(next(iter(result.values())), cv2.IMREAD_UNCHANGED)
+        return img[16, 16, :3][::-1]
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_an_srgb_red_texture_bakes_rec709_red(self):
+        if cmds.colorManagementPrefs(query=True, renderingSpaceName=True) != "ACEScg":
+            self.skipTest("the scene does not render in ACEScg")
+        r, g, b = self._baked_centre()
+        self.assertAlmostEqual(r, 1.0, delta=0.01)
+        self.assertLess(max(g, b), 0.01)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_no_output_space_keeps_the_rendering_space(self):
+        if cmds.colorManagementPrefs(query=True, renderingSpaceName=True) != "ACEScg":
+            self.skipTest("the scene does not render in ACEScg")
+        r, g, b = self._baked_centre(output_space=None)
+        self.assertAlmostEqual(r, 0.61, delta=0.01)  # ACEScg's sRGB red
+
+    def test_colour_management_off_leaves_the_map_alone(self):
+        baker = TextureBaker(file_format="exr")
+        with (
+            mock.patch.object(TextureBaker, "_rendering_space", return_value=None),
+            mock.patch.object(TextureBaker, "_write_exr") as write,
+        ):
+            baker._to_output_space("C:/never/read.exr")
+        write.assert_not_called()
+
+    def test_a_map_near_the_path_limit_is_written(self):
+        """The write was staged as ``.<stem>.<pid>.part.exr`` beside the map,
+        12 characters longer than it: a map near Windows' 260-character limit
+        -- which Maya, not long-path aware, keeps to -- staged where no file
+        can be, and the write failed (2026-10-03). It goes through
+        ``FileUtils.atomic_write`` now, whose stage is fixed-length."""
+        import numpy as np
+        import pythontk as ptk
+
+        folder = self.enterContext(
+            ptk.TempArtifacts("bake_write_exr", policy="scoped")
+        ).dir_path()
+        path = os.path.join(folder, "m" * (252 - len(folder) - 1 - 4) + ".exr")
+        TextureBaker._write_exr(path, np.ones((2, 2, 4), np.float32))
+        self.assertEqual(os.listdir(folder), [os.path.basename(path)])
+
+
+class TestCameraShader(MayaTkTestCase):
+    """``bake(camera_shader=)``: only the bake's own rays see the card.
+
+    The white-card lightmap used to ride ``shader=`` -- a per-shape override
+    the receiver wears for EVERY ray, its own bounces included -- so a concave
+    object bounced light onto itself as if it were pure white: a production
+    soldering table's backsplash, above a dark mat, baked 75% brighter than
+    Arnold renders it, its top 5-12% (2026-10-03). Every surface behind an
+    ``aiRaySwitch`` (camera rays: the card; every other ray: the real shader)
+    bakes the same point within 2% of the camera render.
+    """
+
+    def _tmp(self):
+        import pythontk as ptk
+
+        return self.enterContext(
+            ptk.TempArtifacts("bake_camera_shader", policy="scoped")
+        ).dir_path()
+
+    def _card(self):
+        card = cmds.shadingNode("lambert", asShader=True, name="cmsCard")
+        cmds.setAttr(card + ".color", 1, 1, 1, type="double3")
+        cmds.setAttr(card + ".diffuse", 1.0)
+        return card
+
+    def _lambert(self, name, rgb):
+        mat = cmds.shadingNode("lambert", asShader=True, name=name)
+        cmds.setAttr(mat + ".color", *rgb, type="double3")
+        cmds.setAttr(mat + ".diffuse", 1.0)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=name + "SG"
+        )
+        cmds.connectAttr(mat + ".outColor", sg + ".surfaceShader")
+        return sg
+
+    def _sky(self):
+        cmds.shadingNode("aiSkyDomeLight", asLight=True, name="cmsSky")
+
+    def _read(self, path):
+        import numpy as np
+
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        self.assertIsNotNone(img, path)
+        return img[..., :3][..., ::-1].astype(np.float64)  # RGB
+
+    def _corner(self):
+        """ONE dark mesh: a 2 m floor and a 2 m wall standing on its -x edge,
+        facing +x; floor uv in u 0..0.5, wall uv in u 0.5..1."""
+        floor = cmds.polyPlane(name="cmsFloor", width=2, height=2, sx=1, sy=1)[0]
+        cmds.polyEditUV(f"{floor}.map[*]", pivotU=0, pivotV=0, scaleU=0.5, scaleV=1.0)
+        wall = cmds.polyPlane(name="cmsWall", width=2, height=2, sx=1, sy=1)[0]
+        cmds.polyEditUV(f"{wall}.map[*]", pivotU=0, pivotV=0, scaleU=0.5, scaleV=1.0)
+        cmds.polyEditUV(f"{wall}.map[*]", uValue=0.5, vValue=0.0, relative=True)
+        cmds.xform(wall, rotation=(0, 0, -90), translation=(-1, 1, 0))
+        mesh = cmds.polyUnite(floor, wall, name="cmsCorner", constructionHistory=False)[
+            0
+        ]
+        cmds.sets(
+            mesh, edit=True, forceElement=self._lambert("cmsDark", (0.05, 0.05, 0.05))
+        )
+        return mesh
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_the_receiver_shows_the_card_not_its_material(self):
+        plane = cmds.polyPlane(name="cmsRed", width=2, height=2, sx=1, sy=1)[0]
+        cmds.sets(plane, edit=True, forceElement=self._lambert("cmsRedMat", (1, 0, 0)))
+        self._sky()
+        result = TextureBaker(resolution=16, samples=2, file_format="exr").bake(
+            [plane],
+            output_dir=self._tmp(),
+            backend="arnold",
+            camera_shader=self._card(),
+        )
+        rgb = self._read(next(iter(result.values())))[4:12, 4:12].reshape(-1, 3).mean(0)
+        self.assertGreater(rgb.mean(), 0.05, f"nothing baked: {rgb}")
+        self.assertLess((rgb.max() - rgb.min()) / rgb.mean(), 0.05, f"tinted: {rgb}")
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_its_own_bounce_keeps_its_real_material(self):
+        mesh = self._corner()
+        self._sky()
+        settings = {"GIDiffuseDepth": 2}
+
+        def bake(**kwargs):
+            baker = TextureBaker(
+                resolution=32, samples=4, file_format="exr", render_settings=settings
+            )
+            out = baker.bake([mesh], output_dir=self._tmp(), backend="arnold", **kwargs)
+            floor = self._read(next(iter(out.values())))[4:28, :16].mean(-1)
+            return floor[:, :3].mean(), floor[:, 12:15].mean()  # by the wall, away
+
+        card = self._card()
+        near_switch, far_switch = bake(camera_shader=card)
+        near_override, far_override = bake(shader=card)
+        # The wall is dark: bouncing as white, it lit the floor beside it.
+        self.assertLess(near_switch, 0.9 * near_override, (near_switch, near_override))
+        self.assertAlmostEqual(far_switch / far_override, 1.0, delta=0.1)
+
+    def test_a_camera_shader_and_an_override_are_one_too_many(self):
+        with self.assertRaises(ValueError):
+            TextureBaker().bake(["x"], shader="a", camera_shader="b")
+
+
+class TestTextureConversionNeverAbortsABake(MayaTkTestCase):
+    """Arnold's auto-TX converts every texture a render reads to ``.tx``
+    beside its source before the first sample, and a conversion that fails
+    aborts the render -- which RTT survives by writing all-zero maps. A
+    production soldering assembly baked BLACK, every object in it, because
+    one transferred normal map's ``.tx`` name (its source's plus ~30
+    characters) passed Windows' 260-character path limit (2026-10-03). A bake
+    reads its textures as they are; a render that aborts anyway writes no map.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("bake_autotx", policy="scoped")
+        ).dir_path()
+        # A conversion that fails leaves Arnold's fallback cache tree behind,
+        # <temp>/TX/<the source's directory, drive dropped>.
+        mirror = os.path.join(
+            tempfile.gettempdir(), "TX", os.path.splitdrive(self.tmp)[1].lstrip("\\/")
+        )
+        self.addCleanup(self._remove_tree_and_empty_parents, mirror)
+        self.out = os.path.join(self.tmp, "out")
+        os.makedirs(self.out)
+
+    @staticmethod
+    def _remove_tree_and_empty_parents(path):
+        shutil.rmtree(path, ignore_errors=True)
+        try:
+            os.removedirs(os.path.dirname(path))
+        except OSError:
+            pass  # a parent still holds something: it stays
+
+    def _plane_with_a_long_texture(self):
+        """A lit plane whose colour is a valid image at a 250-character path:
+        readable, but its ``.tx`` name is not."""
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+        import numpy as np
+
+        deep = self.tmp
+        while len(deep) < 200:
+            deep = os.path.join(deep, "d" * 30)
+        if len(deep) > 235:
+            self.skipTest(f"temp root too deep for the fixture: {len(self.tmp)}")
+        os.makedirs(deep)
+        tex = os.path.join(deep, "t" * (250 - len(deep) - 5) + ".png")
+        self.assertTrue(cv2.imwrite(tex, np.full((8, 8, 3), 128, np.uint8)))
+        plane = cmds.polyPlane(name="txPlane", width=2, height=2, sx=1, sy=1)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="txMat")
+        node = cmds.shadingNode("file", asTexture=True, name="txFile")
+        cmds.setAttr(node + ".fileTextureName", tex, type="string")
+        cmds.connectAttr(node + ".outColor", mat + ".color", force=True)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="txSG")
+        cmds.connectAttr(mat + ".outColor", sg + ".surfaceShader")
+        cmds.sets(plane, edit=True, forceElement=sg)
+        cmds.shadingNode("aiSkyDomeLight", asLight=True, name="txSky")
+        return plane
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_a_texture_whose_tx_name_is_too_long_still_bakes(self):
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+
+        plane = self._plane_with_a_long_texture()
+        result = TextureBaker(resolution=16, samples=2, file_format="exr").bake(
+            [plane], output_dir=self.out, backend="arnold"
+        )
+        self.assertEqual(len(result), 1, result)
+        img = cv2.imread(next(iter(result.values())), cv2.IMREAD_UNCHANGED)
+        self.assertGreater(float(img[..., :3].mean()), 0.05, "baked black")
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def test_a_render_arnold_aborts_writes_no_map(self):
+        plane = self._plane_with_a_long_texture()
+        # Asked for explicitly, the conversion still runs -- and aborts.
+        baker = TextureBaker(
+            resolution=16,
+            samples=2,
+            file_format="exr",
+            render_settings={"autotx": True},
+        )
+        with self.assertLogs(baker.logger, level="WARNING") as caught:
+            result = baker.bake([plane], output_dir=self.out, backend="arnold")
+        self.assertEqual(result, {}, "a black map is not a bake")
+        self.assertIn("rendered nothing", "\n".join(caught.output))
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+    def _red_map_with_green_tx(self, tx_age: float):
+        """A plane wearing a red map with a green ``.tx`` under every name
+        MtoA reads, stamped *tx_age* seconds from the map's time: (file node,
+        map path, plane)."""
+        import subprocess
+
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+        import numpy as np
+
+        mtoa = cmds.pluginInfo("mtoa", query=True, path=True)
+        maketx = os.path.join(
+            os.path.dirname(os.path.dirname(mtoa)), "bin", "maketx.exe"
+        )
+        if not os.path.isfile(maketx):
+            self.skipTest(f"no maketx beside mtoa: {maketx}")
+        red = os.path.join(self.tmp, "stale_BaseColor.png").replace("\\", "/")
+        green = os.path.join(self.tmp, "green.png").replace("\\", "/")
+        self.assertTrue(cv2.imwrite(red, np.full((16, 16, 3), (0, 0, 255), np.uint8)))
+        self.assertTrue(cv2.imwrite(green, np.full((16, 16, 3), (0, 255, 0), np.uint8)))
+        plane = cmds.polyPlane(name="staleTxPlane", width=2, height=2, sx=1, sy=1)[0]
+        mat = cmds.shadingNode("lambert", asShader=True, name="staleTxMat")
+        node = cmds.shadingNode("file", asTexture=True, name="staleTxFile")
+        cmds.setAttr(node + ".fileTextureName", red, type="string")
+        cmds.connectAttr(node + ".outColor", mat + ".color", force=True)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="staleTxSG"
+        )
+        cmds.connectAttr(mat + ".outColor", sg + ".surfaceShader")
+        cmds.sets(plane, edit=True, forceElement=sg)
+        cmds.shadingNode("aiSkyDomeLight", asLight=True, name="staleTxSky")
+        # The names MtoA looks for, the colour-managed one included.
+        space = cmds.getAttr(node + ".colorSpace").replace(" ", "_")
+        rendering = (
+            cmds.colorManagementPrefs(query=True, renderingSpaceName=True) or "ACEScg"
+        ).replace(" ", "_")
+        stem = red[: -len(".png")]
+        stamp = os.path.getmtime(red) + tx_age
+        for tx in (f"{stem}.tx", f"{red}.tx", f"{stem}_{space}_{rendering}.png.tx"):
+            subprocess.run([maketx, green, "-o", tx], check=True, capture_output=True)
+            os.utime(tx, (stamp, stamp))
+        return node, red, plane
+
+    def _baked_bgr(self, plane):
+        import cv2
+
+        result = TextureBaker(resolution=16, samples=2, file_format="exr").bake(
+            [plane], output_dir=self.out, backend="arnold"
+        )
+        self.assertEqual(len(result), 1, result)
+        return (
+            cv2.imread(next(iter(result.values())), cv2.IMREAD_UNCHANGED)[..., :3]
+            .reshape(-1, 3)
+            .mean(axis=0)
+        )
+
+    def test_a_stale_tx_beside_a_texture_is_never_read(self):
+        """With auto-TX off, Arnold READS a ``.tx`` it finds beside a texture,
+        however old -- nothing converts it any more, so nothing sees it is out
+        of date. A texture transfer re-run rewrote a production table's maps
+        under the same names, with the day before's ``.tx`` of them still
+        beside the new PNGs (2026-10-03). Measured: a red map with a green
+        ``.tx`` under MtoA's names baked green. A ``.tx`` older than its
+        texture is set aside for the bake, and the node is put back after."""
+        node, red, plane = self._red_map_with_green_tx(tx_age=-3600.0)
+        space = cmds.getAttr(node + ".colorSpace")
+        b, g, r = self._baked_bgr(plane)
+        self.assertGreater(r, 4 * g, f"baked the stale .tx: BGR mean {(b, g, r)}")
+        self.assertEqual(cmds.getAttr(node + ".fileTextureName"), red)
+        self.assertEqual(cmds.getAttr(node + ".colorSpace"), space)
+
+    def test_a_current_tx_is_read_as_a_render_reads_it(self):
+        """A ``.tx`` as new as its texture is what Arnold renders the scene
+        through (mipmapped), so the bake reads it too: read without one, a
+        production room baked 7-9% darker than the renders and the lightmaps
+        baked through its ``.tx`` files (2026-10-03). The green ``.tx`` beside a
+        red map is how the test sees which one was read."""
+        _node, _red, plane = self._red_map_with_green_tx(tx_age=3600.0)
+        b, g, r = self._baked_bgr(plane)
+        self.assertGreater(
+            g, 4 * r, f"did not read the current .tx: BGR mean {(b, g, r)}"
+        )
+
+
+@unittest.skipUnless(_arnold_loadable(), "mtoa/arnoldRenderToTexture unavailable")
+class TestRenderPanorama(MayaTkTestCase):
+    """render_panorama: the HDR of the scene from one point a reflection probe is.
+
+    Its layout is a contract with every reader (the GLB's probe, the WebXR
+    page's equirect lookup): u = 0.5 + atan2(z, x) / 2pi, top row +Y. Arnold's
+    spherical camera centres -Z instead, so a render taken as it comes would
+    reflect every room a quarter turn off -- which only a scene with a wall of
+    a known colour each way can see.
+    """
+
+    WALLS = {
+        "pxWall": ((60, 0, 0), (0, 0, 90), (1.0, 0.0, 0.0)),  # +X red
+        "nxWall": ((-60, 0, 0), (0, 0, -90), (0.0, 0.0, 1.0)),  # -X blue
+        "pzWall": ((0, 0, 60), (-90, 0, 0), (0.0, 1.0, 0.0)),  # +Z green
+        "nzWall": ((0, 0, -60), (90, 0, 0), (1.0, 1.0, 1.0)),  # -Z white
+    }
+
+    def _wall(self, name, position, rotation, rgb):
+        plane = cmds.polyPlane(name=name, width=400, height=400, sx=1, sy=1)[0]
+        cmds.xform(plane, translation=position, rotation=rotation)
+        util = cmds.shadingNode("aiUtility", asShader=True, name=name + "Util")
+        cmds.setAttr(util + ".shadeMode", 2)  # flat: the colour, unlit
+        cmds.setAttr(util + ".color", *rgb, type="double3")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=name + "SG")
+        cmds.connectAttr(util + ".outColor", sg + ".surfaceShader")
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return plane
+
+    def _render(self, **kwargs):
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        import cv2
+        import pythontk as ptk
+
+        folder = self.enterContext(
+            ptk.TempArtifacts("panorama_test", policy="scoped")
+        ).dir_path()
+        path = os.path.join(folder, "probe.exr")
+        out = TextureBaker(samples=1, device="CPU").render_panorama(
+            (0, 0, 0), path, width=64, **kwargs
+        )
+        self.assertEqual(out, path)
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        self.assertEqual(img.shape[:2], (32, 64), "2:1, the width asked for")
+        return img
+
+    @staticmethod
+    def _dominant(img, u):
+        """The strongest channel ('r', 'g', 'b' or 'white') at *u* on the horizon."""
+        b, g, r = (float(c) for c in img[16, int(u * img.shape[1]), :3])
+        if min(r, g, b) > 0.5 * max(r, g, b):
+            return "white"
+        return "rgb"[[r, g, b].index(max(r, g, b))]
+
+    def test_the_panorama_is_laid_out_as_its_readers_read_it(self):
+        for name, (position, rotation, rgb) in self.WALLS.items():
+            self._wall(name, position, rotation, rgb)
+        img = self._render()
+        self.assertEqual(self._dominant(img, 0.5), "r", "+X belongs at the centre")
+        self.assertEqual(self._dominant(img, 0.75), "g", "+Z a quarter right")
+        self.assertEqual(self._dominant(img, 0.25), "white", "-Z a quarter left")
+        self.assertEqual(self._dominant(img, 0.02), "b", "-X at the seam")
+        self.assertGreater(float(img[16, 32, 3]), 0.9, "alpha: the walls were hit")
+
+    def test_a_hidden_mesh_is_seen_through_and_the_scene_is_left_as_found(self):
+        """*hide* is what moves -- a probe that carried it would show it where
+        it no longer is -- and the render pins nothing it does not restore:
+        the light's camera visibility, the render globals, its own camera."""
+        for name, (position, rotation, rgb) in self.WALLS.items():
+            self._wall(name, position, rotation, rgb)
+        blocker = self._wall("blocker", (30, 0, 0), (0, 0, 90), (0.0, 0.0, 0.0))
+        light = cmds.shadingNode("areaLight", asLight=True)
+        light_shape = cmds.listRelatives(light, shapes=True, fullPath=True)[0]
+        cmds.setAttr(light_shape + ".aiCamera", 0.0)
+        prefix = cmds.getAttr("defaultRenderGlobals.imageFilePrefix")
+        cameras = set(cmds.ls(type="camera"))
+
+        seen = self._render()
+        self.assertLess(float(seen[16, 32, 2]), 0.05, "the blocker hides the red wall")
+        through = self._render(hide=[blocker])
+        self.assertEqual(self._dominant(through, 0.5), "r", "hidden, it is seen through")
+
+        self.assertEqual(cmds.getAttr(light_shape + ".aiCamera"), 0.0)
+        # A fresh scene's prefix was never set and reads None; restored, it is
+        # set empty and reads "" -- both name no prefix.
+        self.assertEqual(
+            cmds.getAttr("defaultRenderGlobals.imageFilePrefix") or "", prefix or ""
+        )
+        self.assertEqual(set(cmds.ls(type="camera")), cameras, "its camera stayed behind")
+        self.assertEqual(
+            cmds.getAttr(cmds.listRelatives(blocker, shapes=True, fullPath=True)[0] + ".primaryVisibility"),
+            True,
+        )
 
 
 if __name__ == "__main__":

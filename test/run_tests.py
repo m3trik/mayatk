@@ -142,7 +142,7 @@ GUI_REQUIRED = {
         "segfault without a real Maya event loop"
     ),
     "test_render_opacity": (
-        "the pulse option box embeds a live uitk ColorRampEditor, so building "
+        "the pulse page embeds a live uitk ColorRampEditor, so building "
         "it constructs real QWidgets (2026-09-11); crashes mayapy in batch"
     ),
     "test_hotkey_collisions": (

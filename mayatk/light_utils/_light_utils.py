@@ -12,6 +12,7 @@ except ImportError:
 import pythontk as ptk
 
 # From this package:
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -285,9 +286,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
             list: Environment light shape full paths, empty when mtoa is
             unloaded (no Arnold light node can exist then).
         """
-        from mayatk.env_utils._env_utils import EnvUtils
-
-        if not EnvUtils.is_plugin_loaded("mtoa"):
+        if not Plugins.is_loaded("mtoa"):
             return []
         return list(
             dict.fromkeys(cmds.ls(type=cls.ENVIRONMENT_LIGHT_TYPES, long=True) or [])
@@ -310,9 +309,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         # Skipped when mtoa is unloaded: no Arnold light node can exist then,
         # and the query warns "Unknown object type" once per unregistered type
         # (measured), so the gate is for noise rather than correctness.
-        from mayatk.env_utils._env_utils import EnvUtils
-
-        if EnvUtils.is_plugin_loaded("mtoa"):
+        if Plugins.is_loaded("mtoa"):
             shapes.extend(cmds.ls(type=cls.ARNOLD_LIGHT_TYPES, long=True) or [])
         return list(dict.fromkeys(shapes))
 
@@ -675,7 +672,7 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
         if not lights:
             return []
         try:
-            cmds.loadPlugin("mtoa", quiet=True)
+            Plugins.load("mtoa")
         except RuntimeError:
             pass
         upgraded: List[str] = []

@@ -13,7 +13,7 @@ blends) against the alternatives and ends with the plan of record and the
 contracts the three sides are built against.
 
 Owners: pythontk (the bake), mayatk / blendertk (`rig_utils/shadow_rig/`,
-the engine and panel), unitytk (`templates/ShadowPlaneController.cs`), pythontk's WebXR
+the engine and panel), unitytk (`templates/ShadowPlane/ShadowPlaneController.cs`), pythontk's WebXR
 viewer (`net_utils/preview/viewer.html`). The projected rig's physics lives in
 `pythontk.ShadowProjection`; everything below reuses it.
 

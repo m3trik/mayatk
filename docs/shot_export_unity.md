@@ -25,6 +25,25 @@ did not author the scene cannot otherwise know — and `clip_mode`, the Animatio
 Clips mode the export declared (`full` realizes no take: the FBX ships one
 whole-timeline clip, and the clip ranges describe windows inside it).
 
+**Every take is an exact slice of the animation.** Maya's take split restricts
+each curve to a take's window before writing it, so a plainly keyed curve with
+no key inside a shot used to give that shot no channel (the node played its
+rest pose for the whole shot in Unity) and a take's keys stopped at its last
+in-window key. `FbxUtils.apply_takes` therefore arms Resample All
+(`FbxUtils.RESAMPLE_ALL`) for the write. Every animated curve is keyed on every
+frame of the bake range first, and each take then carries every channel across
+its whole window (measured in Unity 6000.3, before and after:
+`unitytk/test/test_shot_metadata_integration.py`). A GLB-only export does not
+resample: its intermediate FBX's takes are discarded.
+`ptk.ExportVerifier.check_fbx_take_channels` (the Scene Exporter's *Verify The
+Written File*) fails a file whose takes are not exact slices.
+
+**The Animation Clips mode reaches the FBX.** *Shots + Full Sequence* ships the
+shot takes and Maya's whole-timeline `Take 001`. *Shots Only* drops `Take 001`
+from the written FBX (after any GLB conversion, which cuts its clips from it).
+*Full Sequence Only* splits nothing and ships `Take 001` alone, with the shots
+as windows inside it.
+
 **The shot name IS the clip name, verbatim.** `ShotStore.NAME_PATTERN`
 (`[A-Za-z0-9_]+`, unique among the scene's shots ignoring case — Unity joins
 clips case-insensitively) is the set every carrier keeps unchanged, so the
@@ -117,13 +136,22 @@ reader:
 
 ## Unity side
 
-A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/`
+A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/ShotMetadata/`
 (runtime component + an `AssetPostprocessor` that parses `shot_metadata`, attaches
 the controller to the prefab root, and joins records to clips by name). Deploy it
 as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
 `ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`
 writes the whole set as the embedded `com.m3trik.unitytk` UPM package).
-Verified end-to-end by `unitytk/test/test_shot_metadata_integration.py`.
+Verified end-to-end by `unitytk/test/test_shot_metadata_integration.py`:
+every frame of every shot clip against Maya, in each Animation Clips mode.
+
+Each `ShotRecord` carries its `start`/`end` frames, and the controller carries
+the record's `fps` and `clipMode`, plus `sequenceClip` / `sequenceFirstFrame`:
+the clip cut over the whole-timeline take (the one take no shot names), when
+the file has one. `TryGetSequenceWindow(clip, out start, out end)` gives a
+shot's window in seconds inside that clip, which is how a Full Sequence file is
+played shot by shot. The importer warns when a record names a clip the file
+does not carry, as when an FBX is written without its shot takes.
 
 The minimal read, for reference — clips import natively; Maya exports the
 `shot_metadata` attr as an FBX *user property* on the `data_export` GameObject:
@@ -162,6 +190,12 @@ class ShotMetadataPostprocessor : AssetPostprocessor
 > strip it after reading if you don't want it in the scene.
 
 ## Limitations
+
+- **Write binary FBX.** Unity's ASCII FBX reader drops the whole scene, or
+  truncates the string, once a `data_export` channel passes about 6 KB
+  (measured in batch Unity 6000.3; binary carried 300 KB intact), and the
+  handoff record alone is past that. The Scene Exporter writes binary whenever
+  the carrier ships, even over an ASCII preset.
 
 - **Metadata is selection-dependent.** The carrier is a hidden node, so it
   exports automatically only with *export-all*. The Scene Exporter handles every

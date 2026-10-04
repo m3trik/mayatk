@@ -35,7 +35,7 @@ except ImportError:
     cmds = None  # type: ignore[assignment]
     mel = None  # type: ignore[assignment]
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from qtpy.QtCore import QSettings
@@ -365,25 +365,21 @@ class _ShotStoreInternal(object):
         return cmds.ls(names, long=True) or []
 
     @staticmethod
-    def _resolve_long_names_keep_missing(names):
-        """Long-name-resolve *names*, keeping the caller's form for entries
-        that don't (yet) exist in the scene.
-
-        Unlike :func:`_resolve_long_names`, nothing is dropped: missing
-        objects stay tracked under their original name so the pinned-object
-        system can surface them as "missing" instead of silently losing
-        them.  Ambiguous short names (multiple scene matches) also keep the
-        caller's form.
-        """
+    def _resolve_member_name(name) -> Tuple[str, str]:
+        """``(node, reason)`` for a doc object name -- see
+        :meth:`ShotStore.resolve_member`."""
         try:
             import maya.cmds as cmds
         except ImportError:
-            return list(names) if names else []
-        resolved = []
-        for n in names:
-            hits = cmds.ls(n, long=True) or []
-            resolved.append(hits[0] if len(hits) == 1 else n)
-        return resolved
+            return str(name), "found"
+        name = str(name)
+        hits = cmds.ls(name, long=True, type="transform") or []
+        if not hits and ":" not in name.split("|")[-1]:
+            # A referenced asset lives in a namespace the doc does not write.
+            hits = cmds.ls(name, long=True, type="transform", recursive=True) or []
+        if len(hits) == 1:
+            return hits[0], "found"
+        return name, ("ambiguous" if hits else "missing")
 
 
 class ShotStore(ptk.ShotStore, _ShotStoreInternal):
@@ -609,6 +605,17 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         if not wired:
             return [False] * len(windows)
         return [span is not None for span in AnimUtils.curve_key_spans(wired, windows)]
+
+    def resolve_member(self, name: str) -> Tuple[str, str]:
+        """Resolve a doc object *name* to one scene transform.
+
+        Exact first; a name the scene holds only inside a namespace (a
+        referenced asset, ``AC:door_geo`` for ``door_geo``) is found next.
+        Returns ``(long_name, "found")``, or ``(name, "missing")`` /
+        ``(name, "ambiguous")`` -- several transforms answering to it is a
+        finding, never a silent pick.
+        """
+        return _ShotStoreInternal._resolve_member_name(name)
 
     def _resolve_long_names(self, names):
         """Resolve object names to long DAG paths (drops missing objects)."""

@@ -224,25 +224,22 @@ class TestEnvUtils(MayaTkTestCase):
     # Plugin Management Tests
     # -------------------------------------------------------------------------
 
-    def test_load_plugin(self):
-        """Test loading a standard Maya plugin."""
-        # 'objExport' is a standard plugin usually available
+    def test_load_plugin_is_a_deprecated_alias_of_the_plugin_door(self):
+        """Moved to ``Plugins.load`` / ``Plugins.is_loaded`` (the one door,
+        ``test_plugins``): the aliases warn and still load and answer."""
         plugin_name = "objExport"
-
-        # Ensure it's unloaded first (if possible/safe)
         if cmds.pluginInfo(plugin_name, q=True, loaded=True):
             cmds.unloadPlugin(plugin_name)
 
-        EnvUtils.load_plugin(plugin_name)
+        with self.assertWarns(DeprecationWarning):
+            EnvUtils.load_plugin(plugin_name)
         self.assertTrue(cmds.pluginInfo(plugin_name, q=True, loaded=True))
-
-        # Test loading already loaded plugin (should not error)
-        EnvUtils.load_plugin(plugin_name)
-        self.assertTrue(cmds.pluginInfo(plugin_name, q=True, loaded=True))
+        with self.assertWarns(DeprecationWarning):
+            self.assertTrue(EnvUtils.is_plugin_loaded(plugin_name))
 
     def test_load_plugin_invalid(self):
-        """Test loading a non-existent plugin."""
-        with self.assertRaises(ValueError):
+        """The alias keeps its ValueError for a plugin Maya cannot find."""
+        with self.assertWarns(DeprecationWarning), self.assertRaises(ValueError):
             EnvUtils.load_plugin("non_existent_plugin_xyz")
 
     # -------------------------------------------------------------------------

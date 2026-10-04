@@ -54,6 +54,10 @@ class _TaskDataMixin:
     _required_range_coverage: Optional[Tuple[float, float]] = None
     #: The delivery-only-container note's once-per-run throttle.
     _delivery_only_clamp_said: bool = False
+    #: The workspace ``set_workspace`` switched AWAY from -- the one the run
+    #: hands back after the write. None when no switch was staged. A path edit
+    #: kept past the run must resolve in this one, not the switched one.
+    _home_workspace: Optional[str] = None
     #: ``smart_bake``'s session manifest and (a bake recorded without one)
     #: its override layer, undone by the restore the task stages.
     _bake_session_id: Optional[str] = None
@@ -98,6 +102,7 @@ class _TaskDataMixin:
         self._hierarchy_last_diff = None
         self._required_range_coverage = None
         self._delivery_only_clamp_said = False
+        self._home_workspace = None
         self._bake_session_id = None
         self._bake_override_layer = None
         self._texture_network_snapshot = None

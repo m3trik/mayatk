@@ -355,12 +355,18 @@ class CleanupContract:
                         and isinstance(value[0], (list, tuple))
                     ):
                         cmds.setAttr(f"{node}.{attr}", *value[0], type="double3")
-                    elif isinstance(value, str):
+                    elif isinstance(value, str) or (
+                        value is None
+                        and cmds.getAttr(f"{node}.{attr}", type=True) == "string"
+                    ):
                         # Bare setAttr raises on string attrs (they need the
                         # type flag) — without this branch a snapshotted
                         # string channel (e.g. a data_export producer attr)
                         # silently failed to restore into the except below.
-                        cmds.setAttr(f"{node}.{attr}", value, type="string")
+                        # An empty one snapshots as the None getAttr reads and
+                        # writes back empty (Attributes.set_plug's rule; this
+                        # layer cannot import it).
+                        cmds.setAttr(f"{node}.{attr}", value or "", type="string")
                     else:
                         cmds.setAttr(f"{node}.{attr}", value)
                 except Exception:

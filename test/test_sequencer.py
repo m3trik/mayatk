@@ -260,21 +260,21 @@ class TestResolveKeys(unittest.TestCase):
 
 
 class TestLoadBehavior(unittest.TestCase):
-    """Test YAML behavior loading."""
+    """Behavior template loading: a shipped fade names its effect and where it
+    goes (the scene's recipe keys it), and reads as one visibility phase to
+    every reader that sizes or verifies it (``Behaviors.keyed``)."""
 
     def test_load_fade_in(self):
         t = Behaviors.load_behavior("fade_in")
-        self.assertIn("attributes", t)
-        self.assertIn("visibility", t["attributes"])
-        vis = t["attributes"]["visibility"]
+        self.assertEqual((t["effect"], t["place"]), ("fade_in", "start"))
+        vis = Behaviors.keyed(t)["attributes"]["visibility"]
         self.assertIn("in", vis)
         self.assertEqual(vis["in"]["values"], [0.0, 1.0])
 
     def test_load_fade_out(self):
         t = Behaviors.load_behavior("fade_out")
-        self.assertIn("attributes", t)
-        self.assertIn("visibility", t["attributes"])
-        vis = t["attributes"]["visibility"]
+        self.assertEqual((t["effect"], t["place"]), ("fade_out", "end"))
+        vis = Behaviors.keyed(t)["attributes"]["visibility"]
         self.assertIn("out", vis)
         self.assertEqual(vis["out"]["values"], [1.0, 0.0])
 
@@ -1647,7 +1647,8 @@ class TestShotManifestAssess(unittest.TestCase):
     # -- step with no objects ----------------------------------------------
 
     def test_step_with_no_objects(self):
-        """A built step with no objects should be 'valid'."""
+        """A built step with no objects reads 'no_objects' -- informational,
+        never a silent 'valid' (the doc lists nothing to check)."""
         steps = [BuilderStep("X01", "X", "SEC X", "No objects.", [])]
         builder = self._build_seq(steps, built_ids={"X01"})
         results = builder.assess(
@@ -1655,7 +1656,7 @@ class TestShotManifestAssess(unittest.TestCase):
             exists_fn=lambda _n: True,
             verify_fn=lambda *_: True,
         )
-        self.assertEqual(results[0].status, "valid")
+        self.assertEqual(results[0].status, "no_objects")
         self.assertEqual(results[0].missing_count, 0)
 
     # -- missing behavior --------------------------------------------------
@@ -1726,29 +1727,26 @@ class TestShotManifestAssess(unittest.TestCase):
 
 
 class TestBehaviorYAMLAnchors(unittest.TestCase):
-    """Verify YAML templates include explicit anchor fields."""
+    """The shipped fades key with explicit anchors (``Behaviors.keyed``: the
+    templates name their effect and placement; the recipe states the phase)."""
 
     def test_fade_in_has_anchor(self):
-        t = Behaviors.load_behavior("fade_in")
-        vis = t["attributes"]["visibility"]
+        vis = Behaviors.keyed("fade_in")["attributes"]["visibility"]
         self.assertEqual(vis["in"]["anchor"], "start")
 
     def test_fade_out_has_anchor(self):
-        t = Behaviors.load_behavior("fade_out")
-        vis = t["attributes"]["visibility"]
+        vis = Behaviors.keyed("fade_out")["attributes"]["visibility"]
         self.assertEqual(vis["out"]["anchor"], "end")
 
     def test_fade_in_template_exists(self):
-        """fade_in.yaml should load and contain only the 'in' phase."""
-        t = Behaviors.load_behavior("fade_in")
-        vis = t["attributes"]["visibility"]
+        """fade_in keys only the 'in' phase."""
+        vis = Behaviors.keyed("fade_in")["attributes"]["visibility"]
         self.assertIn("in", vis)
         self.assertNotIn("out", vis)
 
     def test_fade_out_template_exists(self):
-        """fade_out.yaml should load and contain only the 'out' phase."""
-        t = Behaviors.load_behavior("fade_out")
-        vis = t["attributes"]["visibility"]
+        """fade_out keys only the 'out' phase."""
+        vis = Behaviors.keyed("fade_out")["attributes"]["visibility"]
         self.assertNotIn("in", vis)
         self.assertIn("out", vis)
 

@@ -192,7 +192,63 @@ class TestConnectChannel(MayaTkTestCase):
         )
         self.assertEqual(
             [p.split(".")[-1] for p in self._sources("specularRoughness")],
-            ["outAlpha"],
+            ["outColorR"],
+        )
+
+    def _packed_map(self, grey, alpha):
+        """Point the file node at a real RGBA PNG: *grey* in R/G/B, *alpha* in A."""
+        import numpy as np
+        import pythontk as ptk
+        from PIL import Image
+
+        store = ptk.TempArtifacts("cc_packed_map", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = store.path(extension=".png").replace("\\", "/")
+        Image.fromarray(np.full((4, 4, 4), (grey, grey, grey, alpha), np.uint8)).save(
+            path
+        )
+        cmds.setAttr(f"{self.file_node}.fileTextureName", path, type="string")
+
+    def test_pbr_scalar_channels_read_the_colour_not_a_packed_alpha(self):
+        """A packed map keeps its scalar in RGB and something ELSE in alpha:
+        Unity's MetallicSmoothness carries smoothness there. Read off
+        ``outAlpha``, a non-metal wearing that map came out ~78% metal -- a
+        production transfer rendered at a third of its source's brightness,
+        legs black. RGB is where a grey map carries its value too."""
+        self._packed_map(grey=0, alpha=200)
+        for logical, attr in (
+            ("metallic", "metalness"),
+            ("roughness", "specularRoughness"),
+        ):
+            with self.subTest(logical):
+                self.assertTrue(
+                    ShaderAttributeMap.connect_channel(
+                        self.file_node, logical, self.shader
+                    )
+                )
+                self.assertAlmostEqual(
+                    self.sample_input(f"{self.shader}.{attr}"), 0.0, places=3
+                )
+
+    def test_openpbr_normal_lands_on_the_slot_this_maya_has(self):
+        """The OpenPBR spec names the input ``geometryNormal``; Maya 2025's
+        openPBRSurface exposes the classic ``normalCamera`` instead, so the
+        declared slot alone missed and every replayed normal map was dropped
+        (GameShader already probes both)."""
+        try:
+            shader = cmds.shadingNode("openPBRSurface", asShader=True)
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        self.assertTrue(
+            ShaderAttributeMap.connect_channel(self.file_node, "normal", shader)
+        )
+        slot = next(
+            a
+            for a in ("geometryNormal", "normalCamera")
+            if cmds.attributeQuery(a, node=shader, exists=True)
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{shader}.{slot}", source=True, destination=False)
         )
 
     def test_compound_source_into_a_compound_attr_stays_direct(self):

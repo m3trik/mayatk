@@ -16,8 +16,10 @@ Covers:
 All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
 
+import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -328,6 +330,8 @@ class _ControllerHarness:
         slots_instance.ui.footer._status_label = MagicMock()
         slots_instance.ui.btn_build = MagicMock()
         slots_instance.sb.get_setting.return_value = None
+        # An empty source field: the scene's own shots are the source.
+        slots_instance.ui.txt_csv_path.text.return_value = ""
 
         # Create the controller
         self.ctrl = ShotManifestController(slots_instance)
@@ -2315,7 +2319,7 @@ class TestLastResultsPreservation(unittest.TestCase, _ControllerHarness):
         from types import SimpleNamespace
         from mayatk.anim_utils.shots._shots import ShotUpdated, ShotBlock
 
-        sentinel = [SimpleNamespace(built=True)]
+        sentinel = [SimpleNamespace(built=True, needs_build=False)]
         self.ctrl._last_results = sentinel
         self.ctrl._steps = [object()]  # non-empty to pass guard
         self.ctrl._on_store_event(ShotUpdated(shot=ShotBlock(0, "A", 0, 10)))
@@ -2326,7 +2330,7 @@ class TestLastResultsPreservation(unittest.TestCase, _ControllerHarness):
         from types import SimpleNamespace
         from mayatk.anim_utils.shots._shots import ActiveShotChanged
 
-        sentinel = [SimpleNamespace(built=True)]
+        sentinel = [SimpleNamespace(built=True, needs_build=False)]
         self.ctrl._last_results = sentinel
         self.ctrl._steps = [object()]
         self.ctrl._on_store_event(ActiveShotChanged(shot_id=0))
@@ -3051,8 +3055,6 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         self.store = _fresh_store()
         self.ctrl._store = self.store
         self.ctrl._first_shown = True
-        # Default to detection mode (CSV unchecked)
-        self.ctrl.ui.chk_csv.isChecked.return_value = False
 
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
@@ -3077,11 +3079,11 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
-    def test_scene_change_reloads_csv_when_csv_checked(self, mock_active, mock_detect):
-        """Opening a new scene with CSV checked must reload the CSV."""
+    def test_scene_change_reloads_the_scenes_manifest(self, mock_active, mock_detect):
+        """Opening a scene built from a CSV must reload that CSV."""
         new_store = _fresh_store()
+        new_store.source_csv = "/some/manifest.csv"
         mock_active.return_value = new_store
-        self.ctrl.ui.chk_csv.isChecked.return_value = True
         self.ctrl.ui.txt_csv_path.text.return_value = "/some/manifest.csv"
 
         with patch.object(self.ctrl, "_load_csv") as mock_load:
@@ -3141,6 +3143,335 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         # Without Maya, _remove_scene_jobs won't call cmds.scriptJob
         # but the IDs should be None-able for GC safety.
         self.assertFalse(self.ctrl._store_listener_bound)
+
+
+# ---------------------------------------------------------------------------
+# Tests: the scene's own shots as the source (no build sheet)
+# ---------------------------------------------------------------------------
+
+
+class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
+    """An empty source field shows the store's shots -- descriptions and all --
+    instead of re-detecting animation that throws them away.
+
+    Bug: with no CSV the manifest re-detected animation regions and built
+    blank steps from them, so a scene whose shots carry descriptions showed an
+    empty Description column.
+    Fixed: 2026-10-01
+    """
+
+    _DETECT = (
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        ".Detection.detect_shot_regions"
+    )
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.define_shot(
+            "intro", 1, 40, objects=["|rig|arm"], description="Arm reaches out"
+        )
+        self.store.define_shot(
+            "lever", 50, 90, objects=["|rig|hand"], description="Hand pulls lever"
+        )
+        self._active = patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active",
+            return_value=self.store,
+        )
+        self._active.start()
+        self.addCleanup(self._active.stop)
+        self.ctrl._steps = []
+
+    def test_empty_field_shows_the_scenes_shots_with_descriptions(self):
+        with patch(self._DETECT) as detect:
+            self.ctrl._on_first_show()
+        detect.assert_not_called()
+        self.assertEqual(self.ctrl._source, "scene")
+        self.assertEqual(
+            [(s.step_id, s.description) for s in self.ctrl._steps],
+            [("intro", "Arm reaches out"), ("lever", "Hand pulls lever")],
+        )
+        top = self.tree.topLevelItem(0)
+        self.assertEqual(top.text(COL_DESC), "Arm reaches out")
+        self.assertEqual(self.ctrl._user_ranges["lever"], (50, 90))
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_a_scene_source_build_never_removes_or_records_a_sheet(self, mock_cls):
+        """Built from the scene's shots (here: the sheet in the field failed),
+        a build neither removes shots nor stamps the unused sheet as the
+        scene's source -- or the scene would re-open on a sheet never used."""
+        self.ctrl.ui.txt_csv_path.text.return_value = "X:/no/such/sheet.csv"
+        with patch(self._DETECT):
+            self.ctrl._populate_from_source()
+        self.assertEqual(self.ctrl._source, "scene")
+        builder = MagicMock()
+        builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+        mock_cls.return_value = builder
+        _mock_undo_info(self)
+
+        self.ctrl.build()
+
+        builder.sync.assert_called_once()
+        self.assertFalse(builder.sync.call_args.kwargs["remove_missing"])
+        self.assertEqual(self.store.source_csv, "")
+
+    def test_a_store_without_shots_falls_back_to_detection(self):
+        empty = _fresh_store()
+        with (
+            patch(
+                "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=empty
+            ),
+            patch(self._DETECT, return_value=[]) as detect,
+        ):
+            self.ctrl._on_first_show()
+        detect.assert_called_once()
+
+    def test_a_failed_manifest_still_shows_the_scenes_shots(self):
+        self.ctrl.ui.txt_csv_path.text.return_value = "X:/no/such/sheet.csv"
+        with patch(self._DETECT) as detect:
+            self.ctrl._populate_from_source()
+        detect.assert_not_called()
+        self.assertEqual([s.step_id for s in self.ctrl._steps], ["intro", "lever"])
+        self.ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
+        self.assertIn(
+            "Manifest not loaded", self.ctrl.ui.footer.setText.call_args.args[0]
+        )
+
+    def test_a_failed_manifest_on_an_empty_scene_clears_the_table(self):
+        self.ctrl._steps = _make_steps("OLD1")
+        self.ctrl.ui.txt_csv_path.text.return_value = "X:/no/such/sheet.csv"
+        with (
+            patch(
+                "mayatk.anim_utils.shots._shots.ShotStore.active",
+                return_value=_fresh_store(),
+            ),
+            patch(self._DETECT) as detect,
+        ):
+            self.ctrl._populate_from_source()
+        detect.assert_not_called()
+        self.assertEqual(self.ctrl._steps, [])
+
+    def test_clearing_the_field_returns_to_the_scenes_shots(self):
+        self.ctrl._csv_path = "X:/sheet.csv"
+        self.ctrl._source = "csv"
+        self.ctrl.ui.txt_csv_path.text.return_value = ""
+        self.ctrl._on_csv_path_edited()
+        self.assertEqual(self.ctrl._source, "scene")
+        self.assertEqual(self.ctrl._csv_path, "")
+
+    def test_a_store_edit_refreshes_the_scene_source(self):
+        from mayatk.anim_utils.shots._shots import ShotUpdated
+
+        self.ctrl._first_shown = True
+        self.ctrl._load_scene_shots()
+        shot = self.store.sorted_shots()[0]
+        shot.description = "Arm reaches for the lever"
+        self.ctrl._on_store_event(ShotUpdated(shot=shot))
+        self.assertEqual(self.ctrl._steps[0].description, "Arm reaches for the lever")
+
+    def test_detection_settings_leave_the_scene_source_alone(self):
+        from mayatk.anim_utils.shots._shots import SettingsChanged
+
+        self.ctrl._first_shown = True
+        self.ctrl._load_scene_shots()
+        with patch(self._DETECT) as detect:
+            self.ctrl._on_store_event(SettingsChanged())
+        detect.assert_not_called()
+        self.assertEqual(self.ctrl._source, "scene")
+
+    def test_the_field_opens_on_the_scenes_recorded_manifest(self):
+        self.store.source_csv = "X:/sheets/build_sheet.csv"
+        with patch.object(self.ctrl, "_load_csv", return_value=True) as load:
+            self.ctrl.ui.txt_csv_path.text.return_value = "X:/sheets/build_sheet.csv"
+            self.ctrl._on_first_show()
+        self.ctrl.ui.txt_csv_path.setText.assert_called_with(
+            "X:/sheets/build_sheet.csv"
+        )
+        load.assert_called_once_with("X:/sheets/build_sheet.csv")
+
+
+# ---------------------------------------------------------------------------
+# Tests: Auto-fill Missing Assets + Copy Asset Names
+# ---------------------------------------------------------------------------
+
+
+class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
+    """A sheet's asset-less steps take the scene's objects, and Copy Asset
+    Names puts the sheet's asset column back on the clipboard with them in."""
+
+    CSV = (
+        "Step,Step Contents,Asset Names\n"
+        "A01.),Door opens,\n"
+        ",Handle turns,\n"
+        "A02.),Lid lifts,lid_geo\n"
+    )
+    _DETECT = (
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        ".Detection.detect_shot_regions"
+    )
+
+    def setUp(self):
+        import pythontk as ptk
+
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.define_shot("A01", 1, 40, objects=["|grp|door_geo", "|grp|handle"])
+        for p in (
+            patch(
+                "mayatk.anim_utils.shots._shots.ShotStore.active",
+                return_value=self.store,
+            ),
+            patch(self._DETECT, return_value=[]),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        tmp = ptk.TempArtifacts("mtk_manifest_autofill", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.csv = os.path.join(tmp.dir_path(), "sheet.csv")
+        with open(self.csv, "w", encoding="utf-8", newline="") as fh:
+            fh.write(self.CSV)
+        self.ctrl._steps = []
+
+    def _load(self, enabled):
+        # The template's option, applied: what its Auto-fill row sets.
+        self.ctrl._active_mapping = {"fill_missing_assets": enabled}
+        self.assertTrue(self.ctrl._load_csv(self.csv))
+        return {s.step_id: s for s in self.ctrl._steps}
+
+    def test_an_asset_less_step_takes_its_shots_members(self):
+        steps = self._load(True)
+        self.assertEqual(
+            [(o.name, o.origin) for o in steps["A01"].objects],
+            [("door_geo", "shot"), ("handle", "shot")],
+        )
+        self.assertEqual(
+            [(o.name, o.origin) for o in steps["A02"].objects],
+            [("lid_geo", "column")],
+        )
+        child = self.tree.topLevelItem(0).child(0)
+        self.assertIn("Auto-filled from the scene", child.toolTip(COL_DESC))
+
+    def test_off_by_default_the_sheet_is_read_as_written(self):
+        steps = self._load(False)
+        self.assertEqual(steps["A01"].objects, [])
+
+    def test_copy_puts_the_aligned_asset_column_on_the_clipboard(self):
+        self._load(True)
+        self.ctrl._copy_asset_names()
+        mime = QtWidgets.QApplication.clipboard().mimeData()
+        self.assertEqual(mime.text(), 'Asset Names\n"door_geo\nhandle"\n\nlid_geo')
+        self.assertIn("<td>door_geo<br>handle</td>", mime.html())
+
+    def test_copy_without_fills_says_so(self):
+        self._load(False)
+        self.ctrl._copy_asset_names()
+        self.assertIn("Nothing to copy", self.ctrl.ui.footer.setText.call_args.args[0])
+
+
+# ---------------------------------------------------------------------------
+# Tests: the panel over the reconciliation (pairing, no bulk removal, undo,
+# placement, retired templates)
+# ---------------------------------------------------------------------------
+
+
+class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
+    """The panel reads pairing from the engine, never removes a shot in bulk,
+    builds as one undoable edit, and asks before guessing placement."""
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        p = patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=self.store
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        self.ctrl._store = self.store
+        self.ctrl._active_mapping = None
+        self.ctrl._source = "csv"
+        self.ctrl._csv_path = "X:/sheet.csv"
+
+    def test_order_matching_pairs_a_differently_named_shot(self):
+        self.store.define_shot("Step_2_1", 1, 40)
+        self.ctrl._steps = _make_steps("IN_01")
+        self.assertFalse(self.ctrl._step_is_built("IN_01"))
+        self.ctrl._active_mapping = {"match": "name_then_order"}
+        self.assertTrue(self.ctrl._step_is_built("IN_01"))
+
+    def test_a_shot_no_step_pairs_with_is_a_row_and_build_keeps_it(self):
+        self.store.define_shot("A01", 1, 40)
+        self.store.define_shot("OLD", 50, 90)
+        self.ctrl._steps = _make_steps("A01")
+        self.ctrl._populate_table()
+        names = [
+            self.tree.topLevelItem(i).text(0)
+            for i in range(self.tree.topLevelItemCount())
+        ]
+        self.assertEqual(names, ["A01", "OLD"])
+        self.assertEqual([s.name for s in self.ctrl._orphan_shots()], ["OLD"])
+
+    def test_removing_an_orphan_is_explicit_and_recorded_for_undo(self):
+        orphan = self.store.define_shot("OLD", 50, 90)
+        self.ctrl._steps = _make_steps("A01")
+        before = len(self.store._boundary_undo)
+        self.ctrl._remove_orphan(orphan)
+        self.assertIsNone(self.store.shot_by_name("OLD"))
+        self.assertEqual(len(self.store._boundary_undo), before + 1)
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_build_never_removes_and_is_one_undoable_edit(self, mock_cls):
+        self.store.define_shot("OLD", 50, 90)
+        self.ctrl._steps = _make_steps("A01")
+        self.ctrl._user_ranges = {"A01": (1.0, 40.0)}
+        builder = MagicMock()
+        builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+        mock_cls.return_value = builder
+        _mock_undo_info(self)
+        before = len(self.store._boundary_undo)
+        self.ctrl.build()
+        self.assertFalse(builder.sync.call_args.kwargs["remove_missing"])
+        self.assertEqual(len(self.store._boundary_undo), before + 1)
+
+    def test_placement_asks_only_when_steps_and_regions_disagree(self):
+        self.ctrl._steps = _make_steps("A01", "A02", "A03")
+        self.ctrl._user_ranges = {}
+        self.ctrl._cached_gaps = [1.0, 50.0, 100.0]
+        self.assertTrue(self.ctrl._placement_on_regions())
+        self.ctrl.sb.message_box.assert_not_called()
+
+        self.ctrl._cached_gaps = [1.0, 50.0]
+        for answer, expected in (("Yes", True), ("No", False), ("Cancel", None)):
+            self.ctrl.sb.message_box.return_value = answer
+            self.assertIs(self.ctrl._placement_on_regions(), expected)
+
+    def test_placing_sequentially_ignores_the_regions(self):
+        self.ctrl._steps = _make_steps("A01", "A02")
+        self.ctrl._user_ranges = {}
+        self.ctrl._cached_gaps = [500.0]
+        self.ctrl._cached_gap_ends = {}
+        on_regions = self.ctrl._resolve_ranges()
+        sequential = self.ctrl._resolve_ranges(regions=False)
+        self.assertEqual(on_regions[0][1], 500.0)
+        self.assertNotEqual(sequential[0][1], 500.0)
+
+    def test_a_saved_retired_template_migrates_to_its_replacement(self):
+        import json
+
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        key = "mapping_options/default"
+        saved = self.ctrl._settings.value(key, "")
+        self.addCleanup(self.ctrl._settings.setValue, key, saved)
+        self.ctrl._settings.setValue(key, "")
+        retired = Mapping.retired("speedrun")
+        templates = types.SimpleNamespace(active="speedrun")
+        with patch.object(Mapping, "templates", return_value=templates):
+            target = self.ctrl._migrate_retired_mapping("speedrun", *retired)
+        self.assertEqual(templates.active, "default")  # the saved pointer moves
+        self.assertEqual(target, "default")
+        self.assertEqual(
+            json.loads(self.ctrl._settings.value(key)), {"audio": "derive"}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3507,7 +3838,11 @@ class TestStepStatusAudioRollup(unittest.TestCase):
         self.assertEqual(ss.status, "valid")
 
     def test_no_audio_returns_valid(self):
-        ss = StepStatus(step_id="A01", built=True)
+        ss = StepStatus(
+            step_id="A01",
+            built=True,
+            objects=[ObjectStatus(name="obj", exists=True, status="valid")],
+        )
         self.assertEqual(ss.status, "valid")
 
     def test_missing_object_takes_priority_over_valid_audio(self):

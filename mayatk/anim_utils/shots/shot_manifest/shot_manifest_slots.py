@@ -22,6 +22,7 @@ from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
     ColumnMap,
     ShotManifest,
     ManifestModel,
+    ShotPairing,
 )
 from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
     ManifestData,
@@ -36,10 +37,13 @@ from mayatk.anim_utils.shots.shot_manifest.range_resolver import RangeResolver
 from mayatk.anim_utils.shots._shots import (
     BatchComplete,
     SettingsChanged,
+    ShotDefined,
     ShotRemoved,
+    ShotUpdated,
     StoreEvent,
 )
 from mayatk.anim_utils.shots.shot_manifest.table_presenter import ManifestTableMixin
+from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
 
 class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
@@ -54,6 +58,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.ui = slots_instance.ui
         self._steps: List[BuilderStep] = []
         self._csv_path: str = ""
+        # Where the loaded steps came from: "csv" (a manifest), "scene" (the
+        # store's own shots) or "detect" (animation regions, nothing built yet).
+        self._source: str = ""
         self._store = None  # ShotStore from last build
         self._last_results: list = []  # Last assessment results
 
@@ -100,11 +107,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # keeps the dead controller alive and firing after the panel closes.
         self.ui.destroyed.connect(lambda *_: self.remove_callbacks())
         self._column_map = ColumnMap()
-        self._active_mapping = None  # loaded JSON dict from mapping/
+        self._active_mapping = None  # effective template (options applied)
+        self._mapping_template = None  # the template as loaded, options block and all
+        self._mapping_name = None
+        self._option_rows: list = []  # header-menu rows built from its options
         self._mapping_dir = None  # custom directory override
         self._setup_recent_csv()
         self._setup_csv_path_editing()
-        self._setup_csv_toggle()
         self._setup_header_menu()
         self._setup_mapping_combo()
         self._restore_color_overrides()
@@ -136,23 +145,22 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _on_first_show(self) -> None:
         """Auto-populate the table the first time the window is shown."""
         self._first_shown = True
-        self._populate_from_source()
+        self._open_scene_source()
 
     # ---- built state -----------------------------------------------------
 
     @property
     def _is_built(self) -> bool:
-        """True if any CSV step already exists as a shot in the store."""
+        """True if any loaded step has a shot (``_pairing``)."""
         try:
-            built_map = {s.name for s in self._store_cls().active().shots}
+            return bool(self._pairing().shots)
         except Exception:
             return False
-        return any(step.step_id in built_map for step in self._steps)
 
     def _step_is_built(self, step_id: str) -> bool:
-        """True if a specific step already exists as a shot in the store."""
+        """True if step *step_id* has a shot (``_pairing``)."""
         try:
-            return any(s.name == step_id for s in self._store_cls().active().shots)
+            return step_id in self._pairing().shots
         except Exception:
             return False
 
@@ -160,7 +168,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     @property
     def _is_detection_mode(self) -> bool:
-        """True when steps were populated via scene detection (no CSV)."""
+        """True when the steps came from the scene (its shots or detected
+        animation), not a CSV -- so a build never removes a shot."""
         return bool(self._steps) and not self._csv_path
 
     @property
@@ -188,6 +197,50 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         from mayatk.anim_utils.shots._shots import ShotStore
 
         return ShotStore
+
+    @staticmethod
+    def _manifest_cls():
+        """This host's manifest engine class (the twins' other spelling)."""
+        return ShotManifest
+
+    @property
+    def _match(self) -> str:
+        """How the selected template pairs steps with shots (``match``)."""
+        return (self._active_mapping or {}).get("match", "name")
+
+    def _manifest(self, store=None):
+        """This host's manifest engine over *store* (default: the active one),
+        pairing steps with shots the way the selected template says."""
+        store = store if store is not None else self._active_store()
+        return self._manifest_cls()(store, match=self._match)
+
+    def _pairing(self, steps=None, store=None) -> ShotPairing:
+        """Which shot each step (default: the loaded ones) is -- the pure
+        ``ShotManifest.pair``, the one place a step finds its shot (binding,
+        name, then order); it reads only the store, so no host engine."""
+        store = store if store is not None else self._active_store()
+        steps = self._steps if steps is None else steps
+        if store is None or not steps:
+            return ShotPairing()
+        return ptk.ShotManifest(store, match=self._match).pair(steps)
+
+    def _orphan_shots(self, pairing: Optional[ShotPairing] = None) -> list:
+        """Shots no step of the loaded sheet pairs with ("not in doc" rows);
+        only a sheet can leave a shot out, so none in the other modes."""
+        if self._source != "csv":
+            return []
+        return (pairing if pairing is not None else self._pairing()).orphans
+
+    def _remove_orphan(self, shot) -> None:
+        """Remove one shot no doc step pairs with -- the only way a shot leaves
+        the store from this panel: explicit, one at a time, undoable."""
+        store = self._active_store()
+        if store is None:
+            return
+        with store.scene_edit("manifest_remove_shot"):
+            store.remove_shot(shot.shot_id)
+        self._populate_table()
+        self._set_footer(f"Removed shot '{shot.name}'; its keys stay in the scene.")
 
     def _active_store(self):
         """Return the cached ShotStore, or try ShotStore.active()."""
@@ -418,14 +471,44 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     # ---- auto-fill logic -------------------------------------------------
 
+    def _placement_on_regions(self) -> Optional[bool]:
+        """Whether new shots go on the detected animation regions (``True``),
+        one after another (``False``), or the build stops (``None``).
+
+        Steps meet regions IN ORDER, which is right only when there is one
+        region per step; when the counts differ that pairing is a guess, so
+        the user decides with both counts in front of them.  Selected keys
+        are the user's own boundaries and never ask.
+        """
+        regions = len(self._cached_gaps or [])
+        auto = [s for s in self._steps if s.step_id not in self._user_ranges]
+        if self._use_selected_keys or not regions or len(auto) in (0, regions):
+            return True
+        answer = self.sb.message_box(
+            f"<b>{len(auto)} steps, {regions} animation regions.</b><br>"
+            "New shots are placed on the scene's animation regions in order, "
+            "which only lines up with one region per step.<br><br>"
+            "<b>Yes</b> \u2014 place them on the regions anyway<br>"
+            "<b>No</b> \u2014 place them one after another (adjust later)<br>"
+            "<b>Cancel</b> \u2014 set the steps' ranges first",
+            "Yes",
+            "No",
+            "Cancel",
+        )
+        if answer == "Yes":
+            return True
+        return False if answer == "No" else None
+
     def _resolve_ranges(
         self,
         from_step_idx: int = 0,
+        regions: bool = True,
     ) -> List[Tuple[str, float, Optional[float], bool]]:
         """Compute a resolved (start, end) for every step.
 
         Detects/caches animation regions, then delegates to the
         standalone :func:`._range_resolver.resolve_ranges` algorithm.
+        ``regions=False`` ignores them: steps are placed one after another.
         """
         if not self._steps:
             return []
@@ -444,6 +527,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             )
             self._cached_gaps = gap_starts
 
+        if not regions:
+            gap_starts = []
         if use_sel and not gap_starts:
             return []
 
@@ -528,20 +613,70 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if not self._first_shown:
             return
 
+        self._open_scene_source()
+
+    def _open_scene_source(self) -> None:
+        """Point the source field at this scene's manifest, then populate.
+
+        The scene remembers the CSV it was built from (``store.source_csv``,
+        recorded at build), so a scene built from a sheet re-opens checked
+        against that sheet and one built any other way opens on its own shots.
+        Shared by ``_on_first_show`` and ``_on_scene_changed``.
+        """
+        store = self._active_store()
+        self.ui.txt_csv_path.setText(store.source_csv if store is not None else "")
         self._populate_from_source()
 
     def _populate_from_source(self) -> None:
-        """Load CSV or run detection based on the current UI state.
+        """Load the manifest named in the source field, else the scene's shots.
 
-        Shared by ``_on_first_show`` and ``_on_scene_changed`` to keep
-        the populate-on-open logic in one place.
+        No mode switch: a path or link checks the scene against that file; an
+        empty field (or one that fails to load) shows the scene's own shots,
+        and a scene with none yet falls through to animation detection.
         """
-        if self.ui.chk_csv.isChecked():
-            path = self.ui.txt_csv_path.text().strip()
-            if path:
-                self._load_csv(path)
-                return
-        self.detect()
+        path = self.ui.txt_csv_path.text().strip()
+        if path and self._load_csv(path):
+            return
+        self._load_scene_shots(manifest_failed=bool(path))
+
+    def _load_scene_shots(self, manifest_failed: bool = False) -> None:
+        """Show the store's shots as the steps; detect when there are none.
+
+        The steps carry each shot's description, section, members and (for a
+        manifest-built shot) its behaviors (``BuilderStep.from_shots``), so
+        Assess checks the scene against itself: missing objects, broken
+        behaviors, unlisted animated objects.  A build from this source only
+        patches -- it never removes a shot (``_is_detection_mode``).
+
+        Parameters:
+            manifest_failed: The source field named a manifest that did not
+                load; its reason stays on the field and the footer says so.
+        """
+        store = self._active_store()
+        shots = store.sorted_shots() if store is not None else []
+        if not shots:
+            if manifest_failed:
+                self._load_data([])  # never leave a previous scene's rows up
+            else:
+                self.detect()
+            return
+        steps, ranges = BuilderStep.from_shots(shots)
+        steps = self._drop_excluded(steps)
+        n_obj = sum(len(s.objects) for s in steps)
+        footer = f"{len(steps)} shots, {n_obj} objects from the scene."
+        self._load_data(steps, ranges=ranges, source="scene", footer=footer)
+        if manifest_failed:
+            self._set_footer(
+                f"Manifest not loaded (see the field) \u2014 showing {footer}",
+                color=ERROR_COLOR,
+            )
+
+    def _drop_excluded(self, steps: List[BuilderStep]) -> List[BuilderStep]:
+        """*steps* less the context-menu exclusions (case-insensitive)."""
+        if not self._column_map.exclude_steps:
+            return steps
+        excluded = {e.upper() for e in self._column_map.exclude_steps}
+        return [s for s in steps if s.step_id.upper() not in excluded]
 
     def _on_store_event(self, event: StoreEvent) -> None:
         """React to ShotStore mutations — refresh tree timing if steps are loaded."""
@@ -561,8 +696,22 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     # detection mode takes effect.
                     if self._steps:
                         self._refresh_ranges()
-                else:
+                elif self._source != "scene":
+                    # The scene's own shots don't depend on detection settings.
                     self.detect()
+            return
+        if (
+            self._source == "scene"
+            and self._first_shown
+            and isinstance(
+                event, (ShotDefined, ShotUpdated, ShotRemoved, BatchComplete)
+            )
+        ):
+            # The store IS the source: follow its edits (renames, descriptions,
+            # ranges, added/removed shots), keeping the user's expansion.
+            state = self._save_tree_state()
+            self._load_scene_shots()
+            self._restore_tree_state(state)
             return
         if not self._steps:
             return
@@ -583,7 +732,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """Update Start/End columns in the tree from the store."""
         from qtpy.QtCore import Qt
 
-        timing_map = {s.name: s for s in store.sorted_shots()}
+        timing_map = self._pairing().shots
         tree = self.ui.tbl_steps
         tree.blockSignals(True)
         try:
@@ -641,6 +790,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         step_item = item.parent() if is_child else item
         step_data = step_item.data(0, Qt.UserRole)
         if not isinstance(step_data, BuilderStep):
+            if getattr(step_data, "shot_id", None) is not None:  # "not in doc" row
+                menu = QMenu(tree)
+                act_remove = menu.addAction(f"Remove Shot '{step_data.name}'")
+                act_remove.setToolTip(
+                    "No doc step pairs with this shot. Removes its record; "
+                    "its keys stay in the scene."
+                )
+                if menu.exec_(tree.viewport().mapToGlobal(pos)) is act_remove:
+                    self._remove_orphan(step_data)
             return
 
         # Collect all selected parent step IDs for multi-selection actions
@@ -656,12 +814,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             ):
                 selected_step_ids.append(sel_data.step_id)
 
-        # Pre-compute built-step names once for all guards in this menu.
+        # Pre-compute the pairing once for all guards in this menu.
         try:
-            built_names = {s.name for s in self._store_cls().active().shots}
+            built_names = set(self._pairing().shots)
         except Exception:
             built_names = set()
-        any_built = bool(built_names & {s.step_id for s in self._steps})
+        any_built = bool(built_names)
 
         menu = QMenu(tree)
         act_open = menu.addAction(f"Open '{step_data.step_id}' in Shot Sequencer")
@@ -705,6 +863,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         act_outliner = None
         act_copy = None
         act_reapply = None
+        act_audio = None
+        effect_actions = {}
         if is_child:
             obj_data = item.data(0, Qt.UserRole)
             obj_name = (
@@ -721,6 +881,13 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                         ManifestData.fmt_behavior(b) for b in obj_data.behaviors
                     )
                     act_reapply = menu.addAction(f"Apply [{names}]")
+                # The panels that say HOW its behaviors are keyed, opened on
+                # this object alone (the recipe there is the build's).
+                for channel, verb in self._effect_pages(obj_data):
+                    action = menu.addAction(f"{verb} '{obj_name}'\u2026")
+                    effect_actions[action] = channel
+                if obj_data.kind == "audio":
+                    act_audio = menu.addAction(f"Open '{obj_name}' in Audio Clips")
 
         chosen = menu.exec_(tree.viewport().mapToGlobal(pos))
         if chosen is act_open:
@@ -737,6 +904,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             QApplication.clipboard().setText(obj_name)
         elif chosen is act_reapply and act_reapply is not None:
             self._reapply_behavior(step_data.step_id, obj_data)
+        elif chosen is not None and chosen in effect_actions:
+            self._open_effect(step_data.step_id, obj_data, effect_actions[chosen])
+        elif chosen is act_audio and act_audio is not None:
+            self._open_audio_clip(obj_name)
         elif chosen is act_set_frame and act_set_frame is not None:
             self._set_range_to_current_frame(step_item, step_data.step_id)
         elif chosen is act_auto_fill and act_auto_fill is not None:
@@ -769,16 +940,11 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._set_footer(f"Excluded {names} ({n} total excluded).")
 
     def _include_step(self, step_id: str) -> None:
-        """Remove *step_id* from the exclude list and re-parse the CSV."""
+        """Remove *step_id* from the exclude list and re-load the source."""
         current = set(self._column_map.exclude_steps)
         current.discard(step_id)
         self._column_map.exclude_steps = tuple(sorted(current))
-        # Re-parse to restore the step
-        path = self._csv_path or self.ui.txt_csv_path.text().strip()
-        if path:
-            self._load_csv(path)
-        else:
-            self._set_footer(f"Restored '{step_id}'. Reload CSV to populate.")
+        self._populate_from_source()
 
     def _set_range_to_current_frame(self, item, step_id: str) -> None:
         """Set the range start for *step_id* to the current Maya timeline frame.
@@ -803,6 +969,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             import maya.cmds as cmds
         except ImportError:
             return
+        store = self._active_store()
+        if store is not None:
+            obj_name = store.resolve_member(obj_name)[0]
         if not cmds.objExists(obj_name):
             self._set_footer(f"'{obj_name}' not found in scene.", color="#D4908F")
             return
@@ -844,19 +1013,76 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         controller._segment_cache.clear()
         controller._sync_combobox()
 
-        # Select the shot matching step_id
+        # Select the shot paired with step_id
+        target = self._pairing().shots.get(step_id)
         cmb = getattr(seq_slots.ui, "cmb_shot", None)
-        if cmb is not None:
+        if cmb is not None and target is not None:
             for i in range(cmb.count()):
                 shot_id = cmb.itemData(i)
-                shot = controller.sequencer.shot_by_id(shot_id) if shot_id else None
-                if shot and shot.name == step_id:
+                if shot_id == target.shot_id:
                     cmb.blockSignals(True)
                     cmb.setCurrentIndex(i)
                     cmb.blockSignals(False)
                     controller._sync_to_widget(shot_id, frame=True)
                     controller._update_shot_nav_state()
                     break
+
+    #: The Render Effects page each recipe effect is keyed from, and the verb
+    #: its row entry reads with.
+    EFFECT_PAGES = {
+        "fade_in": ("opacity", "Fade"),
+        "fade_out": ("opacity", "Fade"),
+        "pulse": ("highlight", "Highlight"),
+    }
+
+    @classmethod
+    def _effect_pages(cls, obj) -> list:
+        """``[(channel, verb)]`` -- the Render Effects pages *obj*'s behaviors
+        are keyed from, each once, in behavior order."""
+        pages = []
+        for behavior in obj.behaviors or ():
+            page = cls.EFFECT_PAGES.get(Behaviors.effect_of(behavior))
+            if page is not None and page not in pages:
+                pages.append(page)
+        return pages
+
+    def _open_effect(self, step_id: str, obj, channel: str) -> None:
+        """Open Render Effects focused on *obj*'s *channel* effect.
+
+        The picker hides and the header names the object and its step; the
+        object is selected. Once its step is built, the panel's Key re-applies
+        the object's behaviors where the build places them
+        (:meth:`_reapply_behavior`) -- the recipe the page edits is the one
+        that keys them.
+        """
+        store = self._active_store()
+        node = store.resolve_member(obj.name)[0] if store is not None else obj.name
+        leaf = str(node).split("|")[-1].split(":")[-1]
+        self.sb.handlers.marking_menu.show("render_effects")
+        slots = self.sb.get_slots_instance("render_effects")
+        if slots is None or not hasattr(slots, "focus"):
+            return
+        apply = None
+        if self._pairing().shots.get(step_id) is not None:
+
+            def apply():
+                self._reapply_behavior(step_id, obj)
+                return f"Re-applied {leaf}'s behaviors in {step_id}."
+
+        slots.focus(
+            channel,
+            [node],
+            title=f"{leaf} \u00b7 {step_id}",
+            apply=apply,
+            apply_text=f"Apply to '{leaf}' in {step_id}" if apply else "",
+        )
+
+    def _open_audio_clip(self, name: str) -> None:
+        """Open Audio Clips on *name*'s track."""
+        self.sb.handlers.marking_menu.show("audio_clips")
+        slots = self.sb.get_slots_instance("audio_clips")
+        if slots is not None and hasattr(slots, "select_track"):
+            slots.select_track(name)
 
     def _open_in_shots(self, step_id: str) -> None:
         """Open the Shots editor UI and navigate to the shot matching *step_id*."""
@@ -865,9 +1091,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             self._set_footer("Build shots first before opening the shots editor.")
             return
 
-        shot = store.shot_by_name(step_id)
+        shot = self._pairing().shots.get(step_id)
         if shot is None:
-            self._set_footer(f"Shot '{step_id}' not found in the store.")
+            self._set_footer(f"No shot pairs with '{step_id}' yet.")
             return
 
         self.sb.handlers.marking_menu.show("shots")
@@ -913,6 +1139,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """
         txt = self.ui.txt_csv_path
         txt.setReadOnly(False)
+        # The scene owns its source (ShotStore.source_csv); a path restored
+        # from the last session would check this scene against another's sheet.
+        # Past paths stay one click away in the recent-values list.
+        txt.restore_state = False
         # uitk's "file_or_url" preset: an existing file passes synchronously; a
         # URL passes on shape, then uitk's deferred probe (off the UI thread)
         # settles reachability and hands its reason to the callable tooltip.
@@ -933,7 +1163,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         tt = self.sb.tooltip
         return tt.fmt(
             title="CSV Source",
-            body=problem or "A local CSV file, or a web address that serves one.",
+            body=problem
+            or "A local CSV file, or a web address that serves one.  Leave it "
+            "empty to review the scene's own shots.",
             sections=[
                 (
                     "Local file",
@@ -968,14 +1200,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _on_csv_path_edited(self) -> None:
         """Load the CSV when a typed/pasted path is committed (Enter / focus-out).
 
-        Skips empty input and an unchanged path (a bare re-commit on
-        focus-out).  Any other changed path is handed to _load_csv -- the
+        Skips an unchanged path (a bare re-commit on focus-out); a cleared
+        field returns to the scene's own shots.  Any other changed path is
+        handed to _load_csv -- the
         single authority on validity -- which strips it, reports a missing
         file, surfaces an unreadable cloud placeholder, and keeps the field
         editable on failure.
         """
         path = self.ui.txt_csv_path.text().strip()
-        if not path or path == self._csv_path:
+        if path == self._csv_path:
+            return
+        if not path:
+            self._load_scene_shots()
             return
         self._load_csv(path)
 
@@ -984,12 +1220,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         path = self.ui.txt_csv_path.text().strip()
         if path:
             self._on_csv_browsed(path)
-
-    def _setup_csv_toggle(self) -> None:
-        """Connect the CSV checkbox to enable/disable the path and browse widgets."""
-        chk = self.ui.chk_csv
-        chk.toggled.connect(self._on_csv_toggled)
-        self._sync_csv_widgets(False)
 
     def _setup_header_menu(self) -> None:
         """Configure the header option menu.
@@ -1029,10 +1259,27 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         ).released.connect(self._open_color_editor)
         menu.add(
             "QPushButton",
+            setText="Copy Asset Names",
+            setObjectName="btn_copy_asset_names",
+            setToolTip=(
+                "Copy the sheet's Asset Names column with the names the panel\n"
+                "found -- read from the description, or auto-filled from the\n"
+                "scene -- written in. Paste it over that column, starting at the\n"
+                "sheet's first row; every other cell keeps its value."
+            ),
+        ).released.connect(self._copy_asset_names)
+        menu.add(
+            "QPushButton",
             setText="Audio Clips\u2026",
             setObjectName="btn_audio_clips",
             setToolTip="Open the Audio Clips editor to load, key, and\nmanage audio tracks used by this manifest.",
         ).released.connect(self._open_audio_clips)
+        menu.add(
+            "QPushButton",
+            setText="Render Effects\u2026",
+            setObjectName="btn_render_effects",
+            setToolTip="Open Render Effects to key or revise the opacity and highlight\nchannels this manifest's fade and highlight behaviors key.",
+        ).released.connect(self._open_render_effects)
         menu.add(
             "QPushButton",
             setText="Shots\u2026",
@@ -1043,31 +1290,38 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self.ui.header.set_help_text(
             self.sb.tooltip.fmt(
                 title="Shot Manifest",
-                body="Build and validate shots from a CSV file or by generating from scene animation.",
+                body="Check the scene's shots against a build sheet, or review the shots the scene already has.",
                 sections=[
                     (
-                        "Quick Start \u2014 CSV",
+                        "Quick Start \u2014 Build Sheet",
                         [
-                            "Check the <b>CSV</b> checkbox and browse to a CSV file, or "
-                            "paste a web address (a Google Sheets share link works).",
+                            "Browse to a CSV file, or paste a web address (a Google "
+                            "Sheets share link works) and press Enter.",
                             "Review parsed steps in the table; edit ranges or exclude steps as needed.",
                             "Click <b>Build</b> to create shots with behaviors applied.",
                             "Click <b>Assess</b> to verify completeness.",
+                            "The template's options (under its picker in the header "
+                            "menu) adapt it to the sheet: step-ID style, audio, and "
+                            "<b>Auto-fill Missing Assets</b> -- then <b>Copy Asset "
+                            "Names</b> pastes those back into the sheet.",
                         ],
                     ),
                     (
-                        "Quick Start \u2014 Animation",
+                        "No Build Sheet",
                         [
-                            "Uncheck <b>CSV</b> \u2014 shots are generated from animation using the settings in Shot Settings.",
-                            "Refine ranges in the table if needed.",
-                            "Click <b>Build</b>, then <b>Assess</b>.",
+                            "Leave the field empty (or clear it) \u2014 the table shows the "
+                            "scene's own shots with their descriptions; <b>Assess</b> checks "
+                            "them for missing objects and behaviors.",
+                            "A scene with no shots yet is generated from animation using "
+                            "the settings in Shot Settings; refine ranges, then <b>Build</b>.",
+                            "A scene built from a sheet re-opens checked against that sheet.",
                         ],
                     ),
                     (
                         "Table Columns",
                         [
                             "<b>Step</b> \u2014 Step ID (e.g. A01).",
-                            "<b>Section</b> \u2014 Read-only grouping label from CSV.",
+                            "<b>Section</b> \u2014 Read-only grouping label from the sheet.",
                             "<b>Description</b> \u2014 Audio narration or step notes.",
                             "<b>Behaviors</b> \u2014 Per-object actions; click the child row label to toggle.",
                             "<b>Start / End</b> \u2014 Frame range. Solid text = user-entered; dim italic = auto-filled.",
@@ -1079,8 +1333,16 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                             "Double-click Start or End to type a frame. Downstream steps re-flow.",
                             "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
                             "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked, normal = valid.",
-                            "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified.",
-                            "Right-click step row: Exclude, Open in Sequencer, Show Excluded.",
+                            "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified. "
+                            "Fades and highlights are keyed from the scene's effect recipe (Render Effects); "
+                            "Build re-keys those an older recipe made and removes the keys of behaviors the "
+                            "doc dropped, so it stays enabled while either is pending.",
+                            "Right-click a step row: Open in Shot Sequencer or Shots (once built), "
+                            "Exclude (before a build), Show Excluded. An object row adds Show in "
+                            "Outliner, Copy, Apply its behaviors, and Fade / Highlight '...' -- Render "
+                            "Effects on that object alone, where Key re-applies its behaviors; an audio "
+                            "row opens its clip in Audio Clips; a 'not in doc' row offers Remove Shot "
+                            "-- its keys stay in the scene.",
                         ],
                     ),
                 ],
@@ -1103,6 +1365,80 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return store.fit_mode
         return self._store_cls().DEFAULT_FIT_MODE
 
+    def _fill_missing_assets(self) -> None:
+        """Give the loaded sheet's asset-less steps the scene's objects.
+
+        ``ShotManifest.fill_missing_assets``: what each step's paired shot
+        holds (its members and what animates in its range) -- a step with no
+        shot stays empty (nothing links it to scene time).  The added objects are ``generated``: marked in the
+        table, built like any other, and what :meth:`_copy_asset_names` writes
+        back to the sheet.
+        """
+        store = self._active_store()
+        mapping = self._active_mapping or {}
+        if not (
+            mapping.get("fill_missing_assets") and self._steps and store is not None
+        ):
+            return
+        filled = self._manifest(store).fill_missing_assets(self._steps)
+        unfilled = [
+            s.step_id
+            for s in self._steps
+            if not any(o.kind != "audio" for o in s.objects)
+        ]
+        if filled:
+            self._populate_table()
+            self._refresh_ranges()
+        n_obj = sum(len(names) for names in filled.values())
+        footer = f"{len(self._steps)} steps loaded; auto-filled {len(filled)} ({n_obj} objects)"
+        if unfilled:
+            footer += (
+                f"; {len(unfilled)} have no shot to take objects from -- "
+                "build or match shots first"
+            )
+        self._set_footer(footer + ".")
+
+    def _copy_asset_names(self) -> None:
+        """Put the sheet's Asset Names column, with the names the sheet's asset
+        cells didn't list (read from the description or auto-filled) written
+        into their steps' empty cells, on the clipboard
+        (``ManifestModel.asset_column``)."""
+        from qtpy.QtCore import QMimeData
+        from qtpy.QtWidgets import QApplication
+
+        fills = {
+            s.step_id: [o.name for o in s.objects if o.origin != "column"]
+            for s in self._steps
+        }
+        fills = {sid: names for sid, names in fills.items() if names}
+        if not self._csv_path or not fills:
+            self._set_footer(
+                "Nothing to copy: no step takes its objects from its description "
+                "or the scene (the template's Objects and Auto-fill Missing "
+                "Assets options).",
+                color=ERROR_COLOR,
+            )
+            return
+        columns = (
+            ColumnMap.from_dict(self._active_mapping.get("columns", {}))
+            if self._active_mapping is not None
+            else self._column_map
+        )
+        try:
+            column = ManifestModel.asset_column(self._csv_path, fills, columns=columns)
+        except (OSError, ValueError) as exc:
+            self._set_footer(f"Couldn't copy asset names: {exc}", color=ERROR_COLOR)
+            return
+        tsv, html = ManifestModel.column_clipboard(column)
+        mime = QMimeData()
+        mime.setText(tsv)
+        mime.setHtml(html)
+        QApplication.clipboard().setMimeData(mime)
+        self._set_footer(
+            f"Copied {len(column)} rows ({len(fills)} steps filled). In the sheet, "
+            "select the Asset Names cell in row 1 and paste."
+        )
+
     def _on_long_names_toggled(self, checked: bool) -> None:
         """Persist and apply the long-names display preference."""
         self._settings.setValue("long_names", checked)
@@ -1115,6 +1451,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     def _open_audio_clips(self) -> None:
         """Open the Audio Clips editor."""
         self.sb.handlers.marking_menu.show("audio_clips")
+
+    def _open_render_effects(self) -> None:
+        """Open the Render Effects panel."""
+        self.sb.handlers.marking_menu.show("render_effects")
 
     def _open_color_editor(self) -> None:
         """Launch the status-color editor dialog."""
@@ -1288,6 +1628,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         target = select
         if target is None and not self._mapping_dir:
             target = Mapping.templates().active
+            retired = Mapping.retired(target) if target else None
+            if retired is not None:
+                target = self._migrate_retired_mapping(target, *retired)
         idx = self._combo_data_index(target) if target else -1
         if idx < 0 and "default" in names:
             idx = self._combo_data_index("default")
@@ -1296,6 +1639,27 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # Programmatic refresh: apply but don't persist — rebuilding the list
         # must not overwrite the user's last-used pointer.
         self._apply_mapping(cmb.currentData(), persist=False)
+
+    def _migrate_retired_mapping(
+        self, name: str, replacement: str, values: dict
+    ) -> str:
+        """Point a saved selection of retired template *name* at its
+        replacement, carrying the option *values* it stood for (unless the
+        replacement already has saved values).  Returns the replacement."""
+        import json
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        key = f"mapping_options/{replacement}"
+        if not self._settings.value(key, ""):
+            self._settings.setValue(key, json.dumps(values))
+        try:
+            Mapping.templates().active = replacement
+        except Exception:
+            pass
+        self.logger.info(
+            "Mapping %r is retired; using %r with %s.", name, replacement, values
+        )
+        return replacement
 
     def _combo_data_index(self, name) -> int:
         """Index of the combo item whose data == *name*, or -1."""
@@ -1326,17 +1690,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         """
         from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
-        if not name:
-            self._active_mapping = None
-        else:
+        self._mapping_name = name or None
+        self._mapping_template = None
+        if name:
             try:
-                self._active_mapping = Mapping.load_mapping(
+                self._mapping_template = Mapping.load_mapping(
                     name, self._mapping_dir or None
                 )
             except Exception as exc:
                 self.logger.error("Failed to load mapping '%s': %s", name, exc)
                 self._set_footer(f"Mapping error: {exc}", color=ERROR_COLOR)
                 self._active_mapping = None
+                self._build_option_rows()
                 return
             if persist and not self._mapping_dir:
                 try:
@@ -1345,10 +1710,97 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     )
                 except Exception:
                     pass
+        self._build_option_rows()
+        self._reapply_mapping()
 
+    # ---- template options -------------------------------------------------
+
+    def _option_values(self) -> Dict[str, object]:
+        """The saved option values of the current template (``{}`` if none)."""
+        import json
+
+        if not self._mapping_name:
+            return {}
+        raw = self._settings.value(f"mapping_options/{self._mapping_name}", "")
+        try:
+            values = json.loads(raw) if raw else {}
+        except (TypeError, ValueError):
+            return {}
+        return values if isinstance(values, dict) else {}
+
+    def _reapply_mapping(self) -> None:
+        """Rebuild the effective template from its options, then re-load the sheet."""
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        self._active_mapping = (
+            Mapping.apply_options(self._mapping_template, self._option_values())
+            if self._mapping_template is not None
+            else None
+        )
         path = self._csv_path or self.ui.txt_csv_path.text().strip()
         if path:
             self._load_csv(path)
+
+    def _on_option_changed(self, key: str, value) -> None:
+        """Save one option of the current template and re-apply it."""
+        import json
+
+        values = self._option_values()
+        values[key] = value
+        self._settings.setValue(
+            f"mapping_options/{self._mapping_name}", json.dumps(values)
+        )
+        self._reapply_mapping()
+
+    def _build_option_rows(self) -> None:
+        """Show the current template's options under its picker in the header menu.
+
+        One row per option (``Mapping.option_specs``), built by uitk's widget
+        factory from an ``AttributeSpec`` -- the template declares its own
+        settings, so a new option needs no code here.  Values persist per
+        template; the template, not the widget state, owns them.
+        """
+        from qtpy import QtCore, QtWidgets
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+        from uitk.bridge.spec import AttributeSpec, KindFactory
+        from uitk.bridge.tooltip import Tooltip
+
+        menu = self.ui.header.menu
+        for row in self._option_rows:
+            menu.remove_widget(row)
+            row.deleteLater()
+        self._option_rows = []
+        if not isinstance(menu, QtWidgets.QWidget):
+            return  # mocked UI (logic tests)
+        values = self._option_values()
+        for opt in Mapping.option_specs(self._mapping_template):
+            spec = AttributeSpec(
+                key=opt["key"],
+                label=opt["label"],
+                kind=opt["kind"],
+                default=values.get(opt["key"], opt["default"]),
+                choices=tuple(opt.get("choices", ())),
+                tooltip=opt["tooltip"],
+            )
+            row = QtWidgets.QWidget()
+            hbox = QtWidgets.QHBoxLayout(row)
+            hbox.setContentsMargins(0, 0, 0, 0)
+            hbox.setSpacing(2)
+            label = QtWidgets.QLabel(f"{spec.display_label}:", row)
+            label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            widget = KindFactory.make_widget(spec, row)
+            widget.setObjectName(f"opt_{spec.key}")
+            widget.restore_state = False  # the template owns the value
+            tip = Tooltip.format_param_tooltip(spec)
+            label.setToolTip(tip)
+            widget.setToolTip(tip)
+            hbox.addWidget(label)
+            hbox.addWidget(widget, 1)
+            KindFactory.connect_changed(
+                widget, lambda value, key=spec.key: self._on_option_changed(key, value)
+            )
+            menu.add(row)
+            self._option_rows.append(row)
 
     def _open_mappings_folder(self) -> None:
         """Open the writable folder where user mapping files live.
@@ -1378,33 +1830,25 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     # ---- mode switching (single source of truth) -------------------------
 
-    def _sync_csv_widgets(self, csv_mode: bool) -> None:
-        """Sync checkbox and CSV-related widgets to match the active mode."""
-        chk = self.ui.chk_csv
-        chk.blockSignals(True)
-        chk.setChecked(csv_mode)
-        chk.blockSignals(False)
-        txt = self.ui.txt_csv_path
-        txt.setEnabled(csv_mode)
-        txt.style().unpolish(txt)
-        txt.style().polish(txt)
-
     def _load_data(
         self,
         steps: List[BuilderStep],
         *,
         ranges: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
         csv_path: str = "",
+        source: str = "",
         footer: str = "",
     ) -> None:
         """Single source of truth for mode switching.
 
-        Every code path that changes table contents (detect, CSV load,
-        CSV toggle-off) funnels through here so that state, widgets,
-        and the table are always consistent.
+        Every code path that changes table contents (detect, CSV load, the
+        scene's shots) funnels through here so that state and the table are
+        always consistent.  *source* defaults to ``"csv"`` with a
+        *csv_path*, else ``"detect"``.
         """
         self._steps = steps
         self._csv_path = csv_path
+        self._source = source or ("csv" if csv_path else "detect")
         self._user_ranges = dict(ranges) if ranges else {}
         self._last_results = []
         self._last_resolved = []
@@ -1412,52 +1856,28 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._cached_gaps = None
         self._cached_gap_ends = None
 
-        self._sync_csv_widgets(bool(csv_path))
         self._populate_table()
         self._update_build_button()
 
         if footer:
             self._set_footer(footer)
 
-    def _on_csv_toggled(self, enabled: bool) -> None:
-        """Handle the CSV checkbox toggle.
-
-        When checked with a remembered path, reloads CSV data.
-        When checked without a path, enables widgets for browsing.
-        When unchecked, clears data so detection can be used.
-        """
-        if enabled:
-            path = self.ui.txt_csv_path.text().strip()
-            if path:
-                self._load_csv(path)
-            else:
-                self._sync_csv_widgets(True)
-        else:
-            self._sync_csv_widgets(False)
-            self.detect()
-
     def _on_csv_browsed(self, path: str) -> None:
         """Handle a CSV path selected via browse or BrowseOption."""
-        self._sync_csv_widgets(True)
         self.ui.txt_csv_path.setText(path)
         self._load_csv(path)
 
-    def _load_csv(self, path: str) -> None:
+    def _load_csv(self, path: str) -> bool:
         """Parse the CSV (a path or URL) and load it via :meth:`_load_data`.
+
+        Returns ``True`` once loaded; a failure marks the field invalid with
+        its reason and returns ``False``.
 
         When an active mapping is selected, delegates to the
         :mod:`mapping` resolver.  Otherwise falls back to
         :func:`parse_csv` with the current :attr:`_column_map`.
         """
         import os
-
-        # Attempting a load means CSV mode is active: enable the path
-        # widgets up front so any failure below (missing file, unreadable
-        # cloud placeholder, malformed CSV) still leaves the field
-        # inspectable and browsable.  Otherwise a failed load returns early
-        # and strands the user with a disabled control they can't use to
-        # see or correct the bad path.
-        self._sync_csv_widgets(True)
 
         # Settle the path field's live validator now (sync check only) so
         # neither its debounce nor an in-flight URL probe can re-color the
@@ -1469,7 +1889,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # can't be probed without a round trip, so only a local path is gated.
         if not ptk.RemoteFile.is_url(path) and not os.path.isfile(path):
             self._mark_csv_invalid(f"File not found: {path}")
-            return
+            return False
 
         try:
             if self._active_mapping is not None:
@@ -1486,7 +1906,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # subclasses OSError, so this branch must come first.
             self.logger.error("Failed to fetch CSV %r: %s", path, exc)
             self._mark_csv_invalid(str(exc))
-            return
+            return False
         except OSError as exc:
             # isfile() passed but the bytes can't be read.  Don't assume a
             # single cause -- _describe_read_failure enumerates the likely
@@ -1494,21 +1914,18 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # always surfaces the raw error, and appends the free space if low.
             self.logger.error("Failed to read CSV %r: %s", path, exc)
             self._mark_csv_invalid(self._describe_read_failure(path, exc))
-            return
+            return False
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
             self._mark_csv_invalid(f"Error: {exc}")
-            return
+            return False
 
         # Honor context-menu exclusions on BOTH branches.  parse_csv already
         # applies them on the no-mapping branch (idempotent here); resolve()
         # builds a fresh ColumnMap from the mapping JSON and never sees
         # self._column_map, so without this a reload while a mapping is active
-        # resurrects every context-menu-excluded step (and _include_step would
-        # resurrect ALL excluded steps, not just the one being restored).
-        if self._column_map.exclude_steps:
-            excluded = {e.upper() for e in self._column_map.exclude_steps}
-            steps = [s for s in steps if s.step_id.upper() not in excluded]
+        # resurrects every context-menu-excluded step.
+        steps = self._drop_excluded(steps)
 
         self.ui.txt_csv_path.reset_action_color()
         self._recent_csv_option.record(path)
@@ -1519,11 +1936,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         store_ranges = {}
         try:
             store = self._store_cls().active()
-            step_ids = {s.step_id for s in steps}
             store_ranges = {
-                s.name: (s.start, s.end)
-                for s in store.sorted_shots()
-                if s.name in step_ids
+                sid: (shot.start, shot.end)
+                for sid, shot in self._pairing(steps, store).shots.items()
             }
         except Exception:
             pass
@@ -1539,6 +1954,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         # for new steps added between existing ones.
         if store_ranges:
             self._refresh_ranges()
+        self._fill_missing_assets()
+        return True
 
     @staticmethod
     def _describe_read_failure(path: str, exc: OSError) -> str:
@@ -1553,7 +1970,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         Priority order:
         1. If steps are already loaded, return True immediately.
-        2. If CSV checkbox is on and a path exists, load the CSV.
+        2. Load the source: the CSV in the field, else the scene's shots.
         3. Otherwise, run scene detection.
 
         Returns True if steps are now available.
@@ -1561,12 +1978,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if self._steps:
             return True
 
-        # Try CSV first when enabled
-        path = self.ui.txt_csv_path.text().strip()
-        if path and self.ui.chk_csv.isChecked():
-            self._load_csv(path)
-            if self._steps:
-                return True
+        self._populate_from_source()
+        if self._steps:
+            return True
 
         # Fall back to scene detection
         try:
@@ -1583,18 +1997,21 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
     # ---- button state ----------------------------------------------------
 
     def _update_build_button(self) -> None:
-        """Enable Build only after assess has run and unbuilt steps remain.
+        """Enable Build once Assess has run and a build would change something.
 
-        Build always starts disabled.  The assess operation populates
-        ``_last_results`` which determines whether build is warranted.
-        If all steps are already built, or assess has not been run yet,
-        the button stays disabled.
+        Build always starts disabled. It is warranted while a step is unbuilt,
+        an object is one a build fixes -- not in its shot, its behavior keys
+        missing or made under an older effect recipe -- a shot holds keys of
+        behaviors the doc dropped (``StepStatus.needs_build``), or a behavior
+        was ticked on or off since that Assess.
         """
         btn = getattr(self.ui, "b003", None)
         if btn is None:
             return
         if self._last_results:
-            needs_build = any(not r.built for r in self._last_results)
+            needs_build = getattr(self, "_behaviors_edited", False) or any(
+                r.needs_build for r in self._last_results
+            )
         else:
             needs_build = False
         btn.setEnabled(needs_build)
@@ -1609,7 +2026,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
 
         try:
-            import maya.cmds as cmds
+            import maya.cmds  # noqa: F401 — availability check
         except ImportError:
             self._set_footer("Maya is required to build shots.", color=ERROR_COLOR)
             return
@@ -1618,7 +2035,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         try:
             store = ShotStore.active()
-            builder = ShotManifest(store)
+            builder = self._manifest(store)
 
             # When selected-keys mode is active, verify keys exist
             # before proceeding — even if user ranges are complete.
@@ -1652,7 +2069,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 # audio/animation members via the sequencer). Only new
                 # steps get resolver-derived positions, and user ranges
                 # always win.
-                range_map = {s.name: (s.start, s.end) for s in store.sorted_shots()}
+                range_map = {
+                    sid: (shot.start, shot.end)
+                    for sid, shot in self._pairing(store=store).shots.items()
+                }
                 if self._last_resolved:
                     existing_ids = set(range_map)
                     for sid, s, e, _ in self._last_resolved:
@@ -1685,6 +2105,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 range_map = dict(self._user_ranges)
             else:
                 resolved = self._resolve_ranges()
+                placement = self._placement_on_regions()
+                if placement is None:
+                    self._set_footer("Build cancelled -- set the steps' ranges first.")
+                    return
+                if not placement:
+                    resolved = self._resolve_ranges(regions=False)
                 range_map = {
                     sid: (s, e) for sid, s, e, _ in resolved if e is not None
                 } or None
@@ -1708,33 +2134,29 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                     )
                     return
 
-            # Detection mode: don't remove existing shots not in steps.
-            # A restricted build (selected-keys subset) must never remove
-            # either: removal semantics are only meaningful against the
-            # full CSV step list, and store removals are not undoable.
-            remove = not self._is_detection_mode and build_steps is self._steps
-
-            cmds.undoInfo(openChunk=True, chunkName="ShotManifest_build")
             self._building = True
             try:
-                with store.batch_update():
+                with store.scene_edit("manifest_build"), store.batch_update():
                     actions, beh, assessment = builder.sync(
                         build_steps,
                         ranges=range_map,
-                        remove_missing=remove,
+                        # A build never removes a shot: one no step pairs with
+                        # is listed ("not in doc") for the user to remove.
+                        remove_missing=False,
                         zero_duration_fallback=incremental,
                         fit_mode=self._fit_mode,
                         initial_shot_length=self._initial_shot_length,
                         skip_scene_discovery=use_sel,
                     )
-                    # Record the source CSV for provenance on reopen.
-                    csv_path = self._csv_path or self.ui.txt_csv_path.text().strip()
+                    # Record the source CSV for provenance on reopen -- only
+                    # the one these steps came from: a path still in the field
+                    # after a failed load was never used.
+                    csv_path = self._csv_path
                     if csv_path and store.source_csv != csv_path:
                         store.source_csv = csv_path
                         store.mark_dirty()
             finally:
                 self._building = False
-                cmds.undoInfo(closeChunk=True)
 
             # Store the store for later handoff to Shot Sequencer UI
             self._store = store
@@ -1743,7 +2165,6 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             n_created = sum(1 for a in actions.values() if a == "created")
             n_patched = sum(1 for a in actions.values() if a == "patched")
             n_skipped = sum(1 for a in actions.values() if a == "skipped")
-            n_removed = sum(1 for a in actions.values() if a == "removed")
             n_refused = sum(1 for a in actions.values() if a == "refused")
             n_beh_applied = len(beh.get("applied", []))
             n_beh_skipped = len(beh.get("skipped", []))
@@ -1755,14 +2176,12 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
                 parts.append(f"{n_patched} patched")
             if n_skipped:
                 parts.append(f"{n_skipped} unchanged")
-            if n_removed:
-                parts.append(f"{n_removed} removed from CSV")
             if n_refused:
                 parts.append(f"{n_refused} not built (name taken, see log)")
             if n_beh_applied:
                 parts.append(f"{n_beh_applied} behaviors applied")
             if n_beh_skipped:
-                parts.append(f"{n_beh_skipped} behaviors kept (existing keys)")
+                parts.append(f"{n_beh_skipped} behaviors kept (animator keys)")
             if n_beh_failed:
                 parts.append(f"{n_beh_failed} behaviors failed (see log)")
             self._set_footer(
@@ -1841,7 +2260,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         from mayatk.anim_utils.shots._shots import ShotStore
 
         store = ShotStore.active()
-        builder = ShotManifest(store)
+        builder = self._manifest(store)
         use_sel = self._use_selected_keys
 
         # In selected-keys mode, verify keys exist before proceeding —
@@ -1869,7 +2288,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
         # Write per-object statuses back to shot metadata so that
         # both the manifest and sequencer share the same classification.
-        built_map = {s.name: s for s in store.sorted_shots()}
+        built_map = self._pairing(store=store).shots
         status_changed = False
         for r in results:
             shot = built_map.get(r.step_id)
@@ -1902,6 +2321,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         missing_beh_names = {
             o.name for r in results for o in r.objects if o.status == "missing_behavior"
         }
+        stale_names = {
+            o.name for r in results for o in r.objects if o.status == "stale_behavior"
+        }
+        n_dropped = sum(len(r.dropped_behaviors) for r in results)
         n_additional = sum(len(r.additional_objects) for r in results)
         n_shrinkable = sum(1 for r in results if r.shrinkable_frames > 0)
         sorted_shots = store.sorted_shots()
@@ -1913,6 +2336,10 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             parts.append(f"{len(missing_obj_names)} missing objects")
         if missing_beh_names:
             parts.append(f"{len(missing_beh_names)} missing behaviors")
+        if stale_names:
+            parts.append(f"{len(stale_names)} to re-key (older recipe)")
+        if n_dropped:
+            parts.append(f"{n_dropped} dropped behavior(s) to remove")
         if n_additional:
             parts.append(f"{n_additional} scene objects")
         if n_shrinkable:

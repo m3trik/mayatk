@@ -13,6 +13,7 @@ import tempfile
 import maya.cmds as cmds
 import maya.mel as mel
 
+import pythontk as ptk
 from mayatk.env_utils.fbx_utils import FbxUtils
 
 from base_test import MayaTkTestCase
@@ -699,6 +700,88 @@ class TestApplyTakesGuaranteesAnimation(MayaTkTestCase):
         FbxUtils.apply_takes([{"name": "T1", "start": 1, "end": 10}])
         FbxUtils.reset_takes()
         self.assertTrue(FbxUtils.animation_export_enabled())
+
+
+class TestApplyTakesShipsEveryChannel(MayaTkTestCase):
+    """Every declared take carries every animated channel across its window.
+
+    Maya's ``FBXExportSplitAnimationIntoTakes`` restricts each curve to a
+    take's window before writing it, so a curve with no key inside a take
+    contributes NO channel to it -- the node plays its rest pose for that whole
+    shot -- and a take's keys stop at its last in-window key rather than at its
+    end. Unity plays those takes as the shot clips: measured in Unity 6000.3, a
+    50-frame shot imported 40 frames long with two of its three nodes frozen,
+    and the shot after it as a clip with no curves at all. Only the
+    whole-timeline take was right. With every curve resampled
+    (``FBXExportBakeResampleAnimation``) each take is an exact slice, which is
+    what :meth:`FbxUtils.apply_takes` arms. Proven on the written file.
+    """
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        self.artifacts = ptk.TempArtifacts("fbx_take_channels", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+        door = cmds.polyCube(name="DOOR")[0]
+        cmds.setKeyframe(f"{door}.translateY", t=1, v=0)
+        cmds.setKeyframe(f"{door}.translateY", t=100, v=5)
+        # Keyed only inside A01, so A02 is where a lossy split shows.
+        lift = cmds.polyCube(name="LIFT")[0]
+        cmds.setKeyframe(f"{lift}.translateY", t=10, v=0)
+        cmds.setKeyframe(f"{lift}.translateY", t=40, v=10)
+        blinker = cmds.polyCube(name="BLINKER")[0]
+        cmds.setKeyframe(f"{blinker}.visibility", t=20, v=1)
+        cmds.setKeyframe(f"{blinker}.visibility", t=30, v=0)
+        self.nodes = [door, lift, blinker]
+        self.takes = [
+            {"name": "A01", "start": 1, "end": 50},
+            {"name": "A02", "start": 51, "end": 100},
+        ]
+
+    def tearDown(self):
+        FbxUtils.reset_takes()
+        super().tearDown()
+
+    def _export(self):
+        path = os.path.join(self.artifacts.dir_path(), "takes.fbx")
+        mel.eval("FBXExportInAscii -v false")  # read back by the binary reader
+        FbxUtils.apply_takes(self.takes)
+        cmds.select(self.nodes, replace=True)
+        cmds.file(path, force=True, options="v=0;", type="FBX export", es=True)
+        return ptk.FbxFile.load(path, decode_arrays=("KeyTime",), raw_payloads=False)
+
+    def test_every_take_carries_every_channel_over_its_window(self):
+        curves = self._export().take_curves()
+        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
+        whole = set(curves["Take 001"])
+        self.assertTrue(whole, "the whole-timeline take animates nothing")
+        compared = 0
+        for take in self.takes:
+            name = take["name"]
+            missing = sorted(whole - set(curves.get(name, {})))
+            self.assertEqual(missing, [], f"{name} lost these channels to the split")
+            for key, (first, last, count) in curves[name].items():
+                self.assertEqual(
+                    (round(first / tick), round(last / tick)),
+                    (take["start"], take["end"]),
+                    f"{name} {key} does not span the take",
+                )
+                compared += 1
+        # 2 takes x (3 nodes' animated channels): nothing compared is no pass.
+        self.assertGreaterEqual(compared, 2 * len(self.nodes))
+
+    def test_reset_takes_restores_the_resample_flag(self):
+        """Sticky global state: the export's resample may not outlive it."""
+        mel.eval("FBXExportBakeResampleAnimation -v false")
+        FbxUtils.apply_takes(self.takes)
+        self.assertTrue(FbxUtils.export_flag("FBXExportBakeResampleAnimation"))
+
+        FbxUtils.reset_takes()
+
+        self.assertFalse(
+            FbxUtils.export_flag("FBXExportBakeResampleAnimation"),
+            "reset_takes left Resample All on for every later export",
+        )
 
 
 if __name__ == "__main__":

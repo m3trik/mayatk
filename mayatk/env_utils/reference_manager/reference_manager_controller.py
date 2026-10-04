@@ -555,13 +555,21 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         }
 
         paths_to_add = set(selected_by_path) - set(current_refs_by_path)
-        # A foreign row references its BAKE (a cached .ma) and is intentionally
-        # non-selectable, so its reference can never appear in the selection. Excluding
-        # bake-backed references here keeps an unrelated selection change from silently
-        # un-referencing every foreign row — those are toggled by their own icon.
+        # Only a LISTED file can be deselected: a reference whose file has no row here
+        # (another workspace, a filtered-out type) is left alone. A foreign row
+        # references its BAKE (a cached .ma, never a row) and is intentionally
+        # non-selectable, so the bake-backed exclusion keeps an unrelated selection
+        # change from silently un-referencing every foreign row — those are toggled by
+        # their own icon. Mirror of blendertk's ``_on_selection_changed``.
+        listed = set()
+        for row in range(t.rowCount()):
+            item = t.item(row, 0)
+            file_path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
+            if file_path:
+                listed.add(os.path.normcase(os.path.normpath(file_path)))
         paths_to_remove = {
             p
-            for p in set(current_refs_by_path) - set(selected_by_path)
+            for p in (set(current_refs_by_path) & listed) - set(selected_by_path)
             if not self._bake_source_key(current_refs_by_path[p].path)
         }
 

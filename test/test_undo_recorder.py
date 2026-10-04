@@ -16,7 +16,6 @@ import maya.api.OpenMaya as om2
 import maya.api.OpenMayaAnim as oma2
 import maya.cmds as cmds
 
-import mayatk
 from base_test import MayaTkTestCase
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.undo_recorder import UndoRecorder
@@ -186,25 +185,25 @@ class TestUndoRecorder(MayaTkTestCase):
         plugin loaded from outside its trusted locations, and blocks until someone
         answers it (a plugin of mayatk's own did, 2026-09-14). Standalone never
         prompts, so the load itself is checked: the step rides the
-        ``ufeSupport`` plugin Maya ships, and no plugin loads from mayatk.
+        ``ufeSupport`` plugin Maya ships, and recording loads nothing from
+        anywhere else (what another test loaded before stays out of it; the
+        package-wide rule is ``mock_tests/test_plugins``).
         """
+        before = set(cmds.pluginInfo(query=True, listPlugins=True) or [])
         with UndoRecorder.record() as recorder:
             self._curve_fn().addKey(self._frame(5), 9.0, **recorder.anim)
 
         def folded(path):
             return os.path.normcase(os.path.normpath(path))
 
-        package = folded(os.path.dirname(os.path.abspath(mayatk.__file__)))
-        for name in cmds.pluginInfo(query=True, listPlugins=True) or []:
+        maya = folded(os.environ["MAYA_LOCATION"]) + os.sep
+        loaded = set(cmds.pluginInfo(query=True, listPlugins=True) or []) - before
+        for name in loaded:
             path = folded(cmds.pluginInfo(name, query=True, path=True))
-            self.assertFalse(
-                path.startswith(package + os.sep), f"{name} loads from {path}"
-            )
+            self.assertTrue(path.startswith(maya), f"{name} loads from {path}")
         self.assertTrue(cmds.pluginInfo("ufeSupport", query=True, loaded=True))
         carrier = folded(cmds.pluginInfo("ufeSupport", query=True, path=True))
-        self.assertTrue(
-            carrier.startswith(folded(os.environ["MAYA_LOCATION"]) + os.sep), carrier
-        )
+        self.assertTrue(carrier.startswith(maya), carrier)
         cmds.undo()
         self.assertEqual(self._times(), [1.0, 10.0])
 

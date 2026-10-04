@@ -30,6 +30,7 @@ from mayatk.light_utils.lightmap_baker import lightmap_baker_slots as slots_modu
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 from mayatk.light_utils.lightmap_baker.lightmap_baker_slots import LightmapBakerSlots
 from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+from mayatk.light_utils.lightmap_baker._probe_placement import ProbePlacement
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 from mayatk.mat_utils.bake_sets import LightmapExcludeSet
@@ -93,11 +94,26 @@ class _FakeBaker:
         self.called_stem = None
         self.called_on_progress = None
         self.called_shader = None
+        self.called_camera_shader = None
         self.called_batch = None
         self.called_claims = None
+        self.called_region = None
         self.card_seen_at_bake = False
         self.card_color = None
         self.card_diffuse = None
+        self.called_panorama = None
+
+    def render_panorama(self, position, path, width=1024, hide=None):
+        """A panorama as ``TextureBaker.render_panorama`` writes one: 2:1, every
+        direction a hit (alpha 1), the call recorded."""
+        self.called_panorama = {
+            "position": [float(c) for c in position],
+            "width": width,
+            "hide": list(hide or []),
+        }
+        cv2, np = _cv2()
+        cv2.imwrite(path, np.full((width // 2, width, 4), 0.5, np.float32))
+        return path
 
     def bake(
         self,
@@ -113,8 +129,13 @@ class _FakeBaker:
         shader=None,
         batch=False,
         claims=None,
+        region=None,
+        camera_shader=None,
     ):
+        shader = shader or camera_shader  # the card, whichever way it rides
+        self.called_camera_shader = camera_shader
         self.called_size = size
+        self.called_region = region
         self.called_claims = claims
         self.called_uv_set = uv_set
         self.called_stem = stem
@@ -292,6 +313,32 @@ class TestDilateLightmap(MayaTkTestCase):
                 # One further in -> kept.
                 self.assertTrue(bool(mask[row, last_full - 1]))
                 self.assertTrue(bool(mask[row, 8]))
+
+    def test_coverage_mask_keeps_every_island_however_small(self):
+        # The erosion (and the full-coverage cut) are per-TEXEL rules, and an
+        # island under ~3 texels wide has nothing left after them. With any big
+        # island surviving, the mask then dropped every small one, and the
+        # refill painted them with whatever island was nearest: on the
+        # production device (hundreds of key-sized islands at 1024) the
+        # Arnold map lost the keys' lighting to 45-degree dilation blobs while
+        # the Cycles bake kept it. Each island keeps its own best texels.
+        _, np = _cv2()
+        size = 64
+
+        def quad(u0, u1, v0=0.25, v1=0.75):
+            return [[(u0, v0), (u1, v0), (u1, v1)], [(u0, v0), (u1, v1), (u0, v1)]]
+
+        big = quad(0.0, 1 / 3, 0.0, 1.0)
+        strip = quad(40 / size, 42 / size)  # two full columns: erosion empties it
+        sliver = quad(50.5 / size, 51.5 / size)  # no fully covered texel at all
+        mask = LightmapBaker._coverage_mask(big + strip + sliver, (size, size))
+        self.assertIsNotNone(mask)
+        row = size // 2
+        self.assertTrue(bool(mask[row, 8]), "the big island lost its interior")
+        self.assertFalse(bool(mask[row, 21]), "the big island's border stays eroded")
+        self.assertTrue(mask[row, 40:42].any(), "a 2-texel island vanished")
+        self.assertTrue(mask[row, 50:52].any(), "a 1-texel island vanished")
+        self.assertFalse(mask[row, 44:49].any(), "background joined the mask")
 
     def test_real_shadow_texels_survive_the_rescue(self):
         # The rescue cut is RELATIVE (1% of median lit): genuine contact
@@ -642,9 +689,11 @@ class TestSeparated(MayaTkTestCase):
 
     @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
     def test_bake_separated_passes_true_white_card_shader_and_cleans_up(self):
-        # The card rides the bake as Arnold's per-shape -shader override
-        # (measured: only the shape being baked wears it) -- the scene's
-        # shading is NEVER touched and the card is deleted afterward. Kd must
+        # The card rides the bake as TextureBaker's camera_shader -- the bake's
+        # own rays see it, every bounce the real materials (as the per-shape
+        # -shader override, a concave object bounced light onto itself as if
+        # it were white) -- the scene's assignments are NEVER touched and the
+        # card is deleted afterward. Kd must
         # be pinned to 1.0 (lambert defaults to 0.8 = a grey card = maps ~20%
         # dark, measured 0.8006).
         cube, shape, known_sg = self._cube_with_known_material("sepCube")
@@ -658,6 +707,7 @@ class TestSeparated(MayaTkTestCase):
         LightmapBaker(resolution=64, baker=fake).bake_separated([long], output_dir=tmp)
 
         self.assertTrue(fake.card_seen_at_bake, "no live shader reached the bake")
+        self.assertTrue(fake.called_camera_shader, "the card rode as an override")
         self.assertEqual(tuple(fake.card_color), (1.0, 1.0, 1.0))
         self.assertAlmostEqual(fake.card_diffuse, 1.0)
         self.assertTrue(fake.called_batch)  # batched by default (7.45x)
@@ -1482,6 +1532,264 @@ class TestPackAtlas(MayaTkTestCase):
             if prev and prev != uv_set:
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
+    @staticmethod
+    def _panel(name, sg, x0, width=3.94, depth=1.31):
+        """A wall-like panel spanning world x [x0, x0 + width], its lightmap = map1."""
+        plane = cmds.polyPlane(
+            name=name, width=width, height=depth, subdivisionsX=1, subdivisionsY=1
+        )[0]
+        cmds.move(x0 + width / 2.0, 0, 0, plane)
+        cmds.makeIdentity(plane, apply=True, translate=True)
+        shape = cmds.listRelatives(plane, shapes=True, fullPath=True)[0]
+        cmds.sets(shape, edit=True, forceElement=sg)
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.addAttr(shape, longName=UvDiagnostics.LIGHTMAP_UV_TAG, dataType="string")
+        cmds.setAttr(
+            f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", "lightmap", type="string"
+        )
+        return cmds.ls(plane, long=True)[0]
+
+    @staticmethod
+    def _uv_at(obj, x, z):
+        import maya.api.OpenMaya as om
+
+        sel = om.MSelectionList()
+        sel.add(obj)
+        fn = om.MFnMesh(sel.getDagPath(0).extendToShape())
+        u, v, _face = fn.getUVAtPoint(om.MPoint(x, 0, z), om.MSpace.kWorld, "lightmap")
+        return u, v
+
+    def _panel_tile(self, obj, x0, width, field, render=256, noise=0.0, seed=0):
+        """A tile of *field* (a function of world x) as _dilate_lightmap hands one on.
+
+        The coverage erode drops the outermost ring and the refill copies its
+        neighbour into it; *noise* is iid relative sampling noise per texel.
+        """
+        cv2, np = _cv2()
+        u0, _v = self._uv_at(obj, x0 + 1e-3, 0.0)
+        u1, _v = self._uv_at(obj, x0 + width - 1e-3, 0.0)
+        centres = (np.arange(render) + 0.5) / render
+        x = x0 + (centres - u0) / (u1 - u0) * width
+        rgb = np.tile(field(x)[None, :], (render, 1)).astype(np.float32)
+        if noise:
+            rng = np.random.default_rng(seed)
+            rgb *= (1.0 + noise * rng.standard_normal(rgb.shape)).astype(np.float32)
+        alpha = np.ones((render, render), np.float32)
+        alpha[[0, -1], :] = 0.0
+        alpha[:, [0, -1]] = 0.0
+        rgb[:, 0], rgb[:, -1] = rgb[:, 1], rgb[:, -2]
+        path = os.path.join(self.tmp, f"{obj.rsplit('|', 1)[-1]}.exr")
+        cv2.imwrite(path, np.dstack([rgb, rgb, rgb, alpha]))
+        return path
+
+    def _packed_reader(self, mapping, resolution=64):
+        """Pack *mapping*; return ``read(obj, x, y, z)``: the atlas through obj's rect."""
+        import maya.api.OpenMaya as om
+
+        cv2, np = _cv2()
+        packed = LightmapBaker(resolution=resolution).pack_atlas(
+            mapping, output_dir=self.tmp
+        )
+        atlas = _read(next(iter(packed.values()))[0])[..., :3].astype(np.float32)
+        h, w = atlas.shape[:2]
+
+        def read(obj, x, y, z):
+            sel = om.MSelectionList()
+            sel.add(obj)
+            fn = om.MFnMesh(sel.getDagPath(0).extendToShape())
+            u, v, _f = fn.getUVAtPoint(om.MPoint(x, y, z), om.MSpace.kWorld, "lightmap")
+            sx, sy, ox, oy = packed[obj][1]
+            px = np.array([[(u * sx + ox) * w - 0.5]], np.float32)
+            py = np.array([[(1.0 - (v * sy + oy)) * h - 0.5]], np.float32)
+            return float(cv2.remap(atlas, px, py, cv2.INTER_LINEAR)[0, 0, 0])
+
+        return read
+
+    def _seam_steps(self, read, a, b, x, zs, y=0.0, eps=1e-4):
+        return [
+            abs(read(a, x - eps, y, z) - read(b, x + eps, y, z))
+            / ((read(a, x - eps, y, z) + read(b, x + eps, y, z)) / 2)
+            for z in zs
+        ]
+
+    def test_coplanar_panels_meet_without_a_step(self):
+        """Two panels that share a 3D edge show ONE light level along it.
+
+        The production room (PLAYGROUND, 2026-10-02) read as a patchwork: under a
+        smooth light field each wall panel met its neighbour with a step (median
+        5.4%, p90 12%). The pack put it there, independent of the bake: the
+        cell's border ring, partly covered after the shrink, was refilled from
+        the ring INSIDE it, the tile was resized edge to edge while its rect is
+        published with its edges on border-texel CENTERS, and the denoise window
+        an edge truncates averaged the light from inside -- each side read its
+        lighting texels in from the edge. Synthetic tiles, no render: the light
+        field is known, so any step at the seam is the pack's.
+        """
+        _cv2_, np = _cv2()
+        sg, _mat = self._make_sg("seamPanels")
+        width, sigma, hot = 3.94, 0.7, 3.94 + 0.35  # a fixture just past the edge
+
+        def field(x):
+            return 1.0 + 1.5 * np.exp(-((x - hot) ** 2) / (2 * sigma**2))
+
+        panels = [self._panel(f"seamPanel{i}", sg, i * width) for i in range(2)]
+        mapping = {
+            obj: self._panel_tile(obj, i * width, width, field)
+            for i, obj in enumerate(panels)
+        }
+        read = self._packed_reader(mapping)
+        steps = self._seam_steps(read, *panels, width, np.linspace(-0.4, 0.4, 9) * 1.31)
+        self.assertLess(
+            max(steps),
+            0.01,
+            f"seam step {100 * max(steps):.1f}% between coplanar panels",
+        )
+
+    def test_noisy_coplanar_panels_read_one_value_along_their_edge(self):
+        """Each panel is its own cell with its own sampling noise, so however well
+        each is finished they disagree along the edge they share -- the seam is
+        stitched: both sides read one value there."""
+        _cv2_, np = _cv2()
+        sg, _mat = self._make_sg("noisyPanels")
+        width = 3.94
+        panels = [self._panel(f"noisyPanel{i}", sg, i * width) for i in range(2)]
+        mapping = {
+            obj: self._panel_tile(
+                obj, i * width, width, lambda x: 1.0 + 0.0 * x, noise=0.08, seed=i
+            )
+            for i, obj in enumerate(panels)
+        }
+        read = self._packed_reader(mapping)
+        steps = self._seam_steps(
+            read, *panels, width, np.linspace(-0.4, 0.4, 17) * 1.31
+        )
+        self.assertLess(max(steps), 0.01, f"seam step {100 * max(steps):.1f}%")
+
+    def test_a_corner_is_not_stitched(self):
+        """A wall meeting a floor shares an edge but not a plane: their light differs."""
+        _cv2_, np = _cv2()
+        sg, _mat = self._make_sg("cornerPanels")
+        width = 3.94
+        floor = self._panel("cornerFloor", sg, 0.0)
+        wall = self._panel("cornerWall", sg, width)
+        cmds.rotate(0, 0, 90, wall, pivot=(width, 0, 0), relative=True)
+        cmds.makeIdentity(wall, apply=True, rotate=True)
+        mapping = {
+            floor: self._panel_tile(floor, 0.0, width, lambda x: 1.0 + 0.0 * x),
+            wall: self._wall_tile(wall, 2.0),
+        }
+        read = self._packed_reader(mapping)
+        for z in np.linspace(-0.4, 0.4, 5) * 1.31:
+            self.assertAlmostEqual(read(floor, width - 1e-3, 0.0, z), 1.0, delta=0.02)
+            self.assertAlmostEqual(read(wall, width, 1e-3, z), 2.0, delta=0.04)
+
+    def test_a_panel_standing_in_front_is_not_stitched(self):
+        """A baseboard runs along a wall's edge a little IN FRONT of it: coplanar
+        in normal, never sharing the edge."""
+        _cv2_, np = _cv2()
+        sg, _mat = self._make_sg("frontPanels")
+        width = 3.94
+        back = self._panel("frontBack", sg, 0.0)
+        front = self._panel("frontFront", sg, width)
+        cmds.move(0, 0.02, 0, front, relative=True)
+        cmds.makeIdentity(front, apply=True, translate=True)
+        mapping = {
+            back: self._panel_tile(back, 0.0, width, lambda x: 1.0 + 0.0 * x),
+            front: self._panel_tile(front, width, width, lambda x: 2.0 + 0.0 * x),
+        }
+        read = self._packed_reader(mapping)
+        for z in np.linspace(-0.4, 0.4, 5) * 1.31:
+            self.assertAlmostEqual(read(back, width - 1e-3, 0.0, z), 1.0, delta=0.02)
+            self.assertAlmostEqual(read(front, width + 1e-3, 0.02, z), 2.0, delta=0.04)
+
+    def test_region_tiles_pack_onto_their_layout(self):
+        """A tile rendered over only its island's region lands where the layout
+        samples it, and two such coplanar panels still meet in one value."""
+        cv2, np = _cv2()
+        sg, _mat = self._make_sg("regionPanels")
+        width, sigma, hot = 3.94, 0.7, 3.94 + 0.35
+
+        def field(x):
+            return 1.0 + 1.5 * np.exp(-((x - hot) ** 2) / (2 * sigma**2))
+
+        panels = [self._panel(f"regionPanel{i}", sg, i * width) for i in range(2)]
+        for obj in panels:  # the production walls: islands at u 0..1/3
+            self._squeeze_lightmap_u(obj, 1.0 / 3.0)
+        baker = LightmapBaker(resolution=64)
+        plan = baker.atlas_plan(panels)
+        bake_sizes = baker._plan_bake_sizes(baker.plan_sizes(plan))
+        regions = baker._plan_regions(bake_sizes)
+        self.assertEqual(set(regions), set(panels))
+        mapping = {}
+        for i, obj in enumerate(panels):
+            u0, v0, u1, v1 = regions[obj]
+            render = bake_sizes[obj]
+            # What RTT writes for the region: column c samples layout u at
+            # u0 + (u1 - u0) * (c + 0.5) / render (measured, mtoa 5.4.5).
+            lu = u0 + (u1 - u0) * (np.arange(render) + 0.5) / render
+            x = i * width + lu * 3.0 * width  # squeezed: layout u 1/3 spans the panel
+            rgb = np.tile(field(x)[None, :], (render, 1)).astype(np.float32)
+            inside = (lu > 0.0) & (lu < 1.0 / 3.0)
+            alpha = np.tile(inside[None, :], (render, 1)).astype(np.float32)
+            alpha[[0, -1], :] = 0.0
+            path = os.path.join(self.tmp, f"regionPanel{i}.exr")
+            cv2.imwrite(path, np.dstack([rgb, rgb, rgb, alpha]))
+            mapping[obj] = path
+        packed = baker.pack_atlas(
+            mapping, output_dir=self.tmp, plan=plan, regions=regions
+        )
+        atlas = _read(next(iter(packed.values()))[0])[..., :3].astype(np.float32)
+        h, w = atlas.shape[:2]
+
+        def read(obj, x, z):
+            import maya.api.OpenMaya as om
+
+            sel = om.MSelectionList()
+            sel.add(obj)
+            fn = om.MFnMesh(sel.getDagPath(0).extendToShape())
+            u, v, _f = fn.getUVAtPoint(om.MPoint(x, 0, z), om.MSpace.kWorld, "lightmap")
+            sx, sy, ox, oy = packed[obj][1]
+            px = np.array([[(u * sx + ox) * w - 0.5]], np.float32)
+            py = np.array([[(1.0 - (v * sy + oy)) * h - 0.5]], np.float32)
+            return float(cv2.remap(atlas, px, py, cv2.INTER_LINEAR)[0, 0, 0])
+
+        for i, obj in enumerate(panels):
+            for x in np.linspace(0.25, 0.75, 5) * width + i * width:
+                self.assertAlmostEqual(read(obj, x, 0.0) / field(x), 1.0, delta=0.04)
+        steps = [
+            abs(read(panels[0], width - 1e-4, z) - read(panels[1], width + 1e-4, z))
+            for z in np.linspace(-0.4, 0.4, 9) * 1.31
+        ]
+        self.assertLess(max(steps) / field(width), 0.01)
+
+    def test_a_panel_lying_on_another_along_its_border_is_not_stitched(self):
+        """A decal along a panel's border shares the edge's LINE, not the edge:
+        both faces lie on the same side of it."""
+        _cv2_, np = _cv2()
+        sg, _mat = self._make_sg("decalPanels")
+        width = 3.94
+        base = self._panel("decalBase", sg, 0.0)
+        decal = self._panel("decalTop", sg, width / 2.0, width=width / 2.0)
+        mapping = {
+            base: self._wall_tile(base, 1.0),
+            decal: self._wall_tile(decal, 2.0),
+        }
+        read = self._packed_reader(mapping)
+        for z in np.linspace(-0.4, 0.4, 5) * 1.31:
+            self.assertAlmostEqual(read(base, width - 1e-3, 0.0, z), 1.0, delta=0.02)
+            self.assertAlmostEqual(read(decal, width - 1e-3, 0.0, z), 2.0, delta=0.04)
+
+    def _wall_tile(self, obj, value, render=256):
+        """A uniform tile (the coverage-eroded shape _dilate_lightmap hands on)."""
+        cv2, np = _cv2()
+        rgb = np.full((render, render), value, np.float32)
+        alpha = np.ones((render, render), np.float32)
+        alpha[[0, -1], :] = 0.0
+        alpha[:, [0, -1]] = 0.0
+        path = os.path.join(self.tmp, f"{obj.rsplit('|', 1)[-1]}.exr")
+        cv2.imwrite(path, np.dstack([rgb, rgb, rgb, alpha]))
+        return path
+
     def test_an_unlaid_out_map_is_kept_rather_than_dropped(self):
         # pack_atlas resolves its layout through atlas_plan, which resolves
         # meshes -- so a name that no longer IS one (deleted between bake and
@@ -1733,36 +2041,6 @@ class TestPackAtlas(MayaTkTestCase):
                     msg=f"{obj}: cell edge uv={uv_edge} -> {px}px is not a "
                     "texel center",
                 )
-
-    def test_crop_admits_no_edge_extension_texel(self):
-        # The production seam: the crop used to pad a whole texel past the
-        # island's high edge, and an edge-extension texel is NOT this
-        # object's lighting -- Arnold renders the extension physically, and
-        # a point just past a wall panel's edge is coplanar with the
-        # neighbouring panel, so it bakes dark. The pad was also asymmetric
-        # (the low edge clamped at 0), which is why every tile's TOP edge
-        # measured -5% against its own interior while its bottom read ~0%.
-        # A source whose island region is uniform must therefore crop to
-        # island texels ONLY -- no neighbouring value may enter the crop.
-        cv2, np = _cv2()
-        w = h = 24
-        img = np.zeros((h, w, 3), np.float32)
-        # island = u[0.25, 0.75] -> cols 6..18, v[0.25, 0.75] -> rows 6..18
-        img[...] = 9.0  # everything outside the island: an extreme value
-        img[6:18, 6:18] = 1.0
-        cropped, rect, bounds = LightmapBaker._crop_to_island(
-            img, (0.25, 0.25, 0.75, 0.75), [0.5, 0.5, 0.0, 0.0]
-        )
-        self.assertEqual(
-            float(cropped.max()),
-            1.0,
-            "an edge-extension texel leaked into the crop",
-        )
-        self.assertEqual(bounds, (0.25, 0.25, 0.75, 0.75))
-        # The rect still maps the cropped region onto the whole cell.
-        sx, sy, ox, oy = rect
-        self.assertAlmostEqual(ox + sx * 0.25, 0.0, places=6)
-        self.assertAlmostEqual(ox + sx * 0.75, 0.5, places=6)
 
     def test_cropped_islands_sample_disjoint_atlas_regions(self):
         # A crop-composed rect legally extends past its own cell (that is the
@@ -2285,14 +2563,31 @@ class TestDenoise(unittest.TestCase):
         where[18:30, 2:20] = True
         self.assertLess(self._grain(tile, where), 0.6 * self._grain(shrunk, where))
 
-    def test_off_is_the_path_as_it_was(self):
+    def test_off_skips_only_the_denoise(self):
+        """Off means no denoise -- the tile still lands in its cell the way its
+        rect is published. That placement is not a quality knob: the old off-path
+        (the tile handed back whole for the assembler's edge-to-edge resize) is
+        the one that put a step on every shared panel edge (2026-10-02)."""
         _cv2_, np = _cv2()
         img, _island = self._map()
+        expected, covered = ptk.ImgUtils.resize_into_cell(
+            img[..., :3], (16, 16), coverage=img[..., 3], edge_centers=True
+        )
+        own = covered > LightmapBaker._COVERAGE_OWN
         off = LightmapBaker(resolution=64, denoise=False)
-        np.testing.assert_array_equal(off._finish_tile(img, (16, 16)), img[..., :3])
+        got = off._finish_tile(img, (16, 16), edge_centers=True)
+        np.testing.assert_allclose(got[own], expected[own], rtol=1e-6)
+        on = LightmapBaker(resolution=64)._finish_tile(img, (16, 16), edge_centers=True)
+        self.assertFalse(np.allclose(on[own], expected[own]), "the denoise must act")
+        # A map without coverage (finished at its own size) is only resampled.
         rgb = img[..., :3].copy()
+        np.testing.assert_allclose(
+            LightmapBaker(resolution=64)._finish_tile(rgb, (16, 16)),
+            ptk.ImgUtils.resize_into_cell(rgb, (16, 16), edge_centers=False)[0],
+            rtol=1e-6,
+        )
         np.testing.assert_array_equal(
-            LightmapBaker(resolution=64)._finish_tile(rgb, (16, 16)), rgb
+            LightmapBaker(resolution=64)._finish_tile(rgb, (64, 64)), rgb
         )
 
     def test_the_preset_carries_the_setting(self):
@@ -2441,6 +2736,17 @@ class TestIncludeEnvironment(MayaTkTestCase):
         kept = TextureBaker(resolution=16, device="CPU")
         self.assertEqual(LightmapBaker(baker=kept).device, "CPU")
 
+    def test_a_baker_made_here_defaults_to_auto(self):
+        """The scene's own device was the CPU on the production office (saved so),
+        and a scripted bake ran 48 minutes for 9 of its 49 objects while the panel,
+        defaulting to AUTO, baked all 49 on the GPU in 17. "SCENE" still asks for
+        the scene's own.
+        Added: 2026-10-01
+        """
+        self.assertEqual(LightmapBaker().device, "AUTO")
+        self.assertEqual(LightmapBaker.from_preset("mobile").device, "AUTO")
+        self.assertEqual(LightmapBaker(device="SCENE").baker._device_settings(), {})
+
     def test_the_device_reaches_the_bake_primitive(self):
         baker = LightmapBaker(device="GPU")
         self.assertEqual(baker.baker.device, "GPU")
@@ -2535,39 +2841,77 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         self.assertLess(sizes["a"], baker.resolution)
         self.assertEqual(sizes["b"], baker.resolution)  # never above a full map
 
-    def test_an_atlas_tile_renders_above_its_cell_because_nothing_denoises_it(self):
-        """The assembler's INTER_AREA resize into the cell is the only noise
-        filter an Arnold atlas gets: RTT ignores imagers, so nothing denoises
-        the map. Tiles rendered AT their cell kept every sample's noise --
-        measured on a production room at mobile (1024 / 4 samples), the floor
-        cells shipped 2.3x the shadow noise of the pre-plan-first full-size
-        bake and read as splotches in the WebXR preview. A tile renders at a
-        multiple of its cell, never above the full map."""
+    def test_an_atlas_tile_renders_above_its_cell(self):
+        """The assembler's INTER_AREA resize averages a tile's noise before the
+        cell is denoised: tiles rendered AT their cell kept every sample's noise
+        and read as splotches in the WebXR preview (2026-09-21). A tile renders
+        at :attr:`_ATLAS_SUPERSAMPLE` times its cell, never above the full map.
+        2 since 2026-10-01: on a production floor at four bounces, 4x took 75s
+        for 0.39% shadow mottle and 2x 22s for 0.52% (two seeds, shipped cell)."""
         baker = LightmapBaker(resolution=1024)
+        ss = baker._ATLAS_SUPERSAMPLE
+        self.assertGreaterEqual(ss, 2)
         with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
             sizes = baker._plan_bake_sizes(
                 {"prop": (100, 100), "floor": (256, 218), "wall": (600, 300)}
             )
-        self.assertGreaterEqual(sizes["prop"], 4 * 100)
-        # The production floor cell: back to the full-size render it had
-        # before plan-first, i.e. exactly the pre-regression noise.
-        self.assertEqual(sizes["floor"], baker.resolution)
+        self.assertGreaterEqual(sizes["prop"], ss * 100)
+        self.assertGreaterEqual(sizes["floor"], ss * 256)
+        self.assertLessEqual(sizes["floor"], baker.resolution)
         self.assertEqual(sizes["wall"], baker.resolution)  # capped at a full map
 
-    def test_partial_island_coverage_raises_the_bake_size(self):
-        # _pack_group crops a partial-coverage map to its island bbox and folds
-        # the crop into the published rect, so only that fraction of the map's
-        # texels reach the cell. Rendering the cell size flat would hand the
-        # assembler a tile to UPSCALE -- softer than bake-full-then-pack for
-        # exactly the unwraps that need it most.
+    def test_a_partial_island_renders_its_region_not_a_magnified_square(self):
+        """A layout covering part of its square renders JUST its island's region.
+
+        It used to render the whole square magnified by the axis it covered least
+        and crop the rest away: a production room's reused wall layouts (u 0..0.33)
+        drew 3x the texels they shipped and its baseboard strips (u 0..0.05) a
+        full map each -- 342 of 624 render-seconds (2026-10-02)."""
         baker = LightmapBaker(resolution=1024)
         with mock.patch.object(
-            LightmapBaker, "_lightmap_uv_bbox", return_value=(0.0, 0.0, 0.5, 1.0)
+            LightmapBaker, "_lightmap_uv_bbox", return_value=(0.0, 0.0, 0.33, 1.0)
         ):
-            half = baker._plan_bake_sizes({"a": (100, 100)})["a"]
+            sizes = baker._plan_bake_sizes({"a": (100, 100)})
+            regions = baker._plan_regions(sizes)
         with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
-            full = baker._plan_bake_sizes({"a": (100, 100)})["a"]
-        self.assertGreaterEqual(half, 2 * full - LightmapBaker._ATLAS_BAKE_QUANTUM)
+            full = baker._plan_bake_sizes({"a": (100, 100)})
+        self.assertEqual(sizes, full)  # sized by its cell, not magnified
+        self.assertIn("a", regions)  # ...and renders its region of the layout
+
+    def test_every_side_of_a_region_keeps_its_full_pad(self):
+        """The island sits exactly the pad -- at least 4 render texels -- from every frame edge.
+
+        At 1, Arnold's pixel filter corrupted the island's outermost row near
+        the frame (+3.3% / -1.4% on a production room's wall tiles: a 1-2%
+        dip-and-ridge on every panel seam at 2K, where Arnold's own camera
+        render is smooth). At 4 the side the unit square did not clamp came
+        back clean, but the clamped sides kept a FRACTION of a texel and the
+        seams no better. RTT renders a region past the unit square (measured:
+        u/v_start -0.25, scale 1.5 maps exactly), so nothing is clamped --
+        even for an island touching the square's edge, as the walls' do."""
+        baker = LightmapBaker(resolution=1024)
+        island = (0.0, 0.0, 0.33, 1.0)
+        with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=island):
+            px = baker._plan_bake_sizes({"a": (100, 100)})["a"]
+            u0, v0, u1, v1 = baker._plan_regions({"a": px})["a"]
+        self.assertGreaterEqual(baker._REGION_PAD, 4)
+        su, sv = (u1 - u0) / px, (v1 - v0) / px  # one render texel, in uv
+        for gap in (
+            (island[0] - u0) / su,
+            (u1 - island[2]) / su,
+            (island[1] - v0) / sv,
+            (v1 - island[3]) / sv,
+        ):
+            self.assertAlmostEqual(gap, baker._REGION_PAD, delta=1e-6)
+
+    def test_a_full_island_renders_whole(self):
+        baker = LightmapBaker(resolution=1024)
+        with mock.patch.object(
+            LightmapBaker,
+            "_lightmap_uv_bbox",
+            return_value=(0.004, 0.004, 0.996, 0.996),
+        ):
+            self.assertEqual(baker._plan_regions({"a": 256}), {})
 
     def test_bake_atlas_sizes_the_bake_from_the_plan_and_reuses_it(self):
         sg = self._sg("bakePlan")
@@ -2685,13 +3029,35 @@ class TestLightmapPresets(unittest.TestCase):
 
     def test_builtin_tiers_listed(self):
         names = LightmapBaker.preset_store().list()
-        for tier in ("preview", "mobile", "desktop"):
+        for tier in ("preview", "mobile", "desktop", "hero"):
             self.assertIn(tier, names)
+
+    def test_every_tier_bakes_the_bounces_the_blender_twin_does(self):
+        """Both engines count bounces alike -- a grey calibration room baked by
+        Arnold and by Cycles agreed with each other and the analytic value to
+        2%, at 0 and at 2 bounces (2026-10-01) -- so the tiers carry ONE depth
+        each, and a room bakes to the same level on either side. Four is the
+        default: 95% of a grey room's converged light, against 81% at the old 2.
+        Added: 2026-10-01
+        """
+        depths = {
+            n: LightmapBaker.from_preset(n).gi_depth
+            for n in ("preview", "mobile", "desktop", "hero")
+        }
+        self.assertEqual(depths, {"preview": 2, "mobile": 4, "desktop": 6, "hero": 8})
+
+    def test_a_baker_that_names_no_tier_bakes_the_default_one(self):
+        """A script that never names a tier gets the panel's default (mobile).
+        Added: 2026-10-01
+        """
+        bare, mobile = LightmapBaker(), LightmapBaker.from_preset("mobile")
+        for dial in ("resolution", "samples", "gi_depth", "gi_samples"):
+            self.assertEqual(getattr(bare, dial), getattr(mobile, dial), dial)
 
     def test_from_preset_sets_resolution_and_samples(self):
         baker = LightmapBaker.from_preset("desktop")
         self.assertEqual(baker.resolution, 2048)
-        self.assertEqual(baker.samples, 8)
+        self.assertEqual(baker.samples, 4)
         # The injected default baker inherits the resolution.
         self.assertEqual(baker.baker.resolution, 2048)
 
@@ -2700,11 +3066,11 @@ class TestLightmapPresets(unittest.TestCase):
         # preset must reach the bake via the baker's pinned render_settings,
         # or every bake silently runs at Arnold's 1-bounce scene default.
         baker = LightmapBaker.from_preset("desktop")
-        self.assertEqual(baker.gi_depth, 3)
-        self.assertEqual(baker.gi_samples, 6)
+        self.assertEqual(baker.gi_depth, 6)
+        self.assertEqual(baker.gi_samples, 4)
         self.assertEqual(
             baker.baker.render_settings,
-            {"GIDiffuseDepth": 3, "GIDiffuseSamples": 6},
+            {"GIDiffuseDepth": 6, "GIDiffuseSamples": 4},
         )
 
     def test_overrides_win_over_preset(self):
@@ -2712,7 +3078,7 @@ class TestLightmapPresets(unittest.TestCase):
         self.assertEqual(baker.resolution, 1536)  # override
         self.assertEqual(baker.samples, 4)  # from preset
         self.assertEqual(baker.gi_depth, 5)  # override
-        self.assertEqual(baker.gi_samples, 4)  # from preset
+        self.assertEqual(baker.gi_samples, 2)  # from preset
 
     def test_unknown_preset_raises(self):
         with self.assertRaises(ValueError):
@@ -2787,8 +3153,9 @@ class TestLightmapPresets(unittest.TestCase):
         self.assertIs(baker.include_environment, False)
         self.assertIs(baker.denoise, False)
         self.assertIs(baker.beside_textures, True)
-        # The device names one machine's hardware; a preset never picks it.
-        self.assertIsNone(baker.device)
+        # The device names one machine's hardware; a preset never picks it --
+        # the baker keeps its own default.
+        self.assertEqual(baker.device, LightmapBaker().device)
 
     def test_from_preset_overrides_still_win_over_saved_switches(self):
         self._store_with("roomPass", self._PANEL_PRESET)
@@ -2953,7 +3320,8 @@ class TestBesideTextures(MayaTkTestCase):
     The folder comes from the same vote that names the map
     (``LightmapBaker._texture_set``), so ``<set>_Lightmap.exr`` sits beside
     ``<set>_BaseColor.png``; the bake's output_dir takes any object whose
-    material has no texture folder on this machine.
+    material has no texture folder on this machine -- or whose folder lies
+    outside the scene's project.
     """
 
     def setUp(self):
@@ -2961,6 +3329,10 @@ class TestBesideTextures(MayaTkTestCase):
         self.root = tempfile.mkdtemp(prefix="lm_beside_")
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
         self.out = os.path.join(self.root, "out")
+        # The temp root IS the project the textures live in.
+        previous = cmds.workspace(query=True, rootDirectory=True)
+        cmds.workspace(self.root, openWorkspace=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
 
     def _textured(self, name, folder, set_name, sg=None, make_folder=True):
         """A cube wearing a lambert whose color is ``<folder>/<set>_BaseColor.png``.
@@ -3031,6 +3403,30 @@ class TestBesideTextures(MayaTkTestCase):
         ).bake_separated([cube], output_dir=self.out)
         self.assertTrue(self._same(os.path.dirname(out[cube]), self.out))
         self.assertFalse(os.path.exists(gone))
+
+    @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+    def test_a_texture_folder_outside_the_project_is_never_written_to(self):
+        """Another project's (or Downloads') texture folder is not this bake's to write.
+
+        A texture library two projects share took both projects' lightmaps
+        under one name: a production soldering assembly's room maps beside
+        another project's room textures, where that project's own room lightmap
+        lives, and a PLAYGROUND bake's table atlas in the soldering project's
+        texture folder (2026-10-03). Each bake then silently replaced the
+        other's. Outside the project, the map takes the bake's output_dir."""
+        inside = os.path.join(self.root, "sourceimages", "crate")
+        library = tempfile.mkdtemp(prefix="lm_library_")
+        self.addCleanup(shutil.rmtree, library, ignore_errors=True)
+        ours, _ = self._textured("bsOurs", inside, "Crate_Wood_01")
+        shared, _ = self._textured("bsShared", library, "Office_Wall_01")
+
+        out = LightmapBaker(
+            resolution=64, baker=_FakeBaker(), beside_textures=True
+        ).bake_separated([ours, shared], output_dir=self.out)
+
+        self.assertTrue(self._same(os.path.dirname(out[ours]), inside))
+        self.assertTrue(self._same(os.path.dirname(out[shared]), self.out))
+        self.assertEqual(os.listdir(library), [])  # never written to
 
     @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
     def test_an_atlas_lands_beside_its_material_groups_textures(self):
@@ -3628,6 +4024,408 @@ class TestBakeWorkflow(MayaTkTestCase):
 
 
 @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+class TestReflectionProbe(MayaTkTestCase):
+    """A bake captures the room it lit as a reflection probe, and records it.
+
+    What a lightmap cannot hold: a baked METAL has no diffuse, so all it shows
+    is what it reflects, and an object the bake left out is lit by nothing of
+    the room. Measured on a production soldering table against Arnold's render
+    of the same room (2026-10-03): under the WebXR preview's studio its metal
+    housing read 0.12 of Arnold's luminance and its unbaked magnifier up to
+    2.8x too bright; reflecting and lit by the room's own probe, 0.62 and
+    0.65-1.45x. A fake backend stands in for Arnold.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("lm_probe", policy="scoped")
+        ).dir_path()
+
+    def _room(self):
+        """A 10 x 4 x 10 m room (cm) on the floor, a table in it and an
+        unbaked prop on the table, off-centre: ``(room, table, prop)``."""
+        room = cmds.polyCube(name="pbRoom", width=1000, height=400, depth=1000)[0]
+        cmds.move(0, 200, 0, room)
+        table = cmds.polyCube(name="pbTable", width=240, height=90, depth=100)[0]
+        cmds.move(-100, 45, -200, table)
+        prop = cmds.polyCube(name="pbProp", width=20, height=20, depth=20)[0]
+        cmds.move(-300, 100, -150, prop)
+        return [cmds.ls(n, long=True)[0] for n in (room, table, prop)]
+
+    def _bake(self, objects, **kwargs):
+        fake = _FakeBaker()
+        result = LightmapBaker(resolution=1024, baker=fake, **kwargs).bake(
+            objects, packing="per_object", output_dir=self.tmp
+        )
+        return result, fake
+
+    def test_a_bake_captures_the_room_over_what_moves_and_records_it(self):
+        room, table, prop = self._room()
+        result, fake = self._bake([room, table])
+        self.assertTrue(result.probe, "the bake captured no probe")
+        self.assertEqual(os.path.dirname(result.probe), self.tmp, "beside its maps")
+        self.assertTrue(result.probe.endswith("_Probe.exr"))
+        call = fake.called_panorama
+        # Over the prop that moves, at the baked room's mid-height.
+        self.assertAlmostEqual(call["position"][0], -300.0, places=3)
+        self.assertAlmostEqual(call["position"][1], 200.0, places=3)
+        self.assertAlmostEqual(call["position"][2], -150.0, places=3)
+        self.assertEqual(call["hide"], [prop], "what moves is see-through to it")
+        self.assertEqual(call["width"], 512, "half the bake's resolution")
+
+        probe = LightmapRecords.probe()
+        self.assertEqual(probe["map"], os.path.basename(result.probe))
+        self.assertEqual(probe["position"], call["position"])
+        self.assertEqual(probe["unit_scale"], 0.01)
+        # The room's walls, measured from the probe: the table below it is
+        # furniture, and the floor stays the floor.
+        (x0, y0, z0), (x1, y1, z1) = probe["box"]
+        for got, want in (
+            (x0, -500),
+            (y0, 0),
+            (z0, -500),
+            (x1, 500),
+            (y1, 400),
+            (z1, 500),
+        ):
+            self.assertAlmostEqual(got, want, delta=1.0)
+
+        manifest = json.loads(LightmapRecords._record().text)
+        self.assertEqual(manifest["probe"], probe, "the manifest carries it to the GLB")
+        deps = {d["map"]: d for d in LightmapRecords.lightmap_dependencies()}
+        self.assertEqual(deps[probe["map"]]["objects"], [], "the scene's, no object's")
+        self.assertTrue(deps[probe["map"]]["path"], "a GLB build finds it")
+        self.assertIn(
+            self.tmp.replace("\\", "/").lower(),
+            [d.replace("\\", "/").lower() for d in LightmapRecords.search_dirs()],
+        )
+
+    def test_what_moves_outside_the_room_does_not_pull_the_probe(self):
+        """A scratch copy parked beside the room (a production scene keeps a
+        TEMP copy of its table there) is neither in the room nor lit by it."""
+        room, table, _prop = self._room()
+        outside = cmds.polyCube(name="pbOutside", width=20, height=20, depth=20)[0]
+        cmds.move(2000, 100, 1500, outside)
+        _result, fake = self._bake([room, table])
+        call = fake.called_panorama
+        self.assertAlmostEqual(call["position"][0], -300.0, places=3)
+        self.assertAlmostEqual(call["position"][2], -150.0, places=3)
+        # Still see-through to it, wherever it stands: in an open scene what
+        # moves is in the probe's view however far off it is parked.
+        self.assertIn(cmds.ls(outside, long=True)[0], call["hide"])
+
+    def test_a_table_under_the_probe_is_furniture_not_the_floor(self):
+        room, table, _prop = self._room()
+        box = ProbePlacement([room, table]).faces([-100.0, 200.0, -200.0])
+        self.assertAlmostEqual(
+            box[0][1], 0.0, delta=1.0, msg="the floor, past the table"
+        )
+
+    def test_a_hidden_baked_object_is_no_wall(self):
+        """The render does not see a hidden object, so the box must not: a
+        baked shell around the probe, hidden since its bake, walled it in."""
+        room, table, _prop = self._room()
+        shell = cmds.polyCube(name="pbShell", width=200, height=200, depth=200)[0]
+        cmds.move(-300, 200, -150, shell)
+        shell = cmds.ls(shell, long=True)[0]
+        self._bake([room, table, shell])
+        cmds.setAttr(shell + ".visibility", 0)
+
+        LightmapBaker(resolution=1024, baker=_FakeBaker()).bake_probe()
+
+        (x0, _y0, z0), (x1, _y1, z1) = LightmapRecords.probe()["box"]
+        for got, want in ((x0, -500), (z0, -500), (x1, 500), (z1, 500)):
+            self.assertAlmostEqual(got, want, delta=1.0)
+
+    def test_a_z_up_scene_gets_no_probe(self):
+        """Its deliverables read a probe in Y-up axes (the WebXR preview's
+        equirect, Unity's cubemap), so one captured in a Z-up scene's would
+        reflect the room on its side: none, said once. Added: 2026-10-04"""
+        cmds.upAxis(axis="z", rotateView=False)
+        self.addCleanup(cmds.upAxis, axis="y", rotateView=False)
+        room, table, _prop = self._room()
+        with self.assertLogs(LightmapBaker.logger, level="WARNING") as caught:
+            result, fake = self._bake([room, table])
+        self.assertIsNone(result.probe)
+        self.assertIsNone(fake.called_panorama)
+        self.assertIsNone(LightmapRecords.probe())
+        self.assertTrue(any("Z-up" in line for line in caught.output), caught.output)
+
+    def test_the_probe_follows_its_file_when_repathed(self):
+        room, table, _prop = self._room()
+        result, _fake = self._bake([room, table])
+        moved = os.path.join(self.tmp, "moved")
+        os.makedirs(moved)
+        name = os.path.basename(result.probe)
+        shutil.move(result.probe, os.path.join(moved, name))
+        self.assertEqual(LightmapRecords.repath_lightmaps({name.lower(): moved}, []), 1)
+        deps = {d["map"]: d for d in LightmapRecords.lightmap_dependencies(walk=False)}
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(deps[name]["path"])),
+            os.path.normcase(moved),
+        )
+
+    def test_a_renamed_map_is_followed_by_its_markers_and_the_probe(self):
+        """A lightmap is bound by its FILE NAME -- the markers, the folder and
+        writer records and the deliverable's manifest all key on it -- so a
+        file renamed on disk read as a missing lightmap. ``rename_lightmap``
+        re-stamps every record naming it (the Texture Path Editor's rename
+        drives it). Added: 2026-10-04
+        """
+        room, table, _prop = self._room()
+        result, _fake = self._bake([room, table])
+        deps = LightmapRecords.lightmap_dependencies(walk=False)
+        mapped = next(d for d in deps if d["objects"])
+        old, new = mapped["map"], "renamed_" + mapped["map"]
+        os.rename(mapped["path"], os.path.join(os.path.dirname(mapped["path"]), new))
+        self.assertEqual(
+            LightmapRecords.rename_lightmap(old, new), len(mapped["objects"])
+        )
+
+        probe_old = os.path.basename(result.probe)
+        probe_new = "renamed_" + probe_old
+        os.rename(result.probe, os.path.join(os.path.dirname(result.probe), probe_new))
+        self.assertEqual(LightmapRecords.rename_lightmap(probe_old, probe_new), 1)
+
+        after = {d["map"]: d for d in LightmapRecords.lightmap_dependencies(walk=False)}
+        self.assertNotIn(old, after)
+        self.assertEqual(sorted(after[new]["objects"]), sorted(mapped["objects"]))
+        self.assertTrue(after[new]["path"], "the renamed file resolves")
+        self.assertTrue(after[probe_new]["path"], "...and so does the probe")
+        self.assertEqual(LightmapRecords.probe()["map"], probe_new)
+        manifest = json.loads(LightmapRecords._record().text)
+        self.assertIn(new, json.dumps(manifest), "the deliverable names it too")
+        self.assertNotIn(f'"{old}"', json.dumps(manifest))
+        self.assertEqual(LightmapRecords.rename_lightmap("nothing.exr", "x.exr"), 0)
+
+    def test_reverting_every_bake_drops_the_probe(self):
+        room, table, _prop = self._room()
+        self._bake([room, table])
+        LightmapRecords.revert([room])
+        self.assertIsNotNone(LightmapRecords.probe(), "the table is still baked")
+        LightmapRecords.revert()
+        self.assertIsNone(LightmapRecords.probe())
+
+    def test_with_the_switch_off_there_is_no_probe(self):
+        room, table, _prop = self._room()
+        result, fake = self._bake([room, table], reflection_probe=False)
+        self.assertIsNone(result.probe)
+        self.assertIsNone(fake.called_panorama)
+        self.assertIsNone(LightmapRecords.probe())
+        self.assertNotIn("probe", json.loads(LightmapRecords._record().text))
+
+
+class TestProbePlacement(MayaTkTestCase):
+    """Where the probe stands, in each kind of scene a generic baker meets.
+
+    The first rule -- the middle of what is baked, at half the room's height,
+    inside the room its rays found -- held in the one room it was measured in
+    and put the probe where it could not see the room anywhere else (measured
+    2026-10-04, these scenes run through both rules): inside the car standing at the
+    bake's middle (a black probe), inside a column at a room's middle, five
+    metres up in a hall, a courtyard's walls read as infinitely far for its
+    open sky, a probe's ceiling taken from a shelf 30 cm over it. Each test is
+    one of those scenes. ``ProbePlacement`` is the geometry -- ray casts
+    against the scene, no Arnold. Added: 2026-10-04
+    """
+
+    @staticmethod
+    def _cube(name, w, h, d, at, inward=False):
+        node = cmds.polyCube(name=name, width=w, height=h, depth=d)[0]
+        cmds.move(*at, node)
+        if inward:  # a room as a runtime draws one: its faces turned in
+            cmds.polyNormal(
+                node, normalMode=0, userNormalMode=0, constructionHistory=False
+            )
+        return cmds.ls(node, long=True)[0]
+
+    @staticmethod
+    def _plane(name, w, d, at=(0, 0, 0)):
+        node = cmds.polyPlane(name=name, width=w, height=d)[0]
+        cmds.move(*at, node)
+        return cmds.ls(node, long=True)[0]
+
+    @staticmethod
+    def _light(kind, at=(0, 0, 0)):
+        node = cmds.shadingNode(kind, asLight=True)
+        cmds.move(*at, node)
+        return node
+
+    def _site(self, baked, unbaked=()):
+        site = ProbePlacement(baked, unbaked).place()
+        self.assertIsNotNone(site)
+        return site
+
+    def assertBox(self, box, want, delta=1.0):
+        for corner, wanted in zip(box, want):
+            for got, value in zip(corner, wanted):
+                if value is None:  # an open face: pushed out of the scene's reach
+                    self.assertGreaterEqual(abs(got), 0.5e5, box)
+                else:
+                    self.assertAlmostEqual(got, value, delta=delta, msg=box)
+
+    def assertClearOf(self, position, node, by=30.0):
+        """*position* is at least *by* outside *node*'s world bounds."""
+        x0, y0, z0, x1, y1, z1 = cmds.exactWorldBoundingBox(node)
+        gap = [
+            max(lo - c, 0.0, c - hi)
+            for c, lo, hi in zip(position, (x0, y0, z0), (x1, y1, z1))
+        ]
+        self.assertGreaterEqual(
+            sum(g * g for g in gap) ** 0.5, by - 0.5, (position, node)
+        )
+
+    def test_a_solid_at_the_bakes_middle_is_flown_over_never_entered(self):
+        """A car on a ground plane: the bake's middle is inside the car, and a
+        probe there rendered its shell from within. It hovers over the car at
+        eye level instead, the ground its one face."""
+        ground = self._plane("ppGround", 4000, 4000)
+        car = self._cube("ppCar", 450, 140, 180, (0, 70, 0))
+        self._light("pointLight", (0, 800, 0))
+        site = self._site([ground, car])
+        for got, want in zip(site.position, (0.0, 200.0, 0.0)):
+            self.assertAlmostEqual(got, want, delta=1.0)
+        self.assertClearOf(site.position, car)
+        # The ground, past the car roof the probe stands over; the sky open.
+        self.assertBox(site.box, [[None, 0.0, None], [None, None, None]])
+        self.assertEqual(site.open_faces, 5)
+        self.assertEqual(site.hide, [])
+
+    def test_a_column_at_the_rooms_middle_is_stepped_around(self):
+        room = self._cube("ppRoom", 1000, 400, 1000, (0, 200, 0), inward=True)
+        column = self._cube("ppColumn", 60, 400, 60, (0, 200, 0))
+        self._light("pointLight", (300, 350, 300))
+        site = self._site([room, column])
+        self.assertAlmostEqual(site.position[1], 200.0, delta=1.0)
+        self.assertClearOf(site.position, column, by=50.0)
+        self.assertLess(
+            abs(site.position[0]) + abs(site.position[2]), 200.0, "near the middle"
+        )
+        self.assertTrue(any("ppColumn" in note for note in site.notes), site.notes)
+        # The walls behind the column, not its face 30 cm off.
+        self.assertBox(site.box, [[-500, 0, -500], [500, 400, 500]])
+
+    def test_a_dark_cavity_at_the_bakes_middle_is_left_for_the_lit_room(self):
+        """A cabinet's inside faces in, like a room's, but no light reaches it:
+        a cabin, not the room."""
+        room = self._cube("ppRoom", 1000, 400, 1000, (0, 200, 0), inward=True)
+        cabinet = self._cube("ppCabinet", 100, 100, 100, (0, 200, 0), inward=True)
+        self._light("pointLight", (300, 350, 300))
+        site = self._site([room, cabinet])
+        self.assertClearOf(site.position, cabinet)
+        self.assertBox(site.box, [[-500, 0, -500], [500, 400, 500]])
+
+    def test_a_lit_room_built_inside_out_is_still_a_room(self):
+        """One cube with its faces out: from inside, the backs of its walls --
+        the sign of a solid -- but a light in view says room."""
+        room = self._cube("ppRoom", 600, 300, 600, (0, 150, 0))
+        self._light("pointLight", (0, 250, 0))
+        site = self._site([room])
+        for got, want in zip(site.position, (0.0, 150.0, 0.0)):
+            self.assertAlmostEqual(got, want, delta=1.0)
+        self.assertEqual(site.notes, [])
+        self.assertBox(site.box, [[-300, 0, -300], [300, 300, 300]])
+
+    def test_a_tall_hall_keeps_the_probe_at_eye_level(self):
+        hall = self._cube("ppHall", 2000, 1200, 2000, (0, 600, 0), inward=True)
+        table = self._cube("ppTable", 240, 90, 100, (200, 45, 100))
+        self._light("pointLight", (0, 1100, 0))
+        site = self._site([hall, table])
+        self.assertAlmostEqual(
+            site.position[1], 200.0, delta=1.0, msg="not half of 12 m"
+        )
+        self.assertBox(site.box, [[-1000, 0, -1000], [1000, 1200, 1000]])
+
+    def test_a_courtyard_reads_its_sky_as_distant_and_projects_its_walls(self):
+        """Open above and walled round: the old box was all or nothing, so
+        its walls and floor reflected as if infinitely far."""
+        floor = self._plane("ppFloor", 1200, 1200)
+        walls = [
+            self._cube("ppWallN", 1200, 400, 20, (0, 200, -600)),
+            self._cube("ppWallS", 1200, 400, 20, (0, 200, 600)),
+            self._cube("ppWallE", 20, 400, 1200, (600, 200, 0)),
+            self._cube("ppWallW", 20, 400, 1200, (-600, 200, 0)),
+        ]
+        cmds.directionalLight()
+        site = self._site([floor] + walls)
+        self.assertEqual(site.open_faces, 1)
+        self.assertBox(site.box, [[-590, 0, -590], [590, None, 590]])
+        self.assertAlmostEqual(site.position[1], 200.0, delta=1.0)
+
+    def test_a_bare_ground_projects_onto_the_ground_alone(self):
+        """A side cone's lower rays meet the ground at a slant: no wall. The
+        old box took the first one's landing as one, or read the ground as
+        distant with the rest."""
+        floor = self._plane("ppFloor", 1000, 1000)
+        faces = ProbePlacement([floor]).faces([0.0, 100.0, 0.0])
+        self.assertEqual(
+            [[c is None for c in corner] for corner in faces],
+            [[True, False, True], [True, True, True]],
+            faces,
+        )
+        self.assertAlmostEqual(faces[0][1], 0.0, delta=0.01)
+        site = self._site([floor])
+        self.assertBox(site.box, [[None, 0.0, None], [None, None, None]])
+        self.assertAlmostEqual(site.position[1], 200.0, delta=1.0)
+
+    def test_a_lone_object_in_empty_space_is_read_as_distant(self):
+        decal = self._plane("ppDecal", 10, 10, (0, 500, 0))
+        site = self._site([decal])
+        self.assertIsNone(site.box)
+        self.assertEqual(site.open_faces, 6)
+
+    def test_a_shelf_over_what_moves_is_kept_clear_of(self):
+        """Over the prop at eye level is 10 cm under a shelf, which then filled
+        the panorama's top -- and the box's ceiling."""
+        room = self._cube("ppRoom", 1000, 400, 1000, (0, 200, 0), inward=True)
+        shelf = self._cube("ppShelf", 200, 10, 100, (-300, 215, -150))
+        prop = self._cube("ppProp", 20, 20, 20, (-300, 100, -150))
+        self._light("pointLight", (300, 350, 300))
+        site = self._site([room, shelf], [prop])
+        self.assertEqual(site.reason, "over what moves")
+        self.assertClearOf(site.position, shelf)
+        self.assertAlmostEqual(site.position[0], -300.0, delta=1.0)
+        self.assertBox(site.box, [[-500, 0, -500], [500, 400, 500]])
+
+    def test_what_surrounds_the_bake_stays_in_view_and_what_moves_does_not(self):
+        """An unbaked sky dome and ground surround the bake: the probe sees
+        them, and the ground is its floor. The prop beside the building moves:
+        see-through."""
+        building = self._cube("ppBuilding", 800, 600, 800, (0, 300, 0))
+        dome = cmds.ls(cmds.polySphere(name="ppDome", radius=5000)[0], long=True)[0]
+        ground = self._plane("ppGround", 20000, 20000)
+        prop = self._cube("ppProp", 20, 20, 20, (700, 50, 0))
+        cmds.directionalLight()
+        site = self._site([building], [dome, ground, prop])
+        self.assertEqual(site.hide, [prop])
+        self.assertEqual(site.reason, "over what moves")
+        self.assertAlmostEqual(site.box[0][1], 0.0, delta=1.0, msg="the unbaked ground")
+        self.assertClearOf(site.position, building)
+
+    def test_a_turned_room_projects_onto_its_whole_extent(self):
+        """A room turned 45 degrees has no wall square to an axis; the box is
+        the room's world bounds, not one wall's slant."""
+        room = self._cube("ppRoom", 800, 300, 800, (0, 150, 0), inward=True)
+        cmds.rotate(0, 45, 0, room)
+        self._light("pointLight", (0, 250, 0))
+        site = self._site([room])
+        half = 400 * 2**0.5
+        self.assertBox(site.box, [[-half, 0, -half], [half, 300, half]], delta=2.0)
+
+    def test_a_room_in_metres_measures_in_metres(self):
+        cmds.currentUnit(linear="m")
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        room = self._cube("ppRoom", 10, 4, 10, (0, 2, 0), inward=True)
+        prop = self._cube("ppProp", 0.2, 0.2, 0.2, (-3, 1, -1.5))
+        self._light("pointLight", (3, 3.5, 3))
+        site = self._site([room], [prop])
+        for got, want in zip(site.position, (-3.0, 2.0, -1.5)):
+            self.assertAlmostEqual(got, want, delta=0.01)
+        self.assertBox(site.box, [[-5, 0, -5], [5, 4, 5]], delta=0.01)
+
+
+@unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
 class TestSupersededMaps(MayaTkTestCase):
     """A re-bake sets aside the maps it superseded -- and only its own.
 
@@ -3641,6 +4439,10 @@ class TestSupersededMaps(MayaTkTestCase):
         super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="lm_superseded_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # The project: a re-bake sets aside nothing outside it.
+        previous = cmds.workspace(query=True, rootDirectory=True)
+        cmds.workspace(self.tmp, openWorkspace=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
         # A re-bake sets what it superseded aside -- into this machine's
         # Recycle Bin wherever the volume has one. Pinned per test to a volume
         # with none, so the leftovers land in ``_superseded`` inside the
@@ -3703,6 +4505,27 @@ class TestSupersededMaps(MayaTkTestCase):
         self.assertEqual(self._paths(atlas.retired), self._paths(per_object.values()))
         for path in per_object.values():
             self.assertFalse(os.path.exists(path), path)
+
+    def test_a_map_outside_the_project_is_never_set_aside(self):
+        """A map the scene once wrote OUTSIDE its project -- beside a texture
+        library another project shares -- sits in that project's folder too,
+        whose scenes may read it and this one cannot see: a soldering
+        assembly's re-bake sent another project's room lightmap to the Recycle Bin
+        (2026-10-03). Only a map inside the scene's project is set aside."""
+        cube = self._cube("supOutside")
+        outside = self.enterContext(
+            ptk.TempArtifacts("lm_superseded_outside", policy="scoped")
+        ).dir_path()
+        old = (
+            LightmapBaker(resolution=64, baker=_FakeBaker())
+            .bake([cube], packing="per_object", output_dir=outside, suffix="_Lightmap")
+            .maps[cube]
+        )
+
+        result = self._bake([cube])  # the re-bake, inside the project
+
+        self.assertTrue(os.path.exists(old), "another project's map was set aside")
+        self.assertEqual(result.retired, [])
 
     def test_a_superseded_map_is_set_aside_never_deleted(self):
         """BACKLOG 2026-09-23, decided 2026-09-27: no scene can see another
@@ -3985,12 +4808,14 @@ class _PackingCombo:
     """Packing combobox stub. Per-Object is the FIXTURE's default (it keeps the
     b000 tests on the one-map-each branch unless they ask for the other); the
     PANEL's default is Atlas by Material, which ``cmb002_init`` selects and
-    ``TestQualityAndScopeSwitches`` pins."""
+    ``TestQualityAndScopeSwitches`` pins. Carries the Reflection Probe switch,
+    as the real one does."""
 
     _LABELS = LightmapBakerSlots._PACKING_LABELS
 
-    def __init__(self, text="Per-Object (one map each)"):
+    def __init__(self, text="Per-Object (one map each)", probe=True):
         self._text = text
+        self.option_box = _SwitchBox(probe)
 
     def currentText(self):
         return self._text
@@ -4153,6 +4978,7 @@ class _SlotUi:
         bounces=2,
         adaptive=True,
         beside=False,
+        probe=True,
     ):
         self.footer = _Footer()
         self.cmb_device = _DeviceCombo(device)
@@ -4166,7 +4992,7 @@ class _SlotUi:
         self.txt_output_dir = _LineEdit(
             output_dir, placeholder="sourceimages", switch=beside
         )
-        self.cmb002 = _PackingCombo(packing)
+        self.cmb002 = _PackingCombo(packing, probe=probe)
         self.cmb_scope = _ScopeCombo(scope, environment=environment)
         self.lbl_exclude = _Label()
 
@@ -4202,6 +5028,7 @@ class _FakeWorkflow:
         gi_samples=None,
         adaptive=None,
         beside_textures=False,
+        reflection_probe=True,
         **kwargs,
     ):
         self.resolution = resolution
@@ -4213,6 +5040,7 @@ class _FakeWorkflow:
         self.gi_samples = gi_samples
         self.adaptive = adaptive
         self.beside_textures = beside_textures
+        self.reflection_probe = reflection_probe
         self.calls: list = []
         self.last_result = None
         _FakeWorkflow.instances.append(self)
@@ -4310,6 +5138,7 @@ class TestPresetTemplate(unittest.TestCase):
             denoise=False,
             packing="Atlas by Material (shared map)",
             beside=True,
+            probe=False,
         )
         self.assertEqual(
             self._slots(ui)._preset_values(),
@@ -4323,6 +5152,7 @@ class TestPresetTemplate(unittest.TestCase):
                 "include_environment": False,
                 "denoise": False,
                 "beside_textures": True,
+                "reflection_probe": False,
             },
         )
 
@@ -4338,6 +5168,7 @@ class TestPresetTemplate(unittest.TestCase):
                 denoise=False,
                 packing="Atlas by Material (shared map)",
                 beside=True,
+                probe=False,
             )
         )._preset_values()
         target = self._slots(_SlotUi())  # the panel's defaults
@@ -4357,6 +5188,7 @@ class TestPresetTemplate(unittest.TestCase):
             adaptive=False,
             packing="Atlas by Material (shared map)",
             beside=True,
+            probe=False,
         )
         s = self._slots(ui)
 
@@ -4370,7 +5202,7 @@ class TestPresetTemplate(unittest.TestCase):
                 values["gi_depth"],
                 values["gi_samples"],
             ),
-            (2048, 8, 3, 6),
+            (2048, 4, 6, 4),
         )
         self.assertEqual(
             (
@@ -4379,8 +5211,9 @@ class TestPresetTemplate(unittest.TestCase):
                 values["adaptive"],
                 values["packing"],
                 values["beside_textures"],
+                values["reflection_probe"],
             ),
-            (False, False, False, "atlas", True),
+            (False, False, False, "atlas", True, False),
         )
 
     def test_every_key_the_panel_saves_is_one_the_headless_path_reads(self):
@@ -4447,15 +5280,19 @@ class TestLightmapBakerSlots(MayaTkTestCase):
     def test_b000_carries_the_device_and_environment_rows_to_the_bake(self):
         # The rows are bake INPUTS, not cosmetics: a Device row the bake never
         # reads would silently keep rendering on the scene's own device, an
-        # unchecked Include Environment would still bake the skydome in, and
-        # an unchecked Denoise would still denoise.
+        # unchecked Include Environment would still bake the skydome in, an
+        # unchecked Denoise would still denoise, and an unchecked Reflection
+        # Probe would still render one.
         self._select_cube()
-        s = self._slots(_SlotUi(device="CPU", environment=False, denoise=False))
+        s = self._slots(
+            _SlotUi(device="CPU", environment=False, denoise=False, probe=False)
+        )
         s.b000()
         baker = _FakeWorkflow.instances[0]
         self.assertEqual(baker.device, "CPU")
         self.assertFalse(baker.include_environment)
         self.assertFalse(baker.denoise)
+        self.assertFalse(baker.reflection_probe)
 
         _FakeWorkflow.instances.clear()
         s = self._slots(_SlotUi())  # the panel's defaults
@@ -4464,6 +5301,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(default.device, "AUTO")
         self.assertTrue(default.include_environment)
         self.assertTrue(default.denoise)
+        self.assertTrue(default.reflection_probe)
 
     def test_b000_hands_the_scope_and_dials_to_bake_and_reverts_nothing(self):
         # ONE call: the engine checks the scene, bakes and records. Nothing is
@@ -5473,38 +6311,52 @@ class TestPanelSwitches(unittest.TestCase):
         return s
 
     def test_each_switch_reads_from_its_own_fields_option_box(self):
-        s = self._slots(environment=False, adaptive=False, denoise=False, beside=True)
+        s = self._slots(
+            environment=False, adaptive=False, denoise=False, beside=True, probe=False
+        )
         self.assertFalse(s._include_environment(), "the Scope field's switch")
         self.assertFalse(s._adaptive(), "the Samples field's switch")
         self.assertFalse(s._denoise(), "the Resolution field's switch")
         self.assertTrue(s._beside_textures(), "the Output Directory's switch")
+        self.assertFalse(s._reflection_probe(), "the Packing field's switch")
 
     def test_a_switch_read_before_its_field_is_wired_gives_the_shipped_default(self):
         """The preset machinery reads this map while the panel is still
         loading, so a switch with no toggle yet must answer, not raise."""
         s = self._slots()
-        for field in ("cmb_scope", "spn_samples", "cmb_resolution", "txt_output_dir"):
+        for field in (
+            "cmb_scope",
+            "spn_samples",
+            "cmb_resolution",
+            "txt_output_dir",
+            "cmb002",
+        ):
             getattr(s.ui, field).option_box.toggle = None
         self.assertTrue(s._include_environment())
         self.assertTrue(s._adaptive())
         self.assertTrue(s._denoise())
         self.assertFalse(s._beside_textures(), "beside textures ships off")
+        self.assertTrue(s._reflection_probe(), "the probe ships on")
 
     def test_a_preset_load_writes_a_switch_through_its_toggle(self):
-        s = self._slots(environment=True, denoise=True, adaptive=True, beside=False)
+        s = self._slots(
+            environment=True, denoise=True, adaptive=True, beside=False, probe=True
+        )
         applied = s._apply_preset_values(
             {
                 "include_environment": False,
                 "denoise": False,
                 "adaptive": False,
                 "beside_textures": True,
+                "reflection_probe": False,
             }
         )
-        self.assertEqual(applied, 4)
+        self.assertEqual(applied, 5)
         self.assertFalse(s._include_environment())
         self.assertFalse(s._denoise())
         self.assertFalse(s._adaptive())
         self.assertTrue(s._beside_textures())
+        self.assertFalse(s._reflection_probe())
 
     def test_the_switches_are_keyed_as_the_preset_store_keys_them(self):
         """So ``_preset_fields`` can build its entries straight from the table
@@ -5513,11 +6365,16 @@ class TestPanelSwitches(unittest.TestCase):
             set(LightmapBakerSlots._TOGGLES), set(LightmapBaker.PRESET_BOOL_KEYS)
         )
 
-    def test_the_panel_opens_on_atlas_by_material(self):
+    def test_the_panel_opens_on_atlas_by_material_with_the_probe_on(self):
         s = self._slots()
         s.ui.cmb002 = _ItemCombo()
         s.cmb002_init(s.ui.cmb002)
         self.assertEqual(s._packing(), "atlas")
+        self.assertTrue(s._reflection_probe())
+        self.assertEqual(
+            s.ui.cmb002.option_box.wired["settings_key"],
+            "lightmap_baker_reflection_probe",
+        )
 
     def test_the_scope_still_opens_on_the_selection_with_the_environment_in(self):
         s = self._slots()

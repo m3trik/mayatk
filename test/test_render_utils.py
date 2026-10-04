@@ -61,9 +61,6 @@ class RenderUtilsTest(unittest.TestCase):
         names = [r["name"] for r in RenderUtils.get_available_renderers()]
         self.assertEqual(len(names), len(set(names)))
 
-    def test_plugin_installed_false_for_unknown(self):
-        self.assertFalse(RenderUtils._plugin_installed("not_a_real_plugin_xyz123"))
-
     # ------------------------------------------------------------- selection
     def test_current_renderer_is_str(self):
         self.assertIsInstance(RenderUtils.current_renderer(), str)

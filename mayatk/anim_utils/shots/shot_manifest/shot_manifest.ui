@@ -58,25 +58,6 @@
        <number>1</number>
       </property>
       <item>
-       <widget class="QCheckBox" name="chk_csv">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>19</height>
-         </size>
-        </property>
-        <property name="text">
-         <string>CSV:</string>
-        </property>
-       </widget>
-      </item>
-      <item>
        <widget class="LineEdit" name="txt_csv_path">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
@@ -100,7 +81,7 @@
          <bool>true</bool>
         </property>
         <property name="placeholderText">
-         <string>Path or URL to CSV file...</string>
+         <string>Build sheet: CSV path or link (empty = the scene's shots)</string>
         </property>
        </widget>
       </item>

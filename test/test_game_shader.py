@@ -2860,6 +2860,42 @@ class GameShaderFBXTest(QuickTestCase):
         )
 
 
+class GameShaderAssignToSelectionTest(unittest.TestCase):
+    """The panel's Assign to Selection step (``GameShaderSlots._assign_to_selection``)."""
+
+    def setUp(self):
+        from mayatk.mat_utils.game_shader import GameShaderSlots
+
+        cmds.file(new=True, force=True)
+        # The step needs only the logger: skip the switchboard-bound __init__.
+        self.slots = GameShaderSlots.__new__(GameShaderSlots)
+        self.cube = cmds.polyCube(name="assign_cube")[0]
+        self.shader = cmds.shadingNode("lambert", name="assign_mat", asShader=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _assigned(self, node) -> list:
+        shapes = cmds.listRelatives(node, shapes=True) or []
+        sgs = cmds.listConnections(shapes, type="shadingEngine") or []
+        mats = cmds.ls(cmds.listConnections(sgs, source=True) or [], materials=True)
+        return mats or []
+
+    def test_single_material_is_assigned_to_selection(self):
+        self.slots._assign_to_selection(self.shader, [self.cube])
+        self.assertIn("assign_mat", self._assigned(self.cube))
+
+    def test_several_materials_skip_the_assignment(self):
+        other = cmds.shadingNode("lambert", name="other_mat", asShader=True)
+        self.slots._assign_to_selection([self.shader, other], [self.cube])
+        self.assertNotIn("assign_mat", self._assigned(self.cube))
+        self.assertNotIn("other_mat", self._assigned(self.cube))
+
+    def test_empty_selection_is_a_no_op(self):
+        self.slots._assign_to_selection(self.shader, [])
+        self.assertFalse(cmds.listConnections(self.shader, type="shadingEngine"))
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":

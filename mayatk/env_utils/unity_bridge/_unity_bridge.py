@@ -56,6 +56,10 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     #: curve proxies, so this hand-off stages them exactly like the Scene
     #: Exporter's FBX.
     export_stagers = ("render_effects",)
+    #: Unity builds a model's AnimationClips from the FBX's takes, so each must
+    #: be an exact slice: the split resamples every curve, or a node keyed only
+    #: outside a shot plays its rest pose through it (``FbxUtils.apply_takes``).
+    resample_takes = True
 
     @staticmethod
     def _deliverer_cls():

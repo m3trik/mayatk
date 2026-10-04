@@ -32,6 +32,8 @@ except ImportError:
 
 import pythontk as ptk
 
+from mayatk.core_utils.plugins._plugins import Plugins
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,10 +176,7 @@ class UsdUtils(ptk.HelpMixin):
     @staticmethod
     def load_plugin():
         """Ensure the ``mayaUsdPlugin`` plugin is loaded."""
-        from mayatk.env_utils._env_utils import EnvUtils
-
-        if not EnvUtils.is_plugin_loaded("mayaUsdPlugin"):
-            cmds.loadPlugin("mayaUsdPlugin")
+        Plugins.load("mayaUsdPlugin")
 
     @staticmethod
     def is_usd_file(file_path: str) -> bool:

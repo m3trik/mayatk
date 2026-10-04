@@ -2059,6 +2059,265 @@ class TestTexturePathTokens(MayaTkTestCase):
         )
 
 
+class TestRenameTextures(MayaTkTestCase):
+    """Renaming a texture file, and syncing a material's names to one base.
+
+    A texture is referenced by NAME, so renaming its file in Explorer left
+    every node reading it pointing at nothing. ``rename_texture_file`` renames
+    and repoints together; ``sync_material_names`` names a material, its
+    textures and their file nodes for one base. Added: 2026-10-04
+    """
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts("mtk_tex_rename", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        self.dir = store.dir_path().replace("\\", "/")
+        # The folder is the project: sync renames only the project's own files.
+        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
+        cmds.workspace(self.dir, openWorkspace=True)
+        for name in (
+            "rock_Base_Color.1001.png",
+            "rock_Base_Color.1002.png",
+            "rock_Normal.png",
+        ):
+            with open(os.path.join(self.dir, name), "wb") as f:
+                f.write(b"DATA")
+        self.mat = cmds.shadingNode("lambert", asShader=True, name="rock_MAT")
+        self.color = self._file("rock_Base_Color_file", "rock_Base_Color.<UDIM>.png")
+        cmds.connectAttr(f"{self.color}.outColor", f"{self.mat}.color")
+        self.normal = self._file("rock_Normal_file", "rock_Normal.png")
+        cmds.connectAttr(f"{self.normal}.outAlpha", f"{self.mat}.diffuse")
+
+    def _file(self, name, texture):
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        node = cmds.shadingNode("file", asTexture=True, name=name)
+        Attributes.set_plug_literal(f"{node}.fileTextureName", f"{self.dir}/{texture}")
+        return node
+
+    def listing(self):
+        return sorted(os.listdir(self.dir))
+
+    def test_a_rename_repoints_every_node_on_the_file_and_undoes_whole(self):
+        twin = self._file("twin_file", "rock_Normal.png")  # another reader
+        cmds.undoInfo(state=True)
+        cmds.undoInfo(openChunk=True)
+        try:
+            result = MatUtils.rename_texture_file(
+                f"{self.dir}/rock_Normal.png", "stone_Normal.png"
+            )
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self.assertEqual(sorted(result["nodes"]), sorted([self.normal, twin]))
+        self.assertIn("stone_Normal.png", self.listing())
+        for node in (self.normal, twin):
+            self.assertEqual(
+                cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/stone_Normal.png"
+            )
+        cmds.undo()
+        self.assertIn("rock_Normal.png", self.listing(), "undo renames it back")
+        self.assertEqual(
+            cmds.getAttr(f"{self.normal}.fileTextureName"),
+            f"{self.dir}/rock_Normal.png",
+        )
+
+    def test_a_backslash_path_keeps_its_folder(self):
+        """The folder split took only ``/``: a Windows-spelled path was
+        repointed at the bare new NAME, its folder gone."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        windows = self.dir.replace("/", "\\")
+        Attributes.set_plug_literal(
+            f"{self.normal}.fileTextureName", f"{windows}\\rock_Normal.png"
+        )
+        MatUtils.rename_texture_file(f"{self.dir}/rock_Normal.png", "stone_Normal.png")
+        self.assertEqual(
+            cmds.getAttr(f"{self.normal}.fileTextureName"),
+            f"{windows}\\stone_Normal.png",
+        )
+
+    def test_a_tile_set_renames_every_tile_and_keeps_its_token(self):
+        MatUtils.rename_texture_file(
+            cmds.getAttr(f"{self.color}.fileTextureName"), "stone_Base_Color.<UDIM>.png"
+        )
+        self.assertIn("stone_Base_Color.1001.png", self.listing())
+        self.assertIn("stone_Base_Color.1002.png", self.listing())
+        self.assertTrue(
+            cmds.getAttr(f"{self.color}.fileTextureName").endswith(
+                "/stone_Base_Color.<UDIM>.png"
+            )
+        )
+
+    def test_sync_names_the_material_textures_and_file_nodes_for_one_base(self):
+        result = MatUtils.sync_material_names(
+            self.mat,
+            "stone",
+            material_affix=("", "_MAT"),
+            file_node_affix=("", "_file"),
+        )
+        self.assertEqual(result["material"][1], "stone_MAT")
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertEqual(
+            self.listing(),
+            [
+                "stone_Base_Color.1001.png",
+                "stone_Base_Color.1002.png",
+                "stone_Normal.png",
+            ],
+        )
+        self.assertTrue(cmds.objExists("stone_Base_Color_file"))
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertTrue(
+            cmds.getAttr("stone_Normal_file.fileTextureName").endswith(
+                "/stone_Normal.png"
+            )
+        )
+
+    def test_sync_refuses_the_lot_when_one_rename_would_collide(self):
+        with open(os.path.join(self.dir, "stone_Normal.png"), "wb") as f:
+            f.write(b"OTHER")
+        with self.assertRaises(ValueError):
+            MatUtils.sync_material_names(self.mat, "stone", material_affix=("", "_MAT"))
+        self.assertTrue(cmds.objExists("rock_MAT"), "nothing renamed")
+        self.assertIn("rock_Base_Color.1001.png", self.listing())
+
+    def test_sync_follows_the_material_s_own_texture_set_only(self):
+        """A StingrayPBS wears environment maps (``diffuse_cube.dds``) beside
+        its own set; sync renamed those to the material's base too -- a file
+        three materials and another project read, under a name meaning
+        nothing. The set is the baker's (``MapFactory.dominant_texture_set``).
+        Production PLAYGROUND scene, 2026-10-04.
+        """
+        with open(os.path.join(self.dir, "env_cube.dds"), "wb") as f:
+            f.write(b"CUBE")
+        cube = self._file("env_cube_file", "env_cube.dds")
+        cmds.connectAttr(f"{cube}.outAlpha", f"{self.mat}.translucence")
+        result = MatUtils.sync_material_names(
+            self.mat, "stone", material_affix=("", "_MAT")
+        )
+        self.assertIn("env_cube.dds", self.listing())
+        self.assertIn("stone_Normal.png", self.listing())
+        self.assertTrue(cmds.objExists("env_cube_file"), "its node keeps its name")
+        self.assertFalse([r for r in result["skipped"] if "env_cube" in r])
+
+    def test_sync_leaves_a_file_outside_the_project_its_name(self):
+        """Another project's file is that project's too: renaming it broke
+        every scene reading it there."""
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts("mtk_tex_outside", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        outside = store.dir_path().replace("\\", "/")
+        with open(os.path.join(outside, "rock_Roughness.png"), "wb") as f:
+            f.write(b"DATA")
+        node = cmds.shadingNode("file", asTexture=True, name="rough_file")
+        cmds.setAttr(
+            f"{node}.fileTextureName", f"{outside}/rock_Roughness.png", type="string"
+        )
+        cmds.connectAttr(f"{node}.outColor", f"{self.mat}.ambientColor")
+        result = MatUtils.sync_material_names(
+            self.mat, "stone", material_affix=("", "_MAT")
+        )
+        self.assertEqual(os.listdir(outside), ["rock_Roughness.png"])
+        node = dict(result["file_nodes"])[node]
+        self.assertEqual(node, "rock_Roughness", "named after the file it reads")
+        self.assertTrue(
+            cmds.getAttr(f"{node}.fileTextureName").endswith("/rock_Roughness.png")
+        )
+        self.assertTrue([r for r in result["skipped"] if "rock_Roughness" in r])
+        self.assertIn("stone_Normal.png", self.listing(), "the project's own follow")
+
+    def _baked_lightmaps(self):
+        """Two baked sets' maps on disk, bound by their markers: this set's
+        ``rock_Lightmap_1.exr`` and another set's ``rockery_Lightmap.exr``."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        maps = {
+            "rock_GEO": "rock_Lightmap_1.exr",
+            "rockery_GEO": "rockery_Lightmap.exr",
+        }
+        for obj, name in maps.items():
+            with open(os.path.join(self.dir, name), "wb") as f:
+                f.write(b"EXR")
+            cmds.polyCube(name=obj)
+            LightmapRecords._write_marker(
+                obj,
+                {"map": name, "uv_set": "map1", "intensity": 1.0, "mode": "separated"},
+            )
+        LightmapRecords._save_folder_hints({n.lower(): self.dir for n in maps.values()})
+        return LightmapRecords
+
+    def test_sync_takes_the_set_s_lightmap_along(self):
+        """A bake names its map after the texture set it lights
+        (``<base>_Lightmap[_N].exr``) and the markers bind it by that name, so
+        a renamed set left its lightmap on the old name."""
+        LightmapRecords = self._baked_lightmaps()
+        result = MatUtils.sync_material_names(
+            self.mat, "stone", material_affix=("", "_MAT"), lightmaps=LightmapRecords
+        )
+        self.assertEqual(
+            [(old, new) for _path, old, new in result["lightmaps"]],
+            [("rock_Lightmap_1.exr", "stone_Lightmap_1.exr")],
+        )
+        self.assertIn("stone_Lightmap_1.exr", self.listing())
+        self.assertIn("rockery_Lightmap.exr", self.listing(), "another set stays")
+        self.assertEqual(
+            LightmapRecords.lightmap_info("rock_GEO")["map"], "stone_Lightmap_1.exr"
+        )
+
+    def test_sync_without_the_lightmap_records_leaves_the_lightmap(self):
+        """The records are injected (the Texture Path Editor passes the ones it
+        holds): mat_utils sits below light_utils, and importing them broke the
+        layer gate. Without them the set's lightmap is not followed."""
+        LightmapRecords = self._baked_lightmaps()
+        result = MatUtils.sync_material_names(
+            self.mat, "stone", material_affix=("", "_MAT")
+        )
+        self.assertEqual(result["lightmaps"], [])
+        self.assertIn("rock_Lightmap_1.exr", self.listing())
+        self.assertEqual(
+            LightmapRecords.lightmap_info("rock_GEO")["map"], "rock_Lightmap_1.exr"
+        )
+
+    def test_sync_renames_the_shading_group_and_its_companion_shaders(self):
+        """Names built on the material's (Maya's ``<material>SG``, an Arnold
+        ``<material>_ai`` beside it) follow it; the members are not its names."""
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        sg = cmds.rename(sg, "rock_MATSG")
+        cmds.connectAttr(f"{self.mat}.outColor", f"{sg}.surfaceShader")
+        ai = cmds.shadingNode("lambert", asShader=True, name="rock_MAT_ai")
+        cmds.connectAttr(f"{ai}.outColor", f"{sg}.volumeShader")
+        cube = cmds.polyCube(name="rock_MAT_GEO")[0]
+        cmds.sets(cube, edit=True, forceElement=sg)
+        MatUtils.sync_material_names(self.mat, "stone", material_affix=("", "_MAT"))
+        for name in ("stone_MAT", "stone_MATSG", "stone_MAT_ai", "rock_MAT_GEO"):
+            self.assertTrue(cmds.objExists(name), name)
+
+    def test_a_shading_group_named_after_an_older_material_takes_maya_s_spelling(self):
+        """The production table's group still carried a long-gone material's
+        name (``..._UVChannel_1_MATSG`` under ``SolderingTable_MAT``)."""
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        sg = cmds.rename(sg, "long_gone_MATSG")
+        cmds.connectAttr(f"{self.mat}.outColor", f"{sg}.surfaceShader")
+        result = MatUtils.sync_material_names(
+            self.mat, "stone", material_affix=("", "_MAT")
+        )
+        self.assertEqual(result["companions"], [("long_gone_MATSG", "stone_MATSG")])
+
+    def test_a_default_material_refuses_before_anything_changes(self):
+        node = self._file("lambert1_file", "rock_Normal.png")
+        cmds.connectAttr(f"{node}.outColor", "lambert1.color", force=True)
+        with self.assertRaises(ValueError):
+            MatUtils.sync_material_names("lambert1", "stone")
+        self.assertTrue(cmds.objExists("lambert1"))
+        self.assertIn("rock_Normal.png", self.listing(), "no file renamed either")
+
+
 class TestStingrayGraphIdentity(MayaTkTestCase):
     """``get_stingray_opacity_mode`` reads the loaded graph back off the node.
 

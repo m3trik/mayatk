@@ -424,6 +424,29 @@ class MayaTkTestCase(unittest.TestCase):
             or [None]
         )[0]
 
+    @staticmethod
+    def sample_input(attr: str, u: float = 0.5, v: float = 0.5) -> float:
+        """The value the file node driving *attr* delivers at ``(u, v)``.
+
+        mayapy never evaluates a file texture through ``getAttr`` (it returns
+        the plug defaults: ``outColorR`` 0, ``outAlpha`` 1), so this samples
+        the image with ``colorAtPoint`` and reads the channel the WIRED plug
+        carries: R for ``outColorR``, the alpha for ``outAlpha`` -- or the
+        RGB luminance when ``alphaIsLuminance`` is on, as Maya does.
+        """
+        src = cmds.listConnections(attr, source=True, destination=False, plugs=True)
+        if not src:
+            raise AssertionError(f"'{attr}' is not driven")
+        node, _, plug = src[0].partition(".")
+        rgb = cmds.colorAtPoint(node, output="RGB", u=u, v=v)
+        if plug in ("outColorR", "outColorG", "outColorB"):
+            return rgb["RGB".index(plug[-1])]
+        if plug == "outAlpha":
+            if cmds.getAttr(f"{node}.alphaIsLuminance"):
+                return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+            return cmds.colorAtPoint(node, output="A", u=u, v=v)[0]
+        raise AssertionError(f"'{attr}' is driven by {src[0]}, not a scalar plug")
+
     def assertSkinIntact(self, mesh: str, msg: str = None):
         """Assert *mesh* is still driven by a skinCluster."""
         shape = self.live_shape(mesh)

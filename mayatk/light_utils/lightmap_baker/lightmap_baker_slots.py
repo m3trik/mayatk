@@ -72,9 +72,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     #: option box of the field it QUALIFIES rather than a checkbox row of its
     #: own: the environment is part of what Scope gathers, adaptive sampling is
     #: how the Samples are spent, denoise is what the map ships at that
-    #: Resolution, and Beside Material Textures redirects the Output Directory.
-    #: So each reads as a qualifier on a control rather than a row that happens
-    #: to sit nearby, and the panel is four rows shorter.
+    #: Resolution, Beside Material Textures redirects the Output Directory, and
+    #: the reflection probe is what the bake ships beside the maps Packing lays
+    #: out. So each reads as a qualifier on a control rather than a row that
+    #: happens to sit nearby, and the panel is five rows shorter.
     #:
     #: The keys are the preset store's (:attr:`LightmapBaker.PRESET_BOOL_KEYS`),
     #: so :meth:`_preset_fields` builds its entries straight from here and
@@ -84,6 +85,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         "adaptive": ("spn_samples", True),
         "denoise": ("cmb_resolution", True),
         "beside_textures": ("txt_output_dir", False),
+        "reflection_probe": ("cmb002", True),
     }
 
     #: The tier a panel opened for the first time shows: the .ui's dial
@@ -213,7 +215,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "of their own but leaves them in the render: they still cast "
                     "shadows and bounce light onto everything that bakes.",
                     "<b>Packing</b>: one atlas per material (the default), or one "
-                    "map per object. <b>Processor</b>: which one Arnold renders on.",
+                    "map per object. Its camera button also captures the room as a "
+                    "<b>Reflection Probe</b>, for the reflections a lightmap cannot "
+                    "hold. <b>Processor</b>: which one Arnold renders on.",
                     "<b>Quality</b>: Resolution, Samples, GI Samples and Bounces. "
                     "Each dial carries its own switch: <b>Denoise</b> cleans a map "
                     "at the size it ships, <b>Adaptive Sampling</b> (GPU) adds "
@@ -456,16 +460,33 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # ------------------------------------------------------------------
 
     def cmb002_init(self, widget) -> None:
-        """Populate the Packing combobox; Atlas by Material is the default.
+        """Populate the Packing combobox (Atlas by Material is the default) and
+        hang the Reflection Probe switch off it.
 
         One shared map per material is what an engine wants: fewer textures,
         no per-object naming collisions, and the texels spent where the
         surface area is. Per-Object is the opt-out, for a hero asset that
-        earns a full map of its own.
+        earns a full map of its own. Packing is what the bake ships, and the
+        probe is the one file it ships beside the maps
+        (:meth:`LightmapBaker.bake_probe`).
         """
         widget.clear()
         widget.addItems(self._PACKING_LABELS)
         widget.setCurrentIndex(1)  # Atlas by Material — one shared map each
+        self._wire_toggle(
+            widget,
+            "reflection_probe",
+            icon="camera",
+            on="Reflection Probe: the bake also renders the room it lit as an "
+            "HDR from one point and ships it beside the maps. A lightmap holds "
+            "no reflections, so a baked metal shows only what it reflects, and "
+            "an object the bake leaves out is lit by nothing of the room: the "
+            "WebXR preview and the GLB light both from the probe. Click to "
+            "ship the maps alone.",
+            off="No reflection probe: baked metals reflect the viewer's stock "
+            "studio rather than this room, and objects the bake leaves out are "
+            "lit by it. Click to capture the room with the bake.",
+        )
 
     def _packing(self) -> str:
         """``"atlas"`` or ``"per_object"`` from the Packing combobox (default per_object)."""
@@ -475,6 +496,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _set_packing(self, value: str) -> None:
         """Select the Packing row for ``"atlas"`` / ``"per_object"``."""
         self.ui.cmb002.setCurrentIndex(1 if value == "atlas" else 0)
+
+    def _reflection_probe(self) -> bool:
+        """Whether the bake captures the room as a reflection probe (the
+        Packing switch)."""
+        return self._toggle_state("reflection_probe")
 
     def cmb_scope_init(self, widget) -> None:
         """Populate the Scope combobox (Selected is the default) and hang the
@@ -766,7 +792,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             on="Beside material textures: each lightmap is saved in "
             "the folder its material's texture maps are in, named after that "
             "texture set. This field only takes the objects whose material has "
-            "no texture folder. Click to save every map here instead.",
+            "no texture folder inside the project (another project's is never "
+            "written to). Click to save every map here instead.",
             off="Saving every lightmap to this folder. Click to save "
             "each one beside its material's texture maps instead.",
             on_toggled=self._show_output_mode,
@@ -856,6 +883,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             include_environment=self._include_environment(),
             denoise=self._denoise(),
             beside_textures=self._beside_textures(),
+            reflection_probe=self._reflection_probe(),
         )
 
         # Where the maps land: the Output Directory field resolved against the

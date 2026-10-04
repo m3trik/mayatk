@@ -143,6 +143,29 @@ class TestSequencerAudioShift(MayaTkTestCase):
         self.assertEqual(len(stops), 1)
         self.assertAlmostEqual(stops[0] - starts[0], 10.0)
 
+    # --- the manifest's claims ride with its clips -------------------------
+
+    def test_a_shift_moves_the_manifests_claims_with_the_clip(self):
+        """Bug: the range shift handed the store's ledger over from a static
+        hook with no ``self``, so every audio shift raised NameError. The
+        claims the Shot Manifest holds on a clip must land where it moved,
+        or the next build releases another key in its place.
+        Fixed: 2026-10-03
+        """
+        shot = self._add_shot(10.0, 40.0)
+        self._author_audio("narr_claim", frame=15.0)
+        curve = audio_utils.track_curve("narr_claim")
+        self.store.edit_ledger.record_authored(
+            curve, 15.0, shot.shot_id, "set_clip", "narr_claim"
+        )
+
+        self.sequencer.set_shot_start(shot.shot_id, 100.0, ripple=False)
+
+        self.assertAlmostEqual(_key_frame("narr_claim"), 105.0)
+        self.assertEqual(
+            self.store.edit_ledger.authored(behavior="set_clip"), [(curve, 105.0)]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

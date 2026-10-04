@@ -1,9 +1,11 @@
 # coding=utf-8
-"""Shot Manifest behavior template schema + discovery tests.
+"""Shot Manifest behavior template schema + discovery tests, and the effect
+recipe's round trip through a real scene.
 
-Maya-free (``_behaviors`` guards ``cmds``), but kept under the mayatk test tree
-and run via mayapy alongside the rest of the suite.  Templates are JSON (the
-pythontk engine's store, shared with blendertk).
+The schema and dispatch tests are Maya-free (``_behaviors`` guards ``cmds``);
+:class:`RecipeRoundTripTest` builds in a live scene. All run via mayapy
+alongside the rest of the suite.  Templates are JSON (the pythontk engine's
+store, shared with blendertk).
 
     & $MAYAPY mayatk\\test\\test_shot_manifest_behaviors.py
 """
@@ -13,11 +15,20 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import maya.cmds as cmds
+
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.anim_utils.shots.shot_manifest.behaviors import (
     Behaviors,
     BehaviorSpec,
 )
-from mayatk.anim_utils.shots._shots import ShotBlock
+from mayatk.anim_utils.shots._shots import ShotBlock, ShotStore
+from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+    BuilderObject,
+    BuilderStep,
+    ShotManifest,
+)
+from mayatk.audio_utils._audio_utils import AudioUtils
 
 
 class BehaviorSpecTest(unittest.TestCase):
@@ -96,6 +107,43 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
         self.assertEqual(len(result["applied"]), 1)
         self.assertEqual(result["failed"], [])
 
+    def test_a_highlight_beside_a_fade_keeps_its_own_anchors(self):
+        """Bug: an object's behaviors were spread 0.0 .. 1.0 over the shot
+        whatever they were, so a highlight beside a fade had both of its ramps
+        forced to anchor 0.0 -- collapsed onto the same frames, glowing for the
+        whole timeline before the shot.  Points still spread in doc order.
+        Fixed: 2026-10-03
+        """
+        anchors = {}
+
+        def apply_fn(obj, behavior, start, end, source_path="", anchor_override=None):
+            anchors[(obj, behavior)] = anchor_override
+
+        Behaviors.apply_to_shots(
+            [
+                self._shot(
+                    [
+                        {"name": "door", "behavior": "highlight"},
+                        {"name": "door", "behavior": "fade_out"},
+                        {"name": "lid", "behavior": "fade_in"},
+                        {"name": "lid", "behavior": "fade_out"},
+                    ]
+                )
+            ],
+            apply_fn,
+            exists_fn=lambda name, entry=None: True,
+            has_keys_fn=lambda name, s, e, entry=None: False,
+        )
+        self.assertEqual(
+            anchors,
+            {
+                ("door", "highlight"): None,
+                ("door", "fade_out"): None,
+                ("lid", "fade_in"): 0.0,
+                ("lid", "fade_out"): 1.0,
+            },
+        )
+
     def test_internal_typeerror_is_a_failure_not_a_retry(self):
         calls = []
 
@@ -168,6 +216,109 @@ class ApplyToShotsDispatchTest(unittest.TestCase):
                 has_keys_fn=lambda name, s, e: False,
             )
         self.assertIn("real bug", str(ctx.exception))
+
+
+class RecipeRoundTripTest(MayaTkTestCase):
+    """The scene's effect recipe through a real build: Build keys the recipe,
+    a recipe change reads as stale until a Build re-keys it, and a behavior
+    the doc drops takes its keys with it -- never the animator's."""
+
+    RANGE = {"A01": (0.0, 240.0)}
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="film")  # 24 fps
+        ShotStore._active = None
+        self.store = ShotStore()
+        self.door = cmds.polyCube(name="door")[0]
+
+    def tearDown(self):
+        ShotStore._active = None
+        super().tearDown()
+
+    @staticmethod
+    def _steps(*objects):
+        """One step, A01, listing ``(name, [behaviors], kind)`` objects."""
+        step = BuilderStep(
+            step_id="A01", section="A", section_title="Sec", description="d"
+        )
+        for name, behaviors, kind in objects:
+            step.objects.append(
+                BuilderObject(name=name, behaviors=list(behaviors), kind=kind)
+            )
+        return [step]
+
+    def _build(self, steps):
+        return ShotManifest(self.store).sync(steps, ranges=self.RANGE)
+
+    def _keys(self, attr):
+        plug = f"{self.door}.{attr}"
+        return list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True) or [],
+                cmds.keyframe(plug, q=True, vc=True) or [],
+            )
+        )
+
+    def _pulse_plan(self):
+        shot = self.store.sorted_shots()[0]
+        return self.store.effect_recipe.plan("pulse", shot.start, shot.end, 24)
+
+    def test_a_build_keys_the_scene_recipe(self):
+        self.store.update_effect_recipe(pulse_period=2.0, pulse_duty=0.5)
+        self._build(self._steps(("door", ["highlight"], "scene")))
+        self.assertEqual(self._keys("highlight"), self._pulse_plan())
+
+    def test_a_recipe_change_is_stale_until_a_build_rekeys_it(self):
+        steps = self._steps(("door", ["highlight"], "scene"))
+        _, _, built = self._build(steps)
+        self.assertEqual(built[0].objects[0].status, "valid")
+        self.assertFalse(built[0].needs_build)
+
+        self.store.update_effect_recipe(pulse_period=2.0)
+        stale = ShotManifest(self.store).assess(steps)
+        self.assertEqual(stale[0].objects[0].status, "stale_behavior")
+        self.assertEqual(stale[0].objects[0].stale_behaviors, ["highlight"])
+        self.assertTrue(stale[0].needs_build)
+
+        _, _, rebuilt = self._build(steps)
+        self.assertEqual(rebuilt[0].objects[0].status, "valid")
+        self.assertEqual(self._keys("highlight"), self._pulse_plan())
+
+    def test_a_behavior_the_doc_drops_takes_its_keys(self):
+        self._build(self._steps(("door", ["highlight", "fade_in"], "scene")))
+        self.assertTrue(self._keys("highlight"))
+        # The animator's key on the same channel is not the manifest's.
+        cmds.setKeyframe(f"{self.door}.highlight", time=1000, value=0.5)
+
+        steps = self._steps(("door", ["fade_in"], "scene"))
+        dropped = ShotManifest(self.store).assess(steps)
+        self.assertEqual(dropped[0].dropped_behaviors, [["door", "highlight"]])
+        self.assertTrue(dropped[0].needs_build)
+
+        self._build(steps)
+        self.assertEqual(self._keys("highlight"), [(1000.0, 0.5)])
+        self.assertTrue(self._keys("opacity"))
+        self.assertFalse(self.store.edit_ledger.authored(behavior="highlight"))
+
+    def test_a_build_leaves_a_hand_placed_clip_of_its_track(self):
+        """The build used to clear the whole track before keying its clip."""
+        tid = AudioUtils.normalize_track_id("A01_Hello")
+        AudioUtils.ensure_track_attr(tid)
+        AudioUtils.set_path(tid, make_temp_wav("round_trip_hello", 1.0))
+        AudioUtils.write_key(tid, 500, 1)  # placed by hand, later on
+
+        self._build(self._steps(("A01_Hello", ["set_clip"], "audio")))
+        start = self.store.sorted_shots()[0].start
+        self.assertEqual(
+            AudioUtils.read_keys(tid),
+            [(start, 1.0), (start + 24.0, 0.0), (500.0, 1.0)],
+        )
+        # ...and claims only what it keyed.
+        self.assertEqual(
+            [t for _c, t in self.store.edit_ledger.authored(behavior="set_clip")],
+            [start, start + 24.0],
+        )
 
 
 if __name__ == "__main__":

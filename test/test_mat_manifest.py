@@ -321,18 +321,19 @@ class TestRestoreOpacityWiring(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{file_node}.alphaIsLuminance"))
 
     def test_scalar_channels_still_connect_directly(self):
-        """Roughness/metalness ARE scalar attrs -- no broadcast, no regression."""
+        """Roughness/metalness ARE scalar attrs -- no broadcast, no regression.
+        Read off ``outColorR``: a packed map's alpha is another channel."""
         mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_scalar")
         MatManifest.restore(
             mat, {"materials": {mat: {"roughness": self.gray, "metallic": self.gray}}}
         )
         self.assertEqual(
             [p.split(".")[-1] for p in self._driven_by(mat, "specularRoughness")],
-            ["outAlpha"],
+            ["outColorR"],
         )
         self.assertEqual(
             [p.split(".")[-1] for p in self._driven_by(mat, "metalness")],
-            ["outAlpha"],
+            ["outColorR"],
         )
 
     def test_lambert_opacity_drives_transparency_from_alpha(self):

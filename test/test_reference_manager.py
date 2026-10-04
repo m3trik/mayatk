@@ -962,6 +962,39 @@ class TestReferenceManager(unittest.TestCase):
             removed, [], "a bake-backed reference must not be auto-removed"
         )
 
+    def test_unlisted_reference_survives_a_selection_change(self):
+        """Selection is the reference set only for the files the table LISTS: a
+        reference to a file outside the shown workspace (or filtered out) has no row to
+        be deselected from, so a click on an unrelated row must not remove it (it
+        silently un-referenced everything from another workspace). Mirror of
+        blendertk's ``_on_selection_changed``."""
+        self.controller.update_table(["shown"], ["C:/proj/scenes/shown.ma"])
+        ref = MagicMock()
+        ref.path = "C:/other_ws/scenes/elsewhere.ma"
+        ref.namespace = "elsewhere"
+        removed = []
+        with (
+            patch.object(
+                type(self.controller),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "remove_references",
+                lambda self, ns: removed.append(ns),
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_sync_reference_icons",
+                lambda self: None,
+            ),
+        ):
+            self.controller.handle_item_selection()
+
+        self.assertEqual(removed, [], "an unlisted reference must not be removed")
+
     def test_update_table_native_row_editable_after_reusing_foreign_item(self):
         """update_table reuses items across refreshes: a row that held a non-editable
         foreign (.blend) file, reused for a native scene once the toggle is turned off,
@@ -4284,6 +4317,51 @@ class TestReferenceRemoval(unittest.TestCase):
         controller = self._controller([])
         controller.unreference_all()
         controller.sb.message_box.assert_not_called()
+
+
+class TestConvertReferencesToAssemblies(unittest.TestCase):
+    """``AssemblyManager.convert_references_to_assemblies`` against a real file."""
+
+    def setUp(self):
+        cmds = ref_engine.cmds
+        self._store = ptk.TempArtifacts("mtk_rm_assembly_test", policy="scoped")
+        self.prop = os.path.join(self._store.dir_path(), "prop.ma")
+        cmds.file(new=True, force=True)
+        cmds.polyCube(name="box")
+        cmds.file(rename=self.prop)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        cmds.file(self.prop, reference=True, namespace="prop")
+
+    def tearDown(self):
+        ref_engine.cmds.file(new=True, force=True)
+        self._store.cleanup()
+
+    def _converted(self):
+        """``{definition: active representation}`` after the conversion."""
+        cmds = ref_engine.cmds
+        ref_engine.AssemblyManager.convert_references_to_assemblies()
+        return {
+            d: cmds.assembly(d, query=True, active=True)
+            for d in cmds.ls(type="assemblyDefinition")
+        }
+
+    def test_a_reference_becomes_an_active_assembly(self):
+        self.assertEqual(self._converted(), {"prop_assembly": "prop.ma"})
+        self.assertEqual(ref_engine.cmds.ls(type="reference"), [])
+
+    def test_a_taken_name_activates_the_new_definition(self):
+        """Bug: the conversion re-derived the node name, so when Maya had to
+        rename the new definition (``prop_assembly1``) it activated the OLD
+        ``prop_assembly``, failed, and left the reference in place. Fixed:
+        2026-10-02."""
+        ref_engine.Plugins.load("sceneAssembly")
+        ref_engine.cmds.assembly(name="prop_assembly", type="assemblyDefinition")
+
+        self.assertEqual(
+            self._converted(), {"prop_assembly": "", "prop_assembly1": "prop.ma"}
+        )
+        self.assertEqual(ref_engine.cmds.ls(type="reference"), [])
 
 
 if __name__ == "__main__":

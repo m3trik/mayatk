@@ -252,8 +252,11 @@ class _TaskDefinitionsMixin:
                         "is skipped rather than rewritten: relativizing it would "
                         "point at a file that isn't there and silently break the "
                         "material on import.",
-                        "The path edits persist after the export, and are "
-                        "undo-anchored so Maya's undo can back them out.",
+                        "The path edits persist after the export — except when "
+                        "<b>Auto Set Workspace</b> switched to the scene's own "
+                        "project for the write: a relative path resolves "
+                        "against the active project, so the scene then gets "
+                        "its own paths back with the workspace.",
                     ],
                 ),
                 "setChecked": True,
@@ -539,19 +542,19 @@ class _TaskDefinitionsMixin:
                     bullets=[
                         "<b>Off (Pure Bake)</b> — the bake alone: no "
                         "reflection or gloss on a baked surface.",
-                        "<b>Quarter</b> — the default: the bake keeps its "
-                        "contrast, and gloss and normal maps still read.",
-                        "<b>Half / Full</b> — stronger reflections; Full "
-                        "lifts every dark glossy baked surface.",
+                        "<b>Quarter / Half</b> — weaker reflections "
+                        "everywhere, for a deliberately matte look.",
+                        "<b>Full</b> — the default: lit surfaces reflect "
+                        "fully, shadows stay dark.",
                     ],
                     notes=[
                         "A lightmap already holds the surface's diffuse "
                         "light, so a baked material only ever takes the "
                         "environment's specular; this sets how much. The "
                         "viewer's environment is a bright studio, not the room "
-                        "the bake lit: measured on a production room, the "
-                        "darkest baked surfaces read 0.06 of display baked "
-                        "alone, 0.22 at Full and 0.11 at Quarter.",
+                        "the bake lit, so each texel's reflection is first "
+                        "scaled by how lit its bake is: a shadow reflects next "
+                        "to nothing at any level.",
                         "Only lightmapped materials; everything else takes the "
                         "environment whole.",
                         "Decided here and carried by the deliverable (GLB and "
@@ -1204,6 +1207,10 @@ class _TaskDefinitionsMixin:
                         "map — so it renders wrong only in the deliverable.",
                         "Reports per SHAPE, so a per-face assignment that "
                         "leaves part of a mesh on the default is named too.",
+                        "An ORIG shape (deformer / modelling history) listed "
+                        "ahead of its transform's real shape ships that "
+                        "transform on 'Default_Material' in the FBX; delete "
+                        "the mesh's history to clear it.",
                         "Assign a material, or drop the object from the export "
                         "set, to pass.",
                     ],
@@ -1366,9 +1373,10 @@ class _TaskDefinitionsMixin:
                     title="Verify The Written File",
                     body="Re-opens the FBX/GLB that just shipped and runs "
                     "pythontk's file-level gates over the bytes on disk — a "
-                    "truncated container, a take the FBX dropped, a NaN that "
-                    "reached an accessor, a clip whose span disagrees with its "
-                    "take.",
+                    "truncated container, a take the FBX dropped, a shot take "
+                    "missing a channel or keyed short of its window (a node "
+                    "Unity would play at its rest pose), a NaN that reached an "
+                    "accessor, a clip whose span disagrees with its take.",
                     notes=[
                         "Reports only. The file is already written, so a failure "
                         "is logged per gate at ERROR and never unwrites the "

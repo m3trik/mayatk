@@ -741,6 +741,9 @@ class WidgetSyncMixin:
             return
         self.sequencer.store.select_on_load = checked
         self.sequencer.store.mark_dirty()
+        # A cross-scene preference: saved by the panel that changes it (a
+        # store save no longer writes the prefs file).
+        self.sequencer.store._save_user_prefs()
 
     def _set_show_internal_holds(self, enabled: bool) -> None:
         """Toggle flat-key span visibility in attribute sub-rows."""

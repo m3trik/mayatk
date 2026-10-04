@@ -1,7 +1,7 @@
 {
-    "description": "Desktop / high quality — high resolution, samples and GI bounces.",
+    "description": "Desktop / high quality — high resolution, six bounces, low shadow noise.",
     "resolution": 2048,
-    "samples": 8,
-    "gi_depth": 3,
-    "gi_samples": 6
+    "samples": 4,
+    "gi_depth": 6,
+    "gi_samples": 4
 }

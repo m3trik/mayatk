@@ -18,6 +18,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils.shader_templates._shader_templates import ShaderTemplates
@@ -239,7 +240,7 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         # that does surfaces per-node errors from the restorer below.
         for plugin in ("shaderFXPlugin", "mtoa"):
             try:
-                EnvUtils.load_plugin(plugin)
+                Plugins.load(plugin)
             except ValueError as e:
                 self.logger.debug(str(e))
 

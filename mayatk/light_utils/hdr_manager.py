@@ -49,6 +49,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -90,7 +91,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         """
         if cmds is None:
             return False
-        return EnvUtils.is_plugin_loaded("mtoa")
+        return Plugins.is_loaded("mtoa")
 
     @staticmethod
     def arnold_available() -> bool:
@@ -104,7 +105,7 @@ class HdrManager(ptk.LoggingMixin, ptk.HelpMixin):
         if cmds is None:
             return False
         try:
-            cmds.loadPlugin("mtoa", quiet=True)
+            Plugins.load("mtoa")
         except Exception:
             return False
         return HdrManager.arnold_loaded()

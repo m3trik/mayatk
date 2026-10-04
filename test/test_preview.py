@@ -549,6 +549,24 @@ class TestCleanupContractAttrRestore(MayaTkTestCase):
 
         self.assertEqual(cmds.getAttr(f"{node}.payload"), "before")
 
+    def test_rollback_empties_a_string_attr_that_was_empty(self):
+        """An empty string channel snapshots as the ``None`` getAttr reads, and
+        the bare setAttr raised on it into the swallowed except: rollback left
+        the previewed value behind (the shape ``Attributes.pinned`` had).
+
+        Added: 2026-10-03
+        """
+        node = cmds.createNode("transform", name="contract_empty_str_node")
+        cmds.addAttr(node, ln="payload", dt="string")
+        self.assertIsNone(cmds.getAttr(f"{node}.payload"))
+
+        contract = CleanupContract()
+        contract.record_modification(node, "payload")
+        cmds.setAttr(f"{node}.payload", "after", type="string")
+        contract.rollback()
+
+        self.assertFalse(cmds.getAttr(f"{node}.payload"))
+
     def test_rollback_restores_float_attr(self):
         """The pre-existing scalar path still restores (guard for the new
         string branch not disturbing it)."""

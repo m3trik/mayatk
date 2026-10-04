@@ -13,6 +13,7 @@ import pythontk as ptk
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -1681,7 +1682,7 @@ class UvUtils(ptk.HelpMixin):
         ``shellSpacing`` is already normalized, so resolution only sets pack
         precision, not the gap. Cap it well below *map_size* to stay fast.
         """
-        cmds.loadPlugin("Unfold3D", quiet=True)
+        Plugins.load("Unfold3D")
         pad = cls.calculate_uv_padding(map_size, normalize=True)
         uvs = cmds.polyListComponentConversion(mesh, toUV=True) or []
         if not uvs:
@@ -1852,7 +1853,7 @@ class UvUtils(ptk.HelpMixin):
                 seamers[m] = seamer
         seamed = list(seamers)
         if unfold and seamed:
-            cmds.loadPlugin("Unfold3D", quiet=True)
+            Plugins.load("Unfold3D")
             # Unfold each mesh on its own: a mesh u3dUnfold rejects (e.g. one
             # with "non-manifold UVs") then only skips itself -- a single batched
             # unfold would abort the whole selection on the first bad mesh.
@@ -2836,6 +2837,74 @@ class UvUtils(ptk.HelpMixin):
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
     @staticmethod
+    def export_uv_layout(objects, uv_set: str = None) -> dict:
+        """Read each mesh's *uv_set* as a per-loop layout, for :meth:`apply_uv_layout`.
+
+        The sending half of the layout hand-off, in the format of its twin
+        ``btk.UvUtils.export_uv_layout``: per LOOP (face-vertex), never per
+        vertex -- lightmap islands are cut at seams, where one vertex carries
+        several UVs -- with the polygon vertex-count sequence and the vertex
+        total as the fingerprint :meth:`apply_uv_layout` checks before it
+        replays the layout. Replayed onto a mesh of the same topology it is the
+        same layout, loop for loop: how a texture transfer gives a target its
+        source's lightmap UVs.
+
+        Parameters:
+            objects: Mesh transforms or shapes.
+            uv_set: The set to read; default each mesh's lightmap set
+                (``UvDiagnostics.find_lightmap_uv_set``, else
+                ``LIGHTMAP_UV_SET``).
+
+        Returns:
+            dict: ``{object: {"uv_set", "poly_counts", "num_verts", "uvs"}}``,
+            keyed by the caller's own spelling of each object; ``uvs`` is
+            base64 little-endian float32 ``[u0, v0, u1, v1, ...]`` in loop
+            order, (0, 0) on a face the set leaves unmapped. A mesh without the
+            set is left out.
+        """
+        import array
+        import base64
+        import sys
+
+        from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
+
+        out = {}
+        for obj in ptk.make_iterable(objects):
+            shape = NodeUtils.get_shape(str(obj))
+            if not shape:
+                continue
+            shape = str(shape)
+            name = (
+                uv_set
+                or UvDiagnostics.find_lightmap_uv_set(shape)
+                or UvDiagnostics.LIGHTMAP_UV_SET
+            )
+            if name not in (cmds.polyUVSet(shape, query=True, allUVSets=True) or []):
+                continue
+            fn = CoreUtils.get_mfn_mesh(shape)
+            counts, _verts = fn.getVertices()
+            mapped, ids = fn.getAssignedUVs(name)
+            us, vs = fn.getUVs(name)
+            buf = array.array("f")
+            uv_ids = iter(ids)
+            for count, has in zip(counts, mapped):
+                face = [next(uv_ids) for _ in range(has)]
+                if has == count:
+                    for uid in face:
+                        buf.extend((us[uid], vs[uid]))
+                else:  # a face carries all of its UVs or none
+                    buf.extend([0.0] * (2 * count))
+            if sys.byteorder != "little":  # pin the wire format, not the host's
+                buf.byteswap()
+            out[obj] = {
+                "uv_set": name,
+                "poly_counts": [int(c) for c in counts],
+                "num_verts": fn.numVertices,
+                "uvs": base64.b64encode(buf.tobytes()).decode("ascii"),
+            }
+        return out
+
+    @staticmethod
     @CoreUtils.undoable
     def apply_uv_layout(layouts: dict, uv_set: str = None, quiet: bool = False) -> dict:
         """Write UV layouts authored in ANOTHER application onto these meshes.
@@ -3039,7 +3108,8 @@ class UvUtils(ptk.HelpMixin):
             freeze_history (bool): If True, bake the projection and delete
                 construction history (final baked lightmap UVs, no live unwrap
                 history) -- appropriate for export-bound meshes. Default False
-                preserves modeling history.
+                preserves modeling history: a mesh with history gets the
+                projection as a live node in it; a mesh without stays without.
             quiet (bool): Suppress logging.
 
         Returns:
@@ -3135,6 +3205,18 @@ class UvUtils(ptk.HelpMixin):
                     if target not in added and added:
                         target = added[0]
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=target)
+                # Only a mesh WITH history gets the projection as a node in it.
+                # One nothing drives has none to preserve, and a live unwrap
+                # would re-run on any later upstream edit -- moving the lightmap
+                # UVs out from under the map baked on them -- behind an orig
+                # copy of the mesh that carries its unused vertices into Maya's
+                # "invalid or unused components" warning at every open (a
+                # production table, 2026-10-02).
+                historic = bool(
+                    cmds.listConnections(
+                        f"{shape}.inMesh", source=True, destination=False
+                    )
+                )
                 cmds.polyAutoProjection(
                     f"{shape}.f[*]",
                     layoutMethod=0,
@@ -3143,6 +3225,7 @@ class UvUtils(ptk.HelpMixin):
                     planes=planes,
                     percentageSpace=pct,
                     createNewMap=False,
+                    constructionHistory=historic,
                 )
 
                 if freeze_history:

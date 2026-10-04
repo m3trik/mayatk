@@ -991,7 +991,8 @@ class TestSceneExporter(MayaTkTestCase):
         first run had already mutated. The override is now offered at the
         failure point, so accepting it continues the SAME run: the tasks
         dispatch exactly once and the deliverable is written.
-        Added: 2026-09-03
+        Added: 2026-09-03. Changed 2026-10-04: decided where each check fails
+        (``decide_check_failure``), driven here through the real runner.
         """
         try:
             if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
@@ -999,28 +1000,24 @@ class TestSceneExporter(MayaTkTestCase):
         except Exception:
             self.skipTest("FBX plugin not available")
 
-        runs = []
-
-        def _fail_once(tasks):
-            runs.append(dict(tasks))
-            self.exporter.task_manager._last_failed_checks = ["check_path_length"]
-            return False
-
         asked = []
-        self.exporter.task_manager.run_tasks = _fail_once
-        self.exporter.confirm = lambda question: (asked.append(question), True)[1]
 
+        def _override(check, messages, remaining):
+            asked.append((check, messages, remaining))
+            return ptk.TaskFactory.CHECK_OVERRIDE
+
+        self.exporter.decide_check_failure = _override
         result = self.exporter.perform_export(
             export_dir=self.temp_dir,
             objects=[self.cube],
             output_name="OverrideAccepted",
-            tasks={"check_path_length": 60},
+            tasks={"check_path_length": 5},  # every real path is longer
         )
 
         self.assertTrue(result, "an accepted override must write the file")
-        self.assertEqual(len(runs), 1, "the task pipeline must not run twice")
         self.assertEqual(len(asked), 1, "the override must be offered once")
-        self.assertIn("check_path_length", asked[0])
+        self.assertEqual(asked[0][0], "check_path_length")
+        self.assertTrue(asked[0][1], "the dialog gets what the check reported")
         self.assertEqual(
             self.exporter._overridden_checks,
             ["check_path_length"],
@@ -1030,81 +1027,88 @@ class TestSceneExporter(MayaTkTestCase):
             os.path.exists(os.path.join(self.temp_dir, "OverrideAccepted.fbx"))
         )
 
-    def test_an_override_runs_the_tasks_the_failed_check_had_stopped(self):
-        """The runner stops dispatching tasks at the first failed check --
-        everything below it is work an aborted write would throw away. An
-        override turns that write back on, so those tasks must run before it:
-        without this an overridden export silently shipped a file that skipped
-        (say) the texture conversion the user asked for. Only the SKIPPED names
-        re-dispatch; re-running the ones above would repeat their mutation.
-        Added: 2026-09-03
+    def test_an_override_keeps_evaluating_the_checks_after_it(self):
+        """An override used to be asked once, after the run had dropped every
+        check below the failure -- so "OK" shipped a file whose remaining
+        checks were never made. Asked where the check fails, an override
+        carries the same run on: the next check still runs, and its own
+        failure asks again.
+        Added: 2026-10-04
         """
-        tm = self.exporter.task_manager
-        dispatched = []
-        real_dispatch = tm._execute_tasks_and_checks
-
-        # The resume goes to the dispatcher directly, never through run_tasks:
-        # run_tasks re-derives the run's task-driven modes from what it is
-        # handed, and a subset would zero the Optimize Keys level mid-run.
-        def _record(tasks_only, checks_only):
-            dispatched.append(dict(tasks_only))
-            self.assertEqual(checks_only, {})
-            return True
-
-        # The state the aborted first pass leaves behind: one task never ran.
-        tm._last_skipped_tasks = ["convert_to_relative_paths"]
-        tm._execute_tasks_and_checks = _record
         try:
-            self.exporter._resume_skipped_tasks(
-                {"convert_to_relative_paths": True, "set_linear_unit": "cm"}
-            )
-        finally:
-            tm._execute_tasks_and_checks = real_dispatch
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
 
-        self.assertEqual(len(dispatched), 1)
-        self.assertEqual(
-            dispatched[0],
-            {"convert_to_relative_paths": True},
-            "only the skipped task re-dispatches, never the ones that already ran",
+        tm = self.exporter.task_manager
+        made = []
+        real_check = tm.check_path_length
+
+        def _check_after(*args):
+            made.append("check_zz_after")
+            return False, ["the second failure"]
+
+        # A second failing check, scheduled after the first (alphabetically,
+        # with no dependency entry it lands after every task).
+        tm.check_zz_after = _check_after
+        asked = []
+
+        def _decide(check, messages, remaining):
+            asked.append((check, remaining))
+            return ptk.TaskFactory.CHECK_OVERRIDE
+
+        self.exporter.decide_check_failure = _decide
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            output_name="OverrideContinues",
+            tasks={"check_path_length": 5, "check_zz_after": True},
         )
+        self.assertTrue(result)
+        self.assertEqual(made, ["check_zz_after"], "the later check must run")
+        self.assertEqual(
+            asked,
+            [("check_path_length", ["check_zz_after"]), ("check_zz_after", [])],
+            "each failure asks, naming the checks still to run",
+        )
+        self.assertEqual(
+            self.exporter._overridden_checks, ["check_path_length", "check_zz_after"]
+        )
+        self.assertIs(tm.check_path_length.__func__, real_check.__func__)
 
-        # A run the gate never cut short must not dispatch a second pass at all.
-        dispatched.clear()
-        tm._last_skipped_tasks = []
-        tm._execute_tasks_and_checks = _record
-        try:
-            self.exporter._resume_skipped_tasks({"set_linear_unit": "cm"})
-        finally:
-            tm._execute_tasks_and_checks = real_dispatch
-        self.assertEqual(dispatched, [])
-
-    def test_resuming_skipped_tasks_keeps_the_banner_counts(self):
-        """The second pass re-stamps the run counters the success banner reads.
-        The first pass already counted every REQUESTED task, so its numbers are
-        the ones that describe the run -- letting the resume zero them made the
-        banner drop its "Checks Passed" line entirely.
-        Added: 2026-09-03
+    def test_the_panel_asks_with_three_named_buttons_and_cancel_on_enter(self):
+        """Override All / Override / Cancel, mapped back to the runner's
+        answers; Enter is Cancel, and anything unexpected stops the run.
+        Added: 2026-10-04
         """
-        tm = self.exporter.task_manager
-        tm._last_task_count, tm._last_check_count = 7, 4
-        tm._last_skipped_tasks = ["convert_to_relative_paths"]
-        tm._last_skipped_checks = ["check_valid_paths"]
+        seen = {}
 
-        def _second_pass(tasks_only, checks_only):
-            tm._last_task_count, tm._last_check_count = 1, 0
-            tm._last_skipped_checks = []  # a tasks-only pass skips no check
-            return True
+        class _SB:
+            def message_box(self, string, *buttons, **kwargs):
+                seen.update(string=string, buttons=buttons, **kwargs)
+                return seen.get("reply")
 
-        real = tm._execute_tasks_and_checks
-        tm._execute_tasks_and_checks = _second_pass
-        try:
-            self.exporter._resume_skipped_tasks({"convert_to_relative_paths": True})
-        finally:
-            tm._execute_tasks_and_checks = real
-        self.assertEqual((tm._last_task_count, tm._last_check_count), (7, 4))
-        # The checks the abort dropped never ran: the banner reads this list to
-        # keep them out of "Checks Passed" (added 2026-09-12).
-        self.assertEqual(tm._last_skipped_checks, ["check_valid_paths"])
+        slots = SceneExporterSlots.__new__(SceneExporterSlots)
+        slots.sb = _SB()
+        slots._overridden_checks = []
+        slots._definition_tables_cache = ({}, {})
+        for reply, answer in (
+            ("Override All", ptk.TaskFactory.CHECK_OVERRIDE_ALL),
+            ("Override", ptk.TaskFactory.CHECK_OVERRIDE),
+            ("Cancel", ptk.TaskFactory.CHECK_ABORT),
+            (None, ptk.TaskFactory.CHECK_ABORT),
+        ):
+            seen["reply"] = reply
+            got = slots.decide_check_failure(
+                "check_path_length", ["too long"], ["check_valid_paths"]
+            )
+            self.assertEqual(got, answer, reply)
+        self.assertEqual(seen["buttons"], ("Override All", "Override", "Cancel"))
+        self.assertEqual(seen["default"], "Cancel")
+        self.assertIsNone(seen["timeout"], "a question must not time out")
+        self.assertIn("Path Length", seen["string"])
+        self.assertIn("Valid Paths", seen["string"], "the remaining checks show")
 
     def test_the_override_prompt_survives_the_panel_rich_text_engine(self):
         """``sb.message_box`` hands its string to Qt's rich-text engine, which
@@ -1134,24 +1138,24 @@ class TestSceneExporter(MayaTkTestCase):
     def test_declining_the_override_still_aborts_the_export(self):
         """The offer is consent, never an automatic pass: declining keeps the
         pre-existing abort, and nothing is written.
-        Added: 2026-09-03
+        Added: 2026-09-03. Changed 2026-10-04: Cancel in the per-check dialog.
         """
+        asked = []
 
-        def _fail(tasks):
-            self.exporter.task_manager._last_failed_checks = ["check_path_length"]
-            return False
+        def _cancel(check, messages, remaining):
+            asked.append(check)
+            return ptk.TaskFactory.CHECK_ABORT
 
-        self.exporter.task_manager.run_tasks = _fail
-        self.exporter.confirm = lambda question: False
-
+        self.exporter.decide_check_failure = _cancel
         result = self.exporter.perform_export(
             export_dir=self.temp_dir,
             objects=[self.cube],
             output_name="OverrideDeclined",
-            tasks={"check_path_length": 60},
+            tasks={"check_path_length": 5},  # every real path is longer
         )
 
         self.assertFalse(result)
+        self.assertEqual(asked, ["check_path_length"])
         self.assertEqual(self.exporter._overridden_checks, [])
         self.assertFalse(
             os.path.exists(os.path.join(self.temp_dir, "OverrideDeclined.fbx"))
@@ -3605,6 +3609,89 @@ class TestSceneExporter(MayaTkTestCase):
         finally:
             os.chdir(original_cwd)
 
+    def test_relative_paths_never_outlive_the_workspace_they_resolve_in(self):
+        """The scene's project is not the active one: Auto Set Workspace
+        switches to it for the write, Convert To Relative Paths rewrote the
+        textures against IT and KEPT the rewrite, and the switch was undone
+        after the write -- leaving ``sourceimages/...`` resolving against the
+        user's project, where nothing is. A valid link, broken by the export
+        (reproduced 2026-10-04). The write still reads the relative form; the
+        scene gets its working path back with the workspace.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        ws_root = self._make_workspace_scene()
+        sub = os.path.join(ws_root, "sourceimages", "wood")
+        os.makedirs(sub, exist_ok=True)
+        tex = os.path.join(sub, "bark.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+        stored = cmds.getAttr(f"{file_node}.fileTextureName")
+
+        # The user's active project: a different one, with no such texture.
+        active = os.path.join(self.temp_dir, "active_project")
+        os.makedirs(os.path.join(active, "sourceimages"), exist_ok=True)
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(active, openWorkspace=True)
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        original_cwd = os.getcwd()
+        try:
+            tm.set_workspace(enable=True)
+            tm.convert_to_relative_paths()
+            self.assertEqual(
+                cmds.getAttr(f"{file_node}.fileTextureName"),
+                "sourceimages/wood/bark.png",
+                "the write must still read the project-relative form",
+            )
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
+
+        after = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertEqual(after, stored, "the scene must get its own path back")
+        self.assertTrue(
+            MatUtils.resolve_path(after, search=False),
+            f"{after!r} no longer resolves in the active project",
+        )
+        self.assertNotIn("project-relative texture paths", tm.kept_edits)
+
+    def test_relative_paths_are_kept_when_the_active_project_is_the_scenes(self):
+        """The other half: with the scene's own project already active there is
+        no switch to undo, so the rewrite resolves where the scene stays and is
+        KEPT. ``cmds.workspace -q -rd`` ends in a slash and the scene-path
+        lookup may not, so a raw string compare read the same project as a
+        switch and handed the scene its absolute paths back.
+        """
+        ws_root = self._make_workspace_scene()
+        sub = os.path.join(ws_root, "sourceimages", "wood")
+        os.makedirs(sub, exist_ok=True)
+        tex = os.path.join(sub, "bark.png")
+        with open(tex, "wb") as f:
+            f.write(b"PNGDATA")
+        file_node = self._assign_texture(self.cube, tex)
+
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(ws_root, openWorkspace=True)  # already the scene's
+
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        original_cwd = os.getcwd()
+        try:
+            tm.set_workspace(enable=True)
+            tm.convert_to_relative_paths()
+            self.assertIn("project-relative texture paths", tm.kept_edits)
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"), "sourceimages/wood/bark.png"
+        )
+
     # ------------------------------------------------------------------
     # Export-transient state — must SURVIVE the write, not revert before it
     # ------------------------------------------------------------------
@@ -4875,6 +4962,122 @@ class TestExportDataNodeOption(MayaTkTestCase):
         gate = [row.status for row in report.rows if row.check == "fbx_takes"]
         self.assertEqual(gate, ["SKIP"], report.summary())
 
+    def test_a_glb_cuts_its_shots_without_any_keyed_visibility(self):
+        """The shots' clip origin rode the visibility record alone, so a scene
+        with nothing keyed on visibility published none: the clip rebuild
+        declined after the converter's split takes were already dropped, and
+        the GLB shipped ``Take 001`` and no shot clip -- with ``clips_vs_takes``
+        failing and the export still reporting success (measured 2026-10-04).
+        Added: 2026-10-04
+        """
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("ShotA", 1, 20, objects=[self.cube])
+        store.define_shot("ShotB", 21, 40, objects=[self.cube])
+        artifacts = ptk.TempArtifacts("se_glb_no_visibility", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        self.assertTrue(
+            exporter.perform_export(
+                export_dir=out,
+                objects=[self.cube],
+                output_name="no_vis",
+                tasks={
+                    "export_data_node": True,
+                    "apply_declared_takes": "both",
+                    "output_format": "fbx_glb",
+                },
+            )
+        )
+        glb = os.path.join(out, "no_vis.glb")
+        with ptk.MeshConvert.open_glb(glb) as edit:
+            names = [a.get("name") for a in edit.gltf.get("animations") or []]
+        self.assertIn("ShotA", names)
+        self.assertIn("ShotB", names)
+        report = ptk.ExportVerifier(glb=glb, fbx=os.path.join(out, "no_vis.fbx")).run()
+        rows = {row.check: row.status for row in report.rows}
+        self.assertEqual(rows.get("clips_vs_takes"), "PASS", report.summary())
+        self.assertEqual(rows.get("clip_origin"), "PASS", report.summary())
+
+    def _export_takes(self, mode):
+        """Export the cube + a node keyed only inside ShotA through the real
+        pipeline in Animation Clips *mode*; the written FBX, its takes read."""
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("FBX plugin not available")
+        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=40, value=10)
+        early = cmds.polyCube(name="early_only")[0]
+        cmds.setKeyframe(early, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(early, attribute="translateY", time=15, value=4)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("ShotA", 1, 20, objects=[self.cube])
+        store.define_shot("ShotB", 21, 40, objects=[self.cube])
+        artifacts = ptk.TempArtifacts("se_take_modes", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        self.assertTrue(
+            exporter.perform_export(
+                export_dir=out,
+                objects=[self.cube, early],
+                output_name=f"{mode}_mode",
+                tasks={"export_data_node": True, "apply_declared_takes": mode},
+            )
+        )
+        return ptk.FbxFile.load(
+            os.path.join(out, f"{mode}_mode.fbx"),
+            decode_arrays=("KeyTime",),
+            raw_payloads=False,
+        )
+
+    def test_shots_only_ships_no_whole_timeline_take(self):
+        """Shots Only reaches the FBX: the whole-timeline take Maya writes
+        beside the split is dropped from the deliverable, as the GLB drops its
+        stack. It used to be ignored -- an FBX written Shots Only was the same
+        file as Shots + Full Sequence, and Unity imported a Take 001 clip
+        nobody asked for.
+        Added: 2026-10-04
+        """
+        fbx = self._export_takes("shots")
+        self.assertEqual(sorted(fbx.take_names()), ["ShotA", "ShotB"])
+
+    def test_every_take_of_the_deliverable_carries_every_channel(self):
+        """Each shot's take is an exact slice: ``early_only`` is keyed only
+        inside ShotA, and Maya's split used to leave ShotB with no channel for
+        it -- Unity then played it at its rest pose for the whole shot.
+        Added: 2026-10-04
+        """
+        fbx = self._export_takes("both")
+        curves = fbx.take_curves()
+        self.assertEqual(sorted(curves), ["ShotA", "ShotB", "Take 001"])
+        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
+        whole = set(curves["Take 001"])
+        self.assertTrue(any(key[0] == "early_only" for key in whole))
+        for take, (start, end) in (("ShotA", (1, 20)), ("ShotB", (21, 40))):
+            self.assertEqual(sorted(whole - set(curves[take])), [], take)
+            for key, (first, last, _count) in curves[take].items():
+                self.assertEqual(
+                    (round(first / tick), round(last / tick)), (start, end), key
+                )
+
     def test_includes_carrier_and_publishes_with_shots(self):
         from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.node_utils.data_nodes import DataNodes
@@ -4937,7 +5140,9 @@ class TestExportDataNodeOption(MayaTkTestCase):
         )
         self.addCleanup(FbxUtils.unregister_export_stager, "preview_probe")
         exporter = SceneExporter(log_level="WARNING")
-        exporter.confirm = lambda question: False  # decline the override
+        exporter.decide_check_failure = (  # decline any override
+            lambda *args: ptk.TaskFactory.CHECK_ABORT
+        )
         tm = exporter.task_manager
 
         def _publish_then_fail(tasks):
@@ -4973,7 +5178,9 @@ class TestExportDataNodeOption(MayaTkTestCase):
         )
         self.addCleanup(FbxUtils.unregister_export_stager, "preview_probe_takes")
         exporter = SceneExporter(log_level="WARNING")
-        exporter.confirm = lambda question: False  # decline the override
+        exporter.decide_check_failure = (  # decline any override
+            lambda *args: ptk.TaskFactory.CHECK_ABORT
+        )
         tm = exporter.task_manager
 
         def _takes_then_fail(tasks):
@@ -7354,6 +7561,27 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertFalse(status, "an orig riding other geometry was not flagged")
         self.assertTrue(any("orig shape riding" in m for m in msgs), msgs)
 
+    def test_check_default_materials_flags_an_orig_ahead_of_its_real_shape(self):
+        """An orig shape listed BEFORE its transform's real shape ships that
+        transform on 'Default_Material' in the FBX -- right geometry, wrong
+        material -- though it is the transform's own, single-parent orig.
+
+        Measured on the production office (2026-10-01): ``WALL_A`` held the
+        orig of the 24-way instanced wall mesh ahead of its instance; the FBX
+        carried a per-node Default_Material for it (gone with the history),
+        Blender's importer linked it to the object, and the bridge lightmap
+        bake gave that one wall an atlas of its own. FBX2glTF reads the shared
+        mesh's material, so the GLB never showed it.
+        Added: 2026-10-01
+        """
+        orig = self._deformed_cube_orig("leading")
+        cmds.reorder(orig, front=True)
+
+        self.tm.objects = [self.cube_long]
+        status, msgs = self.tm.check_default_materials()
+        self.assertFalse(status, "an orig ahead of the real shape was not flagged")
+        self.assertTrue(any("ahead of the real shape" in m for m in msgs), msgs)
+
     def test_check_default_materials_allows_an_instanced_deformed_mesh(self):
         """Instancing a deformed mesh shares its orig across every instance.
 
@@ -7734,7 +7962,9 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
 
     def test_a_named_preset_is_never_overridden(self):
         """The preset IS the user's configuration. A preset that deliberately
-        disables instancing must not be silently corrected.
+        disables instancing must not be silently corrected. (What a GLB itself
+        requires is the one exception -- see
+        ``test_a_preset_cannot_strip_what_a_glb_requires``.)
 
         ``run_tasks`` is stubbed to fail so the run stops immediately after the
         preset decision -- the branch under test -- without paying for a real
@@ -7765,8 +7995,138 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
             _run(preset_file=None), (True, False), "no preset must pin the defaults"
         )
         self.assertEqual(
-            _run(preset_file=preset), (False, True), "a preset must win outright"
+            _run(preset_file=preset),
+            (False, True),
+            "a preset must replace the default pins",
         )
+
+    def test_a_preset_cannot_strip_what_a_glb_requires(self):
+        """A preset owns content choices, never the GLB's own requirements.
+
+        Measured on a production assembly (2026-09-30): the panel's persisted
+        preset (`fbxexport`, Maya's own, Tangents and Binormals OFF) bypassed
+        the GLB pins, so every normal-mapped primitive shipped without TANGENT
+        and rendered through three.js's derivative fallback -- reported as
+        weak, wrong specular on the baked table. The preset's content choices
+        (here cameras) still win.
+        """
+        import maya.mel as mel
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = cmds.polyCube(name="preset_glb_probe")[0]
+        preset = os.path.join(self.out, "p.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def _load(*_args, **_kwargs):
+            # What `fbxexport.fbxexportpreset` leaves in the plugin.
+            mel.eval("FBXExportTangents -v false")
+            mel.eval("FBXExportEmbeddedTextures -v false")
+            mel.eval("FBXExportCameras -v true")
+
+        with (
+            patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load),
+            patch.object(TaskManager, "run_tasks", return_value=False),
+        ):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[cube],
+                preset_file=preset,
+                tasks={"output_format": "glb", "smart_bake": False},
+            )
+        self.assertTrue(mel.eval("FBXExportTangents -q"), "the GLB lost its tangents")
+        self.assertTrue(mel.eval("FBXExportEmbeddedTextures -q"))
+        self.assertTrue(
+            mel.eval("FBXExportCameras -q"), "a content choice was overridden"
+        )
+
+    def test_a_preset_on_an_fbx_run_keeps_its_tangent_choice(self):
+        """Only a GLB deliverable has requirements to enforce; an FBX run is the
+        preset's to shape, tangents included."""
+        import maya.mel as mel
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        cube = cmds.polyCube(name="preset_fbx_probe")[0]
+        preset = os.path.join(self.out, "p.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def _load(*_args, **_kwargs):
+            mel.eval("FBXExportTangents -v false")
+
+        with (
+            patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load),
+            patch.object(TaskManager, "run_tasks", return_value=False),
+        ):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[cube],
+                preset_file=preset,
+                tasks={"output_format": "fbx", "smart_bake": False},
+            )
+        self.assertFalse(mel.eval("FBXExportTangents -q"))
+
+
+    def _ascii_preset_export(self, name, with_carrier):
+        """A real FBX write under a preset that asks for ASCII; the file."""
+        import maya.mel as mel
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        cube = cmds.polyCube(name=f"{name}_cube")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=20, value=5)
+        if with_carrier:
+            store = ShotStore()
+            ShotStore.set_active(store)
+            self.addCleanup(ShotStore.clear_active)
+            store.define_shot("ShotA", 1, 20, objects=[cube])
+        preset = os.path.join(self.out, "ascii.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+        self.addCleanup(mel.eval, "FBXExportInAscii -v false")
+
+        def _load(*_args, **_kwargs):
+            mel.eval("FBXExportInAscii -v true")
+
+        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load):
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.out,
+                    objects=[cube],
+                    output_name=name,
+                    preset_file=preset,
+                    tasks={
+                        "output_format": "fbx",
+                        "export_data_node": with_carrier,
+                        "smart_bake": False,
+                    },
+                )
+            )
+        return os.path.join(self.out, f"{name}.fbx")
+
+    def test_an_ascii_preset_cannot_ship_the_carrier_unreadable(self):
+        """Unity's ASCII FBX reader drops the whole scene, or truncates the
+        string, once a ``data_export`` channel passes ~6 KB (measured in batch
+        Unity 6000.3: a 7 KB value arrived as 7 characters, a 20 KB one as an
+        empty prefab; binary carried 300 KB intact) -- and the handoff record
+        alone is past that. A preset owns content choices, never whether the
+        carrier's metadata can be read: an export shipping it is written
+        binary.
+        Added: 2026-10-04
+        """
+        path = self._ascii_preset_export("ascii_carrier", with_carrier=True)
+
+        self.assertTrue(ptk.FbxFile.is_fbx(path), "the carrier shipped as ASCII")
+        metadata = ptk.FbxFile.load(path, raw_payloads=False).user_properties(
+            "shot_metadata"
+        )
+        self.assertTrue(metadata and b"ShotA" in metadata[0])
+
+    def test_an_ascii_preset_without_the_carrier_keeps_its_format(self):
+        """No metadata, nothing to protect: the preset's choice stands."""
+        path = self._ascii_preset_export("ascii_plain", with_carrier=False)
+
+        self.assertFalse(ptk.FbxFile.is_fbx(path), "an ASCII preset was overridden")
 
 
 class TestPresetDirectoryScan(QuickTestCase):
@@ -10377,6 +10737,88 @@ class TestBakeRangeModes(MayaTkTestCase):
             "the range task must not publish the origin -- export_data_node "
             "hands it to the producers as the export context's clip_span",
         )
+
+    # -- the origin of a resampling split ------------------------------------
+    #
+    # A take split resamples EVERY curve over the bake range (FbxUtils.apply_takes,
+    # which is what makes each take an exact slice), so the whole-timeline
+    # take's first key is the range's first frame wherever the scene's first
+    # key comes later -- measured on a curve keyed 10-100 under a 1-100 range:
+    # the take's first key moved from 10 to 1, and a GLB converter puts the
+    # first key at t=0. The range is set after the publish, so the origin is
+    # predicted from the same readings the range task uses.
+
+    def _splitting(self, **modes):
+        self.tm.run = self.tm.run.replace(
+            **{"splits_takes": True, "bake_range_mode": "auto", **modes}
+        )
+
+    def test_a_resampling_split_starts_the_origin_at_the_first_shot(self):
+        """A shot that opens before the first key opens the stack with it."""
+        self._declare_shots((1, 60), (80, 120))
+        self._splitting()
+        seen = self._published_origin()
+
+        self.tm._publish_scene_records()
+
+        self.assertEqual(seen.get("span"), (1, 200))
+
+    def test_shots_inside_the_keys_leave_the_origin_on_the_keys(self):
+        """The common case is unchanged: the keys already enclose the shots."""
+        self._declare_shots((20, 60), (80, 120))
+        self._splitting()
+        seen = self._published_origin()
+
+        self.tm._publish_scene_records()
+
+        self.assertEqual(seen.get("span"), (10, 200))
+
+    def test_a_scene_range_split_reaches_the_scene_range(self):
+        """The Scene Animation Range row widens the range past keys and shots."""
+        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
+        self._declare_shots((20, 60))
+        self._splitting(bake_range_mode="scene")
+        seen = self._published_origin()
+
+        self.tm._publish_scene_records()
+
+        self.assertEqual(seen.get("span"), (5, 310))
+
+    def test_a_glb_only_split_keeps_the_origin_on_the_keys(self):
+        """Its intermediate FBX ships no take anyone reads (the GLB's clips
+        are cut from the whole-timeline take), so it is not resampled and its
+        origin stays on the keys -- the GLB route exactly as before."""
+        self._declare_shots((1, 60), (80, 120))
+        self._splitting(output_format="glb")
+        seen = self._published_origin()
+
+        self.tm._publish_scene_records()
+
+        self.assertEqual(seen.get("span"), (10, 200))
+
+    def _resampled_after_split(self, **modes):
+        """Whether the write is armed to resample once the takes are applied.
+        Through the real publish: the takes are read off the carrier it
+        commits."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self._declare_shots((20, 60), (80, 120))
+        self._splitting(**modes)
+        self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v false")
+
+        self.tm.apply_declared_takes("both")
+
+        self.assertEqual(
+            FbxUtils.declared_takes()[0]["name"], "Shot_0", "no takes were applied"
+        )
+        return FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+
+    def test_a_deliverable_split_resamples_every_curve(self):
+        """An FBX deliverable's takes are exact slices: Resample All is armed."""
+        self.assertTrue(self._resampled_after_split())
+
+    def test_a_glb_only_split_does_not_resample(self):
+        self.assertFalse(self._resampled_after_split(output_format="glb"))
 
     def test_clip_origin_is_published_when_baking_is_disabled(self):
         """No bake still means a stack: the curves ship as authored."""

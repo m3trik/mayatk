@@ -962,11 +962,8 @@ class Channels:
         shapes = NodeUtils.get_shape_node(nodes, returned_type="str")
         if not isinstance(shapes, list):
             shapes = [shapes] if shapes else []
-        # NodeUtils.get_shape_node resolves via listRelatives without
-        # fullPath, so it can hand back a bare short name; re-resolve to full
-        # DAG paths here (the original, pre-delegation get_shape_nodes did),
-        # else a downstream cmds.select can raise "More than one object
-        # matches name" in a scene with duplicate short names.
+        # get_shape_node returns minimal-unique names; this method's contract
+        # (pre-delegation) is full DAG paths.
         return cmds.ls(shapes, long=True) if shapes else []
 
     @staticmethod

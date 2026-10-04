@@ -71,6 +71,8 @@ DEFAULT_INCLUDE = {
     "core_utils.components": "Components",
     "core_utils.auto_instancer._auto_instancer": "AutoInstancer",
     "core_utils.mash->Mash": "*",
+    # Every plug-in load, by name; mayatk's own plug-ins in one declared folder.
+    "core_utils.plugins._plugins": "Plugins",
     "core_utils.preview": "Preview",
     "core_utils.script_job_manager": "ScriptJobManager",
     # OpenMaya edits as one ordinary undo step (Maya's own ufeCmd carries them).

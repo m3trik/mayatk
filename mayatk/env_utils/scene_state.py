@@ -173,9 +173,15 @@ class SceneState:
         reached WebXR as alpha blend, back faces sorting through the body.
         ``Standard_Masked.sfx`` carries ``mask_threshold`` as the cutoff;
         ``Standard_Transparent.sfx`` is ``BLEND``; the opaque graph is left to
-        the converter, whose ``OPAQUE`` is already right. Other shader types
-        are not read: their opacity reaches the GLB through their own alpha
-        and the converter's judgement stands.
+        the converter, whose ``OPAQUE`` is already right. Maya's own legacy
+        models (:attr:`FBX_NATIVE_SHADERS`) are ``BLEND`` wherever their
+        ``transparency`` is driven or above zero: the FBX carries it, and
+        FBX2glTF writes it into ``baseColorFactor``'s alpha -- but judges the
+        mode from a texture's alpha alone, so a Phong lens at 89% transparency
+        reached the GLB ``OPAQUE``, its alpha of 0.105 ignored by every viewer,
+        and rendered a solid grey disc (a production magnifier, 2026-10-03).
+        Other shader types are not read: their opacity reaches the GLB through
+        their own alpha and the converter's judgement stands.
         """
         from mayatk.mat_utils._mat_utils import MatUtils
 
@@ -187,6 +193,10 @@ class SceneState:
             if node_type in cls.SURFACE_OPACITY_SHADERS:
                 # Blend, never mask: the channel is continuous.
                 if cls._surface_opacity_is_driven(mat):
+                    result[mat] = {"mode": "BLEND"}
+                continue
+            if node_type in cls.FBX_NATIVE_SHADERS:
+                if cls._channel_is_driven(mat, "transparency", clear=0.0):
                     result[mat] = {"mode": "BLEND"}
                 continue
             if node_type != "StingrayPBS":
@@ -203,12 +213,18 @@ class SceneState:
                 result[mat] = {"mode": "BLEND"}
         return result
 
+    @classmethod
+    def _surface_opacity_is_driven(cls, mat: str) -> bool:
+        """Is *mat*'s ``opacity`` connected or below 1.0 on any channel?"""
+        return cls._channel_is_driven(mat, "opacity", clear=1.0)
+
     @staticmethod
-    def _surface_opacity_is_driven(mat: str) -> bool:
-        """Is *mat*'s ``opacity`` connected (on the compound or a child) or
-        below 1.0 on any channel? Maya allows a compound and its children to
-        be wired independently, so both are checked."""
-        plug = f"{mat}.opacity"
+    def _channel_is_driven(mat: str, channel: str, clear: float) -> bool:
+        """Is *mat*'s colour *channel* connected (on the compound or a child)
+        or away from *clear* -- the value that means fully opaque -- on any
+        component? Maya allows a compound and its children to be wired
+        independently, so both are checked."""
+        plug = f"{mat}.{channel}"
         if not cmds.objExists(plug):
             return False
         for candidate in [plug] + [f"{plug}{c}" for c in "RGB"]:
@@ -218,7 +234,7 @@ class SceneState:
             rgb = list(cmds.getAttr(plug)[0])[:3]
         except (RuntimeError, ValueError, TypeError, IndexError):
             return False
-        return min(float(c) for c in rgb) < 1.0 - 1e-4
+        return max(abs(float(c) - clear) for c in rgb) > 1e-4
 
     @classmethod
     def _read_base_color(

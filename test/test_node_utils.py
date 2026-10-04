@@ -95,6 +95,21 @@ class TestNodeUtils(MayaTkTestCase):
         self.assertIsInstance(attrs, list)
         self.assertIn("translateX", attrs)
 
+    def test_get_transform_node_keeps_a_transform_subtype(self):
+        """A joint IS a transform node, so it resolves to itself.
+
+        Bug: only the exact type ``transform`` was kept; a joint fell through
+        to the history walk and came back as its PARENT, so every control
+        ``Controls.create(match=joint)`` built sat on the joint above (an
+        articulated rig's telescope control buried in the collar hinge).
+        Fixed: 2026-10-03.
+        """
+        root = cmds.createNode("joint", name="tn_root_jnt")
+        child = cmds.createNode("joint", name="tn_child_jnt", parent=root)
+        for joint in (child, root):
+            got = NodeUtils.get_transform_node(joint)
+            self.assertEqual(cmds.ls(got, long=True), cmds.ls(joint, long=True))
+
     def test_get_shape_node(self):
         """Test get_shape_node."""
         # From transform
@@ -120,16 +135,61 @@ class TestNodeUtils(MayaTkTestCase):
         want = cmds.listRelatives(cube, shapes=True, fullPath=True) or []
         self.assertEqual(len(want), 2, "test needs a mesh with an orig shape")
 
-        got = NodeUtils.get_shape_node(cube, returned_type="str")
+        got = NodeUtils.get_shape_node(cube, returned_type="str", no_intermediate=False)
         self.assertEqual([cmds.ls(s, long=True)[0] for s in got], want)
 
         # Several nodes: input order preserved, no duplicates.
         other = cmds.polyCube(name="orderCube2")[0]
-        pair = NodeUtils.get_shape_node([cube, other, cube], returned_type="str")
+        pair = NodeUtils.get_shape_node(
+            [cube, other, cube], returned_type="str", no_intermediate=False
+        )
         self.assertEqual(
             [cmds.ls(s, long=True)[0] for s in pair],
             want + (cmds.listRelatives(other, shapes=True, fullPath=True) or []),
         )
+
+    def test_get_shape_node_drops_orig_shapes(self):
+        """A deformed mesh resolves to its live shape only, by default.
+
+        Bug: the orig (intermediate) shape came back too, so callers that
+        iterate the result -- merge_vertices, the component-inverse
+        expansion, ``get_mfn_mesh(api_version=1)`` -- also ran their mesh
+        ops on the deformer's input mesh. Fixed: 2026-10-02.
+        """
+        cube = cmds.polyCube(name="origCube")[0]
+        cmds.select(cube)
+        cmds.nonLinear(type="bend")
+        cmds.select(clear=True)
+        live = cmds.listRelatives(cube, shapes=True, noIntermediate=True, fullPath=True)
+
+        got = NodeUtils.get_shape_node(cube, returned_type="str")
+
+        self.assertEqual(cmds.ls(got, long=True), live)
+
+    def test_get_shape_node_history_node_resolves_its_own_shape(self):
+        """A history node resolves to the shape it feeds, not every same-named one.
+
+        Bug: the history fallback re-resolved ``listRelatives(parent=True)``'s
+        bare leaf name, which matches every node of that name, so a polyCube
+        feeding ``|dup|dupShape`` also returned ``|grp|dup|dupShape`` (the
+        Channels footer's Shape button selected both). Fixed: 2026-10-02.
+        """
+        _, hist = cmds.polyCube(name="dup")
+        grp = cmds.group(empty=True, name="dupGrp")
+        other = cmds.parent(cmds.polyCube(name="tmp")[0], grp)[0]
+        other = cmds.rename(other, "dup")
+        cmds.rename(
+            cmds.listRelatives(other, shapes=True, fullPath=True)[0], "dupShape"
+        )
+
+        got = NodeUtils.get_shape_node(hist, returned_type="str")
+
+        self.assertEqual(cmds.ls(got, long=True), ["|dup|dupShape"])
+
+    def test_get_shape_node_component_input(self):
+        """A component resolves to its owning shape."""
+        got = NodeUtils.get_shape_node(f"{self.cyl}.vtx[0:3]", returned_type="str")
+        self.assertEqual(cmds.ls(got, long=True), cmds.ls(self.cyl_shape, long=True))
 
     def test_get_history_node(self):
         """Test get_history_node."""
@@ -721,6 +781,27 @@ class TestNodeUtils(MayaTkTestCase):
             self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "two.png")
         self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), "orig.png")
 
+    def test_pinned_restores_a_string_plug_that_was_empty(self):
+        """An empty string plug reads back ``None``, and that is the value
+        ``pinned`` snapshots. Restored through a plain ``setAttr`` it raised
+        (logged, swallowed), so the pinned value stayed: a reflection-probe
+        render left ``defaultRenderGlobals.imageFilePrefix`` -- empty in a
+        fresh scene -- pointing into its deleted temp folder.
+
+        Added: 2026-10-03
+        """
+        cmds.addAttr(self.cyl, longName="pinNote", dataType="string")
+        plug = f"{self.cyl}.pinNote"
+        self.assertIsNone(cmds.getAttr(plug))
+
+        with Attributes.pinned(self.cyl, pinNote="C:/staged/prefix"):
+            self.assertEqual(cmds.getAttr(plug), "C:/staged/prefix")
+
+        self.assertFalse(cmds.getAttr(plug))
+        Attributes.set_plug(plug, "kept")
+        Attributes.set_plug(plug, None)
+        self.assertFalse(cmds.getAttr(plug))
+
     def test_set_node_custom_attributes(self):
         """Test set_node_custom_attributes."""
         # Simple attribute
@@ -1255,21 +1336,16 @@ class TestNodeUtils(MayaTkTestCase):
     # -------------------------------------------------------------------------
 
     def test_create_assembly(self):
-        """Test create_assembly."""
-        try:
-            # Check if assembly command exists
-            cmds.assembly
-        except AttributeError:
-            self.skipTest("Assembly command not available")
+        """create_assembly parents the nodes under a new assembly node.
 
-        try:
-            asm = NodeUtils.create_assembly([self.cyl], assembly_name="test_asm")
-            self.assertEqual(cmds.nodeType(asm), "assembly")
-            self.assertIn(self.cyl, asm.children())
-        except RuntimeError as e:
-            print(f"Skipping assembly test due to runtime error: {e}")
-            # This often fails in batch mode or if plugin not loaded
-            pass
+        Bug: it relied on the ``sceneAssembly`` plugin already being loaded;
+        under mayapy it is not, so ``cmds.assembly`` raised "No object matches
+        name" -- which this test used to swallow and pass. Fixed: 2026-10-02.
+        """
+        asm = NodeUtils.create_assembly([self.cyl], assembly_name="test_asm")
+
+        self.assertEqual(cmds.nodeType(asm), "assemblyDefinition")
+        self.assertEqual([c.split("|")[-1] for c in asm.children()], [self.cyl])
 
     # -------------------------------------------------------------------------
     # Render Node Tests

@@ -137,7 +137,7 @@ class TestExportTransfer(_TransferCase):
         # Scoped to a node the shot never held: the shot still travels, empty.
         outside = ShotStore.export_transfer(objects=[stayed])
         self.assertEqual(outside["store"]["shots"][0]["objects"], ["stayed"])
-        self.assertEqual(outside["ledger"], {"steps": {}, "keys": {}})
+        self.assertEqual(outside["ledger"], {"steps": {}, "keys": {}, "authored": {}})
 
     def test_an_empty_store_has_nothing_to_say(self):
         ShotStore.active()

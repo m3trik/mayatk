@@ -74,6 +74,15 @@ class MayaExportMixin:
     #: full refresh wiped a lightmap manifest and previewed the asset unlit).
     export_stagers: Tuple[str, ...] = ()
 
+    #: Whether an animated hand-off's take split resamples every curve
+    #: (:meth:`FbxUtils.apply_takes`), making each take an exact slice of the
+    #: animation. On only where the FBX's takes ARE what the far side plays --
+    #: Unity builds its clips from them (``UnityBridge``). Off by default: a
+    #: DCC hand-off keeps the authored keys editable rather than one per
+    #: frame, and the WebXR preview cuts its own clips from the
+    #: whole-timeline take.
+    resample_takes: bool = False
+
     #: Drop the baked rig's apparatus from the FBX payload after the write
     #: (:meth:`FbxUtils.drop_rig_apparatus` -- what the Scene Exporter's
     #: Exclude Rig Helpers row does to its own FBX). A bridge whose consumer
@@ -382,7 +391,7 @@ class MayaExportMixin:
                     # documents) rather than running the producers, so a preview
                     # push stays free of scene side effects. Idempotent alongside
                     # the hook -- ``apply_takes`` clears prior take state first.
-                    takes = FbxUtils.apply_takes_from_node()
+                    takes = FbxUtils.apply_takes_from_node(resample=self.resample_takes)
                     if takes:
                         self.logger.info(
                             f"Animation: realized {takes} declared take(s)."

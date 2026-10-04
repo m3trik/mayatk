@@ -324,6 +324,117 @@ class TestConvertToStandardSurface(MayaTkTestCase, _DecalSceneMixin):
         self.assertTrue(cmds.getAttr(f"{self.new_mat}.thinWalled"))
 
 
+class TestConvertOpaqueMaterials(MayaTkTestCase, _DecalSceneMixin):
+    """An opaque material carries opacity only as its DEFAULT value.
+
+    ``read_channels`` reports a literal for every undriven slot, so an untouched
+    ``standardSurface.opacity`` (1, 1, 1) -- or a classic shader's
+    ``transparency`` (0, 0, 0), the same "opaque" in inverted terms -- used to
+    read as an opacity channel. A Stingray retype then picked the masked graph,
+    whose unbound mask discards every fragment (the retyped mesh rendered
+    invisible), and a classic -> PBR retype copied ``transparency`` 0 straight
+    into ``opacity`` 0.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.artifacts = ptk.TempArtifacts("mtk_shader_opaque", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+        self.base_map = self._png(
+            self.artifacts.path(extension=".png"), "OPAQUE_Base_Color"
+        )
+
+    def _material(self, node_type, name):
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        color = self._file_node(self.base_map, f"{name}_color")
+        attr = ShaderAttributeMap.get_attr(node_type, "baseColor")[0]
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.{attr}", force=True)
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return mat
+
+    def test_an_opaque_pbr_material_gets_the_plain_stingray_graph(self):
+        mat = self._material("standardSurface", "opaque_ss")
+        self.assertNotIn("opacity", ShaderConverter.read_channels(mat))
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        self.assertFalse(
+            cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True),
+            "an opaque material was given the masked (cutout) graph",
+        )
+
+    def test_an_opaque_classic_shader_stays_opaque_as_pbr(self):
+        mat = self._material("blinn", "opaque_blinn")
+        new_mat = ShaderConverter.convert(mat, target="standard_surface")[mat]
+        for got in cmds.getAttr(f"{new_mat}.opacity")[0]:
+            self.assertAlmostEqual(got, 1.0, places=5)
+        self.assertFalse(cmds.getAttr(f"{new_mat}.thinWalled"))
+
+    def test_a_constant_transparency_carries_across_as_opacity(self):
+        """Partial transparency is real and survives -- in OPACITY terms."""
+        mat = self._material("blinn", "glass_blinn")
+        cmds.setAttr(f"{mat}.transparency", 0.25, 0.25, 0.25, type="double3")
+        value = ShaderConverter.read_channels(mat)["opacity"]["value"]
+        for got in value:
+            self.assertAlmostEqual(got, 0.75, places=5)
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        self.assertFalse(cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True))
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.opacity"), 0.75, places=5)
+
+    def _stingray(self, name, opacity_mode="none"):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        try:
+            mat = MatUtils.create_stingray_shader(name, opacity_mode=opacity_mode)
+        except RuntimeError as error:  # no shaderFX plugin on this install
+            self.skipTest(f"StingrayPBS unavailable: {error}")
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.select(plane)
+        cmds.hyperShade(assign=mat)
+        return mat
+
+    def test_an_unmapped_masked_stingray_carries_no_opacity(self):
+        """The masked graph's ``TEX_mask_map`` is a SAMPLER: undriven, its
+        literal (0, 0, 0) is no opacity at all -- read as one, the retype
+        picked the transparent graph at opacity 0 and the mesh vanished."""
+        mat = self._stingray("masked_bare", opacity_mode="masked")
+        self.assertNotIn("opacity", ShaderConverter.read_channels(mat))
+
+    def test_an_untextured_stingray_keeps_its_colour_as_pbr(self):
+        """A StingrayPBS keeps its constants in uniforms (``base_color``), not
+        on its ``TEX_*`` samplers -- whose (0, 0, 0) turned it black."""
+        mat = self._stingray("bare_sr")
+        cmds.setAttr(f"{mat}.base_color", 0.2, 0.4, 0.6, type="double3")
+        new_mat = ShaderConverter.convert(mat, target="standard_surface")[mat]
+        for got, want in zip(cmds.getAttr(f"{new_mat}.baseColor")[0], (0.2, 0.4, 0.6)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_an_untextured_classic_shader_keeps_its_colour_as_stingray(self):
+        """...and the way in: the literal lands on the uniform, not the sampler."""
+        mat = cmds.shadingNode("blinn", asShader=True, name="bare_blinn")
+        cmds.setAttr(f"{mat}.color", 0.2, 0.4, 0.6, type="double3")
+        plane = cmds.polyPlane(name="bare_blinn_geo", constructionHistory=False)[0]
+        cmds.select(plane)
+        cmds.hyperShade(assign=mat)
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        for got, want in zip(cmds.getAttr(f"{new_mat}.base_color")[0], (0.2, 0.4, 0.6)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_a_scalar_literal_fills_every_channel_of_a_colour_slot(self):
+        """Stingray's transparent ``opacity`` is a scalar; standardSurface's a
+        float3 -- a bare ``setAttr`` of one into the other raises, and the
+        partial opacity was dropped on the way back."""
+        mat = self._material("blinn", "glass_rt")
+        cmds.setAttr(f"{mat}.transparency", 0.25, 0.25, 0.25, type="double3")
+        stingray = ShaderConverter.convert(mat, target="stingray")[mat]
+        back = ShaderConverter.convert(stingray, target="standard_surface")[stingray]
+        for got in cmds.getAttr(f"{back}.opacity")[0]:
+            self.assertAlmostEqual(got, 0.75, places=5)
+
+
 class TestConvertSkips(MayaTkTestCase, _DecalSceneMixin):
     def setUp(self):
         super().setUp()

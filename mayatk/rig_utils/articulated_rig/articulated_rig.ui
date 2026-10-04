@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>460</width>
-    <height>620</height>
+    <width>520</width>
+    <height>640</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -71,43 +71,62 @@
         <number>0</number>
        </property>
        <item>
-        <widget class="ComboBox" name="cmb_source">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>19</height>
-          </size>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>19</height>
-          </size>
+        <layout class="QHBoxLayout" name="horizontalLayout_source">
+         <property name="spacing">
+          <number>1</number>
          </property>
          <item>
-          <property name="text">
-           <string>Parts:  Auto (from contacts)</string>
-          </property>
+          <widget class="ComboBox" name="cmb_source">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+             <horstretch>1</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>160</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>19</height>
+            </size>
+           </property>
+           <item>
+            <property name="text">
+             <string>Parts:  Auto (from contacts)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Parts:  Selection Order</string>
+            </property>
+           </item>
+          </widget>
          </item>
          <item>
-          <property name="text">
-           <string>Parts:  Selection Order</string>
-          </property>
+          <widget class="QLineEdit" name="txt_name">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+             <horstretch>1</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>19</height>
+            </size>
+           </property>
+           <property name="placeholderText">
+            <string>Rig Name: Auto</string>
+           </property>
+          </widget>
          </item>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLineEdit" name="txt_name">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>19</height>
-          </size>
-         </property>
-         <property name="placeholderText">
-          <string>Rig Name: Auto</string>
-         </property>
-        </widget>
+        </layout>
        </item>
        <item>
         <widget class="QPushButton" name="btn_analyze">
@@ -133,27 +152,56 @@
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="btn_build">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>30</height>
-          </size>
+        <layout class="QHBoxLayout" name="horizontalLayout_build">
+         <property name="spacing">
+          <number>1</number>
          </property>
-         <property name="text">
-          <string>Build Rig</string>
-         </property>
-        </widget>
+         <item>
+          <widget class="QCheckBox" name="chk_end_control">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>End Control</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btn_build">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+             <horstretch>1</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>30</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>Build Rig</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </item>
       </layout>
      </widget>
     </item>
     <item>
-     <widget class="QGroupBox" name="grp_post">
+     <widget class="QGroupBox" name="grp_pose">
       <property name="title">
-       <string>Post-Rig:</string>
+       <string>Pose:</string>
       </property>
-      <layout class="QVBoxLayout" name="verticalLayout_post">
+      <layout class="QHBoxLayout" name="horizontalLayout_pose">
        <property name="spacing">
         <number>1</number>
        </property>
@@ -182,6 +230,56 @@
          </property>
         </widget>
        </item>
+       <item>
+        <widget class="PushButton" name="btn_ik_fk">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>21</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Switch IK / FK</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_rest">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>21</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Rest Pose</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QGroupBox" name="grp_edit">
+      <property name="title">
+       <string>Edit:</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalLayout_edit">
+       <property name="spacing">
+        <number>1</number>
+       </property>
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_insert">
          <property name="spacing">
@@ -240,20 +338,20 @@
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="QPushButton" name="btn_fold">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>Fold Into Parent</string>
+           </property>
+          </widget>
+         </item>
         </layout>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_fold">
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>21</height>
-          </size>
-         </property>
-         <property name="text">
-          <string>Fold Selected Part's Joint</string>
-         </property>
-        </widget>
        </item>
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_limits">
@@ -293,6 +391,19 @@
          <property name="spacing">
           <number>1</number>
          </property>
+         <item>
+          <widget class="QCheckBox" name="chk_adjust">
+           <property name="minimumSize">
+            <size>
+             <width>0</width>
+             <height>21</height>
+            </size>
+           </property>
+           <property name="text">
+            <string>Adjust Pivots</string>
+           </property>
+          </widget>
+         </item>
          <item>
           <widget class="QPushButton" name="btn_rebuild">
            <property name="minimumSize">
@@ -418,6 +529,11 @@
    <class>TableWidget</class>
    <extends>QTableWidget</extends>
    <header>uitk.widgets.tableWidget</header>
+  </customwidget>
+  <customwidget>
+   <class>PushButton</class>
+   <extends>QPushButton</extends>
+   <header>uitk.widgets.pushButton</header>
   </customwidget>
  </customwidgets>
  <resources/>

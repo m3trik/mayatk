@@ -4,6 +4,7 @@
 slide joints (a desk lamp, a magnifier arm, a boom).
 
 ``_articulated_rig.py`` is the engine (:class:`ArticulatedRig`),
+``_solver_expression.py`` writes its end control's solve as a MEL expression,
 ``grab_tool.py`` the viewport grab (:class:`ArticulatedRigGrab`), and
 ``articulated_rig_slots.py`` + ``articulated_rig.ui`` the panel. The math --
 the joint model, the grab solver and the geometry rules -- is pythontk's

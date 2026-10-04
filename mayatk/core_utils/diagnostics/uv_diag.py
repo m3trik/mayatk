@@ -362,12 +362,14 @@ class UvDiagnostics:
         return real_sets
 
     @staticmethod
-    def _analyze_uv_set(shape, uv_set: str) -> dict:
+    def _analyze_uv_set(shape, uv_set: str, count_overlaps: bool = True) -> dict:
         """Analyze a UV set and return quality metrics.
 
         Parameters:
             shape: The mesh shape node
             uv_set: Name of the UV set to analyze
+            count_overlaps: Count overlapping faces (``polyUVOverlap``, the one
+                costly query); ``False`` leaves ``overlap_count`` at 0.
 
         Returns:
             Dictionary with quality metrics:
@@ -450,13 +452,21 @@ class UvDiagnostics:
                 except Exception:
                     pass
 
-                # Get Overlap Count
-                try:
-                    overlaps = cmds.polyUVOverlap(shape, oc=True)
-                    if overlaps:
-                        result["overlap_count"] = len(overlaps)
-                except Exception:
-                    pass
+                # Overlap count, on the FACES: polyUVOverlap takes components,
+                # and handed the bare shape it returns None -- which read as
+                # "no overlap" for every set, so a Combine's stacked lightmap
+                # layouts passed is_bakeable_lightmap and were baked as-is.
+                if count_overlaps:
+                    try:
+                        overlaps = cmds.polyUVOverlap(
+                            f"{shape}.f[*]", overlappingComponents=True
+                        )
+                        if overlaps:
+                            result["overlap_count"] = len(
+                                cmds.ls(overlaps, flatten=True)
+                            )
+                    except Exception:
+                        pass
 
                 # Valid if has UVs, has area, and is in reasonable bounds
                 result["is_valid"] = (
@@ -480,10 +490,14 @@ class UvDiagnostics:
 
         Quality criteria (in order of importance):
         1. Has valid UV data (non-empty, non-degenerate, within bounds)
-        2. UV Overlap (fewer overlapping faces is better)
-        3. Area Outside 0-1 (UVs closer to unit square is better)
-        4. UV coverage (weighted combination of completeness and expansion)
-        5. Name preference (standard names as tiebreaker only)
+        2. Area Outside 0-1 (UVs closer to unit square is better)
+        3. UV coverage (weighted combination of completeness and expansion)
+        4. Name preference (standard names as tiebreaker only)
+
+        Overlap is deliberately NOT a criterion: texture UVs overlap on
+        purpose (mirrored halves, stacked trim), so ranking by it would let a
+        stray non-overlapping projection outrank the real texture set -- which
+        ``keep_only_primary`` then deletes.
 
         Sets with '___delete___' prefix are EXCLUDED entirely - this is an
         explicit user directive indicating the set should be removed.
@@ -528,7 +542,7 @@ class UvDiagnostics:
                 continue
 
             is_real = uv_set in real_sets
-            metrics = UvDiagnostics._analyze_uv_set(shape, uv_set)
+            metrics = UvDiagnostics._analyze_uv_set(shape, uv_set, count_overlaps=False)
             candidates.append((uv_set, metrics, is_real))
 
         if not candidates:
@@ -537,7 +551,9 @@ class UvDiagnostics:
                 if uv_set in exclude:
                     continue
                 is_real = uv_set in real_sets
-                metrics = UvDiagnostics._analyze_uv_set(shape, uv_set)
+                metrics = UvDiagnostics._analyze_uv_set(
+                    shape, uv_set, count_overlaps=False
+                )
                 if metrics["uv_count"] > 0:
                     candidates.append((uv_set, metrics, is_real))
 
@@ -560,16 +576,11 @@ class UvDiagnostics:
             # Primary: Valid UV data is mandatory for top tier
             valid_bonus = 1000000 if metrics.get("is_valid") else 0
 
-            # Secondary: Overlap (Lower is better, so negate)
-            # Prefer 0 overlap significantly. Multiply by 1000 to outweigh area/count.
-            # Use 9999 as fallback penalty if overlap calculation failed.
-            overlap_score = -metrics.get("overlap_count", 9999) * 1000
-
-            # Tertiary: Area Outside 0-1 (Lower is better, so negate)
+            # Secondary: Area Outside 0-1 (Lower is better, so negate)
             # Penalize UVs wandering far from 0-1.
             outside_score = -metrics.get("area_outside", 9999) * 100
 
-            # Quaternary: Coverage (Higher is better)
+            # Tertiary: Coverage (Higher is better)
             if prefer_largest_area:
                 # Use UV Count * Fill Rate
                 # This prioritizes Completeness (Count) and Expansion (Fill Rate)
@@ -580,13 +591,13 @@ class UvDiagnostics:
             else:
                 coverage = metrics.get("uv_count", 0)
 
-            # Quinary: Standard name as tiebreaker only
+            # Then: standard name as tiebreaker only
             if name in STANDARD_NAMES:
                 name_bonus = 10 - STANDARD_NAMES.index(name)  # 10-5
             else:
                 name_bonus = 0
 
-            return (valid_bonus, overlap_score, outside_score, coverage, name_bonus)
+            return (valid_bonus, outside_score, coverage, name_bonus)
 
         best = max(candidates, key=quality_score)
         return best[0]

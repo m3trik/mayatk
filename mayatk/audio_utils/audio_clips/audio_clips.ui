@@ -98,8 +98,8 @@
 Selecting a track sets it as the active
 clip on the time slider waveform.
 
-Use the folder icon to browse for audio files,
-or the option box to rename, replace, or remove tracks.</string>
+The option box adds, renames, replaces
+or removes tracks.</string>
          </property>
         </widget>
        </item>

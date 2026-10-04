@@ -633,7 +633,7 @@ class TestPlayblastExporter(MayaTkTestCase):
         pe_path = "mayatk.anim_utils.playblast_exporter.cmds"
         with (
             patch(f"{pe_path}.arnoldRender", create=True, side_effect=fake_render),
-            patch("mayatk.env_utils._env_utils.EnvUtils.load_plugin"),
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
             patch(f"{pe_path}.workspace", return_value="images"),
             patch(f"{pe_path}.setAttr"),
             patch(f"{pe_path}.getAttr", side_effect=fake_getattr),

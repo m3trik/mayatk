@@ -9,7 +9,7 @@ except ImportError:
     pass
 
 import pythontk as ptk
-from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap, ShaderAttrs
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.mat_utils._mat_utils import MatUtils
 
 logger = logging.getLogger(__name__)
@@ -97,11 +97,12 @@ class MatManifest(ptk.HelpMixin):
             )
             return {}
 
-        mapping: ShaderAttrs = ShaderAttributeMap.SHADER_ATTRS[node_type]
         data: Dict[str, str] = {}
 
-        for field in mapping._fields:
-            slot_def = getattr(mapping, field)
+        for field in ShaderAttributeMap.logical_channels():
+            # The slot this NODE has, not just the declared one -- a StingrayPBS
+            # graph or a version-dependent openPBR input may carry an alternate.
+            slot_def = ShaderAttributeMap.resolve_live_slot(mat_name, field, node_type)
             if not slot_def:
                 continue
 
@@ -157,18 +158,16 @@ class MatManifest(ptk.HelpMixin):
         if node_type not in ShaderAttributeMap.SHADER_ATTRS:
             return 0
 
-        mapping: ShaderAttrs = ShaderAttributeMap.SHADER_ATTRS[node_type]
         restored = 0
 
         for field, tex_path in mat_data.items():
-            slot_def = getattr(mapping, field, None)
+            # None for an unknown key, an undeclared slot, or one this node lacks.
+            slot_def = ShaderAttributeMap.resolve_live_slot(mat_name, field, node_type)
             if not slot_def:
                 continue
 
             attr_name, _ = slot_def
             full_attr = f"{mat_name}.{attr_name}"
-            if not cmds.objExists(full_attr):
-                continue
 
             # Find an existing file node that points to this path, or create one.
             file_node = cls._find_or_create_file_node(tex_path)

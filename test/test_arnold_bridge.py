@@ -641,6 +641,37 @@ class ArnoldBridgeTest(unittest.TestCase):
             "base color must be read as sRGB, not Raw",
         )
 
+    @staticmethod
+    def _ao_wired(ai):
+        """True if anything drives the base-colour multiply's AO input."""
+        mult = cmds.listConnections(f"{ai}.baseColor", type="aiMultiply") or []
+        return bool(mult) and any(
+            cmds.listConnections(f"{mult[0]}.{plug}", source=True, destination=False)
+            for plug in ("input2", "input2R", "input2G", "input2B")
+        )
+
+    def test_a_bake_bridge_leaves_ao_unwired(self):
+        # A bake traces the occlusion an AO map approximates, so the bake's
+        # stand-in (TextureBaker.arnold_translation_guard) must not multiply it
+        # into albedo -- loose or packed -- while the default bridge still does.
+        # Multiplied, every bounce off the material darkened twice: bounce-lit
+        # ceilings on the production office baked 0.77x the AO-free result.
+        for maps in (
+            ["model_BaseColor.png", "model_AO.png"],
+            ["model_BaseColor.png", "model_MaskMap.png"],
+        ):
+            for ao in (True, False):
+                cmds.file(new=True, force=True)
+                shader, _, _ = self._make_base_material("matAO", maps)
+                bridge = ArnoldBridge(ambient_occlusion=ao)
+                bridge.add(materials=shader)
+                ai = bridge.get_bridge(shader)
+                self.assertTrue(
+                    cmds.listConnections(f"{ai}.baseColor", type="aiMultiply"),
+                    f"{maps}: the base colour lost its multiply",
+                )
+                self.assertEqual(self._ao_wired(ai), ao, f"{maps} ao={ao}")
+
     def test_mrao_channel_routing(self):
         # MRAO: R=Metallic, G=Roughness, B=AO. Metalness + roughness (NOT
         # inverted) + an AO multiply; no reverse node since roughness is direct.

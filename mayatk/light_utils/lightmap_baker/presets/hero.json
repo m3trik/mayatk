@@ -1,0 +1,7 @@
+{
+    "description": "Hero / production — 4K atlas for a whole environment shared by one material.",
+    "resolution": 4096,
+    "samples": 6,
+    "gi_depth": 8,
+    "gi_samples": 4
+}

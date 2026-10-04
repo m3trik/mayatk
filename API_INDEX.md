@@ -88,7 +88,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MayaScenePersistence`
   - methods: store_cls, save, load, record_changed, remove_callbacks
 - `class ShotStore(pythontk.ShotStore, _ShotStoreInternal)`
-  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, publish_export_view, export_transfer, apply_transfer, transfer_out, transfer_in, merge_carrier, discard_carrier
+  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, resolve_member, publish_export_view, export_transfer, apply_transfer, transfer_out, transfer_in, merge_carrier, discard_carrier
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `class ShotManifest(pythontk.core_utils.engines.shots.manifest.manifest_engine.ShotManifest, _ShotManifestInternal)`
@@ -96,7 +96,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — Maya appliers over the engine's pure keying-recipe core.
 - `class Behaviors(pythontk.core_utils.engines.shots.manifest.behaviors.Behaviors, _BehaviorsInternal)`
-  - methods: apply_behavior, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
+  - methods: apply_behavior, curve_of, behavior_plugs, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, BEHAVIOR_STATUS_COLORS, ERROR_COLOR
@@ -223,7 +223,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, RESERVED_TRACK_IDS
 - `class TrackEvent`
 - `class AudioUtils(pythontk.HelpMixin)`
-  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
+  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, key_clip, track_curve, clip_length_frames, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(pythontk.LoggingMixin)`
@@ -231,7 +231,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `audio_utils/audio_clips/audio_clips_slots.py` — Switchboard slots for the Audio Clips UI.
 - `class AudioClipsSlots(ExportMixin, CallbacksMixin)`
-  - methods: header_init, cmb000_init, cmb000, tb000, tb001_init, tb001, b002, b004, b005, b006
+  - methods: header_init, cmb000_init, cmb000, tb000, tb001_init, tb001, select_track, b002, b004, b005, b006
 
 ### `audio_utils/audio_clips/callbacks.py` — Maya event lifecycle and hydration for Audio Clips.
 - `class CallbacksMixin`
@@ -360,6 +360,10 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: as_tuple
 - `class MashToolkit(object)`
   - methods: ensure_plugin_loaded, create_network, bake_instancer
+
+### `core_utils/plugins/_plugins.py` — Every Maya plug-in mayatk loads goes through one door: :class:`Plugins`.
+- `class Plugins`
+  - methods: is_loaded, available, load
 
 ### `core_utils/preview.py` — Hermetic preview with replay-on-commit (H1 design).
 - `class OperationError(Exception)`
@@ -508,7 +512,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scene_project_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -584,6 +588,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `apply_texture_manifest(new_objects)`
 - `rebuild_scene_lights()`
 - `lightmap_records(meshes)`
+- `hidden_in_maya(obj)`
 - `emissive_material_count()`
 - `light_scene()`
 - `check_bake_level(packed)`
@@ -605,7 +610,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, import_scene, set_bake_range_from_scene, baking_enabled, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -682,11 +687,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/scene_exporter_slots.py` — Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
 - `class SceneExporterSlots(SceneExporter)`
-  - methods: confirm, workspace, header_init, cmb000_init, txt000_init, output_name_preview, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, export_data_node_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
+  - methods: confirm, decide_check_failure, workspace, header_init, cmb000_init, txt000_init, output_name_preview, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, export_data_node_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
 
 ### `env_utils/scene_exporter/task_manager.py` — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
-  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
+  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, ship_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -742,11 +747,16 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class HdrManagerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
   - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
 
+### `light_utils/lightmap_baker/_probe_placement.py` — Where a lightmap bake's reflection probe stands, and the room it projects onto.
+- `class ProbeSite`
+- `class ProbePlacement`
+  - methods: place, room, faces
+
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBakeResult`
   - methods: files, folders
 - `class LightmapBaker(pythontk.LoggingMixin)`
-  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, normalize_lightmap_paths, export_record, refresh_export_metadata
+  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, normalize_lightmap_paths, export_record, refresh_export_metadata
 
 ### `light_utils/lightmap_baker/lightmap_baker_slots.py` — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - `class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
@@ -754,11 +764,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
-  - methods: baked_objects, commit, revert, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps
+  - methods: baked_objects, lightmap_info, commit, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps, rename_lightmap, transfer_lightmaps
 
 ### `mat_utils/_mat_utils.py` — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - `class MatUtils(_MatUtilsInternal)`
-  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, get_texture_file_node, probe_texture_path, has_path_token, is_frame_sequence, token_wildcard, texture_tiles, apply_uv_tiling
+  - methods: resolve_path, get_mats, group_objects_by_material, is_bundled_texture, get_texture_paths, get_texture_info, get_mat_info, format_texture_info_text, format_texture_info_html, format_mat_info_text, format_mat_info_html, get_scene_mats, get_connected_shaders, connect_to_channels, get_mats_by_scope, find_opacity_source, enable_viewport_opacity, set_transparency_algorithm, ensure_transparent_graph, get_file_nodes, get_fav_mats, is_mat_assigned, is_connected, create_mat, assign_mat, claim_material_name, get_shading_assignments, apply_shading_assignments, create_file_node, create_shading_group, resolve_opacity_mode, get_stingray_opacity_mode, resolve_stingray_graph, load_stingray_graph, create_stingray_shader, find_by_mat_id, find_unassigned, collect_material_paths, remap_file_nodes, remap_texture_paths, to_absolute, to_project_relative, stage_textures_relative, rename_texture_file, sync_material_names, is_duplicate_material, find_materials_with_duplicate_textures, reassign_duplicate_materials, filter_materials_by_objects, reload_textures, move_texture_files, copy_textures_to_sourceimages, find_texture_files, migrate_textures, move_unused_textures, get_mat_swatch_icon, convert_bump_to_normal, validate_normal_map_setup, graph_materials, get_texture_file_node, probe_texture_path, has_path_token, is_frame_sequence, token_wildcard, texture_tiles, apply_uv_tiling
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(pythontk.LoggingMixin, _ArnoldBridgeInternal)`
@@ -886,7 +896,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/attribute_mode.py`
 - `class OpacityAttributeMode(pythontk.LoggingMixin)`
-  - methods: create, has_channel, channels_on, set_color, get_color, get_color_stops, key_fade, key_pulse, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
+  - methods: create, has_channel, channels_on, set_color, get_color, get_color_stops, key_fade, key_pulse, write_keys, fade_windows, sync_visibility_from_opacity, ensure_connections, remove
 
 ### `mat_utils/render_opacity/channels.py` — The per-object render-effect channel table.
 - `spec_for(channel) -> ChannelSpec`
@@ -900,15 +910,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(pythontk.LoggingMixin)`
-  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, setup, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
+  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, setup, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, scene_store, scene_recipe, apply_effect, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
 
 ### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - `class RenderEffectsSlots`
-  - methods: header_init, tb000_init, tb000, tb001_init, tb001
+  - methods: header_init, cmb_effect_init, cmb_effect, stk_effects_init, ui_field, focus, unfocus, b000, btn_remove, btn_webxr_init, btn_webxr
 
 ### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
 - `class ShaderAttributeMap(_ShaderAttributeMapInternal)`
-  - methods: logical_channels, get_attr, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
+  - methods: logical_channels, get_attr, constant_attr, read_constant, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
 
 ### `mat_utils/shader_converter.py` — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - `class ShaderConverter(pythontk.LoggingMixin, _ShaderConverterInternal)`
@@ -1010,11 +1020,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/texture_baker.py` — Bake an object's shaded surface (material under scene lighting) to a texture.
 - `class TextureBaker(pythontk.LoggingMixin)`
-  - methods: arnold_available, ensure_arnold, default_output_dir, resolve_meshes, bake, arnold_translation_guard, gpu_available, assign_to_diffuse, restore_diffuse_connections
+  - methods: arnold_available, ensure_arnold, render_panorama, default_output_dir, resolve_meshes, bake, arnold_translation_guard, gpu_available, assign_to_diffuse, restore_diffuse_connections
 
 ### `mat_utils/texture_path_editor.py`
 - `class TexturePathEditorSlots`
-  - methods: header_init, tb_set_texture_directory_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
+  - methods: header_init, tb_set_texture_directory_init, tb_normalize_paths_init, tb_resolve_missing_textures_init, tbl000_init, open_source_images, reload_scene_textures, tb_set_texture_directory, tb_find_and_copy_textures, tb_normalize_paths, make_paths_absolute, tb_resolve_missing_textures, select_textures_for_objects, select_broken_paths, select_absolute_paths, row_browse_for_file, row_rename_file, select_material, select_file_node, row_show_in_hypershade, delete_file_node, refresh_texture_table, cleanup_scene_callbacks, setup_formatting, handle_cell_edit
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(pythontk.HelpMixin)`
@@ -1066,11 +1076,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/articulated_rig/_articulated_rig.py` — Articulated Rig engine -- rigid parts on hinge, swivel, ball and slide joints.
 - `class ArticulatedRig(pythontk.LoggingMixin, _ArticulatedRigInternal)`
-  - methods: group, spec, name, scene_data, scene_rigs, for_node, analyze, create, teardown, rebuild, insert_joint, remove_joint, edit_joint, set_limits, set_limit_from_pose, joint_ids, joint_id_of, joint, control, state, set_state, record, model, export_record, refresh_export_metadata, grab_begin, held_point, pose_to, grab_to
+  - methods: group, spec, name, scene_data, scene_rigs, for_node, end_control, solver, ik_blend, analyze, create, repair_scene, ensure_solver, teardown, rebuild, insert_joint, remove_joint, edit_joint, set_end_control, set_limits, set_limit_from_pose, set_weight, adjusting, adjust_handles, begin_adjust, end_adjust, joint_ids, joint_id_of, joint, control, controls, state, fk_state, channel_value, set_state, match_end_control, switch_ik, reset_pose, record, model, export_record, refresh_export_metadata, grab_begin, held_point, pose_to, grab_to, key_hold
+
+### `rig_utils/articulated_rig/_solver_expression.py` — The end control's solve as a Maya expression: a MEL port of
+- `class SolverExpression(_SolverExpressionInternal)`
+  - methods: text_for, text
 
 ### `rig_utils/articulated_rig/articulated_rig_slots.py` — Articulated Rig panel -- the Switchboard slots for ``articulated_rig.ui``.
 - `class ArticulatedRigSlots(pythontk.LoggingMixin)`
-  - methods: header_init, refresh_table, btn_analyze, btn_build, btn_grab, btn_insert, btn_fold, btn_limits_from_pose, btn_clear_limits, btn_rebuild, btn_remove
+  - methods: header_init, btn_ik_fk_init, parse_limits, refresh_table, btn_analyze, btn_build, btn_grab, btn_ik_fk, match_end_control, btn_rest, btn_insert, btn_fold, btn_limits_from_pose, btn_clear_limits, btn_rebuild, btn_remove
 
 ### `rig_utils/articulated_rig/grab_tool.py` — The viewport grab for articulated rigs: press on a rigged part, drag, let go.
 - `class ArticulatedRigGrab(pythontk.LoggingMixin)`
@@ -1209,7 +1223,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(pythontk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP
@@ -1231,7 +1245,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`
-  - methods: transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name
+  - methods: transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name, pair_sources, find_combined
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`

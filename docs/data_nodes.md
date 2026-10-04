@@ -70,26 +70,27 @@ reader, and when the two DCCs' `FbxUtils.PRODUCERS` name different records
 outside its divergence ledger.
 
 <!-- scene-records:begin -->
-| Record | Carrier | Version | Kind | Owner | Reads | Read by | Crosses | Holds |
-|---|---|---|---|---|---|---|---|---|
-| `shot_metadata` | `data_export` | 1 | authored | Shots | -- | unity, glb, verifier | re-derived | shot definitions -- per clip its frame range ('start'/'end', the take the clip is cut from), objects, and any description and section; the scene fps and the declared clip mode; the clip name is the join key to the imported animation clip |
-| `fbx_takes` | `data_export` | 1 (bare) | authored | Shots | -- | glb, verifier | re-derived | the take list an older file carries, one per shot -- superseded by shot_metadata's per-clip ranges and no longer written -- *legacy: superseded by `shot_metadata`* |
-| `audio_manifest` | `data_export` | 2 | authored | Audio Clips | `shot_metadata` | unity | re-derived | audio events with the frames they fire on, scoped to their clip |
-| `lightmap_metadata` | `data_export` | 1 | authored | Lightmap Baker | -- | unity, glb | re-derived | per-object baked-lightmap records: map file name, uvIndex, intensity, scaleOffset, and the object's scene hierarchy (which tells apart objects that share a name) |
-| `shadow_metadata` | `data_export` | 2 | authored | Shadow Rig | -- | unity, glb | re-derived | projected-shadow planes: per plane, the plane node name, its silhouette texture file name, and the authored intensity |
-| `articulation` | `data_export` | 1 | authored | Articulated Rig | -- | unity, glb | re-derived | articulated rigs: per rig its joints (node name, parent, rest translate and orient, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides -- the ArticulationModel a runtime poses |
-| `emissive_groups` | `data_export` | 1 | authored | Emissive Groups | -- | unity | re-derived | named emissive material groups and their weights |
-| `visibility_tracks` | `data_export` | 1 | derived | Render Effects | `shot_metadata` | glb, verifier | re-derived | keyed visibility per node, as stepped on/off frames, with the authored opacity ramp and each take's first/last authored frame |
-| `handoff` | `data_export` | 1 | derived | Export | -- | -- | re-derived | the standalone-reader contract: what each channel present on the carrier holds |
-| `shot_store` | `data_internal` | 1 (bare) | authored | Shots | -- | -- | domain merge, hand-off | the shot store's full app state |
-| `key_stash` | `data_internal` | 1 (bare) | authored | Key Stash | -- | -- | domain merge | the clip manifest of parked keys |
-| `smart_bake_sessions` | `data_internal` | 2 (bare) | authored | SmartBake | -- | -- | unites | LIFO stack of bake-session restore manifests |
-| `hierarchy_baseline` | `data_internal` | 1 (bare) | authored | Hierarchy check | -- | -- | keeps its own | the export hierarchy baseline (a HierarchyBaseline record) |
-| `emissive_groups` | `data_internal` | 1 (bare) | authored | Emissive Groups | -- | -- | domain merge, hand-off | the group registry: slots, defaults, encoding |
-| `render_effects_bindings` | `data_internal` | 1 (bare) | authored | Render Effects | -- | -- | unites | the viewport material bindings a preview drives, so a suspend and rebind round-trips |
-| `audio_file_map` | `data_internal` | 1 (bare) | authored | Audio Clips | -- | -- | unites | track id to audio file path |
-| `lightmap_dirs` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | unites, hand-off | lightmap file name to the folder it was written to |
-| `lightmap_writers` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | unites, hand-off | lightmap file name to the scene file that wrote it |
+| Record | Carrier | Version | Kind | Owner | Reads | Read by | Web | Crosses | Holds |
+|---|---|---|---|---|---|---|---|---|---|
+| `shot_metadata` | `data_export` | 1 | authored | Shots | -- | unity, glb, verifier | `animation_web` | re-derived | shot definitions -- per clip its frame range ('start'/'end', the take the clip is cut from), objects, and any description and section; the scene fps and the declared clip mode; the clip name is the join key to the imported animation clip |
+| `fbx_takes` | `data_export` | 1 (bare) | authored | Shots | -- | glb, verifier | -- | re-derived | the take list an older file carries, one per shot -- superseded by shot_metadata's per-clip ranges and no longer written -- *legacy: superseded by `shot_metadata`* |
+| `audio_manifest` | `data_export` | 2 | authored | Audio Clips | `shot_metadata` | unity | -- | re-derived | audio events with the frames they fire on, scoped to their clip |
+| `lightmap_metadata` | `data_export` | 1 | authored | Lightmap Baker | -- | unity, glb | `lightmap_web` | re-derived | per-object baked-lightmap records: map file name, uvIndex, intensity, scaleOffset, and the object's scene hierarchy (which tells apart objects that share a name); and the bake's reflection probe, when it captured one: its HDR's file name, capture point and projection box, in scene units beside unit_scale |
+| `shadow_metadata` | `data_export` | 2 | authored | Shadow Rig | -- | unity, glb | `shadow_web` | re-derived | projected-shadow planes: per plane, the plane node name, its silhouette texture file name, and the authored intensity |
+| `articulation` | `data_export` | 1 | authored | Articulated Rig | -- | unity, glb | `articulation_web` | re-derived | articulated rigs: per rig its joints (node name, parent, rest translate and orient, rotate order, channels with limits and grab weights) and the parts a hand grabs, each with the joint it rides -- the ArticulationModel a runtime poses |
+| `emissive_groups` | `data_export` | 1 | authored | Emissive Groups | -- | unity | -- | re-derived | named emissive material groups and their weights |
+| `visibility_tracks` | `data_export` | 1 | derived | Render Effects | `shot_metadata` | glb, verifier | -- | re-derived | keyed visibility per node, as stepped on/off frames, with the authored opacity ramp and each take's first/last authored frame; on a shot scene keying none, the exporter's measured whole-timeline clip origin alone |
+| `handoff` | `data_export` | 1 | derived | Export | -- | -- | -- | re-derived | the standalone-reader contract: what each channel present on the carrier holds |
+| `shot_store` | `data_internal` | 1 (bare) | authored | Shots | -- | -- | -- | domain merge, hand-off | the shot store's full app state |
+| `key_stash` | `data_internal` | 1 (bare) | authored | Key Stash | -- | -- | -- | domain merge | the clip manifest of parked keys |
+| `smart_bake_sessions` | `data_internal` | 2 (bare) | authored | SmartBake | -- | -- | -- | unites | LIFO stack of bake-session restore manifests |
+| `hierarchy_baseline` | `data_internal` | 1 (bare) | authored | Hierarchy check | -- | -- | -- | keeps its own | the export hierarchy baseline (a HierarchyBaseline record) |
+| `emissive_groups` | `data_internal` | 1 (bare) | authored | Emissive Groups | -- | -- | -- | domain merge, hand-off | the group registry: slots, defaults, encoding |
+| `render_effects_bindings` | `data_internal` | 1 (bare) | authored | Render Effects | -- | -- | -- | unites | the viewport material bindings a preview drives, so a suspend and rebind round-trips |
+| `audio_file_map` | `data_internal` | 1 (bare) | authored | Audio Clips | -- | -- | -- | unites | track id to audio file path |
+| `lightmap_dirs` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | -- | unites, hand-off | lightmap file name to the folder it was written to |
+| `lightmap_writers` | `data_internal` | 1 (bare) | authored | Lightmap Baker | -- | -- | -- | unites, hand-off | lightmap file name to the scene file that wrote it |
+| `lightmap_probe` | `data_internal` | 1 | authored | Lightmap Baker | -- | -- | -- | keeps its own | the reflection probe the lightmap bake captured: file name, capture point and projection box |
 <!-- scene-records:end -->
 
 Beside the records, two tool-owned attribute families live on the carriers:

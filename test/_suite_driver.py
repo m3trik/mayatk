@@ -217,6 +217,27 @@ def _sandbox_shots_prefs(temp_dir):
         print(f"[Sandbox] shots prefs override failed: {e}")
 
 
+def _sandbox_workspace():
+    """Open a throwaway Maya project for the run, inside the sandbox temp root.
+
+    A tool that names no path writes into the CURRENT project: a mask into its
+    sourceimages, a bake beside it. mayapy opens the user's default project and
+    a GUI-pass Maya restores the one they last had open -- measured: a test
+    fixture's ``untitled_EMask.png`` in a production project's sourceimages.
+    Called after ``TestSandbox.activate()``, so the store lands in the run's
+    temp root and goes with it.
+    """
+    try:
+        import pythontk as ptk
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        root = ptk.TempArtifacts("maya_workspace", policy="session").dir_path()
+        EnvUtils.create_workspace(root)
+        print(f"[Sandbox] maya workspace -> {EnvUtils.set_current_workspace(root)}")
+    except Exception as e:
+        print(f"[Sandbox] maya workspace override failed: {e}")
+
+
 def _snapshot_real_maya_modules():
     for key in ("maya.cmds", "maya.mel", "maya.api.OpenMaya", "maya.api.OpenMayaAnim"):
         try:
@@ -316,6 +337,19 @@ def _reset_session_globals():
     # depth raised and every later hook standing down.
     try:
         FbxUtils._bracket_state()["depth"] = 0
+    except Exception:
+        pass
+    # The plug-in's export options are process-global too: a module that set
+    # ASCII (or armed a split) left every later module's write that way --
+    # measured 2026-10-04, a test reading the file binary failed after
+    # test_fbx_export_preparers in one chunk and passed alone. Only when the
+    # plug-in is loaded: resetting must not load it.
+    try:
+        import maya.cmds as cmds
+
+        if cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            FbxUtils.reset_takes()
+            FbxUtils.reset_export()
     except Exception:
         pass
     # Everything this copy of mayatk registered with Maya: the manager is a
@@ -467,6 +501,8 @@ def run_suite(config):
     _sandbox_shots_prefs(config.get("temp_dir"))
 
     import maya.cmds as cmds
+
+    _sandbox_workspace()
 
     results_file = config["results_file"]
     progress_file = config.get("progress_file")

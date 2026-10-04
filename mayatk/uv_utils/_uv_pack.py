@@ -49,6 +49,7 @@ import numpy as np
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 
 # Solve tolerance in UV units, calibrated against the engine (measured over
 # cube/cylinder/sphere/torus/cone/pipe/prism/helix at padding 0-8): a shell the
@@ -766,7 +767,7 @@ class _U3dPackInternal:
         meshes, all_uvs = cls._resolve(objects)
         if not all_uvs:
             raise ValueError("No UVs found on selection.")
-        cmds.loadPlugin("Unfold3D", quiet=True)
+        Plugins.load("Unfold3D")
 
         # packBox is [umin, umax, vmin, vmax], anchored at the UDIM's tile corner.
         u_tile, v_tile = uv_utils.udim_to_tile(udim)

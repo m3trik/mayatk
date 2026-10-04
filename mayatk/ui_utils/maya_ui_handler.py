@@ -144,7 +144,7 @@ class MayaUiHandler(UiHandler):
         This makes the one-liner pattern reliable from a Maya shelf::
 
             from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-            MayaUiHandler.instance().editors.show("browser")
+            MayaUiHandler.instance().editors.show("ui_browser")
         """
         if switchboard is None:
             # SingletonMixin._instances is shared across all subclasses and

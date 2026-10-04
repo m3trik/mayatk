@@ -86,6 +86,13 @@ class TestParseTemplate(unittest.TestCase):
         self.assertEqual(meta["RPC_SCRIPT"], "")
         self.assertEqual(meta["BUILD_MANIFEST"], False)
 
+    def test_a_template_saved_with_a_bom_is_parsed(self):
+        """A UTF-8 BOM (Windows PowerShell 5.1 writes one) is not content: the
+        template's constants must be read, not dropped for the defaults."""
+        path = Path(self.tmpdir) / "bom.py"
+        path.write_text('RPC_SCRIPT = "run.py"\n', encoding="utf-8-sig")
+        self.assertEqual(SubstanceBridge.parse_template(path)["RPC_SCRIPT"], "run.py")
+
     def test_invalid_mode_is_filtered_out(self):
         path = self._write(
             "bogus.py",

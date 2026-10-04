@@ -259,7 +259,13 @@ class ClipMotionMixin:
                 return False
 
             def move(lo, hi, d):
-                audio_utils.shift_keys_in_range(lo, hi, d, track_ids=[track_id])
+                audio_utils.shift_keys_in_range(
+                    lo,
+                    hi,
+                    d,
+                    track_ids=[track_id],
+                    ledger=self.sequencer.ledger if self.sequencer else None,
+                )
 
             first = min((f for f, _v in audio_utils.read_keys(track_id)), default=None)
             with audio_utils.batch() as b:

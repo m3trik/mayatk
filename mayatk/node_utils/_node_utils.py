@@ -14,6 +14,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.core_utils.undo_recorder import UndoRecorder
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -661,7 +662,10 @@ class NodeUtils(ptk.HelpMixin):
                 # Strip component suffix (e.g. ".vtx[0]") to query the node.
                 base = node.split(".")[0]
                 node_type = cmds.objectType(base)
-                if node_type == "transform":
+                # Any transform -- a joint, an IK handle, a constraint -- is
+                # its own transform node: an exact-type check sent a joint to
+                # the history walk below, which answers its PARENT.
+                if cmds.objectType(base, isAType="transform"):
                     long_paths = cmds.ls(base, long=True) or [base]
                     result.append(long_paths[0])
                 elif node_type == "mesh":
@@ -702,24 +706,44 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     def get_shape_node(
-        cls, nodes, returned_type="obj", attributes=False, inc=[], exc=[]
+        cls,
+        nodes,
+        returned_type="obj",
+        attributes=False,
+        inc=[],
+        exc=[],
+        no_intermediate=True,
     ):
-        """Get shape node(s) or node attributes."""
+        """Get shape node(s) or node attributes.
+
+        Each input resolves through :meth:`get_shapes` (a transform, a shape or
+        a component); a construction-history (DG) node resolves to the shapes
+        downstream of it.
+
+        Parameters:
+            nodes: Node(s) to resolve.
+            returned_type (str): Passed to ``CoreUtils.convert_array_type``.
+            attributes (bool): Return the shapes' readable attributes instead.
+            inc (list): ``ptk.filter_list`` include patterns.
+            exc (list): ``ptk.filter_list`` exclude patterns.
+            no_intermediate (bool): Drop orig (intermediate) shapes. False also
+                returns them, after the live shape (DAG order).
+
+        Returns:
+            (str/list) Shape node(s), or attribute names when ``attributes``.
+        """
         result = []
-        for node in cmds.ls(CoreUtils.as_strings(nodes), long=True, flatten=True) or []:
-            shapes = (
-                cmds.listRelatives(node, children=True, shapes=True, fullPath=True)
-                or []
-            )
-            if not shapes:
-                shapes = cmds.ls(node, type="shape", long=True) or []
-                if not shapes:
-                    try:
-                        history = cmds.listHistory(node, future=True) or []
-                        transforms = cmds.listRelatives(history, parent=True) or []
-                        shapes = cls.get_shape_node(transforms)
-                    except Exception:
-                        shapes = []
+        nodes_long = cmds.ls(CoreUtils.as_strings(nodes), long=True, objectsOnly=True)
+        for node in nodes_long or []:
+            shapes = cls.get_shapes(node, no_intermediate=no_intermediate)
+            if not shapes and "dagNode" not in cmds.nodeType(node, inherited=True):
+                # Full paths throughout: a leaf name re-resolved by ``ls`` matches
+                # every same-named node in the scene.
+                future = cmds.listHistory(node, future=True) or []
+                shapes = cls.get_shapes(
+                    cmds.ls(future, shapes=True, long=True) or [],
+                    no_intermediate=no_intermediate,
+                )
             result.extend(shapes)
 
         if attributes:
@@ -1307,6 +1331,9 @@ class NodeUtils(ptk.HelpMixin):
             like the assembly's name in all ``cmds.*`` calls and exposes
             ``.addChild`` / ``.children`` to mirror the older legacy helper.
         """
+        # Without the plugin -- mayapy never autoloads it -- ``cmds.assembly``
+        # has no default type and raises "No object matches name".
+        Plugins.load("sceneAssembly")
         assembly_node = cmds.assembly(name=assembly_name)
 
         for node in nodes:

@@ -1126,6 +1126,108 @@ class MatUtils(_MatUtilsInternal):
             scope=scope,
         )
 
+    @classmethod
+    def rename_texture_file(
+        cls,
+        path: str,
+        new_name: str,
+        file_nodes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Rename a texture file on disk and repoint every file node reading it.
+
+        *path* is a stored or absolute texture path; a tile / frame token
+        renames every tile (``ptk.TiledPath.rename`` -- *new_name* keeps the
+        tokens, each tile keeps its number). Nothing is renamed over another
+        file, and a rename failing part-way is put back. The nodes keep their
+        path's spelling -- relative stays relative -- with the new name.
+
+        One undo step with the edits around it: undo renames the files back
+        along with the paths that name them.
+
+        Parameters:
+            path: The texture (stored spelling or absolute).
+            new_name: The new file NAME, no folder.
+            file_nodes: The nodes to repoint. ``None`` (default): every file
+                node in the scene that reads the file -- one left on the old
+                name would read nothing.
+
+        Returns:
+            ``{"renamed": [(old, new)], "nodes": [repointed file node]}``;
+            empty lists when the name is unchanged.
+
+        Raises:
+            ValueError: See ``ptk.TiledPath.rename`` (bad name, token mismatch,
+                nothing on disk).
+            FileExistsError: A target is another existing file.
+        """
+        return cls._rename_texture_file(
+            path=path, new_name=new_name, file_nodes=file_nodes
+        )
+
+    @classmethod
+    def sync_material_names(
+        cls,
+        material: Optional[str],
+        base: str,
+        material_affix: Tuple[str, str] = ("", ""),
+        file_node_affix: Tuple[str, str] = ("", ""),
+        file_nodes: Optional[List[str]] = None,
+        dry_run: bool = False,
+        lightmaps: Any = None,
+    ) -> Dict[str, Any]:
+        """Name a material, its texture set, lightmap and nodes for ONE base.
+
+        One name drives the set: the material becomes *base* with
+        *material_affix*, and the nodes named after it follow (its shading
+        group ``<material>SG``, an Arnold ``<material>_ai`` on the same
+        group). The texture set is the material's dominant one
+        (``ptk.MapFactory.dominant_texture_set`` -- what a bake names its
+        lightmap after); each of its textures keeps everything after the base
+        (map type, tile token, extension), so ``rock_Base_Color.<UDIM>.png``
+        follows ``stone`` as ``stone_Base_Color.<UDIM>.png``, and its file node
+        is named after it (no token, no extension) with *file_node_affix*. The
+        set's lightmap (``rock_Lightmap.exr``) follows too, its bake markers
+        re-stamped. Another set's map (an environment cube) is left alone; so
+        is a file outside the scene's project, which another project may read
+        -- reported, its node named after the file it still reads.
+
+        Planned whole first: a rename that would collide with another file
+        refuses the lot before anything changes. Textures go through
+        :meth:`rename_texture_file`, so every node reading them follows. One
+        undo chunk.
+
+        Parameters:
+            material: The material (``None``: only *file_nodes*).
+            base: The shared base name.
+            material_affix, file_node_affix: ``(prefix, suffix)`` each.
+            file_nodes: The file nodes to sync. ``None``: those in the
+                material's history.
+            dry_run: Return the plan; change nothing.
+            lightmaps: The lightmap records the set's lightmap follows through
+                -- ``lightmap_dependencies()`` and ``rename_lightmap(old,
+                new)``, as ``LightmapRecords`` has them (the Texture Path
+                Editor passes the ones it holds). ``None``: the lightmap is
+                not followed. Passed in, not imported: mat_utils sits below
+                light_utils (``[tool.m3trik.layers]``).
+
+        Returns:
+            ``{"material": (old, new) | None, "companions": [(old, new)],
+            "textures": [(old path, new name)], "file_nodes": [(old, new)],
+            "lightmaps": [(path, old map, new map)], "skipped": [reason]}``.
+
+        Raises:
+            ValueError: *base* is unusable, or a rename would collide.
+        """
+        return cls._sync_material_names(
+            material=material,
+            file_nodes=file_nodes,
+            base=base,
+            material_affix=tuple(material_affix),
+            file_node_affix=tuple(file_node_affix),
+            dry_run=dry_run,
+            lightmaps=lightmaps,
+        )
+
     @staticmethod
     def is_duplicate_material(material1: str, material2: str) -> bool:
         """Check if two materials are duplicates based on their textures."""

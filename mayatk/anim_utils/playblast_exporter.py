@@ -53,6 +53,8 @@ import pythontk as ptk
 #: pythontk, shared with every other host of the exporter.
 from pythontk import CaptureResult, ExportResult, ExportTarget  # noqa: F401
 
+from mayatk.core_utils.plugins._plugins import Plugins
+
 
 class PlayblastExporter(ptk.SequenceExporter):
     """Viewport capture and preview-render exports.
@@ -470,9 +472,7 @@ class PlayblastExporter(ptk.SequenceExporter):
         output_dir = ptk.format_path(os.path.abspath(output_dir))
         os.makedirs(output_dir, exist_ok=True)
 
-        from mayatk.env_utils._env_utils import EnvUtils  # deferred: avoid import cycle
-
-        EnvUtils.load_plugin("mtoa")  # raises ValueError when unavailable
+        Plugins.load("mtoa")  # raises Plugins.LoadError (a ValueError) when unavailable
 
         camera_shape = self._resolve_camera_shape(camera or self.camera)
         if not camera_shape:

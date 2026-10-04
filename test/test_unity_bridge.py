@@ -44,6 +44,14 @@ class TestUnityBridgeUnit(unittest.TestCase):
         """
         self.assertIs(UnityBridge.include_data_export, True)
 
+    def test_its_takes_are_exact_slices(self):
+        """Unity builds the clips from the takes, so this hand-off resamples
+        its split; a DCC hand-off keeps the authored keys (the mixin default)."""
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+
+        self.assertIs(UnityBridge.resample_takes, True)
+        self.assertIs(MayaExportMixin.resample_takes, False)
+
     def test_params_defaults(self):
         d = UnityBridge().params_defaults()
         self.assertEqual(d["ASSETS_SUBDIR"], "Imported")
@@ -167,6 +175,50 @@ class TestUnityBridgeSend(MayaTkTestCase):
         # Default subdir 'Imported'; name sanitized.
         self.assertEqual(dest, self.project / "Assets" / "Imported" / "Custom_Name.fbx")
         self.assertTrue(dest.is_file())
+
+    def test_an_animated_send_ships_every_channel_in_every_take(self):
+        """``late`` is keyed only inside ShotA. Maya's split used to leave
+        ShotB with no channel for it, and Unity played it at its rest pose for
+        the whole shot.
+        Added: 2026-10-04
+        """
+        import pythontk as ptk
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        cube = cmds.polyCube(name="UnityAnim")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=40, value=10)
+        late = cmds.polyCube(name="UnityEarly")[0]
+        cmds.setKeyframe(late, attribute="translateY", time=5, value=0)
+        cmds.setKeyframe(late, attribute="translateY", time=15, value=4)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 1, 20, objects=[cube])
+        store.define_shot("ShotB", 21, 40, objects=[cube])
+        store.publish_export_view()
+
+        result = self.bridge.send(
+            [cube, late],
+            template="copy_to_assets",
+            mode="send_to",
+            params={"INCLUDE_ANIMATION": True, "ASSET_NAME": "anim_takes"},
+        )
+
+        self.assertIsNotNone(result, "send returned None (delivery failed)")
+        curves = ptk.FbxFile.load(
+            result["asset"], span_arrays=("KeyTime",), raw_payloads=False
+        ).take_curves()
+        self.assertIn("ShotB", curves)
+        whole = set(curves["Take 001"])
+        self.assertTrue(any(key[0] == "UnityEarly" for key in whole))
+        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
+        for take, (start, end) in (("ShotA", (1, 20)), ("ShotB", (21, 40))):
+            self.assertEqual(sorted(whole - set(curves[take])), [], take)
+            for key, (first, last, _count) in curves[take].items():
+                self.assertEqual(
+                    (round(first / tick), round(last / tick)), (start, end), key
+                )
 
     def test_send_aborts_when_no_project(self):
         cube = cmds.polyCube(name="UnityNoProj")[0]
