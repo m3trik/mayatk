@@ -96,7 +96,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_manifest/behaviors/_behaviors.py` — Behaviors — Maya appliers over the engine's pure keying-recipe core.
 - `class Behaviors(pythontk.core_utils.engines.shots.manifest.behaviors.Behaviors, _BehaviorsInternal)`
-  - methods: apply_behavior, curve_of, behavior_plugs, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
+  - methods: apply_behavior, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, BEHAVIOR_STATUS_COLORS, ERROR_COLOR
@@ -918,7 +918,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
 - `class ShaderAttributeMap(_ShaderAttributeMapInternal)`
-  - methods: logical_channels, get_attr, constant_attr, read_constant, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
+  - methods: logical_channels, get_attr, constant_attr, emission_weight, read_constant, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
 
 ### `mat_utils/shader_converter.py` — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - `class ShaderConverter(pythontk.LoggingMixin, _ShaderConverterInternal)`
@@ -1245,7 +1245,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`
-  - methods: transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name, pair_sources, find_combined
+  - methods: CONSTANT_ATTRS, transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name, pair_sources, find_combined
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`

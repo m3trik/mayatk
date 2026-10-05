@@ -1,6 +1,6 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 49f8b1b)._
+_Diff vs the last release (origin/main @ 49f8b1b7)._
 
 ## Removed (4)
 
@@ -12,8 +12,6 @@ _Diff vs the last release (origin/main @ 49f8b1b)._
 ## Added (77)
 
 - `anim_utils/shots/_shots.py::ShotStore.resolve_member(self, name: str) -> Tuple[str, str]`
-- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::Behaviors.behavior_plugs(obj: str, behavior_name: str) -> List[str]`
-- `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::Behaviors.curve_of(plug: str) -> str`
 - `audio_utils/_audio_utils.py::AudioUtils.clip_length_frames(cls, track_id: str, carrier: Optional[str] = None) -> float`
 - `audio_utils/_audio_utils.py::AudioUtils.key_clip(cls, track_id: str, start: float, end: Optional[float] = None, duration: Optional[float] = None, auto_end: bool = True, carrier: Optional[str] = None) -> List[Tuple[str, float]]`
 - `audio_utils/_audio_utils.py::AudioUtils.track_curve(cls, track_id: str, carrier: Optional[str] = None) -> Optional[str]`
@@ -56,8 +54,9 @@ _Diff vs the last release (origin/main @ 49f8b1b)._
 - `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.ui_field(self, name)`
 - `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.unfocus(self, *_args) -> None`
 - `mat_utils/shader_attribute_map.py::ShaderAttributeMap.constant_attr(cls, shader_type: str, logical: str) -> Optional[str]`
+- `mat_utils/shader_attribute_map.py::ShaderAttributeMap.emission_weight(cls, shader: str, shader_type: Optional[str] = None) -> float`
 - `mat_utils/shader_attribute_map.py::ShaderAttributeMap.read_constant(cls, shader: str, logical: str, shader_type: Optional[str] = None) -> Optional[Tuple[float, ...]]`
-- `mat_utils/texture_baker.py::TextureBaker.render_panorama(self, position: Sequence[float], path: str, width: int = 1024, hide: Optional[Sequence[str]] = None) -> Optional[str]`
+- `mat_utils/texture_baker.py::TextureBaker.render_panorama(self, position: Sequence[float], path: str, width: int = 1024, hide: Optional[Sequence[str]] = None, lights: Optional[Sequence[str]] = None) -> Optional[str]`
 - `mat_utils/texture_path_editor.py::TexturePathEditorSlots.row_rename_file(self, selection=None)`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.adjust_handles(self) -> Dict[str, str]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.adjusting(self) -> bool`
@@ -86,10 +85,11 @@ _Diff vs the last release (origin/main @ 49f8b1b)._
 - `rig_utils/articulated_rig/articulated_rig_slots.py::ArticulatedRigSlots.match_end_control(self)`
 - `rig_utils/articulated_rig/articulated_rig_slots.py::ArticulatedRigSlots.parse_limits(text: str, channels: Sequence[str]) -> Dict[str, Tuple[Optional[float], Optional[float]]]`
 - `uv_utils/_uv_utils.py::UvUtils.export_uv_layout(objects, uv_set: str = None) -> dict`
+- `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS(cls) -> Dict[str, Dict[str, str]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.find_combined(cls, meshes: Sequence[str]) -> Optional[Tuple[str, Tuple]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.pair_sources(cls, targets: Sequence[str], sources: Sequence[str]) -> Dict`
 
-## Deprecations (13)
+## Deprecations (14)
 
 _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its window: delete the alias and its tests rather than moving the date. A **HELD** row is due by version, but its notice has not yet had its calendar window._
 
@@ -106,8 +106,9 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - **HELD** `env_utils/hierarchy_sync/hierarchy_baseline.py::HierarchyBaseline.migrate_from_sidecar` — remove in 0.21.0, not before 2026-10-24
 - `env_utils/_env_utils.py::EnvUtils.is_plugin_loaded` — remove in 0.23.0, not before 2026-11-02
 - `env_utils/_env_utils.py::EnvUtils.load_plugin` — remove in 0.23.0, not before 2026-11-02
+- `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS` — remove in 0.23.0, not before 2026-11-03
 
-## Signature changed (19)
+## Signature changed (18)
 
 - `anim_utils/shots/shot_manifest/behaviors/_behaviors.py::Behaviors.apply_audio_clip`
   - was: `(obj: str, start: float, end: float, source_path: str = '') -> None`
@@ -139,9 +140,6 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - `light_utils/lightmap_baker/lightmap_records.py::LightmapRecords.commit`
   - was: `(cls, mapping: Dict[str, str], scale_offsets: Optional[Dict[str, List[float]]] = None, intensity: float = 1.0) -> Dict[str, str]`
   - now: `(cls, mapping: Dict[str, str], scale_offsets: Optional[Dict[str, List[float]]] = None, intensity: float = 1.0, written: bool = True) -> Dict[str, str]`
-- `mat_utils/render_opacity/attribute_mode.py::OpacityAttributeMode.key_pulse`
-  - was: `(cls, objects, start: float, end: float, period: float, bright_fraction: float = 0.59, ramp_fraction: float = 0.25, lead_in: Optional[float] = None, lead_out: Optional[float] = None, color: Optional[Sequence[float]] = None, dim_color: Optional[Sequence[float]] = None, auto_create: bool = True, spec: ChannelSpec = HIGHLIGHT, whole_frames: bool = True) -> List[str]`
-  - now: `(cls, objects, start: float, end: float, period: float, bright_fraction: float = 0.59, ramp_fraction: float = 0.25, lead_in: Optional[float] = None, lead_out: Optional[float] = None, color: Optional[Sequence[float]] = None, dim_color: Optional[Sequence[float]] = None, auto_create: bool = True, spec: ChannelSpec = HIGHLIGHT, whole_frames: bool = True, replace: bool = True) -> List[str]`
 - `mat_utils/render_opacity/render_effects.py::RenderEffects.key_fade`
   - was: `(cls, objects=None, start: float = 0, end: float = 15, direction: str = 'in', auto_create: bool = True, tangent: str = 'linear', delete_visibility_keys: bool = False, channel='opacity', whole_frames: bool = True) -> List[Tuple[str, str]]`
   - now: `(cls, objects=None, start: float = 0, end: Optional[float] = None, direction: str = 'in', auto_create: bool = True, tangent: str = 'linear', delete_visibility_keys: bool = False, channel='opacity', whole_frames: bool = True, recipe: Optional[ptk.EffectRecipe] = None) -> List[Tuple[str, str]]`
@@ -159,7 +157,7 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
   - now: `(cls, links: Sequence[Any], joints: Optional[Sequence[Dict[str, Any]]] = None, name: Optional[str] = None, parent: Optional[str] = None, end_control: bool = True) -> 'ArticulatedRig'`
 - `uv_utils/texture_transfer.py::TextureTransfer.assign_results`
   - was: `(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '') -> Dict[str, str]`
-  - now: `(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '', assign_from: str = 'target', sources: Sequence[str] = ()) -> Dict[str, str]`
+  - now: `(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '', assign_from: str = 'target') -> Dict[str, str]`
 - `uv_utils/texture_transfer.py::TextureTransfer.material_constant`
   - was: `(cls, material: str, channel: str) -> Optional[Tuple[float, ...]]`
   - now: `(material: str, channel: str) -> Optional[Tuple[float, ...]]`
