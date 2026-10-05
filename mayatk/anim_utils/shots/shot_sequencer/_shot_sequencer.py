@@ -122,7 +122,11 @@ class ShotSequencer(_ShotSequencerCore):
 
         with AudioUtils.batch() as b:
             tids = AudioUtils.shift_keys_in_range(
-                seq["start"], seq["end"], delta, track_ids=[seq["obj"]]
+                seq["start"],
+                seq["end"],
+                delta,
+                track_ids=[seq["obj"]],
+                ledger=self.ledger,
             )
             if tids:
                 b.mark_dirty(tids)
@@ -321,8 +325,9 @@ class ShotSequencer(_ShotSequencerCore):
         early on it), while dropping it destroys the shot's record of its own
         content — irreversibly, on the next store flush.  Pruning belongs to
         an explicit, user-driven action, not a read-only rebuild.  (blendertk
-        already holds this line: its ``reconcile_all_shots`` is a no-op that
-        surfaces deletions through ``assess`` instead of rewriting.)
+        holds the same line: its ``reconcile_all_shots`` follows renames
+        through the action slot named after the old object and keeps what
+        resolves to nothing, leaving deletions to ``assess``.)
 
         Returns ``True`` if any paths were updated.
         """
@@ -1520,7 +1525,10 @@ class ShotSequencer(_ShotSequencerCore):
         landing on another key's vacated slot can't corrupt the later read.
 
         *ledger* is remapped alongside, for the same reason
-        :meth:`move_curve_keys` takes one.
+        :meth:`move_curve_keys` takes one -- and a key ``setKeyframe``
+        OVERWRITES on a destination takes every claim on it along: left on the
+        frame, its step and a behavior's authored claim passed to the key that
+        landed there (the next Build's ``release_authored`` then deleted it).
         """
         pairs = sorted((p for p in pairs if abs(p[1] - p[0]) >= 1e-6))
         if not pairs:
@@ -1542,6 +1550,19 @@ class ShotSequencer(_ShotSequencerCore):
             moving.append(rec)
         if not moving:
             return
+
+        if ledger is not None:
+            # Claims of the keys about to be overwritten go before the remap
+            # below lands the arrivals' own claims on the same frames.
+            stationary = [
+                t
+                for t in sorted(cmds.keyframe(crv, q=True) or [])
+                if cls._nearest_index(old_times, t, eps) is None
+            ]
+            for _old_t, new_t in pairs:
+                hit = cls._nearest_index(stationary, new_t, eps)
+                if hit is not None:
+                    ledger.release(crv, stationary[hit])
 
         for old_t in old_times:
             # cutKey deletes the curve node along with its last key, so stop
@@ -1626,6 +1647,12 @@ class ShotSequencer(_ShotSequencerCore):
             target = crv if cmds.objExists(crv) else plug
             if not target:
                 target = obj_path
+            if target == crv:
+                # setKeyframe OVERWRITES a key already on new_time: its claims
+                # go with it, before the remap below lands the moved key's.
+                landed = self._key_time_at(crv, new_time, eps)
+                if landed is not None:
+                    self.ledger.release(crv, landed)
             cmds.setKeyframe(target, time=new_time, value=val)
             cmds.keyTangent(
                 target,
@@ -1690,8 +1717,8 @@ class ShotSequencer(_ShotSequencerCore):
                 ledger=ledger,
             )
 
-    @staticmethod
     def _shift_audio(
+        self,
         old_start: float,
         old_end: float,
         delta: float,
@@ -1701,7 +1728,9 @@ class ShotSequencer(_ShotSequencerCore):
         Delegates to :func:`mayatk.audio_utils.shift_keys_in_range`
         which updates the canonical keyed store. Callers are expected
         to wrap bulk ops in an ``audio_utils.batch()`` so the compositor
-        re-renders derived DG audio nodes in a single sync.
+        re-renders derived DG audio nodes in a single sync. The store's
+        ledger rides along: the Shot Manifest claims the clips it keys, and
+        a claim must land where its key moved.
 
         Parameters:
             old_start: Start of the time range to shift.
@@ -1713,7 +1742,9 @@ class ShotSequencer(_ShotSequencerCore):
         from mayatk.audio_utils._audio_utils import AudioUtils as audio_utils
 
         with audio_utils.batch() as b:
-            tids = audio_utils.shift_keys_in_range(old_start, old_end, delta)
+            tids = audio_utils.shift_keys_in_range(
+                old_start, old_end, delta, ledger=self.ledger
+            )
             if tids:
                 b.mark_dirty(tids)
 

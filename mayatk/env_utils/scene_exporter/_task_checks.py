@@ -1152,6 +1152,14 @@ class _TaskChecksMixin(_TaskDataMixin):
         shapes those parents carry -- one means ordinary instancing, more than
         one means the orig is riding geometry it does not belong to. That
         separated the single genuine offender from the five false ones.
+
+        Order under the transform matters too, even for its own single-parent
+        orig: FBX takes a transform's FIRST mesh child for its material, so an
+        orig listed ahead of the real shape ships the right geometry on
+        ``Default_Material`` (probed 2026-10-01; the production office's
+        ``WALL_A``, the same history deleted = clean). FBX2glTF reads the shared
+        mesh's material instead, so only FBX consumers -- the Blender bridge,
+        Unity -- get it.
         """
         offenders = []
         for shape in NodeUtils.get_shapes(
@@ -1161,6 +1169,10 @@ class _TaskChecksMixin(_TaskDataMixin):
                 parents = (
                     cmds.listRelatives(shape, allParents=True, fullPath=True) or []
                 )
+                uuid = cmds.ls(shape, uuid=True)
+                if any(self._leads_real_shape(p, uuid) for p in parents):
+                    offenders.append((shape, "orig shape ahead of the real shape"))
+                    continue
                 if len(parents) < 2:
                     continue  # an ordinary orig shape never leaves Maya
                 # By UUID, not by path: an instanced shape is ONE node with many
@@ -1200,6 +1212,20 @@ class _TaskChecksMixin(_TaskDataMixin):
                 for shape, reason in offenders
             ]
         return True, []
+
+    @staticmethod
+    def _leads_real_shape(parent: str, uuid: list) -> bool:
+        """Whether the shape with *uuid* is *parent*'s first mesh child while a
+        real (non-intermediate) mesh follows it. By UUID: an instanced shape's
+        path under *parent* is not the path the caller holds."""
+        children = (
+            cmds.listRelatives(parent, shapes=True, type="mesh", fullPath=True) or []
+        )
+        return (
+            bool(children)
+            and cmds.ls(children[0], uuid=True) == uuid
+            and any(not NodeUtils.is_intermediate(c) for c in children[1:])
+        )
 
     def check_referenced_objects(self) -> tuple:
         """Check if any referenced objects are present in the scene."""

@@ -10,7 +10,6 @@ try:
 except Exception:
     cmds = mel = None
 import math
-from typing import Optional, List
 
 # Intra-package imports, deliberately UNGUARDED. `CoreUtils.undoable` and
 # `DisplayUtils.add_to_isolation` are evaluated as decorators while the class
@@ -351,15 +350,15 @@ class Primitives:
 
             ``mtoa`` is loaded on demand rather than at import: loading it boots
             the whole Arnold renderer and costs seconds, which must not be paid
-            by merely importing this module. ``EnvUtils.load_plugin`` raises
+            by merely importing this module. ``Plugins.load`` raises a
             ValueError when the plugin is missing, which the callers' existing
             try/except surfaces as a message box instead of a silent no-op.
             """
             import re
 
-            from mayatk.env_utils._env_utils import EnvUtils
+            from mayatk.core_utils.plugins._plugins import Plugins
 
-            EnvUtils.load_plugin("mtoa")
+            Plugins.load("mtoa")
             # shadingNode returns the TRANSFORM (``transform1``) and puts the
             # requested name — or the node type — on the SHAPE. That is
             # backwards from every other primitive here, and from what Maya's

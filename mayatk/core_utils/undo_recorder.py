@@ -10,13 +10,14 @@ optimized curve as it was and reverted the previous edit). Maya only lets a
 COMMAND carry undo, so :meth:`UndoRecorder.record` collects a block's undo
 objects and hands them to Maya's own ``ufeCmd``, whose undo / redo replay them:
 a generic Python command (Maya undoes its own Outliner edits through it) from
-the ``ufeSupport`` plugin in Maya's install folder, loaded on first use when the
-session has not loaded it. A plugin of mayatk's own cannot carry them: by
-default GUI Maya holds every plugin from outside its trusted locations at a
-modal "Untrusted Plugin Loading" prompt until someone answers it, and its
-install folder is trusted, so loading ``ufeSupport`` raises none (both measured
-in a fresh GUI Maya 2025, 2026-09-14). Standalone never prompts, so no headless
-test can see the difference -- ``test_undo_recorder`` checks the load instead.
+the ``ufeSupport`` plugin in Maya's install folder, loaded through
+:meth:`Plugins.load` on first use when the session has not loaded it. A plugin
+of mayatk's own could not: GUI Maya holds a plugin from outside its trusted
+locations at a modal "Untrusted Plugin Loading" prompt until someone answers
+it, while its install folder is always trusted, so loading ``ufeSupport``
+raises none (both measured in a fresh GUI Maya 2025, 2026-09-14). Standalone
+never prompts, so no headless test can see the difference --
+``test_undo_recorder`` checks the load instead.
 
 The queue replays commands in the order they ran, so a block commits when it
 closes, and a block opened inside another first commits the outer block's edits
@@ -44,9 +45,10 @@ from typing import Any, Callable, ContextManager, Dict, Iterator, List
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
+
+from mayatk.core_utils.plugins._plugins import Plugins
 
 logger = logging.getLogger(__name__)
 
@@ -266,8 +268,7 @@ class UndoRecorder:
             return
         try:
             if not cls._carrier_ready:
-                if not cmds.pluginInfo(cls._CARRIER_PLUGIN, query=True, loaded=True):
-                    cmds.loadPlugin(cls._CARRIER_PLUGIN, quiet=True)
+                Plugins.load(cls._CARRIER_PLUGIN)
                 cls._carrier_ready = True
             from maya.internal.ufeSupport import ufeCmdWrapper
 

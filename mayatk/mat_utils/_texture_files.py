@@ -12,6 +12,7 @@ Reached through :class:`mayatk.MatUtils`; nothing here is called directly.
 
 import hashlib
 import os
+import re
 from typing import List, Tuple, Dict, Any, Optional
 
 try:
@@ -24,6 +25,7 @@ import pythontk as ptk
 
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.core_utils._core_utils import CoreUtils
 
 
 class _TextureFilesInternal:
@@ -1049,3 +1051,282 @@ class _TextureFilesInternal:
             dest_path = os.path.join(unused_folder, texture)
             shutil.move(src_path, dest_path)
             print(f"Moved {texture} to {unused_folder}")
+
+    # ------------------------------------------------------------------
+    # Renaming a texture file -- and the names that follow it
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _texture_node_stem(file_name: str) -> str:
+        """*file_name* as a node name: no extension, no tile / frame token (nor
+        the separator before it -- ``rock.<UDIM>.png`` -> ``rock``), Maya-legal."""
+        stem = os.path.splitext(file_name)[0]
+        token = ptk.TiledPath.TOKEN_RE.pattern
+        stem = re.sub(rf"[._]?(?:{token})", "", stem, flags=re.IGNORECASE)
+        stem = re.sub(r"[^0-9A-Za-z_]", "_", stem).strip("_")
+        return f"_{stem}" if stem[:1].isdigit() else stem
+
+    @staticmethod
+    def _stored_with_name(stored: str, new_name: str) -> str:
+        """*stored* with its file name replaced, its folder spelled as it was."""
+        head = re.split(r"[\\/]", stored)[-1]
+        return stored[: len(stored) - len(head)] + new_name
+
+    @classmethod
+    def _rename_texture_file(cls, path, new_name, file_nodes):
+        """Body of :meth:`MatUtils.rename_texture_file`."""
+        from mayatk.core_utils.undo_recorder import UndoRecorder
+
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
+        old_abs = cls.to_absolute(path, workspace, sourceimages)
+        pairs = ptk.TiledPath.rename(old_abs, new_name, dry_run=True)  # raises
+        if not pairs:
+            return {"renamed": [], "nodes": []}
+
+        key = os.path.normcase(os.path.normpath(old_abs))
+        readers = []
+        for node in cmds.ls(type="file") if file_nodes is None else file_nodes:
+            stored = cmds.getAttr(f"{node}.fileTextureName") or ""
+            resolved = (
+                cls.to_absolute(stored, workspace, sourceimages) if stored else ""
+            )
+            if resolved and os.path.normcase(os.path.normpath(resolved)) == key:
+                readers.append((node, stored))
+
+        def move(steps):
+            for src, dst in steps:
+                try:
+                    os.rename(src, dst)
+                except OSError as e:
+                    cmds.warning(f"Could not rename {src} -> {dst}: {e}")
+
+        nodes = []
+        # One undo step whoever calls: the files and every repoint together.
+        with CoreUtils.undo_chunk("Rename Texture File"):
+            with UndoRecorder.record() as recorder:
+                ptk.TiledPath.rename(old_abs, new_name)
+                # Undo puts the files back with the paths that name them.
+                recorder.snapshot(
+                    undo=lambda: move([(new, old) for old, new in reversed(pairs)]),
+                    redo=lambda: move(pairs),
+                )
+            for node, stored in readers:
+                try:
+                    Attributes.set_plug_literal(
+                        f"{node}.fileTextureName",
+                        cls._stored_with_name(stored, new_name),
+                    )
+                    nodes.append(node)
+                except RuntimeError as e:
+                    cmds.warning(f"{node}: renamed on disk, but not repointed: {e}")
+        return {"renamed": pairs, "nodes": nodes}
+
+    @staticmethod
+    def _lightmap_for_base(map_name: str, old_base: str, new_base: str):
+        """*map_name* spelled for *new_base* when it is *old_base*'s lightmap,
+        else ``None``.
+
+        A bake names its map after the texture set it lights --
+        ``<base>_Lightmap[_N].exr``, the affix the convention's ``lightmap``
+        entry -- so the whole stem has to be that: ``rockery_Lightmap`` is not
+        ``rock``'s.
+        """
+        stem, ext = os.path.splitext(os.path.basename(map_name))
+        prefix, suffix = ptk.NamingConvention.affix_parts("lightmap")
+        match = re.fullmatch(
+            rf"({re.escape(prefix)}){re.escape(old_base)}({re.escape(suffix)}[_-]*\d*)",
+            stem,
+            flags=re.IGNORECASE,
+        )
+        return f"{match[1]}{new_base}{match[2]}{ext}" if match else None
+
+    @staticmethod
+    def _fixed_name(node: str) -> bool:
+        """Whether *node* cannot be renamed: a default node (``lambert1``,
+        ``initialShadingGroup``), a locked one, or one a reference brings."""
+        return bool(
+            cmds.ls(node, defaultNodes=True)
+            or cmds.lockNode(node, q=True, lock=True)[0]
+            or cmds.referenceQuery(node, isNodeReferenced=True)
+        )
+
+    @classmethod
+    def _companion_names(cls, material: str, new: str) -> List[Tuple[str, str]]:
+        """``[(node, new name)]`` for the nodes named after *material*.
+
+        Its shading groups -- the ones it is the surface shader of become
+        ``<new>SG``, Maya's own spelling, whatever an older material named
+        them -- and any node on them built on its name (an Arnold
+        ``<material>_ai``), which keeps its tail. Never a member (an object is
+        not the material's name) and never a node that cannot be renamed.
+        """
+        leaf = material.rsplit("|", 1)[-1]
+        renames = {}
+        groups = cmds.listConnections(material, s=False, d=True, type="shadingEngine")
+        for sg in dict.fromkeys(groups or []):
+            surface = cmds.listConnections(f"{sg}.surfaceShader", s=True, d=False)
+            for node in [sg, *(cmds.listConnections(sg, s=True, d=False) or [])]:
+                name = node.rsplit("|", 1)[-1]
+                if node in renames or name == leaf or cmds.ls(node, dag=True):
+                    continue
+                if name.startswith(leaf):
+                    renames[node] = new + name[len(leaf) :]
+                elif node == sg and surface == [leaf]:
+                    renames[node] = f"{new}SG"
+        return [
+            (node, name)
+            for node, name in renames.items()
+            if name != node.rsplit("|", 1)[-1] and not cls._fixed_name(node)
+        ]
+
+    @classmethod
+    def _sync_material_names(
+        cls,
+        material,
+        file_nodes,
+        base,
+        material_affix,
+        file_node_affix,
+        dry_run,
+        lightmaps=None,
+    ):
+        """Body of :meth:`MatUtils.sync_material_names`."""
+        base = str(base or "").strip()
+        if not base or any(c in base for c in '\\/:*?"<>|'):
+            raise ValueError(f"Not a usable base name: {base!r}.")
+        workspace = EnvUtils.get_env_info("workspace") or ""
+        sourceimages = EnvUtils.get_env_info("sourceimages") or ""
+        project = EnvUtils.scene_project_root()
+        plan = {
+            "material": None,
+            "companions": [],
+            "textures": [],
+            "file_nodes": [],
+            "lightmaps": [],
+            "skipped": [],
+        }
+
+        def renameable(path: str, name: str) -> bool:
+            """Whether *path* is this project's to rename (and is there)."""
+            if not (project and ptk.FileUtils.is_under(os.path.abspath(path), project)):
+                plan["skipped"].append(
+                    f"{name}: outside this project -- another may read it, so it "
+                    "keeps its name"
+                )
+                return False
+            if not ptk.TiledPath.tiles(path):
+                plan["skipped"].append(f"{name}: not on disk to rename")
+                return False
+            return True
+
+        errors = []
+        if material:
+            new = ptk.StrUtils.apply_affix(base, *material_affix)
+            if new != material.rsplit("|", 1)[-1]:
+                if cls._fixed_name(material):
+                    errors.append(
+                        f"{material} cannot be renamed (a default, locked or "
+                        "referenced node)"
+                    )
+                plan["material"] = (material, new)
+                plan["companions"] = cls._companion_names(material, new)
+        if file_nodes is None:
+            history = (cmds.listHistory(material) or []) if material else []
+            file_nodes = list(dict.fromkeys(cmds.ls(history, type="file") or []))
+
+        stored = {n: cmds.getAttr(f"{n}.fileTextureName") or "" for n in file_nodes}
+        names = {n: os.path.basename(s.replace("\\", "/")) for n, s in stored.items()}
+        # The set the names follow is the one the baker names a lightmap after:
+        # an environment cube or a decal beside it is another set's, not this
+        # name's to change.
+        found = ptk.MapFactory.dominant_texture_set([n for n in names.values() if n])
+        old_base = found[0] if found else ""
+        if not old_base and any(names.values()):
+            plan["skipped"].append(
+                "No texture names a map type, so there is no texture set to "
+                "follow; the textures keep their names"
+            )
+
+        planned, kept = set(), set()  # a texture several nodes read: once
+        foreign = []  # another set's maps: left alone, reported once below
+        for node in file_nodes:
+            name = names[node]
+            if not name:
+                plan["skipped"].append(f"{node}: no texture path")
+                continue
+            if not old_base:
+                continue  # no set to follow (reported above)
+            if ptk.MapFactory.get_base_texture_name(name).lower() != old_base.lower():
+                foreign.append(name)
+                continue
+            if not name.lower().startswith(old_base.lower()):
+                plan["skipped"].append(
+                    f"{name}: does not start with its base name {old_base!r}; "
+                    "left as it is"
+                )
+                continue
+            new_name = base + name[len(old_base) :]
+            old_abs = cls.to_absolute(stored[node], workspace, sourceimages)
+            key = os.path.normcase(os.path.normpath(old_abs))
+            if new_name != name and key not in planned:
+                planned.add(key)
+                if not renameable(old_abs, name):
+                    kept.add(key)
+                else:
+                    try:
+                        ptk.TiledPath.rename(old_abs, new_name, dry_run=True)
+                        plan["textures"].append((old_abs, new_name))
+                    except (ValueError, OSError) as e:
+                        errors.append(str(e))
+            if key in kept:
+                new_name = name  # the node follows the file it reads
+            node_name = ptk.StrUtils.apply_affix(
+                cls._texture_node_stem(new_name), *file_node_affix
+            )
+            if not node_name or node_name == node.rsplit("|", 1)[-1]:
+                continue
+            if cls._fixed_name(node):
+                plan["skipped"].append(f"{node}: a node that cannot be renamed")
+            else:
+                plan["file_nodes"].append((node, node_name))
+        foreign = list(dict.fromkeys(foreign))
+        if foreign:
+            plan["skipped"].append(
+                f"{', '.join(foreign)}: another texture set than {old_base!r} -- "
+                f"left as {'it is' if len(foreign) == 1 else 'they are'}"
+            )
+
+        # The set's lightmap follows the set: bound by name, it is named after it.
+        if plan["textures"] and lightmaps is not None:
+            for dep in lightmaps.lightmap_dependencies():
+                new_map = cls._lightmap_for_base(dep["map"], old_base, base)
+                if not new_map or new_map == dep["map"]:
+                    continue
+                if not dep["path"]:
+                    plan["skipped"].append(f"{dep['map']}: not on disk to rename")
+                    continue
+                if not renameable(dep["path"], dep["map"]):
+                    continue
+                try:
+                    ptk.TiledPath.rename(dep["path"], new_map, dry_run=True)
+                    plan["lightmaps"].append((dep["path"], dep["map"], new_map))
+                except (ValueError, OSError) as e:
+                    errors.append(str(e))
+        if errors:
+            raise ValueError("Names not synced -- " + "; ".join(errors))
+        if dry_run:
+            return plan
+
+        with CoreUtils.undo_chunk("Sync Material Names"):
+            for old_abs, new_name in plan["textures"]:
+                cls._rename_texture_file(old_abs, new_name, None)
+            for path, old_map, new_map in plan["lightmaps"]:
+                cls._rename_texture_file(path, new_map, None)
+                lightmaps.rename_lightmap(old_map, new_map)
+            for key in ("file_nodes", "companions"):
+                plan[key] = [(node, cmds.rename(node, new)) for node, new in plan[key]]
+            if plan["material"]:
+                old, new = plan["material"]
+                plan["material"] = (old, cmds.rename(old, new))
+        return plan

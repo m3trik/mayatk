@@ -7,8 +7,8 @@ from qtpy import QtCore
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # from this package:
@@ -759,7 +759,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             **kwargs: Configuration overrides (e.g. shader_type, normal_type, etc.)
 
         Returns:
-            The created shader node(s) (Stingray PBS or Standard Surface)
+            The network's shading GROUP (its shader, should it have none), or
+            None when nothing was built. Unnamed textures spanning several sets
+            build a network per set and return a list of those, one per set.
         """
         if not textures:
             self.logger.error("No textures given to create_network.")
@@ -2425,6 +2427,16 @@ class GameShaderSlots(GameShader):
             setText="Open in Editor",
             setToolTip="Graph the material in the Hypershade.",
         )
+        widget.menu.add(
+            "QCheckBox",
+            setText="Assign to Selection",
+            setObjectName="chk_assign_to_selection",
+            setChecked=False,
+            setToolTip="Assign the created material to the objects (or faces) "
+            "selected when Create Network is pressed.\n"
+            "Skipped when the textures build several materials — set a "
+            "Material Name to merge them into one.",
+        )
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Game Shader",
@@ -2445,6 +2457,8 @@ class GameShaderSlots(GameShader):
                 notes=[
                     "Use <b>Open in Editor</b> from the header menu to graph "
                     "the resulting material in the Hypershade.",
+                    "Check <b>Assign to Selection</b> in the header menu to "
+                    "assign the new material to the current selection.",
                 ],
             )
         )
@@ -2622,8 +2636,50 @@ class GameShaderSlots(GameShader):
                 "  'MAT_' → prefix (prepended)"
             )
 
+    def _assign_to_selection(self, shaders, selection) -> None:
+        """Assign the one material just built to ``selection``.
+
+        Parameters:
+            shaders: The ``create_network`` result (a node or a list of them):
+                each network's shading group, or a material.
+            selection: The objects/components selected before the build.
+        """
+        made = [s for s in ptk.make_iterable(shaders) if s]
+        if not made:
+            return
+        if not selection:
+            self.logger.warning("Assign to Selection: nothing was selected.")
+            return
+        if len(made) > 1:
+            self.logger.warning(
+                f"Assign to Selection skipped: {len(made)} materials were built. "
+                "Set a Material Name to merge them into one."
+            )
+            return
+        material = str(made[0])
+        # ``assign_mat`` takes the MATERIAL. Handed the network's shading group
+        # (what ``create_network`` returns), it built a ``<group>SG`` beside it
+        # and failed wiring the group's absent ``outColor``: nothing assigned.
+        if cmds.ls(material, type="shadingEngine"):
+            material = next(iter(MatUtils._sg_shaders(material)), material)
+        shader = CoreUtils.short_name(material)
+        try:
+            MatUtils.assign_mat(selection, material)
+        except Exception as e:
+            self.logger.error(f"Assign to Selection failed: {shader}: {e}")
+            return
+        self.logger.success(f"Assigned {shader} to {len(selection)} item(s).")
+
     def b000(self):
         """Create network."""
+        # Snapshot before the file dialog, so the assignment targets what was
+        # selected when the button was pressed.
+        selection = (
+            cmds.ls(sl=True) or []  # assign_mat flattens components itself
+            if self.ui.header.menu.chk_assign_to_selection.isChecked()
+            else None
+        )
+
         image_files = self.sb.file_dialog(
             file_types=[f"*.{ext}" for ext in ptk.ImgUtils.texture_file_types],
             title="Select one or more image files to open.",
@@ -2665,6 +2721,9 @@ class GameShaderSlots(GameShader):
             output_profile=output_profile,
             progress_callback=progress_adapter,
         )
+
+        if selection is not None:
+            self._assign_to_selection(self.last_created_shader, selection)
 
 
 # -----------------------------------------------------------------------------

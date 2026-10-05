@@ -17,6 +17,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.scene_exporter.task_manager import TaskManager
@@ -440,42 +441,19 @@ class SceneExporter(ptk.SceneExporterBase):
                 )
             elif self.preset_file:
                 self.load_fbx_export_preset(self.preset_file, verify=True)
+                if create_glb_enabled:
+                    self._pin_glb_requirements()
             elif not usd:
                 self._apply_default_fbx_options(create_glb_enabled)
 
             self._progress_note("Preparing export…")
-            # Run tasks and checks
-            if tasks:
-                try:
-                    checks_passed = self.task_manager.run_tasks(tasks)
-                except Exception as e:
-                    # A raising task stops the run before its write, as a failed
-                    # check does: the staged edits unwind in the finally below,
-                    # and what the tasks kept is named before the error goes on.
-                    self._warn_stopped_before_write(f"Export stopped by an error: {e}.")
-                    raise
-                if not checks_passed:
-                    # Offer the escape hatch HERE, while the staged scene the
-                    # write needs is still standing, rather than leaving the
-                    # user to arm Override Checks and pay for the whole
-                    # pipeline a second time (see confirm_check_override).
-                    if self.confirm_check_override():
-                        self._overridden_checks = list(
-                            getattr(self.task_manager, "_last_failed_checks", ()) or ()
-                        )
-                        self.logger.warning(
-                            "Checks overridden — writing the file despite "
-                            f"{len(self._overridden_checks)} failed check(s): "
-                            f"{', '.join(self._overridden_checks)}."
-                        )
-                        self._resume_skipped_tasks(tasks)
-                    else:
-                        # The staged edits unwind in the finally below; what the
-                        # tasks kept is named.
-                        self._warn_stopped_before_write(
-                            "Export blocked by failed checks."
-                        )
-                        return False
+            # Run tasks and checks. Each failed check is decided where it
+            # fails (decide_check_failure: override it, override it and every
+            # later one, or stop), while the staged scene the write needs is
+            # still standing; a stop returns here and the staged edits unwind
+            # in the finally below.
+            if tasks and not self._run_task_pipeline(tasks):
+                return False
 
             # Select objects to export
             if export_visible:
@@ -571,6 +549,7 @@ class SceneExporter(ptk.SceneExporterBase):
                     from mayatk.env_utils.fbx_utils import FbxUtils
 
                     self._warn_if_animation_excluded()
+                    self._pin_carrier_requirements()
                     with FbxUtils.embed_media_write_cwd():
                         cmds.file(
                             fbx_write_path,
@@ -653,9 +632,6 @@ class SceneExporter(ptk.SceneExporterBase):
                 c_cnt = getattr(tm, "_last_check_count", 0)
                 overridden = self._overridden_checks
                 f_cnt = len(overridden)
-                # Checks the failed one's abort dropped never ran; an override
-                # resumes the tasks, not them, so they are not "passed".
-                n_cnt = len(getattr(tm, "_last_skipped_checks", ()) or ())
                 if t_cnt or c_cnt:
                     export_info_lines.append("")
                     export_info_lines.append(f"Tasks Executed: {t_cnt}")
@@ -663,14 +639,12 @@ class SceneExporter(ptk.SceneExporterBase):
                         # Never "N/N" after an override: the deliverable shipped
                         # WITH known failures and the banner is the record of it.
                         export_info_lines.append(
-                            f"Checks Passed: {c_cnt - f_cnt - n_cnt}/{c_cnt}"
+                            f"Checks Passed: {c_cnt - f_cnt}/{c_cnt}"
                         )
                         if f_cnt:
                             export_info_lines.append(
                                 f"Checks Overridden: {', '.join(overridden)}"
                             )
-                        if n_cnt:
-                            export_info_lines.append(f"Checks Not Run: {n_cnt}")
 
                 self.logger.log_box(
                     "EXPORT SUCCESSFUL", export_info_lines, level="SUCCESS"
@@ -683,6 +657,12 @@ class SceneExporter(ptk.SceneExporterBase):
                 if create_glb_enabled and not glb_only:
                     self._progress_step("Converting to GLB…")
                     glb_alongside = self.task_manager.create_glb()
+
+                # The FBX deliverable's clips, per the Animation Clips mode --
+                # after the GLB, whose clips are cut from the whole-timeline
+                # take Shots Only drops. A GLB-only run's FBX is not shipped.
+                if not glb_only and not usd:
+                    self.task_manager.ship_declared_takes(fbx_write_path)
 
                 # Write the scene-data sidecar (hierarchy baseline for future
                 # diff checks + data_export snapshot) as the single LAST step
@@ -985,6 +965,16 @@ class SceneExporter(ptk.SceneExporterBase):
             self.logger.error(f"Output filename RegEx: {error}.")
         return result
 
+    #: What a GLB deliverable cannot ship without, whoever configured the run
+    #: (see :meth:`_default_fbx_options` for each measurement): FBX2glTF embeds
+    #: only the media the FBX carries, and with no tangent layer the viewer
+    #: invents the normal-map basis. Pinned over a loaded preset as well -- a
+    #: preset owns content choices, never these (:meth:`_pin_glb_requirements`).
+    _GLB_REQUIRED_FBX_OPTIONS = {
+        "FBXExportEmbeddedTextures": True,
+        "FBXExportTangents": True,
+    }
+
     def _default_fbx_options(self, glb_deliverable: bool) -> Dict[str, Any]:
         """FBX export flags for a run that names NO preset.
 
@@ -1061,7 +1051,7 @@ class SceneExporter(ptk.SceneExporterBase):
             "FBXExportEmbeddedTextures": bool(glb_deliverable),
         }
         if glb_deliverable:
-            options["FBXExportTangents"] = True
+            options.update(self._GLB_REQUIRED_FBX_OPTIONS)
             options["FBXExportCameras"] = False
             options["FBXExportLights"] = False
         return options
@@ -1136,6 +1126,66 @@ class SceneExporter(ptk.SceneExporterBase):
             "FBX state nor silently drops instancing, smoothing or media."
         )
 
+    def _pin_glb_requirements(self) -> None:
+        """Re-pin :attr:`_GLB_REQUIRED_FBX_OPTIONS` over a loaded preset, saying so.
+
+        A preset is the user's configuration and keeps every content choice
+        (cameras, lights, smoothing, animation). It cannot make a GLB that
+        lacks what a GLB is: measured on a production assembly (2026-09-30),
+        the panel's persisted preset was Maya's own ``fbxexport``, whose
+        Tangents and Binormals is off, and every normal-mapped primitive
+        shipped without TANGENT -- reported as weak specular on the baked
+        table, with nothing in the log to say the preset had done it.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        required = self._GLB_REQUIRED_FBX_OPTIONS
+        overridden = [
+            option
+            for option, value in required.items()
+            if FbxUtils.export_flag(option) != value
+        ]
+        FbxUtils.set_fbx_options(required)
+        if overridden:
+            self.logger.info(
+                f"FBX preset overridden for the GLB: {', '.join(overridden)} "
+                "turned on -- a GLB needs its media embedded and its tangents "
+                "shipped; the preset's other settings stand."
+            )
+
+    def _pin_carrier_requirements(self) -> bool:
+        """Write binary when the export ships the ``data_export`` carrier.
+
+        Unity's ASCII FBX reader drops the whole scene, or truncates the
+        string, once a carrier channel passes ~6 KB -- measured in batch Unity
+        6000.3: a 7 KB value arrived as 7 characters, a 20 KB one as a prefab
+        holding only its root, while binary carried 300 KB intact -- and the
+        handoff record alone is past that. ASCII can only reach a run through
+        a loaded preset (the default pins reset to binary); a preset owns
+        content choices, never whether the deliverable's metadata can be read,
+        so this pins binary over it the way :meth:`_pin_glb_requirements` pins
+        what a GLB needs, and says so.
+
+        Returns:
+            True when an ASCII setting was overridden.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if not FbxUtils.export_flag("FBXExportInAscii"):
+            return False
+        shipped = cmds.ls(selection=True, long=True) or []
+        if DataNodes.EXPORT not in {CoreUtils.short_name(node) for node in shipped}:
+            return False
+        mel.eval("FBXExportInAscii -v false")
+        self.logger.info(
+            "FBX preset overridden: written binary, not ASCII -- the export "
+            f"ships '{DataNodes.EXPORT}', whose metadata Unity's ASCII reader "
+            "loses past ~6 KB; the preset's other settings stand."
+        )
+        return True
+
     def load_fbx_export_preset(
         self, preset_file: str = None, verify: bool = False
     ) -> Optional[dict]:
@@ -1150,7 +1200,7 @@ class SceneExporter(ptk.SceneExporterBase):
         """
         # Ensure FBX plugin is loaded
         try:
-            EnvUtils.load_plugin("fbxmaya")
+            Plugins.load("fbxmaya")
         except ValueError as e:
             self.logger.error(f"Failed to ensure fbxmaya plugin is loaded: {e}")
             raise RuntimeError(f"Failed to ensure fbxmaya plugin is loaded: {e}") from e

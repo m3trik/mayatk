@@ -9,12 +9,14 @@ except ImportError:
 import os
 from functools import partial
 
-from pythontk import FileDependencies, FileUtils, ImgUtils
+from pythontk import FileDependencies, FileUtils, ImgUtils, NamingConvention, StrUtils
 from pythontk.core_utils.engines.textures.map_factory import MapFactory
 from pythontk.str_utils.fuzzy_matcher import FuzzyMatcher
+from uitk.widgets.column_config import ColumnConfig
 from uitk.widgets.footer import FooterStatusController
 
 # From this package:
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.mat_utils._mat_utils import MatUtils
@@ -42,14 +44,31 @@ class TexturePathEditorSlots:
     # header-menu checkbox listing so the visual matches the run order.
     _RESOLVE_STRATEGY_ORDER = ("stem", "texture", "fuzzy")
 
-    # Displayed length of a texture path while the header's "Truncate Texture
-    # Paths" toggle is on. Cut with ``mode="path"``, which drops whole middle
-    # components: the drive/root stays readable at the front, the filename and
-    # as many of its parents as fit at the back. ``_PATH_TRUNCATE_HEAD`` caps
-    # the front to that root — what identifies a texture is the end of its
-    # path, so the whole budget goes there.
-    _PATH_TRUNCATE_LENGTH = 67
+    # Default displayed length of a texture path while the header's "Truncate
+    # Texture Paths" toggle is on; its option box sets the length. Cut with
+    # ``mode="path"``, which drops whole middle components: the drive/root
+    # stays readable at the front, the filename and as many of its parents as
+    # fit at the back. ``_PATH_TRUNCATE_HEAD`` caps the front to that root —
+    # what identifies a texture is the end of its path, so the whole budget
+    # goes there. Longer since the File Node column is hidden by default.
+    _PATH_TRUNCATE_LENGTH = 96
     _PATH_TRUNCATE_HEAD = 1
+
+    #: The table's columns, in order: 3-5 are facts about the file.
+    _HEADERS = (
+        "Shader",
+        "Texture Path",
+        "File Node",
+        "File Size",
+        "Dimensions",
+        "Image Type",
+    )
+    #: Optional column -> the ``ImgUtils.texture_facts`` field it shows. Read
+    #: only while the column shows.
+    _INFO_COLUMNS = {3: "bytes", 4: "dimensions", 5: "mode"}
+    #: Hidden until shown from the table header's menu (right-click it): the
+    #: file node, rarely needed, and the file facts.
+    _COLUMNS_HIDDEN_BY_DEFAULT = (2, 3, 4, 5)
 
     # Normalize-Paths combobox items. Order is the contract: the menu's
     # combobox is populated in this order, and ``_read_normalize_external_mode``
@@ -161,10 +180,26 @@ class TexturePathEditorSlots:
                 "whole middle folders — the drive and its first directories "
                 "stay readable at the front, the filename at the back.\n"
                 "Display only — the cell still holds the full path, so edits, "
-                "path commands and the tooltip are unaffected."
+                "path commands and the tooltip are unaffected.\n"
+                "Option box (▸): the length to shorten to."
             ),
         )
         chk_truncate.toggled.connect(lambda *_: self._apply_path_truncation())
+        chk_truncate.option_box.menu.setTitle("Truncate Texture Paths")
+        spn_length = chk_truncate.option_box.menu.add(
+            "QSpinBox",
+            setObjectName="spn_truncate_length",
+            setPrefix="Length: ",
+            setSuffix=" characters",
+            setMinimum=24,
+            setMaximum=400,
+            setValue=self._PATH_TRUNCATE_LENGTH,
+            setToolTip=(
+                "How many characters a truncated path shows. Whole middle "
+                "folders are dropped until it fits; the filename always stays."
+            ),
+        )
+        spn_length.valueChanged.connect(lambda *_: self._apply_path_truncation())
 
         chk_warn_len = widget.menu.add(
             "QCheckBox",
@@ -220,6 +255,70 @@ class TexturePathEditorSlots:
             ),
         )
         chk_lightmaps.toggled.connect(lambda *_: self.refresh_texture_table())
+
+        widget.menu.add("Separator", setTitle="Naming")
+        chk_sync = widget.menu.add(
+            "QCheckBox",
+            setText="Keep Names In Sync",
+            setObjectName="chk_sync_names",
+            setChecked=False,
+            setToolTip=self.sb.tooltip.fmt(
+                title="Keep Names In Sync",
+                body="Renaming a shader, a texture or a file node renames the "
+                "rest of its material to match: the shader, every texture file "
+                "it uses (on disk) and their file nodes share one base name.",
+                bullets=[
+                    "<b>Shader</b> — the base name with the shader affix; its "
+                    "shading group (<i>…SG</i>) and an Arnold <i>…_ai</i> beside "
+                    "it follow.",
+                    "<b>Textures</b> — the material's own texture set, each "
+                    "keeping what follows its base name (map type, UDIM token, "
+                    "extension): <i>rock_Base_Color.png</i> follows <i>stone</i> "
+                    "as <i>stone_Base_Color.png</i>. Every file node reading a "
+                    "renamed file is repointed.",
+                    "<b>Lightmap</b> — the set's baked lightmap "
+                    "(<i>rock_Lightmap.exr</i>) follows, its bake markers "
+                    "re-stamped.",
+                    "<b>File nodes</b> — named after their texture, plus the "
+                    "file node suffix.",
+                ],
+                notes=[
+                    "A texture or file node follows only as a new base name "
+                    "(<i>rock_Normal</i> → <i>stone_Normal</i>); a new map type "
+                    "or another set's map is renamed alone.",
+                    "Left alone: another set's map (an environment cube), and "
+                    "any file outside this project — another project may read "
+                    "it. Both are reported.",
+                    "Planned whole first: a rename that would land on another "
+                    "file stops the lot before anything changes.",
+                    "One undo step, files included.",
+                    "Option box (▸): the shader affix and the file node suffix.",
+                ],
+            ),
+        )
+        flyout = chk_sync.option_box.menu
+        flyout.setTitle("Keep Names In Sync")
+        shader_affix = flyout.add(
+            self.sb.registered_widgets.LineEdit,
+            setObjectName="txt_shader_affix",
+        )
+        shader_affix.option_box.set_affix(
+            default="convention",
+            convention_key="material",
+            settings_key="texture_path_editor_shader_affix",
+            on_change=lambda _mode, w=shader_affix: self._apply_shader_affix_hint(w),
+        )
+        self._apply_shader_affix_hint(shader_affix)
+        flyout.add(
+            self.sb.registered_widgets.LineEdit,
+            setObjectName="txt_file_node_suffix",
+            setPlaceholderText="File Node Suffix",
+            setToolTip=(
+                "Appended to a texture's name to name its file node "
+                "(e.g. '_file': stone_Base_Color.png → stone_Base_Color_file).\n"
+                "Empty: the file node takes the texture's name as it is."
+            ),
+        )
 
         widget.menu.add("Separator", setTitle="Path Management")
         widget.menu.add(
@@ -368,7 +467,7 @@ class TexturePathEditorSlots:
                             "column's display by dropping whole middle folders "
                             "(drive and filename stay readable). The cell keeps "
                             "the full path (edits, commands and the tooltip "
-                            "always use it).",
+                            "always use it). Option box (▸) sets the length.",
                             "<b>Exclude Arnold Nodes</b> — hide rows whose texture "
                             "is used only by an Arnold shader (a preview shader "
                             "owns a duplicate file node per texture). Also narrows "
@@ -380,6 +479,18 @@ class TexturePathEditorSlots:
                             "the markers; Normalize Paths / Make Paths Absolute "
                             "re-spell the recorded folder; hiding them also keeps "
                             "them out of the <i>all</i> scope.",
+                        ],
+                    ),
+                    (
+                        "Naming (header menu)",
+                        [
+                            "<b>Keep Names In Sync</b> — renaming a shader, or "
+                            "giving a texture or file node a new base name, "
+                            "renames its whole material to one base name: the "
+                            "shader (with its affix), every texture file of its "
+                            "set, on disk, and their file nodes. Option box (▸): "
+                            "the shader affix (the scene convention by default) "
+                            "and the file node suffix.",
                         ],
                     ),
                     (
@@ -400,8 +511,18 @@ class TexturePathEditorSlots:
                     "there — the pane at the bottom is the whole record of what "
                     "it found, relocated and repathed.",
                     "<b>Right-click</b> any row for per-texture actions: "
-                    "Browse for File, scene selection, Hypershade graph, "
-                    "delete.",
+                    "Browse for File (one row) or Folder (several — each "
+                    "repointed to its same-named file there), Rename File "
+                    "(the file on disk, in place), scene selection, Hypershade "
+                    "graph, delete (on a lightmap row: Revert to Source, as "
+                    "the Lightmap Baker — its objects are unbound, the map "
+                    "stays on disk). Editing "
+                    "a path that changes only the file name renames the file "
+                    "too, inside this project (outside it the path repoints).",
+                    "<b>Right-click the column headers</b> to show, hide or "
+                    "reorder columns: File Node, File Size, Dimensions and "
+                    "Image Type start hidden, and a hidden column's values are "
+                    "never read.",
                     "Collision policy on Copy / Move: same-name + same-size "
                     "files rebind without overwriting; different-size hits "
                     "skip with a warning (never silently rebinds to a wrong "
@@ -510,14 +631,45 @@ class TexturePathEditorSlots:
             if self._footer_controller:
                 widget.itemSelectionChanged.connect(self._footer_controller.update)
 
+            # Right-click the header: show / hide / reorder the columns. The
+            # optional ones start hidden and are read only once shown.
+            widget.enable_column_config(
+                settings_key="texture_path_editor_columns",
+                locked=(1,),
+                reorderable=True,
+                hidden_by_default=self._COLUMNS_HIDDEN_BY_DEFAULT,
+            )
+            ColumnConfig.of(widget).visibility_changed.connect(
+                lambda column, hidden, w=widget: (
+                    None if hidden else self._fill_info_columns(w, [column])
+                )
+            )
+            widget.context_menu_about_to_show.connect(
+                lambda w=widget: self._fit_row_menu(w)
+            )
+
             widget.menu.add("Separator", setTitle="Path Management")
             widget.menu.add(
                 "QPushButton",
                 setText="Browse for File...",
                 setObjectName="row_browse_for_file",
                 setToolTip=(
-                    "Open a file browser and pick a texture file to repath this "
-                    "row to. Single selection only."
+                    "One row: pick the texture file to repath it to.\n"
+                    "Several rows: pick a folder — each selected texture is "
+                    "repointed to its same-named file there; one with no such "
+                    "file keeps its path."
+                ),
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Rename File...",
+                setObjectName="row_rename_file",
+                setToolTip=(
+                    "Rename this row's texture file on disk, in its cell (a "
+                    "UDIM set renames every tile). Every file node reading it "
+                    "is repointed; with Keep Names In Sync on, a new base name "
+                    "takes the shader, its other textures and their file nodes "
+                    "along. One undo step."
                 ),
             )
 
@@ -559,6 +711,7 @@ class TexturePathEditorSlots:
                 )
 
             _bind_menu_action("row_browse_for_file", self.row_browse_for_file)
+            _bind_menu_action("row_rename_file", self.row_rename_file)
             _bind_menu_action("select_material", self.select_material)
             _bind_menu_action("select_file_node", self.select_file_node)
             _bind_menu_action("row_show_in_hypershade", self.row_show_in_hypershade)
@@ -623,6 +776,11 @@ class TexturePathEditorSlots:
     def _header_menu(self):
         """The header's menu, or None while it is still unbuilt."""
         return getattr(getattr(self.ui, "header", None), "menu", None)
+
+    def _option_menu(self, name: str):
+        """The option-box menu of header item *name*, or None while unbuilt."""
+        item = getattr(self._header_menu(), name, None)
+        return getattr(getattr(item, "option_box", None), "menu", None)
 
     def _exclude_arnold_pattern(self):
         """Classification pattern behind the header's "Exclude Arnold Nodes" toggle.
@@ -1165,22 +1323,23 @@ class TexturePathEditorSlots:
 
     def _do_browse_for_file(self, selection):
         contexts = self._get_selected_contexts(selection, require_file_nodes=False)
+        if len(contexts) > 1:
+            # Several rows: one folder, each repointed to its own file there.
+            self._browse_for_folder(contexts)
+            return
         lightmaps = [ctx["lightmap"] for ctx in contexts if ctx.get("lightmap")]
         if lightmaps:
             # A lightmap row: the file picked names the folder the markers
             # should record (the map itself is what the bake committed, so a
             # different basename is refused rather than silently rebound).
-            if len(contexts) > 1:
-                cmds.warning("Browse for File: select a single row.")
-                return
             self._browse_for_lightmap(lightmaps[0])
             return
 
         nodes = self._file_nodes_from_selection(selection)
         if not nodes:
             return
-        if len(nodes) > 1:
-            cmds.warning("Browse for File: select a single row.")
+        if len(nodes) > 1:  # one shader row standing for several file nodes
+            self._browse_for_folder(contexts)
             return
 
         node_name = nodes[0]
@@ -1262,6 +1421,379 @@ class TexturePathEditorSlots:
         if self._repath_lightmap(dep, os.path.dirname(chosen)):
             self.ui.tbl000.init_slot()
 
+    def _browse_for_folder(self, contexts) -> None:
+        """Several rows: repoint each to its same-named file in a folder picked.
+
+        The file nodes go through Set Directory's path-only pass
+        (:meth:`_set_texture_dir_flat`), which repoints a node only when the
+        folder actually holds its texture -- tiles included -- and names the
+        rest; a lightmap row follows when its map is there.
+        """
+        nodes = list(
+            dict.fromkeys(n for ctx in contexts for n in ctx.get("file_nodes") or [])
+        )
+        lightmaps = [ctx["lightmap"] for ctx in contexts if ctx.get("lightmap")]
+        workspace, sourceimages = self._project_roots()
+        start_dir = sourceimages
+        for node in nodes[:1]:
+            current = cmds.getAttr(f"{node}.fileTextureName") or ""
+            folder = os.path.dirname(
+                MatUtils.to_absolute(current, workspace, sourceimages)
+            )
+            if folder and os.path.isdir(folder):
+                start_dir = folder
+        chosen = self.sb.dir_dialog(
+            title=(
+                f"{self._DIALOG_MARK_DEST} Browse for Folder — repoint "
+                f"{len(contexts)} texture(s) to their same-named files in…"
+            ),
+            start_dir=start_dir,
+        )
+        if not chosen:
+            return
+        count = self._set_texture_dir_flat(nodes, chosen) if nodes else 0
+        missing = []
+        for dep in lightmaps:
+            if os.path.isfile(os.path.join(chosen, dep["map"])):
+                count += int(self._repath_lightmap(dep, chosen))
+            else:
+                missing.append(dep["map"])
+        if missing:
+            cmds.warning(
+                f"Browse for Folder: no {', '.join(missing)} in '{chosen}'; "
+                "those lightmaps keep their folder."
+            )
+        om.MGlobal.displayInfo(
+            f"Browse for Folder: repointed {count} of {len(contexts)} row(s)."
+        )
+        self.ui.tbl000.init_slot()
+
+    # ------------------------------------------------------------------
+    # Row menu fitted to the selection
+    # ------------------------------------------------------------------
+
+    def _fit_row_menu(self, widget) -> None:
+        """Fit the row menu to the selection, just before it opens.
+
+        Browse is a file pick for one row and a folder pick for several (its
+        label says which); Rename File renames one row's file and is disabled
+        otherwise; Delete on lightmap rows only is the baker's Revert to Source.
+        """
+        selection = (
+            widget.get_selection(
+                columns=self._ROW_SELECTION_COLUMNS, include_current=True
+            )
+            or []
+        )
+        rows = len(selection)
+        lightmap_rows = sum(
+            1
+            for entry in selection
+            if str(self._selection_value(entry, "path") or "").strip()
+            in self._lightmap_rows
+        )
+        QPushButton = self.sb.QtWidgets.QPushButton
+        delete = widget.menu.findChild(QPushButton, "delete_file_node")
+        if delete is not None:
+            delete.setText(
+                "Revert to Source..."
+                if rows and lightmap_rows == rows
+                else "Delete File Node"
+            )
+        browse = widget.menu.findChild(QPushButton, "row_browse_for_file")
+        if browse is not None:
+            browse.setText("Browse for Folder..." if rows > 1 else "Browse for File...")
+        rename = widget.menu.findChild(QPushButton, "row_rename_file")
+        if rename is not None:
+            rename.setEnabled(rows == 1)
+
+    # ------------------------------------------------------------------
+    # File facts -- the optional columns
+    # ------------------------------------------------------------------
+
+    def _row_texture_path(self, widget, row: int, workspace: str, sourceimages: str):
+        """The absolute texture (or tile pattern) *row* names; ``""`` if none."""
+        item = widget.item(row, 1)
+        if item is None:
+            return ""
+        UserRole = self.sb.QtCore.Qt.UserRole
+        lightmap = self._lightmap_rows.get(
+            str(item.data(UserRole) or item.text()).strip()
+        )
+        if lightmap is not None:
+            return lightmap.get("path") or ""
+        stored = item.text().strip()
+        return MatUtils.to_absolute(stored, workspace, sourceimages) if stored else ""
+
+    @staticmethod
+    def _format_fact(field: str, facts: dict):
+        """``(text, tooltip, sort key)`` for one fact of a row."""
+        if not facts:
+            return "", "No file on disk.", None
+        tiles = facts.get("tiles", 1)
+        of_set = f" — the first of {tiles} tiles" if tiles > 1 else ""
+        if field == "bytes":
+            size = facts.get("bytes")
+            across = f", across {tiles} tiles" if tiles > 1 else ""
+            return FileUtils.format_bytes(size), f"{size:,} bytes{across}", size
+        value = facts.get(field)
+        if value is None:
+            why = (
+                "Online-only: not downloaded to read its header."
+                if facts.get("online_only")
+                else "Unreadable header."
+            )
+            return "", why, None
+        if field == "dimensions":
+            width, height = value
+            return (
+                f"{width} x {height}",
+                f"{width} x {height} pixels{of_set}",
+                width * height,
+            )
+        tip = value
+        if ";" not in value:  # a PIL mode: spell its depth too
+            try:
+                tip = f"{value} — {ImgUtils.format_bit_depth(value)}"
+            except Exception:  # noqa: BLE001 -- the mode alone still reads
+                pass
+        return value, tip + of_set, value
+
+    def _fill_info_columns(self, widget, columns=None) -> None:
+        """Fill the fact columns that show (of *columns*, default all).
+
+        A hidden column is never read: its files are not even stat'ed. Headers
+        are read once per file version (``ImgUtils.texture_facts`` caches), so
+        a refresh costs nothing new.
+        """
+        header = widget.horizontalHeader()
+        wanted = {
+            column: field
+            for column, field in self._INFO_COLUMNS.items()
+            if (columns is None or column in columns)
+            and column < widget.columnCount()
+            and not header.isSectionHidden(column)
+        }
+        if not wanted:
+            return
+        workspace, sourceimages = self._project_roots()
+        sorting = widget.isSortingEnabled()
+        widget.setSortingEnabled(False)  # a sorted column would move rows mid-fill
+        widget.blockSignals(True)  # a filled cell is not an edit
+        try:
+            for row in range(widget.rowCount()):
+                path = self._row_texture_path(widget, row, workspace, sourceimages)
+                facts = (
+                    ImgUtils.texture_facts(path, tuple(wanted.values())) if path else {}
+                )
+                for column, field in wanted.items():
+                    text, tip, key = self._format_fact(field, facts)
+                    widget.set_sorted_cell(row, column, text, key).setToolTip(tip)
+        finally:
+            widget.blockSignals(False)
+            widget.setSortingEnabled(sorting)
+
+    # ------------------------------------------------------------------
+    # Renaming -- a texture file, and the names kept in sync with it
+    # ------------------------------------------------------------------
+
+    def row_rename_file(self, selection=None):
+        """Rename one row's texture file, edited in its own cell.
+
+        The path cell opens on just the file name (the stem selected); Enter
+        renames the file on disk and repoints every node reading it
+        (:meth:`_rename_texture`).
+        """
+        selection = list(selection or [])
+        contexts = self._get_selected_contexts(selection, require_file_nodes=False)
+        if len(contexts) != 1 or len(selection) != 1:
+            cmds.warning("Rename File: select a single row.")
+            return
+        context, row = contexts[0], selection[0].row
+        table = self.ui.tbl000
+        dep = context.get("lightmap")
+        if dep is not None:
+            name = dep["map"]
+        else:
+            node = context.get("file_node")
+            if not node:
+                cmds.warning("Rename File: this row has no file node.")
+                return
+            name = os.path.basename(
+                (cmds.getAttr(f"{node}.fileTextureName") or "").replace("\\", "/")
+            )
+        if not name:
+            cmds.warning("Rename File: this row names no file.")
+            return
+        table.edit_cell_as(
+            row,
+            1,
+            name,
+            lambda new_name, ctx=context: self._rename_texture(ctx, new_name),
+        )
+
+    #: Said when Keep Names In Sync leaves a rename to the file or node edited
+    #: (:meth:`_sync_carries`).
+    _SYNC_ALONE = (
+        "Keep Names In Sync: {name} was renamed alone -- {material} follows "
+        "only a new base name for its own texture set."
+    )
+
+    def _rename_texture(self, context, new_name: str) -> bool:
+        """Rename the texture file *context* names to *new_name*, then refresh.
+
+        With Keep Names In Sync on, a new base name for a file of the
+        material's own texture set renames the whole material instead
+        (:meth:`_sync_names`); any other rename -- another set's map, a new
+        map type -- renames that file alone and says so
+        (:meth:`_sync_carries`). A lightmap row's bake markers are re-stamped
+        with the name (``LightmapRecords.rename_lightmap``) -- they bind the
+        map by name. Refused names are reported, never half-applied.
+        """
+        new_name = str(new_name or "").strip()
+        dep = context.get("lightmap")
+        try:
+            if dep is not None:
+                if not dep.get("path"):
+                    raise ValueError(f"{dep['map']} is not on disk to rename.")
+                with CoreUtils.undo_chunk("Rename Lightmap"):
+                    MatUtils.rename_texture_file(dep["path"], new_name)
+                    self._lightmap_records().rename_lightmap(dep["map"], new_name)
+                om.MGlobal.displayInfo(f"Renamed lightmap {dep['map']} -> {new_name}")
+            else:
+                node = context["file_node"]
+                stored = cmds.getAttr(f"{node}.fileTextureName") or ""
+                syncing = self._sync_names_enabled() and context.get("shader_node")
+                base = MapFactory.get_base_texture_name(new_name)
+                if syncing and self._sync_carries(
+                    context, base, texture=(stored, new_name)
+                ):
+                    self._sync_names(context, base)
+                else:
+                    result = MatUtils.rename_texture_file(stored, new_name)
+                    om.MGlobal.displayInfo(
+                        f"Renamed {os.path.basename(stored)} -> {new_name}; "
+                        f"repointed {len(result['nodes'])} file node(s)."
+                    )
+                    if syncing:
+                        cmds.warning(
+                            self._SYNC_ALONE.format(
+                                name=os.path.basename(stored),
+                                material=context["shader_node"],
+                            )
+                        )
+        except (ValueError, OSError, RuntimeError) as e:  # RuntimeError: cmds.rename
+            cmds.warning(f"Rename File: {e}")
+            return False
+        self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
+        return True
+
+    def _sync_names_enabled(self) -> bool:
+        """State of the header's "Keep Names In Sync" toggle."""
+        return self._menu_flag(self._header_menu(), "chk_sync_names", False)
+
+    def _sync_affixes(self):
+        """``(shader (prefix, suffix), file node (prefix, suffix))`` from the
+        Keep Names In Sync option box -- the shader's through its affix picker
+        (the scene convention by default), the file node's a plain suffix."""
+        flyout = self._option_menu("chk_sync_names")
+        field = getattr(flyout, "txt_shader_affix", None)
+        shader = ("", "")
+        if field is not None:
+            shader = field.option_box.resolve_affix(default="suffix")
+        if not any(shader):  # an empty field: the convention, not nothing
+            shader = NamingConvention.affix_parts("material")
+        suffix_field = getattr(flyout, "txt_file_node_suffix", None)
+        suffix = suffix_field.text().strip() if suffix_field is not None else ""
+        if suffix and not suffix.startswith("_"):
+            suffix = f"_{suffix}"
+        return tuple(shader), ("", suffix)
+
+    @staticmethod
+    def _apply_shader_affix_hint(widget) -> None:
+        """The shader affix field's placeholder and tooltip, per its mode."""
+        mode = widget.option_box.affix_mode
+        hints = {
+            "convention": (
+                "Scene Convention",
+                "The shader takes the scene's naming convention for materials "
+                "(edit it in the Naming panel's Suffix By Type).\nClick the "
+                "button beside the field to type your own instead.",
+            ),
+            "prefix": ("Shader Prefix", "Prepended to the base name: MAT_stone."),
+            "suffix": ("Shader Suffix", "Appended to the base name: stone_MAT."),
+        }
+        placeholder, tip = hints.get(
+            mode,
+            (
+                "Shader Affix",
+                "Placement read from the '_': '_MAT' is a suffix, 'MAT_' a prefix.",
+            ),
+        )
+        widget.setPlaceholderText(placeholder)
+        widget.setToolTip(tip)
+
+    def _sync_plan(self, context, base: str, dry_run: bool = False) -> dict:
+        """``MatUtils.sync_material_names`` for *context*'s material at *base*,
+        with the option box's affixes and the lightmap records this panel
+        holds (a real run is one undo chunk of its own)."""
+        shader_affix, node_affix = self._sync_affixes()
+        return MatUtils.sync_material_names(
+            context.get("shader_node"),
+            base,
+            material_affix=shader_affix,
+            file_node_affix=node_affix,
+            dry_run=dry_run,
+            lightmaps=self._lightmap_records(),
+        )
+
+    def _sync_carries(self, context, base: str, texture=None, node=None) -> bool:
+        """Whether Keep Names In Sync renames *context*'s whole material for an
+        edit: the sync at *base* (a dry run) gives the edited thing exactly the
+        name typed (case aside) -- *texture* ``(stored path, new file name)``
+        or *node* ``(file node, new node name)``.
+
+        That holds for a file of the material's own texture set (or its node)
+        whose base alone changed. Syncing to the typed name's base, whatever
+        was typed, renamed the set after an environment cube's new name while
+        the cube kept its own, and a new map type (the base unchanged) renamed
+        nothing. Another set's map, a new map type, tile token or extension,
+        or a file the sync keeps (outside the project) is renamed alone.
+
+        Raises:
+            ValueError: The sync refuses *base* (``MatUtils.sync_material_names``).
+        """
+        plan = self._sync_plan(context, base, dry_run=True)
+        if texture is not None:
+            stored, name = texture
+            path = MatUtils.to_absolute(stored, *self._project_roots())
+            planned = next(
+                (n for old, n in plan["textures"] if FileUtils.is_same_file(old, path)),
+                None,
+            )
+        else:
+            edited, name = node
+            planned = dict(plan["file_nodes"]).get(edited)
+            name = StrUtils.apply_affix(name, *self._sync_affixes()[1])
+        return bool(planned) and planned.lower() == name.lower()
+
+    def _sync_names(self, context, base: str) -> bool:
+        """Name *context*'s material, its texture set, lightmap and nodes for
+        *base* (``MatUtils.sync_material_names``), and report it."""
+        plan = self._sync_plan(context, base)
+        changed = int(bool(plan["material"])) + sum(
+            len(plan[key])
+            for key in ("companions", "textures", "file_nodes", "lightmaps")
+        )
+        om.MGlobal.displayInfo(
+            f"Names synced to {base!r}: {changed} rename(s) "
+            f"({len(plan['textures'])} texture file(s), "
+            f"{len(plan['lightmaps'])} lightmap(s))."
+        )
+        for reason in plan["skipped"]:
+            cmds.warning(f"Sync Names: {reason}")
+        return True
+
     def select_material(self, selection=None):
         """Select scene objects assigned to the materials of selected rows."""
         contexts = self._get_selected_contexts(selection, require_file_nodes=False)
@@ -1337,9 +1869,21 @@ class TexturePathEditorSlots:
         MatUtils.graph_materials(nodes_to_graph)
 
     def delete_file_node(self, selection=None):
-        """Delete the selected file node(s)."""
-        contexts = self._get_selected_contexts(selection)
+        """Delete the selected file node(s); a lightmap row reverts its objects.
+
+        A lightmap row has no file node -- its bake markers bind the map -- so
+        the action used to return silently on one. Its delete is the Lightmap
+        Baker's Revert to Source on the objects it binds
+        (:meth:`_remove_lightmaps`).
+        """
+        everything = self._get_selected_contexts(selection, require_file_nodes=False)
+        lightmaps = [ctx["lightmap"] for ctx in everything if ctx.get("lightmap")]
+        if lightmaps:
+            self._remove_lightmaps(lightmaps)
+        contexts = [ctx for ctx in everything if ctx.get("file_nodes")]
         if not contexts:
+            if not lightmaps and everything:
+                cmds.warning("Delete File Node: the selected row(s) hold no file node.")
             return
 
         nodes_to_delete = []
@@ -1383,6 +1927,52 @@ class TexturePathEditorSlots:
                 self.ui.tbl000.init_slot()
             except Exception as e:
                 om.MGlobal.displayError(f"Failed to delete file nodes: {str(e)}")
+
+    def _remove_lightmaps(self, deps) -> int:
+        """Revert the objects each lightmap in *deps* binds to source.
+
+        The Lightmap Baker's Revert to Source, scoped to those objects and
+        confirmed first: ``LightmapRecords.revert`` clears their markers and
+        republishes the manifest, so nothing is left bound to the map (a legacy
+        atlas UV layout is restored too). Their materials and texture UVs were
+        never changed, and the map file stays on disk. The reflection probe
+        binds no object and is reported instead. One undo step.
+
+        Returns:
+            How many objects were cleared.
+        """
+        bound = [dep for dep in deps if dep.get("objects")]
+        for dep in deps:
+            if not dep.get("objects"):
+                cmds.warning(
+                    f"{dep['map']} is the scene's reflection probe; it binds no "
+                    "object -- re-bake without a probe to drop it."
+                )
+        if not bound:
+            return 0
+        objects = list(dict.fromkeys(o for dep in bound for o in dep["objects"]))
+        names = ", ".join(dep["map"] for dep in bound[:4])
+        if len(bound) > 4:
+            names += f", +{len(bound) - 4} more"
+        reply = self.sb.message_box(
+            f"<b>Revert to Source</b> &mdash; the {len(objects)} object(s) "
+            f"lit by <hl>{names}</hl>?<br><br>Removes their lightmap wiring: "
+            "each object's lightmap record and its entry in the scene's "
+            "lightmap export data. Their materials and texture UVs were never "
+            "changed, and the map file stays on disk. One Undo restores the "
+            "wiring.",
+            "Yes",
+            "No",
+        )
+        if reply != "Yes":
+            return 0
+        cleared = self._lightmap_records().revert(objects)
+        om.MGlobal.displayInfo(
+            f"Reverted {len(cleared)} object(s) to source (unbound from {names}; "
+            "the map stays on disk)."
+        )
+        self.ui.tbl000.init_slot()
+        return len(cleared)
 
     def _downstream_consumers(self, file_nodes) -> tuple:
         """Return ``(shaders, other)``: what deleting *file_nodes* would unwire.
@@ -2852,38 +3442,51 @@ class TexturePathEditorSlots:
     def _setup_scene_change_callback(self, widget):
         """Subscribe to scene-change events via ScriptJobManager."""
         mgr = ScriptJobManager.instance()
-        for event in (
-            "SceneOpened",
-            "NewSceneOpened",
-            "SceneImported",
-            "workspaceChanged",
+        for event, visible_only in (
+            ("SceneOpened", False),
+            ("NewSceneOpened", False),
+            ("SceneImported", False),
+            ("workspaceChanged", False),
+            # An undone rename or repath: the rows would name what is gone.
+            # Only while shown -- every undo in the scene fires these.
+            ("Undo", True),
+            ("Redo", True),
         ):
             mgr.subscribe(
                 event,
-                lambda w=widget: self._on_scene_change(w),
+                lambda w=widget, v=visible_only: self._on_scene_change(w, v),
                 owner=self,
             )
         mgr.connect_cleanup(widget, owner=self)
 
-    def _on_scene_change(self, widget):
-        if self._refresh_pending:
+    def _on_scene_change(self, widget, visible_only: bool = False):
+        # One refresh per idle. Pending is "shown" (an undo: skips a hidden
+        # table) or "always" (a scene event) -- and a scene event outranks a
+        # waiting undo rather than being swallowed by it.
+        pending = self._refresh_pending
+        self._refresh_pending = (
+            "shown" if visible_only and pending in (False, "shown") else "always"
+        )
+        if pending:
             return
-        self._refresh_pending = True
 
         def do_refresh():
-            self._refresh_pending = False
-            self._previous_paths.clear()
+            mode, self._refresh_pending = self._refresh_pending, False
             try:
                 try:
-                    if not widget.isVisible():
-                        pass
+                    visible = widget.isVisible()
                 except RuntimeError:
                     # Widget has been deleted (C++ object gone).
                     self.cleanup_scene_callbacks()
                     return
-                print(
-                    "TexturePathEditor: Scene changed, refreshing texture path table..."
-                )
+                if mode == "shown" and not visible:
+                    return
+                self._previous_paths.clear()
+                if mode == "always":
+                    print(
+                        "TexturePathEditor: Scene changed, refreshing texture "
+                        "path table..."
+                    )
                 self._refresh_table_content(widget)
             except Exception as e:
                 print(f"TexturePathEditor: Error refreshing table on scene change: {e}")
@@ -2915,6 +3518,9 @@ class TexturePathEditorSlots:
             if not rows and not self._lightmap_rows:
                 rows = [("", "", "No file nodes found")]
 
+            # The fact columns start empty: _fill_info_columns reads only the
+            # ones showing.
+            facts = [""] * len(self._INFO_COLUMNS)
             formatted = []
             for shader_name, path, file_node_name in rows:
                 # Stash node names in UserRole so handle_cell_edit can recover
@@ -2924,6 +3530,7 @@ class TexturePathEditorSlots:
                         (shader_name, shader_name),
                         path,
                         (file_node_name, file_node_name),
+                        *facts,
                     ]
                 )
             for path, dep in self._lightmap_rows.items():
@@ -2936,22 +3543,31 @@ class TexturePathEditorSlots:
                         (shader_label, ""),
                         (path, path),
                         (node_label, ""),
+                        *facts,
                     ]
                 )
 
-            widget.add(formatted, headers=["Shader", "Texture Path", "File Node"])
+            widget.add(formatted, headers=list(self._HEADERS))
 
             header = widget.horizontalHeader()
             header.setSectionsMovable(False)
-            header.setSectionResizeMode(0, self.sb.QtWidgets.QHeaderView.Interactive)
-            header.setSectionResizeMode(1, self.sb.QtWidgets.QHeaderView.Stretch)
-            header.setSectionResizeMode(2, self.sb.QtWidgets.QHeaderView.Interactive)
+            QHeaderView = self.sb.QtWidgets.QHeaderView
+            for column in range(len(self._HEADERS)):
+                header.setSectionResizeMode(
+                    column,
+                    QHeaderView.Stretch if column == 1 else QHeaderView.Interactive,
+                )
             widget.setColumnWidth(0, 200)
             widget.setColumnWidth(2, 200)
+            for column in self._INFO_COLUMNS:
+                widget.setColumnWidth(column, 90)
+            # A rebuild resets the columns; the user's layout goes back on.
+            widget.restore_column_state()
 
             self.setup_formatting(widget)
             widget.apply_formatting()
             self._apply_path_truncation(widget)
+            self._fill_info_columns(widget)
         finally:
             widget.setUpdatesEnabled(True)
             cmds.waitCursor(state=False)
@@ -2985,6 +3601,14 @@ class TexturePathEditorSlots:
         """
         return self._menu_flag(self._header_menu(), "chk_truncate_paths", False)
 
+    def _truncate_length(self) -> int:
+        """The Truncate Texture Paths option box's length; the default until
+        the header menu is built."""
+        spin = getattr(
+            self._option_menu("chk_truncate_paths"), "spn_truncate_length", None
+        )
+        return int(spin.value()) if spin is not None else self._PATH_TRUNCATE_LENGTH
+
     def _apply_path_truncation(self, widget=None):
         """Push the Truncate Texture Paths toggle onto the path column.
 
@@ -2999,7 +3623,7 @@ class TexturePathEditorSlots:
         widget.set_column_truncation(
             1,
             length=(
-                self._PATH_TRUNCATE_LENGTH if self._truncate_paths_enabled() else None
+                self._truncate_length() if self._truncate_paths_enabled() else None
             ),
             mode="path",
             # An ellipsis, not the primitive's default "..", which in a path
@@ -3243,7 +3867,41 @@ class TexturePathEditorSlots:
     # Cell editing
     # ------------------------------------------------------------------
 
+    def _is_file_rename(self, stored: str, typed: str) -> bool:
+        """Whether a typed path renames *stored*'s file rather than repointing.
+
+        Same folder, another name, the old file on disk and the new one not:
+        there is nothing to point at, so the edit means "call it this". A typed
+        path naming a file that exists stays a repoint, and so does an edit of
+        a file outside the scene's project (``EnvUtils.scene_project_root``,
+        the boundary Keep Names In Sync keeps) -- another project may read it,
+        so a path edit must not rename a shared library texture; the warning
+        says so. Rename File, which asks for the rename, still renames it.
+        """
+        if not stored or not typed:
+            return False
+        workspace, sourceimages = self._project_roots()
+        old = MatUtils.to_absolute(stored, workspace, sourceimages)
+        new = MatUtils.to_absolute(typed, workspace, sourceimages)
+        if not (
+            FileUtils.is_same_file(os.path.dirname(old), os.path.dirname(new))
+            and os.path.basename(old) != os.path.basename(new)
+            and self._texture_on_disk(old)
+            and not self._texture_on_disk(new)
+        ):
+            return False
+        project = EnvUtils.scene_project_root()
+        if project and FileUtils.is_under(os.path.abspath(old), project):
+            return True
+        cmds.warning(
+            f"{os.path.basename(old)} is outside this project -- another may "
+            "read it, so a typed path does not rename it (Rename File does)."
+        )
+        return False
+
     def handle_cell_edit(self, row: int, col: int):
+        if col in self._INFO_COLUMNS:  # facts about the file, not edits
+            return
         tbl = self.ui.tbl000
         item = tbl.item(row, col)
         if not item:
@@ -3279,6 +3937,7 @@ class TexturePathEditorSlots:
             if actual != new_value:
                 _restore_text(item, actual)
             om.MGlobal.displayInfo(f"Renamed {label} '{old_name}' -> '{actual}'")
+            return True
 
         # A lightmap row: the path cell repoints the bake markers (folder only
         # -- the map is what the bake committed); the name cells are labels,
@@ -3300,6 +3959,15 @@ class TexturePathEditorSlots:
                 self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
                 return
             typed = new_value.strip().replace("\\", "/")
+            stored = self._lightmap_row_path(lightmap)
+            if lightmap.get("path") and self._is_file_rename(lightmap["path"], typed):
+                # The same folder, a name nothing is at: rename the map (and
+                # re-stamp the markers that bind it by name).
+                if not self._rename_texture(
+                    {"lightmap": lightmap}, os.path.basename(typed)
+                ):
+                    _restore_text(item, stored)
+                return
             if typed and os.path.basename(typed).lower() != lightmap["map"].lower():
                 cmds.warning(
                     f"The bake markers name {lightmap['map']!r}; a path to a "
@@ -3313,16 +3981,62 @@ class TexturePathEditorSlots:
                 _restore_text(item, self._lightmap_row_path(lightmap))
             return
 
+        shader_item, fn_item = tbl.item(row, 0), tbl.item(row, 2)
+        context = {
+            "shader_node": (shader_item.data(UserRole) if shader_item else None)
+            or None,
+            "file_node": fn_item.data(UserRole) if fn_item else None,
+        }
+        if col in (0, 2) and self._sync_names_enabled() and context["shader_node"]:
+            # Keep Names In Sync: the edited name sets the base the whole
+            # material follows -- a file node's only as a new base for one of
+            # the set's own textures, else the node alone is renamed. The cell
+            # goes back first; the refresh after the sync shows what landed.
+            old = item.data(UserRole) or ""
+            shader_affix, node_affix = self._sync_affixes()
+            if col == 0:
+                base = StrUtils.strip_known_affix(new_value, *shader_affix)
+            else:
+                base = MapFactory.get_base_texture_name(
+                    StrUtils.strip_known_affix(new_value, *node_affix)
+                )
+            base = base.strip("_")
+            try:
+                if col == 2 and not self._sync_carries(
+                    context, base, node=(context["file_node"], new_value)
+                ):
+                    if _rename_node("file node"):
+                        cmds.warning(
+                            self._SYNC_ALONE.format(
+                                name=old, material=context["shader_node"]
+                            )
+                        )
+                    return
+                _restore_text(item, old)
+                self._sync_names(context, base)
+            except (ValueError, OSError, RuntimeError) as e:
+                _restore_text(item, old)
+                cmds.warning(f"Keep Names In Sync: {e}")
+            self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
+            return
+
         if col == 0:
             _rename_node("shader")
         elif col == 1:
-            fn_item = tbl.item(row, 2)
-            file_node = fn_item.data(UserRole) if fn_item else None
+            file_node = context["file_node"]
             if not file_node:
                 cmds.warning("No file node associated with this row.")
                 return
             if not cmds.objExists(file_node):
                 cmds.warning(f"File node '{file_node}' no longer exists.")
+                return
+            stored = cmds.getAttr(f"{file_node}.fileTextureName") or ""
+            if self._is_file_rename(stored, new_value.strip()):
+                # Only the file name changed, to one nothing is at: rename the
+                # file (every reader follows) rather than point at nothing.
+                name = os.path.basename(new_value.strip().replace("\\", "/"))
+                if not self._rename_texture(context, name):
+                    _restore_text(item, stored)
                 return
             try:
                 Attributes.set_plug_literal(f"{file_node}.fileTextureName", new_value)

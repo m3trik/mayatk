@@ -30,10 +30,10 @@ class UndoLedgerMixin:
         No production path here calls this any more: every mayatk shot edit
         brackets through :meth:`ShotStore.scene_edit`, which pushes the
         restore point BEFORE the mutation and tags it with whether the edit
-        reached Maya's undo queue.  This stays as the untagged primitive —
-        blendertk's mirror uses it directly (its undo chunk always pushes, so
-        it needs no pairing), and an untagged point deliberately keeps the
-        pre-pairing "restore and undo" behaviour.  Prefer ``scene_edit``.
+        reached Maya's undo queue.  This stays as the untagged primitive (an
+        untagged point deliberately keeps the pre-pairing "restore and undo"
+        behaviour); blendertk's edits bracket through its own
+        ``scene_edit`` too, pairing by a scene serial.  Prefer ``scene_edit``.
         """
         if self.sequencer is not None:
             self.sequencer.store.push_boundary_snapshot()

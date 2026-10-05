@@ -10,12 +10,19 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
 - ``_resolve_fps`` → ``cmds.currentUnit`` (via :class:`AudioUtils`);
 - ``_measure_audio`` → source-path / registered-track probe against scene FPS;
 - ``_audio_grow_duration`` → the Maya-bound ``behaviors.compute_duration``;
-- ``_resolve_names_keep_missing`` → long-DAG-name resolution;
+- name resolution → the store's ``resolve_member`` (one transform's long DAG
+  name -- exactly, else a namespaced reference by its leaf; several are
+  ambiguous), which the engine's ``_resolve_object`` asks;
 - ``_discover_scene_objects`` / ``_filter_to_animated`` → animCurve walks;
 - assess seams (``_object_exists`` / ``_verify_behavior`` / ``_keyframe_range``
   / ``_audio_exists``) → ``cmds`` / audio-track queries;
-- ``apply_behaviors`` → :func:`behaviors.apply_to_shots` keying fades and
-  audio onto each shot's objects;
+- ``apply_behaviors`` / ``_apply_one`` → :func:`behaviors.apply_to_shots` /
+  ``apply_behavior`` keying fades, highlights and audio onto each shot's
+  objects from the scene's effect recipe (``store.effect_recipe``);
+- ``_key_samples`` / ``_delete_keys`` → a behavior's anim-curve keys -- what a
+  build claims as its own and releases;
+- ``_placed_clip_keys`` → a track's clip keys exactly where a build puts
+  them (adopted when no claim covers them);
 - ``rewire_audio`` → the audio compositor sync.
 
 The pure model classes (:class:`BuilderStep`, :class:`ColumnMap`,
@@ -24,6 +31,7 @@ The pure model classes (:class:`BuilderStep`, :class:`ColumnMap`,
 CSV/behavior helpers are called as ``ManifestModel.parse_csv`` etc.
 """
 
+import functools
 import logging
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -39,12 +47,9 @@ from pythontk.core_utils.engines.shots.manifest.manifest_model import (  # noqa:
     ManifestModel,
     ObjectStatus,
     PlannedShot,
+    ShotPairing,
     StepStatus,
-    _ALT_STEP_RE,
-    _BEHAVIOR_PATTERNS,
     _ResolvedColumns,
-    _SECTION_RE,
-    _STEP_RE,
 )
 
 from pythontk.core_utils.engines.shots.manifest.manifest_engine import (
@@ -145,15 +150,11 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
 
         return Behaviors.compute_duration(audio_objs, fallback=0.0)
 
-    def _resolve_names_keep_missing(self, names: List[str]) -> List[str]:
-        """Long-name-resolve *names*, keeping the CSV form for missing objects
-        so the pinned-object system can surface them."""
-        return ShotStore._resolve_long_names_keep_missing(names)
-
     # ---- behavior application / audio rewire ------------------------------
 
     def apply_behaviors(self) -> Dict[str, list]:
-        """Apply detected behaviors to Maya objects (fades, audio clips).
+        """Apply detected behaviors to Maya objects (fades, highlights, audio
+        clips), each keyed from the scene's effect recipe.
 
         Lazy package imports preserve the ``...behaviors.apply_behavior`` /
         ``...behaviors.apply_to_shots`` mock seams.
@@ -162,8 +163,15 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
 
         return Behaviors.apply_to_shots(
             self.store.sorted_shots(),
-            apply_fn=Behaviors.apply_behavior,
+            apply_fn=functools.partial(
+                Behaviors.apply_behavior, recipe=self.recipe, fps=self._resolve_fps()
+            ),
             store=self.store,
+            resolve_fn=lambda name: self._resolve_object(name)[0],
+            conflict_fn=lambda node, b, s, e: bool(self.unowned_keys(node, b, s, e)),
+            release_fn=lambda shot, name, b: self.release_authored(
+                shot.shot_id, name, b
+            ),
         )
 
     @staticmethod
@@ -211,7 +219,13 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         return Behaviors.verify_behavior(
-            obj, behavior, start, end, anchor_override=anchor_override
+            obj,
+            behavior,
+            start,
+            end,
+            anchor_override=anchor_override,
+            recipe=self.recipe,
+            fps=self._resolve_fps(),
         )
 
     def _keyframe_range(self, obj_name: str) -> Optional[Tuple[float, float]]:
@@ -219,6 +233,76 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
 
     def _audio_exists(self, name: str) -> bool:
         return self._default_audio_exists(name)
+
+    # ---- behavior-key ownership seams --------------------------------------
+
+    def _key_samples(
+        self, obj: str, behavior: str, start: float, end: float
+    ) -> List[Tuple[str, float]]:
+        """Keys in ``[start, end]`` on the plugs *behavior* keys on *obj*
+        (``Behaviors._behavior_plugs``), by anim-curve name."""
+        import maya.cmds as _cmds
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
+
+        out: List[Tuple[str, float]] = []
+        for plug in Behaviors._behavior_plugs(obj, behavior):
+            for crv in _cmds.keyframe(plug, q=True, name=True) or []:
+                for t in _cmds.keyframe(crv, q=True, time=(start, end), tc=True) or []:
+                    out.append((crv, t))
+        return out
+
+    def _delete_keys(self, curve: str, times: List[float]) -> None:
+        import maya.cmds as _cmds
+
+        if not _cmds.objExists(curve):
+            return
+        for t in times:
+            _cmds.cutKey(curve, time=(t - 1e-3, t + 1e-3), clear=True)
+
+    def _placed_clip_keys(
+        self, name: str, start: float, end: float
+    ) -> List[Tuple[str, float]]:
+        """The track's ON key at *start* and its first OFF key after it, when
+        both sit where a build places them (the ``audio_clip`` verification's
+        rule); ``[]`` otherwise."""
+        try:
+            tid = AudioUtils.normalize_track_id(name)
+            if not AudioUtils.has_track(tid):
+                return []
+            keys = AudioUtils.read_keys(tid)
+            curve = AudioUtils.track_curve(tid)
+        except Exception:
+            return []
+        on = next(
+            (f for f, v in keys if abs(f - start) < 0.5 and int(round(v)) >= 1), None
+        )
+        if on is None or not curve:
+            return []
+        off = next(
+            (f for f, v in keys if on < f <= end + 0.5 and int(round(v)) == 0),
+            None,
+        )
+        return [(curve, on)] + ([(curve, off)] if off is not None else [])
+
+    def _is_asset_candidate(self, name: str) -> bool:
+        """A transform a doc would list: not a joint/IK node, camera or light."""
+        import maya.cmds as _cmds
+
+        if not _cmds.objExists(name):
+            return False
+        if _cmds.nodeType(name) in ("joint", "ikHandle", "ikEffector"):
+            return False
+        for shape in _cmds.listRelatives(name, shapes=True, fullPath=True) or []:
+            kind = _cmds.nodeType(shape)
+            classes = " ".join(_cmds.getClassification(kind) or ())
+            if kind == "camera" or "light" in classes:
+                return False
+        return True
+
+    def _apply_one(self, node: str, behavior: str, start: float, end: float, **kwargs):
+        from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
+
+        return Behaviors.apply_behavior(node, behavior, start, end, **kwargs)
 
     # ---- scene walks (animCurve acquisition) -------------------------------
 
@@ -248,11 +332,8 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         animated = self._transform_curve_map()
 
         found: list = []
-        from mayatk.core_utils._core_utils import CoreUtils
-
-        _short = CoreUtils.leaf_name
         for obj in sorted(animated):
-            if _short(obj) in exclude_names:
+            if ShotStore.member_key(obj) in exclude_names:
                 continue
             if any(
                 self._curve_varies_in_range(crv, start, end) for crv in animated[obj]

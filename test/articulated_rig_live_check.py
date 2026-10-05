@@ -10,11 +10,14 @@ scene holding a prop of rigid parts. Deliberately NOT named ``test_*`` so
   A. the analysis proposes the joints (printed for the record);
   B. the build moves no part at rest;
   C. Maya poses the joints exactly as ``ptk.ArticulationModel`` does -- the
-     numbers Unity and the WebXR runtime play;
-  D. a grab lands the head where it is sent;
+     numbers Unity and the WebXR runtime play -- with the end control's solve
+     added over FK;
+  D. a grab lands the head where it is sent (it drags the end control), and
+     moving the end control lands the head on it;
   E. the export (records published in the bracket, FBX written baked, the
      rig-helper sweep, FBX2glTF) ships every joint and every grabbed part and
-     none of the controls, and ``extras.articulation_web`` binds them all;
+     none of the controls -- the end control included -- and
+     ``extras.articulation_web`` binds them all;
   F. the teardown puts every part back exactly.
 
 The GLB is left in a detached scratch directory and its path printed as
@@ -128,6 +131,7 @@ def main():
     group = world(rig.group)
     rng = random.Random(1)
     worst = 0.0
+    end = rig.end_control
     for _ in range(12):
         state = []
         for slot in range(len(model.channels)):
@@ -135,8 +139,10 @@ def main():
             state.append(
                 rng.uniform(-45 if lo is None else lo, 45 if hi is None else hi)
             )
-        rig.set_state(state, key=False)
-        for index, (p, q) in enumerate(model.world(state)):
+        rig.set_state(state, key=False)  # FK: the seed, with the end control on
+        if end:
+            cmds.setAttr(f"{end}.translate", *[rng.uniform(-3, 3) for _ in range(3)])
+        for index, (p, q) in enumerate(model.world(rig.state())):
             xf = om.MTransformationMatrix(om.MQuaternion(*q).asMatrix())
             xf.setTranslation(om.MVector(*p), om.MSpace.kTransform)
             got = world(rig.joint(rig.joint_ids()[index]))
@@ -147,7 +153,7 @@ def main():
         f"worst joint difference {worst:.2e}",
     )
 
-    rig.set_state(model.rest_state(), key=False)
+    rig.reset_pose(key=False)
     head = by_uuid(parts[-1])
     centre = cmds.exactWorldBoundingBox(head, calculateExactly=True)
     centre = [(centre[i] + centre[i + 3]) / 2 for i in range(3)]
@@ -161,8 +167,23 @@ def main():
         left < 0.01 * size,
         f"{left:.4f} left of {0.08 * size:.2f}",
     )
+    if end:
+        rig.reset_pose(key=False)
+        rest_head = world(head)
+        pivot = cmds.xform(end, query=True, worldSpace=True, rotatePivot=True)
+        cmds.move(-0.06 * size, 0.05 * size, 0.04 * size, end, relative=True)
+        goal = cmds.xform(end, query=True, worldSpace=True, rotatePivot=True)
+        carried = om.MPoint(*pivot) * rest_head.inverse() * world(head)
+        miss = (carried - om.MPoint(*goal)).length()
+        ok &= verdict(
+            "D. the end control lands the head",
+            miss < 0.01 * size,
+            f"{miss:.4f} off over a {0.087 * size:.2f} move",
+        )
+        rig.reset_pose(key=False)
 
-    # A clip for the export: three keys on every control.
+    # A clip for the export: three keys on every control -- the end control's
+    # too, so the bake samples the solve.
     for frame in (1, 12, 24):
         cmds.currentTime(frame)
         state = []
@@ -174,6 +195,10 @@ def main():
                 )
             )
         rig.set_state(state, key=True)
+        if end:
+            offset = [rng.uniform(-0.04, 0.04) * size for _ in range(3)]
+            cmds.setAttr(f"{end}.translate", *offset)
+            cmds.setKeyframe(end, attribute="translate")
     cmds.playbackOptions(
         minTime=1, maxTime=24, animationStartTime=1, animationEndTime=24
     )
@@ -205,7 +230,9 @@ def main():
     joints = [j["name"] for j in record["joints"]]
     grabbed = [g["node"] for g in record["grab"]]
     affix = ptk.NamingConvention.affix("control")
-    controls = [n for n in names if n.endswith(affix)]
+    controls = [
+        n for n in names if n.endswith((affix, affix + ArticulatedRig.IK_GROUP_SUFFIX))
+    ]
     ok &= verdict(
         "E. the GLB ships the skeleton, not the controls",
         all(j in names for j in joints)

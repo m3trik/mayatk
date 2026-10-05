@@ -40,14 +40,17 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
 
     Layout
     ------
-    - **Header**: Auto Convert, Export mode, Trim Silence, Suffix Range,
-      Instructions.
-    - **Tracks combo** (``cmb000``): lists every track on the carrier
-      with a Browse option box + Tracks management menu.
-    - **Sync** (``tb000``): reconcile DG nodes + rebuild composite.
+    - **Header**: Auto Convert; Export mode, Export, Trim Silence, Suffix
+      Time Range; Channels; help text.
+    - **Tracks combo** (``cmb000``): every track on the carrier. Its option
+      box is the Tracks menu: Add Tracks…, Rename, Replace, Cleanup Unused,
+      and Remove Audio (``b002``: every track, DG node and the composite).
     - **Key Audio Event** (``tb001``): key the selected track at the
-      current frame (with Auto End None / Next Event / Key All).
-    - **Remove** (``b002``): purge every track + DG node + composite.
+      current frame. Its option box adds Select Carrier Node, Sync Audio to
+      Timeline (``tb000``), Auto End None, Snap To Frame (the scene's effect
+      recipe, ``audio_snap`` -- the Shot Manifest's build places clips by it
+      too), Next Event and Key All (with Stagger). Keying goes through
+      ``AudioUtils.key_clip``, the writer the manifest's build uses.
     - **Footer**: status messages.
     """
 
@@ -65,6 +68,7 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         self._syncing_combo = False
         self._last_active_tid = None
         self._deferred_sync_pending = False
+        self._unwatch_recipe = None
 
         try:
             cmds.evalDeferred(self._ensure_sync_job)
@@ -157,17 +161,18 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
                 "Keyed events drive a single composite WAV used for "
                 "Time-Slider scrubbing.",
                 steps=[
-                    "Click the <b>folder icon</b> on the tracks combo to "
-                    "browse for audio files. File stems become track IDs; "
+                    "Use <b>Add Tracks…</b> in the tracks combo's option box "
+                    "(▸) to browse for audio files. File stems become track IDs; "
                     "re-adding a file with the same stem replaces the path "
                     "(keyframes are preserved).",
                     "Select a loaded track in the combo.",
                     "Move the timeline cursor to the desired start frame.",
                     "Press <b>Key Audio Event</b> to key the track <i>ON</i>.",
                     "Repeat for each audio cue.",
-                    "Click <b>↻</b> on the <b>Key Audio Event</b> option box "
-                    "to sync DG nodes and rebuild the composite WAV for "
-                    "scrub playback.",
+                    "Each key syncs the DG nodes and rebuilds the composite "
+                    "WAV for scrub playback; <b>Sync Audio to Timeline</b>, in "
+                    "the <b>Key Audio Event</b> option box, re-runs that after "
+                    "keys are edited elsewhere.",
                 ],
                 sections=[
                     (
@@ -497,14 +502,14 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             "QCheckBox",
             setText="Snap To Frame",
             setObjectName="chk_snap_frames",
-            setChecked=_audio_utils.get_snap_frames(),
             setToolTip=(
                 "Round audio key times to the nearest whole frame.\n"
-                "Applies globally to all audio key writes.  Disable\n"
-                "only if you need sub-frame precision."
+                "The scene's effect recipe: every audio key write -- this\n"
+                "panel's and the Shot Manifest's build -- follows it.\n"
+                "Disable only if you need sub-frame precision."
             ),
         )
-        chk_snap.toggled.connect(lambda checked: _audio_utils.set_snap_frames(checked))
+        self._bind_snap(chk_snap)
         widget.option_box.menu.add(
             "QCheckBox",
             setText="Next Event",
@@ -636,37 +641,50 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
         )
 
     def _write_track_keys(self, tid, frame, auto_end=False, duration=None):
-        """Write an ON key (and optionally an end-off key) for *tid*.
+        """Key one clip of *tid* at *frame* through ``AudioUtils.key_clip`` --
+        the writer the Shot Manifest's build uses: ON here, and with
+        *auto_end* OFF at the clip's end unless a later start of the same
+        track sits inside it."""
+        _audio_utils.key_clip(tid, frame, duration=duration, auto_end=auto_end)
 
-        With per-track attrs each track is independent, so there is no
-        cross-track collision to worry about.  Any existing key at
-        *frame* is overwritten; the optional end-off key is suppressed
-        when a later start key of the same track would be inside the
-        clip's footprint.
-        """
-        eps = 1e-3
-        _audio_utils.write_key(tid, frame, 1)
+    def _bind_snap(self, chk) -> None:
+        """Keep Snap To Frame on the scene's recipe: shown from it (also after
+        another panel changes it, or a scene opens), written to it on toggle,
+        never restored from this panel's QSettings over the scene's value."""
+        from uitk.managers.model_binding import ModelBinding
+        from mayatk.node_utils.data_nodes import DataNodes
 
-        if not auto_end:
-            return
+        binding = ModelBinding(
+            read=lambda: {"audio_snap": _audio_utils.get_snap_frames()},
+            write=lambda _field, value: _audio_utils.set_snap_frames(bool(value)),
+        )
+        binding.bind("audio_snap", chk)
+        binding.refresh()
+        # The shot store (which holds the recipe) sits above this panel's
+        # layer: reached through the record owners, never imported.
+        store = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+        if store is not None:
+            self._unwatch_recipe = store.watch_settings(binding.refresh)
+            self.ui.destroyed.connect(lambda *_: self._unwatch_recipe())
 
-        if duration is None:
-            duration = self._get_clip_length_frames(tid)
-        if duration <= 0:
-            return
-        end_frame = math.ceil(frame + duration)
-
-        # Don't stomp a later start key of the same track.
-        existing = _audio_utils.read_keys(tid)
-        for f, v in existing:
-            if abs(f - frame) < eps:
-                continue
-            if f > frame and f <= end_frame and int(round(v)) >= 1:
-                # Another start on this track already inside the
-                # clip's footprint — leave the end-off out.
-                return
-
-        _audio_utils.write_key(tid, end_frame, 0)
+    def select_track(self, name: str) -> bool:
+        """Show *name*'s track in the tracks combo (the Shot Manifest's
+        "Open in Audio Clips"); False when no track answers to it."""
+        try:
+            tid = _audio_utils.normalize_track_id(name)
+        except ValueError:
+            return False
+        cmb = self.ui.cmb000
+        index = cmb.findText(tid)
+        if index < 0:
+            self._refresh_combo(_audio_utils.list_tracks())
+            index = cmb.findText(tid)
+        if index < 0:
+            self.ui.footer.setText(f"No track '{tid}' in this scene.")
+            return False
+        cmb.setCurrentIndex(index)
+        self.ui.footer.setText(f"Track '{tid}'.")
+        return True
 
     def _resolve_next_track(self, tracks):
         """Return the track to key next based on the most recent key."""
@@ -807,17 +825,6 @@ class AudioClipsSlots(ExportMixin, CallbacksMixin):
             self._syncing_combo = False
 
     def _get_clip_length_frames(self, tid):
-        """Return the clip duration in timeline frames for *tid*.
-
-        Uses the file map to locate the source, then queries duration
-        via :func:`audio_utils.audio_duration_frames`.  Returns 0.0 when
-        the source is missing or unreadable.
-        """
-        path = _audio_utils.get_path(tid)
-        if not path:
-            return 0.0
-        try:
-            dur, _ = _audio_utils.audio_duration_frames(path, _audio_utils.get_fps())
-            return float(dur or 0.0)
-        except Exception:
-            return 0.0
+        """The clip duration in timeline frames for *tid*
+        (``AudioUtils.clip_length_frames``); 0.0 when unreadable."""
+        return _audio_utils.clip_length_frames(tid)

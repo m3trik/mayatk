@@ -283,8 +283,12 @@ class _ShotApplyInternal(object):
         track_ids=None,
         lo_open: bool = False,
         hi_closed: bool = False,
+        ledger=None,
     ):
         """Shift audio keys whose timeline position falls within the envelope.
+
+        *ledger* has its claims on the moved keys moved with them (the
+        manifest claims the clips it keys).
 
         Note: ``env_end`` extends to the next shot's current start (not just
         the current shot's ``end``), so audio keys sitting in the trailing
@@ -311,7 +315,9 @@ class _ShotApplyInternal(object):
         lo = env_start + _AUDIO_UPPER_MARGIN if lo_open else env_start
         if hi <= lo:
             return []
-        tids = audio_utils.shift_keys_in_range(lo, hi, delta, track_ids=track_ids)
+        tids = audio_utils.shift_keys_in_range(
+            lo, hi, delta, track_ids=track_ids, ledger=ledger
+        )
         return tids or []
 
 
@@ -494,7 +500,12 @@ class ShotApply(_ShotApplyInternal):
 
             def _shift_audio(env_lo, env_hi, delta, **window):
                 tids = _ShotApplyInternal._shift_audio_range(
-                    env_lo, env_hi, delta, track_ids=track_ids, **window
+                    env_lo,
+                    env_hi,
+                    delta,
+                    track_ids=track_ids,
+                    ledger=store.edit_ledger,
+                    **window,
                 )
                 if tids:
                     dirty.update(tids)

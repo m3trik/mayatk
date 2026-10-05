@@ -685,6 +685,66 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         self.assertIsNone(RenderEffects.refresh_export_metadata())
         self.assertFalse(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
 
+    def test_a_shot_scene_with_no_keyed_visibility_still_publishes_its_origin(self):
+        """The whole-timeline origin is what lets the GLB cut its shots, and it
+        rides this channel alone -- which a scene with nothing keyed on
+        visibility cleared. ``apply_glb_clips`` then had no origin and
+        declined, after the pipeline had already dropped the converter's
+        split takes, so the GLB shipped ``Take 001`` and no shot clip
+        (measured 2026-10-04: two shots on one keyed cube, ``clips_vs_takes``
+        FAIL). Origin only: the per-take spans place visibility gates, and
+        there are none to place.
+        """
+        cube = cmds.polyCube(name="origin_mover")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=40, value=10)
+        self._publish_shots(
+            [
+                {"name": "Shot_A", "start": 1, "end": 20},
+                {"name": "Shot_B", "start": 21, "end": 40},
+            ]
+        )
+
+        FbxUtils.publish(
+            FbxUtils.export_context(clip_span=(1, 40)),
+            only=[ptk.SceneRecords.VISIBILITY],
+        )
+        published = self._carrier(RenderEffects.DATA_CHANNEL)
+
+        self.assertIsNotNone(published, "the origin was not published")
+        self.assertEqual(published["tracks"], [])
+        self.assertEqual(published["clip_span"], {"*": [1.0, 40.0]})
+        self.assertEqual(published["fps"], 30.0)
+
+    def test_an_unmeasured_origin_is_never_published_alone(self):
+        """A hand-off publishes before it arms its bake range, so the seed it
+        would publish is whatever range the last export left in the plugin --
+        and a guessed origin slides every shot by the same wrong amount. With
+        no measurement the record stays cleared, and the converter keeps its
+        own shot takes (``GlbPipeline._drop_split_takes``) instead of cutting
+        them from the wrong frame."""
+        cube = cmds.polyCube(name="unmeasured_mover")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=40, value=10)
+        self._publish_shots([{"name": "Shot_A", "start": 1, "end": 40}])
+        # What an earlier export leaves armed in the plugin: a seed to leak.
+        if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 33")
+        mel.eval("FBXExportBakeComplexEnd -v 60")
+        self.addCleanup(mel.eval, "FBXResetExport")
+        self.assertEqual(FbxUtils.bake_range(), (33.0, 60.0), "no seed to leak")
+
+        for mode in (ptk.ExportContext.HANDOFF, ptk.ExportContext.AUTHORING):
+            FbxUtils.publish(
+                FbxUtils.export_context(mode=mode), only=[ptk.SceneRecords.VISIBILITY]
+            )
+            self.assertFalse(
+                ptk.SceneRecords.VISIBILITY.is_present(DataNodes),
+                f"{mode}: an unmeasured origin was published",
+            )
+
     def test_a_stepped_hold_is_published_as_a_hold_not_a_ramp(self):
         """The ramp is consumed by LINEAR interpolation, so a step has to be
         stated rather than left to be guessed.
@@ -752,6 +812,72 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         FbxUtils.publish()
 
         self.assertTrue(ptk.SceneRecords.VISIBILITY.is_present(DataNodes))
+
+
+class TestHandoffClipOrigin(MayaTkTestCase):
+    """A hand-off GLB cuts its shots where the FBX's own take opens.
+
+    A hand-off publishes its records on entering the export bracket, before it
+    arms its bake range, so the origin it published was whatever range the
+    LAST export left in the FBX plugin -- and every shot was cut that many
+    frames early (measured 2026-10-04: 23). The conversion measures each
+    take's first key from the file it reads (``MeshConvert._stamp_clip_spans``).
+    """
+
+    def test_shots_are_cut_where_the_file_s_take_opens(self):
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from pythontk.file_utils.mesh_convert.glb.reader import GlbReader
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        cmds.currentUnit(time="film")
+        mover = cmds.polyCube(name="origin_mover")[0]
+        cmds.setKeyframe(mover, attribute="translateX", time=10, value=0)
+        cmds.setKeyframe(mover, attribute="translateX", time=200, value=190)
+        cmds.keyTangent(
+            mover,
+            attribute="translateX",
+            inTangentType="linear",
+            outTangentType="linear",
+        )
+        blink = cmds.polyCube(name="origin_blink")[0]
+        cmds.setKeyframe(blink, attribute="visibility", time=10, value=1)
+        cmds.setKeyframe(blink, attribute="visibility", time=150, value=0)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 20, 60, objects=[mover])
+        store.define_shot("ShotB", 80, 120, objects=[mover])
+        store.publish_export_view()
+        # What an earlier export in the session leaves armed in the plugin.
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 33")
+        mel.eval("FBXExportBakeComplexEnd -v 60")
+        self.addCleanup(mel.eval, "FBXResetExport")
+
+        artifacts = ptk.TempArtifacts("handoff_clip_origin", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        fbx, glb = os.path.join(out, "handoff.fbx"), os.path.join(out, "handoff.glb")
+        bridge = WebXrPreview()
+        params = dict(bridge.params_defaults(), INCLUDE_ANIMATION=True)
+        bridge._export_fbx([mover, blink], fbx, params)
+        ptk.GlbPipeline.build(fbx, dst=glb)
+
+        reader = GlbReader.load(glb)
+        spans = reader.clip_spans(24.0)
+        for shot, start, end in (("ShotA", 20, 60), ("ShotB", 80, 120)):
+            low, high, _ = spans[shot]
+            v0 = reader.sample(shot, "origin_mover", "translation", low)
+            v1 = reader.sample(shot, "origin_mover", "translation", high)
+            slope = (v1[0] - v0[0]) / (end - start)  # GLB units per frame
+            # mover's translateX is (frame - 10) scene units.
+            self.assertAlmostEqual(
+                10 + v0[0] / slope,
+                start,
+                delta=0.5,
+                msg=f"{shot} opens on the wrong authored frame",
+            )
 
 
 class TestVisibilityChannelFrameRate(MayaTkTestCase):

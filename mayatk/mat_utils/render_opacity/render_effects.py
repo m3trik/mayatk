@@ -20,6 +20,8 @@ from mayatk.mat_utils.render_opacity.attribute_mode import OpacityAttributeMode
 from mayatk.mat_utils.render_opacity.material_mode import OpacityMaterialMode
 from mayatk.mat_utils.render_opacity.channels import (
     CHANNELS,
+    HIGHLIGHT,
+    OPACITY,
     ChannelSpec,
     spec_for,
 )
@@ -39,8 +41,10 @@ class RenderEffects(ptk.LoggingMixin):
 
     .. note:: Use :meth:`key_fade` to animate an opacity fade with
               automatic visibility mirroring and :meth:`key_pulse` for a
-              repeating highlight.  :meth:`create` adds (or removes) the
-              channel without keying.
+              repeating highlight; both key from the scene's effect recipe
+              (:meth:`scene_recipe`) unless told otherwise, as the Shot
+              Manifest's build does through :meth:`apply_effect`.
+              :meth:`create` adds (or removes) the channel without keying.
               :meth:`prepare_for_export` runs before every FBX export
               (the ``FbxUtils.STAGERS`` bracket) and :meth:`finish_export`
               after it; call them yourself only around a raw ``cmds.file``.
@@ -354,13 +358,14 @@ class RenderEffects(ptk.LoggingMixin):
         cls,
         objects=None,
         start: float = 0,
-        end: float = 15,
+        end: Optional[float] = None,
         direction: str = "in",
         auto_create: bool = True,
         tangent: str = "linear",
         delete_visibility_keys: bool = False,
         channel="opacity",
         whole_frames: bool = True,
+        recipe: Optional[ptk.EffectRecipe] = None,
     ) -> List[Tuple[str, str]]:
         """Key a two-key ramp on a channel; the presence channel mirrors to visibility.
 
@@ -371,7 +376,8 @@ class RenderEffects(ptk.LoggingMixin):
         Parameters:
             objects: Maya nodes. If *None*, uses the current selection.
             start: First frame of the fade.
-            end: Last frame of the fade.
+            end: Last frame of the fade; *start* plus the recipe's
+                ``fade_frames`` when omitted.
             direction: ``"in"`` (0→1), ``"out"`` (1→0), or ``"auto"``.
             auto_create: Create the channel on objects that lack it.
             tangent: Tangent type for the channel's keys (default ``"linear"``).
@@ -381,6 +387,8 @@ class RenderEffects(ptk.LoggingMixin):
             channel: The channel name or :class:`ChannelSpec`; ``"opacity"``.
             whole_frames: Snap the keys to whole frames (the default); see
                 :meth:`OpacityAttributeMode.key_fade`.
+            recipe: The effect recipe the length comes from; the scene's
+                (:meth:`scene_recipe`) when omitted.
 
         Returns:
             List of ``(object_name, "in"|"out")`` per keyed object.
@@ -389,6 +397,8 @@ class RenderEffects(ptk.LoggingMixin):
         objects = cls._selection_or(objects)
         if not objects:
             return []
+        if end is None:
+            end = float(start) + (recipe or cls.scene_recipe()).fade_frames
         cls._ensure_channel(objects, spec, auto_create, delete_visibility_keys)
         return OpacityAttributeMode.key_fade(
             objects,
@@ -590,9 +600,9 @@ class RenderEffects(ptk.LoggingMixin):
         objects=None,
         start: float = 0,
         end: float = 100,
-        period: float = 86,
-        bright_fraction: float = 0.59,
-        ramp_fraction: float = 0.25,
+        period: Optional[float] = None,
+        bright_fraction: Optional[float] = None,
+        ramp_fraction: Optional[float] = None,
         lead_in: Optional[float] = None,
         lead_out: Optional[float] = None,
         color=None,
@@ -601,39 +611,45 @@ class RenderEffects(ptk.LoggingMixin):
         channel="highlight",
         delete_visibility_keys: bool = False,
         whole_frames: bool = True,
+        recipe: Optional[ptk.EffectRecipe] = None,
     ) -> List[str]:
         """Key a repeating bright/dim pulse on a channel over ``start..end``.
 
         Convenience wrapper around :meth:`OpacityAttributeMode.key_pulse` that
-        also owns channel creation (see :meth:`_ensure_channel`). The defaults
-        are the cadence measured on the WebXR reference at 30 fps: a 2.86 s
-        period (86 frames), bright for 59% of it. The pulse is bracketed by dim
-        keys at both ends -- see the writer for why that is load-bearing rather
-        than cosmetic.
+        also owns channel creation (see :meth:`_ensure_channel`). The cadence
+        is the scene's effect recipe -- the one the Render Effects panel edits
+        and the Shot Manifest's build keys with (2.86 s, bright 59% of it, by
+        default) -- converted at the scene's rate, so a pulse keyed at 24 fps
+        beats as one keyed at 30. The pulse is bracketed by dim keys at both
+        ends -- see the writer for why that is load-bearing rather than
+        cosmetic. The keys already in the window are replaced.
 
         Parameters:
             objects: Maya nodes. If *None*, uses the current selection.
             start: First frame of the pulse; the channel is dim here.
             end: Last frame of the pulse; the channel is dim here too.
-            period: One cycle, in frames.
-            bright_fraction: Share of the cycle spent bright.
+            period: One cycle, in FRAMES; the recipe's when omitted.
+            bright_fraction: Share of the cycle spent bright; the recipe's
+                duty when omitted.
             ramp_fraction: Share of the cycle spent in each transition.
-            lead_in: Frames the pulse takes to come up from dim at *start*.
-                None takes the cycle's own ramp; 0 cuts as hard as the
-                floor allows (one frame under *whole_frames*).
+            lead_in: Frames the pulse takes to come up from dim at *start*;
+                omitted, the recipe's lead-in -- or, when *period* or
+                *ramp_fraction* is given, that cycle's own ramp. 0 cuts as hard
+                as the floor allows (one frame under *whole_frames*).
             lead_out: The same at *end*, going back down to dim.
             color: Optional ``(r, g, b)`` for the BRIGHT end of the channel's
                 colour ramp -- what the object reads at intensity 1.
             dim_color: Optional ``(r, g, b)`` for the other end, read at
-                intensity 0. Leaving it ``None`` keeps whatever the object
-                carries, black on a freshly created channel, so the pulse
-                fades to unlit exactly as it did before this end existed.
+                intensity 0. Leaving either ``None`` keeps what the object
+                carries; a channel created here takes the recipe's colours.
             auto_create: Create the channel on objects that lack it.
             channel: The channel name or spec; ``"highlight"``.
             delete_visibility_keys: See :meth:`key_fade`; no effect unless the
                 channel drives presence.
             whole_frames: Snap every key to a whole frame (the default); see
                 :meth:`OpacityAttributeMode.key_pulse`.
+            recipe: The effect recipe; the scene's (:meth:`scene_recipe`) when
+                omitted.
 
         Returns:
             The keyed objects' short names.
@@ -642,22 +658,128 @@ class RenderEffects(ptk.LoggingMixin):
         objects = cls._selection_or(objects)
         if not objects:
             return []
+        recipe = recipe or cls.scene_recipe()
+        cadence = recipe.pulse_cadence(cls._scene_fps() or recipe.REFERENCE_FPS)
+        given = {
+            "period": period,
+            "bright_fraction": bright_fraction,
+            "ramp_fraction": ramp_fraction,
+            "lead_in": lead_in,
+            "lead_out": lead_out,
+        }
+        if period is not None or ramp_fraction is not None:
+            # A caller's own cycle: a lead it does not state is that cycle's
+            # own ramp (the writer's rule), not the recipe's seconds -- which
+            # fit only the recipe's cycle.
+            cadence["lead_in"] = cadence["lead_out"] = None
+        cadence.update({k: v for k, v in given.items() if v is not None})
+        created = (
+            [o for o in objects if not OpacityAttributeMode.has_channel(o, spec)]
+            if auto_create
+            else []
+        )
         cls._ensure_channel(objects, spec, auto_create, delete_visibility_keys)
+        cls._seed_colors(created, spec, recipe)
         return OpacityAttributeMode.key_pulse(
             objects,
             start=start,
             end=end,
-            period=period,
-            bright_fraction=bright_fraction,
-            ramp_fraction=ramp_fraction,
-            lead_in=lead_in,
-            lead_out=lead_out,
             color=color,
             dim_color=dim_color,
             auto_create=False,
             spec=spec,
             whole_frames=whole_frames,
+            **cadence,
         )
+
+    @staticmethod
+    def scene_store():
+        """The class holding the scene's effect recipe -- the shot store. It
+        sits above this layer, so it is reached through the record owners
+        (``DataNodes.owner``), never imported; ``None`` when unavailable."""
+        return DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+
+    @classmethod
+    def scene_recipe(cls) -> ptk.EffectRecipe:
+        """The scene's effect recipe -- the shot store's, which the Render
+        Effects panel edits and the Shot Manifest's build keys with; the
+        defaults when no store can be had."""
+        try:
+            return cls.scene_store().active().effect_recipe
+        except Exception:
+            return ptk.EffectRecipe()
+
+    #: The channel each recipe effect keys.
+    EFFECT_CHANNELS = {"fade_in": OPACITY, "fade_out": OPACITY, "pulse": HIGHLIGHT}
+
+    @classmethod
+    def apply_effect(
+        cls,
+        obj,
+        effect: str,
+        start: float,
+        end: float,
+        recipe: Optional[ptk.EffectRecipe] = None,
+        fps: Optional[float] = None,
+        place=None,
+        anchor: Optional[float] = None,
+    ) -> List[Tuple[str, float]]:
+        """Key one recipe effect on *obj*, placed in the range ``start..end``.
+
+        The Shot Manifest's writer: the same plan :meth:`key_fade` /
+        :meth:`key_pulse` key by hand (``ptk.EffectRecipe.plan``), placed where
+        a behavior template puts it (``EffectRecipe.window``) and written by the
+        one writer (:meth:`OpacityAttributeMode.write_keys`). It deletes
+        nothing -- the build takes out its own previous keys first -- and
+        writes the recipe's colours only on a channel it creates, so a revised
+        object keeps its colours through a rebuild.
+
+        Parameters:
+            obj: The node to key.
+            effect: ``"fade_in"``, ``"fade_out"`` or ``"pulse"``.
+            start: The range's first frame (a shot's start).
+            end: Its last frame.
+            recipe: The effect recipe; the scene's when omitted.
+            fps: The scene's rate; queried when omitted.
+            place: ``"start"`` / ``"end"`` / ``"span"`` / a fraction; where
+                the effect naturally goes when omitted.
+            anchor: A fraction overriding *place* (the build's spread).
+
+        Returns:
+            ``(anim curve, time)`` for every key written.
+
+        Raises:
+            ValueError: An effect with no channel (``"clip"`` keys audio).
+        """
+        spec = cls.EFFECT_CHANNELS.get(effect)
+        if spec is None:
+            raise ValueError(f"The {effect!r} effect keys no render channel.")
+        recipe = recipe or cls.scene_recipe()
+        fps = float(fps or cls._scene_fps() or recipe.REFERENCE_FPS)
+        if place is None:
+            place = "end" if effect == "fade_out" else "start"
+        plan = recipe.plan(
+            effect, *recipe.window(effect, start, end, place, anchor), fps
+        )
+        node = (cmds.ls(str(obj), long=True) or [str(obj)])[0]
+        if not OpacityAttributeMode.has_channel(node, spec):
+            # The attribute-mode create touches ``data_internal``; the
+            # selection must not end up on it.
+            with CoreUtils.preserved_selection():
+                OpacityAttributeMode.create([node], spec)
+            cls._seed_colors([node], spec, recipe)
+        return OpacityAttributeMode.write_keys(node, plan, spec)
+
+    @classmethod
+    def _seed_colors(cls, objects, spec: ChannelSpec, recipe) -> None:
+        """Give channels just created the recipe's colours (no-op for a
+        channel without a colour ramp)."""
+        if not objects or spec.color_stops is None:
+            return
+        with CoreUtils.preserved_selection():
+            for stop, color in zip(("hi", "lo"), recipe.colors):
+                if spec.stop_attr(stop):
+                    OpacityAttributeMode.set_color(objects, color, spec, stop)
 
     @classmethod
     def preview_channels(
@@ -914,14 +1036,22 @@ class RenderEffects(ptk.LoggingMixin):
                 the stored records are read when this assembly did not produce
                 them (an authoring-time republish).
 
+        A scene that declares takes publishes the whole-timeline entry even
+        with no keyed visibility, as the record's only content: it is what
+        ``MeshConvert.apply_glb_clips`` cuts every shot against, and without
+        it the GLB shipped the whole-timeline stack and no shot clip. Only a
+        MEASURED origin (``ctx.clip_span``) is published alone: a hand-off
+        publishes before it arms its bake range, so the seed would be the
+        last export's range, and a guessed origin slides every shot -- with
+        none, the converter keeps its own shot takes instead.
+
         Returns:
-            The record, or ``None`` when there is no keyed visibility (the
-            publisher then clears the channel).
+            The record, or ``None`` when there is no keyed visibility and no
+            measured origin of declared takes (the publisher then clears the
+            channel).
         """
-        # Bail BEFORE the span walk: that reads every anim curve in the scene,
-        # and a scene with no keyed visibility has nothing to spend it on.
         tracks = cls.visibility_tracks()
-        if not tracks:
+        if not tracks and ctx.clip_span is None:
             return None
 
         # The shot record the shots producer has just built (it runs first:
@@ -936,6 +1066,8 @@ class RenderEffects(ptk.LoggingMixin):
         # ramp -- measured 2026-09-02, "carry no frame rate ... not applied".
         fps = metadata.get("fps") or cls._scene_fps()
         takes = ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
+        if not tracks and not takes:
+            return None  # an origin with no clip to cut against it
         # The stack's origin.  Measured by the pipeline (``ctx.clip_span``)
         # once it has seen the final curves; until then the bake range is a
         # SEED, not the answer, and a producer cannot do better: it has no
@@ -950,10 +1082,13 @@ class RenderEffects(ptk.LoggingMixin):
         payload = ptk.MeshConvert.build_visibility_tracks(
             tracks,
             fps=fps,
+            # With no tracks there is no gate to place, so no take needs its
+            # own span: the whole-timeline origin alone, without the walk over
+            # every anim curve in the scene that the spans take.
             clip_spans=ptk.MeshConvert.clip_spans(
                 (),
-                takes,
-                key_spans=cls._scene_key_spans,
+                takes if tracks else (),
+                key_spans=cls._scene_key_spans if tracks else None,
                 stack_range=stack_range,
             ),
         )

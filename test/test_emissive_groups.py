@@ -100,7 +100,8 @@ class TestCarrierMerge(_GroupsCase):
 
         members = cmds.sets(canonical, q=True) or []
         self.assertFalse(
-            any(bystander in m for m in members), f"selection joined the group: {members}"
+            any(bystander in m for m in members),
+            f"selection joined the group: {members}",
         )
         self.assertFalse(cmds.objExists(stray))
 
@@ -269,6 +270,29 @@ class TestMaskBake(_GroupsCase):
         # Export carrier now carries the channels manifest.
         payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
+
+    def test_a_default_path_bake_stays_in_the_runs_sandbox(self):
+        """The panel's button names no path: the mask goes to the current
+        project's sourceimages. Under the test runner that project must be the
+        run's sandbox -- a GUI-pass Maya restores the project the user last had
+        open, and this fixture's `untitled_EMask.png` was found in a production
+        project's sourceimages (2026-10-01)."""
+        from pythontk.core_utils.test_sandbox import TestSandbox
+
+        if not TestSandbox.is_active():
+            self.skipTest("run outside the suite driver: no sandbox to stay in")
+        self._add_two()
+        EmissiveGroups.bake_mask(resolution=64)
+        root = cmds.workspace(q=True, rootDirectory=True)
+        rule = cmds.workspace(fileRuleEntry="sourceImages") or "sourceimages"
+        written = os.path.normcase(
+            os.path.realpath(os.path.join(root, rule, "untitled_EMask.png"))
+        )
+        sandbox = os.path.normcase(os.path.realpath(TestSandbox.temp()))
+        self.assertTrue(os.path.isfile(written), written)
+        self.assertTrue(
+            written.startswith(sandbox), f"wrote into a real project: {written}"
+        )
 
 
 class TestFbxRoundTrip(_GroupsCase):

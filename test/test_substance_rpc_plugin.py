@@ -93,6 +93,7 @@ class _FakePainter:
         self.subscriptions = []  # [(event, callback), ...]
         self.disconnections = []  # [(event, callback), ...]
         self.mesh_map_writes = []  # [(set_name, usage, resource_id), ...]
+        self.deprecation_warnings = []  # one entry per deprecated call
         self.imported_resources = []  # [path, ...]
         #: Key Painter uses for the high-poly entry in ``common()``. Tests
         #: rewrite it to prove the op matches case-insensitively.
@@ -102,12 +103,20 @@ class _FakePainter:
             def __init__(self, width, height):
                 self.width, self.height = width, height
 
+        class _CallableName(str):
+            """Painter 10.1+'s ``make_callable``: a str that warns when called."""
+
+            def __call__(self):
+                outer.deprecation_warnings.append("TextureSet.name()")
+                return self
+
         class FakeTextureSet:
             def __init__(self, name):
                 self._name = name
 
+            @property
             def name(self):
-                return self._name
+                return _CallableName(self._name)
 
             def set_resolution(self, resolution):
                 outer.resolutions.append(
@@ -169,9 +178,9 @@ class _FakePainter:
             def common(self):
                 return {
                     outer.high_poly_key: _Property(
-                        self.texture_set.name(), outer.high_poly_key
+                        str(self.texture_set.name), outer.high_poly_key
                     ),
-                    "OutputSize": _Property(self.texture_set.name(), "OutputSize"),
+                    "OutputSize": _Property(str(self.texture_set.name), "OutputSize"),
                 }
 
             @staticmethod
@@ -383,6 +392,23 @@ class TestProjectSetupOps(unittest.TestCase):
         self.assertEqual(
             self.painter.resolutions,
             [("body", (4096, 4096)), ("props", (4096, 4096))],
+        )
+
+    def test_texture_set_names_read_without_a_deprecation_warning(self):
+        # Painter 10.1+ logs "This method is deprecated, use the property with
+        # the same name instead." for every ``TextureSet.name()`` call.
+        self.client.invoke("project.set_resolution", size=1024)
+        self.client.invoke("bake.set_high_poly", mesh_path=self._high_poly_file())
+        self.assertEqual(self.painter.resolutions[0][0], "body")
+        self.assertEqual(self.painter.deprecation_warnings, [])
+
+    def test_texture_set_name_falls_back_to_the_pre_property_method(self):
+        class _LegacyTextureSet:
+            def name(self):
+                return "legacy"
+
+        self.assertEqual(
+            self.setup_ops._texture_set_name(_LegacyTextureSet()), "legacy"
         )
 
     def test_zero_resolution_is_a_no_op(self):

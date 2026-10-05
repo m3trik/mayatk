@@ -6,8 +6,8 @@ from typing import Optional
 
 try:
     import maya.cmds as cmds
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils

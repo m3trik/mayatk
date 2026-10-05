@@ -21,6 +21,7 @@ except Exception:
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -284,14 +285,14 @@ class _OpacityInternal:
         graph = cls.resolve_stingray_graph(opacity_mode, opacity)
         if not graph:
             return False
-        EnvUtils.load_plugin("shaderFXPlugin")
+        Plugins.load("shaderFXPlugin")
         cmds.shaderfx(sfxnode=CoreUtils.short_name(mat), loadGraph=graph)
         return True
 
     @classmethod
     def _create_stingray_shader(cls, name, opacity, opacity_mode):
         """Body of :meth:`MatUtils.create_stingray_shader`."""
-        EnvUtils.load_plugin("shaderFXPlugin")
+        Plugins.load("shaderFXPlugin")
         shader = NodeUtils.create_render_node(
             "StingrayPBS", name=name, create_shading_group=False
         )

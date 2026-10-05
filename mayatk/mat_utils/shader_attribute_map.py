@@ -7,7 +7,8 @@ connector that honors that declaration against a real Maya attribute.
 itself stays importable (and testable) without a running Maya.
 """
 
-from typing import Optional, Tuple, Dict, Any
+import math
+from typing import Optional, Tuple, Dict, Any, Callable
 from collections import namedtuple
 
 # Each slot is: (attribute_name, output_plug)
@@ -72,14 +73,15 @@ class _ShaderAttributeMapInternal(object):
 
         A file node's ``outAlpha`` is a constant 1.0 when the image has no alpha
         channel (and ``outTransparency``, being ``1 - outAlpha``, a constant 0),
-        so a grayscale Opacity (or Roughness / Metallic) map wired from
-        it does NOTHING -- fully opaque geometry, with every connection present
-        and correct-looking. ``alphaIsLuminance`` derives alpha from luminance
-        instead; this is the same convention ``GameShader`` applies when it
-        creates those file nodes itself (``alphaIsLuminance=1`` for Roughness /
-        Metallic / Opacity, and deliberately ``0`` for ``Metallic_Smoothness``,
-        whose alpha is real). Best-effort: an unloadable texture must not cost
-        the caller the connection.
+        so a grayscale Opacity map wired from it does NOTHING -- fully opaque
+        geometry, with every connection present and correct-looking.
+        ``alphaIsLuminance`` derives alpha from luminance instead; this is the
+        same convention ``GameShader`` applies when it creates those file nodes
+        itself (``alphaIsLuminance=1`` for Opacity, and deliberately ``0`` for
+        ``Metallic_Smoothness``, whose alpha is real). Opacity is the only
+        channel declared on an alpha plug -- the scalar PBR maps read
+        ``outColorR``. Best-effort: an unloadable texture must not cost the
+        caller the connection.
         """
         import maya.cmds as cmds
 
@@ -150,12 +152,18 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             normal=("normalCamera", "outColor"),
             ambientOcclusion=None,
         ),
+        # The PBR trio reads its scalar maps off ``outColorR``, never the alpha:
+        # a grey map carries its value in every channel, and a PACKED one keeps
+        # the scalar in RGB and something else in A -- Unity's
+        # MetallicSmoothness puts smoothness there, so ``outAlpha`` turned a
+        # non-metal ~78% metal (a transferred table rendered at a third of its
+        # source's brightness). R is also the channel StingrayPBS samples.
         "aiStandardSurface": ShaderAttrs(
             baseColor=("baseColor", "outColor"),
             emission=("emissionColor", "outColor"),
             specular=("specularColor", "outColor"),
-            roughness=("specularRoughness", "outAlpha"),
-            metallic=("metalness", "outAlpha"),
+            roughness=("specularRoughness", "outColorR"),
+            metallic=("metalness", "outColorR"),
             opacity=("opacity", "outAlpha"),
             normal=(
                 "normalCamera",
@@ -167,8 +175,8 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             baseColor=("baseColor", "outColor"),
             emission=("emissionColor", "outColor"),
             specular=("specularColor", "outColor"),
-            roughness=("specularRoughness", "outAlpha"),
-            metallic=("metalness", "outAlpha"),
+            roughness=("specularRoughness", "outColorR"),
+            metallic=("metalness", "outColorR"),
             opacity=("opacity", "outAlpha"),
             normal=("normalCamera", "outColor"),
             ambientOcclusion=None,
@@ -202,8 +210,8 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             baseColor=("baseColor", "outColor"),
             emission=("emissionColor", "outColor"),
             specular=("specularColor", "outColor"),
-            roughness=("specularRoughness", "outAlpha"),
-            metallic=("baseMetalness", "outAlpha"),
+            roughness=("specularRoughness", "outColorR"),
+            metallic=("baseMetalness", "outColorR"),
             opacity=("geometryOpacity", "outAlpha"),
             normal=("geometryNormal", "outColor"),
             ambientOcclusion=None,
@@ -222,6 +230,180 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         if attrs is None or logical not in cls.logical_channels():
             return None
         return getattr(attrs, logical)
+
+    # Per shader type, the attribute holding a channel's value when no map is
+    # wired, where that is NOT the slot itself. StingrayPBS keeps its uniforms
+    # apart from its ``TEX_*`` samplers, and a sampler's own literal is no value
+    # at all: an undriven ``TEX_color_map`` reads (0, 0, 0).
+    CONSTANT_ATTRS: Dict[str, Dict[str, str]] = {
+        "StingrayPBS": {
+            "baseColor": "base_color",
+            "emission": "emissive",
+            "roughness": "roughness",
+            "metallic": "metallic",
+            "opacity": "opacity",
+        },
+    }
+
+    @classmethod
+    def constant_attr(cls, shader_type: str, logical: str) -> Optional[str]:
+        """The attribute holding *logical*'s value on an unmapped *shader_type*.
+
+        :attr:`CONSTANT_ATTRS` where the type keeps it apart, else the declared
+        slot. None where no attribute holds a VALUE: a ShaderFX ``TEX_*``
+        sampler with no uniform (``TEX_ao_map``, ``TEX_normal_map``), and
+        ``normal`` everywhere -- an undriven normal input means the surface's
+        own normal, and its literal (standardSurface's ``normalCamera`` is
+        (1, 1, 1)) is not a tangent-space value.
+
+        Parameters:
+            shader_type (str): Maya node type.
+            logical (str): Logical channel name.
+
+        Returns:
+            str | None: The attribute name.
+        """
+        if logical == "normal":
+            return None
+        attr = cls.CONSTANT_ATTRS.get(shader_type, {}).get(logical)
+        if attr:
+            return attr
+        slot = cls.get_attr(shader_type, logical)
+        if not slot or slot[0].startswith("TEX_"):
+            return None
+        return slot[0]
+
+    #: ``(shader type, logical channel) -> f(component)`` for a literal that is
+    #: not in the channel's own units. phong's roughness slot is
+    #: ``cosinePower``, a Blinn-Phong EXPONENT (default 20): read raw, a phong
+    #: source wrote 20 into a 0..1 roughness -- fully rough. It reads as the
+    #: Beckmann width the exponent stands for, ``sqrt(2 / (n + 2))`` (0.30 at
+    #: the default) -- the inverse of the Maya bridge's
+    #: ``_roughness_to_cosine_power``, so a roughness survives a phong round trip.
+    CONSTANT_TRANSFORMS: Dict[Tuple[str, str], Callable[[float], float]] = {
+        ("phong", "roughness"): lambda power: math.sqrt(2.0 / (max(power, 0.0) + 2.0)),
+    }
+
+    # Shaders that gate emission behind a SEPARATE scalar, measured on Maya
+    # 2025 + MtoA -- ``{node_type: (attribute, mode)}``.
+    #
+    # This is an explicit table rather than a list of candidate attribute names
+    # tried against every shader, which is what it replaced. Of the three names
+    # guessed there, ``emissionWeight`` and ``emissive_intensity`` matched
+    # nothing at all, and guessing is actively unsafe: a graph-built shader
+    # (StingrayPBS attributes are graph-dependent) can expose a same-named
+    # attribute with different semantics and a 0 default, which would silently
+    # drop a material that had been previewing correctly.
+    #
+    # ``multiply``: a 0-1 weight folded into the colour.
+    # ``gate``: not a 0-1 scale (OpenPBR carries luminance in nits), so it
+    # decides whether the material emits at all but must never scale it.
+    EMISSION_WEIGHT_ATTRS: Dict[str, Tuple[str, str]] = {
+        "aiStandardSurface": ("emission", "multiply"),
+        "standardSurface": ("emission", "multiply"),
+        "openPBRSurface": ("emissionLuminance", "gate"),
+    }
+
+    @classmethod
+    def emission_weight(cls, shader: str, shader_type: Optional[str] = None) -> float:
+        """The shader's separate emission scalar, or 1.0 when it has none.
+
+        On standardSurface / aiStandardSurface the weight defaults to **0**
+        while ``emissionColor`` defaults to white, so reading the colour alone
+        reports a bright emissive on a material that renders black. A
+        ``multiply`` weight is returned as is (above 1 it is a strength, not a
+        clip); a ``gate`` returns 1.0 or 0.0.
+
+        A shader absent from :attr:`EMISSION_WEIGHT_ATTRS` is **ungated** --
+        returning 1.0 rather than hunting for a plausibly-named attribute,
+        because a wrong guess here silently removes a working emissive.
+
+        Parameters:
+            shader (str): The live shader node.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            float: The weight.
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return 1.0
+        entry = cls.EMISSION_WEIGHT_ATTRS.get(shader_type)
+        if entry is None:
+            return 1.0
+        attr, mode = entry
+        plug = f"{shader}.{attr}"
+        if not cmds.objExists(plug):
+            return 1.0
+        try:
+            value = float(cmds.getAttr(plug))
+        except (RuntimeError, ValueError, TypeError):
+            return 1.0
+        if mode == "gate":
+            return 1.0 if value > 0.0 else 0.0
+        return value
+
+    @classmethod
+    def read_constant(
+        cls, shader: str, logical: str, shader_type: Optional[str] = None
+    ) -> Optional[Tuple[float, ...]]:
+        """*logical*'s literal on *shader*, in the channel's own terms.
+
+        Read from :meth:`constant_attr`, so a value that is no value (a
+        sampler's literal, an undriven normal) is None. Opacity reads as
+        OPACITY (1 = opaque): the classic shaders store it inverted, as
+        ``transparency`` (declared on ``outTransparency``), so their literal
+        is flipped -- read raw, an untouched lambert was fully transparent.
+        A literal in other units converts through
+        :attr:`CONSTANT_TRANSFORMS` (phong's exponent to a roughness), and
+        emission is scaled by the shader's :meth:`emission_weight` -- read
+        alone, an untouched standardSurface's white ``emissionColor`` was a
+        white emitter.
+
+        Parameters:
+            shader (str): The live shader node.
+            logical (str): Logical channel name.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            tuple | None: The value as floats (a scalar is a 1-tuple).
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return None
+        attr = cls.constant_attr(shader_type, logical)
+        if not attr or not cmds.attributeQuery(attr, node=shader, exists=True):
+            return None
+        try:
+            value = cmds.getAttr(f"{shader}.{attr}")
+        except (RuntimeError, ValueError):
+            return None
+        # getAttr returns [(r, g, b)] for a float3; unwrap the outer list.
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        values = tuple(
+            float(v) for v in (value if isinstance(value, (tuple, list)) else (value,))
+        )
+        if logical == "opacity" and cls.get_attr(shader_type, logical) == (
+            attr,
+            "outTransparency",
+        ):
+            values = tuple(1.0 - v for v in values)
+        transform = cls.CONSTANT_TRANSFORMS.get((shader_type, logical))
+        if transform is not None:
+            values = tuple(transform(v) for v in values)
+        if logical == "emission":
+            weight = cls.emission_weight(shader, shader_type)
+            values = tuple(v * weight for v in values)
+        return values
 
     @classmethod
     def get_mapping(
@@ -289,9 +471,9 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         return True
 
     # Fallback slots for a logical channel when the DECLARED one is absent from
-    # the live node. Only StingrayPBS needs this: its attributes come from the
-    # loaded ShaderFX graph, so one node type has three different opacity
-    # answers -- `Standard_Transparent.sfx` the scalar `opacity` declared above,
+    # the live node. StingrayPBS: its attributes come from the loaded ShaderFX
+    # graph, so one node type has three different opacity answers --
+    # `Standard_Transparent.sfx` the scalar `opacity` declared above,
     # `Standard_Masked.sfx` a float3 `TEX_mask_map` (alpha cutout), and
     # `Standard.sfx` neither. Declaring only the first silently dropped the
     # channel on every masked material.
@@ -300,8 +482,12 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
     # (``TEX_mask_mapX/Y/Z``), and VP2 then reads an UNBOUND sampler -- 0 --
     # and discards every fragment. The masked graph reads the RED channel of
     # the bound texture (a grayscale opacity map carries its value there).
+    # openPBRSurface: the spec's ``geometryNormal`` is what a newer Maya may
+    # expose; Maya 2025's node has the classic ``normalCamera`` instead (probed
+    # -- GameShader tries both), so the declaration alone dropped every normal.
     SLOT_ALTERNATES: Dict[Tuple[str, str], Tuple[Tuple[str, str], ...]] = {
         ("StingrayPBS", "opacity"): (("TEX_mask_map", "outColor"),),
+        ("openPBRSurface", "normal"): (("normalCamera", "outColor"),),
     }
 
     # Slots that are shader UNIFORMS, never samplers. A texture connected to

@@ -2,8 +2,8 @@
 # coding=utf-8
 """Event primitive tests — require a live Maya session.
 
-Covers per-track attr creation, key read/write/shift/remove, track
-lifecycle, and the visibility escape hatch.
+Covers per-track attr creation, key read/write/shift/remove, the clip writer
+(``key_clip``), track lifecycle, and the visibility escape hatch.
 """
 
 import unittest
@@ -15,8 +15,11 @@ except ImportError as exc:
         "These tests must run inside a Maya session (standalone or GUI)."
     ) from exc
 
-from base_test import MayaTkTestCase
+import pythontk as ptk
+
+from base_test import MayaTkTestCase, make_temp_wav
 from mayatk.audio_utils._audio_utils import AudioUtils
+from mayatk.node_utils.data_nodes import DataNodes
 
 _events = _schema = _carriers = AudioUtils
 
@@ -106,9 +109,7 @@ class TestEnsureTrackAttr(MayaTkTestCase):
         self.assertTrue(curves, "precondition: the track is keyed through a curve")
         cmds.delete(curves)
         self.assertTrue(cmds.objExists(_schema.CARRIER_NODE), "carrier deleted")
-        self.assertEqual(
-            cmds.getAttr(f"{_schema.CARRIER_NODE}.probe_record"), "RECORD"
-        )
+        self.assertEqual(cmds.getAttr(f"{_schema.CARRIER_NODE}.probe_record"), "RECORD")
 
 
 class TestHasTrack(MayaTkTestCase):
@@ -256,6 +257,81 @@ class TestShiftKeysInRange(MayaTkTestCase):
         self.assertIn("footstep", shifted)
         frames = sorted(f for f, _ in _events.read_keys("footstep"))
         self.assertEqual(frames, [10.0, 20.0, 30.0])
+
+
+class TestKeyClip(MayaTkTestCase):
+    """``key_clip``: the one audio key writer -- the Audio Clips panel's Key and
+    the Shot Manifest's build both place a clip through it, snapped as the
+    scene's effect recipe says."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="film")  # 24 fps: a 1 s clip is 24 frames
+        # The recipe lives on the shot store, which sits above audio_utils.
+        self.store_cls = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+        self.store_cls._active = None
+
+    def tearDown(self):
+        self.store_cls._active = None
+        super().tearDown()
+
+    def test_keys_on_and_off_and_returns_both(self):
+        written = _events.key_clip("voice", 10, duration=24)
+        self.assertEqual(_events.read_keys("voice"), [(10.0, 1.0), (34.0, 0.0)])
+        curve = _events.track_curve("voice")
+        self.assertEqual(written, [(curve, 10.0), (curve, 34.0)])
+
+    def test_the_length_is_measured_from_the_source(self):
+        _events.set_path("voice", make_temp_wav("key_clip_voice", 1.0))
+        _events.key_clip("voice", 10)
+        self.assertEqual(_events.read_keys("voice"), [(10.0, 1.0), (34.0, 0.0)])
+
+    def test_an_unmeasurable_clip_ends_on_the_fallback(self):
+        _events.key_clip("voice", 10, end=40)
+        self.assertEqual(_events.read_keys("voice"), [(10.0, 1.0), (40.0, 0.0)])
+
+    def test_with_neither_length_nor_end_it_plays_through(self):
+        _events.key_clip("voice", 10)
+        self.assertEqual(_events.read_keys("voice"), [(10.0, 1.0)])
+
+    def test_it_deletes_nothing(self):
+        """A caller replacing a clip takes its own keys out first; the writer
+        never clears the track (the build used to, taking hand-placed clips of
+        the same track with it)."""
+        _events.write_key("voice", 100, 1)
+        _events.key_clip("voice", 10, duration=24)
+        self.assertEqual(
+            _events.read_keys("voice"), [(10.0, 1.0), (34.0, 0.0), (100.0, 1.0)]
+        )
+
+    def test_a_later_start_inside_the_clip_keeps_playing(self):
+        """The OFF would cut a later clip of the same track short."""
+        _events.write_key("voice", 20, 1)
+        written = _events.key_clip("voice", 10, duration=24)
+        self.assertEqual(_events.read_keys("voice"), [(10.0, 1.0), (20.0, 1.0)])
+        self.assertEqual([t for _c, t in written], [10.0])
+
+    def test_frames_snap_to_the_nearest_whole_frame(self):
+        _events.key_clip("voice", 10.6, duration=24)
+        self.assertEqual(_events.read_keys("voice"), [(11.0, 1.0), (35.0, 0.0)])
+
+    def test_the_snap_is_the_scene_recipes(self):
+        self.assertTrue(_events.get_snap_frames())
+        _events.set_snap_frames(False)
+        self.assertFalse(_events.get_snap_frames())
+        self.assertFalse(self.store_cls.active().effect_recipe.audio_snap)
+        _events.key_clip("voice", 10.5, duration=24)
+        self.assertEqual(_events.read_keys("voice"), [(10.5, 1.0), (34.5, 0.0)])
+
+    def test_a_shift_moves_the_ledgers_claims_with_the_keys(self):
+        """The manifest claims the clips it keys; a claim left on the frame
+        its key moved off would be released onto whatever sits there next."""
+        ledger = ptk.ShotEditLedger()
+        for curve, t in _events.key_clip("voice", 10, duration=24):
+            ledger.record_authored(curve, t, 1, "set_clip", "voice")
+        _events.shift_keys_in_range(0, 50, 100, ledger=ledger)
+        curve = _events.track_curve("voice")
+        self.assertEqual(ledger.authored(), [(curve, 110.0), (curve, 134.0)])
 
 
 class TestDeleteTrack(MayaTkTestCase):

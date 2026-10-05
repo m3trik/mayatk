@@ -42,11 +42,14 @@ class UnityPanelMixin:
     """
 
     # Manage Unity Scripts needs TemplateDeployer.components() / .run_action(), which
-    # landed in unitytk 0.0.8. The floor rides on the requirement string so the probe,
-    # the prompt and pip all read one value; `pyproject.toml`'s [unity] extra only
-    # constrains a FRESH install, so a session carrying the older release would
-    # otherwise import fine and then AttributeError inside the handler.
-    UNITYTK_REQ = "unitytk>=0.0.8"
+    # landed in unitytk 0.0.8, and 0.1.0 moved the templates into one folder per
+    # component: an older deployer knows only the flat names, so its Install / Update
+    # writes flat copies beside the moved ones (every class twice; the package's
+    # assembly stops compiling). The floor rides on the requirement string so the
+    # probe, the prompt and pip all read one value; `pyproject.toml`'s [unity] extra
+    # only constrains a FRESH install, so a session carrying the older release would
+    # otherwise keep using it.
+    UNITYTK_REQ = "unitytk>=0.1.0"
 
     #: The feature named by the install prompt (Manage Unity Scripts -> Install).
     UNITY_FEATURE = "Unity Bridge"

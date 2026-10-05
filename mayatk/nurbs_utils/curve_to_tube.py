@@ -38,10 +38,9 @@ from typing import List, Optional
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     cmds = None
     om = None
-    print(__file__, error)
 
 import pythontk as ptk
 
@@ -444,12 +443,11 @@ class CurveToTube(ptk.LoggingMixin):
         ``extrude -> nurbsToPoly`` build (which works but can flip normals on a
         live curve edit — see ``_conform_poly_outward``).
         """
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.core_utils.plugins._plugins import Plugins
 
         try:
-            if not EnvUtils.is_plugin_loaded("curveWarp"):
-                cmds.loadPlugin("curveWarp", quiet=True)
-            return EnvUtils.is_plugin_loaded("curveWarp")
+            Plugins.load("curveWarp")
+            return Plugins.is_loaded("curveWarp")
         except Exception:
             return False
 

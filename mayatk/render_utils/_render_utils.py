@@ -13,17 +13,16 @@ The Arnold preview *network* itself is a separate concern owned by
 :class:`mayatk.ArnoldBridge`; this module only selects/launches renderers.
 """
 
-import os
 from typing import Dict, List, Optional
 
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 
 
 class RenderUtils(ptk.HelpMixin):
@@ -73,7 +72,7 @@ class RenderUtils(ptk.HelpMixin):
             _add(name, cls._renderer_label(name), True)
 
         for name, (plugin, label) in cls.OPTIONAL_RENDERERS.items():
-            if name not in seen and cls._plugin_installed(plugin):
+            if name not in seen and Plugins.available(plugin):
                 _add(name, label, False)
 
         return out
@@ -95,29 +94,6 @@ class RenderUtils(ptk.HelpMixin):
             label = None
         return label or fallback or name
 
-    @staticmethod
-    def _plugin_installed(plugin: str) -> bool:
-        """True if *plugin* is loaded, or its file is on the plugin search path.
-
-        ``pluginInfo(path=True)`` only answers for already-loaded plugins, so an
-        installed-but-unloaded renderer is detected by scanning
-        ``MAYA_PLUG_IN_PATH`` for the plugin file (its module .mod adds the dir
-        at startup).
-        """
-        if EnvUtils.is_plugin_loaded(plugin):
-            return True
-        try:
-            search = (os.environ.get("MAYA_PLUG_IN_PATH", "") or "").split(os.pathsep)
-            for directory in search:
-                if not directory:
-                    continue
-                for ext in (".mll", ".so", ".bundle", ".py"):
-                    if os.path.exists(os.path.join(directory, plugin + ext)):
-                        return True
-        except Exception:
-            pass
-        return False
-
     # ------------------------------------------------------------- selection
     @staticmethod
     def current_renderer() -> str:
@@ -129,7 +105,7 @@ class RenderUtils(ptk.HelpMixin):
         """Load *renderer*'s plugin on demand; no-op for built-ins."""
         plugin = cls.OPTIONAL_RENDERERS.get(renderer, (None,))[0]
         if plugin:
-            EnvUtils.load_plugin(plugin)
+            Plugins.load(plugin)
 
     @classmethod
     def set_renderer(cls, name: str) -> None:

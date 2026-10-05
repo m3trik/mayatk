@@ -16,8 +16,8 @@ import numpy as np
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om2
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # From this package:
@@ -2020,16 +2020,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         """Metres per scene linear unit (the record's ``unit_scale``): an
         engine that imported in metres multiplies the record's lengths."""
         unit = cmds.currentUnit(query=True, linear=True)
-        return {
-            "mm": 0.001,
-            "cm": 0.01,
-            "m": 1.0,
-            "km": 1000.0,
-            "in": 0.0254,
-            "ft": 0.3048,
-            "yd": 0.9144,
-            "mi": 1609.344,
-        }.get(unit, 1.0)
+        return ptk.MathUtils.metres_per_unit(unit, 1.0)
 
     @classmethod
     def _plane_attr(cls, plane, name, default=None):

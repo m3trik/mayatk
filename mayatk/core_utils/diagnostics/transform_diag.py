@@ -27,8 +27,8 @@ from typing import Dict, List, Optional, Sequence, Union
 
 try:
     import maya.cmds as cmds
-except ImportError as error:  # pragma: no cover - Maya runtime specific
-    print(__file__, error)
+except ImportError:  # pragma: no cover - Maya runtime specific
+    pass
 
 import pythontk as ptk
 

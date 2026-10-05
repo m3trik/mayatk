@@ -21,15 +21,15 @@ from typing import Iterator, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.mat_utils._mat_utils import MatUtils
-from mayatk.env_utils._env_utils import EnvUtils
 
 
 class _ArnoldBridgeInternal(object):
@@ -66,6 +66,18 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
     # Shading-engine slot the Arnold shader drives (the MtoA render override
     # that sits alongside the standard ``surfaceShader``).
     BRIDGE_SLOT = "aiSurfaceShader"
+
+    def __init__(self, ambient_occlusion: bool = True):
+        """
+        Parameters:
+            ambient_occlusion: Multiply an AO map (or a packed mask's AO channel)
+                into the base colour (default, the game material's look).
+                ``False`` leaves it unwired, for a bake: Arnold traces the
+                occlusion the map approximates, so AO-darkened albedo bounces it
+                twice (:meth:`TextureBaker.arnold_translation_guard`).
+        """
+        super().__init__()
+        self.ambient_occlusion = bool(ambient_occlusion)
 
     #: Surface-shader node types MtoA cannot translate: hardware/ShaderFX graphs
     #: render ERROR MAGENTA in Arnold. Their VIEWPORT look is fine, which is
@@ -144,7 +156,7 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             self.logger.warning("No materials in scope for Arnold bridge.")
             return []
 
-        EnvUtils.load_plugin("mtoa")  # Load Arnold plugin
+        Plugins.load("mtoa")  # Load Arnold plugin
         results: List[str] = []
         for mat in targets:
             name = CoreUtils.short_name(mat)
@@ -645,7 +657,7 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             ai_node, self._chan_plug(file_node, rough_ch), invert=invert
         )
         ao_ch = layout.get("ao")
-        if ao_ch:
+        if ao_ch and self.ambient_occlusion:
             # Broadcast the single AO channel uniformly into the baseColor
             # multiply (input2R/G/B) — never the whole packed outColor (see
             # _PACKED_LAYOUTS: that greens every non-metal surface).
@@ -732,8 +744,9 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             return True
 
         if texture_type == "Ambient_Occlusion":
-            f = self._make_file(texture)
-            cmds.connectAttr(f"{f}.outColor", f"{aiMult_node}.input2", force=True)
+            if self.ambient_occlusion:  # else handled: deliberately unwired
+                f = self._make_file(texture)
+                cmds.connectAttr(f"{f}.outColor", f"{aiMult_node}.input2", force=True)
             return True
 
         if texture_type == "Opacity":

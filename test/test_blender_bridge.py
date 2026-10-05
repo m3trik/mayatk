@@ -1011,9 +1011,7 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
                 script_path="S.py",
             )
 
-        return mock.patch.object(
-            ptk.ScriptRunDeliverer, "run", staticmethod(fake_run)
-        )
+        return mock.patch.object(ptk.ScriptRunDeliverer, "run", staticmethod(fake_run))
 
     def _export_patches(self):
         return (
@@ -1782,9 +1780,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
                 script_path="S.py",
             )
 
-        return mock.patch.object(
-            ptk.ScriptRunDeliverer, "run", staticmethod(fake_run)
-        )
+        return mock.patch.object(ptk.ScriptRunDeliverer, "run", staticmethod(fake_run))
 
     @staticmethod
     def _layout_from(shape):
@@ -1828,9 +1824,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         src, copy = self._instanced_pair()
         request = mock.Mock(template="bake_lightmaps", params={})
         bridge = BlenderBridge()
-        with mock.patch.object(
-            ptk.HandoffBridge, "_preflight", return_value=True
-        ):
+        with mock.patch.object(ptk.HandoffBridge, "_preflight", return_value=True):
             self.assertTrue(bridge._preflight([src, copy], request))
 
     def test_the_real_bake_path_exports_instanced_geometry(self):
@@ -2718,6 +2712,28 @@ class TestBridgeLightManifest(MayaTkTestCase):
         # which baked dark needs.
         self.assertEqual(self.bridge._contributing_lights(records), [])
 
+    def test_an_area_light_carries_its_roll_as_right(self):
+        """The FBX strips a light's rotation and ``aim`` fixes only where it
+        points, so a rectangle's long side rides ``right`` (its world local X).
+        Measured on the production office (2026-10-01): its fixture strips sit
+        under a group turned 90 degrees about Y and crossed turned 90 from the
+        fixtures they light, so every shadow smeared the wrong way.
+        Added: 2026-10-01
+        """
+        transform, _shape = self._light("areaLight", intensity=10.0)
+        cmds.setAttr(f"{transform}.rotateX", -90)  # facing down
+        group = cmds.group(transform, name="bb_turned_rig")
+        cmds.setAttr(f"{group}.rotateY", 90)
+        transform = cmds.listRelatives(group, children=True, fullPath=True)[0]
+
+        record = self.bridge._manifest_lights([transform])[0]
+
+        for got, want in zip(record["aim"], (0.0, -1.0, 0.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        # Local X, turned 90 about world Y, points along world -Z.
+        for got, want in zip(record["right"], (0.0, 0.0, -1.0)):
+            self.assertAlmostEqual(got, want, places=5)
+
     def test_a_zero_intensity_light_is_recorded_as_hidden_not_dropped(self):
         transform, _shape = self._light("pointLight", intensity=0.0)
         records = self.bridge._manifest_lights([transform])
@@ -2935,6 +2951,16 @@ class TestBridgeSkyDomeWorld(MayaTkTestCase):
         self.assertIs(include_environment(bake), True)
         self.assertIs(include_environment(bake, INCLUDE_ENVIRONMENT=False), False)
 
+    def test_an_emissive_map_lights_the_bake_at_arnolds_weight(self):
+        """``ArnoldBridge`` wires an emissive map at emission 1, so Maya's own
+        Lightmap Baker lights the room with the map as authored; the bridge's
+        Cycles bake at 2.0 lit it with twice that.
+        Added: 2026-10-01
+        """
+        from mayatk.env_utils.blender_bridge._blender_bridge import DEFAULTS
+
+        self.assertEqual(DEFAULTS["EMISSION_STRENGTH"], 1.0)
+
     def test_the_bake_template_lights_its_world_through_the_applier(self):
         """The precedence -- explicit HDRI, the dome, ambient -- lives in ONE place,
         blendertk's ``MayaSceneImport.apply_world`` (tested there in Blender), so
@@ -2958,7 +2984,7 @@ class TestBridgeSkyDomeWorld(MayaTkTestCase):
         code = compile(ast.Module([light_scene], type_ignores=[]), "template", "exec")
         worlds = []
 
-        def set_world_environment(hdri=None, strength=1.0):
+        def set_world_environment(hdri=None, strength=1.0, color=None):
             worlds.append((hdri, strength))
             return f"{hdri} @ {strength}"
 
@@ -3009,7 +3035,9 @@ class TestBridgeSkyDomeWorld(MayaTkTestCase):
         self.assertEqual(worlds.pop(), ("C:/maps/studio.hdr", 2.0))
         self.assertEqual((report["hdri"], report["sky_dome"]), ("studio.hdr", ""))
         report = run(NoApplier, "")
-        self.assertEqual(worlds.pop(), (None, 2.0))
+        # Nothing lights the world, so it goes black -- as Arnold renders it --
+        # rather than keeping the flat ambient Maya's own baker never sees.
+        self.assertEqual(worlds[-2:], [(None, 2.0), (None, 0.0)])
         self.assertEqual((report["hdri"], report["sky_dome"]), ("", ""))
         self.assertIn("BLACK", " ".join(report["warnings"]))
 
@@ -3643,6 +3671,57 @@ class TestBridgeLightmapSceneRecords(MayaTkTestCase):
         LightmapExcludeSet.define([mesh])
 
         self.assertEqual(self._section([root])["exclude"], [])
+
+    def test_the_template_rebuilds_materials_without_ambient_occlusion(self):
+        """Cycles traces the occlusion an AO map approximates, so the bake
+        rebuilds the sent materials without the AO multiply -- as the Arnold
+        bake's game-shader stand-in does (production office: bounce-lit ceilings
+        0.77x Arnold with it, 0.95x without).
+        Added: 2026-10-01
+        """
+        import ast
+
+        tree = ast.parse(
+            (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        )
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and getattr(node.func, "attr", "") == "_apply_texture_manifest"
+        ]
+        self.assertTrue(calls, "the template no longer replays the texture manifest")
+        for call in calls:
+            kw = {k.arg: k.value for k in call.keywords}
+            self.assertIn("ambient_occlusion", kw)
+            self.assertIs(kw["ambient_occlusion"].value, False)
+
+    def test_the_template_keeps_hidden_meshes_out_of_render_and_targets(self):
+        """A group send carries its hidden descendants -- ``_bakeable`` only
+        filters the meshes it is handed -- and Blender's FBX importer maps the
+        hidden flag to ``hide_viewport`` but leaves ``hide_render`` on, so Cycles
+        rendered and baked what Arnold never renders. Measured on the production
+        office (2026-10-01): the hidden ``|TEMP|PROPS`` figure and spare table
+        were baked and in the render. Read off the template's source, the bridge
+        suite's convention for template contracts: hiding is read per mesh up its
+        parents, taken out of the render, and out of the targets.
+        Added: 2026-10-01
+        """
+        import ast
+
+        source = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        rule = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "hidden_in_maya"
+        )
+        body = ast.unparse(rule)
+        self.assertIn("obj.hide_viewport", body)
+        self.assertIn("obj = obj.parent", body)
+        self.assertIn("hidden = [o for o in meshes if hidden_in_maya(o)]", source)
+        self.assertIn("obj.hide_render = True", source)
+        self.assertIn("meshes = [o for o in meshes if o not in hidden]", source)
 
     def test_the_template_reads_the_records_off_the_imported_meshes(self):
         """Not off every imported object: the light rebuild replaces the lights'

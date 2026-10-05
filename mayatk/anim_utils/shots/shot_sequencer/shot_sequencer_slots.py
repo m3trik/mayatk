@@ -243,7 +243,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 signal.connect(slot)
                 connections.append((sig_name, slot))
             sequencer._slots_connections = connections
-            sequencer._zone_menu_connected = True
+            # Right-clicks reach on_zone_context_menu (the shot-lane menu)
+            # instead of the widget's built-in default menu.
+            sequencer.zone_menu_enabled = True
 
             # The panel's own key bindings.  ``add_shortcut`` disposes and
             # replaces a same-sequence binding, so a slots re-init over the

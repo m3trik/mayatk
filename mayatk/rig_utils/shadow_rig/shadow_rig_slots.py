@@ -12,8 +12,8 @@ import math
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils

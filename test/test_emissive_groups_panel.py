@@ -13,6 +13,7 @@ configures (columns / scrub / single-click edit) and re-wires its signals,
 and every button path drives the engine end-to-end against a real scene.
 """
 
+import os
 import unittest
 
 import maya.cmds as cmds
@@ -234,6 +235,20 @@ class TestPanelWorkflow(_PanelCase):
         payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
         self.assertEqual(payload["resolution"], 64)
+        # The button names no path, so the mask lands in the current project's
+        # sourceimages -- which must be the run's sandbox, never the project the
+        # user last had open (a GUI-pass Maya restores it from prefs: measured,
+        # `untitled_EMask.png` of exactly this fixture in a production project).
+        from pythontk.core_utils.test_sandbox import TestSandbox
+
+        if TestSandbox.is_active():
+            root = os.path.normcase(
+                os.path.realpath(cmds.workspace(q=True, rootDirectory=True))
+            )
+            sandbox = os.path.normcase(os.path.realpath(TestSandbox.temp()))
+            self.assertTrue(
+                root.startswith(sandbox), f"wrote into a real project: {root}"
+            )
 
     def test_table_signal_rewire_survives_a_new_slots_instance(self):
         """The QWidget outlives the slots instance; a re-init must rebind.

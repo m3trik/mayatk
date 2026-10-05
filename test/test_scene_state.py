@@ -108,6 +108,43 @@ class TestAlphaModeSection(MayaTkTestCase):
         cube, _ = self._standard_surface("solidStd")
         self.assertNotIn("solidStd", SceneState.read([cube]).get("alpha_mode") or {})
 
+    def _legacy(self, name, node_type="phong", transparency=None, connect=False):
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        if transparency is not None:
+            cmds.setAttr(f"{mat}.transparency", *transparency, type="double3")
+        if connect:
+            tex = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+            cmds.connectAttr(f"{tex}.outTransparency", f"{mat}.transparency")
+        return cube, mat
+
+    def test_a_transparent_legacy_shader_is_blend(self):
+        """REGRESSION (2026-10-03): a Phong lens at 89% transparency reached
+        the GLB OPAQUE. The FBX carries its transparency and FBX2glTF writes
+        it into baseColorFactor's alpha (0.105) -- but judges the MODE from a
+        texture's alpha alone, so every viewer ignored the alpha and drew a
+        solid grey disc in the magnifier."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._legacy("lensMat", transparency=(0.89, 0.89, 0.89))
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("lensMat")
+        self.assertEqual(entry, {"mode": "BLEND"})
+        cube, _ = self._legacy("mappedLensMat", node_type="lambert", connect=True)
+        entry = (SceneState.read([cube]).get("alpha_mode") or {}).get("mappedLensMat")
+        self.assertEqual(entry, {"mode": "BLEND"}, "a mapped transparency too")
+
+    def test_an_opaque_legacy_shader_contributes_nothing(self):
+        """Transparency 0 is opaque: the converter's own OPAQUE stands."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._legacy("solidPhong")
+        self.assertNotIn("solidPhong", SceneState.read([cube]).get("alpha_mode") or {})
+
 
 class TestMetallicRoughnessSection(MayaTkTestCase):
     def _material_with_maps(self, name="mrMat", roughness=True, metallic=True):
@@ -191,6 +228,38 @@ class TestMetallicRoughnessSection(MayaTkTestCase):
         )
         self.assertNotIn(
             "plain", SceneState.read([cube]).get("metallic_roughness") or {}
+        )
+
+
+class TestEmissionWeight(MayaTkTestCase):
+    """The emission weight is the SHADER map's: a material's constant emission
+    (``ShaderAttributeMap.read_constant``) needs it too, below this layer."""
+
+    def test_the_weight_is_the_shader_maps(self):
+        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        self.assertIs(
+            SceneState.EMISSION_WEIGHT_ATTRS, ShaderAttributeMap.EMISSION_WEIGHT_ATTRS
+        )
+        ss = cmds.shadingNode("standardSurface", asShader=True)
+        self.assertEqual(SceneState.emission_weight(ss), 0.0)
+        cmds.setAttr(f"{ss}.emission", 0.25)
+        self.assertAlmostEqual(SceneState.emission_weight(ss), 0.25)
+
+    def test_an_unweighted_emissive_colour_is_carried_as_nothing(self):
+        """``emissionColor`` defaults to white behind a weight of 0."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube = cmds.polyCube(name="emit_geo")[0]
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="emitMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        self.assertNotIn("emitMat", SceneState.read([cube]).get("emissive") or {})
+        cmds.setAttr(f"{mat}.emission", 0.5)
+        self.assertEqual(
+            SceneState.read([cube])["emissive"]["emitMat"]["color"], [0.5, 0.5, 0.5]
         )
 
 

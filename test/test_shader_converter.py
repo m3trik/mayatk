@@ -8,6 +8,7 @@ export has to keep the texture, invert the transparency into opacity, and leave
 every plane still assigned.
 """
 
+import math
 import os
 import unittest
 
@@ -322,6 +323,253 @@ class TestConvertToStandardSurface(MayaTkTestCase, _DecalSceneMixin):
 
     def test_thin_walled_is_set_for_cutout_behavior(self):
         self.assertTrue(cmds.getAttr(f"{self.new_mat}.thinWalled"))
+
+
+class TestConvertOpaqueMaterials(MayaTkTestCase, _DecalSceneMixin):
+    """An opaque material carries opacity only as its DEFAULT value.
+
+    ``read_channels`` reports a literal for every undriven slot, so an untouched
+    ``standardSurface.opacity`` (1, 1, 1) -- or a classic shader's
+    ``transparency`` (0, 0, 0), the same "opaque" in inverted terms -- used to
+    read as an opacity channel. A Stingray retype then picked the masked graph,
+    whose unbound mask discards every fragment (the retyped mesh rendered
+    invisible), and a classic -> PBR retype copied ``transparency`` 0 straight
+    into ``opacity`` 0.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.artifacts = ptk.TempArtifacts("mtk_shader_opaque", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+        self.base_map = self._png(
+            self.artifacts.path(extension=".png"), "OPAQUE_Base_Color"
+        )
+
+    def _material(self, node_type, name):
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        color = self._file_node(self.base_map, f"{name}_color")
+        attr = ShaderAttributeMap.get_attr(node_type, "baseColor")[0]
+        cmds.connectAttr(f"{color}.outColor", f"{mat}.{attr}", force=True)
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return mat
+
+    def test_an_opaque_pbr_material_gets_the_plain_stingray_graph(self):
+        mat = self._material("standardSurface", "opaque_ss")
+        self.assertNotIn("opacity", ShaderConverter.read_channels(mat))
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        self.assertFalse(
+            cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True),
+            "an opaque material was given the masked (cutout) graph",
+        )
+
+    def test_an_opaque_classic_shader_stays_opaque_as_pbr(self):
+        mat = self._material("blinn", "opaque_blinn")
+        new_mat = ShaderConverter.convert(mat, target="standard_surface")[mat]
+        for got in cmds.getAttr(f"{new_mat}.opacity")[0]:
+            self.assertAlmostEqual(got, 1.0, places=5)
+        self.assertFalse(cmds.getAttr(f"{new_mat}.thinWalled"))
+
+    def test_a_constant_transparency_carries_across_as_opacity(self):
+        """Partial transparency is real and survives -- in OPACITY terms."""
+        mat = self._material("blinn", "glass_blinn")
+        cmds.setAttr(f"{mat}.transparency", 0.25, 0.25, 0.25, type="double3")
+        value = ShaderConverter.read_channels(mat)["opacity"]["value"]
+        for got in value:
+            self.assertAlmostEqual(got, 0.75, places=5)
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        self.assertFalse(cmds.attributeQuery("TEX_mask_map", node=new_mat, exists=True))
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.opacity"), 0.75, places=5)
+
+    def _stingray(self, name, opacity_mode="none"):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        try:
+            mat = MatUtils.create_stingray_shader(name, opacity_mode=opacity_mode)
+        except RuntimeError as error:  # no shaderFX plugin on this install
+            self.skipTest(f"StingrayPBS unavailable: {error}")
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.select(plane)
+        cmds.hyperShade(assign=mat)
+        return mat
+
+    def test_an_unmapped_masked_stingray_carries_no_opacity(self):
+        """The masked graph's ``TEX_mask_map`` is a SAMPLER: undriven, its
+        literal (0, 0, 0) is no opacity at all -- read as one, the retype
+        picked the transparent graph at opacity 0 and the mesh vanished."""
+        mat = self._stingray("masked_bare", opacity_mode="masked")
+        self.assertNotIn("opacity", ShaderConverter.read_channels(mat))
+
+    def test_an_untextured_stingray_keeps_its_colour_as_pbr(self):
+        """A StingrayPBS keeps its constants in uniforms (``base_color``), not
+        on its ``TEX_*`` samplers -- whose (0, 0, 0) turned it black."""
+        mat = self._stingray("bare_sr")
+        cmds.setAttr(f"{mat}.base_color", 0.2, 0.4, 0.6, type="double3")
+        new_mat = ShaderConverter.convert(mat, target="standard_surface")[mat]
+        for got, want in zip(cmds.getAttr(f"{new_mat}.baseColor")[0], (0.2, 0.4, 0.6)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_an_untextured_classic_shader_keeps_its_colour_as_stingray(self):
+        """...and the way in: the literal lands on the uniform, not the sampler."""
+        mat = cmds.shadingNode("blinn", asShader=True, name="bare_blinn")
+        cmds.setAttr(f"{mat}.color", 0.2, 0.4, 0.6, type="double3")
+        plane = cmds.polyPlane(name="bare_blinn_geo", constructionHistory=False)[0]
+        cmds.select(plane)
+        cmds.hyperShade(assign=mat)
+        new_mat = ShaderConverter.convert(mat, target="stingray")[mat]
+        for got, want in zip(cmds.getAttr(f"{new_mat}.base_color")[0], (0.2, 0.4, 0.6)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_a_scalar_literal_fills_every_channel_of_a_colour_slot(self):
+        """Stingray's transparent ``opacity`` is a scalar; standardSurface's a
+        float3 -- a bare ``setAttr`` of one into the other raises, and the
+        partial opacity was dropped on the way back."""
+        mat = self._material("blinn", "glass_rt")
+        cmds.setAttr(f"{mat}.transparency", 0.25, 0.25, 0.25, type="double3")
+        stingray = ShaderConverter.convert(mat, target="stingray")[mat]
+        back = ShaderConverter.convert(stingray, target="standard_surface")[stingray]
+        for got in cmds.getAttr(f"{back}.opacity")[0]:
+            self.assertAlmostEqual(got, 0.75, places=5)
+
+
+class TestLiveSlots(MayaTkTestCase, _DecalSceneMixin):
+    """The slot the NODE has (``ShaderAttributeMap.resolve_live_slot``), read
+    and carried: openPBR's normal on Maya 2025's ``normalCamera`` (the spec's
+    ``geometryNormal`` is what it declares), a masked StingrayPBS's opacity on
+    ``TEX_mask_map``. Read off the declaration alone, both were dropped."""
+
+    def setUp(self):
+        super().setUp()
+        self.artifacts = ptk.TempArtifacts("mtk_shader_live_slots", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+
+    def _map(self, stem):
+        path = self._png(self.artifacts.path(extension=".png"), stem)
+        return self._file_node(path, stem.lower())
+
+    def test_reads_the_openpbr_normal_on_the_slot_this_maya_has(self):
+        try:
+            shader = cmds.shadingNode("openPBRSurface", asShader=True, name="ls_opbr")
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(shader) != "openPBRSurface":  # an `unknown` placeholder
+            self.skipTest("openPBRSurface unavailable in this session")
+        slot = next(
+            a
+            for a in ("geometryNormal", "normalCamera")
+            if cmds.attributeQuery(a, node=shader, exists=True)
+        )
+        normal = self._map("LIVE_Normal")
+        cmds.connectAttr(f"{normal}.outColor", f"{shader}.{slot}", force=True)
+        self.assertEqual(
+            ShaderConverter.read_channels(shader)["normal"]["file"], normal
+        )
+
+    def test_a_masked_stingrays_mask_becomes_the_opacity(self):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        try:
+            mat = MatUtils.create_stingray_shader("ls_masked", opacity_mode="masked")
+        except RuntimeError as error:  # no shaderFX plugin on this install
+            self.skipTest(f"StingrayPBS unavailable: {error}")
+        mask = self._map("LIVE_Opacity")
+        cmds.connectAttr(f"{mask}.outColor", f"{mat}.TEX_mask_map", force=True)
+        plane = cmds.polyPlane(name="ls_masked_geo", constructionHistory=False)[0]
+        cmds.select(plane)
+        cmds.hyperShade(assign=mat)
+        self.assertEqual(ShaderConverter.read_channels(mat)["opacity"]["file"], mask)
+
+        new_mat = ShaderConverter.convert(mat, target="standard_surface")[mat]
+        drivers = {
+            node
+            for plug in ("opacity", "opacityR", "opacityG", "opacityB")
+            for node in cmds.listConnections(
+                f"{new_mat}.{plug}", source=True, destination=False
+            )
+            or []
+        }
+        self.assertEqual(drivers, {mask})
+
+
+class TestConstantsInChannelTerms(MayaTkTestCase):
+    """An unmapped literal crosses in the CHANNEL's terms
+    (``ShaderAttributeMap.read_constant``), not in its source attribute's."""
+
+    def _stingray_from(self, node_type, name):
+        mat = cmds.shadingNode(node_type, asShader=True, name=name)
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name=f"{name}_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        try:
+            return ShaderConverter.convert(mat, target="stingray")[mat]
+        except RuntimeError as error:  # no shaderFX plugin on this install
+            self.skipTest(f"StingrayPBS unavailable: {error}")
+
+    def test_an_untouched_standard_surface_emits_nothing_as_stingray(self):
+        """``emissionColor`` is white behind an ``emission`` weight of 0:
+        carried alone, an untouched standardSurface retyped to Stingray
+        glowed white."""
+        new_mat = self._stingray_from("standardSurface", "dark_ss")
+        for got in cmds.getAttr(f"{new_mat}.emissive")[0]:
+            self.assertAlmostEqual(got, 0.0, places=5)
+
+    def test_a_phong_exponent_lands_as_a_roughness(self):
+        """phong's ``cosinePower`` (default 20) landed on Stingray's 0..1
+        ``roughness`` uniform as 20 -- fully rough."""
+        new_mat = self._stingray_from("phong", "shiny_phong")
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{new_mat}.roughness"), math.sqrt(2.0 / 22.0), places=4
+        )
+
+
+class TestEmissionLandsLit(MayaTkTestCase):
+    """A carried emission lands on the target's colour slot, but standardSurface
+    / aiStandardSurface keep a separate weight that defaults to 0 (openPBR a
+    luminance): written alone, an emissive material retyped to one of them
+    rendered black. Fixed: 2026-10-04."""
+
+    def _convert(self, mat, target="standard_surface"):
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{mat}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name=f"{mat}_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        return ShaderConverter.convert(mat, target=target)[mat]
+
+    def test_an_emissive_lambert_lands_lit_as_standard_surface(self):
+        mat = cmds.shadingNode("lambert", asShader=True, name="glow_lambert")
+        cmds.setAttr(f"{mat}.incandescence", 0.2, 0.6, 1.0, type="double3")
+        new_mat = self._convert(mat)
+        self.assertEqual(cmds.nodeType(new_mat), "standardSurface")
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.emission"), 1.0, places=5)
+        for got, want in zip(
+            cmds.getAttr(f"{new_mat}.emissionColor")[0], (0.2, 0.6, 1.0)
+        ):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_a_source_that_emits_nothing_leaves_the_weight_off(self):
+        mat = cmds.shadingNode("lambert", asShader=True, name="dark_lambert")
+        new_mat = self._convert(mat)
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.emission"), 0.0, places=5)
+
+    def test_an_emissive_lambert_lands_lit_as_open_pbr(self):
+        mat = cmds.shadingNode("lambert", asShader=True, name="glow_lambert_opbr")
+        cmds.setAttr(f"{mat}.incandescence", 0.5, 0.5, 0.5, type="double3")
+        try:
+            new_mat = self._convert(mat, target="open_pbr")
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(new_mat) != "openPBRSurface":  # an `unknown` placeholder
+            self.skipTest("openPBRSurface unavailable in this session")
+        self.assertGreater(cmds.getAttr(f"{new_mat}.emissionLuminance"), 0.0)
 
 
 class TestConvertSkips(MayaTkTestCase, _DecalSceneMixin):

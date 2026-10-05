@@ -1327,7 +1327,7 @@ class SubstanceEngine(ptk.HandoffBridge):
         """
         out: Dict[str, Any] = dict(_TEMPLATE_DEFAULTS)
         try:
-            tree = ast.parse(template_path.read_text(encoding="utf-8"))
+            tree = ast.parse(template_path.read_text(encoding="utf-8-sig"))
         except (OSError, SyntaxError) as e:
             logger.warning("Could not parse template %s: %s", template_path, e)
             return out

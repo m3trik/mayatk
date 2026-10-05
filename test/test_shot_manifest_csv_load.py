@@ -45,10 +45,10 @@ _SLOTS = "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
 def _make_stub_controller():
     """A stub carrying only the collaborators ``_load_csv`` touches."""
     ctrl = types.SimpleNamespace()
-    ctrl._sync_csv_widgets = MagicMock()
     ctrl._set_footer = MagicMock()
     ctrl._load_data = MagicMock()
     ctrl._refresh_ranges = MagicMock()
+    ctrl._fill_missing_assets = MagicMock()
     ctrl._recent_csv_option = MagicMock()
     ctrl._active_mapping = None
     ctrl._column_map = ColumnMap()
@@ -67,23 +67,26 @@ def _make_stub_controller():
     ctrl._mark_csv_invalid = lambda reason: ShotManifestController._mark_csv_invalid(
         ctrl, reason
     )
+    ctrl._drop_excluded = lambda steps: ShotManifestController._drop_excluded(
+        ctrl, steps
+    )
     return ctrl
 
 
 class LoadCsvFailureTest(unittest.TestCase):
     """Every _load_csv failure path must leave the field usable."""
 
-    def test_missing_file_enables_widgets(self):
-        """A non-existent path still enables the field (so it can be fixed)."""
+    def test_missing_file_leaves_the_field_usable(self):
+        """A non-existent path is reported on the field and returns False."""
         ctrl = _make_stub_controller()
-        ShotManifestController._load_csv(ctrl, "X:/no/such/file.csv")
+        ok = ShotManifestController._load_csv(ctrl, "X:/no/such/file.csv")
 
-        ctrl._sync_csv_widgets.assert_called_once_with(True)
+        self.assertFalse(ok)
         ctrl._load_data.assert_not_called()
         ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
 
-    def test_unreadable_oserror_enables_widgets(self):
-        """An OSError on read (e.g. errno 22) enables the field, not load."""
+    def test_unreadable_oserror_leaves_the_field_usable(self):
+        """An OSError on read (e.g. errno 22) is reported, not loaded."""
         ctrl = _make_stub_controller()
         with (
             patch("os.path.isfile", return_value=True),
@@ -93,14 +96,14 @@ class LoadCsvFailureTest(unittest.TestCase):
                 side_effect=OSError(22, "Invalid argument"),
             ),
         ):
-            ShotManifestController._load_csv(ctrl, "X:/cloud/only.csv")
+            ok = ShotManifestController._load_csv(ctrl, "X:/cloud/only.csv")
 
-        ctrl._sync_csv_widgets.assert_called_once_with(True)
+        self.assertFalse(ok)
         ctrl._load_data.assert_not_called()
         ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
 
-    def test_malformed_csv_still_enables_widgets(self):
-        """A non-OSError parse failure also enables the field and reports it."""
+    def test_malformed_csv_still_leaves_the_field_usable(self):
+        """A non-OSError parse failure is reported, not loaded."""
         ctrl = _make_stub_controller()
         with (
             patch("os.path.isfile", return_value=True),
@@ -109,9 +112,9 @@ class LoadCsvFailureTest(unittest.TestCase):
                 side_effect=ValueError("bad header"),
             ),
         ):
-            ShotManifestController._load_csv(ctrl, "X:/data/bad.csv")
+            ok = ShotManifestController._load_csv(ctrl, "X:/data/bad.csv")
 
-        ctrl._sync_csv_widgets.assert_called_once_with(True)
+        self.assertFalse(ok)
         ctrl._load_data.assert_not_called()
 
 
@@ -134,9 +137,9 @@ class LoadCsvUrlSourceTest(unittest.TestCase):
         ctrl = _make_stub_controller()
         err = ptk.RemoteFile.Error("Can't fetch https://x: HTTP 404 Not Found.")
         with patch(f"{_SLOTS}.ManifestModel.parse_csv", side_effect=err):
-            ShotManifestController._load_csv(ctrl, self._URL)
+            ok = ShotManifestController._load_csv(ctrl, self._URL)
 
-        ctrl._sync_csv_widgets.assert_called_once_with(True)
+        self.assertFalse(ok)
         ctrl._load_data.assert_not_called()
         ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
         msg = ctrl._set_footer.call_args.args[0].lower()

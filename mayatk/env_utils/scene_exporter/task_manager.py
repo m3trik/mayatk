@@ -62,10 +62,10 @@ class TaskManager(
         """Run *tasks*, first adopting the two modes derived from them.
 
         Read off the FULL dict here rather than in
-        ``_execute_tasks_and_checks``: an override that resumes the tasks a
-        failed check stopped hands that method a subset, from which
-        ``optimize_keys_level`` would come back False and smart_bake would stop
-        optimizing its own output (see ``ptk.ExportRun.with_tasks``).
+        ``_execute_tasks_and_checks``, which a caller may hand a subset: from
+        one without it, ``optimize_keys_level`` would come back False and
+        smart_bake would stop optimizing its own output (see
+        ``ptk.ExportRun.with_tasks``).
         """
         self.run = self.run.with_tasks(tasks)
         return super().run_tasks(tasks)
@@ -361,7 +361,8 @@ class TaskManager(
 
         Every check elsewhere in this module reads the SCENE. These read the
         written bytes, which is the only way to catch what the write itself
-        got wrong: a truncated container, a take the FBX dropped, a NaN that
+        got wrong: a truncated container, a take the FBX dropped, a shot take
+        that lost a channel to the split (``fbx_take_channels``), a NaN that
         reached an accessor, a clip whose span disagrees with its take. Runs
         last, after :meth:`write_scene_data_sidecar`, because two gates
         (``clips_vs_takes``, ``fbx_takes``) read that sidecar -- and it is

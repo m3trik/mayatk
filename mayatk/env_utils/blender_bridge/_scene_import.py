@@ -2994,15 +2994,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             # is keyed by -- deliberately not reusing the ``shader_type``
             # parameter name, which carries GameShader's vocabulary
             # ("standard_surface") and would read as the same thing.
+            #
+            # The slot the node HAS (``resolve_live_slot``), as restore wires
+            # it: openPBR's normal is declared on the spec's ``geometryNormal``
+            # and Maya 2025's node exposes ``normalCamera`` -- gated on the
+            # declaration, the rescued normal was dropped.
             node_type = cmds.nodeType(shader)
             for channel in list(rescue):
-                mapped = ShaderAttributeMap.get_attr(node_type, channel)
-                if not mapped:
-                    rescue.pop(channel)
-                    continue
-                attr = f"{shader}.{mapped[0]}"
-                if not cmds.objExists(attr) or cmds.listConnections(
-                    attr, source=True, destination=False
+                mapped = ShaderAttributeMap.resolve_live_slot(
+                    shader, channel, node_type
+                )
+                if not mapped or cmds.listConnections(
+                    f"{shader}.{mapped[0]}", source=True, destination=False
                 ):
                     rescue.pop(channel)
 

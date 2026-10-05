@@ -7,8 +7,8 @@ except ImportError:
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import math
 import pythontk as ptk
 

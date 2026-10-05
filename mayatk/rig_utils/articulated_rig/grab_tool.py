@@ -7,7 +7,10 @@ held point follows the cursor across the camera-facing plane through it, and
 the rig is solved by the same ``ptk.ArticulationModel`` the runtimes port --
 so the pose keyed in Maya is the pose a grab would have made. The controls
 are written, never the joints, so every drag is keyable like any other edit:
-one undo step per drag, keyed on release when Auto Key is on.
+one undo step per drag, keyed on release when Auto Key is on. With the rig's
+end control on, a drag on the end link carries the end control (what was
+moved, and what is keyed); a drag on a link above it poses the FK controls,
+which reshapes the arm under the end link it pins.
 
 :class:`ArticulatedRigGrab` is a thin ``draggerContext`` over plain-value
 steps (:meth:`~ArticulatedRigGrab.press` / :meth:`~ArticulatedRigGrab.drag` /
@@ -47,7 +50,10 @@ class ArticulatedRigGrab(ptk.LoggingMixin):
 
     @classmethod
     def activate(cls) -> str:
-        """Make the grab the current tool. Returns the context's name."""
+        """Make the grab the current tool -- first giving any end control
+        without a solve its solve (:meth:`ArticulatedRig.repair_scene`).
+        Returns the context's name."""
+        ArticulatedRig.repair_scene()
         tool = cls()
         if cmds.draggerContext(cls.CONTEXT, exists=True):
             cmds.deleteUI(cls.CONTEXT)
@@ -135,12 +141,11 @@ class ArticulatedRigGrab(ptk.LoggingMixin):
         return self.rig.grab_to(self.hold, (target.x, target.y, target.z), key=False)
 
     def release(self) -> None:
-        """Let go: key the rig's controls when Auto Key is on, and close the
-        drag's undo chunk."""
+        """Let go: key what the drag moved (the end control, or the FK
+        controls) when Auto Key is on, and close the drag's undo chunk."""
         try:
-            if self.hold and cmds.autoKeyframe(query=True, state=True):
-                slots = self.hold["slots"]
-                self.rig.set_state(self.rig.state(slots), key=True, slots=slots)
+            if self.hold:
+                self.rig.key_hold(self.hold)
         finally:
             self.rig = self.hold = self.plane = None
             if self._chunk:

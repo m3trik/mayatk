@@ -7,10 +7,9 @@ from typing import Dict, List, Optional, Tuple
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
+except ImportError:
     cmds = None
     mel = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

@@ -43,17 +43,18 @@ class _TextureTasksMixin(_TaskDataMixin):
         act ``MatUtils.stage_textures_relative`` still performs by default for
         callers that want it.
 
-        The node *path* edits persist by design: no restore unwinds them, so
-        they are recorded as kept (``TaskFactory.record_kept_edit``) for a run
-        that stops before its write to name. An export runs with the undo
-        queue off, so nothing records them for undo there; called on its own,
-        each write is undo-anchored inside ``stage_textures_relative``.
+        The node *path* edits persist by design -- recorded as kept
+        (``TaskFactory.record_kept_edit``) for a run that stops before its
+        write to name -- unless they would not resolve once the run is over
+        (:meth:`_relativize_texture_paths`). An export runs with the undo
+        queue off, so nothing records them for undo there.
 
         Single per-node pass via ``MatUtils.stage_textures_relative`` — the
-        old copy-then-remap pair coupled two functions through basename keys
-        and could rebind a node to an unrelated same-named file the copy step
-        had refused, flatten valid ``sourceimages/sub/…`` paths, or remap
-        UDIM sets whose tiles were never copied.
+        same engine as the Texture Path Editor's Normalize Paths. (The old
+        copy-then-remap pair coupled two functions through basename keys and
+        could rebind a node to an unrelated same-named file the copy step had
+        refused, flatten valid ``sourceimages/sub/…`` paths, or remap UDIM sets
+        whose tiles were never copied.)
         """
         self.logger.debug("Converting absolute paths to relative")
         file_nodes = self._get_export_file_nodes()
@@ -61,14 +62,19 @@ class _TextureTasksMixin(_TaskDataMixin):
             self.logger.debug("No export texture file nodes — nothing to convert.")
             return
 
-        results = MatUtils.stage_textures_relative(file_nodes, external_mode="skip")
+        results = self._relativize_texture_paths(file_nodes)
 
         converted = [n for n, s in results.items() if s.endswith("relativized")]
         external = [n for n, s in results.items() if s == "skipped:external"]
         if converted:
-            self.record_kept_edit("project-relative texture paths")
             self.logger.info(
-                f"Stored project-relative paths on {len(converted)} file node(s)."
+                f"Stored project-relative paths on {len(converted)} file node(s)"
+                + (
+                    " for the write — the scene's own paths come back with "
+                    "the workspace."
+                    if self._home_workspace is not None
+                    else "."
+                )
             )
         if external:
             # Not a warning: keeping an external link intact is this task's
@@ -85,6 +91,54 @@ class _TextureTasksMixin(_TaskDataMixin):
                     f"{node}: {status.split(':', 1)[1]} — path left unchanged."
                 )
         self.logger.debug("Path conversion completed.")
+
+    def _relativize_texture_paths(self, file_nodes: List[str]) -> Dict[str, str]:
+        """Store project-relative paths on *file_nodes* -- kept only when they
+        will still resolve once the run is over.
+
+        A relative path resolves against the ACTIVE project. When
+        ``set_workspace`` switched to the scene's own project for the write,
+        the rewrite was judged in that project, and the switch is undone after
+        the write: a kept ``sourceimages/…`` then resolves against the user's
+        project, where the file is not -- a valid link broken by the export
+        (reproduced 2026-10-04). So in that case every rewrite is staged
+        instead: the write reads the relative form, and each node gets its
+        stored path back, verbatim, before the workspace is restored. Without
+        a switch the rewrite resolves where the scene stays, and is kept.
+
+        The engine is ``MatUtils.stage_textures_relative`` (externals skipped
+        -- the export never relocates a deliberate link), the same pass the
+        Texture Path Editor's Normalize Paths drives.
+
+        Returns:
+            The engine's ``{file_node: status}``.
+        """
+        before = {
+            node: cmds.getAttr(f"{node}.fileTextureName")
+            for node in file_nodes
+            if cmds.attributeQuery("fileTextureName", node=node, exists=True)
+        }
+        results = MatUtils.stage_textures_relative(file_nodes, external_mode="skip")
+        changed = [n for n, s in results.items() if s.endswith("relativized")]
+        if not changed:
+            return results
+        if self._home_workspace is None:
+            self.record_kept_edit("project-relative texture paths")
+            return results
+        for node in changed:
+            # One key per node: first stager wins, so a second pass over the
+            # same node (convert_textures' write-back) restores the TRUE
+            # original. Literal, because the original may itself be a
+            # relative spelling the plug would otherwise expand.
+            self.stage_deferred_restore(
+                f"relative_texture_path:{node}",
+                lambda node=node, path=before.get(node) or "": (
+                    Attributes.set_plug_literal(f"{node}.fileTextureName", path)
+                    if cmds.objExists(node)
+                    else None
+                ),
+            )
+        return results
 
     def optimize_textures(self, template):
         """Optimize the maps shipping with this export, by map type.
@@ -615,8 +669,9 @@ class _TextureTasksMixin(_TaskDataMixin):
         if write_back and self.run.relative_paths:
             file_nodes = self._get_export_file_nodes()
             if file_nodes:
-                # Same scope as the task itself — re-applying the conversion to
-                # the rewired nodes must not consolidate externals the task
-                # deliberately left alone.
-                MatUtils.stage_textures_relative(file_nodes, external_mode="skip")
+                # Same scope and the same keep-or-stage rule as the task itself
+                # — re-applying the conversion to the rewired nodes must not
+                # consolidate externals the task deliberately left alone, nor
+                # keep a path the restored workspace cannot resolve.
+                self._relativize_texture_paths(file_nodes)
         return None

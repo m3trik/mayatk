@@ -8,9 +8,11 @@ from typing import Dict, ClassVar, List, Optional, Union, Any
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
+
+from mayatk.core_utils.plugins._plugins import Plugins
 
 
 class EnvUtils(ptk.HelpMixin):
@@ -283,42 +285,17 @@ class EnvUtils(ptk.HelpMixin):
                 sys.path.append(path)
 
     @staticmethod
+    @ptk.Deprecation.symbol("Plugins.is_loaded", remove_in="0.23.0", since="2026-10-03")
     def is_plugin_loaded(plugin_name) -> bool:
-        """Whether the given plugin is currently loaded.
-
-        The one home for the ``pluginInfo(..., loaded=True)`` probe, which was
-        re-derived inline at a dozen call sites (three of them for mtoa
-        alone). Returns False rather than raising when the plugin is unknown
-        to this Maya — "unknown" and "not loaded" are the same answer to
-        every caller.
-
-        Parameters:
-            plugin_name (str): The plugin name, e.g. ``"mtoa"``, ``"fbxmaya"``.
-        """
-        try:
-            return bool(cmds.pluginInfo(plugin_name, query=True, loaded=True))
-        except Exception:
-            return False
+        """Moved to :meth:`Plugins.is_loaded`, beside the one plug-in door."""
+        return Plugins.is_loaded(plugin_name)
 
     @classmethod
+    @ptk.Deprecation.symbol("Plugins.load", remove_in="0.23.0", since="2026-10-03")
     def load_plugin(cls, plugin_name):
-        """Loads a specified plugin.
-        This method checks if the plugin is already loaded before attempting to load it.
-
-        Parameters:
-            plugin_name (str): The name of the plugin to load.
-
-        Examples:
-            load_plugin('nearestPointOnMesh')
-
-        Raises:
-            ValueError: If the plugin is not found or fails to load.
-        """
-        if not cls.is_plugin_loaded(plugin_name):
-            try:
-                cmds.loadPlugin(plugin_name, quiet=True)
-            except RuntimeError as e:
-                raise ValueError(f"Failed to load plugin {plugin_name}: {e}")
+        """Moved to :meth:`Plugins.load`, the one door every plug-in load goes
+        through; it raises ``Plugins.LoadError``, a ``ValueError`` as before."""
+        Plugins.load(plugin_name)
 
     @staticmethod
     def vray_plugin(load=False, unload=False, query=False):
@@ -331,21 +308,17 @@ class EnvUtils(ptk.HelpMixin):
         """
 
         # No extension: Maya resolves .mll / .so / .bundle per OS.
-        def is_loaded(plugin="vrayformaya"):
-            return EnvUtils.is_plugin_loaded(plugin)
-
         if query:
-            return is_loaded()
+            return Plugins.is_loaded("vrayformaya")
 
         vray = ["vrayformaya", "vrayformayapatch"]
         try:
             if load:
                 for plugin in vray:
-                    if not is_loaded(plugin):
-                        cmds.loadPlugin(plugin)
+                    Plugins.load(plugin)
             if unload:
                 for plugin in vray:
-                    if is_loaded(plugin):
+                    if Plugins.is_loaded(plugin):
                         cmds.unloadPlugin(plugin)
         except Exception as error:
             print(error)
@@ -813,6 +786,23 @@ class EnvUtils(ptk.HelpMixin):
         return ws.root if ws else ""
 
     @staticmethod
+    def scene_project_root() -> Optional[str]:
+        """The project the open scene's files belong to; ``None`` without one.
+
+        The scene FILE's own project (``DataNodes.project_root``: its nearest
+        ``workspace.mel``, else its folder) -- the one its records are spelled
+        from -- or, while the scene is unsaved, the session's
+        (:meth:`workspace_root`). The boundary a tool keeps when it writes,
+        renames or retires files (a lightmap bake, Keep Names In Sync): a
+        folder two projects share is the other one's too, and no scene of
+        this project can see that one's reads.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        root = DataNodes.project_root() or EnvUtils.workspace_root()
+        return os.path.abspath(root) if root else None
+
+    @staticmethod
     def scenes_dir(path: Optional[str] = None) -> str:
         """The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →
         the root itself. '' when there is no workspace."""
@@ -1213,7 +1203,7 @@ class EnvUtils(ptk.HelpMixin):
         Raises:
             ValueError: When *file_path* is None and the scene has never been saved.
         """
-        cmds.loadPlugin("objExport", quiet=True)
+        Plugins.load("objExport")
 
         if not file_path:
             scene_name = EnvUtils.saved_scene_path()  # see its note on the phantom path

@@ -9,8 +9,8 @@ import pythontk as ptk
 
 try:
     from maya import cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 from mayatk.anim_utils.blendshape_animator.keyframes import Keyframes
 from mayatk.anim_utils.blendshape_animator.target import Target, Targets

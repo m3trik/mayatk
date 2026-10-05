@@ -7,11 +7,10 @@ try:
     import maya.cmds as cmds
     import maya.mel as mel
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     cmds = None
     mel = None
     om = None
-    print(__file__, error)
 import pythontk as ptk
 
 
@@ -132,6 +131,40 @@ class _EditUtilsInternal(object):
             cmds.parent(node, parent)
         except Exception as e:
             cmds.warning(f"Parent '{node}' under '{parent}' failed: {e}")
+
+    @staticmethod
+    def _align_uv_sets(objects) -> None:
+        """Rename each mesh's UV sets, by index, to the first mesh's set names.
+
+        ``polyUnite`` merges UV sets BY NAME: a member whose UVs live in
+        ``UVChannel_1`` (FBX) instead of ``map1`` lands in a separate set and
+        reads as unmapped in the result's primary set. Index alignment matches
+        how exporters treat channels. A set already named like any reference
+        set, or whose target name already exists on that mesh, is left to the
+        by-name merge; shared (instanced) shapes are skipped: a rename would
+        rewrite siblings outside the combine. blendertk's ``_join_copies``
+        mirrors this rule.
+        """
+        ref = None
+        for obj in objects:
+            shapes = cmds.listRelatives(
+                str(obj), shapes=True, noIntermediate=True, type="mesh", fullPath=True
+            )
+            if not shapes:
+                continue
+            shape = shapes[0]
+            sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
+            if ref is None:
+                ref = sets
+                continue
+            if len(cmds.listRelatives(shape, allParents=True) or []) > 1:
+                continue
+            present = set(sets)
+            for name, target in zip(sets, ref):
+                if name not in ref and target not in present:
+                    cmds.polyUVSet(shape, rename=True, uvSet=name, newUVSet=target)
+                    present.discard(name)
+                    present.add(target)
 
     @staticmethod
     def _mirror_pivot_point(obj, pivot) -> list:
@@ -672,6 +705,10 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
                 it can silently delete sibling instances that share the shape
                 but are not part of the selection. Forking each input to a
                 unique shape first leaves those siblings untouched.
+
+        Each member's UV sets are renamed by index to the first member's set
+        names before uniting, so a ``UVChannel_1`` mesh joins a ``map1`` mesh's
+        UVs instead of splitting into its own set.
         """
         if objects is None:
             objects = cmds.ls(
@@ -707,6 +744,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             # Get name before combine destroys the object
             name = str(group_objs[0]).split("|")[-1].split(":")[-1]
             try:
+                _EditUtilsInternal._align_uv_sets(group_objs)
                 united = cmds.polyUnite(group_objs, centerPivot=True, ch=False)
                 return cmds.rename(united[0], name)
             except Exception as e:

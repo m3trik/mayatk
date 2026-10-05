@@ -38,8 +38,8 @@ from typing import Any, Dict, Optional
 
 try:
     import maya.cmds as cmds
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 import pythontk as ptk
 

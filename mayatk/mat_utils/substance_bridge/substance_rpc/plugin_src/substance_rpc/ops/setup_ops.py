@@ -139,6 +139,17 @@ def _defer(slot, value, label):
     }
 
 
+def _texture_set_name(texture_set):
+    """*texture_set*'s name on any Painter version.
+
+    Painter 10.1+ made ``TextureSet.name`` a property; calling it still works
+    but logs a deprecation warning on every call. Older Painters only have
+    the method.
+    """
+    name = texture_set.name
+    return str(name) if isinstance(name, str) else name()
+
+
 # -- Document resolution ---------------------------------------------------
 
 
@@ -150,7 +161,7 @@ def _apply_resolution(size):
     names = []
     for texture_set in textureset.all_texture_sets():
         texture_set.set_resolution(resolution)
-        names.append(texture_set.name())
+        names.append(_texture_set_name(texture_set))
     return names
 
 
@@ -213,7 +224,7 @@ def _apply_high_poly(mesh_path):
                 f"parameters. Available: {sorted(common)}"
             )
         baking.BakingParameters.set({match: url})
-        applied.append(texture_set.name())
+        applied.append(_texture_set_name(texture_set))
     return applied
 
 
@@ -329,7 +340,7 @@ def _apply_mesh_maps(manifest_path):
     resource_usage = _resolve_resource_usage(resource)
     applied = {}
     for texture_set in textureset.all_texture_sets():
-        name = texture_set.name()
+        name = _texture_set_name(texture_set)
         # Sorted so a multi-map material assigns in a stable order; the
         # manifest is JSON, whose object order is whatever json.load gives.
         for usage_name, path in sorted((wiring.get(name) or {}).items()):

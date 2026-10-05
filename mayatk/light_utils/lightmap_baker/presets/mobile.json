@@ -1,7 +1,7 @@
 {
-    "description": "Mobile / standalone VR — balanced resolution, samples and GI bounces.",
+    "description": "Mobile / standalone VR — balanced resolution, four bounces; the default tier.",
     "resolution": 1024,
     "samples": 4,
-    "gi_depth": 2,
-    "gi_samples": 4
+    "gi_depth": 4,
+    "gi_samples": 2
 }

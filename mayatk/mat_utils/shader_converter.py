@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 import pythontk as ptk
 
@@ -88,18 +88,6 @@ class _ShaderConverterInternal(object):
         return None
 
     @staticmethod
-    def _constant_value(shader: str, attr: str) -> Optional[Any]:
-        """The literal value on an undriven slot, or None if it can't be read."""
-        try:
-            value = cmds.getAttr(f"{shader}.{attr}")
-        except (RuntimeError, ValueError):
-            return None
-        # getAttr returns [(r, g, b)] for a float3; unwrap the outer list.
-        if isinstance(value, list) and len(value) == 1 and isinstance(value[0], tuple):
-            return value[0]
-        return value
-
-    @staticmethod
     def _retire(shader: str) -> None:
         """Delete *shader* along with any shading group it leaves EMPTY.
 
@@ -155,28 +143,39 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
         Returns:
             dict: ``{logical: {"file": node|None, "value": literal|None}}`` for
             every channel the shader's type declares. A channel with neither a
-            file nor a value is omitted.
+            file nor a value is omitted, and so is an undriven opacity that is
+            fully opaque: that is every material's default, not a channel. A
+            value is :meth:`ShaderAttributeMap.read_constant`'s -- a tuple, in
+            the channel's own terms.
         """
         shader = str(shader)
         node_type = cmds.nodeType(shader)
-        attrs = ShaderAttributeMap.SHADER_ATTRS.get(node_type)
-        if not attrs:
+        if node_type not in ShaderAttributeMap.SHADER_ATTRS:
             return {}
 
         channels: Dict[str, Dict[str, Any]] = {}
         for logical in ShaderAttributeMap.logical_channels():
-            slot = getattr(attrs, logical)
+            slot = ShaderAttributeMap.resolve_live_slot(shader, logical, node_type)
             if not slot:
                 continue
             attr = slot[0]
 
             file_node = None
-            for plug in cls._slot_plugs(shader, attr):
-                file_node = cls._trace_file_node(plug)
+            for src in cls._slot_plugs(shader, attr):
+                file_node = cls._trace_file_node(src)
                 if file_node:
                     break
 
-            value = None if file_node else cls._constant_value(shader, attr)
+            value = (
+                None
+                if file_node
+                else ShaderAttributeMap.read_constant(shader, logical, node_type)
+            )
+            # Opaque is every material's default, not a channel: carried, it
+            # picked the Stingray masked graph, whose unbound mask discards
+            # every fragment.
+            if logical == "opacity" and value and min(value) >= 1.0 - 1e-6:
+                value = None
             if file_node or value is not None:
                 channels[logical] = {"file": file_node, "value": value}
         return channels
@@ -189,13 +188,18 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
 
         A material that carries an opacity channel needs a graph that HAS an
         opacity slot; ``Standard.sfx`` has none, so defaulting to it would drop
-        the channel silently. ``masked`` is the default for a converted
-        material because the legacy setups this targets are cutouts (decals,
-        foliage) far more often than they are blended glass.
+        the channel silently. A TEXTURED opacity gets ``masked``: the legacy
+        setups this targets are cutouts (decals, foliage) far more often than
+        they are blended glass. A constant one (partial, since an opaque one is
+        not a channel) can only be a blend -- ``transparent``, whose scalar
+        ``opacity`` takes the literal.
         """
         if opacity_mode is not None:
             return opacity_mode
-        return "masked" if "opacity" in channels else "none"
+        opacity = channels.get("opacity")
+        if not opacity:
+            return "none"
+        return "masked" if opacity.get("file") else "transparent"
 
     @classmethod
     @CoreUtils.undoable
@@ -217,8 +221,10 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
                 ``"standard_surface"`` or ``"open_pbr"``.
             opacity_mode (str, optional): StingrayPBS only. ``"masked"``
                 (alpha cutout), ``"transparent"`` (alpha blend) or ``"none"``.
-                Left None, a material with an opacity channel gets ``"masked"``
-                and one without gets ``"none"``.
+                Left None it follows the opacity channel: a textured one gets
+                ``"masked"``, a constant one ``"transparent"`` (only a partial
+                constant is a channel -- opaque is every material's default)
+                and none ``"none"``.
             delete_source (bool): Delete the source shader once its geometry has
                 been re-assigned. False leaves it orphaned in the scene.
             name_suffix (str): Appended to the new shader's name. Empty reuses
@@ -350,26 +356,70 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
                         cls.logger.info(f"  {logical} -> {slot[0]}")
                 elif verbose:
                     cls.logger.info(f"  {logical}: could not drive {slot[0]}.")
-            elif cls._set_constant(shader, slot[0], source["value"]) and verbose:
+            elif (
+                cls._set_constant(
+                    shader,
+                    ShaderAttributeMap.constant_attr(node_type, logical),
+                    source["value"],
+                )
+                and verbose
+            ):
                 cls.logger.info(f"  {logical} = {source['value']}")
+        emission = channels.get("emission")
+        if emission and ("emission" in connected or cls._is_lit(emission.get("value"))):
+            cls._open_emission(shader, node_type)
         return connected
 
     @staticmethod
-    def _set_constant(shader: str, attr: str, value: Any) -> bool:
-        """Copy a literal onto the target slot, tolerating an arity mismatch."""
-        if value is None or not cmds.attributeQuery(attr, node=shader, exists=True):
+    def _is_lit(value: Any) -> bool:
+        """Whether a carried constant emits: any channel above black."""
+        if value is None:
             return False
+        values = value if isinstance(value, (tuple, list)) else (value,)
+        return any(float(v) > 0.0 for v in values)
+
+    @staticmethod
+    def _open_emission(shader: str, node_type: str) -> None:
+        """Open the target's separate emission weight once an emission landed
+        on its colour: standardSurface / aiStandardSurface default the weight
+        to 0 and openPBR its luminance, so the colour alone renders black.
+        A ``multiply`` weight opens at 1.0 -- a carried constant already holds
+        the source's weight in its colour (:meth:`ShaderAttributeMap.read_constant`);
+        a mapped emission plays at full weight -- and a ``gate`` opens at 1000
+        nits, as ``GameShader`` wires it. A weight the target already has is
+        left as it is."""
+        entry = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS.get(node_type)
+        if entry is None:
+            return
+        attr, mode = entry
+        if not cmds.attributeQuery(attr, node=shader, exists=True):
+            return
         try:
-            if isinstance(value, (tuple, list)):
-                if cmds.getAttr(f"{shader}.{attr}", type=True) in (
-                    "float3",
-                    "double3",
-                ):
-                    cmds.setAttr(f"{shader}.{attr}", *value, type="double3")
-                else:  # float3 source into a scalar slot — average it
-                    cmds.setAttr(f"{shader}.{attr}", sum(value) / len(value))
+            if not cmds.getAttr(f"{shader}.{attr}"):
+                cmds.setAttr(f"{shader}.{attr}", 1.0 if mode == "multiply" else 1000.0)
+        except (RuntimeError, ValueError):
+            pass
+
+    @staticmethod
+    def _set_constant(shader: str, attr: Optional[str], value: Any) -> bool:
+        """Copy a literal onto *attr* (the target's
+        :meth:`ShaderAttributeMap.constant_attr` -- a StingrayPBS uniform, not
+        its sampler), tolerating an arity mismatch: a colour into a scalar
+        slot is averaged, a scalar into a colour slot fills every channel
+        (Stingray's transparent ``opacity`` is a scalar, standardSurface's a
+        float3)."""
+        if value is None or not attr:
+            return False
+        if not cmds.attributeQuery(attr, node=shader, exists=True):
+            return False
+        values = tuple(value) if isinstance(value, (tuple, list)) else (value,)
+        try:
+            if cmds.getAttr(f"{shader}.{attr}", type=True) in ("float3", "double3"):
+                if len(values) != 3:
+                    values = (sum(values) / len(values),) * 3
+                cmds.setAttr(f"{shader}.{attr}", *values, type="double3")
             else:
-                cmds.setAttr(f"{shader}.{attr}", value)
+                cmds.setAttr(f"{shader}.{attr}", sum(values) / len(values))
             return True
         except (RuntimeError, ValueError):
             return False

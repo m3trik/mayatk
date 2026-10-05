@@ -65,6 +65,38 @@ class TestLightmapUvs(MayaTkTestCase):
         self.assertNotIn("polyAutoProj", hist, f"history not frozen: {hist}")
         self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"))
 
+    def test_create_leaves_a_history_free_mesh_history_free(self):
+        """No live projection on a mesh that had no history to preserve.
+
+        It used to gain a polyAutoProj and an orig copy of itself (a production
+        soldering table, 2026-10-02): a live unwrap re-runs on any later edit
+        upstream and moves the lightmap UVs out from under the map baked on
+        them, and the copy carried the mesh's unused vertices into Maya's
+        "invalid or unused components" warning at every open."""
+        cube = cmds.polyCube(name="lmCubeBare")[0]
+        cmds.delete(cube, constructionHistory=True)
+        twin = cmds.instance(cube, name="lmCubeBareTwin")[0]  # as the table was
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        self.assertFalse(
+            cmds.listConnections(f"{shape}.inMesh", source=True, destination=False)
+        )
+        for transform in (cube, twin):
+            self.assertEqual(
+                cmds.listRelatives(transform, shapes=True) or [],
+                [shape.split("|")[-1]],
+            )
+        self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"))
+
+    def test_create_keeps_a_mesh_with_history_live(self):
+        """A mesh with modeling history keeps it, the projection joining the chain."""
+        cube = cmds.polyCube(name="lmCubeHist")[0]
+        shape = self._shape(cube)
+        UvUtils.create_lightmap_uvs([cube], map_size=256)
+        hist = [cmds.nodeType(h) for h in (cmds.listHistory(shape) or [])]
+        self.assertIn("polyCube", hist)
+        self.assertIn("polyAutoProj", hist)
+
     def test_create_reuses_valid_existing(self):
         cube = cmds.polyCube(name="lmCube2")[0]
         shape = self._shape(cube)
@@ -88,6 +120,40 @@ class TestLightmapUvs(MayaTkTestCase):
         shape = self._shape(cube)
         cmds.polyEditUV(shape + ".map[*]", scaleU=5, scaleV=5)  # push outside 0-1
         self.assertFalse(UvDiagnostics.is_bakeable_lightmap(shape, "map1"))
+
+    def test_is_bakeable_rejects_overlapping(self):
+        # A planar projection maps a cube's front and back faces onto the same
+        # UVs -- in 0-1, so only the overlap test can reject it.
+        cube = cmds.polyCube(name="lmCubeOverlap")[0]
+        shape = self._shape(cube)
+        cmds.polyProjection(shape + ".f[*]", type="Planar", md="z")
+        cmds.polyNormalizeUV(
+            shape + ".f[*]", normalizeType=1, preserveAspectRatio=False
+        )
+        self.assertFalse(UvDiagnostics.is_bakeable_lightmap(shape, "map1"))
+
+    def test_create_regenerates_layouts_stacked_by_combine(self):
+        """Mesh > Combine stacks every piece's own 0-1 lightmap layout onto the others'.
+
+        The production soldering table (TABLE + MAT + LOWER_LEGS combined, 2026-10-02)
+        carried a 'lightmap' set with 243 of 263 faces overlapping; the reuse test read
+        it as bakeable and the mat baked the legs' shadows into its texels.
+        """
+        a = cmds.polyCube(name="lmStackA")[0]
+        b = cmds.polyCube(name="lmStackB")[0]
+        cmds.move(3, 0, 0, b)
+        UvUtils.create_lightmap_uvs([a, b], map_size=256)
+        merged = cmds.polyUnite(a, b, constructionHistory=False, name="lmStacked")[0]
+        shape = self._shape(merged)
+        self.assertIn("lightmap", cmds.polyUVSet(shape, query=True, allUVSets=True))
+        self.assertFalse(
+            UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"),
+            "two pieces' layouts stacked in one set must not read as bakeable",
+        )
+        res = UvUtils.create_lightmap_uvs([merged], map_size=256)
+        self.assertTrue(res[shape]["created"], f"stacked set reused: {res[shape]}")
+        self.assertEqual(res[shape]["uv_set"], "lightmap")
+        self.assertTrue(UvDiagnostics.is_bakeable_lightmap(shape, "lightmap"))
 
     @staticmethod
     def _foreign_layout(shape, uv_set):
@@ -398,6 +464,29 @@ class TestApplyUvLayout(MayaTkTestCase):
         )
         # Tagged means downstream detection treats it exactly like a locally authored one.
         self.assertEqual(UvDiagnostics.find_lightmap_uv_set(shape), "lightmap")
+
+    def test_an_exported_layout_replays_onto_the_same_topology(self):
+        """``export_uv_layout`` is the sending half: what it reads off one mesh,
+        ``apply_uv_layout`` writes onto another of the same topology, loop for
+        loop -- how a lightmap layout is copied between twin meshes."""
+        src = self._shape(cmds.polyCube(name="layoutDonor")[0])
+        uvs = self._cube_uvs(src)
+        UvUtils.apply_uv_layout({src: self._layout(src, uvs)}, quiet=True)
+        dst = self._shape(cmds.polyCube(name="layoutTwin")[0])
+
+        layouts = UvUtils.export_uv_layout([src], uv_set="lightmap")
+        self.assertEqual(list(layouts), [src])
+        self.assertEqual(layouts[src]["uv_set"], "lightmap")
+        applied = UvUtils.apply_uv_layout({dst: layouts[src]}, quiet=True)
+        self.assertEqual(applied, {dst: "lightmap"})
+        got = self._read_loops(dst, "lightmap")
+        for a, b in zip(got, uvs):
+            self.assertAlmostEqual(a, b, places=6)
+        self.assertEqual(len(got), len(uvs))
+
+    def test_export_leaves_out_a_mesh_without_the_set(self):
+        shape = self._shape(cmds.polyCube(name="layoutNoSet")[0])
+        self.assertEqual(UvUtils.export_uv_layout([shape], uv_set="lightmap"), {})
 
     def test_rejects_a_layout_from_different_topology(self):
         """A mesh edited since the hand-off must be skipped, not given scrambled UVs."""

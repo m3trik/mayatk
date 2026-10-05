@@ -6,8 +6,8 @@ from pathlib import Path
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 import pythontk as ptk
 
@@ -482,11 +482,7 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
 
         try:
             # Ensure FBX plugin is loaded first
-            from mayatk.env_utils._env_utils import EnvUtils
-
-            if not EnvUtils.is_plugin_loaded("fbxmaya"):
-                self.logger.debug("Loading FBX plugin...")
-                cmds.loadPlugin("fbxmaya")
+            FbxUtils.load_plugin()
 
             self.logger.debug("Importing FBX using Maya file command...")
 

@@ -7,13 +7,15 @@ try:
     import maya.mel as mel
     import maya.OpenMaya as om
     import maya.OpenMayaFX as omfx
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 try:
     import MASH.api as _MASH_API  # type: ignore
 except ImportError:
     _MASH_API = None
+
+from mayatk.core_utils.plugins._plugins import Plugins
 
 # Constants
 _RAD_TO_DEG = 57.29577951308232
@@ -78,9 +80,7 @@ class MashToolkit(object, metaclass=_MashToolkitMeta):
 
     @staticmethod
     def ensure_plugin_loaded():
-        loaded = int(cmds.pluginInfo("MASH", q=True, l=1))
-        if not loaded:
-            cmds.loadPlugin("MASH")
+        Plugins.load("MASH")
 
     @classmethod
     def create_network(

@@ -78,9 +78,14 @@ class TestImportSurface(unittest.TestCase):
         names = [name for name in _surface_modules() if name not in MAYA_BOUND]
         self.assertGreater(len(names), 100, "the package walk found nothing")
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONDONTWRITEBYTECODE="1")
-        env["PYTHONPATH"] = os.pathsep.join(
-            path for path in (str(_REPO), env.get("PYTHONPATH", "")) if path
-        )
+        # Absolute: the child runs in the repo (cwd below), where an entry
+        # given relative to this process's directory names nothing.
+        inherited = [
+            os.path.abspath(path)
+            for path in env.get("PYTHONPATH", "").split(os.pathsep)
+            if path
+        ]
+        env["PYTHONPATH"] = os.pathsep.join([str(_REPO)] + inherited)
         proc = subprocess.run(
             [sys.executable, "-c", _PROBE],
             input=json.dumps(names),

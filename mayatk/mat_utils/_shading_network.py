@@ -22,7 +22,7 @@ except Exception:
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 
 
 class _ShadingNetworkInternal:
@@ -119,7 +119,7 @@ class _ShadingNetworkInternal:
     def _create_standard_shader(name=None, color=None, return_type="type"):
         """Create or get the preferred shader type, with optional node creation."""
         try:
-            if EnvUtils.is_plugin_loaded("mtoa") or cmds.nodeType(
+            if Plugins.is_loaded("mtoa") or cmds.nodeType(
                 "standardSurface", isTypeName=True
             ):
                 shader_type = "standardSurface"

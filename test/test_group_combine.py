@@ -338,6 +338,54 @@ class TestGroupCombine(MayaTkTestCase):
         self.assertTrue(cmds.objExists("cube1"))
         self.assertFalse(cmds.objExists("cube2"))
 
+    # ---- UV set alignment ---------------------------------------------------
+
+    @staticmethod
+    def _uv_counts(mesh):
+        """``{uv_set: uv_count}`` for *mesh*, in set order."""
+        return {
+            s: cmds.polyEvaluate(mesh, uvcoord=True, uvSetName=s)
+            for s in cmds.polyUVSet(mesh, query=True, allUVSets=True) or []
+        }
+
+    def test_combine_keeps_uvs_of_differently_named_set(self):
+        """The second object's UVs must land in the result's primary set even
+        when its UV set has a different name (e.g. FBX ``UVChannel_1``).
+
+        Bug: ``polyUnite`` merges UV sets BY NAME, so cube2's UVs went into a
+        separate ``UVChannel_1`` set and ``map1`` on the result only carried
+        cube1's UVs — the second object looked unmapped. Fixed: 2026-10-02.
+        """
+        cmds.polyUVSet(self.cube2, rename=True, uvSet="map1", newUVSet="UVChannel_1")
+
+        combined = EditUtils.combine_objects([self.cube1, self.cube2])
+
+        self.assertEqual(self._uv_counts(combined), {"map1": 28})
+
+    def test_combine_aligns_uv_sets_by_index_to_first_object(self):
+        """Every set aligns by index to the first object's names — a texture +
+        lightmap pair from another source joins the first object's pair."""
+        cmds.polyUVSet(self.cube1, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.polyUVSet(self.cube2, rename=True, uvSet="map1", newUVSet="UVChannel_1")
+        cmds.polyUVSet(
+            self.cube2, copy=True, uvSet="UVChannel_1", newUVSet="UVChannel_2"
+        )
+
+        combined = EditUtils.combine_objects([self.cube1, self.cube2])
+
+        self.assertEqual(self._uv_counts(combined), {"map1": 28, "lightmap": 28})
+
+    def test_combine_never_renames_a_set_already_paired_by_name(self):
+        """A member's set that already carries one of the first object's names
+        (at another index) stays put — index alignment must not steal it."""
+        cmds.polyUVSet(self.cube1, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.polyUVSet(self.cube2, rename=True, uvSet="map1", newUVSet="UVChannel_1")
+        cmds.polyUVSet(self.cube2, copy=True, uvSet="UVChannel_1", newUVSet="map1")
+
+        combined = EditUtils.combine_objects([self.cube1, self.cube2])
+
+        self.assertEqual(self._uv_counts(combined).get("map1"), 28)
+
     def test_materials_by_object_matches_get_mats(self):
         """Batched material resolver must agree with per-object get_mats.
 

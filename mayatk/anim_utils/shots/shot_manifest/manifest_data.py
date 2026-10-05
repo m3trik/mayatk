@@ -35,6 +35,7 @@ PASTEL_STATUS = SHOT_PALETTE
 BEHAVIOR_STATUS_COLORS = {
     "missing": PASTEL_STATUS["missing_behavior"][0],  # warn gold
     "error": PASTEL_STATUS["missing_object"][0],  # error red
+    "stale": PASTEL_STATUS["stale_behavior"][0],  # keyed under an older recipe
 }
 
 # Derived from the palette — used for footer error labels
@@ -50,7 +51,7 @@ class ManifestData:
         return name.replace("_", " ").title() if name else ""
 
     @staticmethod
-    def format_behavior_html(behaviors, broken=(), status_color=None) -> str:
+    def format_behavior_html(behaviors, broken=(), status_color=None, stale=()) -> str:
         """Return rich-text HTML for a list of behavior names.
 
         Parameters:
@@ -61,6 +62,8 @@ class ManifestData:
             status_color: Optional override colour applied to *all* behaviours.
                 When set, *broken* is ignored and every behaviour is rendered
                 in this colour (e.g. the error colour for missing objects).
+            stale: Subset of *behaviors* keyed under an older effect recipe
+                (Build re-keys them), rendered in the ``stale`` colour.
         """
         if not behaviors:
             return ""
@@ -70,11 +73,14 @@ class ManifestData:
                 display = ManifestData.fmt_behavior(b)
                 spans.append(f'<span style="color:{status_color}">{display}</span>')
         else:
-            broken_set = set(broken)
+            broken_set, stale_set = set(broken), set(stale)
             for b in behaviors:
                 display = ManifestData.fmt_behavior(b)
                 if b in broken_set:
                     color = BEHAVIOR_STATUS_COLORS.get("missing")
+                    spans.append(f'<span style="color:{color}">{display}</span>')
+                elif b in stale_set:
+                    color = BEHAVIOR_STATUS_COLORS.get("stale")
                     spans.append(f'<span style="color:{color}">{display}</span>')
                 else:
                     spans.append(display)

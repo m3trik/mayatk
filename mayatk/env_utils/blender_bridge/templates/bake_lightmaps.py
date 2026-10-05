@@ -226,8 +226,11 @@ def apply_texture_manifest(new_objects):
         print("Node-type tagging failed; skipped:")
         traceback.print_exc()
     try:
+        # No AO multiply: Cycles traces the occlusion an AO map approximates, so
+        # AO-darkened albedo darkens every bounce twice -- mayatk's Arnold bake
+        # bridges game shaders without it too (TextureBaker.arnold_translation_guard).
         MayaSceneImport(log_level="WARNING")._apply_texture_manifest(
-            manifest, new_objects
+            manifest, new_objects, ambient_occlusion=False
         )
     except Exception:
         print("Texture-manifest rebuild failed; baking FBX materials:")
@@ -298,6 +301,23 @@ def lightmap_records(meshes):
     return excluded, claims
 
 
+def hidden_in_maya(obj):
+    """Whether *obj* arrived hidden: its own Maya visibility flag or an ancestor's.
+
+    The FBX carries that flag as each node's ``Visibility`` and Blender's importer maps
+    it to ``hide_viewport`` -- but leaves ``hide_render`` on, so Cycles would bake the
+    mesh and let it shadow and bounce into every other map, where Arnold renders none of
+    it. Read off the import rather than named in the manifest: a hidden mesh sharing its
+    leaf name with a visible one (the production office's two ``TABLE``s) arrives as
+    ``TABLE`` / ``TABLE.001``, and which is which cannot be known from the Maya side.
+    """
+    while obj is not None:
+        if obj.hide_viewport:
+            return True
+        obj = obj.parent
+    return False
+
+
 def emissive_material_count():
     """How many materials emit light on their own -- what lights a fixture-lit room.
 
@@ -347,8 +367,8 @@ def light_scene():
     from blendertk.light_utils._light_utils import LightUtils
 
     warnings = []
-    # An explicit HDRI wins; else the scene's sky dome, when one travelled; else a flat
-    # ambient. MayaSceneImport owns the manifest's world schema and that precedence.
+    # An explicit HDRI wins; else the scene's sky dome, when one travelled; else black
+    # (below). MayaSceneImport owns the manifest's world schema and that precedence.
     apply_world = getattr(MayaSceneImport, "apply_world", None)
     if apply_world is not None:
         world = apply_world(
@@ -365,8 +385,14 @@ def light_scene():
             "hdri": os.path.basename(hdri) if hdri else "",
             "sky_dome": "",
         }
-    print("World:", world["description"])
     world_lit = bool(world["hdri"] or world["sky_dome"])
+    if not world_lit:
+        # Nothing lights the world in Maya either: Arnold renders it black, so the bake
+        # does too rather than adding a flat ambient Maya's own baker never sees.
+        world["description"] = LightUtils.set_world_environment(
+            strength=0.0, color=(0.0, 0.0, 0.0)
+        )
+    print("World:", world["description"])
     print(
         "Emission %s (appearance only): %s"
         % (EMISSION_STRENGTH, LightUtils.set_emission_strength(EMISSION_STRENGTH))
@@ -435,7 +461,7 @@ def light_scene():
     return {
         "hdri": world["hdri"],
         "sky_dome": world["sky_dome"],
-        "world_strength": WORLD_STRENGTH,
+        "world_strength": WORLD_STRENGTH if world_lit else 0.0,  # black when unlit
         "imported_lights": len(existing),
         "emissive_materials": emissive,
         "scene_light_strength": SCENE_LIGHT_STRENGTH,
@@ -645,6 +671,17 @@ def main():
     lighting = light_scene()
     baker = make_baker()
     excluded, claims = lightmap_records(meshes)
+    hidden = [o for o in meshes if hidden_in_maya(o)]
+    if hidden:
+        for obj in hidden:
+            obj.hide_render = True
+        meshes = [o for o in meshes if o not in hidden]
+        print(
+            "Hidden in Maya (not rendered, no map): %s"
+            % ", ".join(sorted(o.name for o in hidden))
+        )
+        if not meshes:
+            raise RuntimeError("Every imported mesh is hidden; nothing to bake.")
     if excluded:
         # Into blendertk's own Exclude set, which every bake entry point subtracts:
         # rendered (they shadow the rest), never baked.

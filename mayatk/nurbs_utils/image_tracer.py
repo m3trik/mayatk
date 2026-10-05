@@ -5,6 +5,9 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Union
 
+# Before cv2 loads: OpenCV reads OPENCV_IO_ENABLE_OPENEXR once, at import, so a
+# cv2 imported without it leaves OpenEXR off for the whole process.
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 try:
     import cv2
 except ImportError:
@@ -31,11 +34,10 @@ class BluePencilMixin(object):
             return []
 
         # Ensure plugin is loaded
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.core_utils.plugins._plugins import Plugins
 
         try:
-            if not EnvUtils.is_plugin_loaded("bluePencil"):
-                cmds.loadPlugin("bluePencil", quiet=True)
+            Plugins.load("bluePencil")
         except Exception:
             pass
 

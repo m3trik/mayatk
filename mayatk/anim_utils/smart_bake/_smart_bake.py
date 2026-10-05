@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 
 try:
     from maya import cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 if TYPE_CHECKING:
     import maya.api.OpenMaya as om2  # annotations only; imported per method

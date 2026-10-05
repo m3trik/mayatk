@@ -12,10 +12,9 @@ from dataclasses import dataclass
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     cmds = None
     om = None
-    print(__file__, error)
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils

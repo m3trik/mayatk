@@ -369,6 +369,35 @@ class TestAuditTextures(_AuditCase):
         # BC1 (0.5 B/px) with a full mip chain.
         self.assertAlmostEqual(tex.gpu_mb, 4096 * 2048 * 0.5 * 4 / 3 / 2**20, places=3)
 
+    def test_a_tokenless_map_on_the_slot_a_node_has_is_typed_by_it(self):
+        """``_slot_map_types`` read the DECLARED slot: openPBR declares its normal
+        on ``geometryNormal`` (Maya 2025's node has ``normalCamera``), and a
+        masked Stingray keeps opacity on ``TEX_mask_map``; a tokenless map on
+        either went untyped. Fixed: 2026-10-04 (``resolve_live_slot``)."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        path = _write_png_header(os.path.join(self._dir, "panel.png"), 128, 128)
+        try:
+            opbr = cmds.shadingNode("openPBRSurface", asShader=True)
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(opbr) != "openPBRSurface":  # an `unknown` placeholder
+            self.skipTest("openPBRSurface unavailable in this session")
+        slot = next(
+            a
+            for a in ("geometryNormal", "normalCamera")
+            if cmds.attributeQuery(a, node=opbr, exists=True)
+        )
+        normal = _texture(opbr, slot, path)
+        self.assertEqual(
+            SceneAnalyzer._slot_map_types(opbr, "openPBRSurface"), {normal: "Normal"}
+        )
+        masked = MatUtils.create_stingray_shader("auditMasked", opacity_mode="masked")
+        mask = _texture(masked, "TEX_mask_map", path)
+        self.assertEqual(
+            SceneAnalyzer._slot_map_types(masked, "StingrayPBS"), {mask: "Opacity"}
+        )
+
     def test_non_surface_maps_are_listed_not_counted(self):
         """StingrayPBS wires Maya's IBL cube maps / BRDF LUT onto every material;
         they inflated sampler counts and were typed "Specular" by substring."""

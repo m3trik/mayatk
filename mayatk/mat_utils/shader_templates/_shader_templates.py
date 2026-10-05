@@ -5,8 +5,8 @@ from typing import Any, List, Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 from pythontk.core_utils.engines.textures.map_factory import (
     ConversionRegistry,
@@ -16,9 +16,9 @@ from pythontk.core_utils.engines.textures.map_factory import (
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
-from mayatk.env_utils._env_utils import EnvUtils
 
 # Default logger for library (non-panel) use. The slots pass their own
 # LoggingMixin logger in so save/restore feedback lands in the panel's
@@ -416,7 +416,7 @@ class GraphRestorer(_ShaderTemplatesInternal):
         # snapshot ``attributes``) so the saved values aren't wiped.
         if node and node_type == "StingrayPBS":
             try:
-                EnvUtils.load_plugin("shaderFXPlugin")
+                Plugins.load("shaderFXPlugin")
                 from mayatk.mat_utils._mat_utils import MatUtils
 
                 graph = MatUtils.resolve_stingray_graph("none")

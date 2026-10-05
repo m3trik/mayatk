@@ -19,6 +19,7 @@ import shutil
 import tempfile
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
 import maya.cmds as cmds
 import pythontk as ptk
@@ -1376,7 +1377,8 @@ class TestPathTruncationWiring(unittest.TestCase):
         """The path's tail identifies the texture; the drive alone opens it."""
         self.assertEqual(TexturePathEditorSlots._PATH_TRUNCATE_HEAD, 1)
         shown = ptk.truncate(
-            "O:/Cloud/Projects/jets/plane/sourceimages/textures/plane_body_DIFF.png",
+            "O:/Cloud/Projects/jets/plane/assets/vehicles/fuselage/lookdev/"
+            "sourceimages/textures/plane_body_DIFF.png",
             TexturePathEditorSlots._PATH_TRUNCATE_LENGTH,
             "path",
             "…",
@@ -1407,6 +1409,47 @@ class TestPathTruncationWiring(unittest.TestCase):
         slot = self._slot(checked=True)
         slot.ui = SimpleNamespace(header=slot.ui.header)  # no tbl000
         slot._apply_path_truncation()  # must not raise
+
+    def test_the_option_box_sets_the_length(self):
+        """The toggle's option box carries a length spinbox (added 2026-10-04)."""
+        slot, table = self._slot(checked=True), self._FakeTable()
+        spin = SimpleNamespace(value=lambda: 140)
+        slot.ui.header.menu.chk_truncate_paths.option_box = SimpleNamespace(
+            menu=SimpleNamespace(spn_truncate_length=spin)
+        )
+        slot._apply_path_truncation(table)
+        self.assertEqual(table.calls[0][1], 140)
+
+
+class TestKeepNamesInSyncReaders(unittest.TestCase):
+    """The Keep Names In Sync option box, read without a built panel."""
+
+    def _slot(self, menu):
+        slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        slot.ui = SimpleNamespace(header=SimpleNamespace(menu=menu))
+        return slot
+
+    def test_an_unbuilt_menu_reads_off_and_the_convention(self):
+        slot = self._slot(SimpleNamespace())
+        self.assertFalse(slot._sync_names_enabled())
+        shader, node = slot._sync_affixes()
+        self.assertEqual(shader, ptk.NamingConvention.affix_parts("material"))
+        self.assertEqual(node, ("", ""))
+
+    def test_the_fields_give_the_affixes(self):
+        shader_field = SimpleNamespace(
+            option_box=SimpleNamespace(resolve_affix=lambda default: ("M_", ""))
+        )
+        flyout = SimpleNamespace(
+            txt_shader_affix=shader_field,
+            txt_file_node_suffix=SimpleNamespace(text=lambda: "file"),
+        )
+        chk = SimpleNamespace(
+            isChecked=lambda: True, option_box=SimpleNamespace(menu=flyout)
+        )
+        slot = self._slot(SimpleNamespace(chk_sync_names=chk))
+        self.assertTrue(slot._sync_names_enabled())
+        self.assertEqual(slot._sync_affixes(), (("M_", ""), ("", "_file")))
 
 
 class TestOverLongPathWarning(unittest.TestCase):
@@ -2392,6 +2435,64 @@ class TestRelativePathsSurviveTheWrite(MayaTkTestCase):
         )
 
 
+class TestTableFollowsUndo(MayaTkTestCase):
+    """An undone rename or repath left the rows naming what was gone: the
+    table followed scene opens, never Ctrl+Z. It refreshes on Undo / Redo
+    now -- only while shown, since every undo in the scene fires them.
+    Production PLAYGROUND scene, 2026-10-04.
+    """
+
+    def setUp(self):
+        super().setUp()
+        sb = SimpleNamespace(
+            progress=lambda *a, **kw: _NullProgress(),
+            progress_adapter=lambda update: None,
+            loaded_ui=SimpleNamespace(
+                texture_path_editor=SimpleNamespace(
+                    tbl000=SimpleNamespace(init_slot=lambda: None)
+                )
+            ),
+        )
+        self.slot = TexturePathEditorSlots(sb)
+        self.refreshed = []
+        self.slot._refresh_table_content = self.refreshed.append
+
+    @staticmethod
+    def _widget(visible):
+        return SimpleNamespace(isVisible=lambda: visible)
+
+    def test_undo_and_redo_are_subscribed(self):
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        events = []
+        manager = SimpleNamespace(
+            subscribe=lambda event, _cb, owner: events.append(event),
+            connect_cleanup=lambda *_a, **_kw: None,
+        )
+        with mock.patch.object(ScriptJobManager, "instance", return_value=manager):
+            self.slot._setup_scene_change_callback(self._widget(True))
+        self.assertIn("Undo", events)
+        self.assertIn("Redo", events)
+
+    def test_an_undo_refreshes_a_shown_table_only(self):
+        hidden, shown = self._widget(False), self._widget(True)
+        with mock.patch.object(cmds, "evalDeferred", side_effect=lambda fn: fn()):
+            self.slot._on_scene_change(hidden, visible_only=True)
+            self.slot._on_scene_change(shown, visible_only=True)
+            self.slot._on_scene_change(hidden)  # a scene opened: regardless
+        self.assertEqual(self.refreshed, [shown, hidden])
+
+    def test_a_waiting_undo_does_not_swallow_a_scene_event(self):
+        """Both land before the deferred refresh runs (one per idle)."""
+        queued, hidden = [], self._widget(False)
+        with mock.patch.object(cmds, "evalDeferred", side_effect=queued.append):
+            self.slot._on_scene_change(hidden, visible_only=True)
+            self.slot._on_scene_change(hidden)
+        self.assertEqual(len(queued), 1)
+        queued[0]()
+        self.assertEqual(self.refreshed, [hidden], "the scene event's refresh")
+
+
 class TestRelativePathsAcrossTheReopen(MayaTkTestCase):
     """What a normalized path does across save / open / save.
 
@@ -3120,6 +3221,287 @@ class TestDeleteFileNodeWarnsWhenConnected(MayaTkTestCase):
 
         self.assertFalse(cmds.objExists("tex_gone"))
         self.assertTrue(cmds.objExists("lam_gone"))
+
+
+class TestRenameFromTheEditor(MayaTkTestCase):
+    """Rename File / a path edit that changes only the file name, and Keep
+    Names In Sync, driven through the editor's own handlers (no panel).
+    Added: 2026-10-04
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        store = ptk.TempArtifacts("tpe_rename", policy="scoped")
+        self.addCleanup(store.cleanup, True)
+        self.dir = store.dir_path().replace("\\", "/")
+        for name in ("rock_Normal.png", "rock_Base_Color.png", "taken.png"):
+            with open(os.path.join(self.dir, name), "wb") as f:
+                f.write(b"DATA")
+        self.mat = cmds.shadingNode("lambert", asShader=True, name="rock_MAT")
+        self.nodes = {}
+        for name, plug in (
+            ("rock_Normal.png", "diffuse"),
+            ("rock_Base_Color.png", "color"),
+        ):
+            node = cmds.shadingNode("file", asTexture=True)
+            Attributes.set_plug_literal(f"{node}.fileTextureName", f"{self.dir}/{name}")
+            out = "outColor" if plug == "color" else "outAlpha"
+            cmds.connectAttr(f"{node}.{out}", f"{self.mat}.{plug}")
+            self.nodes[name] = node
+        self.slot = TexturePathEditorSlots.__new__(TexturePathEditorSlots)
+        self.slot.sb = SimpleNamespace(
+            QtCore=SimpleNamespace(QTimer=SimpleNamespace(singleShot=lambda *a: None))
+        )
+        self.slot.ui = SimpleNamespace(header=SimpleNamespace(menu=SimpleNamespace()))
+
+    def _sync(self, on=True):
+        affix = SimpleNamespace(resolve_affix=lambda default: ("", "_MAT"))
+        flyout = SimpleNamespace(
+            txt_shader_affix=SimpleNamespace(option_box=affix),
+            txt_file_node_suffix=SimpleNamespace(text=lambda: "_file"),
+        )
+        self.slot.ui.header.menu.chk_sync_names = SimpleNamespace(
+            isChecked=lambda: on, option_box=SimpleNamespace(menu=flyout)
+        )
+
+    def _project(self, folder=None):
+        """Open *folder* (default: the textures' own) as the scene's project."""
+        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
+        cmds.workspace(folder or self.dir, openWorkspace=True)
+
+    def _env_cube(self):
+        """Another set's map on the material: an environment cube's file node."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        with open(os.path.join(self.dir, "env_cube.dds"), "wb") as f:
+            f.write(b"CUBE")
+        cube = cmds.shadingNode("file", asTexture=True, name="env_cube_file")
+        Attributes.set_plug_literal(
+            f"{cube}.fileTextureName", f"{self.dir}/env_cube.dds"
+        )
+        cmds.connectAttr(f"{cube}.outAlpha", f"{self.mat}.translucence")
+        return cube
+
+    def _edit_cell(self, col, text, file_node):
+        """Type *text* into row 0's cell *col* and commit it, as the table does
+        (``handle_cell_edit``): the name cells keep the old name in UserRole."""
+
+        class Item:
+            def __init__(self, value):
+                self.value, self.role = value, value
+
+            def text(self):
+                return self.value
+
+            def setText(self, value):
+                self.value = value
+
+            def data(self, _role):
+                return self.role
+
+            def setData(self, _role, value):
+                self.role = value
+
+        cells = {
+            0: Item(self.mat),
+            1: Item(cmds.getAttr(f"{file_node}.fileTextureName")),
+            2: Item(file_node),
+        }
+        cells[col].setText(text)
+        self.slot.sb.QtCore.Qt = SimpleNamespace(UserRole=256)
+        self.slot.ui.tbl000 = SimpleNamespace(
+            item=lambda _row, column: cells.get(column),
+            blockSignals=lambda _on: False,
+            apply_formatting=lambda: None,
+        )
+        self.slot._lightmap_rows = {}
+        self.slot._footer_controller = None
+        self.slot.handle_cell_edit(0, col)
+        return cells
+
+    def test_a_path_edit_renames_only_when_the_name_alone_changed_to_nothing(self):
+        self._project()
+        stored = f"{self.dir}/rock_Normal.png"
+        self.assertTrue(self.slot._is_file_rename(stored, f"{self.dir}/new.png"))
+        self.assertFalse(
+            self.slot._is_file_rename(stored, f"{self.dir}/taken.png"),
+            "an existing file is a repoint",
+        )
+        self.assertFalse(
+            self.slot._is_file_rename(stored, f"{self.dir}/sub/new.png"),
+            "another folder is a repoint",
+        )
+
+    def test_a_path_edit_outside_the_project_repoints_and_leaves_the_file(self):
+        """A path edit that changed only the name, to one nothing is at,
+        renamed the file on disk wherever it was -- a library texture other
+        projects read included, which used to be a repoint. Outside the
+        scene's project it repoints again; the file keeps its name."""
+        project = ptk.TempArtifacts("tpe_rename_project", policy="scoped")
+        self.addCleanup(project.cleanup, True)
+        self._project(project.dir_path().replace("\\", "/"))
+        node = self.nodes["rock_Normal.png"]
+        typed = f"{self.dir}/stone_Normal.png"
+        self._edit_cell(1, typed, node)
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+            "nothing renamed on disk",
+        )
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), typed, "repointed")
+
+    def test_rename_file_renames_on_disk_and_repoints(self):
+        node = self.nodes["rock_Normal.png"]
+        ok = self.slot._rename_texture(
+            {"file_node": node, "shader_node": self.mat}, "stone_Normal.png"
+        )
+        self.assertTrue(ok)
+        self.assertTrue(os.path.isfile(f"{self.dir}/stone_Normal.png"))
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/stone_Normal.png"
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"), "sync is off: the shader stays")
+
+    def test_a_refused_name_changes_nothing(self):
+        node = self.nodes["rock_Normal.png"]
+        self.assertFalse(self.slot._rename_texture({"file_node": node}, "taken.png"))
+        self.assertTrue(os.path.isfile(f"{self.dir}/rock_Normal.png"))
+
+    def test_browse_on_several_rows_repoints_each_to_its_file_in_one_folder(self):
+        """Browse used to warn and do nothing with more than one row."""
+        moved = f"{self.dir}/moved"
+        os.makedirs(moved)
+        with open(f"{moved}/rock_Normal.png", "wb") as f:
+            f.write(b"DATA")
+        self.slot.sb.dir_dialog = lambda **kwargs: moved
+        self.slot.ui.tbl000 = SimpleNamespace(init_slot=lambda: None)
+        self.slot._previous_paths = {}
+        contexts = [
+            {"file_nodes": [self.nodes["rock_Normal.png"]]},
+            {"file_nodes": [self.nodes["rock_Base_Color.png"]]},
+        ]
+        self.slot._browse_for_folder(contexts)
+        self.assertTrue(
+            cmds.getAttr(f"{self.nodes['rock_Normal.png']}.fileTextureName").endswith(
+                "/moved/rock_Normal.png"
+            )
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{self.nodes['rock_Base_Color.png']}.fileTextureName"),
+            f"{self.dir}/rock_Base_Color.png",
+            "no such file in the folder: the path stays",
+        )
+
+    def test_delete_on_a_lightmap_row_removes_the_lightmap_from_its_objects(self):
+        """A lightmap row has no file node, so Delete File Node returned
+        silently -- "unable to delete" (reported 2026-10-04). Its delete is the
+        lightmap's: confirmed, the bake markers binding it are cleared; the
+        .exr stays on disk."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        cube = cmds.ls(cmds.polyCube(name="lm_cube")[0], long=True)[0]
+        LightmapRecords._write_marker(cube, {"map": "lm_cube_Lightmap.exr"})
+        dep = {"map": "lm_cube_Lightmap.exr", "objects": [cube], "path": None}
+        self.slot._lightmap_rows = {"x/lm_cube_Lightmap.exr": dep}
+        self.slot.ui.tbl000 = SimpleNamespace(init_slot=lambda: None)
+        asked = []
+        self.slot.sb.message_box = lambda text, *buttons, **kw: (
+            asked.append((text, buttons)) or "Yes"
+        )
+        self.slot.delete_file_node([{"path": "x/lm_cube_Lightmap.exr"}])
+        self.assertEqual(len(asked), 1)
+        self.assertIn("lm_cube_Lightmap.exr", asked[0][0])
+        self.assertFalse(LightmapRecords._marker_node(cube), "the marker is cleared")
+
+    def test_with_sync_on_the_whole_material_follows(self):
+        self._sync()
+        # The folder is the project: sync renames only the project's own files.
+        self._project()
+        node = self.nodes["rock_Normal.png"]
+        self.slot._rename_texture(
+            {"file_node": node, "shader_node": self.mat}, "stone_Normal.png"
+        )
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["stone_Base_Color.png", "stone_Normal.png", "taken.png"],
+        )
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertTrue(cmds.objExists("stone_Base_Color_file"))
+
+    def test_with_sync_on_a_new_map_type_renames_that_file(self):
+        """The sync took only the typed name's base -- unchanged by
+        ``rock_Base_Color.png`` -> ``rock_Albedo.png`` -- so the file kept its
+        name and the cell snapped back. A rename that is not a new base for
+        the material's own set renames that file alone."""
+        self._sync()
+        self._project()
+        node = self.nodes["rock_Base_Color.png"]
+        self.assertTrue(
+            self.slot._rename_texture(
+                {"file_node": node, "shader_node": self.mat}, "rock_Albedo.png"
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Albedo.png", "rock_Normal.png", "taken.png"],
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/rock_Albedo.png"
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"))
+
+    def test_with_sync_on_another_set_s_map_is_renamed_alone(self):
+        """Renaming an environment cube synced the material to the CUBE's new
+        base: ``rock_MAT`` and every ``rock_*`` file became ``studio_env_*``,
+        and the cube -- another set's map -- kept its name, unreported."""
+        self._sync()
+        self._project()
+        cube = self._env_cube()
+        self.assertTrue(
+            self.slot._rename_texture(
+                {"file_node": cube, "shader_node": self.mat}, "studio_env.dds"
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "studio_env.dds", "taken.png"],
+        )
+        self.assertTrue(
+            cmds.getAttr(f"{cube}.fileTextureName").endswith("/studio_env.dds")
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+
+    def test_with_sync_on_another_set_s_file_node_is_renamed_alone(self):
+        """The file node cell took the same base: the cube's node renamed the
+        whole material after itself, and stayed as it was."""
+        self._sync()
+        self._project()
+        cube = self._env_cube()
+        self._edit_cell(2, "studio_env_file", cube)
+        self.assertTrue(cmds.objExists("studio_env_file"))
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["env_cube.dds", "rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+        )
+
+    def test_with_sync_on_a_file_node_s_new_base_renames_the_material(self):
+        """A file node of the set renamed to a new base still renames the
+        whole material (with or without the node suffix typed)."""
+        self._sync()
+        self._project()
+        self._edit_cell(2, "stone_Normal", self.nodes["rock_Normal.png"])
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["stone_Base_Color.png", "stone_Normal.png", "taken.png"],
+        )
 
 
 if __name__ == "__main__":

@@ -78,9 +78,6 @@ _TRACK_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _DEFAULT_FPS: float = 24.0
 _WAVEFORM_CACHE: Dict[str, List[Tuple[float, float]]] = {}
 
-_SNAP_FRAMES: bool = True
-"""Global default for whole-frame snapping on audio key writes."""
-
 
 class AudioUtils(ptk.HelpMixin):
     """Unified audio system API for Maya scenes.
@@ -106,17 +103,32 @@ class AudioUtils(ptk.HelpMixin):
 
     @staticmethod
     def get_snap_frames() -> bool:
-        """Return the global whole-frame snap default for key writes."""
-        return _SNAP_FRAMES
+        """Whether audio key writes snap to whole frames -- the scene's effect
+        recipe (``audio_snap``), so the Audio Clips panel, a script and the
+        Shot Manifest's build place a clip by one rule, saved with the scene."""
+        try:
+            store = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+            return bool(store.active().effect_recipe.audio_snap)
+        except Exception:
+            return bool(ptk.EffectRecipe().audio_snap)
 
     @staticmethod
     def set_snap_frames(value: bool) -> None:
-        """Set the global whole-frame snap default for key writes."""
-        global _SNAP_FRAMES
-        _SNAP_FRAMES = bool(value)
+        """Set the scene recipe's whole-frame snap for audio key writes.
+
+        The shot store holds the recipe; it sits above this layer, so it is
+        reached through the record owners (``DataNodes.owner``).
+
+        Raises:
+            RuntimeError: No shot store is available to hold it.
+        """
+        store = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+        if store is None:
+            raise RuntimeError("No shot store to hold the scene's effect recipe.")
+        store.active().update_effect_recipe(audio_snap=bool(value))
 
     snap_frames = property(
-        lambda self: _SNAP_FRAMES,
+        lambda self: AudioUtils.get_snap_frames(),
         lambda self, v: AudioUtils.set_snap_frames(v),
     )
 
@@ -593,8 +605,7 @@ class AudioUtils(ptk.HelpMixin):
 
         Parameters:
             snap: Whether to snap ``frame`` to the nearest whole frame.
-                ``None`` (default) uses the global :func:`get_snap_frames`
-                setting.
+                ``None`` (default) uses the scene's :func:`get_snap_frames`.
         """
         cls.validate_track_id(track_id)
         if cmds is None:
@@ -603,10 +614,103 @@ class AudioUtils(ptk.HelpMixin):
         carrier = carrier or CARRIER_NODE
         attr = f"{carrier}.{cls.attr_for(track_id)}"
         if snap is None:
-            snap = _SNAP_FRAMES
+            snap = cls.get_snap_frames()
         if snap:
             frame = round(float(frame))
         cmds.setKeyframe(attr, time=frame, value=int(bool(value)))
+
+    @classmethod
+    def key_clip(
+        cls,
+        track_id: str,
+        start: float,
+        end: Optional[float] = None,
+        duration: Optional[float] = None,
+        auto_end: bool = True,
+        carrier: Optional[str] = None,
+    ) -> List[Tuple[str, float]]:
+        """Key one clip of *track_id*: ON at *start* and, with *auto_end*, OFF
+        where it ends -- the one audio key writer.
+
+        The Audio Clips panel's Key and the Shot Manifest's build both place a
+        clip through it, so a clip keyed by hand and one a build keys land the
+        same way. It deletes nothing: a key already at *start* is overwritten,
+        and a caller replacing a clip takes out its own keys first (the build
+        releases what it claimed).
+
+        Parameters:
+            track_id: The track (its attr is created when missing).
+            start: The ON key's frame.
+            end: Where the OFF key falls back to when the clip's length cannot
+                be measured (the build passes its shot's end); ``None`` keys no
+                OFF then.
+            duration: The clip's length in frames; measured from its source
+                (:meth:`clip_length_frames`) when omitted.
+            auto_end: Key the OFF at the clip's natural end (``start`` plus its
+                length). Left out when a later start key of the same track
+                sits inside the clip -- it would cut that one short.
+            carrier: The track carrier; ``data_internal`` by default.
+
+        Returns:
+            ``(anim curve, time)`` for every key written -- what the manifest
+            records as its own. Times snap as :meth:`get_snap_frames` says
+            (to the NEAREST frame, as shot bounds do, so a shot grown to fit
+            the clip ends on its OFF key).
+        """
+        cls.validate_track_id(track_id)
+        if cmds is None:
+            return []
+        carrier = carrier or CARRIER_NODE
+        snap = cls.get_snap_frames()
+
+        def at(frame: float) -> float:
+            return float(round(float(frame))) if snap else float(frame)
+
+        on = at(start)
+        cls.write_key(track_id, on, 1, carrier, snap=False)
+        times = [on]
+        if auto_end:
+            if duration is None:
+                duration = cls.clip_length_frames(track_id, carrier)
+            off = None
+            if duration and duration > 0:
+                off = at(on + float(duration))
+            elif end is not None and float(end) > on:
+                off = at(end)
+            if off is not None and off > on:
+                eps = 1e-3
+                later_start = any(
+                    on + eps < f <= off + eps and int(round(v)) >= 1
+                    for f, v in cls.read_keys(track_id, carrier)
+                )
+                if not later_start:
+                    cls.write_key(track_id, off, 0, carrier, snap=False)
+                    times.append(off)
+        curve = cls.track_curve(track_id, carrier)
+        return [(curve, t) for t in times] if curve else []
+
+    @classmethod
+    def track_curve(cls, track_id: str, carrier: Optional[str] = None) -> Optional[str]:
+        """The anim curve keying *track_id*, or ``None`` before its first key."""
+        if cmds is None:
+            return None
+        attr = f"{carrier or CARRIER_NODE}.{cls.attr_for(track_id)}"
+        if not cmds.objExists(attr):
+            return None
+        return (cmds.keyframe(attr, q=True, name=True) or [None])[0]
+
+    @classmethod
+    def clip_length_frames(cls, track_id: str, carrier: Optional[str] = None) -> float:
+        """*track_id*'s clip length in timeline frames, from its source file;
+        ``0.0`` when the source is missing or unreadable."""
+        path = cls.get_path(track_id, carrier)
+        if not path:
+            return 0.0
+        try:
+            dur, _ = cls.audio_duration_frames(path, cls.get_fps())
+            return float(dur or 0.0)
+        except Exception:
+            return 0.0
 
     @classmethod
     def remove_key(
@@ -666,11 +770,17 @@ class AudioUtils(ptk.HelpMixin):
         delta: float,
         track_ids: Optional[List[str]] = None,
         carrier: Optional[str] = None,
+        ledger=None,
     ) -> List[str]:
         """Shift audio keys in ``[old_start, old_end]`` by *delta*.
 
         Uses a set-then-cut pattern to work around Maya's broken
         ``cmds.keyframe(edit=True, timeChange=delta)`` for enum attrs.
+
+        *ledger* (a ``ShotEditLedger``) has its claims on the moved keys moved
+        with them: the Shot Manifest claims the clips it keys, and a claim left
+        on the frame its key moved off would be released onto whatever key
+        sits there next.
 
         When *track_ids* is supplied, the caller asserts every tid has
         a live attr on *carrier*; the per-tid existence check is
@@ -739,6 +849,10 @@ class AudioUtils(ptk.HelpMixin):
                     )
             if any_ok:
                 shifted.append(tid)
+                if ledger is not None:
+                    curve = cls.track_curve(tid, carrier)
+                    if curve:
+                        ledger.remap(curve, [(f, f + delta) for f, _ in pairs])
         return shifted
 
     # ------------------------------------------------------------------

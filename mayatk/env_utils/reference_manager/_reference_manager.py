@@ -14,10 +14,11 @@ from typing import Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
@@ -92,24 +93,35 @@ class AssemblyManager:
         Returns:
             str: The name of the created representation, or None if the creation failed.
         """
+        return cls._create_definition(namespace, file_path)[1]
+
+    @classmethod
+    def _create_definition(cls, namespace: str, file_path: str):
+        """``(assembly_node, representation)``, or ``(None, None)`` with a warning.
+
+        The node is the name Maya actually gave it: ``<namespace>_assembly``
+        when free, suffixed when that name is taken.
+        """
+        if not os.path.exists(file_path):
+            cmds.warning(f"File does not exist: {file_path}")
+            return None, None
         try:
-            if not os.path.exists(file_path):
-                cmds.warning(f"File does not exist: {file_path}")
-                return None
-
-            assembly_name = f"{namespace}_assembly"
-            assembly_node = cmds.assembly(name=assembly_name, type="assemblyDefinition")
-
+            Plugins.load("sceneAssembly")  # mayapy never autoloads it
+            assembly_node = cmds.assembly(
+                name=f"{namespace}_assembly", type="assemblyDefinition"
+            )
             cmds.assembly(
                 assembly_node, edit=True, createRepresentation="Scene", input=file_path
             )
             representations = cmds.assembly(
                 assembly_node, query=True, listRepresentations=True
             )
-            return representations[0] if representations else None
         except Exception:
+            representations = None
+        if not representations:
             cmds.warning(f"Failed to create assembly definition for {file_path}")
-            return None
+            return None, None
+        return assembly_node, representations[0]
 
     @classmethod
     def set_active_representation(
@@ -138,22 +150,11 @@ class AssemblyManager:
         Iterates through all current references, creates an assembly definition for each,
         sets the active representation, and optionally removes the original reference after conversion.
         """
+        # Each helper warns on its own failure; the reference stays when either fails.
         for ref in cls.current_references():
-            namespace = ref.namespace
-            file_path = ref.path
-
-            rep_name = cls.create_assembly_definition(namespace, file_path)
-            if rep_name:
-                assembly_name = f"{namespace}_assembly"
-                if cls.set_active_representation(assembly_name, rep_name):
-                    # Optionally remove the original reference after conversion
-                    ref.remove()
-                else:
-                    cmds.warning(
-                        f"Failed to set active representation for {assembly_name}"
-                    )
-            else:
-                cmds.warning(f"Failed to create assembly definition for {file_path}")
+            node, rep_name = cls._create_definition(ref.namespace, ref.path)
+            if rep_name and cls.set_active_representation(node, rep_name):
+                ref.remove()
 
 
 class _ReferenceManagerInternal(object):

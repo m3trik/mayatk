@@ -321,18 +321,19 @@ class TestRestoreOpacityWiring(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{file_node}.alphaIsLuminance"))
 
     def test_scalar_channels_still_connect_directly(self):
-        """Roughness/metalness ARE scalar attrs -- no broadcast, no regression."""
+        """Roughness/metalness ARE scalar attrs -- no broadcast, no regression.
+        Read off ``outColorR``: a packed map's alpha is another channel."""
         mat = cmds.shadingNode("standardSurface", asShader=True, name="op_ss_scalar")
         MatManifest.restore(
             mat, {"materials": {mat: {"roughness": self.gray, "metallic": self.gray}}}
         )
         self.assertEqual(
             [p.split(".")[-1] for p in self._driven_by(mat, "specularRoughness")],
-            ["outAlpha"],
+            ["outColorR"],
         )
         self.assertEqual(
             [p.split(".")[-1] for p in self._driven_by(mat, "metalness")],
-            ["outAlpha"],
+            ["outColorR"],
         )
 
     def test_lambert_opacity_drives_transparency_from_alpha(self):
@@ -367,6 +368,71 @@ class TestRestoreOpacityWiring(MayaTkTestCase):
         MatManifest.restore(mat, {"materials": {mat: {"opacity": self.gray}}})
         source = self._driven_by(mat, "transparency")[0].split(".")[0]
         self.assertTrue(cmds.getAttr(f"{source}.alphaIsLuminance"))
+
+
+class TestLiveSlotCapture(MayaTkTestCase):
+    """build / restore read the slot the NODE has, not only the declared one.
+
+    ``ShaderAttributeMap.resolve_live_slot``: openPBR's normal is declared on
+    the spec's ``geometryNormal`` while Maya 2025's node exposes the classic
+    ``normalCamera``, and a masked StingrayPBS keeps its opacity on
+    ``TEX_mask_map`` -- read off the declaration alone, both were dropped.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tex_path = os.path.join(tempfile.gettempdir(), "ls_test.png").replace(
+            "\\", "/"
+        )
+        self.cube = cmds.polyCube(name="ls_cube")[0]
+
+    def _wear(self, shader):
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(self.cube, edit=True, forceElement=sg)
+
+    def _same_path(self, path):
+        return os.path.normpath(path).lower() == os.path.normpath(self.tex_path).lower()
+
+    def test_an_openpbr_normal_round_trips(self):
+        try:
+            shader = cmds.shadingNode("openPBRSurface", asShader=True, name="ls_opbr")
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(shader) != "openPBRSurface":  # an `unknown` placeholder
+            self.skipTest("openPBRSurface unavailable in this session")
+        slot = next(
+            a
+            for a in ("geometryNormal", "normalCamera")
+            if cmds.attributeQuery(a, node=shader, exists=True)
+        )
+        file_node = _connect_file_to(shader, slot, self.tex_path)
+        self._wear(shader)
+
+        manifest = MatManifest.build([self.cube])
+        self.assertTrue(self._same_path(manifest["materials"][shader]["normal"]))
+
+        cmds.delete(file_node)  # what a graph reload does to every input
+        self.assertEqual(MatManifest.restore(shader, manifest), 1)
+        (driver,) = cmds.listConnections(
+            f"{shader}.{slot}", source=True, destination=False, type="file"
+        )
+        self.assertTrue(self._same_path(cmds.getAttr(f"{driver}.fileTextureName")))
+
+    def test_a_masked_stingray_mask_map_is_captured_as_opacity(self):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        try:
+            shader = MatUtils.create_stingray_shader("ls_masked", opacity_mode="masked")
+        except RuntimeError as error:  # no shaderFX plugin on this install
+            self.skipTest(f"StingrayPBS unavailable: {error}")
+        mask = cmds.shadingNode("file", asTexture=True, isColorManaged=True)
+        cmds.setAttr(f"{mask}.fileTextureName", self.tex_path, type="string")
+        cmds.connectAttr(f"{mask}.outColor", f"{shader}.TEX_mask_map", force=True)
+        self._wear(shader)
+
+        manifest = MatManifest.build([self.cube])
+        self.assertTrue(self._same_path(manifest["materials"][shader]["opacity"]))
 
 
 class TestFindOrCreateFileNode(MayaTkTestCase):

@@ -159,7 +159,10 @@ class Attributes(ptk.HelpMixin):
 
         ``value`` may be a scalar, a string, or a 3-tuple. Tuples are written
         as ``type="double3"`` when the plug is a ``float3``/``double3``
-        compound; strings carry the ``type="string"`` Maya requires.
+        compound; strings carry the ``type="string"`` Maya requires. ``None``
+        on a string plug writes it empty: it is what ``cmds.getAttr`` reads
+        from a never-set one, so a value read back always writes back -- as
+        ``""``, which names nothing, as ``None`` did.
 
         With ``force=True``, the plug is unlocked for the duration of the
         write and re-locked afterwards. When ``force=False`` and the plug
@@ -188,8 +191,10 @@ class Attributes(ptk.HelpMixin):
                 "double3",
             ):
                 cmds.setAttr(plug, value[0], value[1], value[2], type="double3")
-            elif isinstance(value, str):
-                cmds.setAttr(plug, value, type="string")
+            elif isinstance(value, str) or (
+                value is None and cmds.getAttr(plug, type=True) == "string"
+            ):
+                cmds.setAttr(plug, value or "", type="string")
             else:
                 cmds.setAttr(plug, value)
         finally:

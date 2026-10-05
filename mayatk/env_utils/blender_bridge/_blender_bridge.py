@@ -111,7 +111,9 @@ DEFAULTS: Dict[str, Any] = {
     "INCLUDE_ENVIRONMENT": True,
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
-    "EMISSION_STRENGTH": 2.0,
+    # Arnold's weight: ArnoldBridge wires an emissive map at emission 1, so a Cycles
+    # bake at 1.0 lights the room as Maya's own baker does (2.0 doubled it).
+    "EMISSION_STRENGTH": 1.0,
     "SCENE_LIGHT_STRENGTH": 1.0,
     "LIGHTMAP_DIR": "",
 }
@@ -759,6 +761,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 # knows both.
                 matrix = cmds.xform(transform, query=True, matrix=True, worldSpace=True)
                 record["aim"] = [-matrix[8], -matrix[9], -matrix[10]]
+                # ...and the light's local X (world row 0), the ROLL about that aim.
+                # Only a rectangle can show it, and the aim alone leaves it to the
+                # receiver's guess: the production office's fixture strips sit under
+                # a group turned 90 degrees, and crossed turned 90 degrees from the
+                # fixtures they light. Normalized: the size rides the empty's scale.
+                length = math.sqrt(sum(v * v for v in matrix[0:3])) or 1.0
+                record["right"] = [v / length for v in matrix[0:3]]
                 record["axis_up"] = "Y"
                 if blender_type == "SPOT":
                     # Maya cone angle is the FULL angle in degrees, and Blender's
@@ -1324,6 +1333,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         Named rather than silent: "my hidden object came back unlit" is exactly
         the question this answers, and an artist who hid something temporarily
         needs to know the bake skipped it.
+
+        Only the meshes in *objects* are filtered here: a hidden mesh under a sent
+        GROUP rides the group's export, and the template keeps it out of the render
+        and the targets by the hiding it arrives with (``hidden_in_maya``).
         """
         import maya.cmds as cmds
 

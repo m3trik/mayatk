@@ -45,12 +45,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.mat_utils._mat_utils import MatUtils
 
 __all__ = ["ShadowPreview"]
@@ -488,7 +488,7 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
             if language is None:
                 raise ValueError(refusal)
         extension, plugin, node_type = cls.LANGUAGES[language]
-        EnvUtils.load_plugin(plugin)
+        Plugins.load(plugin)
 
         if cls.is_attached(plane):
             cls.detach(plane)

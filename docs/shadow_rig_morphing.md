@@ -13,7 +13,7 @@ blends) against the alternatives and ends with the plan of record and the
 contracts the three sides are built against.
 
 Owners: pythontk (the bake), mayatk / blendertk (`rig_utils/shadow_rig/`,
-the engine and panel), unitytk (`templates/ShadowPlaneController.cs`), pythontk's WebXR
+the engine and panel), unitytk (`templates/ShadowPlane/ShadowPlaneController.cs`), pythontk's WebXR
 viewer (`net_utils/preview/viewer.html`). The projected rig's physics lives in
 `pythontk.ShadowProjection`; everything below reuses it.
 
@@ -685,8 +685,9 @@ alpha = intensity opacity (rho > 0 ? clamp(1 - clearance / rho, 0, 1) : 0)
   files (the horizon PNG as a texture with a clamp / linear / no-mip
   sampler) and writes root `extras.shadow_web` = the v2 payload plus, per
   plane, the glTF `node` index of the plane, source and contact and the
-  `texture` index of each map, and top-left rects. The packaged script
-  `preview/scripts/shadow_rig.js` (a built-in `PreviewServer` script) reads
+  `texture` index of each map, and top-left rects. The packaged feature
+  `net_utils/preview/features/shadow_rig/shadow_rig.js` (pythontk; a
+  built-in `PreviewServer` script, its model in `model.js` beside it) reads
   it on `load`, builds one `ShaderMaterial` per plane (both types in one
   shader, `uMode`), merges planes that share a type and atlas and carry no
   fade track into an `InstancedMesh` with per-instance rect, frame and

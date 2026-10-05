@@ -247,19 +247,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             plan = ptk.RampKeys.fade(
                 start, end, "in" if fade_in else "out", whole_frames=False
             )
-
-            # Maya's inTangentType doesn't accept "step"; use "stepnext".
-            itt = "stepnext" if tangent == "step" else tangent
-
-            plug = cls._long_plug(obj, spec.name)
-            for t, v in plan:
-                cmds.setKeyframe(
-                    plug, time=t, value=v, inTangentType=itt, outTangentType=tangent
-                )
-
-            if spec.drives_presence:
-                cls._mirror_visibility(obj, plan)
-
+            cls.write_keys(obj, plan, spec, tangent=tangent)
             keyed.append(
                 (obj.split("|")[-1].split(":")[-1], "in" if fade_in else "out")
             )
@@ -360,10 +348,10 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         for obj in objects:
             if not cls.has_channel(obj, spec):
                 continue
-            plug = cls._long_plug(obj, spec.name)
-            cmds.cutKey(plug, time=window, clear=True)
-            for t, value in plan:
-                cls._key_linear(plug, t, value)
+            # An explicit keying replaces the pulse it lands on.
+            cmds.cutKey(cls._long_plug(obj, spec.name), time=window, clear=True)
+            # A blink on the presence channel stays one: no visibility mirror.
+            cls.write_keys(obj, plan, spec, mirror=False)
             for stop, value in (("hi", color), ("lo", dim_color)):
                 attr = spec.stop_attr(stop)
                 if value is None or not attr:
@@ -380,16 +368,58 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     PULSE_GAP_MIN = ptk.RampKeys.PULSE_GAP_MIN
     WHOLE_FRAME_GAP_MIN = ptk.RampKeys.WHOLE_FRAME_GAP_MIN
 
+    @classmethod
+    def write_keys(
+        cls,
+        obj,
+        keys,
+        spec: ChannelSpec = OPACITY,
+        tangent: str = "linear",
+        mirror: Optional[bool] = None,
+    ) -> List[Tuple[str, float]]:
+        """Key a planned ``[(frame, value), ...]`` on *obj*'s channel -- the one
+        writer every render effect keys through.
+
+        The fade, the pulse and the manifest's behaviors all plan their keys
+        host-free (``ptk.RampKeys`` / ``ptk.EffectRecipe``) and land them here,
+        so a hand-keyed effect and a built one are written the same way. It
+        deletes nothing: a caller replacing keys takes out its own first.
+
+        Parameters:
+            obj: A node carrying the channel.
+            keys: The plan.
+            spec: The channel (name or :class:`ChannelSpec`).
+            tangent: Both tangents of every key (Maya's in-tangent spells
+                ``step`` as ``stepnext``).
+            mirror: Key the stepped ``visibility`` mirror too; default: when
+                the channel drives presence.
+
+        Returns:
+            ``(anim curve, time)`` for every key set, the mirror's included --
+            what the manifest records as its own.
+        """
+        spec = spec_for(spec)
+        if mirror is None:
+            mirror = spec.drives_presence
+        itt = "stepnext" if tangent == "step" else tangent
+        plug = cls._long_plug(obj, spec.name)
+        written: List[Tuple[str, float]] = []
+        for t, v in keys:
+            cmds.setKeyframe(
+                plug, time=t, value=v, inTangentType=itt, outTangentType=tangent
+            )
+        curve = cls._curve_of(plug)
+        written.extend((curve, float(t)) for t, _v in keys)
+        if mirror:
+            cls._mirror_visibility(obj, keys)
+            vis = cls._curve_of(cls._long_plug(obj, "visibility"))
+            written.extend((vis, float(t)) for t, _v in keys)
+        return written
+
     @staticmethod
-    def _key_linear(plug: str, time: float, value: float) -> None:
-        """Key *plug* at *time*, linear both sides -- the pulse's only key form."""
-        cmds.setKeyframe(
-            plug,
-            time=time,
-            value=value,
-            inTangentType="linear",
-            outTangentType="linear",
-        )
+    def _curve_of(plug: str) -> str:
+        """The anim curve keying *plug* (the plug itself when none yet)."""
+        return (cmds.keyframe(plug, q=True, name=True) or [plug])[0]
 
     @classmethod
     def _mirror_visibility(cls, obj, keys) -> None:

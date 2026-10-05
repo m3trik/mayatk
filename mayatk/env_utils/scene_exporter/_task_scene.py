@@ -19,6 +19,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.core_utils.diagnostics.scene_diag import SceneDiagnostics
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.anim_utils.world_fit_bake import WorldFitBake
 from mayatk.env_utils._env_utils import EnvUtils
@@ -55,10 +56,17 @@ class _SceneTasksMixin(_TaskDataMixin):
 
         if enable:
             new_workspace = EnvUtils.find_workspace_using_path()
-            if new_workspace and new_workspace != original_workspace:
-                self.stage_deferred_restore(
+            # Not a string compare: ``workspace -q -rd`` ends in a slash and
+            # the scene-path lookup need not, which read one project as a switch.
+            if new_workspace and not ptk.FileUtils.is_same_file(
+                new_workspace, original_workspace
+            ):
+                if self.stage_deferred_restore(
                     "workspace", lambda: self._restore_workspace(original_workspace)
-                )
+                ):
+                    # What the run hands back: a path edit a task KEEPS must
+                    # resolve there (see _relativize_texture_paths).
+                    self._home_workspace = original_workspace
                 cmds.workspace(new_workspace, openWorkspace=True)
                 self.logger.debug(
                     f"Changed workspace from {original_workspace} to {new_workspace}"
@@ -538,7 +546,7 @@ class _SceneTasksMixin(_TaskDataMixin):
         # Guard the plugin first: querying ``cmds.ls(type="aiSkyDomeLight")``
         # for an unregistered type emits an "Unknown object type" warning, and
         # without mtoa loaded no skydome can exist anyway.
-        if not EnvUtils.is_plugin_loaded("mtoa"):
+        if not Plugins.is_loaded("mtoa"):
             return
 
         skydomes = cmds.ls(type="aiSkyDomeLight", long=True) or []

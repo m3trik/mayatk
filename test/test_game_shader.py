@@ -2860,6 +2860,65 @@ class GameShaderFBXTest(QuickTestCase):
         )
 
 
+class GameShaderAssignToSelectionTest(unittest.TestCase):
+    """The panel's Assign to Selection step (``GameShaderSlots._assign_to_selection``)."""
+
+    def setUp(self):
+        from mayatk.mat_utils.game_shader import GameShaderSlots
+
+        cmds.file(new=True, force=True)
+        # The step needs only the logger: skip the switchboard-bound __init__.
+        self.slots = GameShaderSlots.__new__(GameShaderSlots)
+        self.cube = cmds.polyCube(name="assign_cube")[0]
+        self.shader = cmds.shadingNode("lambert", name="assign_mat", asShader=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+
+    def _assigned(self, node) -> list:
+        shapes = cmds.listRelatives(node, shapes=True) or []
+        sgs = cmds.listConnections(shapes, type="shadingEngine") or []
+        mats = cmds.ls(cmds.listConnections(sgs, source=True) or [], materials=True)
+        return mats or []
+
+    def test_single_material_is_assigned_to_selection(self):
+        self.slots._assign_to_selection(self.shader, [self.cube])
+        self.assertIn("assign_mat", self._assigned(self.cube))
+
+    def test_the_built_network_is_assigned_to_selection(self):
+        """Fed what ``create_network`` really returns -- the network's SHADING
+        GROUP, not its shader -- the selection wears the built material.
+
+        Measured before the fix: ``assign_mat`` took the group for a material,
+        built ``<group>SG`` beside it and failed wiring the group's (absent)
+        ``outColor`` -- an error, nothing assigned, an orphan group left.
+        """
+        tex_dir = tempfile.mkdtemp(prefix="gs_assign_")
+        self.addCleanup(shutil.rmtree, tex_dir, ignore_errors=True)
+        built = GameShader().create_network(
+            [_write_test_image(os.path.join(tex_dir, "rock_BaseColor.png"))],
+            name="assign_rock",
+        )
+        self.slots._assign_to_selection(built, [self.cube])
+        self.assertIn("assign_rock", self._assigned(self.cube))
+        self.assertFalse(cmds.ls("*SGSG"), "a shading group built for the group")
+
+    def test_several_materials_skip_the_assignment(self):
+        other = cmds.shadingNode("lambert", name="other_mat", asShader=True)
+        self.slots._assign_to_selection([self.shader, other], [self.cube])
+        self.assertNotIn("assign_mat", self._assigned(self.cube))
+        self.assertNotIn("other_mat", self._assigned(self.cube))
+
+    def test_empty_selection_warns_and_assigns_nothing(self):
+        """Nothing selected is the user's state, not a failure: one warning
+        naming it, never ``assign_mat``'s "no objects" error."""
+        with self.assertLogs(self.slots.logger, level="WARNING") as logs:
+            self.slots._assign_to_selection(self.shader, [])
+        self.assertEqual([r.levelname for r in logs.records], ["WARNING"], logs.output)
+        self.assertIn("nothing was selected", logs.output[0])
+        self.assertFalse(cmds.listConnections(self.shader, type="shadingEngine"))
+
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":

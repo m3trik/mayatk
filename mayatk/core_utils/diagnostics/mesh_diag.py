@@ -8,8 +8,8 @@ from typing import Optional, Sequence, Union
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:  # pragma: no cover - Maya runtime specific
-    print(__file__, error)
+except ImportError:  # pragma: no cover - Maya runtime specific
+    pass
 
 # Type aliases keep Maya stubs optional during static analysis
 NodeLike = Union[str, object]

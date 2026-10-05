@@ -22,8 +22,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
     cmds = None
 
 try:
@@ -35,8 +34,7 @@ try:
         MSpace,
         MEulerRotation,
     )
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
     MMatrix = MTransformationMatrix = MVector = MQuaternion = None
     MSpace = MEulerRotation = None
 

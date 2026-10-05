@@ -67,10 +67,12 @@ class TestAudioReproFromScene(MayaTkTestCase):
             keys = au.read_keys(tid) or []
             _log(f"  track {tn}: keys={keys[:4]} path={au.get_path(tid)}")
 
-        steps = Mapping.resolve(CSV, name="speedrun")
+        # The retired ``speedrun`` template is the default's derived-audio option.
+        steps = Mapping.resolve(CSV, name="default", options={"audio": "derive"})
         n_aud = sum(1 for st in steps for o in st.objects if o.kind == "audio")
         _log(
-            f"parsed {len(steps)} steps with mapping=speedrun (audio objects: {n_aud})"
+            f"parsed {len(steps)} steps with default + derived audio "
+            f"(audio objects: {n_aud})"
         )
 
         builder = ShotManifest(store)

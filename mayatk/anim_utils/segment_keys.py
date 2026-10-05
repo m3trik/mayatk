@@ -8,9 +8,8 @@ import pythontk as ptk
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 # Module-level loggers — avoid per-call getLogger. Named only: a library must
 # not attach handlers or set levels at import (it double-prints once the host

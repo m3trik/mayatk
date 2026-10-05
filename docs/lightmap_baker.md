@@ -26,7 +26,7 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 |:---|:---|
 | **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included. Its **light** button is *Include Environment*: on, the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards. |
 | **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set): objects that get no map of their own but still cast shadows and bounce light onto everything that bakes. Its icons select the set or clear it. The label shows how many meshes are excluded. |
-| **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). |
+| **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). Its **camera** button is *Reflection Probe*: on (the default), the bake also captures the room it lit as an HDR, for what a lightmap cannot hold. See [Reflection probe](#reflection-probe). |
 | **Processor** | Which one Arnold renders the bake on. **Auto** uses the GPU wherever Arnold has one, else the CPU; **GPU** and **CPU** force it. A machine setting, so it sits above the Quality group and no preset stores it. |
 | **Resolution** | Map size in pixels (256–4096). It also sets the gutter width. Its **filter** button is *Denoise*: each map is cleaned at the size it ships — the object's own map, or its atlas cell. |
 | **Samples** | Arnold camera (AA) samples per texel, squared. Its button is *Adaptive Sampling*: on a GPU bake the extra samples go only where the map is noisy. It greys out when the Processor is CPU. See [Sampling](#sampling). |
@@ -41,7 +41,8 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 A switch rides the option box of the control it qualifies rather than a
 checkbox row of its own — the environment is part of what Scope gathers,
 adaptive sampling is how the Samples are spent, denoise is what the map ships
-at that Resolution. Click a button to flip it; its tooltip says what each state
+at that Resolution, and the reflection probe is what the bake ships beside the
+maps Packing lays out. Click a button to flip it; its tooltip says what each state
 does, and it takes a muted tint while off.
 
 Resolution through Bounces sit in a **Quality** group — exactly the dials a
@@ -93,6 +94,8 @@ same steps:
    comes back essentially unlit, or blown out, is still recorded, because it
    is a faithful render of the scene. The panel's footer warns, and the
    Script Editor lists the scene's lights.
+8. Capture the room as a [reflection probe](#reflection-probe)
+   (`LightmapBaker.bake_probe`), unless its switch is off.
 
 Nothing is reverted first. An object keeps its lightmap until its new map is
 written. So objects the bake doesn't finish (cancelled, or failed) keep the
@@ -125,10 +128,84 @@ surface area is.
 Resolution. Right for a hero asset that earns one, or a small selection.
 
 The atlas layout is planned before any ray is traced. Each object renders at
-4× the size of its cell (never above a full map), then shrinks into the cell,
+2× the size of its cell (never above a full map), then shrinks into the cell,
 and that shrink averages out Arnold's sampling noise. Measured at the same
-ray budget per shipped texel, 4× supersampling matches spending those rays
-as camera samples, and is the cheapest way to spend them on a GPU.
+ray budget per shipped texel, rendering above the cell matches spending those
+rays as camera samples. 2× is the trade the tiers make: on a production floor
+at four bounces, 4× took 75 s for 0.39% shadow mottle and 2× 22 s for 0.52%.
+
+## Reflection probe
+
+A lightmap is light with no direction: what a matte surface shows. A metal
+has no matte part -- all it shows is what it reflects -- so a baked metal
+carries nothing of the bake, and an object the bake leaves out (one that
+moves) is lit by nothing of the room. So a bake also captures the room as a
+reflection probe (`LightmapBaker.bake_probe`): an HDR Arnold renders from one
+point with the bake's own settings, written beside the maps as
+`<scene>_Probe.exr`, half the Resolution wide (256-1024 px).
+
+- **Where it looks from.** Placed by `ProbePlacement`
+  (`light_utils/lightmap_baker/_probe_placement.py`) so it holds in any scene,
+  not only a furnished room:
+  - over the objects that move in the room -- the visible meshes no bake
+    marks -- else the room's middle, else (an open scene: a ground, a
+    courtyard) over the baked objects that are not its ground. What moves
+    outside the baked area does not pull it there;
+  - at half the room's height, never more than 2 m above its floor -- eye
+    level in a hall as in a room, and outdoors;
+  - in open air. A point that sees the inside of a shell all round with no
+    light in view is inside a solid (the car at the bake's middle, a column
+    at the room's, a dark cabinet), and the probe steps out sideways (up only
+    when no side lets out, never down) until the solid fills less than an
+    eighth of its view. A lit room built inside out is still a room: a light
+    in view says so;
+  - at least 0.3 m from any surface it sees (a shelf over the probe would
+    otherwise fill the top of the panorama).
+
+  The visible meshes no bake marks are see-through to it, since a probe that
+  carried them would show them where they no longer are -- they still shade
+  the room. Unbaked meshes that surround the bake (a sky dome, a ground or
+  terrain nobody baked) are not moving objects: they stay in its view, and
+  are walls.
+- **What it reflects onto.** The room's box, measured face by face against
+  what the render sees: rays cast in a cone along each axis, each wall the
+  farthest plane a tenth of the hits that face it squarely land on -- so a
+  table under the probe is furniture, not the floor -- measured again from
+  open air 1 m and 2.5 m around the probe, each face keeping its farthest
+  wall (the column beside the probe, the car roof under it). A face whose
+  cone mostly meets nothing is open and reads as distant, while the others
+  still project: a courtyard's walls and floor, a bare ground's ground. With
+  every face open the probe is read as distant.
+- **What it renders.** Every light is visible to it -- an Arnold light too --
+  and the scene's imagers (exposure, tonemap, denoise) are not applied: the
+  maps get none, and the probe is read beside them, at their level. With
+  **Include Environment** off, the sky dome is left out of it as it is out of
+  the maps. An unbaked instance of a baked mesh stays in its view: the render
+  can only hide a mesh, and with it every instance.
+- **Z-up scenes** get no probe (logged): its deliverables read it in Y-up
+  axes.
+- **Where it goes.** The scene manifest carries it like a map (dependencies,
+  search folders and a repath follow it), the GLB export embeds it, and the
+  [WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)
+  lights with it: baked metals reflect the room instead of a stock studio, and
+  unbaked objects are lit by the room (its Environment window switches it off
+  and on, and draws where it was captured). In Unity, unitytk's **Apply Scene
+  Lightmaps** puts it up as a box-projected Reflection Probe under the model:
+  copy `<scene>_Probe.exr` into the project beside the lightmaps. Measured on a production soldering
+  table against Arnold's render of it: a metal housing from 0.12 of Arnold's
+  luminance to 0.62, its trays from 0.4 to 0.89-1.07, the unbaked magnifier's
+  parts from up to 2.8x too bright to 0.65-1.45x.
+
+Turn it off with the **camera** button on Packing (`reflection_probe=False`).
+To capture it again without re-baking, run
+`LightmapBaker.from_preset("desktop").bake_probe()` and save. Reverting the
+last bake drops it.
+
+A cancelled bake captures no probe, and a probe that fails is logged without
+losing the bake, which is committed by then. A `<scene>_Probe.exr` held open
+(a viewer, a sync client) costs its name, not the render: the probe lands
+beside it as `<scene>_Probe_1.exr`. A re-bake into another folder sets the old
+probe aside, as it does a superseded map.
 
 ## Sampling
 
@@ -139,8 +216,8 @@ camera samples instead:
 
 - **Adaptive Sampling on** (the default — the button on the Samples field):
   every texel gets **Samples**. Noisy texels (shadows, contact) get more, up
-  to Samples × GI Samples. Measured on four production floors at **mobile**
-  (Samples 4, GI Samples 4): 73 s adaptive, against 381 s for giving every
+  to Samples × GI Samples. Measured on four production floors at Samples 4,
+  GI Samples 4: 73 s adaptive, against 381 s for giving every
   texel the full budget (Samples 16). Shadow noise was 1.31% against 1.06%.
 - **Adaptive Sampling off**: every texel gets the full Samples × GI Samples.
   This gives the cleanest map and the slowest bake.
@@ -159,8 +236,8 @@ The Preset combo is uitk's preset template:
 - **Save** (the disk icon) stores the current settings under a name you type.
 - The **⋯** menu renames, deletes, or opens the preset folder.
 - A **\*** after the name means a setting has changed since the preset loaded.
-- The built-ins (**preview**, **mobile**, **desktop**) are italic and
-  read-only.
+- The built-ins (**preview**, **mobile**, **desktop**, **hero**) are italic
+  and read-only.
 
 Presets live in one store, `LightmapBaker.preset_store()`: the shipped JSON in
 [`presets/`](../mayatk/light_utils/lightmap_baker/presets) plus a per-user
@@ -177,6 +254,7 @@ saved in the panel is also a headless bake recipe.
 | `include_environment` | the Scope field's switch | — |
 | `denoise` | the Resolution field's switch | — |
 | `beside_textures` | the Output Directory's image toggle | — |
+| `reflection_probe` | the Packing field's camera toggle | — |
 | `packing` | Packing (panel only; `from_preset` ignores it) | — |
 
 Loading a preset writes only the keys it stores. So picking a built-in moves
@@ -188,9 +266,14 @@ fail on the next machine.
 
 | Built-in | Resolution | Samples | GI Samples | Bounces |
 |:---|:---|:---|:---|:---|
-| preview | 256 | 2 | 2 | 1 |
-| mobile | 1024 | 4 | 4 | 2 |
-| desktop | 2048 | 8 | 6 | 3 |
+| preview | 256 | 2 | 2 | 2 |
+| mobile (the default) | 1024 | 4 | 2 | 4 |
+| desktop | 2048 | 4 | 4 | 6 |
+| hero | 4096 | 6 | 4 | 8 |
+
+The JSON files in
+[`presets/`](../mayatk/light_utils/lightmap_baker/presets) are the source of
+these numbers.
 
 **mobile** was named **quest**. `from_preset("quest")` still builds it, with
 a deprecation notice, until mayatk 0.21.0, and the panel moves a selection
@@ -338,7 +421,7 @@ The steps stay public for a custom flow: `bake_targets`, `preflight`,
 `bake_atlas` / `bake_separated`, `LightmapRecords.commit` and `bake_verdict`.
 
 Constructor switches mirror the panel: `adaptive`, `include_environment`,
-`denoise` and `beside_textures`. `bake(..., intensity=math.pi)` writes a
+`denoise`, `beside_textures` and `reflection_probe`. `bake(..., intensity=math.pi)` writes a
 Unity-native-light calibration into the texels, once. The default, 1.0,
 matches the Maya render.
 
@@ -355,7 +438,8 @@ blendertk's `LightmapBaker` and its panel bake with Cycles and mirror this
 one control for control: the same layout, the preset template (its presets
 store `bounces` for `gi_depth`), the Exclude set (a stamped collection that
 changes nothing about what renders), Beside Material Textures, Bounces,
-Adaptive Sampling, the four switches on the fields they qualify, Reset to
+Adaptive Sampling, the switches on the fields they qualify (bar the
+Reflection Probe: Cycles captures none yet), Reset to
 Defaults and the confirmed Revert. The engine matches too: `bake()` with its
 preflight and verdict, `bake_targets`, the file claims, setting superseded
 maps aside (a linked object's map is kept, as a referenced one's is here), a

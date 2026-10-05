@@ -142,7 +142,7 @@ GUI_REQUIRED = {
         "segfault without a real Maya event loop"
     ),
     "test_render_opacity": (
-        "the pulse option box embeds a live uitk ColorRampEditor, so building "
+        "the pulse page embeds a live uitk ColorRampEditor, so building "
         "it constructs real QWidgets (2026-09-11); crashes mayapy in batch"
     ),
     "test_hotkey_collisions": (
@@ -807,6 +807,9 @@ except Exception as e:
                 "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
                 "extended": extended,
                 "reload": False,
+                # A mayapy this runner launched: its settings stores are the
+                # run's to redirect (_suite_driver._activate_sandbox).
+                "sandbox_settings": True,
             }
             cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
 
@@ -1173,9 +1176,13 @@ except Exception as e:
         base = self.temp_test_dir / f"gui_{os.getpid()}"
         cfg_path = base.with_suffix(".json")
         res_path = base.with_suffix(".txt")
-        # Reload only matters when the session may hold stale modules.
-        needs_reload = self.reuse_instance or (
-            self.connection and self.connection.mode == "interactive"
+        # A session this runner did not launch -- the user's own, in-session
+        # (Script Editor) or attached with --reuse -- may hold stale modules,
+        # so it reloads; and it keeps its real settings stores, since the
+        # driver's redirect cannot be undone and would outlive the run there.
+        users_session = bool(
+            self.reuse_instance
+            or (self.connection and self.connection.mode == "interactive")
         )
         config = {
             "modules": gui_modules,
@@ -1184,7 +1191,8 @@ except Exception as e:
             "progress_file": str(base.with_suffix(".progress")).replace("\\", "/"),
             "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
             "extended": extended,
-            "reload": bool(needs_reload),
+            "reload": users_session,
+            "sandbox_settings": not users_session,
         }
         cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
         res_path.unlink(missing_ok=True)

@@ -169,22 +169,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
             (
                 "Preview",
                 "preview",
-                "256 px / 64 samples / 2 bounces — fast iteration.",
+                "256 px / 128 samples / 2 bounces — fast iteration.",
             ),
             (
                 "Mobile",
                 "mobile",
-                "1024 px / 256 samples / 4 bounces — the production default.",
+                "1024 px / 1024 samples / 4 bounces — the production default.",
             ),
             (
                 "Desktop / High",
                 "desktop",
-                "2048 px / 512 samples / 4 bounces — hero environments.",
+                "2048 px / 2048 samples / 6 bounces — hero environments.",
             ),
             (
                 "Hero / Production",
                 "hero",
-                "4096 px / 1024 samples / 4 bounces — a whole environment sharing\n"
+                "4096 px / 4096 samples / 8 bounces — a whole environment sharing\n"
                 "one material. The figure is the ATLAS size, and one atlas is split\n"
                 "between every object in a material group: a 46-piece room on one\n"
                 "material gets 1/46th of it each, so an environment needs a tier\n"
@@ -408,8 +408,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "meshes). It is not free, though: emissive surfaces DO light a Cycles bake.\n"
             "Measured on a 61 m² office, the lens supplied ~15% of the room's light at\n"
             "2.0 and ~33% at 6.0 — illumination driven by a texture's exposure, which\n"
-            "cannot be aimed or re-coloured. Raise the lights' power instead and leave\n"
-            "this near 2."
+            "cannot be aimed or re-coloured. 1.0 is Arnold's own weight for the map, so\n"
+            "the Cycles bake matches Maya's Lightmap Baker; raise the lights instead."
         ),
     ),
     "LIGHTMAP_DIR": AttributeSpec(

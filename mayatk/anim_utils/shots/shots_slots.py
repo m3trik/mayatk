@@ -32,7 +32,10 @@ class ShotsController(ptk.LoggingMixin):
         self._store_listener_bound = False
         self._refreshing_editor = False
 
-        # Shot editor widgets get their values from the store, not QSettings.
+        # Widgets the store owns get their values from it, not QSettings: a
+        # restore lands after the store sync and goes through the slot that
+        # writes the store, so a QSettings copy overwrote this scene's setting
+        # with the last one set in any scene.
         for name in (
             "cmb_shot_select",
             "txt_shot_name",
@@ -43,6 +46,8 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shift_all",
             "spn_space",
             "spn_gap",
+            "spn_detection",
+            "cmb_detection_mode",
             "spn_initial_length",
             "cmb_fit_mode",
             "chk_snap_whole_frames",

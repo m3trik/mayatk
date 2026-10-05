@@ -12,11 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.node_utils._node_utils import NodeUtils
 
 
@@ -90,7 +91,7 @@ class _AutoUnwrapInternal:
         Materials are excluded — the engines ignore them and would otherwise
         leave a stray .mtl beside the payload.
         """
-        cmds.loadPlugin("objExport", quiet=True)
+        Plugins.load("objExport")
         cmds.select(node, replace=True)
         cmds.file(
             path,
