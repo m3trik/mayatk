@@ -1,11 +1,11 @@
 # coding=utf-8
-"""Shot Manifest behavior template schema + discovery tests, and the effect
-recipe's round trip through a real scene.
+"""Shot Manifest behavior template schema + discovery tests, the effect
+recipe's round trip through a real scene, and how a doc name finds its node.
 
 The schema and dispatch tests are Maya-free (``_behaviors`` guards ``cmds``);
-:class:`RecipeRoundTripTest` builds in a live scene. All run via mayapy
-alongside the rest of the suite.  Templates are JSON (the pythontk engine's
-store, shared with blendertk).
+:class:`RecipeRoundTripTest` and :class:`MemberResolutionTest` build in a live
+scene. All run via mayapy alongside the rest of the suite.  Templates are JSON
+(the pythontk engine's store, shared with blendertk).
 
     & $MAYAPY mayatk\\test\\test_shot_manifest_behaviors.py
 """
@@ -301,6 +301,28 @@ class RecipeRoundTripTest(MayaTkTestCase):
         self.assertTrue(self._keys("opacity"))
         self.assertFalse(self.store.edit_ledger.authored(behavior="highlight"))
 
+    def test_an_animators_key_inside_the_shot_keeps_the_fade_off(self):
+        """The ownership guard where it matters: the animator's key sits
+        INSIDE the shot (the drop test's key at 1000 is outside it)."""
+        from mayatk.mat_utils.render_opacity.attribute_mode import (
+            OpacityAttributeMode,
+        )
+
+        OpacityAttributeMode.create([self.door])
+        cmds.setKeyframe(f"{self.door}.opacity", time=100, value=0.5)
+        steps = self._steps(("door", ["fade_in"], "scene"))
+
+        _, beh, built = self._build(steps)
+        self.assertEqual(
+            [(r["object"], r["behavior"]) for r in beh["skipped"]],
+            [("door", "fade_in")],
+        )
+        self.assertEqual(beh["applied"], [])
+        self.assertEqual(self._keys("opacity"), [(100.0, 0.5)])
+        self.assertFalse(self.store.edit_ledger.authored(behavior="fade_in"))
+        # Unverified over keys the animator owns: a conflict, not a fix.
+        self.assertEqual(built[0].objects[0].status, "behavior_conflict")
+
     def test_a_build_leaves_a_hand_placed_clip_of_its_track(self):
         """The build used to clear the whole track before keying its clip."""
         tid = AudioUtils.normalize_track_id("A01_Hello")
@@ -319,6 +341,93 @@ class RecipeRoundTripTest(MayaTkTestCase):
             [t for _c, t in self.store.edit_ledger.authored(behavior="set_clip")],
             [start, start + 24.0],
         )
+
+
+class MemberResolutionTest(MayaTkTestCase):
+    """A doc name finds its scene node the one way every consumer does
+    (``ShotStore.resolve_member``): exactly, then inside a namespace (a
+    referenced asset), and a name several nodes answer to is a finding --
+    reported, never keyed on a guess."""
+
+    RANGE = {"A01": (0.0, 240.0)}
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentUnit(time="film")  # 24 fps
+        ShotStore._active = None
+        self.store = ShotStore()
+
+    def tearDown(self):
+        ShotStore._active = None
+        super().tearDown()
+
+    @staticmethod
+    def _cube(name: str, parent: str = "") -> str:
+        """A cube named *name* under world group *parent* (or the world); its
+        long name -- spelled out, since a short name may now be shared."""
+        cmds.polyCube(name="tmp_geo")
+        path = "|tmp_geo"
+        if parent:
+            if not cmds.objExists(f"|{parent}"):
+                cmds.group(empty=True, world=True, name=parent)
+            cmds.parent(path, f"|{parent}")
+            path = f"|{parent}|tmp_geo"
+        cmds.rename(path, name)
+        return f"{path.rpartition('|')[0]}|{name}"
+
+    @staticmethod
+    def _in_namespace(namespace: str, name: str) -> str:
+        if not cmds.namespace(exists=namespace):
+            cmds.namespace(add=namespace)
+        return cmds.ls(cmds.polyCube(name=f"{namespace}:{name}")[0], long=True)[0]
+
+    def _build(self, name: str):
+        step = BuilderStep(
+            step_id="A01", section="A", section_title="Sec", description="d"
+        )
+        step.objects.append(BuilderObject(name=name, behaviors=["fade_in"]))
+        return ShotManifest(self.store).sync([step], ranges=self.RANGE)
+
+    def test_a_name_is_found_exactly_then_in_a_namespace(self):
+        lid = self._cube("lid_geo")
+        door = self._in_namespace("AC", "door_geo")
+        self.assertEqual(self.store.resolve_member("lid_geo"), (lid, "found"))
+        self.assertEqual(self.store.resolve_member("door_geo"), (door, "found"))
+        self.assertEqual(
+            self.store.resolve_member("hinge_geo"), ("hinge_geo", "missing")
+        )
+
+    def test_a_leaf_two_nodes_answer_to_is_ambiguous(self):
+        self._in_namespace("AC", "door_geo")
+        self._in_namespace("BC", "door_geo")
+        self.assertEqual(
+            self.store.resolve_member("door_geo"), ("door_geo", "ambiguous")
+        )
+        self._cube("lid_geo", parent="setA")
+        self._cube("lid_geo", parent="setB")
+        self.assertEqual(self.store.resolve_member("lid_geo"), ("lid_geo", "ambiguous"))
+
+    def test_a_build_keys_the_namespaced_node_a_doc_name_finds(self):
+        door = self._in_namespace("AC", "door_geo")
+        _, beh, built = self._build("door_geo")
+        self.assertEqual(len(beh["applied"]), 1)
+        self.assertTrue(cmds.keyframe(f"{door}.opacity", q=True))
+        self.assertEqual(built[0].objects[0].status, "valid")
+
+    def test_an_ambiguous_name_is_keyed_on_neither(self):
+        """Bug: the build's existence check was ``cmds.objExists``, true for a
+        name several transforms share, so the fade keyed the first match
+        (``cmds.ls(...)[0]``) and Assess called the name ambiguous only after.
+        Fixed: 2026-10-04
+        """
+        doors = [self._cube("door", parent=p) for p in ("setA", "setB")]
+        self.assertEqual(len(cmds.ls("door", long=True)), 2)
+
+        _, beh, built = self._build("door")
+        self.assertEqual(beh["applied"], [])
+        for door in doors:
+            self.assertFalse(cmds.keyframe(door, q=True), door)
+        self.assertEqual(built[0].objects[0].status, "ambiguous_object")
 
 
 if __name__ == "__main__":

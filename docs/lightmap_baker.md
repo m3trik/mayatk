@@ -128,10 +128,11 @@ surface area is.
 Resolution. Right for a hero asset that earns one, or a small selection.
 
 The atlas layout is planned before any ray is traced. Each object renders at
-4× the size of its cell (never above a full map), then shrinks into the cell,
+2× the size of its cell (never above a full map), then shrinks into the cell,
 and that shrink averages out Arnold's sampling noise. Measured at the same
-ray budget per shipped texel, 4× supersampling matches spending those rays
-as camera samples, and is the cheapest way to spend them on a GPU.
+ray budget per shipped texel, rendering above the cell matches spending those
+rays as camera samples. 2× is the trade the tiers make: on a production floor
+at four bounces, 4× took 75 s for 0.39% shadow mottle and 2× 22 s for 0.52%.
 
 ## Reflection probe
 
@@ -175,6 +176,12 @@ point with the bake's own settings, written beside the maps as
   cone mostly meets nothing is open and reads as distant, while the others
   still project: a courtyard's walls and floor, a bare ground's ground. With
   every face open the probe is read as distant.
+- **What it renders.** Every light is visible to it -- an Arnold light too --
+  and the scene's imagers (exposure, tonemap, denoise) are not applied: the
+  maps get none, and the probe is read beside them, at their level. With
+  **Include Environment** off, the sky dome is left out of it as it is out of
+  the maps. An unbaked instance of a baked mesh stays in its view: the render
+  can only hide a mesh, and with it every instance.
 - **Z-up scenes** get no probe (logged): its deliverables read it in Y-up
   axes.
 - **Where it goes.** The scene manifest carries it like a map (dependencies,
@@ -194,6 +201,12 @@ To capture it again without re-baking, run
 `LightmapBaker.from_preset("desktop").bake_probe()` and save. Reverting the
 last bake drops it.
 
+A cancelled bake captures no probe, and a probe that fails is logged without
+losing the bake, which is committed by then. A `<scene>_Probe.exr` held open
+(a viewer, a sync client) costs its name, not the render: the probe lands
+beside it as `<scene>_Probe_1.exr`. A re-bake into another folder sets the old
+probe aside, as it does a superseded map.
+
 ## Sampling
 
 On the **CPU**, every camera sample traces **GI Samples** bounce rays.
@@ -203,8 +216,8 @@ camera samples instead:
 
 - **Adaptive Sampling on** (the default — the button on the Samples field):
   every texel gets **Samples**. Noisy texels (shadows, contact) get more, up
-  to Samples × GI Samples. Measured on four production floors at **mobile**
-  (Samples 4, GI Samples 4): 73 s adaptive, against 381 s for giving every
+  to Samples × GI Samples. Measured on four production floors at Samples 4,
+  GI Samples 4: 73 s adaptive, against 381 s for giving every
   texel the full budget (Samples 16). Shadow noise was 1.31% against 1.06%.
 - **Adaptive Sampling off**: every texel gets the full Samples × GI Samples.
   This gives the cleanest map and the slowest bake.
@@ -223,8 +236,8 @@ The Preset combo is uitk's preset template:
 - **Save** (the disk icon) stores the current settings under a name you type.
 - The **⋯** menu renames, deletes, or opens the preset folder.
 - A **\*** after the name means a setting has changed since the preset loaded.
-- The built-ins (**preview**, **mobile**, **desktop**) are italic and
-  read-only.
+- The built-ins (**preview**, **mobile**, **desktop**, **hero**) are italic
+  and read-only.
 
 Presets live in one store, `LightmapBaker.preset_store()`: the shipped JSON in
 [`presets/`](../mayatk/light_utils/lightmap_baker/presets) plus a per-user
@@ -253,9 +266,14 @@ fail on the next machine.
 
 | Built-in | Resolution | Samples | GI Samples | Bounces |
 |:---|:---|:---|:---|:---|
-| preview | 256 | 2 | 2 | 1 |
-| mobile | 1024 | 4 | 4 | 2 |
-| desktop | 2048 | 8 | 6 | 3 |
+| preview | 256 | 2 | 2 | 2 |
+| mobile (the default) | 1024 | 4 | 2 | 4 |
+| desktop | 2048 | 4 | 4 | 6 |
+| hero | 4096 | 6 | 4 | 8 |
+
+The JSON files in
+[`presets/`](../mayatk/light_utils/lightmap_baker/presets) are the source of
+these numbers.
 
 **mobile** was named **quest**. `from_preset("quest")` still builds it, with
 a deprecation notice, until mayatk 0.21.0, and the panel moves a selection

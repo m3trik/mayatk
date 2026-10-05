@@ -36,13 +36,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
+except ImportError:
     cmds = None
     mel = None
-    print(__file__, error)
 
 import pythontk as ptk
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -130,6 +130,10 @@ class TextureBaker(ptk.LoggingMixin):
         #: (:meth:`_bake_with_arnold_batch`); ``bake`` reads it to tell a
         #: cancelled render from a selection that cannot be batched.
         self._batch_cancelled = False
+        #: The members of the last batch whose every map rendered nothing on
+        #: its own (:meth:`_bake_with_arnold_batch`): ``bake`` re-bakes none
+        #: of them per object, where it would render nothing again.
+        self._batch_empty: set = set()
         # Reconstruction filter for the RTT render. Gaussian 2.0 (Arnold's
         # own default) is RIGHT for a bake and box 1.0 is measurably worse,
         # which is the opposite of the usual "a bake is a texture, use box"
@@ -234,26 +238,62 @@ class TextureBaker(ptk.LoggingMixin):
         except Exception:
             return None
 
-    def _to_output_space(self, path: str) -> None:
-        """Re-express the RTT map at *path* in :attr:`output_space`, in place.
+    def _to_output_space(self, path: str) -> Optional[str]:
+        """The RTT map at *path* re-expressed in :attr:`output_space`, staged beside it.
 
-        A no-op with no output space, with colour management off, and when the
-        scene already renders in it. Light outside the target gamut clips at
-        zero (irradiance is never negative). A rendering space with no known
-        conversion keeps its values, warned once per space.
+        ``None`` when there is nothing to convert: no output space, colour
+        management off, or the scene already renders in it. Otherwise the
+        converted map is written to a stage file beside *path* (an unpromoted
+        ``FileUtils.atomic_write`` stage, swept by a later write if stranded)
+        and the stage is returned, for :meth:`_place_in_output_space` to
+        place. *path* itself is never rewritten: the rewrite was refused while
+        a sync client or a viewer held the fresh render, and the map was lost
+        before :meth:`_place_output`'s lock fallback could run. Light outside
+        the target gamut clips at zero (irradiance is never negative). A
+        rendering space with no known conversion keeps its values, warned once
+        per space -- and so does every map when this process cannot read an
+        EXR (:meth:`_exr_trouble`), said once.
         """
         if not (self._rendering_space() and self.output_space):
-            return
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        import cv2
+            return None
+        img = self._read_exr(path)
+        if img is None:
+            self._report_exr_trouble()
+            return None
+        if img.ndim != 3 or img.shape[2] < 3:
+            return None
         import numpy as np
 
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
-        if img is None or img.ndim != 3 or img.shape[2] < 3:
-            return
         out = self._in_output_space(img)
-        if out is not img:
-            self._write_exr(path, out.astype(np.float32))
+        if out is img:
+            return None
+        return self._write_exr(path, out.astype(np.float32), promote=False)
+
+    def _place_in_output_space(self, raw: str, out_path: str, used: set) -> str:
+        """Place the RTT map *raw* at *out_path* in :attr:`output_space`; where it landed.
+
+        The converted map (:meth:`_to_output_space`) is what
+        :meth:`_place_output` moves into place, so a lock on the raw render or
+        on the destination costs at most a name, never the map. The raw render
+        goes once its converted copy is placed; one still held (a sync client
+        indexing it) is left for the sync to release, and said so.
+        """
+        staged = self._to_output_space(raw)
+        if staged is None:
+            return self._place_output(raw, out_path, used)
+        placed = self._place_output(staged, out_path, used)
+        if not ptk.FileUtils.is_same_file(raw, placed):
+            try:
+                os.remove(raw)
+            except OSError:
+                self.logger.warning(
+                    "%s was still held after its map was placed (cloud sync "
+                    "indexing the fresh render?); it may linger beside %s until "
+                    "the sync finishes.",
+                    os.path.basename(raw),
+                    os.path.basename(placed),
+                )
+        return placed
 
     def _in_output_space(self, img):
         """*img* (float BGR[A], as Arnold rendered it) in :attr:`output_space`.
@@ -289,6 +329,7 @@ class TextureBaker(ptk.LoggingMixin):
         path: str,
         width: int = 1024,
         hide: Optional[Sequence[str]] = None,
+        lights: Optional[Sequence[str]] = None,
     ) -> Optional[str]:
         """Render an equirectangular HDR of the scene seen from *position* to *path*.
 
@@ -299,7 +340,10 @@ class TextureBaker(ptk.LoggingMixin):
         reflection sees a light's own radiance, so a map that stands in for
         reflections must. *hide* names meshes the camera sees through while
         they still shade the room (objects that move: a probe is the static
-        room). Nothing in the scene is left changed.
+        room). The scene's imagers (exposure, tonemap, denoise) are ignored:
+        a bake's maps get none (RTT applies none), and the probe is read
+        beside them, at their level. Nothing in the scene is left changed, the
+        selection included.
 
         The EXR (half float) is in :attr:`output_space`, its alpha the share of
         each texel that hit geometry, laid out as three.js reads an equirect
@@ -309,18 +353,32 @@ class TextureBaker(ptk.LoggingMixin):
 
         Parameters:
             position: The camera's world position, in scene units.
-            path: The EXR to write (replaced whole).
+            path: The EXR to write (replaced whole). One held open elsewhere
+                (a viewer, a sync client) costs the name, not the render: the
+                panorama takes an adjacent one (:meth:`_place_output`).
             width: The map's width in texels; its height is half.
             hide: Meshes (transforms or shapes) invisible to the camera.
+            lights: Light shapes made visible to camera rays, each by its
+                own switch (:attr:`_CAMERA_VISIBILITY`: ``aiCamera``, a sky
+                dome's ``camera``). ``None`` for every shape in the scene
+                that carries one -- Arnold's lights as well as Maya's, which
+                ``ls(lights=True)`` alone would miss (an ``aiAreaLight`` is
+                no ``light``).
 
         Returns:
-            *path*, or ``None`` when Arnold is unavailable or wrote nothing (logged).
+            The path the panorama landed at -- *path*, or an adjacent name when
+            *path* is held -- or ``None`` when Arnold is unavailable or wrote
+            nothing (logged).
         """
         if not self.ensure_arnold():
             self.logger.warning("Panorama not rendered: Arnold is unavailable.")
             return None
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        import cv2
+        # Asked BEFORE the render is paid for: its image is read back, and
+        # written, through cv2.
+        trouble = self._exr_trouble()
+        if trouble:
+            self.logger.warning("Panorama not rendered: %s.", trouble)
+            return None
         import numpy as np
 
         width = max(8, int(width) // 2 * 2)
@@ -329,72 +387,83 @@ class TextureBaker(ptk.LoggingMixin):
         for node in hide or ():
             found = cmds.ls(node, dag=True, type="mesh", noIntermediate=True, long=True)
             shapes += found or []
-        lights = [
-            light
-            for light in cmds.ls(lights=True, long=True) or []
-            if cmds.attributeQuery("aiCamera", node=light, exists=True)
-        ]
-        camera, camera_shape = cmds.camera(name="bake_panorama#")
-        try:
+        if lights is None:
+            lights = [
+                node
+                for node in cmds.ls(
+                    *(f"*.{attr}" for attr in self._CAMERA_VISIBILITY),
+                    objectsOnly=True,
+                    long=True,
+                    recursive=True,
+                )
+                or []
+                if cmds.objectType(node, isAType="shape")
+            ]
+        switches = {light: self._camera_visibility(light) for light in lights or []}
+        with contextlib.ExitStack() as stack:
+            # Every node made here (the camera, the guard's stand-ins) takes
+            # the selection, and deleting them after left nothing selected.
+            stack.enter_context(CoreUtils.preserved_selection())
+            camera, camera_shape = cmds.camera(name="bake_panorama#")
+            stack.callback(cmds.delete, camera)
             cmds.xform(camera, worldSpace=True, translation=list(position))
             cmds.setAttr(camera_shape + ".aiTranslator", "spherical", type="string")
             cmds.setAttr(camera_shape + ".nearClipPlane", 0.1)
-            with (
-                contextlib.ExitStack() as stack,
-                ptk.TempArtifacts("bake_panorama", policy="scoped") as tmp,
-            ):
-                prefix = os.path.join(tmp.dir_path(), "panorama").replace("\\", "/")
-                if self.translation_guard:
-                    stack.enter_context(self.arnold_translation_guard())
-                stack.enter_context(self._pinned_render_settings("arnold"))
+            tmp = stack.enter_context(
+                ptk.TempArtifacts("bake_panorama", policy="scoped")
+            )
+            prefix = os.path.join(tmp.dir_path(), "panorama").replace("\\", "/")
+            if self.translation_guard:
+                stack.enter_context(self.arnold_translation_guard())
+            stack.enter_context(self._pinned_render_settings("arnold"))
 
-                def pin(node: str, **values: Any) -> None:
-                    stack.enter_context(
-                        Attributes.pinned(node, _logger=self.logger, **values)
-                    )
+            def pin(node: str, **values: Any) -> None:
+                stack.enter_context(
+                    Attributes.pinned(node, _logger=self.logger, **values)
+                )
 
-                # Unlicensed, a batch render aborts where a bake renders
-                # watermarked: the probe renders as the maps it rides with do.
-                pin(
-                    "defaultArnoldRenderOptions",
-                    AASamples=self._camera_samples(),
-                    aovMode=0,
-                    abortOnLicenseFail=0,
-                )
-                pin("defaultArnoldDriver", ai_translator="exr", mergeAOVs=1)
-                pin(
-                    "defaultResolution",
-                    width=width,
-                    height=height,
-                    deviceAspectRatio=float(width) / height,
-                    pixelAspect=1.0,
-                )
-                pin("defaultRenderGlobals", animation=0, imageFilePrefix=prefix)
-                for light in lights:
-                    pin(light, aiCamera=1.0)
-                for shape in shapes:
-                    pin(shape, primaryVisibility=0)
-                cmds.arnoldRender(
-                    width=width, height=height, camera=camera_shape, batch=True
-                )
-                rendered = prefix + ".exr"
-                img = (
-                    cv2.imread(rendered, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
-                    if os.path.isfile(rendered)
-                    else None
-                )
-        finally:
-            cmds.delete(camera)
+            # Unlicensed, a batch render aborts where a bake renders
+            # watermarked: the probe renders as the maps it rides with do --
+            # and without the imagers RTT never applies to them: a batch
+            # render runs the scene's chain, and an exposure or a tonemap
+            # there moved the probe off its maps' level.
+            pin(
+                "defaultArnoldRenderOptions",
+                AASamples=self._camera_samples(),
+                aovMode=0,
+                abortOnLicenseFail=0,
+                ignoreImagers=1,
+            )
+            pin("defaultArnoldDriver", ai_translator="exr", mergeAOVs=1)
+            pin(
+                "defaultResolution",
+                width=width,
+                height=height,
+                deviceAspectRatio=float(width) / height,
+                pixelAspect=1.0,
+            )
+            pin("defaultRenderGlobals", animation=0, imageFilePrefix=prefix)
+            for light, attr in switches.items():
+                if attr:
+                    pin(light, **{attr: 1.0})
+            for shape in shapes:
+                pin(shape, primaryVisibility=0)
+            cmds.arnoldRender(
+                width=width, height=height, camera=camera_shape, batch=True
+            )
+            img = self._read_exr(prefix + ".exr")
         if img is None or img.ndim != 3 or img.shape[2] < 3:
             self.logger.warning("Panorama not rendered: Arnold wrote no image.")
             return None
         img = self._in_output_space(img.astype(np.float32))
         img = np.roll(img, -(img.shape[1] // 4), axis=1)
-        self._write_exr(path, np.ascontiguousarray(img, dtype=np.float32))
-        return path
+        staged = self._write_exr(
+            path, np.ascontiguousarray(img, dtype=np.float32), promote=False
+        )
+        return self._place_output(staged, path, set())
 
-    @staticmethod
-    def _write_exr(path: str, image) -> None:
+    @classmethod
+    def _write_exr(cls, path: str, image, promote: bool = True) -> str:
         """Write *image* (float BGR[A]) as a half-float EXR at *path*, swapped in whole.
 
         Through ``ptk.FileUtils.atomic_write``: a write over a map's own file
@@ -402,17 +471,36 @@ class TextureBaker(ptk.LoggingMixin):
         after the map ran past it -- past the 260 characters Maya keeps to,
         for a map near them. Raises when cv2 cannot encode -- it returns False
         instead of raising, and a caller that deletes its inputs once this
-        returns would lose them to a silent failure.
-        """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        import cv2
+        returns would lose them to a silent failure. *promote* ``False``
+        leaves the EXR at its stage beside *path*, for a caller that places it
+        itself (:meth:`_place_output`).
 
+        What half float cannot hold is held to its range: NaN is 0, and past
+        +/-65504 is 65504. Encoded as it was, a texel past it (a light seen
+        whole in a reflection probe) became +inf, which the GLB embed reads
+        as 0 -- the brightest reflection, black.
+
+        Returns:
+            *path*, or the stage when *promote* is ``False``.
+        """
+        import numpy as np
+
+        cv2 = cls._cv2()
+        if cv2 is None:
+            raise RuntimeError(f"cannot write {path}: cv2 is not installed")
         parent = os.path.dirname(os.path.abspath(path))
         if parent:
             os.makedirs(parent, exist_ok=True)
-        ok, data = cv2.imencode(
-            ".exr", image, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_HALF]
+        top = float(np.finfo(np.float16).max)
+        image = np.clip(
+            np.nan_to_num(np.asarray(image, dtype=np.float32), nan=0.0),
+            -top,
+            top,
         )
+        with cls._codec_temp():
+            ok, data = cv2.imencode(
+                ".exr", image, [cv2.IMWRITE_EXR_TYPE, cv2.IMWRITE_EXR_TYPE_HALF]
+            )
         if not ok:
             raise RuntimeError(f"failed to encode EXR: {path}")
 
@@ -420,7 +508,159 @@ class TextureBaker(ptk.LoggingMixin):
             with open(part, "wb") as fh:
                 fh.write(data.tobytes())
 
-        ptk.FileUtils.atomic_write(path, write)
+        return ptk.FileUtils.atomic_write(path, write, promote=promote)
+
+    @classmethod
+    def _read_exr(cls, path: str):
+        """The image at *path* as cv2 decodes it (float BGR[A] for an EXR), or ``None``.
+
+        ``None`` when it does not decode -- cut short, absent, or no codec in
+        this process (:meth:`_exr_trouble` tells the last apart). Read through
+        Python's own file IO and decoded in memory: ``cv2.imread`` opens no
+        path that is not ASCII on Windows, and its ``None`` for a map in a
+        folder named ``Büro`` read as a render that wrote nothing -- a good
+        map, deleted.
+        """
+        cv2 = cls._cv2()
+        if cv2 is None:
+            return None
+        import numpy as np
+
+        try:
+            data = np.fromfile(path, dtype=np.uint8)
+        except (OSError, ValueError):
+            return None
+        if not data.size:
+            return None
+        with cls._codec_temp():
+            try:
+                return cv2.imdecode(data, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+            except cv2.error:
+                return None
+
+    @staticmethod
+    def _cv2():
+        """cv2, its EXR codec asked for, or ``None`` when it is not installed.
+
+        No package declares it, so a bake asks rather than imports.
+        """
+        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+        try:
+            import cv2
+        except ImportError:
+            return None
+        return cv2
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _codec_temp():
+        """Spell the temp folder in ASCII for OpenCV, for the block.
+
+        OpenCV's EXR codec encodes and decodes through a scratch FILE in the
+        temp folder, opened by a narrow path: under a temp folder whose path
+        is not ASCII -- a Windows user named José -- every EXR encode and
+        decode failed. Its short (8.3) spelling names the same folder in
+        ASCII where the volume keeps short names; ``TEMP`` and ``TMP`` carry
+        it for the block. Anywhere else this changes nothing, and
+        :meth:`_exr_trouble` reports what is left.
+        """
+        import tempfile
+
+        temp = tempfile.gettempdir()
+        short = ""
+        if os.name == "nt" and not temp.isascii():
+            import ctypes
+
+            buffer = ctypes.create_unicode_buffer(32768)
+            if ctypes.windll.kernel32.GetShortPathNameW(temp, buffer, len(buffer)):
+                short = buffer.value
+        if not short or not short.isascii():
+            yield
+            return
+        saved = {key: os.environ.get(key) for key in ("TEMP", "TMP")}
+        os.environ["TEMP"] = os.environ["TMP"] = short
+        try:
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    @classmethod
+    def _exr_trouble(cls) -> Optional[str]:
+        """Why this process cannot encode and decode an EXR, or ``None`` when it can.
+
+        A 1x1 round trip through cv2 (:meth:`_codec_temp` in force). Three
+        things fail it, none of them a map's: cv2 is not installed; another
+        tool imported it before ``OPENCV_IO_ENABLE_OPENEXR`` was set (the
+        codec then stays off for the process); or the temp folder has no
+        ASCII spelling.
+        """
+        import tempfile
+
+        cv2 = cls._cv2()
+        if cv2 is None:
+            return "cv2 (opencv-python) is not installed"
+        import numpy as np
+
+        with cls._codec_temp():
+            try:
+                ok, data = cv2.imencode(".exr", np.zeros((1, 1, 4), np.float32))
+                back = (
+                    cv2.imdecode(data, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+                    if ok
+                    else None
+                )
+            except cv2.error:
+                back = None
+        if back is not None:
+            return None
+        return (
+            "OpenCV cannot encode or decode an EXR in this process: cv2 was "
+            "imported before OPENCV_IO_ENABLE_OPENEXR was set, or its temp "
+            f"folder ({tempfile.gettempdir()}) has no ASCII spelling (set "
+            "OPENCV_TEMP_PATH to an ASCII folder before Maya starts)"
+        )
+
+    #: Whether :meth:`_report_exr_trouble` has spoken in this process.
+    _exr_trouble_reported: bool = False
+
+    @classmethod
+    def _report_exr_trouble(cls) -> Optional[str]:
+        """:meth:`_exr_trouble`, warned once per process with what bakes do instead."""
+        trouble = cls._exr_trouble()
+        if trouble and not TextureBaker._exr_trouble_reported:
+            TextureBaker._exr_trouble_reported = True
+            cls.logger.warning(
+                "No EXR codec: %s. Baked maps are kept as Arnold wrote them -- "
+                "unchecked for an aborted render, and in its rendering space -- "
+                "and no reflection probe is rendered.",
+                trouble,
+            )
+        return trouble
+
+    #: A light's camera-ray visibility, as each spells it: ``aiCamera`` on
+    #: Maya's lights and Arnold's area light, ``camera`` on Arnold's sky dome
+    #: -- an HDRI backdrop hidden from the camera still lights a render and
+    #: shows in its reflections, so the probe that stands in for those does.
+    _CAMERA_VISIBILITY: Tuple[str, ...] = ("aiCamera", "camera")
+
+    @classmethod
+    def _camera_visibility(cls, light: str) -> Optional[str]:
+        """*light*'s camera-visibility attribute (:attr:`_CAMERA_VISIBILITY`), or ``None``.
+
+        A number: a node can carry a ``camera`` that is a message instead (the
+        render options name their camera so).
+        """
+        for attr in cls._CAMERA_VISIBILITY:
+            if not cmds.attributeQuery(attr, node=light, exists=True):
+                continue
+            kind = cmds.attributeQuery(attr, node=light, attributeType=True)
+            if kind in ("float", "double", "bool"):
+                return attr
+        return None
 
     def _place_output(self, src: str, dst: str, used: set) -> str:
         """Move a finished bake to *dst*, taking an adjacent name if *dst* is locked.
@@ -804,7 +1044,14 @@ class TextureBaker(ptk.LoggingMixin):
             if camera_shader
             else contextlib.nullcontext()
         )
-        with self._pinned_render_settings(backend), guard, cards:
+        # Every node the bake makes (a stand-in, a switch) takes the
+        # selection, and deleting them after left nothing selected.
+        with (
+            CoreUtils.preserved_selection(),
+            self._pinned_render_settings(backend),
+            guard,
+            cards,
+        ):
             if backend == "arnold" and self._renders_on_gpu():
                 self._log_gpu_budget()
             offset = 0
@@ -851,11 +1098,13 @@ class TextureBaker(ptk.LoggingMixin):
                     # filename no rule predicted), or lost to a failed call,
                     # goes round again per-object: that path finds its file
                     # by dir-diff, so a naming quirk costs one scene
-                    # translation, never the map.
+                    # translation, never the map. Not a member that rendered
+                    # nothing on its own: it would again.
                     missed = [
                         o
                         for o in batch_objects
                         if (cmds.ls(o, long=True) or [o])[0] not in batched
+                        and (cmds.ls(o, long=True) or [o])[0] not in self._batch_empty
                     ]
                     if missed and not cancelled:
                         self.logger.warning(
@@ -1036,8 +1285,7 @@ class TextureBaker(ptk.LoggingMixin):
                     )
                 if not written:
                     return None
-                self._to_output_space(written)
-                placed = self._place_output(written, out_path, used)
+                placed = self._place_in_output_space(written, out_path, used)
                 used.add(placed)
                 return placed
             before = self._mtime(out_path)
@@ -1088,7 +1336,9 @@ class TextureBaker(ptk.LoggingMixin):
 
         Same resolver shapes as :meth:`_resolve_size`; anything unresolved,
         empty or degenerate bakes the whole square, so a region is never what
-        loses a map.
+        loses a map -- one that is not four numbers (``()``, a 3-tuple, a
+        ``None`` corner) too, warned: it used to raise outside the per-object
+        guard and end the whole bake.
         """
         value = region.get(long_name) if isinstance(region, dict) else region
         if callable(value):
@@ -1099,7 +1349,17 @@ class TextureBaker(ptk.LoggingMixin):
                 value = None
         if value is None:
             return None
-        u0, v0, u1, v1 = (float(x) for x in value)
+        try:
+            u0, v0, u1, v1 = (float(x) for x in value)
+        except (TypeError, ValueError) as e:
+            self.logger.warning(
+                "Region %r for %s is not (u0, v0, u1, v1) (%s); baking the "
+                "whole square.",
+                value,
+                long_name,
+                e,
+            )
+            return None
         if not (u1 > u0 and v1 > v0):
             return None
         if (u0, v0, u1, v1) == (0.0, 0.0, 1.0, 1.0):
@@ -2015,23 +2275,24 @@ class TextureBaker(ptk.LoggingMixin):
             return None
         return kept
 
-    @staticmethod
-    def _rendered_nothing(path: str) -> bool:
+    @classmethod
+    def _rendered_nothing(cls, path: str) -> bool:
         """Whether the RTT map at *path* holds no render at all.
 
         A render Arnold aborts still writes each map it began and returns
         normally; the map is complete and all-zero, or cut short so it does
         not read (both measured, mtoa 5.4.5, 2026-10-03). Coverage is the
         alpha RTT writes -- 1 on every texel the layout reaches -- so a black
-        material's map still counts as rendered.
+        material's map still counts as rendered. A map that does not read is
+        cut short only where this process CAN read an EXR
+        (:meth:`_exr_trouble`); where it cannot, nothing here can tell, and
+        the map is kept (said once) -- every good map was deleted for it.
         """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        import cv2
         import numpy as np
 
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        img = cls._read_exr(path)
         if img is None:
-            return True
+            return not cls._report_exr_trouble()
         cover = img[..., 3] if img.ndim == 3 and img.shape[2] == 4 else img
         return not np.any(cover)
 
@@ -2081,9 +2342,12 @@ class TextureBaker(ptk.LoggingMixin):
         :attr:`_batch_cancelled`, set here. A part stopped PART-WAY sets it
         too, keeping the maps it finished (:meth:`_finished_before_stop`) --
         as does one whose map rendered nothing (an abort), keeping the maps
-        before it (:meth:`_rendered_nothing`).
+        before it (:meth:`_rendered_nothing`). A map that rendered nothing
+        with a rendered one after it is no abort: its member alone is left
+        out, named in :attr:`_batch_empty` so it is not baked again.
         """
         self._batch_cancelled = False
+        self._batch_empty = set()
         longs: List[str] = []
         leaves: Dict[str, List[str]] = {}
         shape_paths: Dict[str, List[str]] = {}
@@ -2220,15 +2484,32 @@ class TextureBaker(ptk.LoggingMixin):
                 order = [s for m in members for s in predicted[m]]
                 finished = self._finished_before_stop(order, stems)
                 # An abort returns as a stop does but writes EVERY map it
-                # began, all-zero -- no prefix to read. The first map that
-                # rendered nothing is where it stopped.
-                empty = next(
-                    (
-                        i
-                        for i, s in enumerate(order[:finished])
-                        if s in stems and self._rendered_nothing(stems[s])
-                    ),
-                    None,
+                # began, all-zero -- no prefix to read: from where it stopped,
+                # no map rendered. A map that rendered nothing with a rendered
+                # one after it was no abort -- its member alone renders
+                # nothing (no UVs in its flagged set, a layout off the map) --
+                # and it alone goes, not re-baked: it used to end the call,
+                # and every good map after it went with it.
+                done = order[:finished]
+                nothing = {
+                    i
+                    for i, s in enumerate(done)
+                    if s in stems and self._rendered_nothing(stems[s])
+                }
+                last = max(
+                    (i for i, s in enumerate(done) if s in stems and i not in nothing),
+                    default=-1,
+                )
+                empty = min((i for i in nothing if i > last), default=None)
+                dropped = set()
+                for i in sorted(i for i in nothing if i < last):
+                    dropped.add(done[i])
+                    path = stems.pop(done[i])
+                    self._discard_empty(path, [path])
+                self._batch_empty.update(
+                    m
+                    for m in members
+                    if predicted[m] and all(s in dropped for s in predicted[m])
                 )
                 if empty is not None:
                     finished = empty
@@ -2239,8 +2520,11 @@ class TextureBaker(ptk.LoggingMixin):
                     # it never reached must not go round again per object --
                     # one render, and one more Esc, each -- and the last map
                     # it began is not a finished one (see
-                    # _finished_before_stop), so it goes too.
+                    # _finished_before_stop), so it goes too. Kept: the maps
+                    # before it that were WRITTEN -- an abort found after a
+                    # member missing mid-call has no file for that member.
                     cut = stems[order[finished]]
+                    kept = [s for s in order[:finished] if s in stems]
                     self.logger.warning(
                         "Arnold stopped on map %d of the %d in this call: "
                         "keeping the %d before it, dropping %s (cut short, "
@@ -2248,14 +2532,14 @@ class TextureBaker(ptk.LoggingMixin):
                         "stops here.",
                         finished + 1,
                         len(order),
-                        finished,
+                        len(kept),
                         os.path.basename(cut),
                     )
                     try:
                         os.remove(cut)
                     except OSError:
                         pass
-                    by_stem.update((s, stems[s]) for s in order[:finished])
+                    by_stem.update((s, stems[s]) for s in kept)
                     cancelled = self._batch_cancelled = True
                     break
                 by_stem.update(stems)
@@ -2327,8 +2611,7 @@ class TextureBaker(ptk.LoggingMixin):
             out_path = self._unique_path(
                 output_dir, name, used, fmt, claims, owner=long_name
             )
-            self._to_output_space(raw)
-            out_path = self._place_output(raw, out_path, used)
+            out_path = self._place_in_output_space(raw, out_path, used)
             used.add(out_path)
             results[long_name] = out_path
             self.logger.info("Baked %s -> %s", leaf, out_path)

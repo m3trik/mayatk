@@ -18,8 +18,8 @@ from typing import Dict, List, Optional
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 from mayatk.core_utils.plugins._plugins import Plugins

@@ -33,8 +33,8 @@ try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
     import maya.api.OpenMayaAnim as oma
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 import pythontk as ptk
 

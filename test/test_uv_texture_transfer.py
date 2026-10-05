@@ -16,8 +16,9 @@ import maya.cmds as cmds
 import pythontk as ptk
 from PIL import Image
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, QuickTestCase
 from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.uv_utils.texture_transfer import TextureTransfer
 
 
@@ -161,6 +162,20 @@ class TestTextureTransfer(MayaTkTestCase):
                 output_dir=self.out_dir,
             )
 
+    def test_a_source_that_wears_nothing_is_nothing_to_transfer(self):
+        """A source whose shading group lost its shader wears nothing: the
+        run raised an ``IndexError`` out of the triangle lookup, which the UV
+        panel -- catching ``ValueError`` -- let escape as a traceback."""
+        src = self._plane("nakedSrc")
+        tgt = cmds.duplicate(src, name="nakedTgt")[0]
+        gone, sg = self._lambert("nakedSrcMat")
+        cmds.sets(src, e=True, forceElement=sg)
+        cmds.delete(gone)
+        _tmat, tsg = self._lambert("nakedTgtMat")
+        cmds.sets(tgt, e=True, forceElement=tsg)
+        with self.assertRaisesRegex(ValueError, "nothing to transfer"):
+            TextureTransfer().transfer(tgt, src, size=16, output_dir=self.out_dir)
+
     def test_consolidation_uses_constant_for_unmapped_source(self):
         # Two source materials on one mesh: left column textured, right column
         # a plain colour. Target has ONE material -> one atlas, the right half
@@ -246,6 +261,34 @@ class TestTextureTransfer(MayaTkTestCase):
         new_mat = cmds.listConnections(f"{sg}.surfaceShader")[0]
         self.assertTrue(new_mat.startswith("namesake"), new_mat)
         self.assertNotEqual(new_mat, "namesakeMat")
+
+    def test_a_re_run_beside_a_namesake_node_replaces_its_own_result(self):
+        """Beside a mesh holding the Output Name Maya calls the result
+        ``<name>1``, which a re-run's cleanup -- looking for ``<name>`` --
+        never found: every run stacked ``<name>2``, ``<name>3``... and left
+        the last one's shading group behind. A result is found by its stamp,
+        whatever Maya called it."""
+        plane = self._plane("namesake")
+        original, sg = self._lambert("namesakeMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+        kwargs = dict(
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="namesake",
+            assign=True,
+        )
+        for _run in range(3):
+            TextureTransfer().transfer(plane, **kwargs)
+        results = [m for m in cmds.ls("namesake*", type="lambert") if m != original]
+        self.assertEqual(len(results), 1, results)
+        self.assertEqual(TextureTransfer().face_materials(plane)[0], results)
+        groups = [g for g in cmds.ls("namesake*", type="shadingEngine") if g != sg]
+        self.assertEqual(groups, [f"{results[0]}SG"])
 
     def test_one_source_feeds_every_target(self):
         """First Selected onto several copies raised "cannot pair 2 target(s)
@@ -729,6 +772,21 @@ class TestTextureTransfer(MayaTkTestCase):
         ):
             self.assertAlmostEqual(got, want, places=5)
 
+    def test_an_unweighted_emission_is_no_constant(self):
+        """standardSurface's ``emissionColor`` defaults to WHITE behind an
+        ``emission`` weight of 0: read alone, every non-emissive source's share
+        of a consolidated emission map came out white."""
+        ss = cmds.shadingNode("standardSurface", asShader=True, name="emitSS")
+        self.assertEqual(
+            TextureTransfer.material_constant(ss, "emission"), (0.0, 0.0, 0.0)
+        )
+        cmds.setAttr(f"{ss}.emission", 0.5)
+        cmds.setAttr(f"{ss}.emissionColor", 1.0, 0.5, 0.0, type="double3")
+        for got, want in zip(
+            TextureTransfer.material_constant(ss, "emission"), (0.5, 0.25, 0.0)
+        ):
+            self.assertAlmostEqual(got, want, places=5)
+
     def test_a_stingray_sampler_slot_is_no_constant(self):
         """An undriven ``TEX_ao_map`` reads (0, 0, 0): black occlusion over a
         mapless source's share of the layout."""
@@ -996,6 +1054,146 @@ class TestTextureTransfer(MayaTkTestCase):
         self.assertEqual(TextureTransfer().face_materials(src)[0], [mat])
         self.assertNotIn(mat, TextureTransfer().face_materials(tgt)[0])
 
+    def test_a_source_named_by_its_shape_keeps_its_material(self):
+        """The keep rule compared transform paths against the caller's own
+        spelling: a source passed as its SHAPE matched nothing, so the
+        material it wears was cleared as a previous result. A target passed
+        as its shape is still the owner of its own previous result."""
+        src = self._plane("shapeSrc")
+        mat, sg, _extra = self._surface("held_MAT", texture=self.checker_path)
+        cmds.sets(src, e=True, forceElement=sg)
+        tgt = cmds.duplicate(src, name="shapeTgt")[0]
+        _tmat, tsg = self._lambert("shapeTgtMat")
+        cmds.sets(tgt, e=True, forceElement=tsg)
+        src_shape = cmds.listRelatives(src, shapes=True, fullPath=True)[0]
+        tgt_shape = cmds.listRelatives(tgt, shapes=True, fullPath=True)[0]
+
+        for _run in range(2):
+            TextureTransfer().transfer(
+                tgt_shape,
+                src_shape,
+                size=16,
+                supersample=1,
+                padding=0,
+                output_dir=self.out_dir,
+                output_name="held",
+                assign=True,
+                assign_suffix="_MAT",
+            )
+        self.assertTrue(cmds.objExists(mat))
+        self.assertEqual(TextureTransfer().face_materials(src)[0], [mat])
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["held_1_MAT"])
+        self.assertEqual(cmds.ls("held_1*", type="lambert"), ["held_1_MAT"])
+
+    def _seat(self, chair, rgb):
+        """``|<chair>|seat_GEO`` wearing a flat *rgb* map, with a rotated
+        ``map2`` to transfer into: two chairs are two meshes of one leaf name,
+        and tentacle's blank Output Name derives ``seat`` for both."""
+        tex = os.path.join(self.tmp, f"{chair}_src.png").replace("\\", "/")
+        Image.new("RGB", (16, 16), rgb).save(tex)
+        grp = cmds.group(empty=True, name=chair)
+        plane = cmds.parent(self._plane("seat_tmp"), grp)[0]
+        cmds.rename(f"|{grp}|{plane}", "seat_GEO")
+        plane = f"|{grp}|seat_GEO"
+        _mat, sg = self._lambert(f"{chair}Mat", texture=tex)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+        return plane
+
+    def test_a_name_another_object_wears_is_never_taken_from_it(self):
+        """``|chairA|seat_GEO`` then ``|chairB|seat_GEO``, both named ``seat``:
+        the second run deleted chairA's material -- chairA left wearing
+        nothing -- and wrote its maps over chairA's. Each keeps its own now,
+        and a re-run of either replaces only its own result, in place."""
+        kwargs = dict(
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="seat",
+            assign=True,
+        )
+        a = self._seat("chairA", (255, 0, 0))
+        b = self._seat("chairB", (0, 0, 255))
+        for _run in range(2):  # the second round: each re-run replaces its own
+            TextureTransfer().transfer(a, **kwargs)
+            TextureTransfer().transfer(b, **kwargs)
+            self.assertEqual(TextureTransfer().face_materials(a)[0], ["seat"])
+            self.assertEqual(TextureTransfer().face_materials(b)[0], ["seat_1"])
+        self.assertEqual(sorted(cmds.ls("seat*", type="lambert")), ["seat", "seat_1"])
+        file_a = cmds.listConnections("seat.color", type="file")[0]
+        self.assertEqual(
+            os.path.basename(cmds.getAttr(f"{file_a}.fileTextureName")),
+            "seat_BaseColor.png",
+        )
+        red = self._load(os.path.join(self.out_dir, "seat_BaseColor.png"))
+        blue = self._load(os.path.join(self.out_dir, "seat_1_BaseColor.png"))
+        self.assertGreater(red[..., 0].mean(), 200)
+        self.assertLess(red[..., 2].mean(), 50)
+        self.assertGreater(blue[..., 2].mean(), 200)
+        self.assertLess(blue[..., 0].mean(), 50)
+
+    def test_a_same_mesh_run_never_replaces_the_material_it_reads(self):
+        """A UV-set transfer reads the mesh's OWN material, and that material
+        may already be called what the output is: it was cleared as a previous
+        result -- the material the run was reading deleted, though the
+        originals are never to be modified."""
+        plane = self._plane("ownPlane")
+        mat, sg = self._lambert("seat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="seat",
+            assign=True,
+        )
+        file_node = cmds.listConnections(f"{mat}.color", type="file")[0]
+        self.assertEqual(
+            cmds.getAttr(f"{file_node}.fileTextureName"), self.checker_path
+        )
+        self.assertEqual(TextureTransfer().face_materials(plane)[0], ["seat_1"])
+
+    def test_a_map_a_kept_material_reads_is_never_written_over(self):
+        """A source map that sits in the output folder under the output's own
+        file name was rewritten in place, and the source material -- which the
+        run keeps -- changed with it. The output is named beside it instead,
+        maps and material alike."""
+        os.makedirs(self.out_dir, exist_ok=True)
+        held = os.path.join(self.out_dir, "hero_BaseColor.png").replace("\\", "/")
+        Image.fromarray(_checker()).save(held)
+        before = self._load(held)
+        src = self._plane("keptSrc")
+        _m, sg = self._lambert("keptSrcMat", texture=held)
+        cmds.sets(src, e=True, forceElement=sg)
+        tgt = cmds.duplicate(src, name="keptTgt")[0]
+        _t, tsg = self._lambert("keptTgtMat")
+        cmds.sets(tgt, e=True, forceElement=tsg)
+        cmds.polyEditUV(f"{tgt}.map[*]", scaleU=-1, pivotU=0.5)  # another layout
+
+        out = TextureTransfer().transfer(
+            tgt,
+            src,
+            size=64,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="hero",
+            assign=True,
+        )
+        self.assertTrue(np.array_equal(self._load(held), before), "map written over")
+        (maps,) = out.values()
+        self.assertEqual(os.path.basename(maps["baseColor"]), "hero_1_BaseColor.png")
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["hero_1"])
+
     def test_a_previous_result_maya_does_not_list_is_still_replaced(self):
         """``ls(materials=True)`` lists a shader only while it is registered
         in ``defaultShaderList1``; a production scene carried transfer results
@@ -1029,24 +1227,25 @@ class TestTextureTransfer(MayaTkTestCase):
         self.assertFalse(cmds.objExists("unlisted1"))
         self.assertIn("unlisted", TextureTransfer().face_materials(plane)[0])
 
-    def test_an_output_name_that_collides_replaces_the_existing_material(self):
-        """Pinning the destructive half of "re-running replaces it": the name
-        IS a name, so an existing material wearing it is replaced and anything
-        assigned through it loses that assignment. Deliberate -- the same rule
-        is what makes a second attempt at one deliverable work -- so it is
-        asserted here rather than left to be discovered in a scene."""
+    def test_an_output_name_a_bystander_wears_is_named_beside_it(self):
+        """The name IS a name, but a material something outside the run wears
+        is that object's: it was replaced, the bystander left wearing nothing.
+        The bystander keeps it now, and the output -- material AND maps -- is
+        named beside it. A second attempt at one deliverable still replaces
+        its own result: the stamp says which material that is
+        (``test_a_second_run_with_the_same_name_replaces_the_material``)."""
         plane = self._plane("collidePlane")
-        mat, sg = self._lambert("collideMat", texture=self.checker_path)
+        _mat, sg = self._lambert("collideMat", texture=self.checker_path)
         cmds.sets(plane, e=True, forceElement=sg)
         self._rotate_uv_set_copy(plane, "map2", 90)
 
         # A bystander wearing its own material through its own SG, whose name
-        # the transfer is about to claim for its output.
+        # the transfer is about to use for its output.
         other = self._plane("bystander")
         _victim, victim_sg = self._lambert("hero_atlas")
         cmds.sets(other, e=True, forceElement=victim_sg)
 
-        TextureTransfer().transfer(
+        out = TextureTransfer().transfer(
             plane,
             source_uv_set="map1",
             target_uv_set="map2",
@@ -1057,11 +1256,52 @@ class TestTextureTransfer(MayaTkTestCase):
             output_name="hero_atlas",
             assign=True,
         )
-        # One material by that name, and it is the transfer's output -- worn by
-        # the transfer's target, not by the bystander that used to own the name.
-        self.assertEqual(len(cmds.ls("hero_atlas", type="lambert")), 1)
-        self.assertIn("hero_atlas", TextureTransfer().face_materials(plane)[0])
-        self.assertNotIn("hero_atlas", TextureTransfer().face_materials(other)[0])
+        self.assertEqual(TextureTransfer().face_materials(other)[0], ["hero_atlas"])
+        self.assertEqual(TextureTransfer().face_materials(plane)[0], ["hero_atlas_1"])
+        (maps,) = out.values()
+        self.assertEqual(
+            os.path.basename(maps["baseColor"]), "hero_atlas_1_BaseColor.png"
+        )
+
+
+class TestPairByName(QuickTestCase):
+    """``pair_by_name`` -- path strings only, no scene."""
+
+    def test_meshes_of_one_leaf_name_pair_by_their_paths(self):
+        """Two kits of one part list: paired by the leaf alone, the first
+        target took the LAST source and the second the first -- each chair the
+        other's textures (and, with Include Lightmaps, the other's lighting)."""
+        tgts = ["|tgt|chairA|seat_GEO", "|tgt|chairB|seat_GEO"]
+        srcs = ["|src|chairA|seat_GEO", "|src|chairB|seat_GEO"]
+        want = {tgts[0]: srcs[0], tgts[1]: srcs[1]}
+        self.assertEqual(TextureTransfer.pair_by_name(tgts, srcs), want)
+        self.assertEqual(TextureTransfer.pair_by_name(tgts, srcs[::-1]), want)
+
+    def test_a_tie_or_no_shared_name_pairs_by_order(self):
+        pair = TextureTransfer.pair_by_name
+        # One leaf under parents that match nothing: a tie, so by order.
+        self.assertEqual(
+            pair(["|t1|seat", "|t2|seat"], ["|s1|seat", "|s2|seat"]),
+            {"|t1|seat": "|s1|seat", "|t2|seat": "|s2|seat"},
+        )
+        # Unique leaves pair by leaf, whatever the order.
+        self.assertEqual(
+            pair(["|g|partB", "|g|partA"], ["|partA", "|partB"]),
+            {"|g|partB": "|partB", "|g|partA": "|partA"},
+        )
+        # No shared leaf: by order.
+        self.assertEqual(
+            pair(["|x1", "|x2"], ["|y1", "|y2"]), {"|x1": "|y1", "|x2": "|y2"}
+        )
+
+
+class TestRetiredNames(QuickTestCase):
+    def test_constant_attrs_reads_the_shader_maps_table_for_one_release(self):
+        """``TextureTransfer.CONSTANT_ATTRS`` moved to
+        :attr:`ShaderAttributeMap.CONSTANT_ATTRS` with no alias left behind."""
+        with self.assertWarns(DeprecationWarning):
+            table = TextureTransfer.CONSTANT_ATTRS
+        self.assertIs(table, ShaderAttributeMap.CONSTANT_ATTRS)
 
 
 class TestLightmapTransfer(MayaTkTestCase):

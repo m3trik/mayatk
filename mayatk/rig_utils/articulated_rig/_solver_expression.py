@@ -28,23 +28,65 @@ millisecond (MEL expressions evaluate at roughly 0.06 us a statement).
 from __future__ import annotations
 
 import math
+import re
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+)
 
 import pythontk as ptk
 
 
 class _MelText:
     """Lines of MEL, and every variable they use, declared once at the top (MEL
-    refuses a second declaration in one scope; a loop body is one)."""
+    refuses a second declaration in one scope; a loop body is one).
+
+    A slot's or a joint's own variable is a stem and its index
+    (:meth:`indexed`: ``$v3``, ``$Q2v``), and the stem is reserved: a plain
+    name (:meth:`var`) that it and an index could spell is refused, whichever
+    is declared first, so the two never share a variable -- ``$d1`` was once
+    both a step's delta and the wrist's drift sum, harmless only by the order
+    they were written in.
+    """
 
     def __init__(self):
         self._lines: List[str] = []
         self._kinds: Dict[str, str] = {}
+        self._plain: Set[str] = set()
+        self._stems: Dict[str, re.Pattern] = {}
         self._depth = 0
 
     def var(self, name: str, kind: str = "float") -> str:
         """``$name``, declared as *kind* (``float`` / ``vector`` / ``int``)."""
+        if name not in self._plain:
+            for stem, spelled in self._stems.items():
+                if spelled.fullmatch(name):
+                    raise ValueError(f"${name} reads as a ${stem}<index> variable.")
+            self._plain.add(name)
+        return self._declare(name, kind)
+
+    def indexed(
+        self, stem: str, index: int, kind: str = "float", suffix: str = ""
+    ) -> str:
+        """``$<stem><index><suffix>``, one slot's or joint's own variable,
+        declared as *kind*."""
+        if stem not in self._stems:
+            spelled = re.compile(re.escape(stem) + r"\d+[A-Za-z]*")
+            for name in self._plain:
+                if spelled.fullmatch(name):
+                    raise ValueError(f"${name} reads as a ${stem}<index> variable.")
+            self._stems[stem] = spelled
+        return self._declare(f"{stem}{index}{suffix}", kind)
+
+    def _declare(self, name: str, kind: str) -> str:
         known = self._kinds.setdefault(name, kind)
         if known != kind:
             raise ValueError(f"${name} is a {known}, not a {kind}.")
@@ -242,8 +284,8 @@ class SolverExpression(_SolverExpressionInternal):
         blend = mel.var("bl")
         mel(f"{blend} = clamp(0.0, 1.0, {plugs['blend']});")
         for slot in chain:
-            mel(f"{mel.var(f'f{slot}')} = {plugs['seeds'][slot]};")
-            mel(f"{mel.var(f'o{slot}')} = 0.0;")
+            mel(f"{mel.indexed('f', slot)} = {plugs['seeds'][slot]};")
+            mel(f"{mel.indexed('o', slot)} = 0.0;")
         target = mel.var("tg", "vector")
         tx, ty, tz = plugs["translate"]
         mel(f"{target} = <<{tx}, {ty}, {tz}>>;")
@@ -257,7 +299,7 @@ class SolverExpression(_SolverExpressionInternal):
         with mel.block(f"if ({blend} > 0.0)"):
             for slot in chain:
                 mel(f"$v{slot} = {self._clamped(slot, f'$f{slot}')};")
-                mel.var(f"v{slot}")
+                mel.indexed("v", slot)
             self._solve(mel, bool(follow))
             for slot in chain:
                 mel(f"$o{slot} = {blend} * ($v{slot} - $f{slot});")
@@ -379,7 +421,7 @@ class SolverExpression(_SolverExpressionInternal):
             parent = spec["parent"]
             t, q = self._vec(spec["t"]), spec["q"]
             qv, qw = self._vec(q[:3]), self._num(q[3])
-            pos = mel.var(f"P{j}", "vector")
+            pos = mel.indexed("P", j, "vector")
             if parent is None:
                 mel(f"{fv} = {qv};")
                 mel(f"{fw} = {qw};")
@@ -392,7 +434,7 @@ class SolverExpression(_SolverExpressionInternal):
             for slot in slots:
                 channel = self._channel(slot)
                 if channel.startswith("t"):
-                    axis = mel.var(f"A{slot}", "vector")
+                    axis = mel.indexed("A", slot, "vector")
                     mel(f"{axis} = {self._axis(fv, fw, channel[1])};")
                     mel(f"{pos} = {pos} + {value(slot)} * {axis};")
             turns = {
@@ -405,7 +447,8 @@ class SolverExpression(_SolverExpressionInternal):
                 if slot is None:
                     continue
                 if axes:
-                    mel(f"{mel.var(f'A{slot}', 'vector')} = {self._axis(fv, fw, c)};")
+                    axis = mel.indexed("A", slot, "vector")
+                    mel(f"{axis} = {self._axis(fv, fw, c)};")
                 half, sn, cs, nw = (mel.var(n) for n in ("hh", "sn", "cs", "nw"))
                 mel(f"{half} = ({value(slot)} * {self._num(self.RADIANS)}) * 0.5;")
                 mel(f"{sn} = sin({half});")
@@ -419,8 +462,8 @@ class SolverExpression(_SolverExpressionInternal):
                 mel(f"{nw} = {fw} * {cs} - {sn} * {fv}.{c};")
                 mel(f"{fv} = {cs} * {fv} + {sn} * {cross};")
                 mel(f"{fw} = {nw};")
-            mel(f"{mel.var(f'Q{j}v', 'vector')} = {fv};")
-            mel(f"{mel.var(f'Q{j}w')} = {fw};")
+            mel(f"{mel.indexed('Q', j, 'vector', 'v')} = {fv};")
+            mel(f"{mel.indexed('Q', j, suffix='w')} = {fw};")
 
     # ---------------------------------------------------------------- solve
     def _dls(
@@ -469,13 +512,13 @@ class SolverExpression(_SolverExpressionInternal):
             mel(f"{err} = {target} - {pt};")
             mel(f"if ({dist} > {step}) {err} = {err} * ({step} / {dist});")
             for slot in active:
-                column = mel.var(f"C{slot}", "vector")
+                column = mel.indexed("C", slot, "vector")
                 owner = model.channels[slot][0]
                 if self._channel(slot).startswith("r"):
                     mel(f"{column} = $A{slot} ^ ({pt} - $P{owner});")
                 else:
                     mel(f"{column} = {reach} * $A{slot};")
-                mel(f"{mel.var(f'W{slot}')} = {self._num(self.weights[slot])};")
+                mel(f"{mel.indexed('W', slot)} = {self._num(self.weights[slot])};")
             self._step(mel, active)
             limited = [s for s in active if model.limits(s) != (None, None)]
             if limited:
@@ -507,7 +550,7 @@ class SolverExpression(_SolverExpressionInternal):
                         else reach
                     )
                     moved = f"$v{slot} + {fraction} * $d{slot} * {unit}"
-                    mel(f"{mel.var(f't{slot}')} = {self._clamped(slot, moved)};")
+                    mel(f"{mel.indexed('t', slot)} = {self._clamped(slot, moved)};")
                 self._fk(mel, joint, trial, axes=True)
                 self._point(mel, tpt, joint, point)
                 mel(f"{tdist} = mag({target} - {tpt});")
@@ -551,7 +594,7 @@ class SolverExpression(_SolverExpressionInternal):
             f"+ ({r0} ^ {r1}) * $err.z) * (1.0 / {det});"
         )
         for slot in active:
-            mel(f"{mel.var(f'd{slot}')} = $W{slot} * ($C{slot} * {y});")
+            mel(f"{mel.indexed('d', slot)} = $W{slot} * ($C{slot} * {y});")
 
     def _turn(self, mel: _MelText) -> None:
         """The model's ``_turn``: the ball's channels set so its link's
@@ -605,18 +648,19 @@ class SolverExpression(_SolverExpressionInternal):
             order[1]: f"180.0 - {ab} * {deg}",
             order[0]: f"{ac} * {deg} + 180.0",
         }
-        d1, d2 = mel.var("d1"), mel.var("d2")
-        mel(f"{d1} = 0.0;")
-        mel(f"{d2} = 0.0;")
+        # How far each triple turns the ball from its values: the nearer wins.
+        drift_a, drift_b = mel.var("dra"), mel.var("drb")
+        mel(f"{drift_a} = 0.0;")
+        mel(f"{drift_b} = 0.0;")
         for axis_name in "xyz":
             slot = slots["r" + axis_name]
-            for tag, triple, drift in (("a", first, d1), ("b", second, d2)):
+            for tag, triple, drift in (("a", first, drift_a), ("b", second, drift_b)):
                 raw = mel.var(f"e{tag}{axis_name}")
                 mel(f"{raw} = {triple[axis_name]};")
                 # unwrap toward the ball's value: a half turn rounds up
                 mel(f"{raw} = {raw} + 360.0 * floor(($v{slot} - {raw}) / 360.0 + 0.5);")
                 mel(f"{drift} = {drift} + abs({raw} - $v{slot});")
-        with mel.block(f"if ({d2} < {d1})"):
+        with mel.block(f"if ({drift_b} < {drift_a})"):
             for axis_name in "xyz":
                 slot = slots["r" + axis_name]
                 mel(f"$v{slot} = {self._clamped(slot, f'$eb{axis_name}')};")

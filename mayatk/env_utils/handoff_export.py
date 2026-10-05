@@ -21,8 +21,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 import pythontk as ptk
 from pythontk import Payload

@@ -27,11 +27,10 @@ for _pkg in ("mayatk", "pythontk", "uitk", "tentacle", "unitytk"):
 
 try:
     import maya.cmds as cmds
-    from maya import mel
 except ImportError as error:
     print(f"Warning: {error}")
 
-import mayatk as mtk
+import mayatk  # noqa: F401 -- fail fast: the sibling path must resolve the real package
 
 
 #: Root of the machine-local scenes a few extended tests replay. Those are

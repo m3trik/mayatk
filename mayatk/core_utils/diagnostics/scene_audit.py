@@ -1600,23 +1600,27 @@ class SceneAnalyzer(ptk.LoggingMixin):
         """``{file node: map type}`` for the files *material*'s surface slots read.
 
         For a file whose NAME carries no map-type token. Each slot
-        ``ShaderAttributeMap`` names for the shader type is traced UPSTREAM to
-        its file node by ``MatUtils.get_texture_file_node`` (through bump /
-        normal-map / colour-correct nodes, and a packed map's per-channel
-        wiring), and the slot's logical channel resolves through
-        ``ptk.MapRegistry`` -- never overriding a filename classification (see
-        its ``LOGICAL_CHANNEL_TYPES`` note). A file no slot reaches (Stingray's
+        ``ShaderAttributeMap`` resolves on this node
+        (``resolve_live_slot`` -- the slot the node HAS: openPBR's normal on
+        Maya 2025's ``normalCamera``, a masked Stingray's opacity on
+        ``TEX_mask_map``) is traced UPSTREAM to its file node by
+        ``MatUtils.get_texture_file_node`` (through bump / normal-map /
+        colour-correct nodes, and a packed map's per-channel wiring), and the
+        slot's logical channel resolves through ``ptk.MapRegistry`` -- never
+        overriding a filename classification (see its
+        ``LOGICAL_CHANNEL_TYPES`` note). A file no slot reaches (Stingray's
         ``TEX_global_*`` IBL inputs) is absent.
         """
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
-        attrs = ShaderAttributeMap.SHADER_ATTRS.get(material_type)
-        if attrs is None:
+        if material_type not in ShaderAttributeMap.SHADER_ATTRS:
             return {}
         found: Dict[str, str] = {}
         for channel in ShaderAttributeMap.logical_channels():
-            slot = getattr(attrs, channel)
+            slot = ShaderAttributeMap.resolve_live_slot(
+                material, channel, material_type
+            )
             node = MatUtils.get_texture_file_node(material, slot[0]) if slot else None
             map_type = ptk.MapRegistry.resolve_type_from_channel(channel)
             if node and map_type and node not in found:

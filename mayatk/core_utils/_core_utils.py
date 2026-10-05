@@ -9,10 +9,9 @@ import logging
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except Exception as error:
+except Exception:
     cmds = None
     mel = None
-    print(__file__, error)
 import pythontk as ptk
 
 # Import package modules at class level to avoid circular imports.

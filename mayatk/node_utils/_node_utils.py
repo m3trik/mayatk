@@ -6,10 +6,9 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except Exception as error:
+except Exception:
     cmds = None
     mel = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

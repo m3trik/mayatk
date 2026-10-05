@@ -27,8 +27,12 @@ Config keys:
     reload (bool):          Reload pythontk/mayatk before running (only
                             meaningful in long-lived GUI sessions; fresh
                             processes skip it).
+    sandbox_settings (bool): Redirect uitk's QSettings + preset stores too --
+                            set only for a Maya the runner launched (see
+                            :func:`_activate_sandbox`); absent means False.
 """
 
+import contextlib
 import importlib.util
 import io
 import json
@@ -194,6 +198,41 @@ def _reload_packages():
         )
 
 
+def _activate_sandbox(settings_stores):
+    """Process-level isolation for the whole run: no real browser launch or
+    trash, one throwaway temp root (``pythontk.TestSandbox``).
+
+    With *settings_stores*, ``uitk.testing.TestSandbox`` instead -- the same
+    guards, plus uitk's QSettings and preset stores redirected into that root.
+    A panel a test builds persists its widget state through QSettings, and
+    with pythontk's guards alone every run wrote it into the developer's live
+    store (measured 2026-10-04: a GUI pass of ``test_articulated_rig_panel``
+    rewrote ``articulated_rig`` under ``HKCU\\Software\\uitk\\shared\\switchboard``).
+    The runner asks for it only for a process it launched: the redirect swaps
+    the QSettings class for the rest of the process, so in the user's own Maya
+    (the in-session harness) their tools would go on writing a file that is
+    deleted when Maya exits. Called before any module loads -- a store built
+    earlier keeps the real class.
+
+    Without uitk (a minimal env) the run keeps pythontk's guards, and says so.
+    """
+    if settings_stores:
+        try:
+            from uitk.testing import TestSandbox as SettingsSandbox
+
+            qsettings_dir, _presets_dir = SettingsSandbox.activate()
+            print(f"[Sandbox] uitk settings -> {qsettings_dir}")
+            return
+        except Exception as e:
+            print(
+                f"[Sandbox] uitk settings sandbox unavailable ({e}); "
+                "pythontk's guards only"
+            )
+    from pythontk.core_utils.test_sandbox import TestSandbox
+
+    TestSandbox.activate()
+
+
 def _sandbox_shots_prefs(temp_dir):
     """Redirect ShotStore prefs writes away from the user's cloud-synced store.
 
@@ -217,25 +256,45 @@ def _sandbox_shots_prefs(temp_dir):
         print(f"[Sandbox] shots prefs override failed: {e}")
 
 
+@contextlib.contextmanager
 def _sandbox_workspace():
-    """Open a throwaway Maya project for the run, inside the sandbox temp root.
+    """Run the block in a throwaway Maya project, inside the sandbox temp root,
+    and reopen the project the run found on the way out.
 
     A tool that names no path writes into the CURRENT project: a mask into its
     sourceimages, a bake beside it. mayapy opens the user's default project and
     a GUI-pass Maya restores the one they last had open -- measured: a test
     fixture's ``untitled_EMask.png`` in a production project's sourceimages.
-    Called after ``TestSandbox.activate()``, so the store lands in the run's
+    Entered after ``TestSandbox.activate()``, so the store lands in the run's
     temp root and goes with it.
+
+    The way out matters as much: the in-session harness (Script Editor,
+    ``MayaTestRunner().run_tests``) runs the suite inside the USER's Maya, and
+    the throwaway project left open there is deleted when Maya exits -- with
+    whatever they saved into its default folders in between. ``EnvUtils`` is
+    the class bound on the way in: the module loop purges mayatk between
+    modules, and its workspace calls need nothing the purge takes.
     """
+    previous = None
     try:
         import pythontk as ptk
         from mayatk.env_utils._env_utils import EnvUtils
 
+        previous = EnvUtils.workspace_root()
         root = ptk.TempArtifacts("maya_workspace", policy="session").dir_path()
         EnvUtils.create_workspace(root)
         print(f"[Sandbox] maya workspace -> {EnvUtils.set_current_workspace(root)}")
     except Exception as e:
         print(f"[Sandbox] maya workspace override failed: {e}")
+    try:
+        yield
+    finally:
+        if previous:
+            try:
+                restored = EnvUtils.set_current_workspace(previous)
+                print(f"[Sandbox] maya workspace restored -> {restored}")
+            except Exception as e:
+                print(f"[Sandbox] maya workspace restore failed: {e}")
 
 
 def _snapshot_real_maya_modules():
@@ -484,11 +543,10 @@ def run_suite(config):
     _ensure_sys_path()
 
     # Process-level isolation for the whole chunk -- no real browser launch,
-    # one throwaway temp root -- before any module allocates. Here rather than
-    # only in conftest.py: most modules never import that file.
-    from pythontk.core_utils.test_sandbox import TestSandbox
-
-    TestSandbox.activate()
+    # one throwaway temp root, and in a Maya the runner launched no live
+    # settings store -- before any module allocates. Here rather than only in
+    # conftest.py: most modules never import that file.
+    _activate_sandbox(config.get("sandbox_settings"))
 
     if config.get("extended"):
         os.environ["MAYATK_EXTENDED_TESTS"] = "1"
@@ -500,9 +558,15 @@ def run_suite(config):
 
     _sandbox_shots_prefs(config.get("temp_dir"))
 
-    import maya.cmds as cmds
+    with _sandbox_workspace():
+        return _run_modules(config)
 
-    _sandbox_workspace()
+
+def _run_modules(config):
+    """The module loop :func:`run_suite` runs inside its sandbox: one result
+    block per module, appended as it goes, then the completion marker. Returns
+    the totals dict."""
+    import maya.cmds as cmds
 
     results_file = config["results_file"]
     progress_file = config.get("progress_file")

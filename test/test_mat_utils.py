@@ -2190,6 +2190,9 @@ class TestRenameTextures(MayaTkTestCase):
         three materials and another project read, under a name meaning
         nothing. The set is the baker's (``MapFactory.dominant_texture_set``).
         Production PLAYGROUND scene, 2026-10-04.
+
+        Left alone AND reported, as the toggle's tooltip says: it was skipped
+        silently, so a sync that left a map behind did not say so.
         """
         with open(os.path.join(self.dir, "env_cube.dds"), "wb") as f:
             f.write(b"CUBE")
@@ -2201,7 +2204,9 @@ class TestRenameTextures(MayaTkTestCase):
         self.assertIn("env_cube.dds", self.listing())
         self.assertIn("stone_Normal.png", self.listing())
         self.assertTrue(cmds.objExists("env_cube_file"), "its node keeps its name")
-        self.assertFalse([r for r in result["skipped"] if "env_cube" in r])
+        self.assertEqual(
+            len([r for r in result["skipped"] if "env_cube.dds" in r]), 1, "reported"
+        )
 
     def test_sync_leaves_a_file_outside_the_project_its_name(self):
         """Another project's file is that project's too: renaming it broke

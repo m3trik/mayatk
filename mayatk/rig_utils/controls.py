@@ -7,8 +7,8 @@ from typing import Any, Callable, ClassVar, Dict, Iterable, List, Optional, Tupl
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 import pythontk as ptk
 

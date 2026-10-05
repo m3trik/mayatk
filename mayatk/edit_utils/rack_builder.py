@@ -33,8 +33,8 @@ from __future__ import annotations
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 from dataclasses import dataclass
 from typing import List, Tuple

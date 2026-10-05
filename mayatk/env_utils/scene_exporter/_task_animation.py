@@ -271,7 +271,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         :meth:`FbxUtils.apply_takes` resamples so each take is an exact slice
         -- except on a GLB-only run, whose intermediate FBX ships no take
         anyone reads (the GLB's clips are cut from the whole-timeline take), so
-        its stack stays exactly as authored.
+        its stack stays exactly as authored: ``apply_takes(resample=False)``
+        turns off a Resample All the loaded preset left on.
 
         Asked before the takes exist (the clip origin is published first), so
         the shots are read off the ShotStore, as the range task reads them.
@@ -706,7 +707,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         self._stage_bake_range_restore()
         # Resampled, so each take is an exact slice (FbxUtils.apply_takes) --
         # unless nothing reads the takes: a GLB-only run's clips are cut from
-        # the whole-timeline take (_write_resamples_curves).
+        # the whole-timeline take, kept as keyed whatever the preset says
+        # (_write_resamples_curves).
         count = FbxUtils.apply_takes_from_node(resample=not self.run.glb_only)
         if count:
             # The carrier ships WITH the clips, never instead of them: its

@@ -27,9 +27,8 @@ from typing import ClassVar, List, Optional, Tuple
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
+except Exception:  # the surface imports without Maya (registry, docs, mock tests)
     cmds = mel = None
-    print(__file__, error)
 
 
 class Plugins:

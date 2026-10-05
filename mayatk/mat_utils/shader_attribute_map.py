@@ -7,7 +7,8 @@ connector that honors that declaration against a real Maya attribute.
 itself stays importable (and testable) without a running Maya.
 """
 
-from typing import Optional, Tuple, Dict, Any
+import math
+from typing import Optional, Tuple, Dict, Any, Callable
 from collections import namedtuple
 
 # Each slot is: (attribute_name, output_plug)
@@ -272,6 +273,80 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             return None
         return slot[0]
 
+    #: ``(shader type, logical channel) -> f(component)`` for a literal that is
+    #: not in the channel's own units. phong's roughness slot is
+    #: ``cosinePower``, a Blinn-Phong EXPONENT (default 20): read raw, a phong
+    #: source wrote 20 into a 0..1 roughness -- fully rough. It reads as the
+    #: Beckmann width the exponent stands for, ``sqrt(2 / (n + 2))`` (0.30 at
+    #: the default) -- the inverse of the Maya bridge's
+    #: ``_roughness_to_cosine_power``, so a roughness survives a phong round trip.
+    CONSTANT_TRANSFORMS: Dict[Tuple[str, str], Callable[[float], float]] = {
+        ("phong", "roughness"): lambda power: math.sqrt(2.0 / (max(power, 0.0) + 2.0)),
+    }
+
+    # Shaders that gate emission behind a SEPARATE scalar, measured on Maya
+    # 2025 + MtoA -- ``{node_type: (attribute, mode)}``.
+    #
+    # This is an explicit table rather than a list of candidate attribute names
+    # tried against every shader, which is what it replaced. Of the three names
+    # guessed there, ``emissionWeight`` and ``emissive_intensity`` matched
+    # nothing at all, and guessing is actively unsafe: a graph-built shader
+    # (StingrayPBS attributes are graph-dependent) can expose a same-named
+    # attribute with different semantics and a 0 default, which would silently
+    # drop a material that had been previewing correctly.
+    #
+    # ``multiply``: a 0-1 weight folded into the colour.
+    # ``gate``: not a 0-1 scale (OpenPBR carries luminance in nits), so it
+    # decides whether the material emits at all but must never scale it.
+    EMISSION_WEIGHT_ATTRS: Dict[str, Tuple[str, str]] = {
+        "aiStandardSurface": ("emission", "multiply"),
+        "standardSurface": ("emission", "multiply"),
+        "openPBRSurface": ("emissionLuminance", "gate"),
+    }
+
+    @classmethod
+    def emission_weight(cls, shader: str, shader_type: Optional[str] = None) -> float:
+        """The shader's separate emission scalar, or 1.0 when it has none.
+
+        On standardSurface / aiStandardSurface the weight defaults to **0**
+        while ``emissionColor`` defaults to white, so reading the colour alone
+        reports a bright emissive on a material that renders black. A
+        ``multiply`` weight is returned as is (above 1 it is a strength, not a
+        clip); a ``gate`` returns 1.0 or 0.0.
+
+        A shader absent from :attr:`EMISSION_WEIGHT_ATTRS` is **ungated** --
+        returning 1.0 rather than hunting for a plausibly-named attribute,
+        because a wrong guess here silently removes a working emissive.
+
+        Parameters:
+            shader (str): The live shader node.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            float: The weight.
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return 1.0
+        entry = cls.EMISSION_WEIGHT_ATTRS.get(shader_type)
+        if entry is None:
+            return 1.0
+        attr, mode = entry
+        plug = f"{shader}.{attr}"
+        if not cmds.objExists(plug):
+            return 1.0
+        try:
+            value = float(cmds.getAttr(plug))
+        except (RuntimeError, ValueError, TypeError):
+            return 1.0
+        if mode == "gate":
+            return 1.0 if value > 0.0 else 0.0
+        return value
+
     @classmethod
     def read_constant(
         cls, shader: str, logical: str, shader_type: Optional[str] = None
@@ -283,6 +358,11 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         OPACITY (1 = opaque): the classic shaders store it inverted, as
         ``transparency`` (declared on ``outTransparency``), so their literal
         is flipped -- read raw, an untouched lambert was fully transparent.
+        A literal in other units converts through
+        :attr:`CONSTANT_TRANSFORMS` (phong's exponent to a roughness), and
+        emission is scaled by the shader's :meth:`emission_weight` -- read
+        alone, an untouched standardSurface's white ``emissionColor`` was a
+        white emitter.
 
         Parameters:
             shader (str): The live shader node.
@@ -317,6 +397,12 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             "outTransparency",
         ):
             values = tuple(1.0 - v for v in values)
+        transform = cls.CONSTANT_TRANSFORMS.get((shader_type, logical))
+        if transform is not None:
+            values = tuple(transform(v) for v in values)
+        if logical == "emission":
+            weight = cls.emission_weight(shader, shader_type)
+            values = tuple(v * weight for v in values)
         return values
 
     @classmethod

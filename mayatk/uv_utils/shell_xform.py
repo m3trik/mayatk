@@ -21,10 +21,9 @@ and bmesh helpers (see ``tentacle/docs/parity_map.py``).
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
+except ImportError:
     cmds = None
     mel = None
-    print(__file__, error)
 
 import pythontk as ptk
 from uitk import IconManager

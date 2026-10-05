@@ -337,5 +337,70 @@ class TestChunkTempIsolation(unittest.TestCase):
         self.assertTrue(crash_files(child_temp), os.listdir(child_temp))
 
 
+class TestOnlyALaunchedMayaSandboxesSettings(unittest.TestCase):
+    """The driver's config says whether its Maya is one this runner launched.
+
+    ``sandbox_settings`` arms uitk's QSettings + preset redirect in the suite
+    driver (``test_suite_driver``): without it a panel test wrote its fixtures
+    into the developer's live uitk store. The redirect swaps the QSettings
+    class for the rest of the process, so it suits a mayapy chunk or a GUI
+    Maya the runner launched, and never the user's own session -- the
+    in-session harness (Script Editor) or ``--reuse`` -- which it would outlive.
+
+    No Maya: the chunk launch is refused and the GUI connection stubbed, and
+    the config the driver would have read is read back from disk.
+    """
+
+    def setUp(self):
+        self.runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(self.runner.results_file.unlink, True)
+        self.runner.temp_test_dir.mkdir(exist_ok=True)
+
+    def _read_config(self, path):
+        import json
+
+        self.addCleanup(path.unlink, True)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _chunk_config(self):
+        refused = mock.patch.object(
+            rt.subprocess, "Popen", side_effect=OSError("launch refused by the test")
+        )
+        with refused, contextlib.redirect_stdout(io.StringIO()):
+            self.runner._run_chunk(
+                "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+            )
+        for stale in self.runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            self.addCleanup(stale.unlink, True)
+        return self._read_config(
+            self.runner.temp_test_dir / f"chunk_{os.getpid()}_00_1.json"
+        )
+
+    def _gui_config(self, mode, reuse=False):
+        self.runner.reuse_instance = reuse
+        self.runner.connection = mock.Mock(mode=mode)
+        self.runner.connect_to_maya = lambda: True
+        self.runner.send_code = lambda code: True
+        with contextlib.redirect_stdout(io.StringIO()):
+            sent = self.runner._run_via_port(
+                ["test_x"], {"test_x": "test_x.py"}, False, no_wait=True
+            )
+        self.assertEqual(sent, "nowait")
+        return self._read_config(self.runner.temp_test_dir / f"gui_{os.getpid()}.json")
+
+    def test_a_mayapy_chunk_is_sandboxed(self):
+        self.assertIs(self._chunk_config().get("sandbox_settings"), True)
+
+    def test_a_gui_maya_the_runner_launched_is_sandboxed(self):
+        self.assertIs(self._gui_config("port").get("sandbox_settings"), True)
+
+    def test_the_users_own_session_is_not(self):
+        """The in-session harness (Script Editor), and an attach (``--reuse``)."""
+        for mode, reuse in (("interactive", False), ("port", True)):
+            with self.subTest(mode=mode, reuse=reuse):
+                config = self._gui_config(mode, reuse)
+                self.assertFalse(config.get("sandbox_settings", False), config)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

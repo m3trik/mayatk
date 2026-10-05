@@ -43,8 +43,8 @@ from typing import List, Optional, Sequence, Tuple
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import numpy as np
 import pythontk as ptk
 

@@ -18,6 +18,7 @@ and Remove Rig.
 
 import math
 import unittest
+from unittest import mock
 
 import maya.cmds as cmds
 from qtpy import QtCore, QtWidgets
@@ -303,6 +304,27 @@ class TestPostRig(_PanelCase):
         )
         self.assertGreater(math.dist(before, after), 1.0)
         self.assertFalse(self.ui.chk_adjust.isChecked())
+
+    def test_a_panel_open_never_restores_adjust_pivots(self):
+        """The box shows a live state -- whether the rig in the table is
+        adjusting -- not a setting. Persisted, an adjust that ended any way but
+        by clearing the box (Rebuild, Remove, undo, closing Maya) left True
+        stored, and the next panel open's restore checked it: handles built on
+        whatever rig the selection touched. The store is stood in for, never
+        written: the restore is driven as a panel open drives it."""
+        rig = self.build()
+        cmds.select(rig.control("LEG_2"), replace=True)
+        box = self.ui.chk_adjust
+        self.ui.restored_widgets.discard(box)  # an open restores a widget once
+        stored_on = mock.patch.object(
+            self.ui.state, "load", side_effect=lambda w, *a, **k: w.setChecked(True)
+        )
+        with stored_on:
+            self.ui.perform_restore_state(box)
+        self.settle()
+        self.assertFalse(rig.adjusting, "the restore began an adjust")
+        self.assertFalse(box.isChecked())
+        self.assertFalse(box.restore_state)
 
     def test_limits_from_pose_and_remove(self):
         rig = self.build(end_control=False)

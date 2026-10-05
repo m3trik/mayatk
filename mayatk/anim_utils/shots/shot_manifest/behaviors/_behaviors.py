@@ -124,6 +124,35 @@ class _BehaviorsInternal(object):
         )
         return has_start and has_stop
 
+    @staticmethod
+    def _curve_of(plug: str) -> str:
+        """The anim curve keying *plug* (the plug itself when none yet)."""
+        return (cmds.keyframe(plug, q=True, name=True) or [plug])[0]
+
+    @staticmethod
+    def _behavior_plugs(obj: str, behavior_name: str) -> List[str]:
+        """The plugs *behavior_name* keys on *obj*: its template's channels,
+        with ``visibility`` and ``opacity`` each bringing the other (the
+        dual-keyed presence pair :meth:`Behaviors.apply_behavior` writes).
+        Only plugs that exist; ``[]`` when the template or object does not --
+        the manifest's key-ownership reads (``ShotManifest._key_samples``)."""
+        if cmds is None:
+            return []
+        try:
+            attrs = set(Behaviors.keyed(behavior_name).get("attributes") or {})
+        except (FileNotFoundError, ValueError):
+            return []
+        if attrs & {"visibility", "opacity"}:
+            attrs |= {"visibility", "opacity"}
+        long_node = (cmds.ls(str(obj), long=True) or [None])[0]
+        if long_node is None:
+            return []
+        return [
+            f"{long_node}.{a}"
+            for a in sorted(attrs)
+            if cmds.attributeQuery(a, node=long_node, exists=True)
+        ]
+
 
 class Behaviors(_PyBehaviors, _BehaviorsInternal):
     """Behaviors — module namespace.
@@ -290,7 +319,7 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
                         inTangentType=itt,
                         outTangentType=tan,
                     )
-                    written.append((Behaviors.curve_of(attr_plug), k["time"]))
+                    written.append((_BehaviorsInternal._curve_of(attr_plug), k["time"]))
                     # Mirror: set a matching visibility keyframe so FBX
                     # export produces a real visibility animation curve.
                     # Use explicit attr path to target the transform only —
@@ -316,36 +345,8 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
                             inTangentType="stepnext",
                             outTangentType="step",
                         )
-                        written.append((Behaviors.curve_of(vis_plug), t))
+                        written.append((_BehaviorsInternal._curve_of(vis_plug), t))
         return written
-
-    @staticmethod
-    def curve_of(plug: str) -> str:
-        """The anim curve keying *plug* (the plug itself when none yet)."""
-        return (cmds.keyframe(plug, q=True, name=True) or [plug])[0]
-
-    @staticmethod
-    def behavior_plugs(obj: str, behavior_name: str) -> List[str]:
-        """The plugs *behavior_name* keys on *obj*: its template's channels,
-        with ``visibility`` and ``opacity`` each bringing the other (the
-        dual-keyed presence pair :meth:`apply_behavior` writes).  Only plugs
-        that exist; ``[]`` when the template or object does not."""
-        if cmds is None:
-            return []
-        try:
-            attrs = set(Behaviors.keyed(behavior_name).get("attributes") or {})
-        except (FileNotFoundError, ValueError):
-            return []
-        if attrs & {"visibility", "opacity"}:
-            attrs |= {"visibility", "opacity"}
-        long_node = (cmds.ls(str(obj), long=True) or [None])[0]
-        if long_node is None:
-            return []
-        return [
-            f"{long_node}.{a}"
-            for a in sorted(attrs)
-            if cmds.attributeQuery(a, node=long_node, exists=True)
-        ]
 
     @staticmethod
     def verify_behavior(
@@ -590,10 +591,10 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
         The engine's build loop (``ptk`` ``Behaviors.apply_to_shots`` -- two
         passes per shot, guards settled before anything is keyed, every
         previous key released first) bound to Maya's checks: *exists_fn*
-        defaults to ``cmds.objExists`` (an audio entry: a registered track, or a
-        ``source_path`` to make one) and *has_keys_fn* to keys in the range
-        (an audio entry: its clip already placed).  The other parameters and
-        the result are the engine's.
+        defaults to exactly one node answering to the name (an audio entry: a
+        registered track, or a ``source_path`` to make one) and *has_keys_fn*
+        to keys in the range (an audio entry: its clip already placed).  The
+        other parameters and the result are the engine's.
         """
         from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 
@@ -612,7 +613,10 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
                     return True
             if cmds is None:
                 return False
-            return cmds.objExists(obj_name)
+            # Exactly one node: ``objExists`` is true for a name several
+            # transforms share, and the writer would key the first of them --
+            # an ambiguous name is Assess's finding, never a guess.
+            return len(cmds.ls(obj_name, long=True) or []) == 1
 
         def _default_has_keys(obj_name, start, end, entry=None):
             if entry is not None and _is_audio(entry):

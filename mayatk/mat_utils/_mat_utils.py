@@ -1187,9 +1187,10 @@ class MatUtils(_MatUtilsInternal):
         follows ``stone`` as ``stone_Base_Color.<UDIM>.png``, and its file node
         is named after it (no token, no extension) with *file_node_affix*. The
         set's lightmap (``rock_Lightmap.exr``) follows too, its bake markers
-        re-stamped. Another set's map (an environment cube) is left alone; so
-        is a file outside the scene's project, which another project may read
-        -- reported, its node named after the file it still reads.
+        re-stamped. Left alone, and reported in ``skipped``: another set's map
+        (an environment cube), and a file outside the scene's project, which
+        another project may read -- its node named after the file it still
+        reads.
 
         Planned whole first: a rename that would collide with another file
         refuses the lot before anything changes. Textures go through

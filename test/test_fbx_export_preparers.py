@@ -325,7 +325,9 @@ class TestSessionHookSplitStagesTheProxies(MayaTkTestCase):
 
         self.assertIn("FadeOut", text, "precondition: the takes were split")
         self.assertIn("fadeHost__opacity", text, "the split shipped no curve proxy")
-        self.assertEqual(cmds.ls("fadeHost__opacity"), [], "the proxy outlived the write")
+        self.assertEqual(
+            cmds.ls("fadeHost__opacity"), [], "the proxy outlived the write"
+        )
 
     def test_an_export_that_splits_nothing_stages_nothing(self):
         """No declared take, no resample: a bare File > Export stays as it was."""

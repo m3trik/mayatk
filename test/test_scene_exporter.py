@@ -8066,7 +8066,6 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
             )
         self.assertFalse(mel.eval("FBXExportTangents -q"))
 
-
     def _ascii_preset_export(self, name, with_carrier):
         """A real FBX write under a preset that asks for ASCII; the file."""
         import maya.mel as mel
@@ -10796,15 +10795,15 @@ class TestBakeRangeModes(MayaTkTestCase):
 
         self.assertEqual(seen.get("span"), (10, 200))
 
-    def _resampled_after_split(self, **modes):
-        """Whether the write is armed to resample once the takes are applied.
-        Through the real publish: the takes are read off the carrier it
-        commits."""
+    def _resampled_after_split(self, preset=False, **modes):
+        """Whether the write is armed to resample once the takes are applied,
+        from Resample All as a loaded preset left it (*preset*). Through the
+        real publish: the takes are read off the carrier it commits."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         self._declare_shots((20, 60), (80, 120))
         self._splitting(**modes)
-        self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v false")
+        self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {'true' if preset else 'false'}")
 
         self.tm.apply_declared_takes("both")
 
@@ -10819,6 +10818,19 @@ class TestBakeRangeModes(MayaTkTestCase):
 
     def test_a_glb_only_split_does_not_resample(self):
         self.assertFalse(self._resampled_after_split(output_format="glb"))
+
+    def test_a_glb_only_split_overrules_a_preset_that_resamples(self):
+        """Its stack stays as authored, as its published origin says, whatever
+        the loaded preset left on: with Resample All left on, the
+        intermediate's whole-timeline take opened on the bake range while the
+        origin stayed on the keys. The preset's value is back after the
+        write."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.addCleanup(self.mel.eval, f"{FbxUtils.RESAMPLE_ALL} -v false")
+        self.assertFalse(self._resampled_after_split(preset=True, output_format="glb"))
+        FbxUtils.reset_takes()
+        self.assertTrue(FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL))
 
     def test_clip_origin_is_published_when_baking_is_disabled(self):
         """No bake still means a stack: the curves ship as authored."""

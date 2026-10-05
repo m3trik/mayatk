@@ -29,8 +29,12 @@ from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
+
+# Eager: SceneState names the shader map's emission-weight table at class
+# definition. The module is a pure table until a reader runs (no maya import).
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 
 class SceneState:
@@ -65,25 +69,11 @@ class SceneState:
     # embedded by the base-colour section and rendered solid).
     SURFACE_OPACITY_SHADERS = frozenset({"standardSurface", "aiStandardSurface"})
 
-    # Shaders that gate emission behind a SEPARATE scalar, measured on Maya
-    # 2025 + MtoA -- ``{node_type: (attribute, mode)}``.
-    #
-    # This is an explicit table rather than a list of candidate attribute names
-    # tried against every shader, which is what it replaced. Of the three names
-    # guessed there, ``emissionWeight`` and ``emissive_intensity`` matched
-    # nothing at all, and guessing is actively unsafe: a graph-built shader
-    # (StingrayPBS attributes are graph-dependent) can expose a same-named
-    # attribute with different semantics and a 0 default, which would silently
-    # drop a material that had been previewing correctly.
-    #
-    # ``multiply``: a 0-1 weight folded into the colour.
-    # ``gate``: not a 0-1 scale (OpenPBR carries luminance in nits), so it
-    # decides whether the material emits at all but must never scale it.
-    EMISSION_WEIGHT_ATTRS = {
-        "aiStandardSurface": ("emission", "multiply"),
-        "standardSurface": ("emission", "multiply"),
-        "openPBRSurface": ("emissionLuminance", "gate"),
-    }
+    # Shaders that gate emission behind a SEPARATE scalar --
+    # ``{node_type: (attribute, mode)}``. The shader map's table
+    # (:attr:`ShaderAttributeMap.EMISSION_WEIGHT_ATTRS`, where its rationale
+    # lives): a material's constant emission needs it below this layer too.
+    EMISSION_WEIGHT_ATTRS = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS
 
     @staticmethod
     def source() -> Dict[str, str]:
@@ -251,8 +241,6 @@ class SceneState:
         exporter folds Maya's ``diffuse`` weight in, and overwriting with the
         raw colour would make the preview brighter than the FBX intends.
         """
-        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
-
         result: Dict[str, Dict[str, Any]] = {}
 
         for mat in materials:
@@ -299,8 +287,6 @@ class SceneState:
         ships, with empty sections -- that is the "requested, nothing to
         carry" signal the panel summary reads).
         """
-        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
-
         result: Dict[str, Dict[str, Any]] = {}
 
         for mat in materials:
@@ -392,27 +378,11 @@ class SceneState:
     def emission_weight(cls, mat: str) -> float:
         """The shader's separate emission scalar, or 1.0 when it has none.
 
-        On aiStandardSurface the weight defaults to **0**, so reading
-        ``emissionColor`` alone reports a bright emissive on a material that
-        renders black. glTF has a single emissive term, so a ``multiply``
-        weight is folded into the colour; above 1 the writer preserves the
-        magnitude via ``KHR_materials_emissive_strength`` instead of clipping.
-
-        A shader absent from :attr:`EMISSION_WEIGHT_ATTRS` is **ungated** --
-        returning 1.0 rather than hunting for a plausibly-named attribute,
-        because a wrong guess here silently removes a working emissive.
+        :meth:`ShaderAttributeMap.emission_weight`. On aiStandardSurface the
+        weight defaults to **0**, so reading ``emissionColor`` alone reports a
+        bright emissive on a material that renders black. glTF has a single
+        emissive term, so a ``multiply`` weight is folded into the colour;
+        above 1 the writer preserves the magnitude via
+        ``KHR_materials_emissive_strength`` instead of clipping.
         """
-        entry = cls.EMISSION_WEIGHT_ATTRS.get(cmds.nodeType(mat))
-        if entry is None:
-            return 1.0
-        attr, mode = entry
-        plug = f"{mat}.{attr}"
-        if not cmds.objExists(plug):
-            return 1.0
-        try:
-            value = float(cmds.getAttr(plug))
-        except (RuntimeError, ValueError, TypeError):
-            return 1.0
-        if mode == "gate":
-            return 1.0 if value > 0.0 else 0.0
-        return value
+        return ShaderAttributeMap.emission_weight(mat)

@@ -10,13 +10,17 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
 - ``_resolve_fps`` → ``cmds.currentUnit`` (via :class:`AudioUtils`);
 - ``_measure_audio`` → source-path / registered-track probe against scene FPS;
 - ``_audio_grow_duration`` → the Maya-bound ``behaviors.compute_duration``;
-- ``_resolve_names_keep_missing`` → long-DAG-name resolution;
+- name resolution → the store's ``resolve_member`` (one transform's long DAG
+  name -- exactly, else a namespaced reference by its leaf; several are
+  ambiguous), which the engine's ``_resolve_object`` asks;
 - ``_discover_scene_objects`` / ``_filter_to_animated`` → animCurve walks;
 - assess seams (``_object_exists`` / ``_verify_behavior`` / ``_keyframe_range``
   / ``_audio_exists``) → ``cmds`` / audio-track queries;
-- ``apply_behaviors`` → :func:`behaviors.apply_to_shots` keying fades,
-  highlights and audio onto each shot's objects from the scene's effect
-  recipe (``store.effect_recipe``);
+- ``apply_behaviors`` / ``_apply_one`` → :func:`behaviors.apply_to_shots` /
+  ``apply_behavior`` keying fades, highlights and audio onto each shot's
+  objects from the scene's effect recipe (``store.effect_recipe``);
+- ``_key_samples`` / ``_delete_keys`` → a behavior's anim-curve keys -- what a
+  build claims as its own and releases;
 - ``_placed_clip_keys`` → a track's clip keys exactly where a build puts
   them (adopted when no claim covers them);
 - ``rewire_audio`` → the audio compositor sync.
@@ -236,12 +240,12 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         self, obj: str, behavior: str, start: float, end: float
     ) -> List[Tuple[str, float]]:
         """Keys in ``[start, end]`` on the plugs *behavior* keys on *obj*
-        (``Behaviors.behavior_plugs``), by anim-curve name."""
+        (``Behaviors._behavior_plugs``), by anim-curve name."""
         import maya.cmds as _cmds
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         out: List[Tuple[str, float]] = []
-        for plug in Behaviors.behavior_plugs(obj, behavior):
+        for plug in Behaviors._behavior_plugs(obj, behavior):
             for crv in _cmds.keyframe(plug, q=True, name=True) or []:
                 for t in _cmds.keyframe(crv, q=True, time=(start, end), tc=True) or []:
                     out.append((crv, t))

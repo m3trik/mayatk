@@ -1753,6 +1753,23 @@ class TestHighlightChannel(MayaTkTestCase):
         )
         self.assertEqual(keys, ptk.RampKeys.pulse(10, 400, **kwargs))
 
+    def test_a_pulse_keyed_over_another_replaces_it(self):
+        """An explicit keying replaces the pulse it lands on: the window's
+        keys go first, so a re-keyed cadence is the new plan alone."""
+        import pythontk as ptk
+
+        RenderEffects.key_pulse([self.cube], start=10, end=400, period=50)
+        kwargs = dict(period=86, bright_fraction=0.59, lead_in=12, lead_out=30)
+        RenderEffects.key_pulse([self.cube], start=10, end=400, **kwargs)
+        plug = f"{self.cube}.highlight"
+        keys = list(
+            zip(
+                cmds.keyframe(plug, q=True, tc=True),
+                cmds.keyframe(plug, q=True, vc=True),
+            )
+        )
+        self.assertEqual(keys, ptk.RampKeys.pulse(10, 400, **kwargs))
+
     def test_the_pulse_gaps_are_the_cycles_own_ramp_by_default(self):
         """Default lead-in / lead-out: the ends are shaped exactly like every
         interior transition, so the first bright hold sits one ramp in and the

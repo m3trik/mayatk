@@ -45,8 +45,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils

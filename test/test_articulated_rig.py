@@ -25,6 +25,7 @@ curves, layers and a moved rig group alike.
 import math
 import os
 import random
+import re
 import unittest
 
 import maya.api.OpenMaya as om
@@ -34,7 +35,10 @@ import pythontk as ptk
 from base_test import MayaTkTestCase
 
 from mayatk.rig_utils.articulated_rig import ArticulatedRig, ArticulatedRigGrab
-from mayatk.rig_utils.articulated_rig._solver_expression import SolverExpression
+from mayatk.rig_utils.articulated_rig._solver_expression import (
+    SolverExpression,
+    _MelText,
+)
 
 SCALE = 2.0
 R = (0.966, 0.259, 0.0)
@@ -748,6 +752,90 @@ class TestSolverExpression(MayaTkTestCase):
                 checked += 1
         self.assertEqual(checked + skipped, sum(len(c["solve"]) for c in doc["cases"]))
         self.assertGreater(checked, skipped)
+
+    def test_an_out_of_reach_target_settles_as_the_model_does(self):
+        """Past the reach a step is halved until it brings the held point
+        nearer, and the solve stops when none does: the arm settles where it
+        comes nearest. Every conformance target is a pose's own point -- in
+        reach by construction -- so this is pinned here: targets 1.2 to 2
+        reaches out from the chain's root, along a drag (each solve seeded
+        with where the last one settled; a target held still settles until
+        no step helps), for an arm held off its slide (position only) and its
+        ball-mounted end following a hand's turn (the wrist split). Each drag
+        is seeded where the stop decides the pose: a port that took the last
+        halved step anyway lands 0.8 to 3 degrees off the model's."""
+        tolerance = ptk.ArticulationConformance.TOLERANCE["solve"]
+        rig = ptk.ArticulationConformance.rigs()["arm"]
+        compared = 0
+        for joint, turned, stream in ((3, False, 21), (4, True, 8)):
+            rng = random.Random(stream)
+            local = [rng.uniform(-1.5, 1.5) for _ in range(3)]
+            model, io = self.solver(rig, joint, local)
+            chain = model.chain(joint)
+            reach = math.dist(local, (0.0, 0.0, 0.0)) + sum(
+                math.dist(model.joints[j]["t"], (0.0, 0.0, 0.0)) for j in chain[1:]
+            )
+            # The chain's root joint turns in place: nothing moves its origin.
+            root = model.world(model.rest_state())[chain[0]][0]
+            way = [rng.gauss(0.0, 1.0) for _ in range(3)]
+            way = [c / math.dist(way, (0.0, 0.0, 0.0)) for c in way]
+            seed = ptk.ArticulationConformance._random_state(model, rng)
+            hand = ptk.ArticulationConformance._random_state(model, rng)
+            rotation = list(model.world(hand)[joint][1]) if turned else None
+            for k in (1.2, 1.2, 1.6, 2.0, 2.0):
+                target = [r + c * k * reach for r, c in zip(root, way)]
+                want = model.solve(seed, joint, local, target, rotation)
+                held = model.point(want, joint, local)
+                self.assertGreater(
+                    math.dist(held, target), 0.1 * reach, "the target is in reach"
+                )
+                got = self.offsets(io, seed, target, rotation)
+                expected = [
+                    w - s if model.channels[slot][0] in chain else 0.0
+                    for slot, (w, s) in enumerate(zip(want, seed))
+                ]
+                self.assertLess(
+                    max(abs(g - e) for g, e in zip(got, expected)),
+                    tolerance,
+                    f"joint {joint}, {k} reaches out: {got} != {expected}",
+                )
+                compared += 1
+                seed = want
+        self.assertEqual(compared, 10)
+
+    def test_a_steps_deltas_are_written_by_the_step_alone(self):
+        """``$d<slot>`` is a step's delta. The wrist's drift sums once shared
+        those names (``$d1`` / ``$d2``, reset and summed between two position
+        solves), harmless only because each step writes its deltas before it
+        reads them -- so a name a slot's variable could spell is refused, both
+        ways round."""
+        rig = ptk.ArticulationConformance.rigs()["arm"]
+        slots = range(len(ptk.ArticulationModel(rig).channels))
+        text = SolverExpression.text_for(
+            rig,
+            4,  # the ball-mounted head: the wrist split, steps and drift sums
+            (0.1, 0.2, 0.3),
+            self.IDENTITY,
+            {
+                "translate": ["io.gx", "io.gy", "io.gz"],
+                "quat": ["io.qx", "io.qy", "io.qz", "io.qw"],
+                "blend": "io.blend",
+                "follow": "io.follow",
+                "seeds": [f"io.seed{slot}" for slot in slots],
+                "outputs": [[f"io.out{slot}"] for slot in slots],
+            },
+        )
+        writes = re.findall(r"^\s*\$d\d+ = (.*);$", text, re.MULTILINE)
+        self.assertTrue(writes, "no step in the text")
+        self.assertEqual([w for w in writes if not w.startswith("$W")], [])
+        mel = _MelText()
+        mel.indexed("d", 1)
+        with self.assertRaises(ValueError):
+            mel.var("d1")
+        mel = _MelText()
+        mel.var("d2")
+        with self.assertRaises(ValueError):
+            mel.indexed("d", 7)
 
     def test_a_ball_keeping_its_own_turn_is_carried_by_its_parents_link(self):
         """``followRotation`` off: the head keeps its FK turn and the chain

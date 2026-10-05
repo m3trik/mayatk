@@ -6,11 +6,10 @@ from typing import List, Set, Tuple, Dict, Union, Optional, Iterable
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     # Bind the names (house policy) — the `om is None` / `cmds is None` guards
     # below read them, and an unbound name raises NameError instead.
     cmds = om = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

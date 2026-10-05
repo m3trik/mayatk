@@ -7,8 +7,8 @@ from typing import List, Union, Set
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # From this package

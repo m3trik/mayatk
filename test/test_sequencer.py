@@ -11038,6 +11038,44 @@ class TestLandingOnOccupiedFrames(unittest.TestCase):
         self.assertEqual(times, [0.0, 50.0, 55.0, 56.0, 61.0, 62.0, 70.0])
         self.assertEqual(values, [0.0, 1.0, 2.0, 5.0, 8.0, 5.0, 0.0])
 
+    def test_an_overwritten_key_takes_its_claims_with_it(self):
+        """A sparse move recreates its keys with ``setKeyframe``, which
+        OVERWRITES a key already on a destination frame -- and every claim on
+        that key goes with it.  Left on the frame, its step and a behavior's
+        authored claim passed to the animator's key that landed there, which
+        the next Build's ``release_authored`` then deleted (blendertk's
+        BTK-SHOTS-3, the same class)."""
+        obj = self._make([(0, 0.0), (10, 5.0), (20, 9.0)])
+        crv = self._curve(obj)
+        led = ptk.ShotEditLedger()
+        led.record_authored(crv, 10.0, 0, "fade_in", obj, "stamp")
+        led.record_step(crv, 10.0, "spline", "spline")
+
+        ShotSequencer.move_curve_keys(crv, [0.0, 20.0], 10.0, ledger=led)
+
+        times, values = self._keys(obj)
+        self.assertEqual(times, [10.0, 30.0])
+        self.assertEqual(values, [0.0, 9.0])
+        self.assertFalse(led.owns_authored(crv, 10.0))
+        self.assertFalse(led.owns_step(crv, 10.0))
+
+    def test_a_stepped_key_moved_onto_a_key_takes_its_claims_with_it(self):
+        """The same overwrite through ``move_stepped_keys`` (cutKey +
+        setKeyframe): the key it lands on is replaced, and so are its claims."""
+        obj = self._make([(0, 0.0), (10, 5.0), (20, 9.0)])
+        crv = self._curve(obj)
+        seq = ShotSequencer()
+        seq.ledger.record_authored(crv, 10.0, 0, "fade_in", obj, "stamp")
+        seq.ledger.record_step(crv, 10.0, "spline", "spline")
+
+        seq.move_stepped_keys(obj, 20.0, 10.0, attr_name="translateX")
+
+        times, values = self._keys(obj)
+        self.assertEqual(times, [0.0, 10.0])
+        self.assertEqual(values, [0.0, 9.0])
+        self.assertFalse(seq.ledger.owns_authored(crv, 10.0))
+        self.assertFalse(seq.ledger.owns_step(crv, 10.0))
+
 
 class TestGroupMoveOrderIsRigid(unittest.TestCase):
     """A group drag commits clip by clip, and the widget hands the batch over

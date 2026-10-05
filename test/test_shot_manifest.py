@@ -2827,6 +2827,56 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_auto.assert_not_called()
 
 
+class TestRecipeChangeKeepsTheTable(unittest.TestCase, _ControllerHarness):
+    """A store setting that is no detection input leaves the table alone.
+
+    Bug: ``ShotStore.update_effect_recipe`` fires the same bare
+    ``SettingsChanged`` a detection setting does, so every Render Effects
+    spinbox tick re-ran ``detect()`` -- the steps regenerated, a typed range
+    gone -- while the last Assess, judged under the old recipe, still drove
+    the Build button.
+    Fixed: 2026-10-04
+    """
+
+    _DETECT = (
+        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        ".Detection.detect_shot_regions"
+    )
+    _REGIONS = [{"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]}]
+
+    def setUp(self):
+        # The store first: the controller listens to the one active when built.
+        self.store = _fresh_store()
+        self.setup_controller()
+        self.addCleanup(self.ctrl.remove_callbacks)
+        self.ctrl._first_shown = True
+        with patch(self._DETECT, return_value=self._REGIONS):
+            self.ctrl.detect()
+        self.ctrl._user_ranges["Shot 1"] = (12.0, 60.0)  # typed by the user
+
+    def test_a_recipe_change_keeps_the_steps_and_typed_ranges(self):
+        steps = list(self.ctrl._steps)
+        with patch(self._DETECT, return_value=self._REGIONS) as detect:
+            self.store.update_effect_recipe(fade_frames=20)
+        detect.assert_not_called()
+        self.assertEqual(self.ctrl._steps, steps)
+        self.assertEqual(self.ctrl._user_ranges["Shot 1"], (12.0, 60.0))
+
+    def test_a_recipe_change_stales_the_last_assess(self):
+        self.ctrl._last_results = [StepStatus(step_id="Shot 1", built=False)]
+        with patch(self._DETECT, return_value=self._REGIONS):
+            self.store.update_effect_recipe(fade_frames=20)
+        self.assertEqual(self.ctrl._last_results, [])
+        self.ui.b003.setEnabled.assert_called_with(False)
+
+    def test_a_detection_setting_still_redetects_once(self):
+        with patch(self._DETECT, return_value=self._REGIONS) as detect:
+            self.store.detection_threshold = 9.0
+            self.store.notify_settings_changed()
+            self.store.notify_settings_changed()  # nothing changed since
+        detect.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Tests: assess() selected-keys guard + scene discovery skip
 # ---------------------------------------------------------------------------
@@ -3279,6 +3329,37 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
         detect.assert_not_called()
         self.assertEqual(self.ctrl._source, "scene")
 
+    def test_shots_deleted_elsewhere_empty_the_table_without_asking(self):
+        """Bug: the scene's shots all deleted in another panel (Shots' Delete
+        All), the store event reloaded them, found none and fell through to
+        the interactive ``detect()`` -- whose selected-keys mode pops a modal
+        "No keys selected" for an action taken elsewhere.
+        Fixed: 2026-10-04
+        """
+        from mayatk.anim_utils.shots._shots import ShotRemoved
+
+        self.store.detection_mode = "skip_zero"  # a selected-keys mode
+        self.ctrl._first_shown = True
+        self.ctrl._load_scene_shots()
+        for shot in list(self.store.shots):
+            self.store.remove_shot(shot.shot_id)
+        selected = (
+            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+            ".Detection.regions_from_selected_keys"
+        )
+        with (
+            patch(selected, return_value=[]) as by_keys,
+            patch(self._DETECT, return_value=[]) as detect,
+        ):
+            self.ctrl._on_store_event(ShotRemoved(shot_id=1))
+        self.ctrl.sb.message_box.assert_not_called()
+        by_keys.assert_not_called()
+        detect.assert_not_called()
+        self.assertEqual(self.ctrl._steps, [])
+        self.assertEqual(self.ctrl._source, "scene")  # still following the store
+        footer = self.ctrl.ui.footer.setText.call_args.args[0]
+        self.assertIn("no shots", footer.lower())
+
     def test_the_field_opens_on_the_scenes_recorded_manifest(self):
         self.store.source_csv = "X:/sheets/build_sheet.csv"
         with patch.object(self.ctrl, "_load_csv", return_value=True) as load:
@@ -3472,6 +3553,101 @@ class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
         self.assertEqual(
             json.loads(self.ctrl._settings.value(key)), {"audio": "derive"}
         )
+
+    def test_a_retired_templates_options_join_the_saved_ones(self):
+        """Bug: the retired template's options were carried only when its
+        replacement had none saved, so a user with saved ``default`` options
+        silently lost ``audio: derive`` -- while the log said it was carried.
+        Fixed: 2026-10-04
+        """
+        import json
+
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        key = "mapping_options/default"
+        saved = self.ctrl._settings.value(key, "")
+        self.addCleanup(self.ctrl._settings.setValue, key, saved)
+        self.ctrl._settings.setValue(key, json.dumps({"fill_missing_assets": True}))
+        retired = Mapping.retired("speedrun")
+        templates = types.SimpleNamespace(active="speedrun")
+        with patch.object(Mapping, "templates", return_value=templates):
+            self.ctrl._migrate_retired_mapping("speedrun", *retired)
+        self.assertEqual(
+            json.loads(self.ctrl._settings.value(key)),
+            {"fill_missing_assets": True, "audio": "derive"},
+        )
+
+
+class TestReapplyReportsWhatItDid(unittest.TestCase, _ControllerHarness):
+    """An object row's Apply -- and Render Effects' focused Key, which runs
+    it -- says when nothing was re-applied.
+
+    Bug: ``_reapply_behavior`` ignored ``reapply_object``'s ``False`` (the
+    object missing or ambiguous) and re-assessed as if it had worked, so the
+    user got no message; the focused Key's ``apply`` then reported
+    "Re-applied ..." whatever happened, leaving Render Effects' error branch
+    dead.
+    Fixed: 2026-10-04
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.define_shot("A01", 1, 40)
+        self.ctrl._store = self.store
+        self.ctrl._steps = _make_steps("A01")
+        self.obj = BuilderObject(name="ghost", behaviors=["fade_in"])
+        self.builder = MagicMock()
+        for p in (
+            patch.object(self.ctrl, "_manifest", return_value=self.builder),
+            patch.object(self.ctrl, "assess"),
+        ):
+            p.start()
+            self.addCleanup(p.stop)
+        _mock_undo_info(self)
+
+    def _footer(self) -> str:
+        return self.ctrl.ui.footer.setText.call_args.args[0]
+
+    def test_nothing_reapplied_is_said_and_not_reassessed(self):
+        self.builder.reapply_object.return_value = False
+        with patch.object(
+            self.store, "resolve_member", return_value=("ghost", "missing")
+        ):
+            self.assertIs(self.ctrl._reapply_behavior("A01", self.obj), False)
+        self.ctrl.assess.assert_not_called()
+        self.assertIn("'ghost' is not in the scene", self._footer())
+
+    def test_an_ambiguous_object_is_named_as_such(self):
+        self.builder.reapply_object.return_value = False
+        with patch.object(
+            self.store, "resolve_member", return_value=("ghost", "ambiguous")
+        ):
+            self.assertIs(self.ctrl._reapply_behavior("A01", self.obj), False)
+        self.assertIn("several scene objects are named 'ghost'", self._footer())
+
+    def test_a_reapply_reassesses_and_says_it_did(self):
+        self.builder.reapply_object.return_value = True
+        self.assertIs(self.ctrl._reapply_behavior("A01", self.obj), True)
+        self.ctrl.assess.assert_called_once_with(skip_key_check=True)
+
+    def test_an_unbuilt_step_says_build_first(self):
+        self.assertIs(self.ctrl._reapply_behavior("A02", self.obj), False)
+        self.assertIn("build first", self._footer())
+        self.builder.reapply_object.assert_not_called()
+
+    def test_the_focused_key_raises_when_nothing_was_reapplied(self):
+        focus = self.ctrl.sb.get_slots_instance.return_value.focus
+        self.ctrl._open_effect("A01", self.obj, "opacity")
+        apply = focus.call_args.kwargs["apply"]
+
+        self.builder.reapply_object.return_value = False
+        with self.assertRaises(RuntimeError) as ctx:
+            apply()
+        self.assertIn("ghost", str(ctx.exception))
+
+        self.builder.reapply_object.return_value = True
+        self.assertEqual(apply(), "Re-applied ghost's behaviors in A01.")
 
 
 # ---------------------------------------------------------------------------

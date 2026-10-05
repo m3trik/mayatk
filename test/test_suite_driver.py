@@ -13,15 +13,27 @@ The cause is still unknown -- something sets `shouldStop`, or the GUI-side
 runner returns early. These do not guess at it. They pin the DETECTION, which
 is what turns a silent truncation into a named, reproducible one.
 
+Also pinned: the throwaway Maya project a run works in is given back when it
+ends (`TestTheRunGivesTheProjectBack`), and uitk's settings sandbox is armed
+only in a Maya the runner launched (`TestTheSettingsSandboxIsForALaunchedMaya`).
+
 Pure Python: the functions under test take ids, not a Maya session, so this
-runs anywhere.
+runs anywhere -- the project test stands a one-command `maya.cmds` in for
+Maya's, the settings test a stand-in `uitk.testing`.
 """
 
+import contextlib
 import importlib.util
 import inspect
+import io
 import os
+import shutil
+import sys
+import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TEST_DIR = Path(__file__).resolve().parent
 
@@ -40,6 +52,13 @@ class DriverTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.driver = _load_driver()
+
+    def _keep(self, mapping, key):
+        """Put *mapping[key]* -- or its absence -- back when the test ends."""
+        if key in mapping:
+            self.addCleanup(mapping.__setitem__, key, mapping[key])
+        else:
+            self.addCleanup(mapping.pop, key, None)
 
 
 class TestCollectedIds(DriverTestCase):
@@ -300,6 +319,160 @@ class TestClassLevelSkipIsNotATruncation(DriverTestCase):
             f"a setUpClass skip must not be reported: {missing}",
         )
         self.assertTrue(missing[0].endswith("test_c"), missing)
+
+
+class _WorkspaceCmds:
+    """``maya.cmds`` as far as a project goes: ``workspace`` over one current
+    root, remembering every root it was asked to open."""
+
+    def __init__(self, root):
+        self.root = root
+        self.opened = []
+
+    def workspace(self, *args, **kwargs):
+        if kwargs.get("query") or kwargs.get("q"):
+            return self.root
+        if kwargs.get("openWorkspace"):
+            self.root = args[0]
+            self.opened.append(args[0])
+        return None
+
+
+class TestTheRunGivesTheProjectBack(DriverTestCase):
+    """A run opens a throwaway project; it must reopen the one it found.
+
+    The in-session harness (Script Editor: ``MayaTestRunner().run_tests``)
+    runs ``run_suite`` inside the user's own Maya, which the run left on its
+    ``policy="session"`` project -- a folder deleted when Maya exits, with
+    whatever they had saved into its default folders in between.
+
+    No Maya: ``maya.cmds`` is a stand-in holding one current root, and the
+    run's other process-wide sandboxes are stood down for the test.
+    """
+
+    def setUp(self):
+        from mayatk.env_utils import _env_utils
+
+        project = tempfile.TemporaryDirectory()
+        self.addCleanup(project.cleanup)
+        self.project = os.path.normpath(project.name)
+        self.cmds = _WorkspaceCmds(self.project)
+        self.addCleanup(self._remove_sandboxes)
+        maya = types.ModuleType("maya")
+        maya.cmds = self.cmds
+        for key, value in (("maya", maya), ("maya.cmds", self.cmds)):
+            self._keep(sys.modules, key)
+            sys.modules[key] = value
+        self._keep(os.environ, "MAYATK_EXTENDED_TESTS")  # the run sets or clears it
+        for patcher in (
+            mock.patch.object(_env_utils, "cmds", self.cmds, create=True),
+            mock.patch("pythontk.core_utils.test_sandbox.TestSandbox.activate"),
+            mock.patch.object(self.driver, "_ensure_sys_path"),
+            mock.patch.object(self.driver, "_sandbox_shots_prefs"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        results = tempfile.TemporaryDirectory()
+        self.addCleanup(results.cleanup)
+        self.config = {
+            "modules": [],
+            "results_file": os.path.join(results.name, "results.txt"),
+        }
+
+    def _remove_sandboxes(self):
+        for root in self.cmds.opened:
+            if os.path.normpath(root) != self.project:
+                shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_run_ends_on_the_project_it_found(self):
+        self.driver.run_suite(self.config)
+
+        self.assertEqual(len(self.cmds.opened), 2, self.cmds.opened)
+        self.assertNotEqual(
+            os.path.normpath(self.cmds.opened[0]), self.project, "no sandbox opened"
+        )
+        self.assertEqual(os.path.normpath(self.cmds.root), self.project)
+
+    def test_an_aborted_run_still_gives_it_back(self):
+        """An interrupt in the Script Editor, or a harness error between
+        modules, ends the run as surely as its last module does."""
+        self.config["modules"] = ["test_never_loaded"]
+        with mock.patch.object(self.driver, "_progress", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.driver.run_suite(self.config)
+
+        self.assertEqual(os.path.normpath(self.cmds.root), self.project)
+
+
+class TestTheSettingsSandboxIsForALaunchedMaya(DriverTestCase):
+    """uitk's QSettings + preset redirect runs only in a Maya the runner launched.
+
+    A panel a test builds persists its widget state through QSettings, and the
+    driver armed only pythontk's guards, so a run wrote its fixtures into the
+    developer's live store. Measured 2026-10-04: a GUI pass of
+    ``test_articulated_rig_panel`` rewrote ``chk_adjust``, ``txt_name`` and
+    ``tbl_joints`` under ``HKCU\\Software\\uitk\\shared\\switchboard``.
+    ``uitk.testing.TestSandbox`` redirects that store by swapping the QSettings
+    class for the rest of the process, which is why the runner asks for it
+    (``sandbox_settings``) only for a process it launched: in the user's own
+    Maya (the in-session harness) every tool of theirs would go on writing a
+    throwaway file.
+
+    No Qt: ``uitk.testing`` is a stand-in module and both activations are mocks.
+    """
+
+    def setUp(self):
+        testing = types.ModuleType("uitk.testing")
+        testing.TestSandbox = mock.Mock()
+        testing.TestSandbox.activate.return_value = ("<qsettings>", "<presets>")
+        self.uitk_activate = testing.TestSandbox.activate
+        self._keep(sys.modules, "uitk.testing")
+        sys.modules["uitk.testing"] = testing
+        self._keep(os.environ, "MAYATK_EXTENDED_TESTS")  # the run sets or clears it
+        ptk_activate = mock.patch(
+            "pythontk.core_utils.test_sandbox.TestSandbox.activate"
+        )
+        self.ptk_activate = ptk_activate.start()
+        self.addCleanup(ptk_activate.stop)
+        for patcher in (
+            mock.patch.object(self.driver, "_ensure_sys_path"),
+            mock.patch.object(self.driver, "_sandbox_shots_prefs"),
+            mock.patch.object(
+                self.driver, "_sandbox_workspace", contextlib.nullcontext
+            ),
+            mock.patch.object(self.driver, "_run_modules", return_value={}),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _run(self, **config):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.driver.run_suite({"modules": [], "results_file": "-", **config})
+        return printed.getvalue()
+
+    def test_a_launched_maya_gets_the_settings_sandbox(self):
+        self._run(sandbox_settings=True)
+
+        self.uitk_activate.assert_called_once_with()
+
+    def test_the_users_own_session_keeps_its_settings(self):
+        """Without the flag -- the in-session harness, or any config that
+        predates it -- the driver assumes the user's own Maya: pythontk's
+        guards only."""
+        self._run()
+        self._run(sandbox_settings=False)
+
+        self.uitk_activate.assert_not_called()
+        self.assertEqual(self.ptk_activate.call_count, 2)
+
+    def test_without_uitk_the_run_keeps_pythontk_guards_and_says_so(self):
+        sys.modules["uitk.testing"] = None  # the import raises; setUp restores it
+
+        printed = self._run(sandbox_settings=True)
+
+        self.ptk_activate.assert_called_once_with()
+        self.assertIn("settings sandbox unavailable", printed)
 
 
 if __name__ == "__main__":

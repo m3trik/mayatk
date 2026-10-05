@@ -6,8 +6,8 @@ from pathlib import Path
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 import pythontk as ptk
 

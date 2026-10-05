@@ -79,6 +79,11 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
         # the switchboard connects it. Connecting it here as well ran every
         # click twice (Switch IK / FK flipped and flipped back).
         self.ui.chk_end_control.toggled.connect(self._on_end_control_toggled)
+        # Adjust Pivots shows a live state -- whether the rig in the table is
+        # adjusting -- not a setting: restored, an adjust that ended any way
+        # but by clearing the box began again on the next panel open, on
+        # whatever rig the selection touched.
+        self.ui.chk_adjust.restore_state = False
         self.ui.chk_adjust.toggled.connect(self._on_adjust_toggled)
         self._init_table()
         self._init_tooltips()

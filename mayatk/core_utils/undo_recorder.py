@@ -12,13 +12,12 @@ objects and hands them to Maya's own ``ufeCmd``, whose undo / redo replay them:
 a generic Python command (Maya undoes its own Outliner edits through it) from
 the ``ufeSupport`` plugin in Maya's install folder, loaded through
 :meth:`Plugins.load` on first use when the session has not loaded it. A plugin
-of mayatk's own would carry them only where an install declared mayatk's
-plug-in folder (:class:`Plugins`): elsewhere GUI Maya holds a plugin from
-outside its trusted locations at a modal "Untrusted Plugin Loading" prompt
-until someone answers it, while its install folder is always trusted, so
-loading ``ufeSupport`` raises none (both measured in a fresh GUI Maya 2025,
-2026-09-14). Standalone never prompts, so no headless test can see the
-difference -- ``test_undo_recorder`` checks the load instead.
+of mayatk's own could not: GUI Maya holds a plugin from outside its trusted
+locations at a modal "Untrusted Plugin Loading" prompt until someone answers
+it, while its install folder is always trusted, so loading ``ufeSupport``
+raises none (both measured in a fresh GUI Maya 2025, 2026-09-14). Standalone
+never prompts, so no headless test can see the difference --
+``test_undo_recorder`` checks the load instead.
 
 The queue replays commands in the order they ran, so a block commits when it
 closes, and a block opened inside another first commits the outer block's edits
@@ -46,9 +45,8 @@ from typing import Any, Callable, ContextManager, Dict, Iterator, List
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 from mayatk.core_utils.plugins._plugins import Plugins
 

@@ -202,19 +202,18 @@ class _LightUtilsInternal:
         colour to read, so it falls through to the caller's parameter rather than
         guessing an average.
 
-        Gated on ``SceneState.emission_weight`` for the reason that reader
-        documents: ``standardSurface.emissionColor`` DEFAULTS to white while its
-        ``emission`` weight defaults to 0, so colour alone reports a bright
-        emissive on Maya's own default material -- which would hand every plain
-        fixture a white light and silently override the caller's *kelvin*.
+        Gated on ``ShaderAttributeMap.emission_weight`` for the reason that
+        reader documents: ``standardSurface.emissionColor`` DEFAULTS to white
+        while its ``emission`` weight defaults to 0, so colour alone reports a
+        bright emissive on Maya's own default material -- which would hand every
+        plain fixture a white light and silently override the caller's *kelvin*.
         """
-        from mayatk.env_utils.scene_state import SceneState
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
         for mat in MatUtils.get_mats(list(members)) or []:
             mapping = ShaderAttributeMap.get_attr(cmds.nodeType(mat), "emission")
-            if not mapping or SceneState.emission_weight(mat) == 0.0:
+            if not mapping or ShaderAttributeMap.emission_weight(mat) == 0.0:
                 continue
             plug = f"{mat}.{mapping[0]}"
             if not cmds.objExists(plug) or cmds.listConnections(

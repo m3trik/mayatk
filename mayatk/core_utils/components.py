@@ -9,10 +9,9 @@ from typing import Union, List, Dict, Set, Tuple, Optional
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except Exception as error:
+except Exception:
     cmds = None
     om = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

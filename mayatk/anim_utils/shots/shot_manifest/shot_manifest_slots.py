@@ -100,6 +100,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
+        self._detection_snapshot: tuple = ()  # _detection_inputs, last seen
         self._bind_store_listener()
         self._install_scene_jobs()
         # connect_cleanup (in _install_scene_jobs) tears down only the SJM
@@ -568,8 +569,25 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             store.add_listener(self._on_store_event)
             self._bound_store = store
             self._store_listener_bound = True
+            self._detection_snapshot = self._detection_inputs()
         except Exception:
             pass
+
+    def _detection_inputs(self) -> tuple:
+        """The store settings the steps' detection, auto-filled ranges and
+        build layout read -- detection mode and threshold, gap, new-shot
+        length, fit mode -- with the store itself (``()`` without one)."""
+        store = self._active_store()
+        if store is None:
+            return ()
+        return (
+            store,
+            store.detection_mode,
+            store.detection_threshold,
+            store.gap,
+            store.initial_shot_length,
+            store.fit_mode,
+        )
 
     def _unbind_store_listener(self) -> None:
         """Remove the ShotStore listener."""
@@ -639,7 +657,9 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             return
         self._load_scene_shots(manifest_failed=bool(path))
 
-    def _load_scene_shots(self, manifest_failed: bool = False) -> None:
+    def _load_scene_shots(
+        self, manifest_failed: bool = False, detect_when_empty: bool = True
+    ) -> None:
         """Show the store's shots as the steps; detect when there are none.
 
         The steps carry each shot's description, section, members and (for a
@@ -651,14 +671,26 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         Parameters:
             manifest_failed: The source field named a manifest that did not
                 load; its reason stays on the field and the footer says so.
+            detect_when_empty: Fall through to :meth:`detect` when the store
+                has no shots.  ``False`` on a store event: another panel
+                removed them and asked for no detection -- which may stop to
+                ask for selected keys -- so the table empties and keeps
+                following the store.
         """
         store = self._active_store()
         shots = store.sorted_shots() if store is not None else []
         if not shots:
             if manifest_failed:
                 self._load_data([])  # never leave a previous scene's rows up
-            else:
+            elif detect_when_empty:
                 self.detect()
+            else:
+                self._load_data(
+                    [],
+                    source="scene",
+                    footer="No shots in the scene -- Assess or Build detects "
+                    "its animation.",
+                )
             return
         steps, ranges = BuilderStep.from_shots(shots)
         steps = self._drop_excluded(steps)
@@ -684,6 +716,17 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if self._building:
             return
         if isinstance(event, SettingsChanged):
+            # One event for every store setting, but only the detection inputs
+            # move the steps and ranges: re-detecting for another -- a Render
+            # Effects recipe spinbox, a snap toggle, a Shots-panel trim --
+            # regenerated the steps (typed ranges, renamed steps gone) per
+            # tick.  It does stale the last Assess, which judged the old keys.
+            inputs = self._detection_inputs()
+            if inputs == self._detection_snapshot:
+                self._last_results = []
+                self._update_build_button()
+                return
+            self._detection_snapshot = inputs
             # Detection settings changed — invalidate cache and re-detect.
             # Guard on _first_shown to avoid triggering detection (and
             # message boxes) before the widget is visible.
@@ -710,7 +753,7 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
             # The store IS the source: follow its edits (renames, descriptions,
             # ranges, added/removed shots), keeping the user's expansion.
             state = self._save_tree_state()
-            self._load_scene_shots()
+            self._load_scene_shots(detect_when_empty=False)
             self._restore_tree_state(state)
             return
         if not self._steps:
@@ -1066,7 +1109,8 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         if self._pairing().shots.get(step_id) is not None:
 
             def apply():
-                self._reapply_behavior(step_id, obj)
+                # Raises why not: Render Effects reports it, not "Re-applied".
+                self._reapply_behavior(step_id, obj, raise_errors=True)
                 return f"Re-applied {leaf}'s behaviors in {step_id}."
 
         slots.focus(
@@ -1644,20 +1688,21 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
         self, name: str, replacement: str, values: dict
     ) -> str:
         """Point a saved selection of retired template *name* at its
-        replacement, carrying the option *values* it stood for (unless the
-        replacement already has saved values).  Returns the replacement."""
+        replacement, carrying the option *values* it stood for into the
+        replacement's saved ones -- over a saved value of the same option, as
+        the retired template was the one last chosen.  Returns the
+        replacement."""
         import json
         from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
-        key = f"mapping_options/{replacement}"
-        if not self._settings.value(key, ""):
-            self._settings.setValue(key, json.dumps(values))
+        options = {**self._option_values(replacement), **values}
+        self._settings.setValue(f"mapping_options/{replacement}", json.dumps(options))
         try:
             Mapping.templates().active = replacement
         except Exception:
             pass
         self.logger.info(
-            "Mapping %r is retired; using %r with %s.", name, replacement, values
+            "Mapping %r is retired; using %r with %s.", name, replacement, options
         )
         return replacement
 
@@ -1715,13 +1760,15 @@ class ShotManifestController(ManifestTableMixin, ptk.LoggingMixin):
 
     # ---- template options -------------------------------------------------
 
-    def _option_values(self) -> Dict[str, object]:
-        """The saved option values of the current template (``{}`` if none)."""
+    def _option_values(self, name: Optional[str] = None) -> Dict[str, object]:
+        """The saved option values of template *name*, the current one by
+        default (``{}`` if none)."""
         import json
 
-        if not self._mapping_name:
+        name = name or self._mapping_name
+        if not name:
             return {}
-        raw = self._settings.value(f"mapping_options/{self._mapping_name}", "")
+        raw = self._settings.value(f"mapping_options/{name}", "")
         try:
             values = json.loads(raw) if raw else {}
         except (TypeError, ValueError):

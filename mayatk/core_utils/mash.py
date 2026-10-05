@@ -7,8 +7,8 @@ try:
     import maya.mel as mel
     import maya.OpenMaya as om
     import maya.OpenMayaFX as omfx
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 try:
     import MASH.api as _MASH_API  # type: ignore

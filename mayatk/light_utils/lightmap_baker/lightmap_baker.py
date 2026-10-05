@@ -49,12 +49,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 import pythontk as ptk
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.mat_utils.bake_sets import LightmapExcludeSet
 from mayatk.light_utils._light_utils import LightUtils
@@ -324,8 +324,10 @@ class LightmapBaker(ptk.LoggingMixin):
         ``from_preset("mobile", resolution=1536)``); extra preset keys
         (``description``, the panel's ``packing``) are ignored.
 
-        Built-ins: ``preview`` (256/2), ``mobile`` (1024/4), ``desktop`` (2048/8).
-        A retired tier name (``quest``) still resolves, with a notice.
+        Built-ins (resolution / samples; the JSON in ``presets/`` is the
+        source): ``preview`` (256/2), ``mobile`` (1024/4, the default tier),
+        ``desktop`` (2048/4) and ``hero`` (4096/6). A retired tier name
+        (``quest``) still resolves, with a notice.
         """
         store = cls.preset_store()
         if not store.exists(name):
@@ -483,6 +485,9 @@ class LightmapBaker(ptk.LoggingMixin):
            (:meth:`LightmapRecords.superseding`): a bake after an output
            option changed leaves no old maps behind.
         6. :meth:`bake_verdict` reads the finished maps' level.
+        7. :meth:`bake_probe` captures the room as a reflection probe
+           (:attr:`reflection_probe`) -- not after a cancel, and a probe that
+           fails is logged, never raised: the bake is committed by then.
 
         Nothing is reverted first. An object the bake does not finish (a
         cancel, a failed render) keeps the map it had, and that map is intact:
@@ -499,7 +504,7 @@ class LightmapBaker(ptk.LoggingMixin):
             output_dir: Where the maps go (see :meth:`bake_separated`).
             prefix / suffix: Name affix around each map's texture-set stem.
             on_progress: ``(done, total, name) -> bool`` per object; return
-                ``False`` to cancel the rest.
+                ``False`` to cancel the rest (and the probe).
             intensity: A multiplier baked into the texels. 1.0 matches the
                 Maya render; ``math.pi`` matches Unity's realtime-light
                 convention (Arnold bakes ``albedo x E / pi``, Unity lights
@@ -536,6 +541,17 @@ class LightmapBaker(ptk.LoggingMixin):
         if result.refused:
             return result
 
+        # A cancel ends the bake, not just its renders: the maps it finished
+        # are committed, but no reflection probe follows -- one more render,
+        # and one the artist cannot stop.
+        cancelled = False
+
+        def tick(done: int, total: int, name: str) -> bool:
+            nonlocal cancelled
+            keep = on_progress(done, total, name)
+            cancelled = cancelled or keep is False
+            return keep
+
         # Atlas packing is chosen BEFORE baking, not after: bake_atlas plans
         # the layout up front so each object bakes at a bounded multiple of the
         # size it will occupy in the atlas, instead of rendering a full map per
@@ -545,7 +561,7 @@ class LightmapBaker(ptk.LoggingMixin):
             output_dir=output_dir,
             prefix=prefix,
             suffix=suffix,
-            on_progress=on_progress,
+            on_progress=tick if on_progress is not None else None,
             **kwargs,
         )
         if packing == "atlas":
@@ -579,8 +595,13 @@ class LightmapBaker(ptk.LoggingMixin):
             )
         result.retired = retired
         result.verdict = self.bake_verdict(result.maps.values())
-        if self.reflection_probe:
-            result.probe = self.bake_probe(result.maps)
+        if self.reflection_probe and not cancelled:
+            # After the commit, so it must never be what loses the bake: a
+            # render that fails, or a probe file held open, costs the probe.
+            try:
+                result.probe = self.bake_probe(result.maps)
+            except Exception as e:
+                self.logger.warning("Reflection probe not captured: %s", e)
         return result
 
     # ------------------------------------------------------------------
@@ -622,7 +643,11 @@ class LightmapBaker(ptk.LoggingMixin):
           see-through to it -- a probe that carried them would show them where
           they no longer are -- while they still shade the room, as they do in
           the bake; unbaked meshes that surround the bake (a sky dome, a
-          ground nobody baked) are the room's surroundings and stay in it.
+          ground nobody baked) are the room's surroundings and stay in it, and
+          so does an unbaked instance of a baked mesh (the render hides a
+          mesh, and with it every instance). Every light is visible to it, an
+          Arnold light too; an environment the bake left out
+          (:attr:`include_environment`) is left out of it as well.
 
         A Z-up scene gets no probe: its deliverables (the WebXR preview,
         Unity) read a probe in Y-up axes, and one captured in the scene's
@@ -655,24 +680,49 @@ class LightmapBaker(ptk.LoggingMixin):
                 "and Unity read a probe in Y-up axes."
             )
             return None
-        site = ProbePlacement(baked, self._unbaked_visible(baked)).place()
-        if site is None:
-            return None
-        folder = self._probe_folder(maps)
-        if not folder:
-            self.logger.warning(
-                "No reflection probe: no folder holds this bake's maps."
+        unbaked, shared = self._unbaked_visible(baked)
+        lights = LightUtils.all_lights()
+        # An environment the bake left out stays out of its probe: muted for
+        # the placement (a muted dome is no sky to see) and the render (no sky
+        # lift the maps lack), as it was for the maps.
+        with self._muted_environment():
+            # An unbaked instance of a baked mesh renders with it, so the
+            # probe's rays see it as the room (see _unbaked_visible).
+            site = ProbePlacement(baked + shared, unbaked).place()
+            if site is None:
+                return None
+            folder = self._probe_folder(maps)
+            if not folder:
+                self.logger.warning(
+                    "No reflection probe: no folder holds this bake's maps."
+                )
+                return None
+            stem = os.path.splitext(
+                os.path.basename(cmds.file(query=True, sceneName=True))
+            )[0]
+            path = os.path.join(folder, f"{stem or 'untitled'}_Probe.exr")
+            low, high = self.PROBE_WIDTH_RANGE
+            width = max(low, min(high, int(self.resolution) // 2))
+            written = self.baker.render_panorama(
+                site.position,
+                path,
+                width=width,
+                # Their own meshes: a transform would hide its baked children.
+                hide=[
+                    shape
+                    for node in site.hide
+                    for shape in cmds.listRelatives(
+                        node,
+                        shapes=True,
+                        noIntermediate=True,
+                        fullPath=True,
+                        type="mesh",
+                    )
+                    or []
+                ],
+                # Only when there are any: an injected backend need not know it.
+                **({"lights": lights} if lights else {}),
             )
-            return None
-        stem = os.path.splitext(
-            os.path.basename(cmds.file(query=True, sceneName=True))
-        )[0]
-        path = os.path.join(folder, f"{stem or 'untitled'}_Probe.exr")
-        low, high = self.PROBE_WIDTH_RANGE
-        width = max(low, min(high, int(self.resolution) // 2))
-        written = self.baker.render_panorama(
-            site.position, path, width=width, hide=site.hide
-        )
         if not written:
             return None
         LightmapRecords.commit_probe(written, site.position, site.box)
@@ -698,16 +748,44 @@ class LightmapBaker(ptk.LoggingMixin):
         return written
 
     @staticmethod
-    def _unbaked_visible(baked: List[str]) -> List[str]:
-        """The visible mesh transforms no bake marks: what moves, and what a
-        probe lights in full -- or what surrounds the bake (a dome, a ground)."""
+    def _unbaked_visible(baked: List[str]) -> Tuple[List[str], List[str]]:
+        """``(unbaked, shared)``: the visible mesh transforms no bake marks --
+        what moves, and what a probe lights in full, or what surrounds the
+        bake (a dome, a ground) -- and apart, those whose mesh a baked
+        transform shares.
+
+        Every instance is a transform of its own (``allPaths``: a plain mesh
+        listing names an instanced mesh by its first path alone). The render
+        hides a mesh, though, not an instance (``primaryVisibility`` is the
+        shape's), so hiding an instance of a baked mesh took its baked twin
+        out of the probe: such an instance is never hidden -- it renders, and
+        the probe's rays see it with the room.
+        """
         marked = set(cmds.ls(baked, long=True) or [])
-        found: List[str] = []
-        for shape in cmds.ls(type="mesh", noIntermediate=True, long=True) or []:
-            parent = (cmds.listRelatives(shape, parent=True, fullPath=True) or [""])[0]
-            if parent and parent not in marked and DisplayUtils.is_visible(parent):
-                found.append(parent)
-        return list(dict.fromkeys(found))
+        meshes = [
+            shape
+            for node in marked
+            for shape in cmds.listRelatives(
+                node, shapes=True, noIntermediate=True, fullPath=True, type="mesh"
+            )
+            or []
+        ]
+        baked_meshes = set(cmds.ls(meshes, uuid=True) or []) if meshes else set()
+        unbaked: List[str] = []
+        shared: List[str] = []
+        for shape in (
+            cmds.ls(
+                type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+            )
+            or []
+        ):
+            parent = shape.rpartition("|")[0]
+            if not parent or parent in marked or not DisplayUtils.is_visible(parent):
+                continue
+            mesh = (cmds.ls(shape, uuid=True) or [None])[0]
+            (shared if mesh in baked_meshes else unbaked).append(parent)
+        shared = list(dict.fromkeys(shared))
+        return [n for n in dict.fromkeys(unbaked) if n not in shared], shared
 
     @staticmethod
     def _probe_folder(maps: Optional[Dict[str, str]]) -> Optional[str]:
@@ -830,15 +908,10 @@ class LightmapBaker(ptk.LoggingMixin):
         what loses it. Duplicates collapse, so an atlas 46 objects share is
         read once.
         """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        try:
-            import cv2
-        except ImportError:
-            return {}
         levels: Dict[str, Tuple[float, float]] = {}
         for path in sorted(set(paths or ())):
             try:
-                img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+                img = TextureBaker._read_exr(path)
                 if img is None:
                     continue
                 rgb = img[..., :3] if img.ndim == 3 else img
@@ -1302,13 +1375,16 @@ class LightmapBaker(ptk.LoggingMixin):
         maps end up) and :meth:`bake_atlas`'s tiles (which are packed first):
         :meth:`_bake_to_lightmap_uvs` with the card as the per-shape shader
         override, torn down with the shading group it made. *kwargs* go to that
-        core (``output_dir``, ``prefix``, ``batch``, ...).
+        core (``output_dir``, ``prefix``, ``batch``, ...). The selection is
+        left as found: the new card took it, and deleting the card after left
+        nothing selected.
         """
-        card = self._create_white_card()
-        try:
-            return self._bake_to_lightmap_uvs(objects, shader=card, **kwargs)
-        finally:
-            self._delete_white_card(card)
+        with CoreUtils.preserved_selection():
+            card = self._create_white_card()
+            try:
+                return self._bake_to_lightmap_uvs(objects, shader=card, **kwargs)
+            finally:
+                self._delete_white_card(card)
 
     def _delete_white_card(self, card: str) -> None:
         """Delete the bake's card WITH the shading group assigning it made.
@@ -1479,22 +1555,22 @@ class LightmapBaker(ptk.LoggingMixin):
     #: nothing, and a tile rendered AT its cell keeps every sample's noise at
     #: full strength; the shrink averages it first, and :attr:`denoise` then
     #: works on what survives, at the cell (:meth:`_finish_tile`).
-    #: Measured on a production room at mobile (1024 / 4 samples), with two AA
-    #: seeds so the difference is pure sampling noise: a floor cell's shadow
-    #: carried 21.9% relative noise rendered at the cell, 15.2% at 2x and 9.5%
-    #: at 4x -- 4x being, for those 256px cells, exactly the full-size render
-    #: the pre-2026-09-01 bake-full-then-pack gave them. At the cell it read as
-    #: splotches in the WebXR preview. The cost is the square of this over the
-    #: plan's own texels (4 floors: 10s -> 63s on the GPU) and never more than
-    #: a full map per object, i.e. never above the old path's.
+    #: Measured on a production room at 1024 / 4 samples, with two AA seeds
+    #: so the difference is pure sampling noise: a floor cell's shadow carried
+    #: 21.9% relative noise rendered at the cell, 15.2% at 2x and 9.5% at 4x.
+    #: At the cell it read as splotches in the WebXR preview. The cost is the
+    #: square of this over the plan's own texels, and never more than a full
+    #: map per object.
     #:
-    #: The rays the shrink averages are not wasted: they buy exactly what the
-    #: same rays spent as camera samples at the cell would. Measured at one
-    #: budget per SHIPPED texel (the four production floors, GPU, two seeds):
-    #: 4x at AA 8 took 99s for 2.18% shadow noise, 2x at AA 16 117s for 2.10%,
-    #: 1x at AA 32 125s for 1.98% -- the same noise, and the texels the
-    #: cheaper way to spend it on a GPU. What the budget IS, and where it
-    #: goes, is the texture baker's (:meth:`TextureBaker._sampling_settings`).
+    #: The rays the shrink averages are not wasted: they buy what the same
+    #: rays spent as camera samples at the cell would (at one budget per
+    #: SHIPPED texel, 4x at AA 8, 2x at AA 16 and 1x at AA 32 baked 2.18 /
+    #: 2.10 / 1.98% shadow noise). 2x, not the 4x it was, since the tiers
+    #: bake four bounces (2026-10-01): on a production floor at AA 4 / GI 4,
+    #: 4x took 75 s for 0.39% shadow mottle and 2x 22 s for 0.52%, under a
+    #: third of the time for a third more mottle. What the budget IS, and
+    #: where it goes, is the texture baker's
+    #: (:meth:`TextureBaker._sampling_settings`).
     _ATLAS_SUPERSAMPLE: int = 2
 
     def bake_atlas(
@@ -1915,10 +1991,10 @@ class LightmapBaker(ptk.LoggingMixin):
     def _move_into_place(source: str, destination: str) -> None:
         """Move *source* onto *destination*, never deleting what is there first.
 
-        ``ptk.FileUtils.move_file`` stages it beside the destination and swaps it
-        in, so a failure leaves the destination's old file as it was -- the object
-        keeps its map -- and a swap that fails puts the source back, for the
-        caller's next name.
+        ``ptk.FileUtils.move_file`` replaces it in one rename (staged and swapped
+        in only across volumes), so a failure leaves the destination's old file as
+        it was -- the object keeps its map -- and a swap that fails puts the source
+        back, for the caller's next name.
 
         Raises:
             OSError: The move or the swap failed; *destination* is untouched.
@@ -2146,7 +2222,6 @@ class LightmapBaker(ptk.LoggingMixin):
         layout (:meth:`_plan_regions`): it is read in the region's frame and
         its published rect composed back onto the layout.
         """
-        import cv2
         import numpy as np
 
         regions = regions or {}
@@ -2178,7 +2253,7 @@ class LightmapBaker(ptk.LoggingMixin):
             # (bake_atlas), finished at its own size -- the whole map is its
             # cell -- and written opaque.
             src = mapping[objs[0]]
-            img = cv2.imread(src, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+            img = TextureBaker._read_exr(src)
             tile = img is not None and img.ndim == 3 and img.shape[2] == 4
             if tile:
                 img = self._finish_tile(img, img.shape[1::-1])
@@ -2217,7 +2292,7 @@ class LightmapBaker(ptk.LoggingMixin):
         cells: List[List[float]] = []  # placement rects (the layout's cells)
         placed: List[Tuple[str, List[float]]] = []  # published (engine) rects
         for obj, rect in zip(objs, rects):
-            img = cv2.imread(mapping[obj], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+            img = TextureBaker._read_exr(mapping[obj])
             if img is None:
                 self.logger.warning("Atlas: unreadable map for %s; skipping.", obj)
                 continue
@@ -2788,18 +2863,15 @@ class LightmapBaker(ptk.LoggingMixin):
         that can't be read is left untouched and logged -- the record is worth
         more than the multiplier.
         """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        try:
-            import cv2
-        except ImportError as e:
+        if TextureBaker._cv2() is None:
             self.logger.warning(
-                "Intensity %.3f NOT applied (cv2 unavailable): %s", intensity, e
+                "Intensity %.3f NOT applied: cv2 is not installed.", intensity
             )
             return
 
         for path in {os.path.abspath(p) for p in paths}:
             try:
-                img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+                img = TextureBaker._read_exr(path)
                 if img is None:
                     raise RuntimeError("unreadable EXR")
                 bgr = img[..., :3] if img.ndim == 3 else img
@@ -3194,11 +3266,9 @@ class LightmapBaker(ptk.LoggingMixin):
 
         Returns False (a no-op) when the image has no alpha channel.
         """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
-        import cv2
         import numpy as np
 
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        img = TextureBaker._read_exr(path)
         if img is None:
             raise RuntimeError(f"unreadable EXR: {path}")
         if img.ndim != 3 or img.shape[2] < 4:

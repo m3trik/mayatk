@@ -112,6 +112,17 @@ class TestRenderEffectsPanel(unittest.TestCase):
         self.assertEqual(self.ui.s000.value(), 24)
         self.assertAlmostEqual(self.ui.s004.value(), 0.5)
 
+    def test_a_whole_number_box_shows_the_nearest_whole_number(self):
+        """``setValue`` truncates a float on an integer box: a 0.57 duty is
+        56.99... percent and showed 56 (0.29 and 0.58 too)."""
+        for duty in (0.29, 0.57, 0.58):
+            self.Store.active().update_effect_recipe(pulse_duty=duty)
+            self.assertEqual(self.ui.s003.value(), round(duty * 100), duty)
+        self.Store.active().update_effect_recipe(fade_frames=12.6)
+        self.assertEqual(self.ui.s000.value(), 13)
+        self.Store.active().update_effect_recipe(pulse_period=2.86)
+        self.assertAlmostEqual(self.ui.s002.value(), 2.86, msg="decimals stay")
+
     def test_recipe_fields_never_restore_from_qsettings(self):
         """A restore lands after the recipe was read and would write the last
         value set in ANY scene over this one's."""
@@ -161,6 +172,55 @@ class TestRenderEffectsPanel(unittest.TestCase):
 
         self.slots.unfocus()
         self.assertFalse(self.ui.cmb_effect.isHidden())
+        self.assertEqual(self.ui.b000.text(), "Key Highlight Pulse")
+
+    def test_a_focused_highlight_s_key_says_what_each_mode_does(self):
+        """In Revise a focused highlight's Key re-colours -- the manifest's
+        re-key serves Create only -- yet it kept the manifest's "Apply to ..."
+        text: a mode switch never re-labelled it."""
+        self.slots.focus(
+            "highlight",
+            [],
+            title="Red_Door · S03",
+            apply=lambda: "",
+            apply_text="Apply to 'Red_Door' in S03",
+        )
+        self.addCleanup(self.slots.unfocus)
+        self.addCleanup(self.ui.cmb_mode_highlight.setCurrentIndex, 0)
+        self.assertEqual(self.ui.b000.text(), "Apply to 'Red_Door' in S03")
+        self.ui.cmb_mode_highlight.setCurrentIndex(1)  # Revise
+        self.assertEqual(self.ui.b000.text(), "Key Highlight Pulse")
+        self.ui.cmb_mode_highlight.setCurrentIndex(0)  # Create
+        self.assertEqual(self.ui.b000.text(), "Apply to 'Red_Door' in S03")
+
+    def test_a_focus_that_opens_in_revise_labels_key_for_revise(self):
+        """Every object already carrying the highlight opens the page in
+        Revise, where Key re-colours -- not the manifest's "Apply to ..."."""
+        from mayatk.mat_utils.render_opacity import render_effects_slots as slots_mod
+
+        # The named objects resolve (``ls(objects)``); the selection and the
+        # scene read empty, so nothing else here sees a node.
+        resolved = patch.object(
+            slots_mod.cmds,
+            "ls",
+            side_effect=lambda *args, **kwargs: ["|Red_Door"] if args else [],
+        )
+        carrying = patch.object(
+            slots_mod.RenderEffectsSlots,
+            "_carrying",
+            staticmethod(lambda channel, objects: list(objects)),
+        )
+        with resolved, carrying:
+            self.slots.focus(
+                "highlight",
+                ["Red_Door"],
+                title="Red_Door · S03",
+                apply=lambda: "",
+                apply_text="Apply to 'Red_Door' in S03",
+            )
+        self.addCleanup(self.slots.unfocus)
+        self.addCleanup(self.ui.cmb_mode_highlight.setCurrentIndex, 0)
+        self.assertEqual(self.ui.cmb_mode_highlight.currentData(), "revise")
         self.assertEqual(self.ui.b000.text(), "Key Highlight Pulse")
 
     def test_hiding_the_panel_ends_the_focus(self):

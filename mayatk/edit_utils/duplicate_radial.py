@@ -8,8 +8,8 @@ import pythontk as ptk
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 # from this package:
 from mayatk.core_utils.preview import Preview
 from mayatk.core_utils._core_utils import CoreUtils

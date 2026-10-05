@@ -1249,17 +1249,17 @@ class _TextureFilesInternal:
             )
 
         planned, kept = set(), set()  # a texture several nodes read: once
+        foreign = []  # another set's maps: left alone, reported once below
         for node in file_nodes:
             name = names[node]
             if not name:
                 plan["skipped"].append(f"{node}: no texture path")
                 continue
-            if (
-                not old_base
-                or ptk.MapFactory.get_base_texture_name(name).lower()
-                != old_base.lower()
-            ):
-                continue  # another set's map
+            if not old_base:
+                continue  # no set to follow (reported above)
+            if ptk.MapFactory.get_base_texture_name(name).lower() != old_base.lower():
+                foreign.append(name)
+                continue
             if not name.lower().startswith(old_base.lower()):
                 plan["skipped"].append(
                     f"{name}: does not start with its base name {old_base!r}; "
@@ -1290,6 +1290,12 @@ class _TextureFilesInternal:
                 plan["skipped"].append(f"{node}: a node that cannot be renamed")
             else:
                 plan["file_nodes"].append((node, node_name))
+        foreign = list(dict.fromkeys(foreign))
+        if foreign:
+            plan["skipped"].append(
+                f"{', '.join(foreign)}: another texture set than {old_base!r} -- "
+                f"left as {'it is' if len(foreign) == 1 else 'they are'}"
+            )
 
         # The set's lightmap follows the set: bound by name, it is named after it.
         if plan["textures"] and lightmaps is not None:

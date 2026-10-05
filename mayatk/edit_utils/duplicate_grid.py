@@ -4,8 +4,8 @@ from __future__ import annotations
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 from typing import List, Tuple, Union
 import pythontk as ptk
 from mayatk.display_utils._display_utils import DisplayUtils

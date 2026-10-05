@@ -9,6 +9,9 @@ mayatk loads a plug-in around it. The real loads are ``test/test_plugins.py``.
 """
 
 import ast
+import contextlib
+import importlib.util
+import io
 import os
 import sys
 import unittest
@@ -98,6 +101,24 @@ class TestSearchPath(_DoorCase):
     def test_a_loaded_plugin_is_available(self):
         self.loaded.add("mtoa")
         self.assertTrue(Plugins.available("mtoa"))
+
+
+class TestImportWithoutMaya(unittest.TestCase):
+    def test_the_import_is_silent_and_leaves_cmds_none(self):
+        """Imports have no side effects: the registry generator, the docs
+        tooling and these mock tests import the door without Maya, and its
+        guard printed the file and the ImportError to stdout every time."""
+        spec = importlib.util.spec_from_file_location(
+            "_plugins_without_maya", _plugins.__file__
+        )
+        module = importlib.util.module_from_spec(spec)
+        printed = io.StringIO()
+        no_maya = {"maya": None, "maya.cmds": None, "maya.mel": None}
+        with patch.dict(sys.modules, no_maya), contextlib.redirect_stdout(printed):
+            spec.loader.exec_module(module)
+        self.assertEqual(printed.getvalue(), "")
+        self.assertIsNone(module.cmds)
+        self.assertIsNone(module.mel)
 
 
 class TestOneDoor(unittest.TestCase):

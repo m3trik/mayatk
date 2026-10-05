@@ -8,8 +8,8 @@ import pythontk as ptk
 
 try:
     from maya import cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils.attributes._attributes import Attributes

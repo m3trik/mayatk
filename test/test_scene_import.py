@@ -3103,6 +3103,33 @@ class TestRebuildMaterialShaderType(MayaTkTestCase):
         self.assertEqual(engine.requested, ["stingray", "standard_surface"])
 
 
+class TestRebuildMaterialRescue(MayaTkTestCase):
+    def test_a_rescued_normal_lands_on_the_slot_the_node_has(self):
+        """The rescue gate read the DECLARED slot (openPBR ``geometryNormal``;
+        Maya 2025's node has ``normalCamera``), so a product-named normal map was
+        dropped. Fixed: 2026-10-04 (``resolve_live_slot``)."""
+        from PIL import Image
+
+        store = ptk.TempArtifacts("scene_import_rescue", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "panel.png").replace("\\", "/")
+        Image.new("RGB", (4, 4)).save(path)
+        sg = si.BlenderSceneImport._rebuild_material(
+            [], "M_rescue", {"normal": path}, shader_type="open_pbr"
+        )
+        (shader,) = cmds.listConnections(f"{sg}.surfaceShader")
+        if cmds.nodeType(shader) != "openPBRSurface":
+            self.skipTest("openPBRSurface unavailable in this session")
+        slot = next(
+            a
+            for a in ("geometryNormal", "normalCamera")
+            if cmds.attributeQuery(a, node=shader, exists=True)
+        )
+        self.assertTrue(
+            cmds.listConnections(f"{shader}.{slot}", source=True, destination=False)
+        )
+
+
 class TestSceneImportOrchestration(MayaTkTestCase):
     """convert -> import -> manifest rebuild -> cleanup, against real nodes."""
 

@@ -742,10 +742,10 @@ class TestApplyTakesShipsEveryChannel(MayaTkTestCase):
         FbxUtils.reset_takes()
         super().tearDown()
 
-    def _export(self):
+    def _export(self, resample=True):
         path = os.path.join(self.artifacts.dir_path(), "takes.fbx")
         mel.eval("FBXExportInAscii -v false")  # read back by the binary reader
-        FbxUtils.apply_takes(self.takes)
+        FbxUtils.apply_takes(self.takes, resample=resample)
         cmds.select(self.nodes, replace=True)
         cmds.file(path, force=True, options="v=0;", type="FBX export", es=True)
         return ptk.FbxFile.load(path, decode_arrays=("KeyTime",), raw_payloads=False)
@@ -782,6 +782,74 @@ class TestApplyTakesShipsEveryChannel(MayaTkTestCase):
             FbxUtils.export_flag("FBXExportBakeResampleAnimation"),
             "reset_takes left Resample All on for every later export",
         )
+
+    def test_resample_off_overrules_a_preset_that_resamples(self):
+        """``resample=False`` is the write's decision, not a request: a loaded
+        preset with Resample All on kept it on, so a GLB-only run's
+        intermediate opened its whole-timeline take on the bake range while
+        the published clip origin stayed on the keys. Off for the write -- the
+        authored keys ship -- and the preset's ON back after it."""
+        prior = FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+        self.addCleanup(
+            mel.eval, f"{FbxUtils.RESAMPLE_ALL} -v {'true' if prior else 'false'}"
+        )
+        mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")  # what the preset did
+
+        curves = self._export(resample=False).take_curves()["Take 001"]
+
+        tick = ptk.FbxFile.TICKS_PER_SECOND / 24.0
+        lift = [span[0] for key, span in curves.items() if key[0] == "LIFT"]
+        self.assertTrue(lift, "the whole-timeline take does not animate LIFT")
+        self.assertEqual(
+            min(round(first / tick) for first in lift),
+            10,
+            "LIFT's curve was resampled from the bake range, not shipped as keyed",
+        )
+        FbxUtils.reset_takes()
+        self.assertTrue(
+            FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL),
+            "the preset's Resample All was not given back after the write",
+        )
+
+
+class TestSessionHookWarnsOfAnAsciiCarrier(MayaTkTestCase):
+    """A File > Export writes in the format its dialog chose; the Scene
+    Exporter's binary pin (``SceneExporter._pin_carrier_requirements``) never
+    reaches it. Unity's ASCII FBX reader loses a carrier channel past ~6 KB,
+    so a write in ASCII from a scene holding ``data_export`` -- the carrier
+    the hook publishes -- is warned about (not overruled: the hook cannot tell
+    whether this write ships the carrier at all)."""
+
+    LOGGER = "mayatk.env_utils.fbx_utils"
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        self.data_nodes = DataNodes
+        FbxUtils.load_plugin()
+        ascii_ = FbxUtils.export_flag("FBXExportInAscii")
+        self.addCleanup(
+            mel.eval, f"FBXExportInAscii -v {'true' if ascii_ else 'false'}"
+        )
+        self.addCleanup(FbxUtils.reset_takes)
+
+    def _before_export(self, ascii_):
+        mel.eval(f"FBXExportInAscii -v {'true' if ascii_ else 'false'}")
+        FbxUtils._on_before_export()
+
+    def test_an_ascii_write_of_a_scene_with_the_carrier_is_warned(self):
+        self.data_nodes.get_export_node(create=True)
+        with self.assertLogs(self.LOGGER, "WARNING") as logs:
+            self._before_export(ascii_=True)
+        said = " ".join(logs.output)
+        for word in ("ASCII", self.data_nodes.EXPORT, "Unity", "binary"):
+            self.assertIn(word, said)
+
+    def test_a_binary_write_says_nothing(self):
+        self.data_nodes.get_export_node(create=True)
+        with self.assertNoLogs(self.LOGGER, "WARNING"):
+            self._before_export(ascii_=False)
 
 
 if __name__ == "__main__":

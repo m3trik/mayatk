@@ -41,9 +41,8 @@ from typing import Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 import pythontk as ptk
 

@@ -6,12 +6,11 @@ from functools import wraps
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     # Bind the name (house policy) so a no-Maya call site fails with a clear
     # AttributeError on None rather than a NameError on an undefined global --
     # which matters now that two error paths here report through cmds.warning.
     cmds = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

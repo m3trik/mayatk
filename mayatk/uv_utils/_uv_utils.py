@@ -6,8 +6,8 @@ from typing import List, Optional, Sequence, Tuple, Union
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # From this package:

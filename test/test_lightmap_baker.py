@@ -12,6 +12,7 @@ written back as opaque RGB.
 """
 
 import contextlib
+import errno
 import os
 import json
 import shutil
@@ -31,6 +32,7 @@ from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 from mayatk.light_utils.lightmap_baker.lightmap_baker_slots import LightmapBakerSlots
 from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 from mayatk.light_utils.lightmap_baker._probe_placement import ProbePlacement
+from mayatk.light_utils._light_utils import LightUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 from mayatk.mat_utils.bake_sets import LightmapExcludeSet
@@ -103,13 +105,16 @@ class _FakeBaker:
         self.card_diffuse = None
         self.called_panorama = None
 
-    def render_panorama(self, position, path, width=1024, hide=None):
+    def render_panorama(self, position, path, width=1024, hide=None, lights=None):
         """A panorama as ``TextureBaker.render_panorama`` writes one: 2:1, every
-        direction a hit (alpha 1), the call recorded."""
+        direction a hit (alpha 1), the call recorded -- with the lights that
+        were on as it rendered."""
         self.called_panorama = {
             "position": [float(c) for c in position],
             "width": width,
             "hide": list(hide or []),
+            "lights": list(lights or []),
+            "lit": LightUtils.contributing_lights(),
         }
         cv2, np = _cv2()
         cv2.imwrite(path, np.full((width // 2, width, 4), 0.5, np.float32))
@@ -3637,9 +3642,16 @@ class TestNeverWritesOverAnotherObjectsMap(MayaTkTestCase):
         source = self._work_map("Fail_Lightmap.exr")
         claims = LightmapRecords.claims()
 
-        with mock.patch(
-            "mayatk.light_utils.lightmap_baker.lightmap_baker.shutil.move",
-            side_effect=OSError(28, "No space left on device"),
+        with (
+            mock.patch(
+                "mayatk.light_utils.lightmap_baker.lightmap_baker.shutil.move",
+                side_effect=OSError(28, "No space left on device"),
+            ),
+            mock.patch.object(
+                ptk.FileUtils,
+                "replace_file",
+                side_effect=OSError(errno.EXDEV, "Cross-device link"),
+            ),
         ):
             placed = LightmapBaker()._place_unpacked(
                 {obj: (source, None)}, self.tmp, claims=claims
@@ -4071,7 +4083,10 @@ class TestReflectionProbe(MayaTkTestCase):
         self.assertAlmostEqual(call["position"][0], -300.0, places=3)
         self.assertAlmostEqual(call["position"][1], 200.0, places=3)
         self.assertAlmostEqual(call["position"][2], -150.0, places=3)
-        self.assertEqual(call["hide"], [prop], "what moves is see-through to it")
+        # What moves is see-through to it: its own mesh, never a child's.
+        self.assertEqual(
+            call["hide"], cmds.listRelatives(prop, shapes=True, fullPath=True)
+        )
         self.assertEqual(call["width"], 512, "half the bake's resolution")
 
         probe = LightmapRecords.probe()
@@ -4113,7 +4128,9 @@ class TestReflectionProbe(MayaTkTestCase):
         self.assertAlmostEqual(call["position"][2], -150.0, places=3)
         # Still see-through to it, wherever it stands: in an open scene what
         # moves is in the probe's view however far off it is parked.
-        self.assertIn(cmds.ls(outside, long=True)[0], call["hide"])
+        self.assertIn(
+            cmds.listRelatives(outside, shapes=True, fullPath=True)[0], call["hide"]
+        )
 
     def test_a_table_under_the_probe_is_furniture_not_the_floor(self):
         room, table, _prop = self._room()
@@ -4214,6 +4231,162 @@ class TestReflectionProbe(MayaTkTestCase):
         self.assertIsNone(fake.called_panorama)
         self.assertIsNone(LightmapRecords.probe())
         self.assertNotIn("probe", json.loads(LightmapRecords._record().text))
+
+    def test_a_probe_that_fails_never_loses_the_bake(self):
+        """The probe renders AFTER the maps are committed: an arnoldRender
+        error, or a probe file held open, raised out of the finished bake and
+        the panel lost its report. Logged; the bake stands. Added: 2026-10-04
+        """
+        room, table, _prop = self._room()
+        fake = _FakeBaker()
+        fake.render_panorama = mock.Mock(side_effect=RuntimeError("arnoldRender"))
+        with self.assertLogs(LightmapBaker.logger, level="WARNING") as caught:
+            result = LightmapBaker(resolution=1024, baker=fake).bake(
+                [room, table], packing="per_object", output_dir=self.tmp
+            )
+        self.assertEqual(sorted(result.maps), sorted([room, table]))
+        self.assertIsNone(result.probe)
+        self.assertEqual(sorted(LightmapRecords.baked_objects()), sorted([room, table]))
+        self.assertTrue(
+            any("Reflection probe not captured" in line for line in caught.output),
+            caught.output,
+        )
+
+    def test_a_cancelled_bake_captures_no_probe(self):
+        """A cancel keeps the maps it finished, but must not start one more
+        render -- and one the artist cannot stop. Added: 2026-10-04"""
+
+        class _Cancelling(_FakeBaker):
+            """Asks on_progress before each object, as TextureBaker does."""
+
+            def bake(self, objects, on_progress=None, **kwargs):
+                done = {}
+                for i, obj in enumerate(objects):
+                    if on_progress(i, len(objects), obj) is False:
+                        break
+                    done.update(super().bake([obj], **kwargs))
+                return done
+
+        room, table, _prop = self._room()
+        fake = _Cancelling()
+        result = LightmapBaker(resolution=1024, baker=fake).bake(
+            [room, table],
+            packing="per_object",
+            output_dir=self.tmp,
+            on_progress=lambda done, _total, _name: done < 1,
+        )
+        self.assertEqual(len(result.maps), 1, "what finished before the cancel")
+        self.assertIsNone(result.probe)
+        self.assertIsNone(fake.called_panorama, "a render after the cancel")
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_the_probe_sees_every_light_an_arnold_one_too(self):
+        """``ls(lights=True)`` lists no Arnold light (an aiAreaLight is no
+        ``light``), so a room's fixtures stayed invisible to the probe's
+        camera and it showed none of their radiance. Added: 2026-10-04"""
+        room, table, _prop = self._room()
+        fixture = cmds.listRelatives(
+            cmds.shadingNode("aiAreaLight", asLight=True), shapes=True, fullPath=True
+        )[0]
+        native = cmds.listRelatives(
+            cmds.shadingNode("pointLight", asLight=True), shapes=True, fullPath=True
+        )[0]
+        _result, fake = self._bake([room, table])
+        self.assertIn(fixture, fake.called_panorama["lights"])
+        self.assertIn(native, fake.called_panorama["lights"])
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_an_environment_the_bake_leaves_out_stays_out_of_its_probe(self):
+        """Include Environment off muted the sky dome for the maps alone: the
+        probe still rendered it -- a sky lift on what it lights that the maps
+        lack -- and its placement still counted it as sky. Added: 2026-10-04
+        """
+        room, table, _prop = self._room()
+        dome = cmds.shadingNode("aiSkyDomeLight", asLight=True)
+        dome_shape = cmds.listRelatives(dome, shapes=True, fullPath=True)[0]
+        real_place = ProbePlacement.place
+        skies = []
+
+        def place(placement):
+            skies.append(placement._light_points()[1])
+            return real_place(placement)
+
+        for include in (True, False):
+            with self.subTest(include_environment=include):
+                del skies[:]
+                with mock.patch.object(
+                    ProbePlacement, "place", autospec=True, side_effect=place
+                ):
+                    _result, fake = self._bake(
+                        [room, table], include_environment=include
+                    )
+                self.assertEqual(
+                    dome_shape in fake.called_panorama["lit"], include, "the render"
+                )
+                self.assertEqual(skies, [include], "the placement's sky")
+                self.assertTrue(cmds.getAttr(dome + ".visibility"), "put back")
+
+    def test_an_instance_of_a_baked_mesh_is_never_hidden(self):
+        """The render hides a MESH (its shape's primaryVisibility), and with it
+        every instance: hiding the unbaked instance -- the mesh's first path,
+        the only one a plain listing names -- hid its baked twin from the
+        probe. Added: 2026-10-04"""
+        room, table, _prop = self._room()
+        original = cmds.polyCube(name="pbOriginal", width=30, height=30, depth=30)[0]
+        cmds.move(200, 100, 200, original)
+        twin = cmds.instance(original, name="pbTwin")[0]
+        cmds.move(-200, 100, 200, twin)
+        twin = cmds.ls(twin, long=True)[0]
+        _result, fake = self._bake([room, table, twin])
+        twin_mesh = set(
+            cmds.ls(cmds.listRelatives(twin, shapes=True, fullPath=True), uuid=True)
+        )
+        self.assertFalse(
+            twin_mesh & self._hidden_meshes(fake), "the baked twin was hidden"
+        )
+
+    def test_a_baked_child_of_an_unbaked_mesh_stays_in_view(self):
+        """``hide`` named the unbaked TRANSFORM, and the render hides every mesh
+        under what it is given: the baked child went with its unbaked parent.
+        The parent's own mesh alone is hidden. Added: 2026-10-04"""
+        room, table, _prop = self._room()
+        holder = cmds.polyCube(name="pbHolder", width=40, height=10, depth=40)[0]
+        cmds.move(250, 100, 250, holder)
+        held = cmds.polyCube(name="pbHeld", width=20, height=20, depth=20)[0]
+        held = cmds.ls(cmds.parent(held, holder)[0], long=True)[0]
+        holder = cmds.ls(holder, long=True)[0]
+        _result, fake = self._bake([room, table, held])
+        hidden = self._hidden_meshes(fake)
+
+        def meshes(node):
+            return set(
+                cmds.ls(cmds.listRelatives(node, shapes=True, fullPath=True), uuid=True)
+            )
+
+        self.assertFalse(meshes(held) & hidden, "the baked child was hidden")
+        self.assertTrue(meshes(holder) <= hidden, "what moves is see-through")
+
+    @staticmethod
+    def _hidden_meshes(fake):
+        """The meshes (by uuid) the panorama hides, expanded as
+        ``TextureBaker.render_panorama`` expands its *hide*."""
+        paths = [
+            shape
+            for node in fake.called_panorama["hide"]
+            for shape in cmds.ls(
+                node, dag=True, type="mesh", noIntermediate=True, long=True
+            )
+            or []
+        ]
+        return set(cmds.ls(paths, uuid=True) or []) if paths else set()
+
+    def test_a_bake_leaves_the_selection_as_it_found_it(self):
+        """The bake's white card took the selection when it was made, and
+        deleting it after left nothing selected. Added: 2026-10-04"""
+        room, table, prop = self._room()
+        cmds.select(prop)
+        self._bake([room, table])
+        self.assertEqual(cmds.ls(selection=True, long=True), [prop])
 
 
 class TestProbePlacement(MayaTkTestCase):
@@ -4678,6 +4851,57 @@ class TestSupersededMaps(MayaTkTestCase):
         path = self._bake([cube]).maps[cube]
         LightmapRecords.revert([cube])
         self.assertTrue(os.path.exists(path))
+
+    # -- the reflection probe follows the same rules ----------------------------
+
+    def test_a_rebake_into_another_folder_sets_the_old_probe_aside(self):
+        """Same scene, so the same probe NAME, in another folder: the probe was
+        retired only when its name changed, and the old one stayed, read by
+        nothing. Added: 2026-10-04"""
+        cube = self._cube("supProbeFolder")
+        old = self._bake([cube], folder="first").probe
+        new = self._bake([cube], folder="second").probe
+        self.assertEqual(os.path.basename(old), os.path.basename(new))
+        self.assertTrue(os.path.isfile(new))
+        self.assertFalse(os.path.exists(old), "the old probe stayed behind")
+        aside = os.path.join(
+            os.path.dirname(old),
+            ptk.FileDependencies.SUPERSEDED_DIR,
+            os.path.basename(old),
+        )
+        self.assertTrue(os.path.isfile(aside), "set aside, never deleted")
+
+    def test_a_same_place_rebake_keeps_the_probe(self):
+        cube = self._cube("supProbeSame")
+        old = self._bake([cube]).probe
+        new = self._bake([cube]).probe
+        self.assertEqual(self._paths([old]), self._paths([new]))
+        self.assertTrue(os.path.isfile(new))
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(os.path.dirname(new), ptk.FileDependencies.SUPERSEDED_DIR)
+            )
+        )
+
+    def test_the_probe_baked_before_the_first_save_is_set_aside_once_saved(self):
+        """``untitled_Probe.exr`` is the scene's own once saved (the first save
+        stamps it), and the saved scene's probe takes its place."""
+        cube = self._cube("supProbeSave")
+        old = self._bake([cube]).probe
+        self._save_as("probe_first.ma")
+        new = self._bake([cube]).probe
+        self.assertNotEqual(os.path.basename(old), os.path.basename(new))
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.isfile(new))
+
+    def test_the_probe_a_save_as_copys_source_reads_is_kept(self):
+        cube = self._cube("supProbeCopy")
+        self._save_as("probe_source.ma")
+        old = self._bake([cube]).probe
+        self._save_as("probe_copy.ma", write=False)
+        new = self._bake([cube]).probe
+        self.assertNotEqual(os.path.basename(old), os.path.basename(new))
+        self.assertTrue(os.path.isfile(old), "the source scene still reads it")
 
 
 class TestRevertIsOneUndo(MayaTkTestCase):

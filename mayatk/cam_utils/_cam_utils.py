@@ -5,8 +5,8 @@ from __future__ import annotations
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # from this package:

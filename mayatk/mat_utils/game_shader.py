@@ -7,8 +7,8 @@ from qtpy import QtCore
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 import pythontk as ptk
 
 # from this package:
@@ -759,7 +759,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             **kwargs: Configuration overrides (e.g. shader_type, normal_type, etc.)
 
         Returns:
-            The created shader node(s) (Stingray PBS or Standard Surface)
+            The network's shading GROUP (its shader, should it have none), or
+            None when nothing was built. Unnamed textures spanning several sets
+            build a network per set and return a list of those, one per set.
         """
         if not textures:
             self.logger.error("No textures given to create_network.")
@@ -2638,7 +2640,8 @@ class GameShaderSlots(GameShader):
         """Assign the one material just built to ``selection``.
 
         Parameters:
-            shaders: The ``create_network`` result (a node or a list of them).
+            shaders: The ``create_network`` result (a node or a list of them):
+                each network's shading group, or a material.
             selection: The objects/components selected before the build.
         """
         made = [s for s in ptk.make_iterable(shaders) if s]
@@ -2653,9 +2656,15 @@ class GameShaderSlots(GameShader):
                 "Set a Material Name to merge them into one."
             )
             return
-        shader = CoreUtils.short_name(made[0])
+        material = str(made[0])
+        # ``assign_mat`` takes the MATERIAL. Handed the network's shading group
+        # (what ``create_network`` returns), it built a ``<group>SG`` beside it
+        # and failed wiring the group's absent ``outColor``: nothing assigned.
+        if cmds.ls(material, type="shadingEngine"):
+            material = next(iter(MatUtils._sg_shaders(material)), material)
+        shader = CoreUtils.short_name(material)
         try:
-            MatUtils.assign_mat(selection, shader)
+            MatUtils.assign_mat(selection, material)
         except Exception as e:
             self.logger.error(f"Assign to Selection failed: {shader}: {e}")
             return

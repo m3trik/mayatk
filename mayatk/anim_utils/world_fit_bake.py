@@ -23,9 +23,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:  # pragma: no cover - Maya environment required
+except ImportError:  # pragma: no cover - Maya environment required
     cmds = None
-    print(__file__, error)
 
 
 class WorldFitBake:

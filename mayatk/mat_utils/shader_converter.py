@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 import pythontk as ptk
 
@@ -221,8 +221,10 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
                 ``"standard_surface"`` or ``"open_pbr"``.
             opacity_mode (str, optional): StingrayPBS only. ``"masked"``
                 (alpha cutout), ``"transparent"`` (alpha blend) or ``"none"``.
-                Left None, a material with an opacity channel gets ``"masked"``
-                and one without gets ``"none"``.
+                Left None it follows the opacity channel: a textured one gets
+                ``"masked"``, a constant one ``"transparent"`` (only a partial
+                constant is a channel -- opaque is every material's default)
+                and none ``"none"``.
             delete_source (bool): Delete the source shader once its geometry has
                 been re-assigned. False leaves it orphaned in the scene.
             name_suffix (str): Appended to the new shader's name. Empty reuses
@@ -363,7 +365,40 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
                 and verbose
             ):
                 cls.logger.info(f"  {logical} = {source['value']}")
+        emission = channels.get("emission")
+        if emission and ("emission" in connected or cls._is_lit(emission.get("value"))):
+            cls._open_emission(shader, node_type)
         return connected
+
+    @staticmethod
+    def _is_lit(value: Any) -> bool:
+        """Whether a carried constant emits: any channel above black."""
+        if value is None:
+            return False
+        values = value if isinstance(value, (tuple, list)) else (value,)
+        return any(float(v) > 0.0 for v in values)
+
+    @staticmethod
+    def _open_emission(shader: str, node_type: str) -> None:
+        """Open the target's separate emission weight once an emission landed
+        on its colour: standardSurface / aiStandardSurface default the weight
+        to 0 and openPBR its luminance, so the colour alone renders black.
+        A ``multiply`` weight opens at 1.0 -- a carried constant already holds
+        the source's weight in its colour (:meth:`ShaderAttributeMap.read_constant`);
+        a mapped emission plays at full weight -- and a ``gate`` opens at 1000
+        nits, as ``GameShader`` wires it. A weight the target already has is
+        left as it is."""
+        entry = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS.get(node_type)
+        if entry is None:
+            return
+        attr, mode = entry
+        if not cmds.attributeQuery(attr, node=shader, exists=True):
+            return
+        try:
+            if not cmds.getAttr(f"{shader}.{attr}"):
+                cmds.setAttr(f"{shader}.{attr}", 1.0 if mode == "multiply" else 1000.0)
+        except (RuntimeError, ValueError):
+            pass
 
     @staticmethod
     def _set_constant(shader: str, attr: Optional[str], value: Any) -> bool:

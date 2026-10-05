@@ -241,28 +241,55 @@ class ManifestTableMixin:
         self._behaviors_edited = True
         self._update_build_button()
 
-    def _reapply_behavior(self, step_id: str, obj: BuilderObject) -> None:
+    def _reapply_behavior(
+        self, step_id: str, obj: BuilderObject, raise_errors: bool = False
+    ) -> bool:
         """Re-apply every behavior of one object on its paired shot, as one
         undo step -- ``ShotManifest.reapply_object``: its previous keys out,
-        the new ones recorded as the manifest's own."""
+        the new ones recorded as the manifest's own.
+
+        Parameters:
+            raise_errors: Also raise why nothing was re-applied, for a caller
+                that reports it itself (Render Effects' focused Key).
+
+        Returns:
+            Whether it was re-applied.  Why not goes on the footer: no shot
+            pairs with the step yet, the scene holds no object of that name
+            (or several), or an error.
+        """
         try:
             store = self._active_store()
             shot = self._pairing().shots.get(step_id)
             if store is None or shot is None:
-                self._set_footer(
-                    f"No shot pairs with '{step_id}' yet -- build first.",
-                    color=ERROR_COLOR,
-                )
-                return
-            with store.scene_edit("manifest_reapply"):
-                self._manifest(store).reapply_object(shot, obj)
-            # Re-assess so the UI reflects the fixed state.  Skip the
-            # selected-keys guard -- we just applied known behaviors and only
-            # need a status refresh.
-            self.assess(skip_key_check=True)
+                problem = f"No shot pairs with '{step_id}' yet -- build first."
+            else:
+                with store.scene_edit("manifest_reapply"):
+                    applied = self._manifest(store).reapply_object(shot, obj)
+                if applied:
+                    problem = None
+                elif store.resolve_member(obj.name)[1] == "ambiguous":
+                    problem = (
+                        "Nothing re-applied: several scene objects are named "
+                        f"'{obj.name}'."
+                    )
+                else:
+                    problem = f"Nothing re-applied: '{obj.name}' is not in the scene."
+            if problem is None:
+                # Re-assess so the UI reflects the fixed state.  Skip the
+                # selected-keys guard -- we just applied known behaviors and
+                # only need a status refresh.
+                self.assess(skip_key_check=True)
+                return True
         except Exception as exc:
             self.logger.error("Apply behavior failed: %s", exc)
             self._set_footer(f"Error: {exc}", color=ERROR_COLOR)
+            if raise_errors:
+                raise
+            return False
+        self._set_footer(problem, color=ERROR_COLOR)
+        if raise_errors:
+            raise RuntimeError(problem)
+        return False
 
     # -- table population --------------------------------------------------
 

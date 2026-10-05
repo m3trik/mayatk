@@ -174,11 +174,12 @@ class MatManifest(ptk.HelpMixin):
             if not file_node:
                 continue
 
-            # ShaderAttributeMap owns the plug mechanics (arity broadcast +
-            # alpha-source prep) -- this used to retry a failed connection on
-            # "outColor", which swapped the SOURCE data to make the types line
-            # up and so wired a texture's RGB into opacity (color drove
-            # transparency on every rescued cutout material).
+            # ShaderAttributeMap owns the plug mechanics (arity broadcast,
+            # alpha-source prep, the slot's ShaderFX ``use_*`` toggle) -- this
+            # used to retry a failed connection on "outColor", which swapped the
+            # SOURCE data to make the types line up and so wired a texture's RGB
+            # into opacity (color drove transparency on every rescued cutout
+            # material).
             if not ShaderAttributeMap.connect_channel(
                 file_node, field, mat_name, shader_type=node_type
             ):
@@ -186,15 +187,6 @@ class MatManifest(ptk.HelpMixin):
                     f"Could not reconnect {file_node} -> {full_attr} ({field})"
                 )
                 continue
-
-            # Auto-enable the corresponding use_*_map toggle.
-            if attr_name.startswith("TEX_"):
-                toggle = attr_name.replace("TEX_", "use_", 1)
-                if cmds.objExists(f"{mat_name}.{toggle}"):
-                    try:
-                        cmds.setAttr(f"{mat_name}.{toggle}", 1.0)
-                    except Exception:
-                        pass
             restored += 1
 
         if restored:

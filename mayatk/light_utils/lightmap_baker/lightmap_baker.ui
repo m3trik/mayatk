@@ -201,7 +201,7 @@ A selected group excludes every mesh under it; with nothing selected, the set is
         <property name="toolTip">
          <string>Packing — how the baked maps are laid out.
 
-Atlas by Material (default) — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. The layout is planned up front, so each object bakes at 4x the size it will occupy (never above a full map) instead of a full map per object: the downscale into the atlas is what averages Arnold's sampling noise.
+Atlas by Material (default) — objects sharing a primary material are consolidated into one shared EXR (Resolution becomes the shared atlas size), and each object gets an area-weighted atlas rect bound at engine time (Unity's lightmapScaleOffset / glTF KHR_texture_transform) — UVs are never edited, and instances are fully supported: every copy keeps its own rect and its own lighting. Fewer textures, no naming collisions, more efficient texel use for many small objects. The layout is planned up front, so each object bakes at 2x the size it will occupy (never above a full map) instead of a full map per object: the downscale into the atlas is what averages Arnold's sampling noise.
 
 Per-Object — one lightmap texture per object at the full Resolution. Best per-object detail; right for hero assets or small selections.
 
@@ -505,7 +505,7 @@ The folder is created if it doesn't exist. Browsing to a folder inside sourceima
            <property name="toolTip">
             <string>Preset — this panel's bake settings under a name: Packing, Reflection Probe, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Environment, Denoise and Beside Material Textures.
 
-   The built-ins (italic, read-only) — preview, mobile, desktop — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
+   The built-ins (italic, read-only) — preview, mobile, desktop, hero — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
 
    Not saved: Scope, Exclude, Processor, Output Directory and Name — they belong to a scene or a machine. A headless bake reads the same presets: LightmapBaker.from_preset(name).</string>
            </property>

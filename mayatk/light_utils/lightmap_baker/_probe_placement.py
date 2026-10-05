@@ -47,9 +47,8 @@ from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 from mayatk.light_utils._light_utils import LightUtils
 

@@ -270,7 +270,6 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         auto_create: bool = True,
         spec: ChannelSpec = HIGHLIGHT,
         whole_frames: bool = True,
-        replace: bool = True,
     ) -> List[str]:
         """Key a repeating bright/dim pulse on the channel over ``start..end``.
 
@@ -318,10 +317,6 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 cycle still advances by the exact *period*, so only each key's
                 own placement is rounded. Pass ``False`` for the exact
                 sub-frame cadence.
-            replace: Clear the channel's keys inside the pulse's window first
-                (the default) -- an explicit keying replaces the pulse it lands
-                on. ``False`` keys over them, for a caller that has taken out
-                exactly its own keys already (the manifest's build).
 
         Returns:
             The keyed objects' short names.
@@ -353,8 +348,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
         for obj in objects:
             if not cls.has_channel(obj, spec):
                 continue
-            if replace:
-                cmds.cutKey(cls._long_plug(obj, spec.name), time=window, clear=True)
+            # An explicit keying replaces the pulse it lands on.
+            cmds.cutKey(cls._long_plug(obj, spec.name), time=window, clear=True)
             # A blink on the presence channel stays one: no visibility mirror.
             cls.write_keys(obj, plan, spec, mirror=False)
             for stop, value in (("hi", color), ("lo", dim_color)):

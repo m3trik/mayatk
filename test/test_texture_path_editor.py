@@ -3266,7 +3266,63 @@ class TestRenameFromTheEditor(MayaTkTestCase):
             isChecked=lambda: on, option_box=SimpleNamespace(menu=flyout)
         )
 
+    def _project(self, folder=None):
+        """Open *folder* (default: the textures' own) as the scene's project."""
+        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
+        cmds.workspace(folder or self.dir, openWorkspace=True)
+
+    def _env_cube(self):
+        """Another set's map on the material: an environment cube's file node."""
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        with open(os.path.join(self.dir, "env_cube.dds"), "wb") as f:
+            f.write(b"CUBE")
+        cube = cmds.shadingNode("file", asTexture=True, name="env_cube_file")
+        Attributes.set_plug_literal(
+            f"{cube}.fileTextureName", f"{self.dir}/env_cube.dds"
+        )
+        cmds.connectAttr(f"{cube}.outAlpha", f"{self.mat}.translucence")
+        return cube
+
+    def _edit_cell(self, col, text, file_node):
+        """Type *text* into row 0's cell *col* and commit it, as the table does
+        (``handle_cell_edit``): the name cells keep the old name in UserRole."""
+
+        class Item:
+            def __init__(self, value):
+                self.value, self.role = value, value
+
+            def text(self):
+                return self.value
+
+            def setText(self, value):
+                self.value = value
+
+            def data(self, _role):
+                return self.role
+
+            def setData(self, _role, value):
+                self.role = value
+
+        cells = {
+            0: Item(self.mat),
+            1: Item(cmds.getAttr(f"{file_node}.fileTextureName")),
+            2: Item(file_node),
+        }
+        cells[col].setText(text)
+        self.slot.sb.QtCore.Qt = SimpleNamespace(UserRole=256)
+        self.slot.ui.tbl000 = SimpleNamespace(
+            item=lambda _row, column: cells.get(column),
+            blockSignals=lambda _on: False,
+            apply_formatting=lambda: None,
+        )
+        self.slot._lightmap_rows = {}
+        self.slot._footer_controller = None
+        self.slot.handle_cell_edit(0, col)
+        return cells
+
     def test_a_path_edit_renames_only_when_the_name_alone_changed_to_nothing(self):
+        self._project()
         stored = f"{self.dir}/rock_Normal.png"
         self.assertTrue(self.slot._is_file_rename(stored, f"{self.dir}/new.png"))
         self.assertFalse(
@@ -3277,6 +3333,24 @@ class TestRenameFromTheEditor(MayaTkTestCase):
             self.slot._is_file_rename(stored, f"{self.dir}/sub/new.png"),
             "another folder is a repoint",
         )
+
+    def test_a_path_edit_outside_the_project_repoints_and_leaves_the_file(self):
+        """A path edit that changed only the name, to one nothing is at,
+        renamed the file on disk wherever it was -- a library texture other
+        projects read included, which used to be a repoint. Outside the
+        scene's project it repoints again; the file keeps its name."""
+        project = ptk.TempArtifacts("tpe_rename_project", policy="scoped")
+        self.addCleanup(project.cleanup, True)
+        self._project(project.dir_path().replace("\\", "/"))
+        node = self.nodes["rock_Normal.png"]
+        typed = f"{self.dir}/stone_Normal.png"
+        self._edit_cell(1, typed, node)
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+            "nothing renamed on disk",
+        )
+        self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), typed, "repointed")
 
     def test_rename_file_renames_on_disk_and_repoints(self):
         node = self.nodes["rock_Normal.png"]
@@ -3346,8 +3420,7 @@ class TestRenameFromTheEditor(MayaTkTestCase):
     def test_with_sync_on_the_whole_material_follows(self):
         self._sync()
         # The folder is the project: sync renames only the project's own files.
-        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
-        cmds.workspace(self.dir, openWorkspace=True)
+        self._project()
         node = self.nodes["rock_Normal.png"]
         self.slot._rename_texture(
             {"file_node": node, "shader_node": self.mat}, "stone_Normal.png"
@@ -3359,6 +3432,76 @@ class TestRenameFromTheEditor(MayaTkTestCase):
         )
         self.assertTrue(cmds.objExists("stone_Normal_file"))
         self.assertTrue(cmds.objExists("stone_Base_Color_file"))
+
+    def test_with_sync_on_a_new_map_type_renames_that_file(self):
+        """The sync took only the typed name's base -- unchanged by
+        ``rock_Base_Color.png`` -> ``rock_Albedo.png`` -- so the file kept its
+        name and the cell snapped back. A rename that is not a new base for
+        the material's own set renames that file alone."""
+        self._sync()
+        self._project()
+        node = self.nodes["rock_Base_Color.png"]
+        self.assertTrue(
+            self.slot._rename_texture(
+                {"file_node": node, "shader_node": self.mat}, "rock_Albedo.png"
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Albedo.png", "rock_Normal.png", "taken.png"],
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{node}.fileTextureName"), f"{self.dir}/rock_Albedo.png"
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"))
+
+    def test_with_sync_on_another_set_s_map_is_renamed_alone(self):
+        """Renaming an environment cube synced the material to the CUBE's new
+        base: ``rock_MAT`` and every ``rock_*`` file became ``studio_env_*``,
+        and the cube -- another set's map -- kept its name, unreported."""
+        self._sync()
+        self._project()
+        cube = self._env_cube()
+        self.assertTrue(
+            self.slot._rename_texture(
+                {"file_node": cube, "shader_node": self.mat}, "studio_env.dds"
+            )
+        )
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["rock_Base_Color.png", "rock_Normal.png", "studio_env.dds", "taken.png"],
+        )
+        self.assertTrue(
+            cmds.getAttr(f"{cube}.fileTextureName").endswith("/studio_env.dds")
+        )
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+
+    def test_with_sync_on_another_set_s_file_node_is_renamed_alone(self):
+        """The file node cell took the same base: the cube's node renamed the
+        whole material after itself, and stayed as it was."""
+        self._sync()
+        self._project()
+        cube = self._env_cube()
+        self._edit_cell(2, "studio_env_file", cube)
+        self.assertTrue(cmds.objExists("studio_env_file"))
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material is untouched")
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["env_cube.dds", "rock_Base_Color.png", "rock_Normal.png", "taken.png"],
+        )
+
+    def test_with_sync_on_a_file_node_s_new_base_renames_the_material(self):
+        """A file node of the set renamed to a new base still renames the
+        whole material (with or without the node suffix typed)."""
+        self._sync()
+        self._project()
+        self._edit_cell(2, "stone_Normal", self.nodes["rock_Normal.png"])
+        self.assertTrue(cmds.objExists("stone_MAT"))
+        self.assertTrue(cmds.objExists("stone_Normal_file"))
+        self.assertEqual(
+            sorted(os.listdir(self.dir)),
+            ["stone_Base_Color.png", "stone_Normal.png", "taken.png"],
+        )
 
 
 if __name__ == "__main__":

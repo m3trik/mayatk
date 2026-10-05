@@ -105,11 +105,37 @@ import os  # noqa: E402
 
 import pythontk as ptk  # noqa: E402
 
+
 # Process-level isolation first -- no real browser launch (the WebXR preview
 # bridge opens one per push), one throwaway temp root -- so the store below
 # nests inside that root. Also in ``_suite_driver.py``: most modules here never
 # import this file, and the mayapy chunks run through the driver.
-ptk.TestSandbox.activate()
+#
+# With Qt, uitk's QSettings redirect too: `pytest test/test_shot_manifest.py`
+# wrote ~122 RecentValues/<MagicMock> keys per run into the developer's live
+# uitk store (2026-10-04). Never in an interactive Maya: a module importing
+# this file there (`from conftest import mock_cmds`) runs in the USER's
+# session, and the redirect cannot be undone.
+def _settings_sandbox_applies() -> bool:
+    try:
+        from qtpy import QtCore  # noqa: F401
+    except Exception:  # no Qt: nothing can reach the store
+        return False
+    if not _HAVE_REAL_MAYA:
+        return True
+    try:
+        import maya.cmds as cmds
+
+        return bool(cmds.about(batch=True))
+    except Exception:  # mayapy before standalone init
+        return True
+
+
+if _settings_sandbox_applies():
+    from uitk.testing import TestSandbox as _Sandbox  # loud past the guard
+else:
+    _Sandbox = ptk.TestSandbox
+_Sandbox.activate()
 
 # TempArtifacts, not mkdtemp: mayapy test processes are routinely killed, so
 # only the primitive's age-gated sweep ever reclaims the dir. The store must

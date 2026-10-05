@@ -283,6 +283,9 @@ class TexturePathEditorSlots:
                     "file node suffix.",
                 ],
                 notes=[
+                    "A texture or file node follows only as a new base name "
+                    "(<i>rock_Normal</i> → <i>stone_Normal</i>); a new map type "
+                    "or another set's map is renamed alone.",
                     "Left alone: another set's map (an environment cube), and "
                     "any file outside this project — another project may read "
                     "it. Both are reported.",
@@ -481,12 +484,13 @@ class TexturePathEditorSlots:
                     (
                         "Naming (header menu)",
                         [
-                            "<b>Keep Names In Sync</b> — renaming a shader, a "
-                            "texture or a file node renames its whole material "
-                            "to one base name: the shader (with its affix), "
-                            "every texture file it uses, on disk, and their file "
-                            "nodes. Option box (▸): the shader affix (the scene "
-                            "convention by default) and the file node suffix.",
+                            "<b>Keep Names In Sync</b> — renaming a shader, or "
+                            "giving a texture or file node a new base name, "
+                            "renames its whole material to one base name: the "
+                            "shader (with its affix), every texture file of its "
+                            "set, on disk, and their file nodes. Option box (▸): "
+                            "the shader affix (the scene convention by default) "
+                            "and the file node suffix.",
                         ],
                     ),
                     (
@@ -514,7 +518,7 @@ class TexturePathEditorSlots:
                     "the Lightmap Baker — its objects are unbound, the map "
                     "stays on disk). Editing "
                     "a path that changes only the file name renames the file "
-                    "too.",
+                    "too, inside this project (outside it the path repoints).",
                     "<b>Right-click the column headers</b> to show, hide or "
                     "reorder columns: File Node, File Size, Dimensions and "
                     "Image Type start hidden, and a hidden column's values are "
@@ -663,8 +667,9 @@ class TexturePathEditorSlots:
                 setToolTip=(
                     "Rename this row's texture file on disk, in its cell (a "
                     "UDIM set renames every tile). Every file node reading it "
-                    "is repointed; with Keep Names In Sync on, the shader, its "
-                    "other textures and their file nodes follow. One undo step."
+                    "is repointed; with Keep Names In Sync on, a new base name "
+                    "takes the shader, its other textures and their file nodes "
+                    "along. One undo step."
                 ),
             )
 
@@ -1627,11 +1632,21 @@ class TexturePathEditorSlots:
             lambda new_name, ctx=context: self._rename_texture(ctx, new_name),
         )
 
+    #: Said when Keep Names In Sync leaves a rename to the file or node edited
+    #: (:meth:`_sync_carries`).
+    _SYNC_ALONE = (
+        "Keep Names In Sync: {name} was renamed alone -- {material} follows "
+        "only a new base name for its own texture set."
+    )
+
     def _rename_texture(self, context, new_name: str) -> bool:
         """Rename the texture file *context* names to *new_name*, then refresh.
 
-        With Keep Names In Sync on, the whole material follows instead
-        (:meth:`_sync_names`). A lightmap row's bake markers are re-stamped
+        With Keep Names In Sync on, a new base name for a file of the
+        material's own texture set renames the whole material instead
+        (:meth:`_sync_names`); any other rename -- another set's map, a new
+        map type -- renames that file alone and says so
+        (:meth:`_sync_carries`). A lightmap row's bake markers are re-stamped
         with the name (``LightmapRecords.rename_lightmap``) -- they bind the
         map by name. Refused names are reported, never half-applied.
         """
@@ -1645,16 +1660,28 @@ class TexturePathEditorSlots:
                     MatUtils.rename_texture_file(dep["path"], new_name)
                     self._lightmap_records().rename_lightmap(dep["map"], new_name)
                 om.MGlobal.displayInfo(f"Renamed lightmap {dep['map']} -> {new_name}")
-            elif self._sync_names_enabled() and context.get("shader_node"):
-                self._sync_names(context, MapFactory.get_base_texture_name(new_name))
             else:
                 node = context["file_node"]
                 stored = cmds.getAttr(f"{node}.fileTextureName") or ""
-                result = MatUtils.rename_texture_file(stored, new_name)
-                om.MGlobal.displayInfo(
-                    f"Renamed {os.path.basename(stored)} -> {new_name}; "
-                    f"repointed {len(result['nodes'])} file node(s)."
-                )
+                syncing = self._sync_names_enabled() and context.get("shader_node")
+                base = MapFactory.get_base_texture_name(new_name)
+                if syncing and self._sync_carries(
+                    context, base, texture=(stored, new_name)
+                ):
+                    self._sync_names(context, base)
+                else:
+                    result = MatUtils.rename_texture_file(stored, new_name)
+                    om.MGlobal.displayInfo(
+                        f"Renamed {os.path.basename(stored)} -> {new_name}; "
+                        f"repointed {len(result['nodes'])} file node(s)."
+                    )
+                    if syncing:
+                        cmds.warning(
+                            self._SYNC_ALONE.format(
+                                name=os.path.basename(stored),
+                                material=context["shader_node"],
+                            )
+                        )
         except (ValueError, OSError, RuntimeError) as e:  # RuntimeError: cmds.rename
             cmds.warning(f"Rename File: {e}")
             return False
@@ -1706,17 +1733,54 @@ class TexturePathEditorSlots:
         widget.setPlaceholderText(placeholder)
         widget.setToolTip(tip)
 
-    def _sync_names(self, context, base: str) -> bool:
-        """Name *context*'s material, its texture set, lightmap and nodes for
-        *base* (``MatUtils.sync_material_names``), and report it."""
+    def _sync_plan(self, context, base: str, dry_run: bool = False) -> dict:
+        """``MatUtils.sync_material_names`` for *context*'s material at *base*,
+        with the option box's affixes and the lightmap records this panel
+        holds (a real run is one undo chunk of its own)."""
         shader_affix, node_affix = self._sync_affixes()
-        plan = MatUtils.sync_material_names(  # one undo chunk of its own
+        return MatUtils.sync_material_names(
             context.get("shader_node"),
             base,
             material_affix=shader_affix,
             file_node_affix=node_affix,
+            dry_run=dry_run,
             lightmaps=self._lightmap_records(),
         )
+
+    def _sync_carries(self, context, base: str, texture=None, node=None) -> bool:
+        """Whether Keep Names In Sync renames *context*'s whole material for an
+        edit: the sync at *base* (a dry run) gives the edited thing exactly the
+        name typed (case aside) -- *texture* ``(stored path, new file name)``
+        or *node* ``(file node, new node name)``.
+
+        That holds for a file of the material's own texture set (or its node)
+        whose base alone changed. Syncing to the typed name's base, whatever
+        was typed, renamed the set after an environment cube's new name while
+        the cube kept its own, and a new map type (the base unchanged) renamed
+        nothing. Another set's map, a new map type, tile token or extension,
+        or a file the sync keeps (outside the project) is renamed alone.
+
+        Raises:
+            ValueError: The sync refuses *base* (``MatUtils.sync_material_names``).
+        """
+        plan = self._sync_plan(context, base, dry_run=True)
+        if texture is not None:
+            stored, name = texture
+            path = MatUtils.to_absolute(stored, *self._project_roots())
+            planned = next(
+                (n for old, n in plan["textures"] if FileUtils.is_same_file(old, path)),
+                None,
+            )
+        else:
+            edited, name = node
+            planned = dict(plan["file_nodes"]).get(edited)
+            name = StrUtils.apply_affix(name, *self._sync_affixes()[1])
+        return bool(planned) and planned.lower() == name.lower()
+
+    def _sync_names(self, context, base: str) -> bool:
+        """Name *context*'s material, its texture set, lightmap and nodes for
+        *base* (``MatUtils.sync_material_names``), and report it."""
+        plan = self._sync_plan(context, base)
         changed = int(bool(plan["material"])) + sum(
             len(plan[key])
             for key in ("companions", "textures", "file_nodes", "lightmaps")
@@ -3808,19 +3872,32 @@ class TexturePathEditorSlots:
 
         Same folder, another name, the old file on disk and the new one not:
         there is nothing to point at, so the edit means "call it this". A typed
-        path naming a file that exists stays a repoint.
+        path naming a file that exists stays a repoint, and so does an edit of
+        a file outside the scene's project (``EnvUtils.scene_project_root``,
+        the boundary Keep Names In Sync keeps) -- another project may read it,
+        so a path edit must not rename a shared library texture; the warning
+        says so. Rename File, which asks for the rename, still renames it.
         """
         if not stored or not typed:
             return False
         workspace, sourceimages = self._project_roots()
         old = MatUtils.to_absolute(stored, workspace, sourceimages)
         new = MatUtils.to_absolute(typed, workspace, sourceimages)
-        return (
+        if not (
             FileUtils.is_same_file(os.path.dirname(old), os.path.dirname(new))
             and os.path.basename(old) != os.path.basename(new)
             and self._texture_on_disk(old)
             and not self._texture_on_disk(new)
+        ):
+            return False
+        project = EnvUtils.scene_project_root()
+        if project and FileUtils.is_under(os.path.abspath(old), project):
+            return True
+        cmds.warning(
+            f"{os.path.basename(old)} is outside this project -- another may "
+            "read it, so a typed path does not rename it (Rename File does)."
         )
+        return False
 
     def handle_cell_edit(self, row: int, col: int):
         if col in self._INFO_COLUMNS:  # facts about the file, not edits
@@ -3860,6 +3937,7 @@ class TexturePathEditorSlots:
             if actual != new_value:
                 _restore_text(item, actual)
             om.MGlobal.displayInfo(f"Renamed {label} '{old_name}' -> '{actual}'")
+            return True
 
         # A lightmap row: the path cell repoints the bake markers (folder only
         # -- the map is what the bake committed); the name cells are labels,
@@ -3911,8 +3989,9 @@ class TexturePathEditorSlots:
         }
         if col in (0, 2) and self._sync_names_enabled() and context["shader_node"]:
             # Keep Names In Sync: the edited name sets the base the whole
-            # material follows. The cell goes back first; the refresh after
-            # the sync shows what landed.
+            # material follows -- a file node's only as a new base for one of
+            # the set's own textures, else the node alone is renamed. The cell
+            # goes back first; the refresh after the sync shows what landed.
             old = item.data(UserRole) or ""
             shader_affix, node_affix = self._sync_affixes()
             if col == 0:
@@ -3921,10 +4000,22 @@ class TexturePathEditorSlots:
                 base = MapFactory.get_base_texture_name(
                     StrUtils.strip_known_affix(new_value, *node_affix)
                 )
-            _restore_text(item, old)
+            base = base.strip("_")
             try:
-                self._sync_names(context, base.strip("_"))
+                if col == 2 and not self._sync_carries(
+                    context, base, node=(context["file_node"], new_value)
+                ):
+                    if _rename_node("file node"):
+                        cmds.warning(
+                            self._SYNC_ALONE.format(
+                                name=old, material=context["shader_node"]
+                            )
+                        )
+                    return
+                _restore_text(item, old)
+                self._sync_names(context, base)
             except (ValueError, OSError, RuntimeError) as e:
+                _restore_text(item, old)
                 cmds.warning(f"Keep Names In Sync: {e}")
             self.sb.QtCore.QTimer.singleShot(0, self.refresh_texture_table)
             return

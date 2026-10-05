@@ -17,10 +17,9 @@ from typing import Callable, Dict, List, Tuple, Optional, Type, Union
 try:
     import maya.cmds as cmds
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     cmds = None
     om = None
-    print(__file__, error)
 import pythontk as ptk
 
 # from this package:

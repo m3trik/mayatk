@@ -52,9 +52,8 @@ from typing import (
 
 try:
     import maya.cmds as cmds
-except ImportError as error:
+except ImportError:
     cmds = None
-    print(__file__, error)
 
 import pythontk as ptk
 
@@ -650,9 +649,10 @@ class LightmapRecords(ptk.LoggingMixin):
         hold -- the reflections on every baked surface, which are a metal's
         whole look, and the light on everything unbaked. Its file's folder and
         writer go in the private records like any map's (:meth:`search_dirs`
-        then finds it for a GLB build); the scene's previous probe, under
-        another name, is set aside when this scene wrote it -- the rule
-        :meth:`superseding` applies to maps.
+        then finds it for a GLB build); the scene's previous probe file, when
+        it is another file -- another name, or the same name in another
+        folder -- is set aside when this scene wrote it inside its project:
+        the rule :meth:`superseding` applies to maps.
 
         Parameters:
             path: The probe's EXR.
@@ -674,36 +674,58 @@ class LightmapRecords(ptk.LoggingMixin):
             ),
         }
         data_nodes = cls._data_nodes()
+        hints = cls._folder_hints()
+        writers = cls._writers()
+        # Resolved BEFORE this probe's records replace the previous one's: a
+        # re-bake into another folder writes the same NAME, and its record
+        # then names the new folder alone -- the old file was left behind,
+        # read by nothing.
+        superseded = cls._own_probe_file(previous, hints, writers) if previous else None
         ptk.SceneRecords.LIGHTMAP_PROBE.save(data_nodes, record)
         key = cls._hint_key(name)
-        hints = cls._folder_hints()
         hints[key] = cls._portable_dir(path)
         cls._save_folder_hints(hints)
-        writers = cls._writers()
         writers[key] = data_nodes.writer_stamp()
         cls._save_writers(writers)
-        if previous and cls._hint_key(previous["map"]) != key:
-            cls._retire_probe(previous, hints, writers)
+        if superseded:
+            # Kept when it IS the new file, however spelled (the new probe
+            # reads it); set aside when it is another.
+            retired = ptk.FileDependencies.remove_superseded(
+                [superseded], [("", name, path)]
+            )
+            if retired:
+                cls.logger.info(
+                    "Set aside the superseded reflection probe %s -- in the "
+                    "Recycle Bin, or a _superseded folder beside it.",
+                    retired[0],
+                )
         cls._publish()
         return record
 
     @classmethod
-    def _retire_probe(
+    def _own_probe_file(
         cls,
-        previous: Dict[str, Any],
+        probe: Dict[str, Any],
         hints: Dict[str, str],
         writers: Dict[str, str],
-    ) -> None:
-        """Set aside a superseded probe's file, when this scene wrote it."""
-        name = os.path.basename(str(previous["map"]))
+    ) -> Optional[str]:
+        """*probe*'s file, when it is this scene's to set aside once superseded.
+
+        Written by this scene (``DataNodes.written_here``: never a Save As
+        copy's source, which still reads it), recorded in its folder record,
+        on disk, and inside its project (:meth:`project_root`) -- the rules
+        :meth:`superseding` holds a map to. ``None`` otherwise.
+        """
+        name = os.path.basename(str(probe["map"]))
         key = cls._hint_key(name)
         folder = hints.get(key)
         root = cls.project_root()
         if not (folder and root and cls._data_nodes().written_here(writers.get(key))):
-            return
+            return None
         path = os.path.join(cls._resolved_dir(folder, name), name)
         if os.path.isfile(path) and ptk.FileUtils.is_under(os.path.abspath(path), root):
-            ptk.FileDependencies.remove_superseded([path], [])
+            return path
+        return None
 
     @classmethod
     def _probe_ref(cls) -> Optional[Tuple[str, str, str]]:
@@ -1877,10 +1899,11 @@ class LightmapRecords(ptk.LoggingMixin):
     @staticmethod
     def _read_lightmap(path: str) -> "np.ndarray":
         """*path*'s texels as top-down float RGB (file channel order kept)."""
-        import cv2
         import numpy as np
 
-        img = cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+        from mayatk.mat_utils.texture_baker import TextureBaker
+
+        img = TextureBaker._read_exr(path)
         if img is None:
             raise ValueError(f"cannot read lightmap {path!r}")
         img = np.asarray(img, dtype=np.float32)

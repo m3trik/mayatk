@@ -5,8 +5,8 @@ import random
 
 try:
     import maya.cmds as cmds
-except ModuleNotFoundError as error:
-    print(__file__, error)
+except ModuleNotFoundError:
+    pass
 
 # from this package:
 from mayatk.mat_utils._mat_utils import MatUtils

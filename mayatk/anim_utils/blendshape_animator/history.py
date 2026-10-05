@@ -6,8 +6,8 @@ from typing import List, Optional
 
 try:
     from maya import cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 
 class BlendshapeHistory:

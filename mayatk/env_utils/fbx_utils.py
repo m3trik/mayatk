@@ -68,12 +68,14 @@ class FbxUtils(ptk.HelpMixin):
     _auto_takes_ids = _AutoTakesIds()
     _explicit_auto_takes = False  # enable_auto_takes() with no producer or stager
     # Exporter state captured by apply_takes, restored by reset_takes:
-    # (bake_enabled, bake_start, bake_end, animation_flipped), or None when
-    # nothing is pending. The fourth member is whether apply_takes had to turn
-    # the Animation include group (:attr:`ANIMATION_INCLUDE_PROPERTY`) ON --
-    # it has to guarantee that or every other member is a no-op. Recorded as
-    # the CHANGE rather than the prior value so the restore writes only what
-    # was actually changed.
+    # (bake_enabled, bake_start, bake_end, animation_flipped, resample_prior),
+    # or None when nothing is pending. The fourth member is whether
+    # apply_takes had to turn the Animation include group
+    # (:attr:`ANIMATION_INCLUDE_PROPERTY`) ON -- it has to guarantee that or
+    # every other member is a no-op. Recorded as the CHANGE rather than the
+    # prior value so the restore writes only what was actually changed; the
+    # fifth likewise -- Resample All's value before apply_takes changed it,
+    # None when it did not.
     _saved_bake_state = None
 
     # Sensible defaults applied by import_scene when no options are supplied.
@@ -621,17 +623,18 @@ class FbxUtils(ptk.HelpMixin):
         exporter options: without the restore, the ``-v true`` + union range
         that :meth:`apply_takes` set would leak into every later export this
         session (and flip ``set_bake_animation_range``'s enabled check). The
-        Animation include group and Resample All :meth:`apply_takes` turn on
-        are restored with them, for the same reason and from the same capture
-        -- but only when that call actually FLIPPED them, so a property this
-        build could not read is never written back on a guess.
+        Animation include group :meth:`apply_takes` turns on, and the Resample
+        All it sets for the write, are restored with them, for the same reason
+        and from the same capture -- but only when that call actually CHANGED
+        them, so a property this build could not read is never written back on
+        a guess.
         """
         FbxUtils.load_plugin()
         mel.eval("FBXExportSplitAnimationIntoTakes -c")
         saved = FbxUtils._saved_bake_state
         if saved is not None:
             FbxUtils._saved_bake_state = None
-            enabled, start, end, animation_flipped, resample_flipped = saved
+            enabled, start, end, animation_flipped, resample_prior = saved
             mel.eval(
                 f"FBXExportBakeComplexAnimation -v {'true' if enabled else 'false'}"
             )
@@ -639,8 +642,9 @@ class FbxUtils(ptk.HelpMixin):
             mel.eval(f"FBXExportBakeComplexEnd -v {end}")
             if animation_flipped:
                 FbxUtils.set_animation_export(False)
-            if resample_flipped:
-                mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v false")
+            if resample_prior is not None:
+                prior = "true" if resample_prior else "false"
+                mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {prior}")
 
     #: The plugin's "Resample All": bake EVERY animated curve on every frame
     #: of the bake range, not only the complex ones. What makes a take split
@@ -672,7 +676,10 @@ class FbxUtils(ptk.HelpMixin):
         range's first frame even where the scene's first key comes later --
         what an export's clip origin has to say. Off only for a write whose
         takes nothing reads (a GLB's own intermediate, whose clips are cut
-        from the whole-timeline take).
+        from the whole-timeline take) -- and then OFF, not merely left alone:
+        a loaded preset's Resample All would still resample that write,
+        opening its whole-timeline take on the bake range while the published
+        clip origin says the first key.
 
         Also guarantees the Animation include group
         (:attr:`ANIMATION_INCLUDE_PROPERTY`), because without it every line
@@ -689,8 +696,9 @@ class FbxUtils(ptk.HelpMixin):
             takes: Sequence of ``{"name","start","end"}`` mappings (what
                 ``ptk.SceneRecords.declared_takes`` returns) or
                 ``(name, start, end)`` tuples.
-            resample: Turn on Resample All for the write (restored by
-                :meth:`reset_takes`), so every take carries every channel.
+            resample: Resample All for the write, whatever a preset left:
+                on, so every take carries every channel; off, so the curves
+                ship as keyed. Restored by :meth:`reset_takes`.
 
         Returns:
             int: Number of takes defined.  Empty input only clears state.
@@ -717,22 +725,29 @@ class FbxUtils(ptk.HelpMixin):
         # its prior value: reset_takes then writes only what was actually
         # changed, so a property this build could not read is never written
         # back on a guess (`animation_export_enabled` answers True when it
-        # cannot read it).
+        # cannot read it). Resample All likewise: its prior value, kept only
+        # when this call changes it.
         flipping = not FbxUtils.animation_export_enabled()
-        resampling = resample and not FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+        resample = bool(resample)
+        resample_prior = (
+            not resample
+            if FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL) != resample
+            else None
+        )
         if FbxUtils._saved_bake_state is None:
             FbxUtils._saved_bake_state = (
                 FbxUtils.baking_enabled(),
                 mel.eval("FBXExportBakeComplexStart -q"),
                 mel.eval("FBXExportBakeComplexEnd -q"),
                 flipping,
-                resampling,
+                resample_prior,
             )
         mel.eval("FBXExportBakeComplexAnimation -v true")
         mel.eval(f"FBXExportBakeComplexStart -v {union_start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {union_end}")
-        if resampling:
-            mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")
+        if resample_prior is not None:
+            value = "true" if resample else "false"
+            mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {value}")
         if flipping:
             # The one setting that makes everything above a no-op. Warned, not
             # whispered: it is the loaded preset overruling the export, and the
@@ -1299,14 +1314,42 @@ class FbxUtils(ptk.HelpMixin):
         the bracketed writers do: the split resamples every curve
         (:meth:`apply_takes`), which leaves the fades Unity rebuilt from
         sparse visibility pairs one frame long, so they ride the proxies
-        instead.  :meth:`_on_after_export` finishes that table."""
+        instead.  :meth:`_on_after_export` finishes that table.  A write in
+        ASCII is warned about (:meth:`_warn_ascii_carrier`)."""
         if FbxUtils._export_depth:
             return
         FbxUtils.publish(only=sorted(FbxUtils._session_producers))
+        FbxUtils._warn_ascii_carrier()
         if FbxUtils.apply_takes_from_node():
             FbxUtils._bracket_state()["hook_stagers"] = FbxUtils.stage(
                 ("render_effects",)
             )
+
+    @staticmethod
+    def _warn_ascii_carrier() -> None:
+        """Warn when a write is about to go out in ASCII from a scene holding
+        the ``data_export`` carrier.
+
+        Unity's ASCII FBX reader drops the scene, or truncates the string,
+        once a carrier channel passes ~6 KB (measured in batch Unity 6000.3),
+        and the handoff record alone is past that. The Scene Exporter pins
+        binary over a preset (``SceneExporter._pin_carrier_requirements``); a
+        File > Export writes the format its dialog chose, and this hook cannot
+        tell whether the write ships the carrier at all (an Export Selection
+        without it does not), so it says so rather than overruling the
+        dialog.
+        """
+        if not FbxUtils.export_flag("FBXExportInAscii"):
+            return
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        if DataNodes.get_export_node(create=False) is None:
+            return
+        logger.warning(
+            f"FBX export is ASCII and the scene holds '{DataNodes.EXPORT}': if "
+            "this file ships it, Unity's ASCII FBX reader loses its metadata "
+            "(the shots, the handoff) past ~6 KB. Export binary for Unity."
+        )
 
     @staticmethod
     def _on_after_export(*_):

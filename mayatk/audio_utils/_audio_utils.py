@@ -850,7 +850,7 @@ class AudioUtils(ptk.HelpMixin):
             if any_ok:
                 shifted.append(tid)
                 if ledger is not None:
-                    curve = (cmds.keyframe(attr, q=True, name=True) or [None])[0]
+                    curve = cls.track_curve(tid, carrier)
                     if curve:
                         ledger.remap(curve, [(f, f + delta) for f, _ in pairs])
         return shifted

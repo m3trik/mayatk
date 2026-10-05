@@ -324,17 +324,75 @@ class _TextureTransferInternal:
         }
 
     @staticmethod
-    def _members(sg: str) -> set:
-        """Long paths of the transforms with faces in shading group *sg*."""
+    def _transforms(nodes) -> set:
+        """Long paths of the transforms *nodes* name -- transforms, shapes, or
+        components of either, however the caller spelled them."""
         out = set()
-        for member in cmds.sets(sg, query=True) or []:
-            for node in cmds.ls(member.split(".")[0], long=True) or []:
+        for member in nodes:
+            for node in cmds.ls(str(member).split(".")[0], long=True) or []:
                 if cmds.nodeType(node) != "transform":
                     node = (
                         cmds.listRelatives(node, parent=True, fullPath=True) or [node]
                     )[0]
                 out.add(node)
         return out
+
+    @classmethod
+    def _members(cls, sg: str) -> set:
+        """Long paths of the transforms with faces in shading group *sg*."""
+        return cls._transforms(cmds.sets(sg, query=True) or [])
+
+    # --------------------------------------------------------- ownership
+    #: String attribute naming the output a result material IS -- what finds
+    #: it again however it is called now: beside a mesh or group of the
+    #: output's name Maya calls it ``<name>1``, and a user may rename it.
+    OUTPUT_STAMP = "transferOutput"
+
+    @classmethod
+    def _stamp(cls, material: str) -> Optional[str]:
+        """The output *material* is stamped as, or None."""
+        plug = f"{material}.{cls.OUTPUT_STAMP}"
+        return cmds.getAttr(plug) if cmds.objExists(plug) else None
+
+    @classmethod
+    def _set_stamp(cls, material: str, name: str) -> None:
+        """Stamp *material* as output *name* (:attr:`OUTPUT_STAMP`)."""
+        if not cmds.attributeQuery(cls.OUTPUT_STAMP, node=material, exists=True):
+            cmds.addAttr(material, longName=cls.OUTPUT_STAMP, dataType="string")
+        cmds.setAttr(f"{material}.{cls.OUTPUT_STAMP}", name, type="string")
+
+    @classmethod
+    def _holders(cls, name: str, material_name: str) -> List[str]:
+        """What holds output *name*: the surface shaders called
+        *material_name* (the name its material takes), and every material
+        stamped *name*, whatever it is called now. Stamps compare without case:
+        the maps of ``Seat`` and ``seat`` are one file on Windows."""
+        stamped = [
+            node
+            for node in cmds.ls(
+                f"*.{cls.OUTPUT_STAMP}", objectsOnly=True, recursive=True
+            )
+            or []
+            if (cls._stamp(node) or "").lower() == name.lower()
+        ]
+        return list(dict.fromkeys(cls._shaders_named(material_name) + stamped))
+
+    @classmethod
+    def _replaceable(cls, material: str, name: str, owners: set) -> bool:
+        """Whether *material* is output *name*'s own previous result -- this
+        run's to replace: stamped *name*, and worn by nothing outside *owners*
+        (the run's targets, long transform paths).
+
+        Anything else keeps the name: a material another object or a source of
+        this run wears, the run's own original (a same-mesh run READS it), and
+        every unstamped material, which may be anyone's.
+        """
+        stamp = cls._stamp(material)
+        return (
+            bool(stamp)
+            and stamp.lower() == name.lower()
+            and not cls._wearers(material) - owners
+        )
 
     @staticmethod
     def new_material_from(material: str) -> str:
@@ -404,17 +462,33 @@ class _TextureTransferInternal:
 
     @staticmethod
     def pair_by_name(targets: Sequence[str], sources: Sequence[str]) -> Dict[str, str]:
-        """Target -> source, by matching leaf name; leftovers by order."""
-        by_leaf = {CoreUtils.leaf_name(s): s for s in sources}
+        """Target -> source, by the longest matching TAIL of their DAG paths --
+        the leaf name, then its parents -- so ``|tgt|chairA|seat_GEO`` pairs
+        with ``|src|chairA|seat_GEO``, never ``|src|chairB|seat_GEO``. A
+        best match two sources tie for (one leaf under parents that match
+        nothing) and no shared leaf at all go by order."""
+
+        def tail(node) -> List[str]:
+            return [part for part in str(node).split("|") if part][::-1]
+
+        def shared(a, b) -> int:
+            n = 0
+            for x, y in zip(tail(a), tail(b)):
+                if x != y:
+                    break
+                n += 1
+            return n
+
         pairs: Dict[str, str] = {}
         rest_t: List[str] = []
         used = set()
         for t in targets:
-            leaf = CoreUtils.leaf_name(t)
-            s = by_leaf.get(leaf)
-            if s and s not in used:
-                pairs[t] = s
-                used.add(s)
+            scored = [(shared(t, s), s) for s in sources if s not in used]
+            best = max((n for n, _s in scored), default=0)
+            hits = [s for n, s in scored if n == best]
+            if best and len(hits) == 1:
+                pairs[t] = hits[0]
+                used.add(hits[0])
             else:
                 rest_t.append(t)
         rest_s = [s for s in sources if s not in used]
@@ -496,6 +570,15 @@ class _TextureTransferInternal:
 class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
     """Move textures between UV layouts of the same mesh(es) -- see module doc."""
 
+    @ptk.ClassProperty
+    @ptk.Deprecation.symbol(
+        "ShaderAttributeMap.CONSTANT_ATTRS", remove_in="0.23.0", since="2026-10-04"
+    )
+    def CONSTANT_ATTRS(cls) -> Dict[str, Dict[str, str]]:
+        """The table moved to :attr:`ShaderAttributeMap.CONSTANT_ATTRS`, read
+        through :meth:`ShaderAttributeMap.read_constant`."""
+        return ShaderAttributeMap.CONSTANT_ATTRS
+
     def __init__(self, log_level="INFO"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -566,7 +649,12 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 without overwriting each other's maps, so a run that keeps
                 layouts apart appends the layout label to each. Also decides
                 what Auto *assign_suffix* does: the user named the material,
-                so nothing is appended to it.
+                so nothing is appended to it. A name held outside this run --
+                by a material another object or a source wears (any material
+                the run did not stamp as this output's), or by a map a kept
+                material reads -- is never taken: the output, maps and
+                material alike, becomes ``<name>_1`` (``_2``, ...), with a
+                warning. A re-run replaces its own previous result in place.
             normal_convention: ``"opengl"`` / ``"directx"`` to force one
                 convention on every source normal map. Default: each map's own,
                 read off its content, then its filename
@@ -671,8 +759,12 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
             s_ids = np.array(
                 [src_mat_registry.index(m) for m in s_mats], dtype=np.int64
             )
-            tri_src = np.where(
-                s_face[faces] >= 0, s_ids[np.maximum(s_face[faces], 0)], -1
+            # A source that wears nothing has no ids to index (np.where reads
+            # both branches): every triangle reads -1, "nothing to transfer".
+            tri_src = (
+                np.where(s_face[faces] >= 0, s_ids[np.maximum(s_face[faces], 0)], -1)
+                if len(s_ids)
+                else np.full(len(faces), -1, dtype=np.int64)
             )
             tri_tgt = t_face[faces]
             # -1: faces that wear nothing -- no shading group, or one whose
@@ -745,14 +837,17 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 list(jobs), stem, prefix=assign_prefix, suffix=suffix
             )
             jobs = {relabel[label]: job for label, job in jobs.items()}
+        # Each output's name -- its maps' stem AND its material's core -- is
+        # decided here, before anything is written (_output_names): a name a
+        # material outside this run holds is named beside, never taken.
         if stem:
-            name_format = (
-                f"{stem}_{{channel}}"
-                if len(jobs) == 1
-                else f"{stem}_{{material}}_{{channel}}"
-            )
-        results = ptk.UvTransfer.transfer_materials(
-            jobs,
+            name_format = "{material}_{channel}"
+        names, replaced = self._output_names(
+            jobs, stem, assign_prefix, suffix, out_dir, name_format, source_specs
+        )
+        named = {names[label]: job for label, job in jobs.items()}
+        written = ptk.UvTransfer.transfer_materials(
+            named,
             output_dir=out_dir,
             channels=channels,
             size=size,
@@ -761,23 +856,26 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
             name_format=name_format,
             normal_convention=normal_convention,
             source_mask_from_uvs=source_mask_from_uvs,
+            # A map a material this run keeps reads is never written; the maps
+            # of the previous results it replaces are rewritten in place (a
+            # same-mesh re-run reads its own previous result).
+            avoid=[
+                path
+                for spec in source_specs
+                if spec["name"] not in replaced
+                for path in spec["maps"].values()
+            ],
             log=self.logger.info,
         )
+        results = {label: written[names[label]] for label in jobs}
 
         if assign:
             created = self.assign_results(
-                results,
-                jobs,
+                written,
+                named,
                 prefix=assign_prefix,
                 suffix=suffix,
-                base_name=stem or None,
                 assign_from=assign_from,
-                sources=[
-                    s
-                    for src in pairs.values()
-                    if src is not None
-                    for s in self._parts(src)
-                ],
             )
             if assign_shader_type and created:
                 # Retyped AFTER the maps are wired, not built on the target type
@@ -799,7 +897,7 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                     )
                     or {}
                 )
-                for label, old_mat in list(created.items()):
+                for name, old_mat in list(created.items()):
                     # convert keys its result by the SOURCE material and maps a
                     # SKIPPED one to None -- already the target type, or no
                     # channel declaration to read. A skip means nothing was
@@ -808,8 +906,10 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                     new_mat = retyped.get(old_mat)
                     if not new_mat or not cmds.objExists(new_mat):
                         continue
-                    created[label] = new_mat
-                    channels = results.get(label) or {}
+                    created[name] = new_mat
+                    # The retype is a NEW node: the stamp crosses with the name.
+                    self._set_stamp(new_mat, name)
+                    channels = written.get(name) or {}
                     if not channels:
                         continue
                     wired = MatManifest.restore(
@@ -883,6 +983,94 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 faces.extend(f"{obj}.f[{int(i)}]" for i in ids)
         return faces
 
+    def _output_names(
+        self,
+        jobs: Dict[str, Dict[str, Any]],
+        stem: str,
+        prefix: str,
+        suffix: str,
+        out_dir: str,
+        name_format: str,
+        source_specs: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, str], set]:
+        """``({label: output name}, the previous results those names replace)``.
+
+        Decided before anything is written: an output's name is its maps' stem
+        AND its material's core. A layout is named *stem* (``<stem>_<label>``
+        when there are several), else after its label -- or, where that name
+        is held, the first free ``<name>_1``, ``<name>_2``, ... It is held
+        while another output of this run took it, while any material holding
+        it (:meth:`_holders`) is not this output's own previous result
+        (:meth:`_replaceable`), or while a file it would write is a map a
+        material this run keeps reads (a source's own maps, with the output
+        folder set to theirs). ``|chairA|seat_GEO`` then ``|chairB|seat_GEO``
+        under one name -- tentacle's blank Output Name derives ``seat`` for
+        both -- deleted chairA's material and wrote its maps over chairA's.
+        """
+        owners = self._transforms(
+            obj for job in jobs.values() for obj, _mat in job.get("members") or []
+        )
+
+        def key(path: str) -> str:
+            return os.path.normcase(os.path.abspath(path))
+
+        def writes(name: str) -> set:
+            return {
+                key(os.path.join(out_dir, f"{file_stem}.png"))
+                for token in ptk.UvTransfer.CHANNEL_TOKENS.values()
+                for file_stem in [name_format.format(material=name, channel=token)]
+            }
+
+        # A format that never names the material writes the same files under
+        # any name, so renaming cannot steer it (the engine's avoid= still does).
+        steerable = writes("a") != writes("b")
+        names: Dict[str, str] = {}
+        replaced: set = set()
+        taken: set = set()
+        for label in jobs:
+            label_name = ptk.StrUtils.sanitize(label, preserve_case=True)
+            if stem:
+                base = stem if len(jobs) == 1 else f"{stem}_{label_name}"
+            else:
+                # A re-run's label is the result the last run assigned
+                # (`wood_TRANSFER`): named by what that was derived from, so
+                # the material, its stamp and its maps stay `wood`.
+                base = ptk.StrUtils.strip_known_affix(
+                    label_name, prefix=prefix, suffix=suffix
+                ).strip("_")
+            # Spelled as the engine writes it, so maps and material agree.
+            base = ptk.StrUtils.sanitize(base or label_name, preserve_case=True)
+            base = base.strip("_") or "material"
+            name, k = base, 0
+            while True:
+                holders = self._holders(
+                    name, ptk.StrUtils.apply_affix(name, prefix=prefix, suffix=suffix)
+                )
+                kept_reads = {
+                    key(path)
+                    for spec in source_specs
+                    if spec["name"] not in holders
+                    for path in spec["maps"].values()
+                }
+                if (
+                    name.lower() not in taken
+                    and all(self._replaceable(m, name, owners) for m in holders)
+                    and not (steerable and writes(name) & kept_reads)
+                ):
+                    break
+                k += 1
+                name = f"{base}_{k}"
+            if k:
+                self.logger.warning(
+                    f"{base} is held outside this run -- a material another "
+                    "object or this run's source wears, or a map one reads: "
+                    f"named {name}."
+                )
+            taken.add(name.lower())
+            names[label] = name
+            replaced.update(holders)
+        return names, replaced
+
     def assign_results(
         self,
         results: Dict[str, Dict[str, str]],
@@ -891,7 +1079,6 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
         base_name: Optional[str] = None,
         prefix: str = "",
         assign_from: str = "target",
-        sources: Sequence[str] = (),
     ) -> Dict[str, str]:
         """One ``<prefix><layout><suffix>`` material per output, on its faces.
 
@@ -912,24 +1099,30 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
         outputs; the originals keep their textures, so a same-mesh UV-set
         transfer cannot clobber itself.
 
-        A material already holding the result's name is a previous run's and
-        is replaced -- unless one of the run's *sources* (the meshes it read
-        from) wears it: the run is reading that material, and an iteration
-        whose source wears the last result would otherwise lose it. The new
-        one is then uniquified beside it.
+        A material holding the result's name -- called it, or stamped as this
+        output (:attr:`OUTPUT_STAMP`) whatever it is called now -- is replaced
+        only when it is this output's own previous result (:meth:`_replaceable`:
+        stamped, and worn by nothing outside the *jobs*' members). Anything
+        else keeps it -- a material another object or a source of the run
+        wears, the run's own original, any unstamped one -- and the new one is
+        named beside it. :meth:`transfer` names every output past such a holder
+        before it writes (:meth:`_output_names`), so only a direct call meets
+        one here. Every result is stamped with its name.
 
         Returns ``{output label: new material}``.
         """
-        keep = set(cmds.ls(list(sources), long=True) or []) if sources else set()
+        owners = self._transforms(
+            obj for job in jobs.values() for obj, _mat in job.get("members") or []
+        )
         # Resolve EVERY output's faces and build every copy -- neither touches
-        # an assignment -- before anything is replaced. A replaced material is
-        # matched by name, and the name can be one another output's targets
-        # wear (on a re-run, the one its own targets wear): resolved after the
-        # delete, those faces were found wearing nothing and the shader to copy
-        # was gone, so the meshes ended up wearing nothing at all. Building
-        # before clearing is also why a copy never reads a node the clear
-        # destroyed ("No object(s) to duplicate"); the rename comes after.
-        planned: List[Tuple[str, Dict[str, str], str, List[str], str]] = []
+        # an assignment -- before anything is replaced. A replaced material can
+        # be one another output's targets wear (on a re-run, the one its own
+        # targets wear): resolved after the delete, those faces were found
+        # wearing nothing and the shader to copy was gone, so the meshes ended
+        # up wearing nothing at all. Building before clearing is also why a
+        # copy never reads a node the clear destroyed ("No object(s) to
+        # duplicate"); the rename comes after.
+        planned: List[Tuple[str, Dict[str, str], str, str, List[str], str]] = []
         for label, channels in results.items():
             members = jobs.get(label, {}).get("members") or []
             if not channels or not members:
@@ -939,35 +1132,40 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 base_mat = self._source_name(jobs[label]) or base_mat
             label_name = ptk.StrUtils.sanitize(label, preserve_case=True)
             if base_name:
-                new_name = base_name if len(jobs) == 1 else f"{base_name}_{label_name}"
+                core = base_name if len(jobs) == 1 else f"{base_name}_{label_name}"
             else:
-                new_name = label_name
-            new_name = ptk.StrUtils.apply_affix(new_name, prefix=prefix, suffix=suffix)
+                core = label_name
+            new_name = ptk.StrUtils.apply_affix(core, prefix=prefix, suffix=suffix)
             faces = self._member_faces(members)
             planned.append(
-                (label, channels, new_name, faces, self.new_material_from(base_mat))
+                (
+                    label,
+                    channels,
+                    core,
+                    new_name,
+                    faces,
+                    self.new_material_from(base_mat),
+                )
             )
+        # A copy of a previous result carries its stamp until it is restamped.
         fresh = {new_mat for *_rest, new_mat in planned}
         created: Dict[str, str] = {}
-        for label, channels, new_name, faces, new_mat in planned:
-            # The previous run's node goes, and its shading groups with it:
-            # the shader they render is being deleted either way, and a
-            # surviving `<mat>SG` makes the new one come back uniquified as
-            # `<mat>SG1` on every re-run.
+        for label, channels, core, new_name, faces, new_mat in planned:
+            # The previous result goes, and its shading groups with it: the
+            # shader they render is being deleted either way, and a surviving
+            # `<mat>SG` makes the new one come back uniquified as `<mat>SG1`.
             #
-            # Only a SHADER of that name is a previous run's: the name is the
-            # user's (or derived from the source mesh), so a mesh or group may
-            # carry it too -- clearing "any node" deleted that geometry, and two
-            # nodes of the name made the lookup raise. Matched by name without
-            # resolving an ambiguous one; the rename below then uniquifies past
-            # any namesake that stays.
-            for old_mat in self._shaders_named(new_name):
+            # Only a SHADER holds the name: a mesh or group may carry it too
+            # (the name is the user's, or derived from the source mesh), and
+            # the rename below uniquifies past such a namesake -- which is why
+            # a result is found again by its stamp, not by its name.
+            for old_mat in self._holders(core, new_name):
                 if old_mat in fresh:  # another output's copy, not a previous run's
                     continue
-                if keep & self._wearers(old_mat):
+                if not self._replaceable(old_mat, core, owners):
                     self.logger.warning(
-                        f"{old_mat} is worn by a source of this run, so it is "
-                        "kept; the result is named beside it."
+                        f"{old_mat} is not this output's previous result, so it "
+                        "is kept; the result is named beside it."
                     )
                     continue
                 for old_sg in cmds.listConnections(old_mat, type="shadingEngine") or []:
@@ -978,6 +1176,7 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                 if cmds.objExists(old_mat):
                     cmds.delete(old_mat)
             new_mat = cmds.rename(new_mat, new_name)
+            self._set_stamp(new_mat, core)
             # A shading group of the name whose shader is gone (deleted outside
             # this tool) and that holds only these targets is that material's
             # husk: cleared, or the result comes back as `<mat>SG1` beside it.
@@ -985,8 +1184,7 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
             if (
                 cmds.ls(husk, type="shadingEngine")
                 and not self._surface_shader(husk)
-                and self._members(husk)
-                <= set(cmds.ls([f.split(".")[0] for f in faces], long=True) or [])
+                and self._members(husk) <= self._transforms(faces)
             ):
                 cmds.delete(husk)
             wired = MatManifest.restore(new_mat, {"materials": {new_mat: channels}})

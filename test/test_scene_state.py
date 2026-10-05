@@ -231,5 +231,37 @@ class TestMetallicRoughnessSection(MayaTkTestCase):
         )
 
 
+class TestEmissionWeight(MayaTkTestCase):
+    """The emission weight is the SHADER map's: a material's constant emission
+    (``ShaderAttributeMap.read_constant``) needs it too, below this layer."""
+
+    def test_the_weight_is_the_shader_maps(self):
+        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        self.assertIs(
+            SceneState.EMISSION_WEIGHT_ATTRS, ShaderAttributeMap.EMISSION_WEIGHT_ATTRS
+        )
+        ss = cmds.shadingNode("standardSurface", asShader=True)
+        self.assertEqual(SceneState.emission_weight(ss), 0.0)
+        cmds.setAttr(f"{ss}.emission", 0.25)
+        self.assertAlmostEqual(SceneState.emission_weight(ss), 0.25)
+
+    def test_an_unweighted_emissive_colour_is_carried_as_nothing(self):
+        """``emissionColor`` defaults to white behind a weight of 0."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube = cmds.polyCube(name="emit_geo")[0]
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="emitMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        self.assertNotIn("emitMat", SceneState.read([cube]).get("emissive") or {})
+        cmds.setAttr(f"{mat}.emission", 0.5)
+        self.assertEqual(
+            SceneState.read([cube])["emissive"]["emitMat"]["color"], [0.5, 0.5, 0.5]
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

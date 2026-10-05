@@ -7,11 +7,10 @@ try:
     import maya.cmds as cmds
     import maya.mel as mel
     import maya.api.OpenMaya as om
-except ImportError as error:
+except ImportError:
     cmds = None
     mel = None
     om = None
-    print(__file__, error)
 import pythontk as ptk
 
 

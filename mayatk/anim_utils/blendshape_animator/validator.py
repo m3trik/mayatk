@@ -6,8 +6,8 @@ import pythontk as ptk
 
 try:
     from maya import cmds
-except ImportError as error:
-    print(__file__, error)
+except ImportError:
+    pass
 
 from mayatk.node_utils._node_utils import NodeUtils
 
