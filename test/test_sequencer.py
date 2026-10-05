@@ -7187,7 +7187,10 @@ class TestColumnMap(unittest.TestCase):
             cm = ColumnMap(metadata_pass={"priority": ("Priority",)})
             steps = ManifestModel.parse_csv(csv_path, columns=cm)
             self.assertEqual(steps[0]._pass_through, {"priority": "High"})
-            self.assertEqual(steps[1]._pass_through, {})  # Empty value not stored
+            # A blank cell is recorded too (pythontk 2026-10-04): it is how a
+            # cell cleared in the doc clears the shot's value on the next Build;
+            # only non-empty values are ever written to a shot.
+            self.assertEqual(steps[1]._pass_through, {"priority": ""})
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
