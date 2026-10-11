@@ -31,6 +31,7 @@ class ShotNavMixin:
     * ``_prev_action`` / ``_next_action``
     * ``_syncing`` — bool flag
     * ``_sync_to_widget()`` / ``_update_shot_nav_state()``
+    * ``_playhead_to_shot_start`` / ``on_playhead_moved()`` (the transport)
     * ``_visible_shots()``
     * ``_get_sequencer_widget()``
     """
@@ -89,7 +90,7 @@ class ShotNavMixin:
         recorded its marker, so ``_undo_plan`` saw "something unrelated
         followed our edit", skipped the ledger restore and undid only the
         range change.  For a bounds-only edit — creating a shot, whose
-        chunk is empty and whose ledger restore is the ONLY thing that can
+        chunk was then empty and whose ledger restore is the ONLY thing that can
         reverse it — that meant it did not undo at all.
         """
         if self._playback_range_mode == "off":
@@ -120,7 +121,14 @@ class ShotNavMixin:
         if cmb is None:
             return
 
-        old_sid = self.active_shot_id
+        # The store's active shot is the model and the dropdown a view of it:
+        # after an undo, or a pick in the Shots window, the row the dropdown
+        # still shows can name a shot that is gone or no longer active.
+        store_sid = self.sequencer.store.active_shot_id if self.sequencer else None
+        if store_sid is not None and self.sequencer.shot_by_id(store_sid):
+            old_sid = store_sid
+        else:
+            old_sid = self.active_shot_id
 
         cmb.blockSignals(True)
         cmb.clear()
@@ -282,13 +290,48 @@ class ShotNavMixin:
                     widget.playhead_moved.emit(marker_time)
             self._update_shot_nav_state()
             return
-        shot_id = cmb.itemData(new_idx)
+        self._go_to_shot(cmb.itemData(new_idx))
+
+    def _go_to_shot(self, shot_id) -> None:
+        """Change to *shot_id*: make it active, then draw it.
+
+        The one path every shot change takes -- the dropdown, the prev / next
+        buttons, a click on a shot's block -- so the header's options apply to
+        each alike: Frame on Shot Change, and Playhead to Shot Start
+        (:meth:`_land_on_shot`), which leaves the playhead alone when the shot
+        was already the active one.
+        """
+        if self.sequencer is None:
+            return
+        store = self.sequencer.store
+        changed = shot_id != store.active_shot_id
         self._shifted_out_keys.clear()
         self.select_shot(shot_id)
-        store = self.sequencer.store if self.sequencer else None
-        do_frame = store.frame_on_shot_change if store else False
-        self._sync_to_widget(frame=do_frame)
+        shot = self.sequencer.shot_by_id(shot_id)
+        if changed and shot is not None:
+            self._land_on_shot(shot)
+        self._sync_to_widget(frame=store.frame_on_shot_change)
         self._update_shot_nav_state()
+
+    def _set_playhead_to_shot_start(self, enabled: bool) -> None:
+        """Turn the global "a shot change moves the playhead to the shot's
+        first frame" option on/off (header menu)."""
+        self._playhead_to_shot_start = bool(enabled)
+
+    def _land_on_shot(self, shot) -> None:
+        """Put the playhead on *shot*'s first frame -- when the header's
+        Playhead to Shot Start is on.
+
+        For a shot changed to, or one just created: it is the one the user
+        is about to work in, and the playhead left where the gesture began sat
+        in another shot or in none (2026-10-06: "move the playhead to the
+        start of a new shot when it is created"; 2026-10-07: "... when we
+        change shots.  this should be a global option").  A view move, never
+        an undo step (:meth:`on_playhead_moved`); the rebuild that follows
+        draws it.
+        """
+        if self._playhead_to_shot_start:
+            self.on_playhead_moved(shot.start)
 
     def on_shot_block_clicked(self, shot_name: str) -> None:
         """Select a shot by name when its block is clicked in the shot lane."""
@@ -305,10 +348,5 @@ class ShotNavMixin:
                         cmb.setCurrentIndex(i)
                         cmb.blockSignals(False)
                         break
-                self._shifted_out_keys.clear()
-                self.select_shot(shot.shot_id)
-                store = self.sequencer.store if self.sequencer else None
-                do_frame = store.frame_on_shot_change if store else False
-                self._sync_to_widget(frame=do_frame)
-                self._update_shot_nav_state()
+                self._go_to_shot(shot.shot_id)
                 return

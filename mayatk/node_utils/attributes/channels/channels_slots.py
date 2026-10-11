@@ -18,6 +18,7 @@ from uitk.managers.field_visibility import FieldVisibility
 from uitk.widgets.footer import FooterStatusController
 from uitk.widgets.widgetComboBox import WidgetComboBox
 from mayatk.core_utils.script_job_manager import ScriptJobManager
+from mayatk.ui_utils.channel_box import ChannelBox
 from mayatk.node_utils.attributes.channels._channels import (
     Channels,
 )
@@ -57,6 +58,7 @@ class ChannelsSlots:
     # - Pink for any plain incoming connection.
     # - Lighter desaturated red for an animCurve driver (no key on current frame).
     # - Deeper desaturated red for a key set on the current frame.
+    # - Lighter red for a keyed value moved off its curve, not yet keyed.
     ACTION_COLOR_MAP = {
         "off": "#555555",  # dim grey — inactive / default
         "active": "#6898b8",  # desat blue — toolbar toggle active state
@@ -64,6 +66,7 @@ class ChannelsSlots:
         "connected": "#c89c9c",  # desat pink — generic connection
         "keyframe": "#c86464",  # desat red — keyed (no key at current time)
         "keyframe_active": "#a83838",  # deeper desat red — key set at current time
+        "keyframe_changed": "#f08080",  # lighter red — value changed, not keyed
         "expression": "#b478c8",  # desat purple — expression-driven
         "driven_key": "#6898b8",  # desat light-blue — set-driven key
         "constraint": "#5878b8",  # desat blue — constraint
@@ -100,6 +103,11 @@ class ChannelsSlots:
 
         # MMB scrub-edit drag state — set by ``_setup_scrub_edit``.
         self._scrub_state = None
+        # An undo chunk open around a multi-cell edit (drag-fill).
+        self._edit_chunk_open = False
+        # Hops a callback from Maya's Evaluation Manager worker threads onto
+        # the GUI thread (see ``_schedule_values_only_refresh``).
+        self._gui_thread = ptk.MainThreadMarshaller()
 
         # Re-entry guards for ``_refresh_table``.  Filter-combobox
         # spamming (or any code path that pumps the event loop during
@@ -962,6 +970,8 @@ class ChannelsSlots:
             ("cellScrubMoved", self._on_scrub_moved),
             ("cellScrubFinished", self._on_scrub_finished),
             ("cellWheelScrolled", self._on_wheel_scrolled),
+            ("editBatchStarted", self._on_edit_batch_started),
+            ("editBatchFinished", self._on_edit_batch_finished),
         ):
             sig = getattr(widget, name, None)
             if sig is None:
@@ -1050,6 +1060,17 @@ class ChannelsSlots:
                 "color": clr["keyframe_active"],
                 "tooltip": (
                     "Key set at current time — click to remove it.\n"
+                    "Drag: key a range · Alt+drag: remove those keys.\n"
+                    "Ctrl+click / Ctrl+drag: break the connection."
+                ),
+                "action": self._on_icon_cell_clicked,
+            },
+            "keyframe_changed": {
+                "icon": "connect",
+                "color": clr["keyframe_changed"],
+                "tooltip": (
+                    "Value changed but not keyed — the next frame change "
+                    "discards it. Click to key it.\n"
                     "Drag: key a range · Alt+drag: remove those keys.\n"
                     "Ctrl+click / Ctrl+drag: break the connection."
                 ),
@@ -1291,6 +1312,11 @@ class ChannelsSlots:
             widget.setUpdatesEnabled(False)
             widget.blockSignals(True)
 
+            # The rows selected now, re-selected after the rebuild when the
+            # channel box has none to restore -- Maya empties it while it is
+            # tabbed away, and the rows are the channel selection then.
+            kept_rows = self._selected_row_names(widget)
+
             # Tear down existing enum combobox cell widgets explicitly
             # before ``clear()``.  ``clear()`` destroys them
             # synchronously — if Qt still has a queued ``activated``
@@ -1373,7 +1399,9 @@ class ChannelsSlots:
                 self._last_cb_selection = self._normalize_cb_attrs(
                     set(self.controller.get_channel_box_selection())
                 )
-                self._sync_table_to_channel_box(widget)
+                self._sync_table_to_channel_box(
+                    widget, self._last_cb_selection or set(kept_rows)
+                )
 
         except RuntimeError:
             # Widget (or a child) destroyed mid-refresh.
@@ -1467,7 +1495,7 @@ class ChannelsSlots:
             return
         self._refresh_table(widget)
 
-    def _sync_table_to_channel_box(self, widget):
+    def _sync_table_to_channel_box(self, widget, names=None):
         """Select table rows matching the current channel box selection.
 
         Uses ``QItemSelectionModel.select()`` with ``Select | Rows`` so
@@ -1479,8 +1507,12 @@ class ChannelsSlots:
         (viewport clicks, panel hover), which would otherwise wipe the
         user's deliberate table selection.  To deselect in the table,
         click empty space in the table itself.
+
+        Parameters:
+            names (set[str] | None): Long names to select instead of the
+                cached channel box selection.
         """
-        cb_attrs = self._last_cb_selection
+        cb_attrs = self._last_cb_selection if names is None else names
         if not cb_attrs:
             return
 
@@ -1503,6 +1535,37 @@ class ChannelsSlots:
         finally:
             widget.blockSignals(was_blocked)
 
+    def _selected_row_names(self, widget):
+        """Return the attribute names of the selected rows, in table order."""
+        names = []
+        for item in widget.selectedItems():
+            if item.column() == self.COL_NAME:
+                name = item.text().strip()
+                if name and name not in names:
+                    names.append(name)
+        return names
+
+    def _selected_channels(self):
+        """The channels selected in the table, as short names.
+
+        Registered as a :meth:`ChannelBox.add_stand_in` source, so Set
+        Selected Keys and friends key these rows while Maya's channel box is
+        tabbed away (and so emptied).  Nothing while the panel is not shown.
+        """
+        tbl = self.ui.tbl000
+        if self._destroyed or not self._is_widget_alive(tbl) or not tbl.isVisible():
+            return []
+        nodes = self.controller.get_selected_nodes()
+        if not nodes:
+            return []
+        short = []
+        for name in self._selected_row_names(tbl):
+            try:
+                short.append(cmds.attributeQuery(name, node=nodes[0], shortName=True))
+            except Exception:
+                continue
+        return short
+
     def _on_table_selection_changed(self):
         """Push table selection to the Maya Channel Box.
 
@@ -1514,20 +1577,10 @@ class ChannelsSlots:
         if self.ui.tbl000.signalsBlocked() or self._syncing_selection:
             return
 
-        selected_items = self.ui.tbl000.selectedItems()
-        attr_names = []
-
-        # Gather unique names from selected rows (COLUMN 0)
-        for item in selected_items:
-            if item.column() == self.COL_NAME:
-                name = item.text().strip()
-                if name and name not in attr_names:
-                    attr_names.append(name)
+        attr_names = self._selected_row_names(self.ui.tbl000)
 
         self._syncing_selection = True
         try:
-            from mayatk.ui_utils.channel_box import ChannelBox
-
             ChannelBox.select_visual(attr_names)
             self._last_cb_selection = set(attr_names)
         except Exception:
@@ -1563,9 +1616,9 @@ class ChannelsSlots:
         row it crosses, ``Alt`` unlocks / removes those keys, and ``Ctrl`` on
         the Connect column breaks the connection (click or drag alike).
 
-        Connect column: only ``none`` / ``keyframe`` / ``keyframe_active``
-        take a key — the other connection states (expression, constraint,
-        driven_key, connected, muted) are Ctrl-only.
+        Connect column: only ``none`` and the ``keyframe*`` states take a key
+        — the other connection states (expression, constraint, driven_key,
+        connected, muted) are Ctrl-only.
 
         Parameters:
             row (int): Table row.
@@ -1609,7 +1662,7 @@ class ChannelsSlots:
                 return True
             return False
 
-        if state in (None, "none", "keyframe", "keyframe_active"):
+        if state in (None, "none", "keyframe", "keyframe_active", "keyframe_changed"):
             if clear:
                 keyed = False
             elif toggle:
@@ -1904,6 +1957,25 @@ class ChannelsSlots:
             cell.setText(actual_str)
             tbl.blockSignals(False)
 
+    def _on_edit_batch_started(self):
+        """Open one undo chunk for a multi-cell edit (a drag-fill).
+
+        The table writes every filled cell as its own ``cellChanged``; each
+        lands in :meth:`_handle_cell_edit` as its own ``setAttr``, so without
+        the chunk one Undo reverted one cell.
+        """
+        if self._edit_chunk_open:
+            return
+        cmds.undoInfo(openChunk=True, chunkName="Channels Edit")
+        self._edit_chunk_open = True
+
+    def _on_edit_batch_finished(self):
+        """Close the chunk :meth:`_on_edit_batch_started` opened."""
+        if not self._edit_chunk_open:
+            return
+        self._edit_chunk_open = False
+        cmds.undoInfo(closeChunk=True)
+
     # ------------------------------------------------------------------
     # Sync with Channel Box
     # ------------------------------------------------------------------
@@ -1916,15 +1988,11 @@ class ChannelsSlots:
         (which may invalidate the C++ pointer).
         """
         try:
-            from mayatk.ui_utils.channel_box import ChannelBox
-
             ChannelBox.disconnect_selection_changed(self._on_cb_selection_changed)
         except Exception:
             pass
 
         try:
-            from mayatk.ui_utils.channel_box import ChannelBox
-
             self._cb_signal_connected = ChannelBox.connect_selection_changed(
                 self._on_cb_selection_changed
             )
@@ -1940,8 +2008,6 @@ class ChannelsSlots:
             return
 
         try:
-            from mayatk.ui_utils.channel_box import ChannelBox
-
             raw_sel = set(ChannelBox.get_selected_attrs(sections="all"))
         except Exception:
             return
@@ -2568,6 +2634,10 @@ class ChannelsSlots:
         # any in-flight deferreds short-circuit; re-arm it here so the
         # freshly-registered callbacks actually run.
         self._destroyed = False
+        # Build the marshaller's relay here, on the GUI thread: its first post
+        # could otherwise come from a worker thread (the matrix callback).
+        self._gui_thread.post(lambda: None)
+        ChannelBox.add_stand_in(self._selected_channels)
 
         mgr = ScriptJobManager.instance()
         for event in ("SelectionChanged", "SceneOpened", "NewSceneOpened"):
@@ -2604,6 +2674,27 @@ class ChannelsSlots:
             mgr.add_om_callback(
                 om2.MDGMessage.addConnectionCallback,
                 _on_connection_change,
+                owner=self,
+            )
+        except ImportError:
+            pass
+
+        # A key set or cut on an existing curve changes no attribute or
+        # connection on the node, and a channel outside the transform matrix
+        # dirties nothing -- this is the only word the key icons get of it.
+        try:
+            import maya.api.OpenMayaAnim as oma2
+
+            def _on_curve_edited(*_args):
+                try:
+                    if not self._destroyed:
+                        self._schedule_values_only_refresh(widget)
+                except Exception:
+                    pass
+
+            mgr.add_om_callback(
+                oma2.MAnimMessage.addAnimCurveEditedCallback,
+                _on_curve_edited,
                 owner=self,
             )
         except ImportError:
@@ -2687,6 +2778,8 @@ class ChannelsSlots:
         # directly, so kAttributeSet only arrives on mouse-release).
         # Routed through a values-only refresh — preserves selection /
         # scroll and coalesces drag bursts into one UI pass per idle.
+        # It fires on the Evaluation Manager's worker threads (measured,
+        # Maya 2025), so it must touch nothing but the scheduler.
         def _on_matrix_modified(*_args):
             try:
                 if self._destroyed:
@@ -2876,6 +2969,10 @@ class ChannelsSlots:
                         widget.blockSignals(True)
                         cell.setText(val_str)
                         widget.blockSignals(False)
+                # A keyed value set off its curve turns "changed" (and back).
+                conn_type = self.controller.classify_connection(primary, attr_name)
+                if widget.actions.get(row, self.COL_CONN) != conn_type:
+                    widget.actions.set(row, self.COL_CONN, conn_type)
                 break
         except RuntimeError:
             self.cleanup_scene_callbacks()
@@ -2931,17 +3028,20 @@ class ChannelsSlots:
     def _schedule_values_only_refresh(self, widget):
         """Schedule a single deferred values-only update of the table.
 
-        Shared by ``timeChanged`` and viewport matrix-modified callbacks
-        — both want the same in-place refresh that preserves selection /
-        scroll.  Coalesces repeated calls (drag bursts collapse into one
-        UI pass per Qt event-loop tick).
+        Shared by ``timeChanged``, curve-edit and viewport matrix-modified
+        callbacks — all want the same in-place refresh that preserves
+        selection / scroll.  Coalesces repeated calls (drag bursts collapse
+        into one UI pass per Qt event-loop tick).  Safe from any thread.
 
-        Uses ``QTimer.singleShot(0, ...)`` rather than
-        ``cmds.evalDeferred`` because Maya's idle queue does *not* drain
-        during interactive viewport tool drags (Move/Rotate/Scale
-        manipulators) — values stay frozen until mouse-release.  Qt's
-        event loop *does* tick during drags (the viewport repaints
-        through it), so the Qt path keeps cells live during the drag.
+        Posted to the Qt event loop rather than ``cmds.evalDeferred``
+        because Maya's idle queue does *not* drain during interactive
+        viewport tool drags (Move/Rotate/Scale manipulators) — values stay
+        frozen until mouse-release.  Qt's event loop *does* tick during
+        drags (the viewport repaints through it), so the Qt path keeps
+        cells live during the drag.  Posted through the marshaller, not
+        ``QTimer.singleShot(0, ...)``: the matrix callback runs on Maya's
+        worker threads, where a timer never fires — the pending flag then
+        stuck and every later refresh was dropped.
         """
         if getattr(self, "_values_refresh_pending", False) or self._destroyed:
             return
@@ -2959,7 +3059,7 @@ class ChannelsSlots:
             except Exception:
                 pass
 
-        QtCore.QTimer.singleShot(0, _do)
+        self._gui_thread.post(_do)
 
     def _update_values_only(self, widget):
         """Update value cells and connection-state icons for current rows.
@@ -3071,12 +3171,11 @@ class ChannelsSlots:
 
         # Disconnect the Channel Box Qt signal (not an SJM event).
         try:
-            from mayatk.ui_utils.channel_box import ChannelBox
-
             ChannelBox.disconnect_selection_changed(self._on_cb_selection_changed)
         except Exception:
             pass
         self._cb_signal_connected = False
+        ChannelBox.remove_stand_in(self._selected_channels)
 
         # Clear per-node attr token list so a stale list doesn't linger.
         self._attr_change_tokens = []

@@ -18,6 +18,7 @@ from uitk.switchboard import Cancelable
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils.game_shader import GameShader
 from mayatk.mat_utils.shader_converter import ShaderConverter
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -40,20 +41,23 @@ class MatUpdater(ptk.LoggingMixin):
     #: added here now brings its wiring AND its teardown, or neither. Arnold
     #: shaders are ``ArnoldBridge``'s alone (they are generated bridges, which
     #: is why it excludes them from its own material queries).
+    #:
+    #: The physically-based surfaces take their teardown from
+    #: ``ShaderAttributeMap.slot_attrs`` -- the same table their connector wires
+    #: the lobe maps through -- so a lobe cannot be wired and left out of the
+    #: teardown. openPBRSurface was missing outright: a retype to OpenPBR
+    #: converted every material, deleted the sources, and then skipped each
+    #: one as "no connector", so the texture update never ran.
     CONNECTORS = {
         "standardSurface": {
             "connect": "connect_standard_surface_nodes",
             "shader": "standard_surface",
-            "attrs": (
-                "baseColor",
-                "metalness",
-                "specularRoughness",
-                "normalCamera",
-                "emissionColor",
-                "opacity",
-                "transmission",
-                "specularColor",
-            ),
+            "attrs": ShaderAttributeMap.slot_attrs("standardSurface"),
+        },
+        "openPBRSurface": {
+            "connect": "connect_open_pbr_nodes",
+            "shader": "open_pbr",
+            "attrs": ShaderAttributeMap.slot_attrs("openPBRSurface"),
         },
         "StingrayPBS": {
             "connect": "connect_stingray_nodes",
@@ -848,11 +852,13 @@ class MatUpdater(ptk.LoggingMixin):
                 not logged per file here, which would put a paragraph break
                 between every texture in a set.
         """
-        # Build inventory: Map Type -> Path
+        # Build inventory: Map Type -> Path. The material's maps read as ONE
+        # batch, so a set named for a lobe (`Hero_Coat`) keeps its base maps.
         inventory = {}
         unresolved = []
+        map_types = ptk.MapFactory.resolve_map_types(texture_paths)
         for path in texture_paths:
-            map_type = ptk.MapFactory.resolve_map_type(path)
+            map_type = map_types[path]
             if map_type:
                 inventory[map_type] = path
             else:

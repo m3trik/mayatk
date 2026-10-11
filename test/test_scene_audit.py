@@ -177,6 +177,33 @@ class TestSceneDiagnostics(_AuditCase):
         analyzer.print_report(analyzer.generate_report(analyzer.analyze([cube])))
 
 
+class TestColorSpaceFromRegistry(_AuditCase):
+    """The colour-space fix reads the map registry's ``color_space``.
+
+    It kept its own list of colour map types, which had drifted: it called
+    ``Sheen`` (a weight) colour data and knew none of the OpenPBR lobe tints,
+    so a sheen colour map was "fixed" to Raw.
+    """
+
+    def _detect(self, filename):
+        node = cmds.shadingNode("file", asTexture=True)
+        cmds.setAttr(f"{node}.fileTextureName", f"/x/{filename}", type="string")
+        return SceneDiagnostics._detect_color_space_for_node_cmds(node, "sRGB", "Raw")
+
+    def test_lobe_tints_are_colour_and_lobe_weights_are_data(self):
+        for filename, expected in (
+            ("rock_Base_Color.png", "sRGB"),
+            ("rock_Sheen_Color.png", "sRGB"),
+            ("rock_Coat_Color.png", "sRGB"),
+            ("rock_Subsurface_Color.png", "sRGB"),
+            ("rock_Sheen.png", "Raw"),
+            ("rock_Coat_Roughness.png", "Raw"),
+            ("rock_Roughness.png", "Raw"),
+        ):
+            with self.subTest(filename):
+                self.assertEqual(self._detect(filename), expected)
+
+
 class TestAuditInstancing(_AuditCase):
     """Rendered totals count every instance; unique totals count each shape once.
 
@@ -576,6 +603,18 @@ class TestAuditMaterials(_AuditCase):
         self.assertEqual(report.summary.blend_meshes, 1)
         self.assertTrue(report.assets[0].material.uses_transparency)
         self.assertNotIn("transparency", _kinds(report.assets[0].findings))
+
+    def test_open_pbr_glass_is_blend(self):
+        """openPBR spells its glass weight ``transmissionWeight``; the audit
+        read only ``transmission`` (Standard Surface's), so an OpenPBR glass
+        audited as opaque."""
+        cube = cmds.polyCube()[0]
+        try:
+            mat, _ = _assign(cube, "opbrGlass", material_type="openPBRSurface")
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+        cmds.setAttr(f"{mat}.transmissionWeight", 1.0)
+        self.assertEqual(self.audit([cube]).materials[0].transparency, "blend")
 
     def test_blend_materials_count_each_instance_once(self):
         """One instance wearing two blended materials is one instance, not two."""

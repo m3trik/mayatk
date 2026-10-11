@@ -288,6 +288,28 @@ class _TubeRigInternal(object):
         return (p[1] - p[0]).normal(), (p[3] - p[2]).normal()
 
     @staticmethod
+    def _along_chain(centerline, joints) -> list:
+        """*centerline* running root to tip, as *joints* do.
+
+        A RE-measured centerline comes back in mesh-topology order, which a
+        Reverse build (or a reversed Step 1 chain) runs against: binding to
+        it stationed every joint at the wrong end, and the whole cable bound
+        to one joint. Flipped when its start lies nearer the chain's tip.
+        """
+        if not centerline or len(joints) < 2:
+            return centerline
+        root = om.MVector(*_TubeRigInternal._xform_t_ws(joints[0]))
+        first, last = (
+            om.MVector(float(p[0]), float(p[1]), float(p[2]))
+            for p in (centerline[0], centerline[-1])
+        )
+        return (
+            list(centerline)[::-1]
+            if (last - root).length() < (first - root).length()
+            else centerline
+        )
+
+    @staticmethod
     def _world_x_axis(node) -> "om.MVector":
         """World-space X axis of a transform (a joint's down-the-bone direction)."""
         m = cmds.xform(str(node), q=True, ws=True, matrix=True)
@@ -1170,11 +1192,15 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         angle-cut hose end differs from the centerline's last chord by the
         cut angle, and a chord-built control sits visibly skew to the cap.
         Falls back to the local path tangents when the mesh yields no rings
-        (sampled centerlines, rigs built from a bare joint chain).
+        (sampled centerlines, rigs built from a bare joint chain). The rings
+        run in topology order and a Reverse build runs against it, so the
+        normals are matched to *centerline*'s own start.
         """
         try:
             start_n, end_n = TubePath.get_end_normals(
-                self.mesh, rings=self._cross_sections()
+                self.mesh,
+                rings=self._cross_sections(),
+                start_point=centerline[0] if centerline else None,
             )
         except Exception as e:
             self.logger.debug(f"End-normal lookup failed ({e}); using path tangents.")
@@ -1508,12 +1534,25 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
             # traversal that trips on it) degrades to per-vertex projection
             # rather than costing the mesh its parametric weights entirely.
             try:
-                own = TubePath._resolve_mesh_shape(
-                    mesh
-                ) == TubePath._resolve_mesh_shape(self.mesh)
+                shape = TubePath._resolve_mesh_shape(mesh)
+                own = shape == TubePath._resolve_mesh_shape(self.mesh)
                 rings = (
                     self._cross_sections() if own else TubePath.get_vertex_rings(mesh)
                 ) or None
+                if rings:
+                    # A combined mesh's other COMPACT shells (a plug's
+                    # connector and body) bind as rigid groups, one station
+                    # each; compact = within one bone length of their centre,
+                    # so a jacket running the tube's length still bends.
+                    points = [
+                        om.MVector(*_TubeRigInternal._xform_t_ws(j)) for j in joints
+                    ]
+                    bones = sorted((b - a).length() for a, b in zip(points, points[1:]))
+                    rings = list(rings) + TubePath._detached_shells(
+                        TubePath._mesh_fn(shape),
+                        rings,
+                        max_radius=bones[len(bones) // 2] if bones else None,
+                    )
             except Exception as e:
                 self.logger.debug(
                     f"Cross-section extraction failed ({e}); weighting per-vertex."
@@ -1641,6 +1680,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         if not curve:
             try:
                 centerline, _ = self.resolve_centerline()
+                centerline = _TubeRigInternal._along_chain(centerline, joints)
             except Exception as e:
                 self.logger.debug(f"Centerline re-measure failed ({e}); geodesic bind.")
 
@@ -3353,6 +3393,7 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         if not curve and not centerline:
             try:
                 centerline, _ = TubePath.get_centerline(transform, num_joints=-1)
+                centerline = _TubeRigInternal._along_chain(centerline, joints)
             except Exception:
                 centerline = None
             if not centerline or len(centerline) < 2:

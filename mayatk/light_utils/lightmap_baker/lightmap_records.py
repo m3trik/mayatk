@@ -740,8 +740,9 @@ class LightmapRecords(ptk.LoggingMixin):
     @staticmethod
     def project_root() -> Optional[str]:
         """The project this scene's lightmaps belong to; ``None`` without one
-        (``EnvUtils.scene_project_root``: the scene file's own project, the
-        session's while unsaved). A bake writes no map outside it
+        (``EnvUtils.scene_project_root``: the scene file's own project -- a
+        foreign scene opened as new: its source's -- the session's while
+        unsaved). A bake writes no map outside it
         (``LightmapBaker.beside_textures``) and sets none aside there
         (:meth:`superseding`).
         """
@@ -1109,10 +1110,12 @@ class LightmapRecords(ptk.LoggingMixin):
         (``FbxUtils.PRODUCERS``). Pure: it reads the markers and never writes.
 
         Parameters:
-            ctx: The export's decisions (unused: the manifest is a function of
-                the markers alone).
+            ctx: The export's decisions; only its ``scope`` is read. A scoped
+                export names the export set's objects alone (the record is
+                ``export_scoped``): a marker outside it -- a hidden group of
+                stale copies -- would ship its map with nothing to bind it to.
         """
-        return cls._record()
+        return cls._record(ctx.scope)
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
@@ -1145,12 +1148,13 @@ class LightmapRecords(ptk.LoggingMixin):
         return record.text if record is not None else None
 
     @classmethod
-    def _record(cls) -> Optional[ptk.Record]:
+    def _record(cls, objects: Optional[List[str]] = None) -> Optional[ptk.Record]:
         """(Re)build the lightmap manifest record from the scene's markers.
 
         One entry per marked TRANSFORM (one per instance, each with its own
         atlas ``scaleOffset``), legacy shape markers included, in the one
-        marker enumeration's order (:meth:`_marker_records`, sorted by path).
+        marker enumeration's order (:meth:`_marker_records`, sorted by path);
+        *objects* scopes it like that enumeration (``None`` = the scene).
         The ``version`` is stamped by the ``ptk.SceneRecords.LIGHTMAPS``
         declaration. unitytk's optional editor helper reads it to auto-bind
         Unity's native lightmap slots (``renderer.lightmapScaleOffset`` per
@@ -1158,7 +1162,7 @@ class LightmapRecords(ptk.LoggingMixin):
         publisher then clears the channel).
         """
         entries: List[Dict[str, Any]] = []
-        for transform, info in cls._marker_records():
+        for transform, info in cls._marker_records(objects):
             shape = NodeUtils.get_shape(transform)
             # The engine matches by the GameObject (transform) name, so publish
             # exactly what the export carries: the DAG path goes (no format

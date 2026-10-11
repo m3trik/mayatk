@@ -60,6 +60,11 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     #: be an exact slice: the split resamples every curve, or a node keyed only
     #: outside a shot plays its rest pose through it (``FbxUtils.apply_takes``).
     resample_takes = True
+    #: ...and this panel offers no animation knob, so the hand-off exports the
+    #: animation and splits the declared shots unless a request says otherwise.
+    #: Without it no take was split (``resample_takes`` never ran) and Unity
+    #: built one ``Take 001`` clip for a scene that declares its shots.
+    include_animation = True
 
     @staticmethod
     def _deliverer_cls():

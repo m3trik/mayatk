@@ -531,9 +531,6 @@ class TestStaggerKeysFixes(MayaTkTestCase):
         # Check visibility tangents
         times = cmds.keyframe(self.cube, at="visibility", q=True, tc=True)
         for t in times:
-            in_type = cmds.keyTangent(
-                self.cube, at="visibility", t=(t,), q=True, itt=True
-            )[0]
             out_type = cmds.keyTangent(
                 self.cube, at="visibility", t=(t,), q=True, ott=True
             )[0]
@@ -557,6 +554,51 @@ class TestStaggerKeysFixes(MayaTkTestCase):
 
         result = import_without_maya("mayatk.anim_utils.stagger_keys", ("cmds",))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestStaggerClaimHooks(MayaTkTestCase):
+    """Stagger reports the keys it moves (``on_move``), so the shot system's
+    claims ride along with them (mirror of blendertk's ``stagger_keys``)."""
+
+    def test_stagger_carries_a_claim_with_its_key(self):
+        a = cmds.polyCube(name="stagger_hooks_a")[0]
+        b = cmds.polyCube(name="stagger_hooks_b")[0]
+        for obj in (a, b):
+            for t in (0, 10):
+                cmds.setKeyframe(obj, attribute="translateX", time=t, value=t)
+        crv_b = cmds.keyframe(b, attribute="translateX", query=True, name=True)[0]
+        store = mtk.ShotStore()
+        store.edit_ledger.record_authored(crv_b, 10.0, 0, "fade_out", b)
+        cmds.selectKey(clear=True)
+
+        StaggerKeys.stagger_keys([a, b], on_move=store.remap_moved([a, b]))
+
+        self.assertEqual(
+            cmds.keyframe(b, attribute="translateX", query=True, timeChange=True),
+            [10.0, 20.0],
+        )
+        self.assertEqual(store.edit_ledger.authored(), [(crv_b, 20.0)])
+
+    def test_a_segment_staggered_onto_the_next_ones_start_replaces_it(self):
+        """End-to-start placement lands a split curve's first segment ON its
+        next segment's start key: the move stacked two keys on that frame
+        (measured 2026-10-05: B's 5 -> 15 onto B's own 15).  The key landed
+        on -- holding the value the mover carries too -- is replaced."""
+        a = cmds.polyCube(name="seam_a")[0]
+        for t in (0, 10):
+            cmds.setKeyframe(a, attribute="translateX", time=t, value=t)
+        b = cmds.polyCube(name="seam_b")[0]
+        for t, v in ((0, 0), (5, 5), (15, 5), (20, 10)):
+            cmds.setKeyframe(b, attribute="translateX", time=t, value=v)
+        cmds.selectKey(clear=True)
+
+        StaggerKeys.stagger_keys([a, b])
+
+        times = cmds.keyframe(b, attribute="translateX", query=True, timeChange=True)
+        values = cmds.keyframe(b, attribute="translateX", query=True, valueChange=True)
+        self.assertEqual(
+            list(zip(times, values)), [(10.0, 0.0), (15.0, 5.0), (20.0, 10.0)]
+        )
 
 
 if __name__ == "__main__":

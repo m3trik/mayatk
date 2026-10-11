@@ -56,8 +56,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         if level and self._write_resamples_layers():
             self.logger.info(
                 "Smart bake: its own key optimization is skipped -- this FBX "
-                "write splits the declared takes, which re-samples the override "
-                "layer per frame, so reduced layer keys would never ship."
+                "write bakes, which re-samples the override layer per frame, so "
+                "reduced layer keys would never ship."
             )
             level = False
         baker = SmartBake(
@@ -145,11 +145,16 @@ class _AnimationTasksMixin(_TaskDataMixin):
     def _write_resamples_layers(self) -> bool:
         """Whether this run's FBX write re-samples the bake's override layer
         per frame, so a key reduction inside the layer could never ship: the
-        write splits the declared takes (``ExportRun.splits_takes`` over a scene
-        that declares some -- ``FbxUtils.declared_takes``, the read
-        :meth:`apply_declared_takes` realizes them from), a split forces
-        ``FBXExportBakeComplexAnimation`` over the shot union, and nothing is
-        written back to the scene.
+        write BAKES (``FBXExportBakeComplexAnimation``) and nothing is written
+        back to the scene. A baking write keys a layered channel on every frame
+        of its range, Resample All or not -- measured on Maya 2025 / FBX
+        2020.3.6, an override layer keyed at 10/100/200 shipped 191 keys over
+        10-200 -- so a split (``ExportRun.splits_takes`` over a scene that
+        declares some -- ``FbxUtils.declared_takes``, the read
+        :meth:`apply_declared_takes` realizes them from) answers yes, since it
+        forces the bake over the shot union, and any other write answers with
+        the loaded preset's own bake flag. Counting the split alone missed
+        every export whose preset bakes.
 
         A wrong answer costs FIDELITY, not just file size, so answering it is
         worth the four reads: the write bakes the layer either way, but
@@ -161,12 +166,11 @@ class _AnimationTasksMixin(_TaskDataMixin):
         so the skip is the faithful path, not merely the smaller one."""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        return bool(
-            self.run.splits_takes
-            and not self.run.usd
-            and not self.run.animation_write_back
-            and FbxUtils.declared_takes()
-        )
+        if self.run.usd or self.run.animation_write_back:
+            return False
+        if self.run.splits_takes and FbxUtils.declared_takes():
+            return True
+        return FbxUtils.baking_enabled()
 
     def optimize_keys(self, level: Union[bool, str, None] = True):
         """Optimize baked animation keys at the requested level.
@@ -267,22 +271,28 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
     def _write_resamples_curves(self) -> bool:
         """Whether this run's FBX write keys EVERY animated curve on every frame
-        of the bake range: it splits the scene's declared takes, which
+        of the bake range -- Resample All (:attr:`FbxUtils.RESAMPLE_ALL`).
+
+        A write that splits the scene's declared takes sets it itself:
         :meth:`FbxUtils.apply_takes` resamples so each take is an exact slice
         -- except on a GLB-only run, whose intermediate FBX ships no take
         anyone reads (the GLB's clips are cut from the whole-timeline take), so
         its stack stays exactly as authored: ``apply_takes(resample=False)``
-        turns off a Resample All the loaded preset left on.
+        turns off a Resample All the loaded preset left on. Any other write
+        (Full Sequence clips, or no shots) keeps the preset's flag as set, and
+        the plugin resamples only a write that bakes.
 
         Asked before the takes exist (the clip origin is published first), so
-        the shots are read off the ShotStore, as the range task reads them.
+        the shots are read off the ShotStore, as the range task reads them, and
+        the flags off the plugin, where the preset left them.
         """
-        return bool(
-            self.run.splits_takes
-            and not self.run.usd
-            and not self.run.glb_only
-            and self._bake_range_from_shots()
-        )
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        if self.run.usd:
+            return False
+        if self.run.splits_takes and self._bake_range_from_shots():
+            return not self.run.glb_only
+        return FbxUtils.baking_enabled() and FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
 
     def _clip_origin_span(self) -> Optional[Tuple[int, int]]:
         """The frames the whole-timeline take will carry -- the span every GLB
@@ -290,28 +300,49 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         The keys the export ships, written whole whatever the bake range
         (:meth:`_bake_range_from_keys`). And, when the write resamples
-        (:meth:`_write_resamples_curves`), the bake range too: every curve is
-        then keyed from the range's first frame, so a shot that opens before
-        the first key opens the take with it -- measured on a curve keyed
-        10-100 under a 1-100 range, the take's first key moved from 10 to 1,
-        and a GLB converter puts the first key at t=0. The range is set after
-        this publishes (:meth:`set_bake_animation_range` runs last, to cover
-        the takes), so it is predicted from the readings it is made of: a
-        split widens every mode to the declared shots, and the Scene Animation
-        Range row adds the scene's range.
+        (:meth:`_write_resamples_curves` -- a split's, or the preset's), the
+        bake range too: every curve is then keyed over the range, so a range
+        that opens before the first key opens the take with it -- measured on
+        a curve keyed 10-100 under a 1-100 range, the take's first key moved
+        from 10 to 1, and a GLB converter puts the first key at t=0. The range
+        is set after this publishes (:meth:`set_bake_animation_range` runs
+        last, to cover the takes), so it is predicted
+        (:meth:`_predicted_bake_range`).
         """
         keys = self._bake_range_from_keys()
         if not self._write_resamples_curves():
             return keys
-        spans = [keys, self._bake_range_from_shots()]
-        mode = self.run.bake_range_mode
-        if (str(mode).strip().lower() if mode else "") == "scene":
-            spans.append(self._bake_range_from_scene())
-        spans = [span for span in spans if span]
+        spans = [span for span in (keys, self._predicted_bake_range()) if span]
+        if not spans:
+            return None
         return (
             int(math.floor(min(span[0] for span in spans))),
             int(math.ceil(max(span[1] for span in spans))),
         )
+
+    def _predicted_bake_range(self) -> Optional[Tuple[float, float]]:
+        """The range this run's write will bake over, before anything sets it.
+
+        What the Bake Range row's mode measures (:meth:`_bake_range_for_mode`,
+        the reading :meth:`set_bake_animation_range` sets last), widened for a
+        split to the declared shots -- the union :meth:`apply_declared_takes`
+        claims, and sets itself when the row is OFF. With the row OFF and
+        nothing split, the range the plugin holds now -- the preset's -- is
+        the one written.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        try:
+            mode = self._bake_range_token(self.run.bake_range_mode)
+        except ValueError:  # the range task raises it, naming the mode
+            mode = None
+        shots = self._bake_range_from_shots() if self.run.splits_takes else None
+        if mode is None:
+            return shots or FbxUtils.bake_range()
+        spans = [span for span in (self._bake_range_for_mode(mode)[0], shots) if span]
+        if not spans:
+            return None
+        return min(span[0] for span in spans), max(span[1] for span in spans)
 
     def _bake_range_from_scene(self) -> Tuple[int, int]:
         """The scene's authored animation range.
@@ -360,14 +391,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        if not mode:  # OFF — as optimize_keys: the panel filters its own OFF
-            return  # row out, so this is a headless caller's falsy value
-        mode = "keys" if mode is True else str(mode).strip().lower()
-        if mode not in self.BAKE_RANGE_MODES:
-            raise ValueError(
-                f"Unknown bake range mode {mode!r}; expected one of "
-                f"{', '.join(self.BAKE_RANGE_MODES)}."
-            )
+        mode = self._bake_range_token(mode)
+        if mode is None:  # OFF — as optimize_keys: the panel filters its own
+            return  # OFF row out, so this is a headless caller's falsy value
 
         if not FbxUtils.baking_enabled():
             self.logger.info(
@@ -375,15 +401,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
             )
             return
 
-        if mode == "auto":
-            resolved, source = self._bake_range_from_shots(), "shot union"
-            if resolved is None:
-                resolved = self._bake_range_from_keys()
-                source = "keyframe extent (no shots declared)"
-        elif mode == "keys":
-            resolved, source = self._bake_range_from_keys(), "keyframe extent"
-        else:
-            resolved, source = self._bake_range_from_scene(), "scene animation range"
+        resolved, source = self._bake_range_for_mode(mode)
 
         # Never clip a span another task claimed (:meth:`_require_range_coverage`),
         # whatever the selected source measured.
@@ -411,6 +429,36 @@ class _AnimationTasksMixin(_TaskDataMixin):
         mel.eval(f"FBXExportBakeComplexStart -v {start}")
         mel.eval(f"FBXExportBakeComplexEnd -v {end}")
         self.logger.info(f"Set bake range to {start}-{end} ({source}).")
+
+    def _bake_range_token(self, mode: Union[bool, str, None]) -> Optional[str]:
+        """The Bake Range row's *mode* as a :attr:`BAKE_RANGE_MODES` token, or
+        ``None`` for OFF; a legacy ``True`` reads as ``"keys"``.
+
+        Raises:
+            ValueError: An unknown mode.
+        """
+        if not mode:
+            return None
+        mode = "keys" if mode is True else str(mode).strip().lower()
+        if mode not in self.BAKE_RANGE_MODES:
+            raise ValueError(
+                f"Unknown bake range mode {mode!r}; expected one of "
+                f"{', '.join(self.BAKE_RANGE_MODES)}."
+            )
+        return mode
+
+    def _bake_range_for_mode(self, mode: str) -> Tuple[Optional[Tuple], str]:
+        """What Bake Range *mode* (a token) measures, and what it measured --
+        the one reading :meth:`set_bake_animation_range` sets and the clip
+        origin predicts (:meth:`_predicted_bake_range`)."""
+        if mode == "auto":
+            resolved = self._bake_range_from_shots()
+            if resolved is not None:
+                return resolved, "shot union"
+            return self._bake_range_from_keys(), "keyframe extent (no shots declared)"
+        if mode == "keys":
+            return self._bake_range_from_keys(), "keyframe extent"
+        return self._bake_range_from_scene(), "scene animation range"
 
     def _stage_bake_range_restore(self) -> None:
         """Stage the FBX bake range's restore to the range it holds NOW.
@@ -545,8 +593,18 @@ class _AnimationTasksMixin(_TaskDataMixin):
         the bracket that finishes them; so their finish is staged here too,
         under the key :meth:`export_data_node` stages it by (first wins), as
         blendertk's mirror does.  A finish tolerates running twice.
+
+        The context carries the export set as its ``scope``: an export-scoped
+        record (the lightmaps, the shadow planes) names only the nodes the
+        write ships, so the post-write embed never ships the maps of a node
+        left out -- a hidden group of stale copies shipped five outdated
+        lightmaps and failed the verifier on two it could not find
+        (2026-10-09). The scene's own copy of each narrowed record is put back
+        after the run (``ExportSnapshot.restore_scene_wide``): the carrier the
+        scene keeps, and a later hand-off ships as stored, describes it all.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
         try:
             ctx = FbxUtils.export_context(
@@ -555,13 +613,25 @@ class _AnimationTasksMixin(_TaskDataMixin):
                 # The FBX's handoff record publishes the same lighting recipe
                 # the GLB's envelope does, with this run's choices.
                 rendering=self.run.rendering,
+                scope=tuple(self._live_objects()) or None,
             )
             if not FbxUtils._export_depth:
                 staged = dict(FbxUtils._session_stagers)
                 self.stage_deferred_restore(
                     "export_stagers", lambda: FbxUtils._run_stagers("finish", staged)
                 )
-            return FbxUtils.publish(ctx, only=only)
+            snapshot = FbxUtils.publish(ctx, only=only)
+            if snapshot is not None and snapshot.scene_wide:
+                self.stage_deferred_restore(
+                    "scene_wide_records",
+                    lambda: snapshot.restore_scene_wide(DataNodes),
+                )
+                self.logger.info(
+                    "Narrowed to the export set: "
+                    f"{', '.join(snapshot.scene_wide)} (the scene keeps its "
+                    "whole copy)."
+                )
+            return snapshot
         except Exception:  # noqa: BLE001 - the write goes on; say what ships
             self.logger.warning(
                 "Scene records not published; the carrier ships as last stored.",
@@ -572,7 +642,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
     #: The panel that acts on a record's export notes: record key -> (link
     #: label, panel name).  The note's link opens it (``action://show``, which
     #: the Scene Exporter panel handles) -- the Shots window's All Shots group
-    #: holds Delete Stale Shots.
+    #: holds Delete Shots, whose first scope is Stale.
     NOTE_PANELS = {ptk.SceneRecords.SHOTS.key: ("Open Shots", "shots")}
 
     def _log_data_node_summary(self):
@@ -610,14 +680,14 @@ class _AnimationTasksMixin(_TaskDataMixin):
             self.logger.debug("data_export notes skipped.", exc_info=True)
 
     def _note_link(self, key: str) -> str:
-        """The link to the panel that acts on *key*'s notes, or ``""`` (none
-        declared, or a plain logger that builds no links)."""
+        """The link to the panel that acts on *key*'s notes, ``""`` when none
+        is declared -- the panel's name as plain text through a logger that
+        builds no links (:meth:`_log_link`)."""
         entry = self.NOTE_PANELS.get(key)
-        build = getattr(self.logger, "log_link", None)
-        if entry is None or build is None:
+        if entry is None:
             return ""
         label, panel = entry
-        return build(label, "show", ui=panel)
+        return self._log_link(label, "show", ui=panel)
 
     def _include_data_export_node(self):
         """Append the ``data_export`` carrier(s) to the export set.

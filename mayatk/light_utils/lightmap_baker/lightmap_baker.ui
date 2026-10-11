@@ -185,6 +185,68 @@ A selected group excludes every mesh under it; with nothing selected, the set is
        </layout>
       </item>
       <item>
+       <layout class="QHBoxLayout" name="bake_set_layout">
+        <property name="spacing">
+         <number>1</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="lbl_bake_set">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Bake Set — the objects the last bake acted on, stored in the scene as a set (lightmapBaker_baked), so selecting it and baking again re-runs that bake.</string>
+          </property>
+          <property name="text">
+           <string>Bake Set:</string>
+          </property>
+          <property name="caption" stdset="0">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="select_bake_set">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>1</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Select the objects of the last saved bake (hidden ones included).
+
+The disk button is Save After Bake: while it is on, every bake replaces the scene's Bake Set with the objects it acted on — the Scope minus the Exclude set and what Arnold renders nothing of — finished or not. One setting for every scene. The tag button names the set with the naming convention's Set suffix (the Naming panel's, _SET by default).</string>
+          </property>
+          <property name="text">
+           <string>Select Bake Set</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
        <widget class="ComboBox" name="cmb002">
         <property name="minimumSize">
          <size>

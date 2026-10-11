@@ -136,6 +136,28 @@
          </property>
         </widget>
        </item>
+       <item>
+        <widget class="QPushButton" name="chk000">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>999</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="text">
+          <string>Reverse Direction</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
       </layout>
      </widget>
     </item>
@@ -268,28 +290,6 @@
           </property>
           <property name="value">
            <double>-1.000000000000000</double>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="chk000">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>999</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="text">
-           <string>Reverse Direction</string>
-          </property>
-          <property name="checkable">
-           <bool>true</bool>
           </property>
          </widget>
         </item>

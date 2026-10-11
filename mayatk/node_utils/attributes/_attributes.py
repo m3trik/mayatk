@@ -628,12 +628,19 @@ class Attributes(ptk.HelpMixin):
     def get_selected_channels() -> List[str]:
         """Get attributes selected in the channel box.
 
+        With none selected there -- Maya empties the box while it is tabbed
+        away -- the selection of a panel standing in for it (mayatk's
+        Channels) counts instead; see :meth:`ChannelBox.add_stand_in`.
+
         Returns:
             list[str]: e.g. ``['tx', 'ry', 'sz']``
         """
         from mayatk.ui_utils.channel_box import ChannelBox
 
-        return ChannelBox.get_selected_attrs(sections="main")
+        return (
+            ChannelBox.get_selected_attrs(sections="main")
+            or ChannelBox.stand_in_selection()
+        )
 
     @staticmethod
     def get_channel_box_values(

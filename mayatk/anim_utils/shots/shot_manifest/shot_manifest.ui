@@ -121,6 +121,29 @@
        </spacer>
       </item>
       <item>
+       <widget class="PushButton" name="b004">
+        <property name="minimumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>85</width>
+          <height>24</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Export the manifest's rows as CSV, JSON or Markdown,
+to a file or the clipboard. Its menu button sets how.</string>
+        </property>
+        <property name="text">
+         <string>Export</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="PushButton" name="b002">
         <property name="minimumSize">
          <size>

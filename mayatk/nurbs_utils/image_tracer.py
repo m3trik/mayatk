@@ -20,6 +20,8 @@ except ImportError:
     cmds = None
     mel = None
 
+import pythontk as ptk
+
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.display_utils._display_utils import DisplayUtils
@@ -47,7 +49,6 @@ class BluePencilMixin(object):
             )
             return []
 
-        import pythontk as ptk
         import zipfile
         import shutil
 
@@ -144,7 +145,8 @@ class ImageTracer(BluePencilMixin):
         if self.use_blue_pencil:
             return self.get_blue_pencil_curves()
 
-        img = cv2.imread(self.image_path)
+        # Not cv2.imread: on Windows it opens no path that is not ASCII.
+        img = ptk.ImgUtils.cv2_read(self.image_path)
         if img is None:
             raise ValueError("Failed to read image: {}".format(self.image_path))
 

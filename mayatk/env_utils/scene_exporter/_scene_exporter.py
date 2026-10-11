@@ -441,6 +441,7 @@ class SceneExporter(ptk.SceneExporterBase):
                 )
             elif self.preset_file:
                 self.load_fbx_export_preset(self.preset_file, verify=True)
+                self._pin_self_contained()
                 if create_glb_enabled:
                     self._pin_glb_requirements()
             elif not usd:
@@ -499,10 +500,16 @@ class SceneExporter(ptk.SceneExporterBase):
                 self.logger.error("No objects to export.")
                 return False
 
-            # Perform the actual export. For GLB-only the FBX is written to a
-            # throwaway temp dir (so it never lands in — or overwrites anything
-            # in — the output directory) and removed once converted.
-            glb_tempdir = None
+            # Perform the actual export. The FBX is written to, and finished
+            # in, a LOCAL stage -- the rig-helper pass, the GLB conversion, the
+            # takes and the embedded maps all rewrite or read it there -- and
+            # reaches the output directory once, finished (``_deliver``). A
+            # synced output folder holds a just-written file while it uploads:
+            # rewritten in place, the 230 MB production FBX refused the rig
+            # pass's swap ("Access is denied") and shipped every rig helper it
+            # was meant to drop (2026-10-08). For GLB-only the staged FBX is
+            # thrown away. USD writes straight to its destination.
+            stage_dir = None
             # The export bracket stages the scene (the curve-proxy transport
             # nodes; a preview standing down) for the write and undoes it in the
             # ``finally`` below, AFTER the GLB conversion has read the scene;
@@ -524,13 +531,18 @@ class SceneExporter(ptk.SceneExporterBase):
                 # below, or the session's export hooks stand down for the rest
                 # of it.
                 self.task_manager.ensure_scene_records_published()
-                if glb_only:
-                    glb_tempdir = ptk.TempArtifacts("scene_exporter_glb").dir_path()
-                    fbx_write_path = os.path.join(
-                        glb_tempdir, os.path.basename(self.export_path)
-                    )
-                else:
+                if usd:
                     fbx_write_path = self.export_path
+                else:
+                    # Spelled for the ANSI code page Maya writes through: under
+                    # a %TEMP% it cannot hold (Cyrillic on cp1252) ``cmds.file``
+                    # refuses the path, and every FBX run now writes here.
+                    stage_dir = ptk.AppLauncher.ansi_safe_path(
+                        ptk.TempArtifacts("scene_exporter_stage").dir_path()
+                    )
+                    fbx_write_path = os.path.join(
+                        stage_dir, os.path.basename(self.export_path)
+                    )
 
                 # Use cmds.file for export to avoid object-wrapper overhead
                 # cmds.exportSelected wraps cmds.file(..., exportSelected=True)
@@ -590,28 +602,10 @@ class SceneExporter(ptk.SceneExporterBase):
                         export_succeeded = False
                         return False
                     deliverable_path = os.path.splitext(self.export_path)[0] + ".glb"
-                    try:
-                        shutil.move(glb_path, deliverable_path)
-                    except OSError as e:
-                        # Everything succeeded except the final rename, which
-                        # on Windows means the destination is held open. The
-                        # temp dir is about to be removed, so the finished GLB
-                        # -- the whole run's output -- would go with it over a
-                        # file handle. Park it beside the destination instead
-                        # and name it; the user closes the viewer and renames.
-                        reason = ptk.FileUtils.describe_lock(deliverable_path) or str(e)
-                        rescued = ptk.FileUtils.next_version_path(
-                            deliverable_path, format="{stem}_unplaced_v{n:03d}{ext}"
-                        )
-                        try:
-                            shutil.move(glb_path, rescued)
-                        except OSError:  # the output dir itself is unwritable
-                            rescued = glb_path
-                            glb_tempdir = None  # read by the finally; keep it
-                        self.logger.error(
-                            f"Could not write {deliverable_path}: {reason}"
-                        )
-                        self.logger.warning(f"The finished GLB was kept at: {rescued}")
+                    placed = self._deliver(glb_path, deliverable_path)
+                    if placed != deliverable_path:
+                        if placed == glb_path:
+                            stage_dir = None  # the stage holds the only copy
                         export_succeeded = False
                         return False
                     self.logger.success(f"GLB created: {deliverable_path}")
@@ -656,13 +650,45 @@ class SceneExporter(ptk.SceneExporterBase):
                 glb_alongside = None
                 if create_glb_enabled and not glb_only:
                     self._progress_step("Converting to GLB…")
-                    glb_alongside = self.task_manager.create_glb()
+                    glb_alongside = self.task_manager.create_glb(
+                        fbx_path=fbx_write_path, announce=False
+                    )
 
                 # The FBX deliverable's clips, per the Animation Clips mode --
                 # after the GLB, whose clips are cut from the whole-timeline
                 # take Shots Only drops. A GLB-only run's FBX is not shipped.
                 if not glb_only and not usd:
                     self.task_manager.ship_declared_takes(fbx_write_path)
+                    # Every file the scene records name by file name (the
+                    # lightmaps, the reflection probe, the shadow maps) goes
+                    # INSIDE the FBX, so nothing ships beside it -- after the
+                    # GLB, which binds its own copies.
+                    _FbxUtils.embed_dependencies(
+                        fbx_write_path,
+                        self.task_manager._lightmap_search_dirs(),
+                        logger=self.logger,
+                    )
+                    # The finished files, into place: the FBX is the
+                    # deliverable (a refused placement fails the run, its
+                    # file parked beside the destination); the GLB rides
+                    # along, and one that cannot land is dropped from the
+                    # sidecar and the verification rather than the run.
+                    placed = self._deliver(fbx_write_path, self.export_path)
+                    if placed != self.export_path:
+                        if placed == fbx_write_path:
+                            stage_dir = None  # the stage holds the only copy
+                        export_succeeded = False
+                        return False
+                    if glb_alongside:
+                        placed_glb = os.path.splitext(self.export_path)[0] + ".glb"
+                        landed = self._deliver(glb_alongside, placed_glb)
+                        if landed == glb_alongside:
+                            stage_dir = None  # the stage holds the only copy
+                        if landed == placed_glb:
+                            glb_alongside = placed_glb
+                            self.logger.success(f"GLB created: {glb_alongside}")
+                        else:
+                            glb_alongside = None
 
                 # Write the scene-data sidecar (hierarchy baseline for future
                 # diff checks + data_export snapshot) as the single LAST step
@@ -705,8 +731,8 @@ class SceneExporter(ptk.SceneExporterBase):
                 raise RuntimeError(f"Failed to export objects: {e}")
             finally:
                 _FbxUtils.end_export()
-                if glb_tempdir:
-                    shutil.rmtree(glb_tempdir, ignore_errors=True)
+                if stage_dir:
+                    shutil.rmtree(stage_dir, ignore_errors=True)
         except ptk.OperationCancelled as e:
             # The progress callback asked to stop (Esc held over the panel's
             # footer; a headless caller's own gate). Only reachable before the
@@ -746,6 +772,20 @@ class SceneExporter(ptk.SceneExporterBase):
         # Tasks/checks already ran (and any GLB conversion completed) before
         # this point; a True return means the deliverable was written.
         return True
+
+    def _deliver(self, staged: str, destination: str) -> str:
+        """Put the finished *staged* file at *destination* (``ptk.FileUtils.deliver_file``).
+
+        Returns where the file is now: *destination* when it landed; else the
+        copy parked beside it, or *staged* itself when the output folder takes
+        nothing -- both named in the log, so the run's output is never lost
+        with its stage.
+        """
+        placed, reason = ptk.FileUtils.deliver_file(staged, destination)
+        if reason:
+            self.logger.error(f"Could not write {destination}: {reason}")
+            self.logger.warning(f"The finished file was kept at: {placed}")
+        return placed
 
     #: Token -> meaning for every placeholder the Output Filename accepts, in
     #: tooltip order (meanings are tooltip markup). A subclass extends the
@@ -974,6 +1014,11 @@ class SceneExporter(ptk.SceneExporterBase):
         "FBXExportEmbeddedTextures": True,
         "FBXExportTangents": True,
     }
+    #: What every FBX deliverable needs, preset or not: its material media
+    #: inside it. Nothing ships beside a deliverable (the user's rule,
+    #: 2026-10-05); the files the scene records name follow it in after the
+    #: write (``FbxUtils.embed_dependencies``).
+    _SELF_CONTAINED_FBX_OPTIONS = {"FBXExportEmbeddedTextures": True}
 
     def _default_fbx_options(self, glb_deliverable: bool) -> Dict[str, Any]:
         """FBX export flags for a run that names NO preset.
@@ -994,9 +1039,10 @@ class SceneExporter(ptk.SceneExporterBase):
           only embed what the FBX carries. A GLB deliverable written from a
           session nobody had primed therefore arrived with ZERO images: the
           only reason this was not seen is that a WebXR preview push, which
-          pins the flag, usually ran first in the same Maya. Pinned only for a
-          GLB run: a loose-media FBX legitimately ships its textures beside
-          itself, which is what ``convert_to_relative_paths`` is for.
+          pins the flag, usually ran first in the same Maya. Pinned for every
+          run (:attr:`_SELF_CONTAINED_FBX_OPTIONS`): every dependency rides
+          inside the deliverable and nothing ships beside it (the user's rule,
+          2026-10-05), so an FBX carries its maps as a GLB does.
         * ``FBXExportSmoothingGroups`` -- factory **off**, and the hard-edge
           information it carries cannot be reconstructed downstream. The mixin
           pins it for every hand-off for that reason.
@@ -1048,7 +1094,7 @@ class SceneExporter(ptk.SceneExporterBase):
         options = {
             "FBXExportInstances": True,
             "FBXExportSmoothingGroups": True,
-            "FBXExportEmbeddedTextures": bool(glb_deliverable),
+            **self._SELF_CONTAINED_FBX_OPTIONS,
         }
         if glb_deliverable:
             options.update(self._GLB_REQUIRED_FBX_OPTIONS)
@@ -1125,6 +1171,25 @@ class SceneExporter(ptk.SceneExporterBase):
             f"pinned {options} so the write neither inherits this session's "
             "FBX state nor silently drops instancing, smoothing or media."
         )
+
+    def _pin_self_contained(self) -> None:
+        """Re-pin :attr:`_SELF_CONTAINED_FBX_OPTIONS` over a loaded preset, saying so.
+
+        Before the task pipeline: the texture passes stage their copies for a
+        write that embeds them. A preset keeps every content choice; it cannot
+        ship a deliverable that needs files beside it (Maya's own
+        ``fbxexport`` preset leaves Embed Media off).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        required = self._SELF_CONTAINED_FBX_OPTIONS
+        overridden = [o for o, v in required.items() if FbxUtils.export_flag(o) != v]
+        FbxUtils.set_fbx_options(required)
+        if overridden:
+            self.logger.info(
+                f"FBX preset overridden: {', '.join(overridden)} turned on -- the "
+                "deliverable carries its media; the preset's other settings stand."
+            )
 
     def _pin_glb_requirements(self) -> None:
         """Re-pin :attr:`_GLB_REQUIRED_FBX_OPTIONS` over a loaded preset, saying so.

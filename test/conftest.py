@@ -113,32 +113,42 @@ import pythontk as ptk  # noqa: E402
 #
 # With Qt, uitk's QSettings redirect too: `pytest test/test_shot_manifest.py`
 # wrote ~122 RecentValues/<MagicMock> keys per run into the developer's live
-# uitk store (2026-10-04). Never in an interactive Maya: a module importing
-# this file there (`from conftest import mock_cmds`) runs in the USER's
-# session, and the redirect cannot be undone.
-def _settings_sandbox_applies() -> bool:
+# uitk store (2026-10-04).
+#
+# None of it in an interactive Maya: a module importing this file there
+# (`from conftest import mock_cmds`) runs in the USER's session, which a
+# redirect set up at import would outlive -- refusing browser launches and
+# writing its temp files and presets into a root deleted when Maya exits.
+# A run there is the suite driver's, sandboxed for the run only
+# (`_suite_driver._sandbox`).
+def _in_interactive_maya() -> bool:
+    if not _HAVE_REAL_MAYA:
+        return False
+    try:
+        import maya.cmds as cmds
+
+        return not cmds.about(batch=True)
+    except Exception:  # mayapy before standalone init
+        return False
+
+
+def _has_qt() -> bool:
     try:
         from qtpy import QtCore  # noqa: F401
     except Exception:  # no Qt: nothing can reach the store
         return False
-    if not _HAVE_REAL_MAYA:
-        return True
-    try:
-        import maya.cmds as cmds
-
-        return bool(cmds.about(batch=True))
-    except Exception:  # mayapy before standalone init
-        return True
+    return True
 
 
-if _settings_sandbox_applies():
-    from uitk.testing import TestSandbox as _Sandbox  # loud past the guard
-else:
-    _Sandbox = ptk.TestSandbox
-_Sandbox.activate()
+if not _in_interactive_maya():
+    if _has_qt():
+        from uitk.testing import TestSandbox as _Sandbox  # loud past the guard
+    else:
+        _Sandbox = ptk.TestSandbox
+    _Sandbox.activate()
 
-# TempArtifacts, not mkdtemp: mayapy test processes are routinely killed, so
-# only the primitive's age-gated sweep ever reclaims the dir. The store must
-# stay referenced so its session-exit cleanup fires.
-_config_store = ptk.TempArtifacts("mayatk_test_config", policy="session")
-os.environ[ptk.UserConfig.CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()
+    # TempArtifacts, not mkdtemp: mayapy test processes are routinely killed,
+    # so only the primitive's age-gated sweep ever reclaims the dir. The store
+    # must stay referenced so its session-exit cleanup fires.
+    _config_store = ptk.TempArtifacts("mayatk_test_config", policy="session")
+    os.environ[ptk.UserConfig.CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()

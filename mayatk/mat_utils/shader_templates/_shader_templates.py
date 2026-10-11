@@ -60,10 +60,25 @@ class GraphCollector(_ShaderTemplatesInternal):
         self.logger = logger or _LOGGER
         self.placeholder_counter = {}
         self.node_name_map = {}
+        self.image_types = {}
 
     def collect_graph(self, nodes):
         visited_nodes = set()
         acceptable_nodes = {str(node) for node in nodes}
+        # The graph's textures are one set, read together (a set named for a
+        # lobe, `Hero_Coat`, records its roughness as Roughness) -- the same
+        # reading `GraphRestorer` gives the paths it rebinds by type.
+        self.image_types = ptk.MapFactory.resolve_map_types(
+            [
+                image
+                for image in (
+                    cmds.getAttr(f"{node}.fileTextureName")
+                    for node in acceptable_nodes
+                    if cmds.nodeType(node) == "file"
+                )
+                if image
+            ]
+        )
 
         graph_info = {}
         for node in nodes:
@@ -102,7 +117,9 @@ class GraphCollector(_ShaderTemplatesInternal):
         map_type = None
         if node_type == "file":
             image_name = cmds.getAttr(f"{node}.fileTextureName") or ""
-            map_type = MapFactory.resolve_map_type(image_name)
+            map_type = self.image_types.get(image_name) or MapFactory.resolve_map_type(
+                image_name
+            )
             # A file node whose texture resolves to a known map_type is a
             # user-supplied slot: the path is provided by the caller and
             # re-resolved at restore time from ``texture_paths``. Persisting it
@@ -305,8 +322,11 @@ class GraphRestorer(_ShaderTemplatesInternal):
 
         available_map_types = {}
         resolved_log = []
+        # The paths are one set, read together: a set named for a lobe
+        # (`Hero_Coat`) rebinds its roughness to the template's Roughness slot.
+        readings = ptk.MapFactory.classify_textures(self.texture_paths)
         for path in self.texture_paths:
-            map_type = MapFactory.resolve_map_type(path)
+            map_type = readings[path][0]
             if map_type:
                 available_map_types[map_type] = path
                 resolved_log.append(f"{map_type:<24} {os.path.basename(path)}")
@@ -331,7 +351,7 @@ class GraphRestorer(_ShaderTemplatesInternal):
             # abspath: a bare relative filename would yield dirname "" and
             # send generated maps to whatever the CWD happens to be.
             output_dir = os.path.dirname(os.path.abspath(first_path))
-            base_name = ptk.get_base_texture_name(first_path)
+            base_name = readings[first_path][1]
             ext = os.path.splitext(first_path)[1].lstrip(".")
 
         context = TextureProcessor(
@@ -462,7 +482,10 @@ class GraphRestorer(_ShaderTemplatesInternal):
             if self.name:
                 return self.name
             elif self.texture_paths:
-                return ptk.get_base_texture_name(self.texture_paths[0])
+                # Read against the set: its own name may end in a lobe word.
+                return ptk.MapFactory.classify_textures(self.texture_paths)[
+                    self.texture_paths[0]
+                ][1]
         return None
 
     def restore_connections(self):

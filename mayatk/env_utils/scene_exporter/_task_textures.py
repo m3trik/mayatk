@@ -7,13 +7,12 @@ GLB build reads.
 
 import contextlib
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 try:
     import maya.cmds as cmds
-    import maya.mel as mel
 except ImportError:  # the surface must import without Maya (registry, docs tooling)
-    cmds = mel = None
+    cmds = None
 import pythontk as ptk
 
 # From this package:
@@ -126,19 +125,26 @@ class _TextureTasksMixin(_TaskDataMixin):
             self.record_kept_edit("project-relative texture paths")
             return results
         for node in changed:
-            # One key per node: first stager wins, so a second pass over the
-            # same node (convert_textures' write-back) restores the TRUE
-            # original. Literal, because the original may itself be a
-            # relative spelling the plug would otherwise expand.
-            self.stage_deferred_restore(
-                f"relative_texture_path:{node}",
-                lambda node=node, path=before.get(node) or "": (
-                    Attributes.set_plug_literal(f"{node}.fileTextureName", path)
-                    if cmds.objExists(node)
-                    else None
-                ),
-            )
+            self._stage_texture_path_restore(node, before.get(node) or "")
         return results
+
+    def _stage_texture_path_restore(self, node: str, path: str) -> None:
+        """Stage *node*'s stored *path* to come back, verbatim, after the write.
+
+        One key per node, so the first stager wins: a later pass over the same
+        node (``convert_to_relative_paths`` over a path the resolve task
+        staged, ``convert_textures``' write-back) restores the TRUE original.
+        Literal, because the original may itself be a relative spelling the
+        plug would otherwise expand.
+        """
+        self.stage_deferred_restore(
+            f"texture_path:{node}",
+            lambda: (
+                Attributes.set_plug_literal(f"{node}.fileTextureName", path)
+                if cmds.objExists(node)
+                else None
+            ),
+        )
 
     def optimize_textures(self, template):
         """Optimize the maps shipping with this export, by map type.
@@ -207,13 +213,13 @@ class _TextureTasksMixin(_TaskDataMixin):
         who references them afterwards (:meth:`_texture_staging_dir`, shared
         with ``convert_textures``):
 
-        - GLB-only output, or an FBX preset that embeds media: the
-          deliverable carries its own copies, so staging is a
-          ``TempArtifacts`` dir deleted by the deferred restore (with the
+        - An FBX or GLB: the deliverable carries its own copies (every FBX
+          embeds its media -- nothing ships beside a deliverable), so staging
+          is a ``TempArtifacts`` dir deleted by the deferred restore (with the
           age-gated sweep as the crash backstop).
-        - A loose-media FBX references the staged files on disk, so they ARE
-          part of the deliverable: staged durably into ``textures/`` beside
-          the export (relative to the FBX, so the pair ships together) and
+        - A USD layer references the staged files on disk, so they ARE part
+          of the deliverable: staged durably into ``textures/`` beside the
+          export (relative to the layer, so the pair ships together) and
           kept. ``check_existing=True`` makes re-exports incremental.
 
         **Write-back mode** (Texture Output at "Scene Files (In Place)"): the
@@ -378,6 +384,16 @@ class _TextureTasksMixin(_TaskDataMixin):
         name is reported instead of guessed at.  ``<UDIM>``/``<f>`` token
         names match by pattern and rebind with the token preserved.
 
+        A path that resolves where the run hands the scene back is not broken.
+        With ``set_workspace`` switched to the scene's own project for the
+        write, a RELATIVE path valid in the user's active project resolves
+        nowhere here, and the hunt traded that working link for a guess -- a
+        same-named file of the scene's project, rebound and kept -- or left it
+        for ``check_valid_paths`` to fail. Its absolute spelling in the active
+        project is staged for the write instead (:meth:`_home_texture_path`):
+        the deliverable carries the map the user sees, and the node gets its
+        own path back with the workspace.
+
         The same hunt heals the lightmap markers first
         (:meth:`LightmapRecords.heal_lightmap_paths`): a committed lightmap is
         a texture dependency with no file node -- its marker records the
@@ -411,6 +427,7 @@ class _TextureTasksMixin(_TaskDataMixin):
 
         resolved_count = 0
         unresolved = []
+        staged = []  # valid only in the project the run hands back
 
         for node in file_nodes:
             if not cmds.attributeQuery("fileTextureName", node=node, exists=True):
@@ -428,6 +445,27 @@ class _TextureTasksMixin(_TaskDataMixin):
             # absolute on each run.
             if MatUtils.resolve_path(path, search=False):
                 continue  # Path is already valid
+
+            # Valid where the user is, so not a repair: the write reads the
+            # file it resolves to there, and the restore hands the node its
+            # own path back with the workspace.
+            # A locked or connected plug (a referenced or published asset)
+            # cannot take the staged path: reported, for check_valid_paths to
+            # gate, rather than raised -- the task runner re-raises, which
+            # killed the whole export over one node.
+            home_path = self._home_texture_path(path)
+            if home_path:
+                try:
+                    cmds.setAttr(f"{node}.fileTextureName", home_path, type="string")
+                except RuntimeError as e:
+                    unresolved.append(
+                        f"{node} -> {path} (resolves only in "
+                        f"{self._home_workspace}; plug locked/connected: {e})"
+                    )
+                    continue
+                self._stage_texture_path_restore(node, path)
+                staged.append(node)
+                continue
 
             basename = os.path.basename(os.path.expandvars(path))
             if MatUtils.has_path_token(basename):
@@ -465,6 +503,16 @@ class _TextureTasksMixin(_TaskDataMixin):
             else:
                 unresolved.append(f"{node} -> {path}")
 
+        if staged:
+            # INFO: nothing was guessed. Named all the same, because the
+            # scene's own project cannot resolve these -- opened there, the
+            # scene shows them missing.
+            self.logger.info(
+                f"{len(staged)} texture path(s) resolve only in the active project "
+                f"({self._home_workspace}), not in the scene's own: the write "
+                "reads them from there and the scene keeps its paths: "
+                f"{', '.join(staged)}"
+            )
         if resolved_count:
             self.record_kept_edit("rebound missing texture paths")
             self.logger.info(f"Resolved {resolved_count} broken texture path(s).")
@@ -476,6 +524,20 @@ class _TextureTasksMixin(_TaskDataMixin):
                 self.logger.warning(f"  {entry}")
         if not resolved_count and not unresolved:
             self.logger.debug("All texture paths are valid.")
+
+    def _home_texture_path(self, path: str) -> Optional[str]:
+        """*path* resolved in the project the run hands back, or None.
+
+        Asked only while ``set_workspace`` has switched away from that project
+        (``_home_workspace``): its ROOT first and its ``sourceImages`` rule
+        second, Maya's own order (:meth:`MatUtils.to_absolute`), with a
+        tile/frame pattern found by its tiles (:meth:`MatUtils.texture_tiles`).
+        """
+        home = self._home_workspace
+        if not home:
+            return None
+        resolved = MatUtils.to_absolute(path, home, EnvUtils.source_images_dir(home))
+        return resolved if MatUtils.texture_tiles(resolved) else None
 
     # -- lightmap dependencies -------------------------------------------
     # The engine is LightmapRecords (mayatk.light_utils); these three are the
@@ -531,29 +593,20 @@ class _TextureTasksMixin(_TaskDataMixin):
         """Where staged (non-write-back) texture processing lands for this run.
 
         Shared by :meth:`convert_textures` and :meth:`optimize_textures`, so
-        both halves of a run stage into ONE place. Staged files are temp only
-        when nothing after the export references them (the deliverable embeds
-        its own copies): a GLB-only run, or an FBX preset that embeds media —
-        the embed query needs fbxmaya; if it isn't loaded yet, fall through
-        to durable staging (the safe direction: durable files are kept
-        whether or not the write embeds). Otherwise a loose-media FBX
-        references the staged files, so they land durably in ``textures/``
-        beside the deliverable. Direct TaskManager use with no export path
+        both halves of a run stage into ONE place. Staged files are temp
+        whenever the deliverable embeds its own copies -- every FBX and GLB
+        does (the exporter pins Embed Media: nothing ships beside a
+        deliverable) -- so a ``textures/`` folder never lands beside one.
+        Only a USD layer references its maps, so its copies land durably in
+        ``textures/`` beside it. Direct TaskManager use with no export path
         has nothing durable to stage beside, so temp is the only coherent
         mode there.
 
         Returns:
             tuple: ``(staging_dir, temp_staging)``.
         """
-        temp_staging = bool(self.run.glb_only)
-        if not temp_staging:
-            try:
-                temp_staging = bool(mel.eval("FBXExportEmbeddedTextures -q"))
-            except Exception:  # noqa: BLE001 — plugin not loaded yet
-                temp_staging = False
         export_path = self.export_path
-        if not temp_staging and not export_path:
-            temp_staging = True
+        temp_staging = not self.run.usd or not export_path
         if temp_staging:
             return ptk.TempArtifacts(f"scene_exporter_{tag}").dir_path(), True
         staging_dir = os.path.join(os.path.dirname(export_path), "textures")

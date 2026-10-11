@@ -41,8 +41,11 @@ PARAMS: "dict[str, AttributeSpec]" = {
         default=True,
         section="Export",
         tooltip=(
-            "Embed the texture files inside the FBX so Unity extracts the maps on\n"
-            "import. Off relies on the textures already living in the project."
+            "Embed the texture files inside the FBX. Unity binds an embedded map\n"
+            "only once it is extracted beside the model (Inspector > Materials >\n"
+            "Extract Textures): unitytk's import scripts extract the maps they wire\n"
+            "and the files its channels name; Unity's stock import extracts nothing.\n"
+            "Off relies on the textures already living in the project."
         ),
     ),
     "TRIANGULATE": AttributeSpec(

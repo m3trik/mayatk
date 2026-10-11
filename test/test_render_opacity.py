@@ -487,6 +487,66 @@ class TestOpacityVisibilityDriver(MayaTkTestCase):
             "Visibility should not be driven after remove",
         )
 
+    def test_remove_deletes_the_visibility_mirror(self):
+        """Removing opacity takes its stepped visibility mirror with it.
+
+        Bug: remove() deleted the opacity curve but left the mirrored
+        visibility keys behind -- the object kept blinking out, and a
+        later create() refused it for having visibility keys.
+        Fixed: 2026-10-06
+        """
+        RenderEffects.key_fade(objects=[self.cube], start=1, end=15, direction="out")
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        self.assertTrue(
+            cmds.keyframe(vis_plug, q=True, tc=True), "pre-condition: mirror keyed"
+        )
+        cmds.currentTime(20)  # past the fade-out: visibility evaluates off
+
+        RenderEffects.remove(objects=[self.cube], mode="attribute")
+
+        self.assertFalse(
+            cmds.keyframe(vis_plug, q=True, tc=True),
+            "visibility mirror keys left behind",
+        )
+        self.assertTrue(cmds.getAttr(vis_plug), "visibility should reset to on")
+        self.assertEqual(
+            RenderEffects.objects_with_visibility_keys([self.cube]),
+            [],
+            "a re-create would refuse the object",
+        )
+
+    def test_create_clears_the_keys_of_a_locked_visibility(self):
+        """create(delete_visibility_keys=True) clears a locked visibility's
+        keys (``cutKey`` ignores the lock) instead of raising on its reset.
+
+        Bug: the reset ``setAttr`` raised RuntimeError on a locked plug, after
+        the keys were already cut.
+        Fixed: 2026-10-06
+        """
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+        cmds.setKeyframe(vis_plug, time=1, value=0)
+        cmds.setAttr(vis_plug, lock=True)
+
+        RenderEffects.create(
+            objects=[self.cube], mode="attribute", delete_visibility_keys=True
+        )
+
+        self.assertFalse(cmds.keyframe(vis_plug, q=True, tc=True))
+        self.assertTrue(cmds.attributeQuery("opacity", node=self.cube, exists=True))
+
+    def test_remove_highlight_keeps_the_visibility_mirror(self):
+        """Only the presence channel owns the mirror: removing highlight
+        leaves an opacity fade's visibility keys alone."""
+        RenderEffects.key_fade(objects=[self.cube], start=1, end=15, direction="out")
+        RenderEffects.key_fade(
+            objects=[self.cube], start=1, end=15, direction="in", channel="highlight"
+        )
+        vis_plug = f"{(cmds.ls(self.cube, long=True) or [self.cube])[0]}.visibility"
+
+        RenderEffects.remove(objects=[self.cube], channel="highlight")
+
+        self.assertEqual(cmds.keyframe(vis_plug, q=True, tc=True), [1.0, 15.0])
+
     def test_legacy_condition_node_cleaned_on_create(self):
         """Creating opacity on an object with an old condition-node driver
         should remove the legacy node.

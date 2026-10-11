@@ -94,6 +94,10 @@ class ShotSequencer(_ShotSequencerCore):
         """Maya is importable; headless (``cmds`` is ``None``) edits bounds only."""
         return cmds is not None
 
+    def _curve_exists(self, curve: str) -> bool:
+        """A ledger key is the anim curve's node name."""
+        return cmds is None or bool(cmds.objExists(curve))
+
     def _content_batch(self):
         """One audio batch around a multi-step edit, so derived DG audio nodes
         re-render exactly once."""
@@ -151,6 +155,7 @@ class ShotSequencer(_ShotSequencerCore):
         end: float,
         value_tolerance: float = 1e-4,
         require_motion: bool = True,
+        evaluated: bool = False,
     ) -> List[str]:
         """Return names of all transforms that MOVE in [start, end].
 
@@ -170,7 +175,9 @@ class ShotSequencer(_ShotSequencerCore):
         its shot moved; the movers now carry the whole keyed content of an
         envelope whatever the list says (:meth:`_content_objects`), so that
         guarantee no longer needs the list.  ``require_motion=False`` is the
-        old rule, for a caller that wants every keyed object.
+        old rule, for a caller that wants every keyed object.  *evaluated*
+        is ``Detection.curve_moves_in``'s: the curve's values at the range's
+        ends count too (the frames a bound hands over).
         """
         import maya.cmds as cmds
         from mayatk.anim_utils.shots._shots import Detection
@@ -183,7 +190,9 @@ class ShotSequencer(_ShotSequencerCore):
         for xform, crvs in sorted(transform_curves.items()):
             for crv in crvs:
                 if require_motion:
-                    hit = Detection.curve_moves_in(crv, start, end, value_tolerance)
+                    hit = Detection.curve_moves_in(
+                        crv, start, end, value_tolerance, evaluated=evaluated
+                    )
                 else:
                     hit = bool(
                         cmds.keyframe(
@@ -194,6 +203,27 @@ class ShotSequencer(_ShotSequencerCore):
                     result.append(xform)
                     break
         return result
+
+    def _member_names(self, shot: ShotBlock, names: List[str]) -> tuple:
+        """``(listed, unlisted)`` matched by NODE: a member stored as a short
+        name and the long path a scan found are one object, so the long one
+        is neither added again nor missed when the stored one is re-decided."""
+        if cmds is None:
+            return super()._member_names(shot, names)
+        by_node: dict = {}
+        for member in shot.objects:
+            for path in cmds.ls(member, long=True) or []:
+                by_node.setdefault(path, member)
+        listed: list = []
+        unlisted: list = []
+        for name in names:
+            paths = cmds.ls(name, long=True) or [name]
+            member = next((by_node[p] for p in paths if p in by_node), None)
+            if member is None:
+                unlisted.append(name)
+            elif member not in listed:
+                listed.append(member)
+        return listed, unlisted
 
     @staticmethod
     def _content_curves(node: str) -> List[str]:
@@ -307,75 +337,62 @@ class ShotSequencer(_ShotSequencerCore):
         return memo[leaf]
 
     @staticmethod
-    def _reconcile_stale_paths(shot: ShotBlock, rename_memo=None) -> bool:
-        """Re-resolve stale long DAG paths, NEVER dropping membership.
+    def _resolved_name(name: str, rename_memo=None) -> Optional[str]:
+        """The long path *name* should now be stored by, or ``None`` to keep it.
 
-        When a parent node is renamed the long paths of all children change,
-        making the stored entries stale.  This helper extracts the short
-        (leaf) name from each stale entry and substitutes the updated long
-        path; when the leaf name is gone too — the object itself was renamed
-        — it falls back to :meth:`Detection.transform_from_curve_names`,
-        which follows the anim curves Maya named after the old node.
+        A name that answers to ONE node is stored as that node's long path.  A
+        build keeps a doc name it cannot resolve as written, and once the node
+        exists the scene scan -- which names nodes by long path -- adds it
+        beside that name: one object, two members, shipped twice.  A name that
+        answers to several nodes is kept: which one the doc meant is a finding
+        (Assess's ``ambiguous_object``), never a silent pick.
 
-        An entry that resolves to nothing is **kept as stored**.  "Renamed"
-        and "deleted" are indistinguishable from a name alone, this runs
-        unattended on every refresh, and the costs are wildly asymmetric: an
-        unresolvable name is inert (every consumer filters through
-        :meth:`_shot_nodes` / ``cmds.ls``, and the ripple primitives return
-        early on it), while dropping it destroys the shot's record of its own
-        content — irreversibly, on the next store flush.  Pruning belongs to
-        an explicit, user-driven action, not a read-only rebuild.  (blendertk
-        holds the same line: its ``reconcile_all_shots`` follows renames
-        through the action slot named after the old object and keeps what
-        resolves to nothing, leaving deletions to ``assess``.)
-
-        Returns ``True`` if any paths were updated.
+        A name that answers to nothing is a stale path (a parent renamed):
+        re-resolved by its leaf; when the leaf is gone too -- the object itself
+        was renamed -- through :meth:`Detection.transform_from_curve_names`,
+        which follows the anim curves Maya named after the old node.  What
+        resolves to nothing is **kept as stored**: "renamed" and "deleted" are
+        indistinguishable from a name alone, this runs unattended on every
+        refresh, and an unresolvable name is inert (every consumer filters
+        through :meth:`_shot_nodes` / ``cmds.ls``) while dropping it destroys
+        the shot's record of its own content.  Pruning belongs to an explicit,
+        user-driven action.  (blendertk holds the same line: its
+        ``follow_renames`` keeps what resolves to nothing, leaving deletions to
+        ``assess``.)
         """
         import maya.cmds as cmds
 
-        updated = False
-        new_objects: list = []
-        for obj in shot.objects:
-            if cmds.objExists(obj):
-                new_objects.append(obj)
-                continue
-            leaf = CoreUtils.leaf_name(obj)
-            matches = cmds.ls(leaf, long=True, type="transform") or []
-            if len(matches) == 1:
-                new_objects.append(matches[0])
-                updated = True
-            elif matches:
-                new_objects.append(ShotSequencer._disambiguate_matches(matches))
-                updated = True
-            else:
-                renamed = ShotSequencer._renamed_target(leaf, rename_memo)
-                new_objects.append(renamed or obj)
-                updated = updated or bool(renamed)
-        result = sorted(set(new_objects))
-        if result != sorted(shot.objects):
-            shot.objects = result
-            updated = True
-        return updated
+        matches = cmds.ls(name, long=True) or []
+        if len(matches) == 1:
+            return None if matches[0] == name else matches[0]
+        if matches:
+            return None
+        leaf = CoreUtils.leaf_name(name)
+        matches = cmds.ls(leaf, long=True, type="transform") or []
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return ShotSequencer._disambiguate_matches(matches)
+        return ShotSequencer._renamed_target(leaf, rename_memo)
 
     def reconcile_all_shots(self) -> bool:
-        """Re-resolve stale DAG paths across every shot and persist changes.
+        """Point every name the store holds an object by at the node it is now.
 
-        Should be called once per refresh cycle *before* segment collection
-        so that all stored paths are current.  Re-pointing only: membership
-        is never dropped here (see :meth:`_reconcile_stale_paths`).
+        Call once per refresh cycle *before* segment collection, so the store
+        and the scan name each node alike.  Re-pointing only -- membership is
+        never dropped (:meth:`_resolved_name`) -- and through
+        ``ShotStore.rename_members``, so a pin and the hidden / locked state
+        follow their member (a pin left on a stale path keeps nothing).
 
-        Returns ``True`` if any shot was modified.
+        Returns ``True`` if anything was re-pointed.
         """
-        changed = False
         rename_memo: dict = {}  # shared across the pass — see _renamed_target
-        with self.store.batch_update():
-            for shot in self.store.shots:
-                nodes = self._shot_nodes(shot)
-                if shot.objects and len(nodes) < len(set(shot.objects)):
-                    if self._reconcile_stale_paths(shot, rename_memo):
-                        self.store.update_shot(shot.shot_id, objects=shot.objects)
-                        changed = True
-        return changed
+        renames = {}
+        for name in sorted(self.store.held_names()):
+            resolved = self._resolved_name(name, rename_memo)
+            if resolved:
+                renames[name] = resolved
+        return self.store.rename_members(renames)
 
     def collect_object_segments(
         self,
@@ -499,7 +516,9 @@ class ShotSequencer(_ShotSequencerCore):
         """
         if cmds is None:
             return []
-        all_events = self._read_all_audio_events()
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        all_events = AudioUtils.read_all_events()
         sequences: List[Dict[str, Any]] = []
         for tid, events in all_events.items():
             for ev_start, ev_stop in events:
@@ -515,38 +534,6 @@ class ShotSequencer(_ShotSequencerCore):
                     }
                 )
         return sequences
-
-    @staticmethod
-    def _read_all_audio_events() -> Dict[str, List[tuple]]:
-        """Return ``{track_id: [(start, stop), ...]}`` for every audio track.
-
-        Bypasses :meth:`AudioUtils.read_events` per-track
-        ``has_track``/``attributeQuery`` round trip by trusting the
-        attrs returned from :meth:`list_track_attrs`.
-        """
-        try:
-            import maya.cmds as cmds
-            from mayatk.audio_utils._audio_utils import AudioUtils
-        except ImportError:
-            return {}
-        carriers = AudioUtils.find_carriers()
-        if not carriers:
-            return {}
-        carrier = carriers[0]
-        out: Dict[str, List[tuple]] = {}
-        for attr_name in AudioUtils.list_track_attrs(carrier):
-            plug = f"{carrier}.{attr_name}"
-            frames = cmds.keyframe(plug, q=True) or []
-            if not frames:
-                continue
-            vals = cmds.keyframe(plug, q=True, valueChange=True) or []
-            pairs = sorted(zip(frames, vals), key=lambda p: p[0])
-            # One shared pairing state machine (AudioUtils) — only the
-            # batched per-track key *queries* stay local for perf.
-            events = AudioUtils.pair_on_off_events(pairs)
-            if events:
-                out[AudioUtils.track_id_from_attr(attr_name)] = events
-        return out
 
     def _drop_claimed_seam_copy(
         self, seq: Dict[str, Any], target: float, seam: float, eps: float = 1e-3
@@ -854,54 +841,116 @@ class ShotSequencer(_ShotSequencerCore):
 
         if abs(delta) < 1e-6:
             return 0
-        curves = self._anim_curves_of(obj, attr)
-        if not curves:
-            return 0
-
         eps = 1e-3
         moved = 0
-        for crv in curves:
-            pairs = []
-            if times is not None:
-                present = []
-                for t in times:
-                    found = self._key_time_at(crv, t, eps)
-                    if found is not None:
-                        present.append(found)
-                        pairs.append((t, found))
-            elif window is not None:
-                present = (
-                    cmds.keyframe(crv, q=True, time=(window[0] - eps, window[1] + eps))
-                    or []
-                )
-            else:
-                present = cmds.keyframe(crv, q=True) or []
+        for crv in self._anim_curves_of(obj, attr):
+            present, correction = self._named_keys(crv, times, window, eps)
             if not present:
                 continue
-            # The curve can answer with a key a fraction of a frame from the
-            # time the caller named -- a near-duplicate left by an earlier
-            # move (measured on a production assembly: keys at 2278.0 AND
-            # 2278.000000212585 on the same channel).  Moving THAT key by the
-            # caller's delta lands it the same fraction off its target, and
-            # for a Move to Shot the target IS the destination's first frame:
-            # the key ends up a hair before it, in the gap, where the shot
-            # neither owns nor draws it.  Correcting by the earliest matched
-            # pair puts the named key exactly where the caller placed it.
-            crv_delta = delta
-            if pairs:
-                named_t, found_t = min(pairs, key=lambda p: p[1])
-                crv_delta = delta + (named_t - found_t)
             conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
             self.move_curve_keys(
                 crv,
                 present,
-                crv_delta,
+                delta + correction,
                 plug=conns[0] if conns else None,
                 eps=eps,
                 ledger=self.ledger,
             )
             moved += len(present)
         return moved
+
+    def copy_attribute_keys(
+        self,
+        obj: str,
+        attr: Optional[str],
+        delta: float,
+        times: Optional[List[float]] = None,
+        window: Optional[tuple] = None,
+    ) -> int:
+        """Copy keys of *obj* *delta* frames on -- one attribute's, or all --
+        the originals left where they are.
+
+        :meth:`move_attribute_keys`' twin, naming its keys the same way
+        (:meth:`_named_keys`), and what Copy to Shot sends.  Each copy is the
+        whole key record (:meth:`_snapshot_curve_keys` /
+        :meth:`_restore_curve_keys`: value, tangents, breakdown) and it is the
+        animator's key: a claim the shot system holds on a source key stays
+        on that key.  The landing zone is cleared first, as a move clears it
+        (:meth:`_clear_destination`).
+
+        Returns:
+            The number of keys copied.
+        """
+        import maya.cmds as cmds
+
+        if abs(delta) < 1e-6:
+            return 0
+        eps = 1e-3
+        copied = 0
+        for crv in self._anim_curves_of(obj, attr):
+            present, correction = self._named_keys(crv, times, window, eps)
+            if not present:
+                continue
+            # A window is one snapshot; named keys are taken one by one, so a
+            # key between two of them stays behind.
+            spans = (
+                [(window[0] - eps, window[1] + eps)]
+                if times is None and window is not None
+                else [(t - eps, t + eps) for t in sorted(present)]
+            )
+            weighted, records = False, []
+            for span in spans:
+                w, recs = self._snapshot_curve_keys(crv, span)
+                weighted = weighted or w
+                records.extend(recs)
+            if not records:
+                continue
+            conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
+            self._clear_destination(
+                crv,
+                [r["time"] for r in records],
+                delta + correction,
+                plug=conns[0] if conns else None,
+                eps=eps,
+                ledger=self.ledger,
+            )
+            self._restore_curve_keys(crv, records, weighted, delta + correction)
+            copied += len(records)
+        return copied
+
+    def _named_keys(
+        self, crv: str, times: Optional[List[float]], window: Optional[tuple], eps
+    ) -> tuple:
+        """``(present, correction)``: the keys of *crv* a move or a copy names
+        -- *times* matched within *eps*, else every key inside *window*, else
+        all of them -- and the shift that puts the first named one exactly
+        where the caller placed it.
+
+        The curve can answer with a key a fraction of a frame from the time
+        the caller named -- a near-duplicate left by an earlier move (measured
+        on a production assembly: keys at 2278.0 AND 2278.000000212585 on the
+        same channel).  Sending THAT key by the caller's delta lands it the
+        same fraction off its target, and for a Move to Shot the target IS the
+        destination's first frame: the key ends up a hair before it, in the
+        gap, where the shot neither owns nor draws it.  Correcting by the
+        earliest matched pair puts the named key exactly where it belongs.
+        """
+        import maya.cmds as cmds
+
+        if times is None:
+            if window is not None:
+                rng = (window[0] - eps, window[1] + eps)
+                return cmds.keyframe(crv, q=True, time=rng) or [], 0.0
+            return cmds.keyframe(crv, q=True) or [], 0.0
+        pairs = []
+        for t in times:
+            found = self._key_time_at(crv, t, eps)
+            if found is not None:
+                pairs.append((t, found))
+        if not pairs:
+            return [], 0.0
+        named_t, found_t = min(pairs, key=lambda p: p[1])
+        return [found for _t, found in pairs], named_t - found_t
 
     # ---- key motion primitives -------------------------------------------
     #
@@ -1577,90 +1626,85 @@ class ShotSequencer(_ShotSequencerCore):
         if ledger is not None:
             ledger.remap(crv, pairs)
 
-    def move_stepped_keys(
+    def _point_clip_curves(
         self,
         obj: str,
-        old_time: float,
-        new_time: float,
-        attr_name: str | None = None,
+        t: float,
+        attr_name: Optional[str] = None,
+        shot: Optional[ShotBlock] = None,
         eps: float = 1e-3,
-    ) -> None:
-        """Move stepped keys at *old_time* to *new_time* via delete-and-recreate.
+    ) -> List[str]:
+        """The anim curves a point clip of *obj* at *t* stands for -- the
+        pythontk hook behind ``move_stepped_keys``.
 
-        If *attr_name* is given, only that attribute's curves are moved.
-        Otherwise all curves on *obj* with a stepped key at *old_time*.
-
-        Uses cutKey + setKeyframe instead of timeChange to avoid Maya
-        silently misplacing keys at large offsets.
-
-        A step this system claims travels with its key: the destination is
-        where the hold has to be released from once it stops being a seam.
+        *attr_name* (a sub-row clip): that attribute's curves.  Otherwise the
+        curves the mark was drawn from: the content curves
+        (:meth:`_content_curves`) whose key at *t* is one of the marks *shot*
+        shows (:meth:`_animator_marks`), stepped or not -- so a claimed bound
+        sample on another channel stays on its bound.  Without *shot*, the
+        content curves with an animator's key at *t*.
         """
         import maya.cmds as cmds
 
-        if abs(new_time - old_time) < 1e-6:
-            return
-
         matches = cmds.ls(obj, long=True)
         if not matches:
-            return
+            return []
         obj_path = matches[0]
-        tr = (old_time - eps, old_time + eps)
-
-        # Resolve which curves to move
         if attr_name:
             plug = f"{obj_path}.{attr_name}"
             if not cmds.objExists(plug):
-                return
-            raw = cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
-            curves = [(c, plug) for c in raw]
-        else:
-            all_curves = list(
-                set(
-                    cmds.listConnections(obj_path, type="animCurve", s=True, d=False)
-                    or []
-                )
-            )
-            curves = []
-            for crv in all_curves:
-                if not cmds.keyframe(crv, q=True, time=tr):
-                    continue
-                ot = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
-                if ot and ot[0] in _STEP_TANGENTS:
-                    conns = cmds.listConnections(crv, plugs=True, d=True, s=False) or []
-                    curves.append((crv, conns[0] if conns else None))
+                return []
+            return cmds.listConnections(plug, type="animCurve", s=True, d=False) or []
+        out = []
+        for crv in self._content_curves(obj_path):
+            if shot is None:
+                marks = self._animator_key_times(crv, (t - eps, t + eps))
+            else:
+                marks = self._animator_marks([crv], shot)
+            if any(abs(m - t) <= eps for m in marks):
+                out.append(crv)
+        return out
 
-        # Delete-and-recreate each key
-        for crv, plug in curves:
-            vals = cmds.keyframe(crv, q=True, time=tr, valueChange=True)
-            in_tan = cmds.keyTangent(crv, q=True, time=tr, inTangentType=True)
-            out_tan = cmds.keyTangent(crv, q=True, time=tr, outTangentType=True)
-            if not vals:
-                continue
-            val = vals[0]
-            itt = in_tan[0] if in_tan else "stepnext"
-            ott = out_tan[0] if out_tan else "step"
+    def _move_point_key(
+        self, obj: str, curve: str, old_time: float, new_time: float, eps: float = 1e-3
+    ) -> None:
+        """Move *curve*'s key at *old_time* to *new_time* via delete-and-recreate
+        -- the pythontk hook behind ``move_stepped_keys``.
 
-            cmds.cutKey(crv, time=tr, clear=True)
-            # cutKey may delete the curve node if it was the last key;
-            # fall back to the driven plug so setKeyframe recreates it.
-            target = crv if cmds.objExists(crv) else plug
-            if not target:
-                target = obj_path
-            if target == crv:
-                # setKeyframe OVERWRITES a key already on new_time: its claims
-                # go with it, before the remap below lands the moved key's.
-                landed = self._key_time_at(crv, new_time, eps)
-                if landed is not None:
-                    self.ledger.release(crv, landed)
-            cmds.setKeyframe(target, time=new_time, value=val)
-            cmds.keyTangent(
-                target,
-                time=(new_time, new_time),
-                inTangentType=itt,
-                outTangentType=ott,
-            )
-            self.ledger.remap(crv, [(old_time, new_time)])
+        Uses cutKey + setKeyframe instead of timeChange to avoid Maya
+        silently misplacing keys at large offsets.  The whole key record
+        travels (:meth:`_snapshot_curve_keys` / :meth:`_restore_curve_keys`):
+        restoring the tangent TYPES alone left a fixed or weighted tangent
+        with neither its angles nor its weights, and a drag recreates the key
+        twice (lifted clear, then landed).  A step this system claims travels
+        with its key: the destination is where the hold has to be released
+        from once it stops being a seam.
+        """
+        import maya.cmds as cmds
+
+        tr = (old_time - eps, old_time + eps)
+        weighted, records = self._snapshot_curve_keys(curve, tr)
+        if not records:
+            return
+        record = records[0]
+        conns = cmds.listConnections(curve, plugs=True, d=True, s=False) or []
+
+        cmds.cutKey(curve, time=tr, clear=True)
+        # cutKey may delete the curve node if it was the last key;
+        # fall back to the driven plug so setKeyframe recreates it.
+        target = curve if cmds.objExists(curve) else (conns[0] if conns else None)
+        if not target:
+            target = (cmds.ls(obj, long=True) or [obj])[0]
+        if target == curve:
+            # setKeyframe OVERWRITES a key already on new_time: its claims
+            # go with it, before the remap below lands the moved key's.
+            landed = self._key_time_at(curve, new_time, eps)
+            if landed is not None:
+                self.ledger.release(curve, landed)
+        self._restore_curve_keys(
+            target, [record], weighted, delta=new_time - record["time"]
+        )
+        self.ledger.remap(curve, [(old_time, new_time)])
 
     @staticmethod
     def _batch_move_keys(
@@ -1885,8 +1929,11 @@ class ShotSequencer(_ShotSequencerCore):
         The CLAIM is dropped whatever the scene says, so a curve that has
         since been deleted, re-tangented by hand, or moved out from under its
         claim cannot leave a permanent entry behind.  The WRITE is only taken
-        back when the key is still there and still carries the system's
-        ``step`` — an animator who re-tangented it since owns it now.
+        back when the key is still the one the system stepped
+        (``ShotEditLedger.is_same_key``) and still carries its ``step`` — an
+        animator who re-tangented it since owns it now, and so does one who
+        pasted a key over it: releasing onto that key un-stepped the
+        animator's own stepped key (2026-10-10, a Graph Editor paste).
 
         Returns:
             The number of keys restored to their pre-hold out-tangent.
@@ -1897,30 +1944,62 @@ class ShotSequencer(_ShotSequencerCore):
         for crv in led.stepped_curves():
             # A curve the seam scan just resolved is live by construction, so
             # the existence probe only runs for claims nothing asked about.
-            if crv not in seams and not cmds.objExists(crv):
+            if crv not in seams and not self._curve_exists(crv):
                 led.forget_curve(crv)
                 continue
             want = seams.get(crv, ())
             for t in led.step_times(crv):
                 if any(abs(t - w) <= eps for w in want):
                     continue  # still a seam — the hold still belongs here
+                claim = led.claimed_step(crv, t)
                 types = led.release_step(crv, t)
                 if types is None:
                     continue
                 key_t = self._key_time_at(crv, t, eps)
                 if key_t is None:
                     continue  # the key is gone; the claim went with it
-                ott = (
-                    cmds.keyTangent(
-                        crv, q=True, time=(key_t, key_t), outTangentType=True
-                    )
-                    or [""]
-                )[0]
-                if ott != "step":
+                tt = (key_t, key_t)
+                ott = cmds.keyTangent(crv, q=True, time=tt, outTangentType=True)
+                if (ott or [""])[0] != "step":
                     continue  # re-tangented since — not ours to take back
-                self._try_key_tangent(crv, (key_t, key_t), {"outTangentType": types[1]})
+                itt = cmds.keyTangent(crv, q=True, time=tt, inTangentType=True)
+                value = cmds.keyframe(crv, q=True, time=tt, valueChange=True)
+                if not led.is_same_key(claim, (itt or [""])[0], (value or [0.0])[0]):
+                    continue  # written over since — the step is the new key's
+                self._try_key_tangent(crv, tt, {"outTangentType": types[1]})
+                if types[1] == "fixed":
+                    self._restore_fixed_out_tangent(crv, key_t)
                 restored += 1
         return restored
+
+    @classmethod
+    def _restore_fixed_out_tangent(cls, crv: str, t: float) -> None:
+        """Give a released FIXED out-tangent its slope back from its in side.
+
+        Maya's ``step`` discards the out-tangent's angle and weight, so the
+        ``fixed`` type restored alone comes back flat and weightless -- and
+        the seam key beside a pin is fixed (``setKeyframe -insert`` fixes the
+        inserted key's neighbours, in and out alike, one slope).  Measured
+        2026-10-05: a merge that released such a hold played the shot's last
+        10 frames 0.8 off.  The out side is refilled from a FIXED in side --
+        exact for that one-slope key on an unweighted curve, the angle alone
+        on a weighted one, and for a tangent that was broken before its hold
+        the continuation of its in side rather than a flat one.  The hold
+        broke the tangent (``AnimUtils.step_keys``); it is left broken, as
+        every release leaves it.
+        """
+        tt = (t, t)
+        in_type = cmds.keyTangent(crv, q=True, time=tt, inTangentType=True) or [""]
+        if in_type[0] != "fixed":
+            return  # a derived in side is no record of the out side's slope
+        angle = cmds.keyTangent(crv, q=True, time=tt, inAngle=True) or []
+        weight = cmds.keyTangent(crv, q=True, time=tt, inWeight=True) or []
+        if not angle or not weight:
+            return
+        # The weight first: a zero-weight out side takes no angle.
+        cls._try_key_tangent(crv, tt, {"lock": False})
+        cls._try_key_tangent(crv, tt, {"outWeight": weight[0]})
+        cls._try_key_tangent(crv, tt, {"outAngle": angle[0]})
 
     def _apply_gap_holds(self, seams: Dict[str, list]) -> int:
         """Step every seam in *seams* that is not stepped already.
@@ -1953,11 +2032,36 @@ class ShotSequencer(_ShotSequencerCore):
                 itt = (
                     cmds.keyTangent(crv, q=True, time=tt, inTangentType=True) or [""]
                 )[0]
-                led.record_step(crv, t, itt, ott[0])
+                value = cmds.keyframe(crv, q=True, time=tt, valueChange=True) or []
+                led.record_step(crv, t, itt, ott[0], value[0] if value else None)
                 step_dict.setdefault(crv, []).append(t)
         if step_dict:
             AnimUtils.step_keys(keys=step_dict, tangent="out")
         return sum(len(v) for v in step_dict.values())
+
+    def _pin_bound_keys(self, pins: Dict[str, list]) -> int:
+        """Key each curve on the bound frames *pins* names (``{curve: [(frame,
+        shot_id, edge), ...]}``) without changing what it plays, and claim
+        every key inserted for its bound -- the pythontk hook that stops a gap
+        hold where it has to (``ShotSequencer._enforce_gap_holds``).
+
+        The respace pin's writer (:meth:`AnimUtils.insert_keys`, Maya's own
+        ``setKeyframe -insert``) under its rules: only inside the curve's key
+        range, never on a key, never inside a hold.  Returns the number of
+        keys inserted.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        inserted = 0
+        for crv, bounds in pins.items():
+            owners: dict = {}
+            for frame, shot_id, edge in bounds:
+                owners.setdefault(float(frame), (shot_id, edge))
+            for _crv, t in AnimUtils.insert_keys([crv], sorted(owners), report=True):
+                shot_id, edge = owners.get(float(t), (-1, ""))
+                self.ledger.record_key(crv, t, shot_id, edge)
+                inserted += 1
+        return inserted
 
     @classmethod
     def _sample_is_redundant(cls, crv: str, t: float, terminal: bool = True) -> bool:
@@ -2157,7 +2261,7 @@ class ShotSequencer(_ShotSequencerCore):
             ]
             if not records:
                 continue  # nothing here belongs to the shots named in *bounds*
-            if not cmds.objExists(crv):
+            if not self._curve_exists(crv):
                 if bounds is None:
                     led.forget_curve(crv)
                 continue
@@ -2255,6 +2359,8 @@ class ShotSequencer(_ShotSequencerCore):
         extent = shot.end
         if cmds is None:
             return extent
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
         other_spans = [
             (s.start - 1e-6, s.end + 1e-6)
             for s in self.store.shots
@@ -2268,7 +2374,7 @@ class ShotSequencer(_ShotSequencerCore):
             for t in cmds.keyframe(obj, q=True) or []:
                 if t > extent and not _owned_elsewhere(t):
                     extent = t
-        for events in self._read_all_audio_events().values():
+        for events in AudioUtils.read_all_events().values():
             for ev_start, ev_stop in events:
                 ev_end = ev_stop if ev_stop is not None else ev_start
                 if ev_end > extent:

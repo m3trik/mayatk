@@ -105,6 +105,35 @@ class TestLightmapUvs(MayaTkTestCase):
         self.assertTrue(res[shape]["reused"])
         self.assertFalse(res[shape]["created"])
 
+    def test_a_generated_layout_that_still_overlaps_is_named(self):
+        """Regenerated because the old set failed the check -- and the new one
+        can fail it too (a 9544-face production door kept 375 overlapping
+        faces, 2026-10-08): faces sharing texels mix each other's light. The
+        result says so, and the log names the mesh, quiet or not."""
+        import contextlib
+        import io
+        from unittest import mock
+
+        cube = cmds.polyCube(name="lmCubeOverlap")[0]
+        shape = self._shape(cube)
+        out = io.StringIO()
+        with (
+            mock.patch.object(
+                UvDiagnostics, "is_bakeable_lightmap", return_value=False
+            ),
+            contextlib.redirect_stdout(out),
+        ):
+            res = UvUtils.create_lightmap_uvs([cube], map_size=256, quiet=True)
+        self.assertTrue(res[shape]["created"])
+        self.assertIs(res[shape]["bakeable"], False)
+        self.assertIn("overlap", out.getvalue())
+        self.assertIn("lmCubeOverlap", out.getvalue())
+
+        clean = UvUtils.create_lightmap_uvs(
+            [cmds.polyCube(name="lmCubeClean")[0]], map_size=256
+        )
+        self.assertIs(next(iter(clean.values()))["bakeable"], True)
+
     def test_generated_lightmap_survives_cleanup(self):
         # Phase 0a + 1b integration: the tag makes cleanup protect it.
         cube = cmds.polyCube(name="lmCube3")[0]
@@ -2317,7 +2346,7 @@ class TestAutoUnwrap(MayaTkTestCase):
         set in the scene for good, and a saved scene ships it as its second UV
         set -- TEXCOORD_1, the lightmap channel (183 of 757 production meshes).
         The next unwrap of that mesh removes it; a mesh the run does not touch
-        keeps its own, which the exporter reports instead.
+        keeps its own, which Get Scene Info flags instead.
         Added: 2026-09-15
         """
         self._stub_engine()
@@ -2330,6 +2359,26 @@ class TestAutoUnwrap(MayaTkTestCase):
         self.assertEqual(result.failed, [])
         self.assertEqual(UvUtils.find_uv_snapshots([self.cube]), [])
         self.assertEqual(len(UvUtils.find_uv_snapshots([other])), 1)
+
+    def test_a_cancelled_unwrap_leaves_no_snapshot_set(self):
+        """A cancel (``ptk.OperationCancelled``) or a Force Stop
+        (``KeyboardInterrupt``) is a BaseException on purpose, so it passed
+        straight through the per-mesh ``except Exception`` -- neither the
+        restore nor the discard ran, and the backup set stayed on the mesh to
+        ship as TEXCOORD_1 (a production room: 112 meshes). Every exit must take
+        the backup with it; the cancel itself still propagates.
+        Added: 2026-10-08
+        """
+
+        def cancelled(_obj_in, _obj_out):
+            raise ptk.OperationCancelled()
+
+        self._stub_engine(handler=cancelled)
+        before = self._uvs_per_face(self.cube)
+        with self.assertRaises(ptk.OperationCancelled):
+            UvUtils.auto_unwrap(self.cube, method="hard", pack=False)
+        self.assertEqual(UvUtils.find_uv_snapshots([self.cube]), [])
+        self.assertEqual(self._uvs_per_face(self.cube), before)
 
     def test_unshared_engine_uvs_do_not_cut_every_edge(self):
         """A payload with a UV per face corner must come back re-shared.
@@ -3354,6 +3403,55 @@ class TestTransferUvsPreservesDeformers(MayaTkTestCase):
         cmds.delete(donor)
 
         self.assertSkinIntact(mesh)
+
+
+class TestUvWorldTriangles(MayaTkTestCase):
+    """UvUtils.get_uv_world_triangles -- a layout's triangles with the surface they map."""
+
+    def test_pairs_the_uv_triangles_with_their_instances_world_corners(self):
+        """The same triangles as get_uv_triangles, row for row, each corner one
+        of THIS instance's world vertices: the lightmap planner reads from them
+        how much surface each uv axis spans, and an instance stands elsewhere."""
+        import numpy as np
+
+        cube = cmds.polyCube(name="uvwCube", w=2, h=3, d=4)[0]
+        cmds.xform(cube, translation=(5, 1, -2), rotation=(10, 20, 30))
+        copy = cmds.instance(cube, name="uvwCopy")[0]
+        cmds.xform(copy, worldSpace=True, translation=(-7, 0, 3))
+        shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+        expected = UvUtils.get_uv_triangles(shape)
+        for node in cmds.ls([cube, copy], long=True):
+            uvs, points = UvUtils.get_uv_world_triangles(node)
+            np.testing.assert_array_equal(uvs, expected)
+            verts = np.asarray(
+                cmds.xform(f"{node}.vtx[*]", query=True, worldSpace=True, t=True)
+            ).reshape(-1, 3)
+            nearest = np.abs(points.reshape(-1, 1, 3) - verts[None]).sum(axis=2)
+            self.assertLess(nearest.min(axis=1).max(), 1e-4, node)
+            e1, e2 = points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]
+            area = 0.5 * np.linalg.norm(np.cross(e1, e2), axis=1).sum()
+            self.assertAlmostEqual(area, 2 * (2 * 3 + 3 * 4 + 2 * 4), places=4)
+
+    def test_an_unmapped_face_maps_no_triangle(self):
+        """The per-face vertex list holds every face and the assigned-uv list
+        skips an unmapped one: the corners must stay with their own face."""
+        import numpy as np
+
+        plane = cmds.polyPlane(name="uvwPlane", w=4, h=3, sx=4, sy=3)[0]
+        cmds.polyMapDel(f"{plane}.f[2]", f"{plane}.f[5:6]")
+        uvs, points = UvUtils.get_uv_world_triangles(plane)
+        self.assertEqual(len(uvs), 2 * 9)
+        e1, e2 = points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]
+        area = 0.5 * np.linalg.norm(np.cross(e1, e2), axis=1).sum()
+        self.assertAlmostEqual(area, 9.0, places=4)  # 9 one-unit faces still mapped
+        # The plane's own uvs span its 4 units along u and its 3 along v.
+        (u0, v0), (u1, v1) = (
+            uvs.reshape(-1, 2).min(axis=0),
+            uvs.reshape(-1, 2).max(axis=0),
+        )
+        su, sv = ptk.ImgUtils.uv_axis_scale(points, uvs)
+        self.assertAlmostEqual(su, 4.0 / (u1 - u0), places=3)
+        self.assertAlmostEqual(sv, 3.0 / (v1 - v0), places=3)
 
 
 if __name__ == "__main__":

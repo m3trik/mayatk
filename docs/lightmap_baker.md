@@ -26,6 +26,7 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 |:---|:---|
 | **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included. Its **light** button is *Include Environment*: on, the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards. |
 | **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set): objects that get no map of their own but still cast shadows and bounce light onto everything that bakes. Its icons select the set or clear it. The label shows how many meshes are excluded. |
+| **Bake Set** | *Select Bake Set* selects the objects of the last saved bake. Its **disk** button is *Save After Bake*: while on, every bake replaces the scene's [Bake set](#bake-set) with the objects it acted on. One setting for every scene. Its **tag** button names the set with the naming convention's Set suffix (`lightmapBaker_baked_SET`) instead of plain (`lightmapBaker_baked`); **clear** deletes it. The label shows how many objects it holds. |
 | **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). Its **camera** button is *Reflection Probe*: on (the default), the bake also captures the room it lit as an HDR, for what a lightmap cannot hold. See [Reflection probe](#reflection-probe). |
 | **Processor** | Which one Arnold renders the bake on. **Auto** uses the GPU wherever Arnold has one, else the CPU; **GPU** and **CPU** force it. A machine setting, so it sits above the Quality group and no preset stores it. |
 | **Resolution** | Map size in pixels (256–4096). It also sets the gutter width. Its **filter** button is *Denoise*: each map is cleaned at the size it ships — the object's own map, or its atlas cell. |
@@ -66,7 +67,9 @@ same steps:
    (`LightmapBaker.bake_targets`). Meshes Arnold renders nothing of are left
    out too, and named in the Script Editor: hidden or templated by their own
    flags, their shape's, an ancestor's, level-of-detail visibility or a
-   display layer. The footer counts them apart from the excluded ones.
+   display layer. The footer counts them apart from the excluded ones. A
+   visible mesh that is neither baked now, baked before, nor excluded moves,
+   and stays out of the render ([What the render holds](#what-the-render-holds)).
 2. Check that the scene can bake (`LightmapBaker.preflight`), before anything
    in it changes. Every lightmap renders with Arnold, so mtoa is loaded here
    if it isn't yet; a machine without it is refused. Lights the tool authored
@@ -117,7 +120,7 @@ engine wiring.
 ## Packing
 
 **Atlas by Material** — the default — gives one shared EXR per primary
-material. Each object gets a rect weighted by its surface area. The rect is the
+material. Each object gets a rect: its cell in the atlas. The rect is the
 engine binding (Unity `lightmapScaleOffset` / glTF `KHR_texture_transform`),
 stored per transform, so every instance of a shared mesh keeps its own rect and
 its own lighting. UVs are never edited. It is what an engine wants: fewer
@@ -127,12 +130,50 @@ surface area is.
 **Per-Object** is the opt-out: every object gets its own map at the full
 Resolution. Right for a hero asset that earns one, or a small selection.
 
-The atlas layout is planned before any ray is traced. Each object renders at
-2× the size of its cell (never above a full map), then shrinks into the cell,
-and that shrink averages out Arnold's sampling noise. Measured at the same
-ray budget per shipped texel, rendering above the cell matches spending those
-rays as camera samples. 2× is the trade the tiers make: on a production floor
-at four bounces, 4× took 75 s for 0.39% shadow mottle and 2× 22 s for 0.52%.
+The atlas layout is planned before any ray is traced, and it is **packed**
+(`ptk.ImgUtils.pack_atlas_rects` over `ptk.RectPacker`):
+
+- **One texel density for the group.** Each cell is sized from the object's
+  world surface area over its layout's island coverage, at the largest
+  density at which the whole group fits. A mesh twice the size gets twice the
+  texels, and a sparse layout keeps its islands' density.
+- **Each cell in its surface's shape.** A cell takes the shape its layout's
+  box has on the mesh, so texels come out square on the surface:
+  `ptk.ImgUtils.uv_axis_scale` measures how much surface each UV axis spans
+  (over `UvUtils.get_uv_world_triangles`). A layout covering part of its
+  square gets a cell of that part's shape. A layout stretched to fill its
+  square whatever the mesh's shape gets the mesh's shape back. Every wall
+  and baseboard of a production room is laid out that way: a 131 × 394 cm wall
+  in a square layout gets a 1:3 cell, and a 13 × 395 cm baseboard a thin
+  strip. Before 2026-10-10 a squarified treemap bent cells to tile the square,
+  and nothing undid a layout's stretch. On that room the texels ran 2.4:1
+  (median) and 17:1 on the baseboards: 4 texels/cm up a baseboard and 0.25
+  along it, where the cabinets' shadows fall. Now every cell is 1–1.05:1 at
+  one density (1.04 texels/cm at 2048). A cell too long for the atlas at the
+  group's density (a 30 m corridor wall) folds toward square at its own area,
+  so it alone gives up its shape, not everyone's density.
+- **A gutter at every resolution.** Every cell keeps the gutter (2 px, or
+  Resolution / 256) from every neighbour and from the atlas edge, and no cell
+  is under 4 px. Every padded cell lies on whole 4 × 4 blocks, the blocks
+  BC6H (Unity's HDR lightmaps) and UASTC / ASTC (the web deliverable's KTX2)
+  encode, so no block mixes two objects. The tiled layout's gutter shrank with
+  its cell: at 256 px neighbours met at 3 px and a cell under a texel vanished.
+- **Copies in name order.** Copies of one mesh take equal cells in name
+  order, every bake. Maya measures their areas in single precision, and the
+  tiled layout ordered cells by that noise, so the same room's baseboards
+  took different cells in each bake.
+
+A group too big to fit even at 4 px per cell falls back to the tiled layout,
+with a warning: bake it at a higher Resolution, or split it across materials.
+
+Each object then renders above its cell and shrinks into it, and that shrink
+averages out Arnold's sampling noise: 2² render texels per cell texel (never
+above a full map). RTT renders one square frame, so an elongated cell is sized
+from its area, never under its long side: a 1:3 wall renders what a square cell
+of its area does, and a baseboard's strip renders at its long side. Measured at the same ray budget per shipped texel, rendering
+above the cell matches spending those rays as camera samples. 2× is the trade
+the tiers make: on a production floor at four bounces, 4× took 75 s for 0.39%
+shadow mottle and 2× 22 s for 0.52%.
 
 ## Reflection probe
 
@@ -188,10 +229,10 @@ point with the bake's own settings, written beside the maps as
   search folders and a repath follow it), the GLB export embeds it, and the
   [WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)
   lights with it: baked metals reflect the room instead of a stock studio, and
-  unbaked objects are lit by the room (its Environment window switches it off
+  unbaked objects are lit by the room (its Environment menu switches it off
   and on, and draws where it was captured). In Unity, unitytk's **Apply Scene
   Lightmaps** puts it up as a box-projected Reflection Probe under the model:
-  copy `<scene>_Probe.exr` into the project beside the lightmaps. Measured on a production soldering
+  the Scene Exporter embeds `<scene>_Probe.exr` in the FBX with the lightmaps, and the importer extracts them beside it. Measured on a production soldering
   table against Arnold's render of it: a metal housing from 0.12 of Arnold's
   luminance to 0.62, its trays from 0.4 to 0.89-1.07, the unbaked magnifier's
   parts from up to 2.8x too bright to 0.65-1.45x.
@@ -290,6 +331,21 @@ still traces them, so they cast shadows and bounce light onto everything that
 does bake. A group in the set excludes every mesh under it; faces exclude
 their mesh.
 
+### What the render holds
+
+A bake renders the static scene: what it bakes, what was baked before (any
+object with a lightmap), and the Exclude set. Any other visible mesh is taken
+to move -- an interactive prop that is never baked -- and is out of the render
+for the bake, then switched back on. It casts no shadow and bounces no light
+into the maps: a shadow it left would stay on the cart, the table or the floor
+wherever the prop went. The Script Editor names each one. To keep a static
+object's shadow without baking it, add it to the Exclude set. The reflection
+probe leaves the same meshes out of its render.
+
+Only a mesh's own shape is switched off, never its transform, so a baked mesh
+parented under a moving one still renders. An unbaked instance of a mesh that
+renders stays in, since hiding it would hide its twin too.
+
 The workflow reads the set itself (`LightmapBaker.bake_targets`). A bake from
 the panel, from a script, or from a preset all skip the same objects, and so
 does the Blender bridge's lightmap bake: an excluded mesh in the send crosses
@@ -302,6 +358,31 @@ re-bake the room at **mobile**: the prop keeps its map.
 
 The row mirrors the Marmoset bridge's Bake Source row, and both sets share
 one base (`BakeSet`).
+
+## Bake set
+
+The Bake set holds the objects the last bake acted on: the Scope, minus the
+Exclude set and what Arnold renders nothing of, finished or not. Select it and
+bake again to re-run that bake. It is a plain `objectSet`
+(`mayatk.mat_utils.bake_sets.LightmapBakeSet`) and saves with the scene.
+
+The panel writes it after a bake while *Save After Bake* (the row's disk
+button) is on; each bake replaces it. The switch is per user, not per scene,
+and off by default. The tag button picks its name: `lightmapBaker_baked`, or
+the naming convention's spelling, `lightmapBaker_baked_SET` with the shipped
+convention. The Set suffix is the one the Naming panel edits
+(`ptk.NamingConvention`, entry `objectSet`). Toggling the tag renames a set
+already in the scene. Either spelling reads, and so does a set saved before
+the convention changed.
+
+A script saves the same set after `bake()`:
+
+```python
+from mayatk.mat_utils.bake_sets import LightmapBakeSet
+
+result = mtk.LightmapBaker.from_preset("mobile").bake(objects)
+LightmapBakeSet.define(sorted(set(result.maps) | set(result.unbaked)), conventional=True)
+```
 
 ## Where the maps land
 
@@ -436,8 +517,10 @@ warns and is removed in 0.20.0.
 
 blendertk's `LightmapBaker` and its panel bake with Cycles and mirror this
 one control for control: the same layout, the preset template (its presets
-store `bounces` for `gi_depth`), the Exclude set (a stamped collection that
-changes nothing about what renders), Beside Material Textures, Bounces,
+store `bounces` for `gi_depth`), the Exclude set and the Bake set (stamped
+collections that change nothing about what renders; the Bake set's name
+follows the same tag), the packed atlas (`ptk.ImgUtils.pack_atlas_rects`,
+the one planner both use), Beside Material Textures, Bounces,
 Adaptive Sampling, the switches on the fields they qualify (bar the
 Reflection Probe: Cycles captures none yet), Reset to
 Defaults and the confirmed Revert. The engine matches too: `bake()` with its

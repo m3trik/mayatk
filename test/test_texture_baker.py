@@ -2993,11 +2993,16 @@ class TestExrCodec(MayaTkTestCase):
 
     Three things in the process -- none of them a map's -- took it away and
     cost every map: ``cv2.imread`` opens no non-ASCII path on Windows (a map in
-    a folder named "José" read as a render that wrote nothing, and was
+    a folder named "Résumé ★" read as a render that wrote nothing, and was
     DELETED); OpenCV's codec works through a scratch file in the temp folder,
-    so a user named José encoded and decoded nothing; and with no cv2 at all
-    the bake raised after paying every render (2026-10-04 review).
+    so a user named Zoë encoded and decoded nothing; and with no cv2 at all
+    the bake raised after paying every render (2026-10-04 review). The read
+    and the temp-folder spelling are pythontk's now (``ImgUtils.cv2_read`` /
+    ``cv2_temp``); ``_read_exr`` and ``_codec_temp`` delegate to them.
     """
+
+    #: An accent the ANSI code page holds, and a star it cannot.
+    FOLDER = "Résumé ★"
 
     def _folder(self, *parts):
         import pythontk as ptk
@@ -3021,8 +3026,8 @@ class TestExrCodec(MayaTkTestCase):
         self.assertTrue(ok)
         return data.tobytes()
 
-    def test_a_map_in_a_folder_named_jose_is_a_map(self):
-        path = os.path.join(self._folder("Jos\u00e9"), "planeShape.exr")
+    def test_a_map_in_a_non_ascii_folder_is_a_map(self):
+        path = os.path.join(self._folder(self.FOLDER), "planeShape.exr")
         with open(path, "wb") as fh:
             fh.write(self._exr_bytes())
         self.assertFalse(TextureBaker._rendered_nothing(path), "a good map, deleted")
@@ -3031,11 +3036,11 @@ class TestExrCodec(MayaTkTestCase):
             fh.write(self._exr_bytes(0.0))
         self.assertTrue(TextureBaker._rendered_nothing(empty))
 
-    def test_a_temp_folder_named_jose_still_encodes_and_decodes(self):
+    def test_a_non_ascii_temp_folder_still_encodes_and_decodes(self):
         import ctypes
 
         _cv2, np = self._cv2_np()
-        temp = self._folder("Jos\u00e9")
+        temp = self._folder(self.FOLDER)
         buffer = ctypes.create_unicode_buffer(32768)
         ctypes.windll.kernel32.GetShortPathNameW(temp, buffer, len(buffer))
         if not buffer.value.isascii():

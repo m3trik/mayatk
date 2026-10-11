@@ -198,7 +198,7 @@ class SegmentCollector:
         return sorted(attrs)
 
     @staticmethod
-    def build_curve_preview(crv, t_start, t_end):
+    def build_curve_preview(crv, t_start, t_end, hidden_times=()):
         """Extract Bézier curve shape data for a single anim curve.
 
         Returns a DCC-agnostic dict that the widget painter can render
@@ -210,6 +210,10 @@ class SegmentCollector:
             Maya animCurve node name.
         t_start, t_end : float
             Visible time range to clip to.
+        hidden_times : iterable of float
+            Key times the widget draws without a dot (``hidden``): keys that
+            shape the curve but are not the animator's -- the shot system's
+            claimed bound samples.
 
         Returns
         -------
@@ -221,6 +225,8 @@ class SegmentCollector:
 
             *broken*: ``[bool, ...]`` per key — tangents unlocked (the
             widget draws those handles dotted).
+
+            *hidden*: ``[bool, ...]`` per key — on *hidden_times*.
 
             *segments*: list of dicts, one per consecutive key pair::
 
@@ -346,10 +352,14 @@ class SegmentCollector:
         val_min = min(all_vals)
         val_max = max(all_vals)
 
+        hidden_times = list(hidden_times)
         return {
             "keys": vis_keys,
             "segments": vis_segs,
             "broken": broken,
+            "hidden": [
+                any(abs(t - h) <= 1e-3 for h in hidden_times) for t, _v in vis_keys
+            ],
             # Whether a handle's LENGTH means anything, which is what the
             # widget needs to swing a unified key's other side where the
             # rebuild will put it: on an unweighted curve the control point

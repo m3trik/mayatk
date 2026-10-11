@@ -489,15 +489,20 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         history = cmds.listHistory(str(material), pruneDagObjects=True) or []
         file_nodes = cmds.ls(history, type="file") or []
 
+        paths = [
+            cmds.getAttr(f"{fn}.fileTextureName")
+            for fn in file_nodes
+            if cmds.objExists(f"{fn}.fileTextureName")
+        ]
+        paths = [path for path in paths if path]
+        # The material's textures are one set, read together: a set named for
+        # a lobe (`Hero_Coat`) keeps its `Hero_Coat_Roughness` a Roughness.
+        map_types = ptk.MapFactory.resolve_map_types(paths)
+
         found: List[Tuple[str, str]] = []
         seen_types = set()
-        for fn in file_nodes:
-            if not cmds.objExists(f"{fn}.fileTextureName"):
-                continue
-            path = cmds.getAttr(f"{fn}.fileTextureName")
-            if not path:
-                continue
-            map_type = ptk.MapFactory.resolve_map_type(path)
+        for path in paths:
+            map_type = map_types[path]
             if not map_type or map_type in seen_types:
                 continue
             seen_types.add(map_type)
@@ -526,7 +531,7 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
         # supersedes the Specular luminance proxy, so both never wire metalness.
         if types & {"Metallic", "ORM", "MRAO", "MSAO", "Metallic_Smoothness"}:
             drop |= {"Specular"}
-        if any(t.startswith("Normal") for t in types):  # vs. bump/height
+        if types & set(ptk.MapRegistry.NORMAL_TYPES):  # vs. bump/height
             drop |= {"Bump", "Height"}
         # A packed mask carrying AO (ORM/MRAO/MSAO broadcast a single channel
         # into the baseColor multiply) supersedes a standalone AO map (which
@@ -686,7 +691,10 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             True if a connection was made, False for an unsupported type.
         """
         # Normals (Normal / Normal_OpenGL / Normal_DirectX) → tangent-space bump.
-        if texture_type.startswith("Normal"):
+        # The tangent-space types only: ``startswith`` also took the object-
+        # and world-space bakes (``Normal_Object`` / ``Normal_World``) as
+        # tangent normals.
+        if texture_type in ptk.MapRegistry.NORMAL_TYPES:
             f = self._make_file(texture, alpha_is_luminance=1)
             self._wire_bump(bump_node, f"{f}.outAlpha", tangent=True)
             return True

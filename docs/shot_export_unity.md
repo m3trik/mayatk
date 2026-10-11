@@ -125,7 +125,9 @@ either or both; each runs once per export, fault-isolated, **in the records'
 declared dependency order (`audio_manifest` reads `shot_metadata`, so shots
 first)** — the audio producer reads the takes the shots producer just built and
 scopes each event to its take (`clip` + take-relative `frame`), so every audio
-event fires only in its own AnimationClip (a `full` export realizes no take, so
+event fires in its own AnimationClip -- and, in a Shots + Full Sequence file, at
+its shot's window in the whole-timeline clip, which unitytk places from the shot
+record (a `full` export realizes no take, so
 its events ship unscoped against the one whole-timeline clip). Verified end-to-end by
 `unitytk/test/test_shots_audio_sidebyside_integration.py`.
 

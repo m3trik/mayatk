@@ -509,7 +509,9 @@ class MayaConnection:
                 )
 
         if mode == "auto":
-            detected_mode = self._detect_mode()
+            # A forced new instance only ever launches: probing a port could
+            # only touch a session the flag exists to keep away from.
+            detected_mode = self._detect_mode(None if force_new_instance else port)
             if detected_mode == "standalone" and launch:
                 # If we detected standalone (meaning no interactive or port found),
                 # and user wants to launch, we should switch to port mode to trigger the launch attempt
@@ -909,8 +911,13 @@ class MayaConnection:
             f"No available ports found in range {start_port}-{start_port + max_check}"
         )
 
-    def _detect_mode(self) -> ConnectionMode:
-        """Auto-detect the best connection mode."""
+    def _detect_mode(self, port: Optional[int] = 7002) -> ConnectionMode:
+        """Auto-detect the best connection mode.
+
+        Parameters:
+            port: The command port to probe for a listening Maya; None skips the
+                probe (a forced new instance must not touch a live session).
+        """
         # 1. Check if we are in Maya GUI (Interactive)
         # We skip this if in batch mode (mayapy) so we can act as a runner (port)
         try:
@@ -924,15 +931,16 @@ class MayaConnection:
             pass
 
         # 2. Try command port (Runner for mayapy or external python)
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            result = sock.connect_ex(("localhost", 7002))
-            sock.close()
-            if result == 0:
-                return "port"
-        except Exception:
-            pass
+        if port is not None:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(("localhost", port))
+                sock.close()
+                if result == 0:
+                    return "port"
+            except Exception:
+                pass
 
         # 3. Fall back to standalone (mayapy / batch execution)
         return "standalone"

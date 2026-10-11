@@ -225,10 +225,14 @@ class ShadowRigSlots:
                         "Modes",
                         [
                             "<b>Combined</b> — one plane for the whole selection "
-                            "(a table with the props on it casts one shadow).",
+                            "(a table with the props on it casts one shadow). One "
+                            "rigid caster: its anchor rides the parent the objects "
+                            "share; moving one alone re-fits it here, but at "
+                            "runtime it stays where it was drawn.",
                             "<b>Per object</b> — one plane per selected object, "
                             "each with its own contact, tile and record; the "
-                            "planes share an atlas and the engines instance them.",
+                            "planes share an atlas and the engines instance them. "
+                            "For objects that move independently.",
                         ],
                     )
                 ],

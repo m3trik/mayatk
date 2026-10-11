@@ -105,11 +105,11 @@ class TaskManager(
         (the deliverable must not lie).
 
         Parameters:
-            fbx_path: FBX to convert. Defaults to ``self.export_path`` (the
-                FBX-alongside case). The GLB-only path passes the temp FBX so the
-                ``.glb`` lands beside it (then gets moved into the output dir).
-            announce: When True, log the resulting path. The GLB-only path sets
-                this False and logs the final (moved) path itself.
+            fbx_path: FBX to convert. Defaults to ``self.export_path``.
+                ``perform_export`` passes its STAGED FBX, so the ``.glb`` lands
+                beside it in the local stage and is delivered after.
+            announce: When True, log the resulting path. ``perform_export``
+                sets this False and logs the delivered path itself.
 
         Returns:
             The created ``.glb`` path, or ``None`` if the build failed.
@@ -135,6 +135,9 @@ class TaskManager(
                 # moment the project is reorganised -- and then the GLB ships
                 # unlit while the bake sits one folder away.
                 lightmap_dirs=self._lightmap_search_dirs(),
+                # The DELIVERABLE's folders: the FBX converted here is a local
+                # staged copy, and "beside the FBX" is the stage.
+                shadow_dirs=ptk.MeshConvert.fbx_media_dirs(self.export_path),
                 # The panel's texture dials resolved against the shared
                 # web-delivery policy: this GLB IS the web deliverable.
                 texture_params=self.run.glb_texture_params(logger=self.logger),
@@ -162,8 +165,10 @@ class TaskManager(
             return None
 
         glb_path = built["glb"]
-        if announce:
-            self.logger.success(f"GLB created: {glb_path}")
+        if announce:  # SUCCESS is a toolkit level; a plain logger says INFO
+            getattr(self.logger, "success", self.logger.info)(
+                f"GLB created: {glb_path}"
+            )
         return glb_path
 
     # ------------------------------------------------------------------
@@ -429,7 +434,7 @@ class TaskManager(
         # Hand over the sidecar this export actually wrote rather than
         # letting the verifier guess: with versioning on, the manifest is
         # keyed to the BASE stem so a series shares one, while the verifier
-        # looks beside the file for `.{stem}.scene_data.json`. Guessing made
+        # looks for `.{stem}.scene_data.json` by the file's own stem. Guessing made
         # `clips_vs_takes` and `fbx_takes` -- the gates that catch a dropped
         # take -- SKIP silently on every versioned export. A path that is not
         # there degrades exactly as auto-discovery would.

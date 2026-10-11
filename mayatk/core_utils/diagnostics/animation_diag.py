@@ -92,6 +92,7 @@ class AnimCurveDiagnostics:
         time_range_threshold: float = 1e6,
         value_threshold: float = 1e6,
         quiet: bool = False,
+        on_delete=None,
     ) -> Dict[str, Any]:
         """Detect and (optionally) repair corrupted animation curves.
 
@@ -159,6 +160,8 @@ class AnimCurveDiagnostics:
                         try:
                             cmds.delete(curve)
                             stats["curves_deleted"] += 1
+                            if on_delete is not None:
+                                on_delete(curve_name, None)  # the whole curve
                             if not quiet:
                                 print(
                                     f"  [!] Deleted severely corrupted curve: {curve_name}"
@@ -221,6 +224,7 @@ class AnimCurveDiagnostics:
                             time_range_threshold,
                             value_threshold,
                             quiet,
+                            on_delete=on_delete,
                         )
 
                         if repaired:
@@ -234,6 +238,8 @@ class AnimCurveDiagnostics:
                             try:
                                 cmds.delete(curve)
                                 stats["curves_deleted"] += 1
+                                if on_delete is not None:
+                                    on_delete(curve_name, None)  # the whole curve
                                 if not quiet:
                                     print(
                                         f"  [✗] Deleted unrepairable curve: {curve_name}"
@@ -279,9 +285,12 @@ class AnimCurveDiagnostics:
         time_threshold: float,
         value_threshold: float,
         quiet: bool = False,
+        on_delete=None,
     ) -> bool:
-        """Attempt to remediate or delete specific corrupted keys on a curve."""
+        """Attempt to remediate or delete specific corrupted keys on a curve;
+        ``on_delete(curve, frames)`` hears the (finite) frames of the keys cut."""
 
+        cut: List[float] = []
         try:
             for key_idx in sorted(keys_to_fix, reverse=True):
                 time = times[key_idx]
@@ -300,14 +309,24 @@ class AnimCurveDiagnostics:
                     should_delete = True
 
                 if should_delete:
+                    # clear: a bare cutKey put the cut keys on the animation
+                    # clipboard, over whatever keys the user had copied.
                     try:
-                        cmds.cutKey(curve, index=(key_idx, key_idx), option="keys")
+                        cmds.cutKey(
+                            curve, index=(key_idx, key_idx), option="keys", clear=True
+                        )
                     except Exception:
                         try:
                             if not math.isnan(time) and not math.isinf(time):
-                                cmds.cutKey(curve, time=(time, time), option="keys")
+                                cmds.cutKey(
+                                    curve, time=(time, time), option="keys", clear=True
+                                )
                         except Exception:
                             return False
+                    if math.isfinite(time):
+                        cut.append(time)
+            if cut and on_delete is not None:
+                on_delete(str(curve), sorted(cut))
 
             try:
                 remaining_times = (

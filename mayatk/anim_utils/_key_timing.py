@@ -9,6 +9,7 @@ shot engine and the key-timing siblings build on. Reached through
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
+import bisect
 import math
 
 try:
@@ -144,6 +145,8 @@ class _KeyTimingInternal:
         retain_spacing,
         channel_box_attrs_only,
         align,
+        on_replace=None,
+        on_move=None,
     ):
         """Body of :meth:`AnimUtils.move_keys_to_frame`."""
         # Get target frame (use current time if not specified)
@@ -283,9 +286,10 @@ class _KeyTimingInternal:
                             offset = frame - anchor_time
 
                         # Move exactly the selected keys — a (min, max) range
-                        # edit would also drag unselected keys inside the span.
-                        keys_moved += cls._shift_key_times(
-                            node, active_key_times, offset
+                        # edit would also drag unselected keys inside the span
+                        # -- replacing an unselected key they land on.
+                        keys_moved += cls._shift_replacing(
+                            node, active_key_times, offset, on_replace, on_move
                         )
             else:
                 # Handle all keys in time range
@@ -306,26 +310,10 @@ class _KeyTimingInternal:
                                 anchor_time = _anchor(keys)
                                 offset = frame - anchor_time
 
-                            # Move the keys.  option="over" lets a range move
-                            # travel past unmoved out-of-range neighbors — the
-                            # default move CLAMPS at the adjacent key (see
-                            # _shift_key_times for the same trap).
-                            if time_range:
-                                cmds.keyframe(
-                                    curves,
-                                    edit=True,
-                                    time=time_range,
-                                    relative=True,
-                                    timeChange=offset,
-                                    option="over",
-                                )
-                            else:
-                                cmds.keyframe(
-                                    curves,
-                                    edit=True,
-                                    relative=True,
-                                    timeChange=offset,
-                                )
+                            # Replacing a key outside the range it lands on.
+                            cls._shift_curves(
+                                curves, offset, time_range, on_replace, on_move
+                            )
                             keys_moved += len(keys)
                 else:
                     # Move all keys on object
@@ -339,24 +327,10 @@ class _KeyTimingInternal:
                             anchor_time = _anchor(keys)
                             offset = frame - anchor_time
 
-                        # Move the keys.  option="over" lets a range move
-                        # travel past unmoved out-of-range neighbors — the
-                        # default move CLAMPS at the adjacent key (see
-                        # _shift_key_times for the same trap).
-                        if time_range:
-                            cmds.keyframe(
-                                curves,
-                                edit=True,
-                                time=time_range,
-                                relative=True,
-                                timeChange=offset,
-                                option="over",
-                            )
-                        else:
-                            cmds.keyframe(
-                                curves, edit=True, relative=True, timeChange=offset
-                            )
-
+                        # Replacing a key outside the range it lands on.
+                        cls._shift_curves(
+                            curves, offset, time_range, on_replace, on_move
+                        )
                         keys_moved += len(keys)
 
         if keys_moved > 0:
@@ -382,6 +356,8 @@ class _KeyTimingInternal:
         selected_keys_only,
         exact_gap,
         prevent_collisions,
+        on_replace=None,
+        on_move=None,
     ):
         """Body of :meth:`AnimUtils.adjust_key_spacing`."""
         if spacing == 0:
@@ -511,6 +487,7 @@ class _KeyTimingInternal:
         # ---------- Execute moves ----------
         for curve, keys_to_move, keyframes in curve_plans:
             # Get the attribute name connected to this curve for preserve_keys
+            anchored = False
             if preserve_keys and any(
                 abs(k - adjusted_time) < tolerance for k in keyframes
             ):
@@ -522,9 +499,19 @@ class _KeyTimingInternal:
                     value = cmds.getAttr(attr_name, time=adjusted_time)
                     tangent_info = cls.get_tangent_info(attr_name, adjusted_time)
                     preserved_keys.append((attr_name, value, tangent_info))
+                    anchored = True
 
             if not keys_to_move:
                 continue
+
+            # A key a moved one lands on is replaced, cut BEFORE the move:
+            # option="over" stacks the mover a hair beside it (two keys on one
+            # frame).  prevent_collisions refused every such landing above.
+            pairs = [(key, max(key + actual_spacing, 0)) for key in keys_to_move]
+            pairs = [(key, dest) for key, dest in pairs if dest != key]
+            replaced = cls._landed_on(curve, pairs, moving=True)
+            for t in replaced:
+                cmds.cutKey(curve, time=(t, t), clear=True)
 
             # Batch move: group into contiguous ranges where possible
             for key in keys_to_move:
@@ -549,6 +536,26 @@ class _KeyTimingInternal:
                             f"adjust_key_spacing: failed to move key at {key} "
                             f"on {curve}: {e}"
                         )
+            if anchored:
+                # The preserved key stays at the adjustment point (it is keyed
+                # back there below), so its claims stay with it; a moved key
+                # landing on that point is overwritten by the re-key, so its
+                # claims go -- from its source frame, where they still are.
+                replaced = replaced + [
+                    key for key, dest in pairs if abs(dest - adjusted_time) < tolerance
+                ]
+                pairs = [
+                    (key, dest)
+                    for key, dest in pairs
+                    if abs(key - adjusted_time) >= tolerance
+                    and abs(dest - adjusted_time) >= tolerance
+                ]
+            # Replaced first, so a claim carried onto a frame is not the one
+            # released there.
+            if replaced and on_replace is not None:
+                on_replace(curve, replaced)
+            if pairs and on_move is not None:
+                on_move(curve, pairs)
 
         # Restore preserved keyframes at the original time
         for attr_name, value, tangent_info in preserved_keys:
@@ -556,7 +563,17 @@ class _KeyTimingInternal:
             cls.set_tangent_info(attr_name, adjusted_time, tangent_info)
 
     @classmethod
-    def _invert_keys(cls, objects, time, relative, delete_original, mode, value_pivot):
+    def _invert_keys(
+        cls,
+        objects,
+        time,
+        relative,
+        delete_original,
+        mode,
+        value_pivot,
+        on_replace,
+        on_move,
+    ):
         """Body of :meth:`AnimUtils.invert_keys`."""
         if objects is None:
             objects = cmds.ls(selection=True)
@@ -640,6 +657,22 @@ class _KeyTimingInternal:
                     (node, key_time, inverted_time, inverted_value, tangent_data)
                 )
 
+        # (source, landing) frames per curve, as the hooks report them.
+        moves_by_curve: Dict[str, List[Tuple[float, float]]] = {}
+        for node, key_time, inverted_time, _, _ in keyframe_data:
+            moves_by_curve.setdefault(node, []).append((key_time, inverted_time))
+
+        # setKeyframe below overwrites a key already on its frame: read which
+        # ones BEFORE the writes. delete_original moves every source on to its
+        # own landing (an in-place mirror forced it above), so none of those
+        # is replaced.
+        replaced: Dict[str, List[float]] = {}
+        if on_replace is not None:
+            for node, moves in moves_by_curve.items():
+                frames = cls._landed_on(node, moves, moving=delete_original)
+                if frames:
+                    replaced[node] = frames
+
         for node, _, inverted_time, inverted_value, tangent_data in keyframe_data:
             cmds.setKeyframe(node, time=inverted_time, value=inverted_value)
             cls.set_tangent_info(node, inverted_time, tangent_data)
@@ -653,7 +686,20 @@ class _KeyTimingInternal:
             for node, key_time, _, _, _ in keyframe_data:
                 rounded_time = round(key_time, 3)
                 if (node, rounded_time) not in inverted_positions:
-                    cmds.cutKey(node, time=(key_time, key_time))
+                    # clear: a bare cutKey put the sources on the animation
+                    # clipboard, over whatever keys the user had copied.
+                    cmds.cutKey(node, time=(key_time, key_time), clear=True)
+
+        # Replaced first: a claim moved onto a frame would otherwise go with
+        # the key released there.  Only a move moves -- a copy that keeps its
+        # sources leaves every key where it was.
+        for node, frames in replaced.items():
+            on_replace(node, frames)
+        if on_move is not None and delete_original:
+            for node, moves in moves_by_curve.items():
+                pairs = [(src, dst) for src, dst in moves if abs(dst - src) >= 1e-9]
+                if pairs:
+                    on_move(node, pairs)
 
     @classmethod
     def _move_curve_keys(
@@ -662,6 +708,8 @@ class _KeyTimingInternal:
         time_pairs: List[Tuple[float, float]],
         tolerance: float = 1e-4,
         allow_merge: bool = False,
+        on_replace=None,
+        on_move=None,
     ) -> int:
         """Move keys on a curve to new times, preserving value and tangents.
 
@@ -673,6 +721,13 @@ class _KeyTimingInternal:
             tolerance: Tolerance for floating point comparisons.
             allow_merge: If True, keys moved to the same time will overwrite each other.
                          If False (default), keys are nudged to avoid collision.
+            on_replace: ``on_replace(curve, frames)`` hears the keys a merge
+                overwrote: an unmoved key, at its frame, or an earlier moved
+                key, at its SOURCE frame -- where whatever is held on it still
+                is -- and that key is then no move.
+            on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames
+                of the keys moved, ``new`` being where each landed (a nudged
+                key's nudged frame). Called after ``on_replace``.
         """
 
         if not time_pairs:
@@ -714,7 +769,9 @@ class _KeyTimingInternal:
         # Process in reverse order to maintain index stability if needed, though time-based cut is robust
         for old_time, _, _, _ in sorted(keys_to_move, key=lambda x: x[0], reverse=True):
             try:
-                cmds.cutKey(curve, time=(old_time, old_time), option="keys")
+                # clear: a bare cutKey put the moved keys on the animation
+                # clipboard, over whatever keys the user had copied.
+                cmds.cutKey(curve, time=(old_time, old_time), option="keys", clear=True)
             except RuntimeError as error:
                 cmds.warning(f"Failed to cut key on {curve} at {old_time}: {error}")
 
@@ -742,8 +799,10 @@ class _KeyTimingInternal:
             return False
 
         taken_times: List[float] = list(remaining_times)
+        replaced: List[float] = []  # what a merge overwrote (see on_replace)
+        landed: List[Tuple[float, float]] = []  # (source, frame) of each mover
 
-        for _, new_time, value, tangent_data in keys_to_move:
+        for old_time, new_time, value, tangent_data in keys_to_move:
             try:
                 candidate_time = float(new_time)
 
@@ -755,6 +814,29 @@ class _KeyTimingInternal:
                     while _is_time_taken(candidate_time, taken_times) and safety < 1000:
                         candidate_time += epsilon
                         safety += 1
+                else:
+                    hit = next(
+                        (
+                            t
+                            for t in taken_times
+                            if abs(candidate_time - t) <= tolerance
+                        ),
+                        None,
+                    )
+                    if hit is not None:
+                        # The key there is overwritten -- cut first: setKeyframe
+                        # replaces only an exact time, a hair off it stacks.
+                        cmds.cutKey(curve, time=(hit, hit), clear=True)
+                        taken_times.remove(hit)
+                        prior = next(
+                            (
+                                i
+                                for i, (_src, at) in enumerate(landed)
+                                if abs(at - hit) <= tolerance
+                            ),
+                            None,
+                        )
+                        replaced.append(hit if prior is None else landed.pop(prior)[0])
 
                 cmds.setKeyframe(curve, time=candidate_time, value=value)
                 if tangent_data:
@@ -768,19 +850,26 @@ class _KeyTimingInternal:
                     except RuntimeError:
                         pass  # locked or referenced curve -- the move still stands
                 taken_times.append(candidate_time)
+                landed.append((old_time, candidate_time))
                 moved_count += 1
             except RuntimeError as error:
                 cmds.warning(f"Failed to set key on {curve} at {new_time}: {error}")
 
         # Remove the temporary key
         try:
-            cmds.cutKey(curve, time=(temp_time, temp_time), option="keys")
+            cmds.cutKey(curve, time=(temp_time, temp_time), option="keys", clear=True)
         except RuntimeError as error:
             cmds.warning(
                 f"_move_curve_keys: failed to remove the temporary key at "
                 f"{temp_time} on {curve}: {error}"
             )
 
+        # Replaced first, so a claim carried onto a frame is not the one
+        # released there.
+        if replaced and on_replace is not None:
+            on_replace(curve, replaced)
+        if landed and on_move is not None:
+            on_move(curve, landed)
         return moved_count
 
     @staticmethod
@@ -820,8 +909,105 @@ class _KeyTimingInternal:
                 cmds.warning(f"Failed to move key at {t} on {curve}: {e}")
         return moved
 
+    @staticmethod
+    def _landed_on(
+        curve: str, moves: List[Tuple[float, float]], moving: bool, eps: float = 1e-4
+    ) -> List[float]:
+        """The keys of *curve* that ``(source, destination)`` *moves* land on
+        and so REPLACE, read as the curve stands before the edit.
+
+        Not one the edit carries on itself: with *moving* every source goes on
+        to its own destination, and a key its own copy lands on is re-keyed.
+        The frames returned are what an ``on_replace`` callback is handed.
+        """
+        dests = sorted((d, s) for s, d in moves)
+        times = [d for d, _s in dests]
+        sources = {s for s, _d in moves}
+        hit = []
+        for t in cmds.keyframe(curve, query=True, timeChange=True) or []:
+            i = bisect.bisect_left(times, t - eps)
+            if i == len(times) or times[i] - t > eps:
+                continue  # nothing lands here
+            if abs(dests[i][1] - t) <= eps or (moving and t in sources):
+                continue
+            hit.append(t)
+        return hit
+
     @classmethod
-    def _align_selected_keyframes(cls, objects, target_frame, use_earliest):
+    def _shift_replacing(
+        cls, curve: str, times, offset: float, on_replace=None, on_move=None
+    ) -> int:
+        """:meth:`_shift_key_times`, REPLACING the keys the move lands on, and
+        report both.
+
+        A key the moved ones land on is cut first: ``keyframe -option over``
+        does not overwrite it, it stacks the mover a hair beside it (two keys
+        on one frame).  ``on_replace(curve, frames)`` then hears the frames cut
+        and ``on_move(curve, pairs)`` the ``(old, new)`` frames of the keys
+        moved -- replaced first, so a claim carried onto a frame is not the one
+        released there.  Returns the number of keys moved.
+        """
+        times = sorted(set(times))
+        if not times or abs(offset) < 1e-9:
+            return 0
+        pairs = [(t, t + offset) for t in times]
+        replaced = cls._landed_on(curve, pairs, moving=True)
+        for t in replaced:
+            cmds.cutKey(curve, time=(t, t), clear=True)
+        moved = cls._shift_key_times(curve, times, offset)
+        if replaced and on_replace is not None:
+            on_replace(curve, replaced)
+        if on_move is not None:
+            on_move(curve, pairs)
+        return moved
+
+    @classmethod
+    def _shift_curves(
+        cls, curves, offset: float, time_range=None, on_replace=None, on_move=None
+    ) -> None:
+        """Shift the keys of *curves* -- those in *time_range*, or every one --
+        by *offset* in ONE edit, and report it as :meth:`_shift_replacing` does.
+
+        A range move leaves the keys outside it behind, and one the moved keys
+        land on is cut first (``option="over"`` would stack the mover beside
+        it); a whole-curve move leaves nothing behind to land on.
+        """
+        if not curves or abs(offset) < 1e-9:
+            return
+        range_kw = {"time": time_range} if time_range else {}
+        plan = []
+        for crv in curves:
+            times = cmds.keyframe(crv, query=True, timeChange=True, **range_kw) or []
+            if not times:
+                continue
+            pairs = [(t, t + offset) for t in times]
+            replaced = cls._landed_on(crv, pairs, moving=True) if time_range else []
+            for t in replaced:
+                cmds.cutKey(crv, time=(t, t), clear=True)
+            plan.append((crv, replaced, pairs))
+        if time_range:
+            # option="over" lets a range move travel past unmoved out-of-range
+            # neighbors -- the default move CLAMPS at the adjacent key.
+            cmds.keyframe(
+                curves,
+                edit=True,
+                time=time_range,
+                relative=True,
+                timeChange=offset,
+                option="over",
+            )
+        else:
+            cmds.keyframe(curves, edit=True, relative=True, timeChange=offset)
+        for crv, replaced, pairs in plan:
+            if replaced and on_replace is not None:
+                on_replace(crv, replaced)
+            if on_move is not None:
+                on_move(crv, pairs)
+
+    @classmethod
+    def _align_selected_keyframes(
+        cls, objects, target_frame, use_earliest, on_replace, on_move
+    ):
         """Body of :meth:`AnimUtils.align_selected_keyframes`."""
         # Get objects to work with
         if objects is None:
@@ -894,7 +1080,10 @@ class _KeyTimingInternal:
                     node, query=True, selected=True, timeChange=True
                 )
                 if sel_times:
-                    cls._shift_key_times(node, sel_times, shift_amount)
+                    # A key the block lands on is replaced, not stacked beside.
+                    cls._shift_replacing(
+                        node, sel_times, shift_amount, on_replace, on_move
+                    )
 
         print(
             f"Aligned selected keyframes for {len(obj_keyframe_data)} object(s) to frame {target_frame:.2f}"
@@ -903,7 +1092,14 @@ class _KeyTimingInternal:
 
     @classmethod
     def _snap_keys_to_frames(
-        cls, objects, method, selected_only, time_range, include_driven, through_blends
+        cls,
+        objects,
+        method,
+        selected_only,
+        time_range,
+        include_driven,
+        through_blends,
+        on_move=None,
     ):
         """Body of :meth:`AnimUtils.snap_keys_to_frames`."""
         # Get objects to work with
@@ -979,6 +1175,7 @@ class _KeyTimingInternal:
             all_curve_times = cmds.keyframe(curve, query=True, timeChange=True) or []
             occupied = set(t for t in all_curve_times if t == int(t))
 
+            applied = []
             for old_time, new_time in moves:
                 # Skip if another key already occupies the target time
                 # (either an original whole-frame key or a previously
@@ -1003,11 +1200,16 @@ class _KeyTimingInternal:
                         option="over",
                     )
                     occupied.add(new_time)
+                    applied.append((old_time, new_time))
                     keys_snapped += 1
                 except RuntimeError as e:
                     cmds.warning(
                         f"Failed to snap keyframe on {curve} at time {old_time}: {e}"
                     )
+            # Never a replacement (an occupied target is skipped); the keys that
+            # did move carry what is held on them.
+            if applied and on_move is not None:
+                on_move(curve, applied)
 
         if keys_snapped > 0:
             print(

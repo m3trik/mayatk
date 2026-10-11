@@ -11,10 +11,17 @@ transparent adoption of BOTH legacy sets older scenes carry
 """
 
 import unittest
+from unittest import mock
 
 import maya.cmds as cmds
+import pythontk as ptk
 
-from mayatk.mat_utils.bake_sets import BakeSet, BakeSourceSet, LightmapExcludeSet
+from mayatk.mat_utils.bake_sets import (
+    BakeSet,
+    BakeSourceSet,
+    LightmapBakeSet,
+    LightmapExcludeSet,
+)
 
 from base_test import MayaTkTestCase
 
@@ -156,6 +163,79 @@ class TestLightmapExcludeSet(MayaTkTestCase):
     def test_no_set_means_no_meshes(self):
         self.assertFalse(LightmapExcludeSet.exists())
         self.assertEqual(LightmapExcludeSet.meshes(), [])
+
+
+class TestLightmapBakeSet(MayaTkTestCase):
+    """The objects the last lightmap bake acted on, spelled plain or by the naming convention.
+
+    The convention table is pinned through its cache, so the user's own
+    convention doc (``_SET`` changed to something else) cannot move what
+    these tests expect.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._pin({"objectSet": ptk.AffixRule("_SET", "auto", "Set")})
+
+    def tearDown(self):
+        LightmapBakeSet.clear()
+        LightmapExcludeSet.clear()
+        super().tearDown()
+
+    def _pin(self, overrides):
+        table = {**ptk.NamingConvention.DEFAULTS, **overrides}
+        patcher = mock.patch.object(ptk.NamingConvention, "_cache", table)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def _cube(name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    def test_define_is_plain_unless_asked_for_the_convention(self):
+        a = self._cube("bsPlain")
+        LightmapBakeSet.define([a])
+        self.assertTrue(cmds.objExists("lightmapBaker_baked"))
+        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked")
+        LightmapBakeSet.define([a], conventional=True)
+        self.assertFalse(cmds.objExists("lightmapBaker_baked"))
+        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked_SET")
+        self.assertEqual(LightmapBakeSet.members(), [a])
+
+    def test_the_convention_decides_the_spelling(self):
+        """A studio whose sets lead with the affix gets a prefixed name."""
+        self._pin({"objectSet": ptk.AffixRule("SET_", "auto", "Set")})
+        LightmapBakeSet.define([self._cube("bsPrefix")], conventional=True)
+        self.assertEqual(LightmapBakeSet.name(), "SET_lightmapBaker_baked")
+
+    def test_respell_renames_in_place_and_keeps_the_members(self):
+        a, b = self._cube("bsRespellA"), self._cube("bsRespellB")
+        LightmapBakeSet.define([a, b])
+        self.assertEqual(LightmapBakeSet.respell(True), "lightmapBaker_baked_SET")
+        self.assertEqual(sorted(LightmapBakeSet.members()), sorted([a, b]))
+        self.assertEqual(LightmapBakeSet.respell(False), "lightmapBaker_baked")
+        self.assertFalse(cmds.objExists("lightmapBaker_baked_SET"))
+        LightmapBakeSet.clear()
+        self.assertIsNone(LightmapBakeSet.respell(True))
+
+    def test_a_set_saved_before_the_convention_changed_still_reads(self):
+        a = self._cube("bsShipped")
+        cmds.sets(a, name="lightmapBaker_baked_SET")
+        self._pin({"objectSet": ptk.AffixRule("_SETS", "auto", "Set")})
+        self.assertTrue(LightmapBakeSet.exists())
+        self.assertEqual(LightmapBakeSet.members(), [a])
+        LightmapBakeSet.clear()
+        self.assertFalse(cmds.objExists("lightmapBaker_baked_SET"))
+
+    def test_clear_removes_every_spelling_and_leaves_the_exclude_set(self):
+        a, b = self._cube("bsClearA"), self._cube("bsClearB")
+        LightmapExcludeSet.define([b])
+        cmds.sets(a, name="lightmapBaker_baked")
+        cmds.sets(a, name="lightmapBaker_baked_SET")
+        LightmapBakeSet.clear()
+        self.assertFalse(cmds.objExists("lightmapBaker_baked"))
+        self.assertFalse(cmds.objExists("lightmapBaker_baked_SET"))
+        self.assertEqual(LightmapExcludeSet.members(), [b])
 
 
 if __name__ == "__main__":

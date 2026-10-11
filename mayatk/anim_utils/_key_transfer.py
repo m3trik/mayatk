@@ -9,7 +9,8 @@ captured and re-keyed with their tangents) and
 Reached through :class:`mayatk.AnimUtils`; nothing here is called directly.
 """
 
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
+import bisect
 
 try:
     import maya.cmds as cmds
@@ -29,7 +30,15 @@ class _KeyTransferInternal:
     """Private helpers and ``AnimUtils`` method bodies; see the module docstring."""
 
     @classmethod
-    def _transfer_keyframes(cls, objects, relative, transfer_tangents, optimize):
+    def _transfer_keyframes(
+        cls,
+        objects,
+        relative,
+        transfer_tangents,
+        optimize,
+        on_replace=None,
+        on_delete=None,
+    ):
         """Body of :meth:`AnimUtils.transfer_keyframes`."""
         resolved_objects = cmds.ls(objects, long=True)
         if len(resolved_objects) < 2:
@@ -40,7 +49,7 @@ class _KeyTransferInternal:
         target_objs = resolved_objects[1:]
 
         if optimize:
-            cls.optimize_keys([source_obj], quiet=True)
+            cls.optimize_keys([source_obj], quiet=True, on_delete=on_delete)
 
         # Check if keyframes are selected, if not use all keyframes
         selected_curves = cmds.keyframe(
@@ -78,6 +87,10 @@ class _KeyTransferInternal:
         }
 
         src_str = str(source_obj)
+        # (curve, frames) the writes replaced, reported once they are all
+        # made -- outside the per-attribute guard, so a failing hook is not
+        # mistaken for (and swallowed as) a failed transfer.
+        replacements = []
 
         # Copy keyframes from source to each target
         for target_obj in target_objs:
@@ -109,6 +122,7 @@ class _KeyTransferInternal:
                         if attr_first_val:
                             relative_offset = initial_value - attr_first_val[0]
 
+                    writes = []
                     for time in keyframe_times:
                         values = cmds.keyframe(
                             src_plug,
@@ -120,16 +134,29 @@ class _KeyTransferInternal:
                             value = values[0]
                             if relative:
                                 value += relative_offset
+                            writes.append((time, value))
 
-                            cmds.setKeyframe(tgt_plug, time=time, value=value)
+                    # A target key on a written frame is replaced by the
+                    # source's: read which BEFORE the writes.
+                    crv, replaced = (
+                        cls._keyed_over(tgt_plug, writes)
+                        if on_replace is not None
+                        else (None, [])
+                    )
+                    for time, value in writes:
+                        cmds.setKeyframe(tgt_plug, time=time, value=value)
 
-                            if transfer_tangents:
-                                tangent_info = cls.get_tangent_info(src_plug, time)
-                                cls.set_tangent_info(tgt_plug, time, tangent_info)
+                        if transfer_tangents:
+                            tangent_info = cls.get_tangent_info(src_plug, time)
+                            cls.set_tangent_info(tgt_plug, time, tangent_info)
+                    if replaced:
+                        replacements.append((crv, replaced))
                 except Exception as e:
                     cmds.warning(
                         f"Could not transfer attribute '{attr}' to '{target_obj}': {e}"
                     )
+        for crv, replaced in replacements:
+            on_replace(crv, replaced)
 
     @classmethod
     def _copy_keys(cls, objects, mode, resolution_order, tangent_detail):
@@ -264,10 +291,15 @@ class _KeyTransferInternal:
                                 ow = cmds.keyTangent(
                                     crv, q=True, time=(t, t), outWeight=True
                                 )
+                                lk = cmds.keyTangent(
+                                    crv, q=True, time=(t, t), lock=True
+                                )
                                 kd["inAngle"] = ia[0] if ia else 0.0
                                 kd["outAngle"] = oa[0] if oa else 0.0
                                 kd["inWeight"] = iw[0] if iw else 1.0
                                 kd["outWeight"] = ow[0] if ow else 1.0
+                                # paste_keys keeps a broken tangent broken.
+                                kd["lock"] = bool(lk[0]) if lk else True
                             key_list.append(kd)
                         attr_entry = key_list
                         if tangent_detail:
@@ -302,6 +334,37 @@ class _KeyTransferInternal:
 
         return result
 
+    @staticmethod
+    def _keyed_over(plug: str, keys) -> Tuple[Optional[str], List[float]]:
+        """``(curve, frames)``: the keys of *plug*'s anim curve that keying the
+        ``(time, value)`` *keys* REPLACES -- one on a keyed frame holding
+        another value (keying the value a key already holds only re-keys it).
+
+        Read BEFORE the writes (``setKeyframe`` overwrites the key on its
+        frame); ``(None, [])`` when *plug* has no curve yet.
+        """
+        curves = cmds.keyframe(plug, query=True, name=True) or []
+        if not curves:
+            return None, []
+        crv = curves[0]
+        times = cmds.keyframe(crv, query=True, timeChange=True) or []
+        values = cmds.keyframe(crv, query=True, valueChange=True) or []
+        wanted = sorted(keys)
+        landing = [t for t, _v in wanted]
+        hit = []
+        for t, v in zip(times, values):
+            i = bisect.bisect_left(landing, t - 1e-4)
+            if i == len(landing) or landing[i] - t > 1e-4:
+                continue  # nothing keyed here
+            new = wanted[i][1]
+            try:
+                same = abs(new - v) <= 1e-6 * max(1.0, abs(new), abs(v))
+            except TypeError:
+                same = new == v
+            if not same:
+                hit.append(t)
+        return crv, hit
+
     @classmethod
     def _paste_keys(
         cls,
@@ -310,6 +373,7 @@ class _KeyTransferInternal:
         target_time,
         match_source,
         refresh_channel_box,
+        on_replace=None,
         **kwargs,
     ):
         """Body of :meth:`AnimUtils.paste_keys`."""
@@ -380,6 +444,14 @@ class _KeyTransferInternal:
                             anchor = anchor[0]
                         base_time = data[0]["time"]
                         offset = float(anchor) - base_time
+                        crv, replaced = (
+                            cls._keyed_over(
+                                plug,
+                                [(kd["time"] + offset, kd["value"]) for kd in data],
+                            )
+                            if on_replace is not None
+                            else (None, [])
+                        )
 
                         for kd in data:
                             t = kd["time"] + offset
@@ -422,6 +494,8 @@ class _KeyTransferInternal:
                                     inWeight=kd["inWeight"],
                                     outWeight=kd["outWeight"],
                                 )
+                            if "lock" in kd:  # broken tangents stay broken
+                                tangent_info["lock"] = kd["lock"]
                             try:
                                 cls.set_tangent_info(plug, t, tangent_info)
                             except RuntimeError as e:
@@ -450,8 +524,16 @@ class _KeyTransferInternal:
                             if not isinstance(target_time, (list, tuple))
                             else list(target_time)
                         )
+                        crv, replaced = (
+                            cls._keyed_over(plug, [(t, data) for t in times])
+                            if on_replace is not None
+                            else (None, [])
+                        )
                         for t in times:
                             cls._set_key_preserving_tangents(plug, t, data, **kwargs)
+                    # A pasted key that overwrote another takes its claims.
+                    if replaced:
+                        on_replace(crv, replaced)
                 keys_set += 1
 
         if refresh_channel_box:

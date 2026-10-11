@@ -25,7 +25,6 @@ try:
 except ImportError:
     cmds = None
 
-import mayatk as mtk
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.image_to_plane._image_to_plane import ImageToPlane
 
@@ -435,7 +434,6 @@ class TestImageToPlane(MayaTkTestCase):
         # Grab names before removal
         plane_name = plane
         mat_name = "removable_MAT"
-        sg_name = f"{mat_name}_SG"
 
         removed = ImageToPlane.remove([plane])
         self.assertEqual(removed, 1)
@@ -457,6 +455,26 @@ class TestImageToPlane(MayaTkTestCase):
         """remove() with nothing selected returns 0."""
         cmds.select(clear=True)
         self.assertEqual(ImageToPlane.remove(), 0)
+
+    # -- Opacity -----------------------------------------------------------
+
+    def test_an_alpha_image_drives_open_pbr_opacity(self):
+        """openPBR's opacity is the scalar ``geometryOpacity``: the old
+        ``opacityR`` / ``transparency`` probe found neither, and an OpenPBR
+        plane with an alpha image came out opaque."""
+        from PIL import Image
+
+        img = os.path.join(self._tmp_dir, "cutout_opbr.png")
+        Image.new("RGBA", (16, 16), (200, 100, 50, 0)).save(img)
+        try:
+            ImageToPlane.create([img], mat_type="openPBRSurface")
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+        shader = "cutout_opbr_MAT"
+        self.assertTrue(
+            cmds.listConnections(f"{shader}.geometryOpacity", source=True),
+            "geometryOpacity not driven by the image's alpha",
+        )
 
     # -- Roughness ---------------------------------------------------------
 

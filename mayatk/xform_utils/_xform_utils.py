@@ -1000,6 +1000,55 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         """
         return XformUtils._set_object_matrix(node=node, value=value, world=world)
 
+    @classmethod
+    @CoreUtils.undoable
+    def set_rotate_order(cls, objects, order, preserve: bool = True) -> List[str]:
+        """Change the rotate order of transforms, keeping their pose and animation.
+
+        The rotate order decides which object-space axis rotates through a
+        single channel: the FIRST letter. In "xyz" (Maya's default) only a
+        spin about the object's own X stays on one channel; once X or Y is
+        keyed away from zero, a spin about its own Z writes all three. Give
+        the axis a prop spins about the first letter ("zyx" for a Z spin),
+        and the axis it turns least the middle one: the order locks
+        (gimbal) when the middle channel reaches +/-90.
+
+        With *preserve*, an unkeyed transform is re-solved in place (``xform
+        -preserve``), and a keyed one has every rotate key re-solved in the new
+        order -- the pose at each key is unchanged, and each solution is
+        chained to the previous one so the curves do not flip. Between keys
+        the interpolation runs in the new order, so in-betweens of a large
+        multi-axis move can differ slightly.
+
+        ``order="auto"`` reads the order off the animation itself: of the six,
+        the one in which each key-to-key step moves the fewest channels
+        without nearing gimbal lock (``ptk.MathUtils.best_rotate_order``) --
+        so a prop keyed turning about its own Y gets a Y-first order, which is
+        also what takes the wobble out of the keyed turn. Its use is AFTER
+        animating, when the axis a prop turns about is finally known; an
+        unkeyed transform, or one every order serves alike (a one-axis
+        hinge), is left alone.
+
+        Parameters:
+            objects (str/obj/list): The transforms to change.
+            order (str/int): A rotate order name ("xyz", "yzx", "zxy", "xzy",
+                "yxz", "zyx"), its ``rotateOrder`` enum index, or "auto".
+            preserve (bool): Keep the pose (and keyed animation). False only
+                sets the attribute, so the object turns. "auto" always
+                preserves.
+
+        Returns:
+            (list): The long names of the transforms that changed. A transform
+            already in *order* is left alone; with *preserve*, one whose
+            rotation is driven by anything but keyframes (a constraint, anim
+            layer or expression) or has a locked rotate channel is skipped
+            with a warning, since the new order would turn it.
+
+        Raises:
+            ValueError: *order* is not a rotate order.
+        """
+        return cls._set_rotate_order(objects=objects, order=order, preserve=preserve)
+
 
 # -----------------------------------------------------------------------------
 

@@ -970,10 +970,14 @@ class ClipMotionMixin:
         self._syncing = True
         try:
             with self.sequencer.store.scene_edit("delkeys"):
+                # Every claim on a deleted key goes with it, a behavior's too
+                # (the reconcile below reaches samples and holds only).
+                release = self.sequencer.store.release_replaced()
                 for t in times:
                     for crv in curves:
                         cmds.cutKey(str(crv), time=(t, t), clear=True)
                         deleted = True
+                        release(str(crv), [t])
                 if deleted:
                     # A key edit like any other (``_key_scene_edit``): the claims
                     # on the deleted keys go with them and the gap holds re-settle.

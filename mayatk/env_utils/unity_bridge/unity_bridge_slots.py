@@ -81,7 +81,9 @@ class UnityBridgeSlots(UnityPanelMixin, MayaBridgeSlotsBase):
             ),
         ],
         "notes": [
-            "Embedded textures (default) ride inside the FBX so Unity extracts the maps.",
+            "Embedded textures (default) ride inside the FBX; unitytk's import "
+            "scripts extract the maps its materials and channels use (Unity's "
+            "stock import binds no embedded map).",
             "Copying into Assets/ is non-destructive to a running Unity session.",
             "The <b>Manage Unity Scripts</b> template installs, updates, "
             "inspects or removes unitytk's C# import automation in the project "

@@ -14,8 +14,9 @@ runner returns early. These do not guess at it. They pin the DETECTION, which
 is what turns a silent truncation into a named, reproducible one.
 
 Also pinned: the throwaway Maya project a run works in is given back when it
-ends (`TestTheRunGivesTheProjectBack`), and uitk's settings sandbox is armed
-only in a Maya the runner launched (`TestTheSettingsSandboxIsForALaunchedMaya`).
+ends (`TestTheRunGivesTheProjectBack`), as are the shots prefs
+(`TestTheRunGivesTheShotsPrefsBack`), and the run's sandbox stays up after
+the run only in a Maya the runner launched (`TestTheSandboxOutlivesOnlyALaunchedMaya`).
 
 Pure Python: the functions under test take ids, not a Maya session, so this
 runs anywhere -- the project test stands a one-command `maya.cmds` in for
@@ -366,7 +367,9 @@ class TestTheRunGivesTheProjectBack(DriverTestCase):
         self._keep(os.environ, "MAYATK_EXTENDED_TESTS")  # the run sets or clears it
         for patcher in (
             mock.patch.object(_env_utils, "cmds", self.cmds, create=True),
-            mock.patch("pythontk.core_utils.test_sandbox.TestSandbox.activate"),
+            mock.patch.object(
+                self.driver, "_sandbox", lambda launched: contextlib.nullcontext()
+            ),
             mock.patch.object(self.driver, "_ensure_sys_path"),
             mock.patch.object(self.driver, "_sandbox_shots_prefs"),
         ):
@@ -404,36 +407,41 @@ class TestTheRunGivesTheProjectBack(DriverTestCase):
         self.assertEqual(os.path.normpath(self.cmds.root), self.project)
 
 
-class TestTheSettingsSandboxIsForALaunchedMaya(DriverTestCase):
-    """uitk's QSettings + preset redirect runs only in a Maya the runner launched.
+class TestTheSandboxOutlivesOnlyALaunchedMaya(DriverTestCase):
+    """Every run is sandboxed; only in a Maya the runner launched for good.
 
     A panel a test builds persists its widget state through QSettings, and the
     driver armed only pythontk's guards, so a run wrote its fixtures into the
     developer's live store. Measured 2026-10-04: a GUI pass of
     ``test_articulated_rig_panel`` rewrote ``chk_adjust``, ``txt_name`` and
     ``tbl_joints`` under ``HKCU\\Software\\uitk\\shared\\switchboard``.
-    ``uitk.testing.TestSandbox`` redirects that store by swapping the QSettings
-    class for the rest of the process, which is why the runner asks for it
-    (``sandbox_settings``) only for a process it launched: in the user's own
-    Maya (the in-session harness) every tool of theirs would go on writing a
-    throwaway file.
+    ``uitk.testing.TestSandbox.activate`` redirects that store for the rest of
+    the process -- right for a process the runner launched (``launched``), and
+    wrong for the user's own Maya (the in-session harness, ``--reuse``), which
+    went on refusing browser launches and writing its settings, presets and
+    temp files into a root deleted when it exits. There the run takes
+    ``activated()``, every guard put back on the way out.
 
-    No Qt: ``uitk.testing`` is a stand-in module and both activations are mocks.
+    No Qt: ``uitk.testing`` is a stand-in module and every activation a mock.
     """
 
     def setUp(self):
         testing = types.ModuleType("uitk.testing")
-        testing.TestSandbox = mock.Mock()
+        testing.TestSandbox = mock.MagicMock()
         testing.TestSandbox.activate.return_value = ("<qsettings>", "<presets>")
         self.uitk_activate = testing.TestSandbox.activate
+        self.uitk_activated = testing.TestSandbox.activated
+        self.uitk_activated.return_value.__enter__.return_value = (
+            "<qsettings>",
+            "<presets>",
+        )
         self._keep(sys.modules, "uitk.testing")
         sys.modules["uitk.testing"] = testing
         self._keep(os.environ, "MAYATK_EXTENDED_TESTS")  # the run sets or clears it
-        ptk_activate = mock.patch(
-            "pythontk.core_utils.test_sandbox.TestSandbox.activate"
-        )
-        self.ptk_activate = ptk_activate.start()
-        self.addCleanup(ptk_activate.stop)
+        for name in ("activate", "activated"):
+            patcher = mock.patch(f"pythontk.core_utils.test_sandbox.TestSandbox.{name}")
+            setattr(self, f"ptk_{name}", patcher.start())
+            self.addCleanup(patcher.stop)
         for patcher in (
             mock.patch.object(self.driver, "_ensure_sys_path"),
             mock.patch.object(self.driver, "_sandbox_shots_prefs"),
@@ -451,28 +459,384 @@ class TestTheSettingsSandboxIsForALaunchedMaya(DriverTestCase):
             self.driver.run_suite({"modules": [], "results_file": "-", **config})
         return printed.getvalue()
 
-    def test_a_launched_maya_gets_the_settings_sandbox(self):
-        self._run(sandbox_settings=True)
+    def test_a_launched_maya_gets_the_settings_sandbox_for_good(self):
+        self._run(launched=True)
 
         self.uitk_activate.assert_called_once_with()
+        self.uitk_activated.assert_not_called()
 
-    def test_the_users_own_session_keeps_its_settings(self):
-        """Without the flag -- the in-session harness, or any config that
-        predates it -- the driver assumes the user's own Maya: pythontk's
-        guards only."""
+    def test_the_users_own_session_gets_it_for_the_run_only(self):
+        """Without the flag -- the in-session harness, ``--reuse``, or a config
+        that predates it -- the driver assumes the user's own Maya."""
         self._run()
-        self._run(sandbox_settings=False)
+        self._run(launched=False)
 
+        self.assertEqual(self.uitk_activated.call_count, 2)
+        self.assertEqual(self.uitk_activated.return_value.__exit__.call_count, 2)
         self.uitk_activate.assert_not_called()
-        self.assertEqual(self.ptk_activate.call_count, 2)
+        self.ptk_activate.assert_not_called()
+
+    def test_an_aborted_run_still_takes_the_sandbox_down(self):
+        """An interrupt in the Script Editor, or a harness error between
+        modules, ends the run as surely as its last module does."""
+        self.driver._run_modules.side_effect = KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._run()
+
+        self.uitk_activated.return_value.__exit__.assert_called_once()
 
     def test_without_uitk_the_run_keeps_pythontk_guards_and_says_so(self):
         sys.modules["uitk.testing"] = None  # the import raises; setUp restores it
 
-        printed = self._run(sandbox_settings=True)
+        printed = self._run(launched=True)
 
         self.ptk_activate.assert_called_once_with()
         self.assertIn("settings sandbox unavailable", printed)
+
+    def test_without_uitk_the_users_session_keeps_them_for_the_run_only(self):
+        sys.modules["uitk.testing"] = None
+
+        printed = self._run()
+
+        self.ptk_activated.assert_called_once_with()
+        self.ptk_activated.return_value.__exit__.assert_called_once()
+        self.ptk_activate.assert_not_called()
+        self.assertIn("settings sandbox unavailable", printed)
+
+
+class TestTheRunGivesTheShotsPrefsBack(DriverTestCase):
+    """A run points ``ShotStore``'s prefs at a scratch folder, then back.
+
+    The prefs live in the user's cloud-synced store, so a run redirects them;
+    the redirect used to stay, and in the user's own Maya (the in-session
+    harness) their shot prefs went on landing in a folder deleted when Maya
+    exits.
+    """
+
+    def setUp(self):
+        from pythontk.core_utils.engines.shots.shot_model import ShotStore
+
+        self.store = ShotStore
+        self.addCleanup(
+            setattr, ShotStore, "_prefs_dir_override", ShotStore._prefs_dir_override
+        )
+        self._keep(os.environ, "MAYATK_EXTENDED_TESTS")  # the run sets or clears it
+        for patcher in (
+            mock.patch.object(self.driver, "_ensure_sys_path"),
+            mock.patch.object(
+                self.driver, "_sandbox", lambda launched: contextlib.nullcontext()
+            ),
+            mock.patch.object(
+                self.driver, "_sandbox_workspace", contextlib.nullcontext
+            ),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(self._remove_scratch)
+        self.during = []
+
+    def _remove_scratch(self):
+        if self.driver._sandbox_dir:
+            shutil.rmtree(self.driver._sandbox_dir, ignore_errors=True)
+
+    def _run_modules(self, config):
+        self.during.append(self.store._prefs_dir_override)
+        return {}
+
+    def _run(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.driver.run_suite({"modules": [], "results_file": "-"})
+
+    def test_the_run_ends_on_the_prefs_it_found(self):
+        self.store._prefs_dir_override = "<the user's own>"
+
+        with mock.patch.object(self.driver, "_run_modules", self._run_modules):
+            self._run()
+
+        self.assertNotEqual(self.during, ["<the user's own>"], "never redirected")
+        self.assertEqual(self.store._prefs_dir_override, "<the user's own>")
+
+    def test_an_aborted_run_still_gives_them_back(self):
+        self.store._prefs_dir_override = None
+
+        with mock.patch.object(
+            self.driver, "_run_modules", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                self._run()
+
+        self.assertIsNone(self.store._prefs_dir_override)
+
+
+class TestEachModuleImportsTheConftestBesideIt(DriverTestCase):
+    """A module's ``import conftest`` resolves as pytest resolves it.
+
+    The run's ``sys.path`` holds ``test/``, ``extended/`` and ``mock_tests/``
+    (``_ensure_sys_path``), ``mock_tests/`` ahead, so a root module's
+    ``from conftest import ...`` loaded the MOCK conftest, which plants mocked
+    ``maya`` modules unconditionally, in a real Maya. Each module now gets the
+    conftest nearest its own folder.
+    """
+
+    def setUp(self):
+        tree = tempfile.TemporaryDirectory()
+        self.addCleanup(tree.cleanup)
+        self.root = Path(tree.name)
+        for folder in ("mock_tests", "extended"):
+            (self.root / folder).mkdir()
+        (self.root / "conftest.py").write_text("WHICH = 'root'\n")
+        (self.root / "mock_tests" / "conftest.py").write_text("WHICH = 'mock'\n")
+        for module in ("test_root.py", "mock_tests/test_mock.py", "extended/test_x.py"):
+            (self.root / module).write_text("from conftest import WHICH\n")
+        self._keep(sys.modules, "conftest")
+        # The driver's own order: mock_tests/ ahead of test/.
+        for folder in (self.root, self.root / "mock_tests"):
+            sys.path.insert(0, str(folder))
+            self.addCleanup(sys.path.remove, str(folder))
+        patcher = mock.patch.object(self.driver, "TEST_DIR", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _which(self, relative):
+        path = str(self.root / relative)
+        name = Path(relative).stem
+        return self.driver._load_test_module(name, path).WHICH
+
+    def test_a_root_module_gets_the_root_conftest(self):
+        self.assertEqual(self._which("test_root.py"), "root")
+
+    def test_a_mock_module_gets_its_own(self):
+        self.assertEqual(self._which("mock_tests/test_mock.py"), "mock")
+        self.assertEqual(self._which("test_root.py"), "root", "and back again")
+
+    def test_a_folder_without_one_gets_the_nearest_above(self):
+        self._which("mock_tests/test_mock.py")
+        self.assertEqual(self._which("extended/test_x.py"), "root")
+
+
+class TestTheUsersSessionGetsItsExportHooksBack(DriverTestCase):
+    """The per-module reset takes the session's export hooks down; in the
+    user's own Maya, the run puts them back.
+
+    ``_reset_session_globals`` disables every FBX export producer and stager,
+    the explicit auto-takes, and the active ShotStore before each module --
+    in the in-session harness, the USER's: their scene's next export after a
+    run lost its shot takes. So did ``MAYATK_EXTENDED_TESTS``, which the run
+    set or cleared for good. Stand-ins for ``FbxUtils``/``ShotStore``; the
+    driver's real reset runs between them.
+    """
+
+    def setUp(self):
+        class FbxUtils:
+            _session_producers = {"shots"}
+            _session_stagers = {"takes": ("<prepare>", "<finish>")}
+            _explicit_auto_takes = True
+            synced = []
+
+            @classmethod
+            def disable_export_producer(cls, key):
+                cls._session_producers.discard(key)
+
+            @classmethod
+            def unregister_export_stager(cls, name):
+                cls._session_stagers.pop(name, None)
+
+            @classmethod
+            def disable_auto_takes(cls):
+                cls._explicit_auto_takes = False
+
+            @classmethod
+            def _sync_auto_export_hook(cls):
+                cls.synced.append(
+                    (set(cls._session_producers), cls._explicit_auto_takes)
+                )
+
+            _bracket_state = staticmethod(dict)
+            reset_takes = reset_export = staticmethod(lambda: None)
+
+        class ShotStore:
+            _active = "<the user's store>"
+            _auto_export_disabled = True
+
+            @classmethod
+            def clear_active(cls):
+                cls._active = None
+
+            @classmethod
+            def set_active(cls, store):
+                cls._active = store
+
+        self.fbx, self.shots = FbxUtils, ShotStore
+        modules = {}
+        for name, attr, value in (
+            ("mayatk.env_utils.fbx_utils", "FbxUtils", FbxUtils),
+            ("mayatk.anim_utils.shots._shots", "ShotStore", ShotStore),
+        ):
+            modules[name] = types.ModuleType(name)
+            setattr(modules[name], attr, value)
+        for patcher in (
+            mock.patch.dict(sys.modules, modules),
+            mock.patch.object(self.driver, "_ensure_sys_path"),
+            mock.patch.object(
+                self.driver,
+                "_sandbox",
+                lambda launched: contextlib.nullcontext(mock.Mock()),
+            ),
+            mock.patch.object(
+                self.driver, "_sandbox_workspace", contextlib.nullcontext
+            ),
+            mock.patch.object(self.driver, "_sandbox_shots_prefs"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self._keep(os.environ, "MAYATK_EXTENDED_TESTS")
+        os.environ["MAYATK_EXTENDED_TESTS"] = "the user's"
+        self.during = {}
+
+    def _modules(self, config):
+        self.driver._reset_session_globals()  # as before every module
+        self.during.update(
+            producers=set(self.fbx._session_producers),
+            active=self.shots._active,
+            env=os.environ.get("MAYATK_EXTENDED_TESTS"),
+        )
+        return {}
+
+    def _run(self, **config):
+        with mock.patch.object(self.driver, "_run_modules", self._modules):
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.driver.run_suite({"modules": [], "results_file": "-", **config})
+
+    def _assert_given_back(self):
+        self.assertEqual(self.fbx._session_producers, {"shots"})
+        self.assertEqual(
+            self.fbx._session_stagers, {"takes": ("<prepare>", "<finish>")}
+        )
+        self.assertTrue(self.fbx._explicit_auto_takes)
+        self.assertEqual(self.fbx.synced[-1], ({"shots"}, True), "the hook follows")
+        self.assertEqual(self.shots._active, "<the user's store>")
+        self.assertTrue(self.shots._auto_export_disabled)
+        self.assertEqual(os.environ.get("MAYATK_EXTENDED_TESTS"), "the user's")
+
+    def test_an_in_session_run_gives_them_back(self):
+        self._run()
+
+        self.assertEqual(
+            self.during, {"producers": set(), "active": None, "env": None}
+        )  # the reset did run
+        self._assert_given_back()
+
+    def test_an_aborted_run_gives_them_back_too(self):
+        def interrupted(config):
+            self._modules(config)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(self.driver, "_run_modules", interrupted):
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.driver.run_suite({"modules": [], "results_file": "-"})
+        self._assert_given_back()
+
+    def test_a_launched_maya_is_left_as_the_reset_left_it(self):
+        self._run(launched=True)
+
+        self.assertEqual(self.fbx._session_producers, set())
+
+
+class TestTheReloadKeepsTheTrashGuard(DriverTestCase):
+    """An in-session run reloads pythontk inside its sandbox; the guards hold.
+
+    The user's long-lived Maya may hold stale modules, so the in-session run
+    reloads pythontk after the sandbox is up -- which re-executed ``FileUtils``
+    without its trash guard, and a re-bake test sent scratch maps to the user's
+    Recycle Bin. The driver re-arms the sandbox after the reload.
+
+    A fresh interpreter, the real sandbox and the real reload (a reload here
+    would fork every class this process holds); probed by guard identity,
+    never by trashing a file.
+    """
+
+    PROBE = r"""
+import contextlib, importlib.util, json, os, sys
+sys.path[:0] = [{pythontk!r}, {uitk!r}, {mayatk!r}]
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+spec = importlib.util.spec_from_file_location("_driver", {driver!r})
+driver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(driver)
+driver._ensure_sys_path = lambda: None
+driver._sandbox_workspace = contextlib.nullcontext
+driver._sandbox_shots_prefs = lambda temp_dir: contextlib.nullcontext()
+
+def guard():
+    from pythontk.file_utils._file_utils import FileUtils
+    return FileUtils.__dict__["move_to_trash"].__func__.__name__
+
+report = {{}}
+
+def probe(config):
+    import pythontk as ptk
+    report["during"] = guard()
+    report["active"] = ptk.TestSandbox.is_active()
+    return {{}}
+
+driver._run_modules = probe
+with contextlib.redirect_stdout(sys.stderr):
+    driver.run_suite({{"modules": [], "results_file": "-", "reload": True}})
+report["after"] = guard()
+print(json.dumps(report))
+"""
+
+    def test_the_trash_stays_guarded_after_the_reload_then_comes_back(self):
+        import json
+        import subprocess
+
+        mono = TEST_DIR.parents[1]
+        code = self.PROBE.format(
+            pythontk=str(mono / "pythontk"),
+            uitk=str(mono / "uitk"),
+            mayatk=str(mono / "mayatk"),
+            driver=str(TEST_DIR / "_suite_driver.py"),
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-3000:])
+        report = json.loads(proc.stdout.splitlines()[-1])
+        self.assertEqual(
+            report, {"during": "no_trash", "active": True, "after": "move_to_trash"}
+        )
+
+
+class TestTheDriverBeatsPerTest(DriverTestCase):
+    """Every test the driver runs leaves a ``TEST <id>`` heartbeat on the
+    progress stream first -- what the runner's stall clocks follow, so a
+    module longer than the stall window is not taken for a hung one."""
+
+    def test_each_test_start_is_a_heartbeat(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        progress = Path(root.name) / "beats.progress"
+
+        class _Two(unittest.TestCase):
+            def test_a(self):
+                pass
+
+            def test_b(self):
+                pass
+
+        result = unittest.TextTestRunner(
+            stream=io.StringIO(),
+            resultclass=self.driver.functools.partial(
+                self.driver._RecordingResult, progress_file=str(progress)
+            ),
+        ).run(unittest.defaultTestLoader.loadTestsFromTestCase(_Two))
+        self.assertTrue(result.wasSuccessful())
+        beats = progress.read_text(encoding="utf-8").split()
+        self.assertEqual(beats[0::2], ["TEST", "TEST"])
+        self.assertEqual(
+            [b.rsplit(".", 1)[-1] for b in beats[1::2]], ["test_a", "test_b"]
+        )
 
 
 if __name__ == "__main__":

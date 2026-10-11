@@ -19,6 +19,7 @@ except ImportError:
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.mat_utils._mat_utils import MatUtils
+from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 
 class ImageToPlane(ptk.LoggingMixin):
@@ -354,26 +355,12 @@ class ImageToPlane(ptk.LoggingMixin):
                 f"{file_node}.outColor", f"{shader}.{color_attr}", force=True
             )
             if opacity:
-                # standardSurface uses opacityR/G/B (float3); lambert/blinn use transparency
-                if cmds.attributeQuery("opacityR", node=shader, exists=True):
-                    for channel in ("opacityR", "opacityG", "opacityB"):
-                        try:
-                            cmds.connectAttr(
-                                f"{file_node}.outAlpha",
-                                f"{shader}.{channel}",
-                                force=True,
-                            )
-                        except Exception:
-                            pass
-                elif cmds.attributeQuery("transparency", node=shader, exists=True):
-                    try:
-                        cmds.connectAttr(
-                            f"{file_node}.outTransparency",
-                            f"{shader}.transparency",
-                            force=True,
-                        )
-                    except Exception:
-                        pass
+                # The shader map owns each type's opacity slot and arity:
+                # standardSurface's float3 `opacity`, openPBR's scalar
+                # `geometryOpacity` (which the old opacityR/transparency probe
+                # missed, leaving an OpenPBR plane opaque), lambert/blinn's
+                # inverted `transparency`.
+                ShaderAttributeMap.connect_channel(file_node, "opacity", str(shader))
 
     @staticmethod
     def _file_has_alpha(file_node):

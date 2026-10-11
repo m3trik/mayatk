@@ -179,16 +179,16 @@ class _SceneTasksMixin(_TaskDataMixin):
             self.record_kept_edit("repaired node and shape names")
 
     def _shot_member_uuids(self) -> Dict[str, str]:
-        """``{member path: node UUID}`` for every shot member the active
-        ``ShotStore`` names that resolves to exactly one node -- snapshotted
-        before a rename, for :meth:`_repath_shot_members`.  A store that
-        cannot be read snapshots nothing: the shots then stay as they were,
-        which is never worse than before the repair."""
+        """``{name: node UUID}`` for every name the active ``ShotStore`` holds
+        an object by (``ShotStore.held_names``: members and the pinned /
+        hidden / locked sets) that resolves to exactly one node --
+        snapshotted before a rename, for :meth:`_repath_shot_members`.  A
+        store that cannot be read snapshots nothing: the shots then stay as
+        they were, which is never worse than before the repair."""
         try:
             from mayatk.anim_utils.shots._shots import ShotStore
 
-            store = ShotStore.active()
-            names = {o for shot in store.shots for o in shot.objects}
+            names = ShotStore.active().held_names()
         except Exception:  # shot bookkeeping must never stop the repair
             self.logger.debug("Shot members not snapshotted.", exc_info=True)
             return {}
@@ -200,13 +200,13 @@ class _SceneTasksMixin(_TaskDataMixin):
         return snapshot
 
     def _repath_shot_members(self, members: Dict[str, str]) -> int:
-        """Point every shot member a rename moved at its node's new path.
+        """Point every name a rename moved at its node's new path.
 
         *members* is :meth:`_shot_member_uuids`' pre-rename snapshot; each
         entry is re-derived as the export set is (:meth:`_repath_renamed`, by
-        UUID -- a path a rename freed up may hold a DIFFERENT node now).  The
-        store is updated in one batch (``ShotStore.update_shot``), kept like
-        the rename itself.  Returns how many shots changed.
+        UUID -- a path a rename freed up may hold a DIFFERENT node now) and
+        applied by ``ShotStore.rename_members``, so a pin follows its member.
+        Kept like the rename itself.  Returns how many shots changed.
         """
         moved = {}
         for name, uuid in members.items():
@@ -220,11 +220,7 @@ class _SceneTasksMixin(_TaskDataMixin):
 
             store = ShotStore.active()
             changed = [s for s in store.shots if moved.keys() & set(s.objects)]
-            with store.batch_update():
-                for shot in changed:
-                    store.update_shot(
-                        shot.shot_id, objects=[moved.get(o, o) for o in shot.objects]
-                    )
+            store.rename_members(moved)
         except Exception:  # the export goes on; say which shots may drop
             self.logger.warning(
                 "Could not point the shots at their repaired member names; a "
@@ -522,7 +518,7 @@ class _SceneTasksMixin(_TaskDataMixin):
         # (``matched_roots`` is non-empty here: the early return above covers
         # the no-match case, which logs at debug.)
         if self.logger.isEnabledFor(logging.INFO):
-            self.logger.log_group(
+            self._log_group(
                 f"Excluded {removed} object(s) under "
                 f"{len(matched_roots)} group(s) from export",
                 list(matched_roots),

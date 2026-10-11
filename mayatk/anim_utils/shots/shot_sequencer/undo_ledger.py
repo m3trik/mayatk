@@ -167,9 +167,9 @@ class UndoLedgerMixin:
           queue → an unrelated edit followed it, so Maya's undo belongs to
           THAT and our restore point stays put;
         * our restore point is on top → apply it, and touch Maya's queue
-          only if the edit actually recorded a step there (a bounds-only
-          edit records nothing, and an unconditional ``cmds.undo()`` would
-          pop the user's previous, unrelated operation).
+          only if the edit actually recorded a step there (one made with
+          undo off records nothing, and an unconditional ``cmds.undo()``
+          would pop the user's previous, unrelated operation).
 
         Which queue still has to be showing ``marker`` depends on BOTH the
         direction and the pairing.  A paired edit's chunk rides Maya's
@@ -210,9 +210,7 @@ class UndoLedgerMixin:
             pass
         finally:
             self._syncing = False
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._sync_to_widget()
+        self._after_shot_change()
 
     def on_redo(self) -> None:
         """Handle redo_requested from the widget — delegate to Maya redo."""
@@ -233,6 +231,4 @@ class UndoLedgerMixin:
             pass
         finally:
             self._syncing = False
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._sync_to_widget()
+        self._after_shot_change()

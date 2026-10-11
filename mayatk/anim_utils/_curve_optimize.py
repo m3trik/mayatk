@@ -369,6 +369,7 @@ class _CurveOptimizeInternal:
         as_strings,
         time_range,
         selected_only,
+        on_delete=None,
     ):
         """Body of :meth:`AnimUtils.simplify_curve`."""
         curves = cls.objects_to_curves(objects, recursive=recursive)
@@ -386,11 +387,26 @@ class _CurveOptimizeInternal:
 
         for curve in curves:
             try:
-                before = cmds.keyframe(curve, q=True, keyframeCount=True) or 0
+                # Times only when asked: on a production bake a time query
+                # costs what a count does not.
+                times = (
+                    cmds.keyframe(curve, q=True, timeChange=True) or []
+                    if on_delete is not None
+                    else None
+                )
+                before = (
+                    len(times)
+                    if times is not None
+                    else cmds.keyframe(curve, q=True, keyframeCount=True) or 0
+                )
                 cmds.filterCurve(curve, **kwargs)
                 after = cmds.keyframe(curve, q=True, keyframeCount=True) or 0
                 if after < before:
                     simplified_curves.append(curve)
+                    if times is not None:
+                        # The reducer only removes keys: the times gone are its cut.
+                        kept = set(cmds.keyframe(curve, q=True, timeChange=True) or [])
+                        on_delete(curve, [t for t in times if t not in kept])
             except RuntimeError:
                 pass
 
@@ -407,6 +423,7 @@ class _CurveOptimizeInternal:
         time_range_threshold,
         value_threshold,
         quiet,
+        on_delete=None,
     ):
         """Body of :meth:`AnimUtils.repair_corrupted_curves`."""
 
@@ -421,11 +438,19 @@ class _CurveOptimizeInternal:
             time_range_threshold=time_range_threshold,
             value_threshold=value_threshold,
             quiet=quiet,
+            on_delete=on_delete,
         )
 
     @classmethod
     def _reduce_to_extremes(
-        cls, objects, value_tolerance, recursive, quiet, stats, max_error
+        cls,
+        objects,
+        value_tolerance,
+        recursive,
+        quiet,
+        stats,
+        max_error,
+        on_delete=None,
     ):
         """Body of :meth:`AnimUtils.reduce_to_extremes`."""
         import maya.api.OpenMaya as om2
@@ -510,6 +535,12 @@ class _CurveOptimizeInternal:
                         if index not in kept:
                             fn.remove(index, **recorder.anim)
                 keys_removed += len(times) - len(keep)
+                if time_input and on_delete is not None:
+                    kept_set = set(keep)
+                    on_delete(
+                        curve,
+                        [times[i] for i in range(len(times)) if i not in kept_set],
+                    )
 
                 # setTangent reads x as UI-time frames and y as UI value units
                 # (probed exact for TL/TA/TU at film and ntsc, cm and m).  It
@@ -579,6 +610,7 @@ class _CurveOptimizeInternal:
         stats,
         progress_callback,
         through_blends,
+        on_delete=None,
     ):
         """Body of :meth:`AnimUtils.optimize_keys`."""
         # Guard: Maya's lazy initialization (triggered on first use)
@@ -638,6 +670,7 @@ class _CurveOptimizeInternal:
                 _saved_time_unit=_saved_time_unit,
                 progress_callback=progress_callback,
                 extremes=extremes,
+                on_delete=on_delete,
             )
         finally:
             cmds.refresh(suspend=False)
@@ -658,6 +691,7 @@ class _CurveOptimizeInternal:
         _saved_time_unit,
         progress_callback=None,
         extremes=False,
+        on_delete=None,
     ):
         # Recorded like any other edit, so one undo reverts the call: the
         # OpenMaya key edits go on the queue through UndoRecorder, and a batch
@@ -682,6 +716,7 @@ class _CurveOptimizeInternal:
                 _saved_time_unit=_saved_time_unit,
                 progress_callback=progress_callback,
                 extremes=extremes,
+                on_delete=on_delete,
             )
         finally:
             if _autokey_was_on:
@@ -703,7 +738,10 @@ class _CurveOptimizeInternal:
         _saved_time_unit,
         progress_callback=None,
         extremes=False,
+        on_delete=None,
     ):
+        # on_delete(curve, frames): the keys every phase removes (each only
+        # removes); frames None for a static curve deleted outright.
         static_curves_deleted = 0
         flat_keys_deleted = 0
         simplified_curves_count = 0
@@ -718,6 +756,9 @@ class _CurveOptimizeInternal:
             static_curves_deleted += len(static_curves)
             if static_curves:
                 cmds.delete(static_curves)
+                if on_delete is not None:
+                    for curve in static_curves:
+                        on_delete(curve, None)  # the whole curve went
                 # Remove deleted curves from anim_curves list
                 static_set = set(static_curves)
                 anim_curves = [c for c in anim_curves if c not in static_set]
@@ -744,6 +785,7 @@ class _CurveOptimizeInternal:
                 # The deviation measure costs an evaluate per baked sample;
                 # ask for it only when it will be printed or returned.
                 stats=extremes_stats if (stats is not None or not quiet) else None,
+                on_delete=on_delete,
             )
             rebuilt_curves.update(reduced)  # tangents already explicit
             flat_candidates = [c for c in anim_curves if c not in rebuilt_curves]
@@ -754,6 +796,10 @@ class _CurveOptimizeInternal:
                 remove=True,
             )
             flat_keys_deleted += sum(len(keys) for _, keys in redundant_keys_to_delete)
+            if on_delete is not None:
+                for curve, keys in redundant_keys_to_delete:
+                    if keys:
+                        on_delete(curve, list(keys))
             # The flat pass froze what these curves need for export -- every
             # survivor of a sparse curve, a per-frame-dense one's holds'
             # boundaries -- so Phase 3 skips them unless the key reducer runs.
@@ -833,7 +879,7 @@ class _CurveOptimizeInternal:
             progress_callback(3, 4, "Simplifying curves")
         if simplify_keys and not extremes:
             simplified = cls.simplify_curve(
-                anim_curves, value_tolerance=value_tolerance
+                anim_curves, value_tolerance=value_tolerance, on_delete=on_delete
             )
             simplified_curves_count += len(simplified)
 

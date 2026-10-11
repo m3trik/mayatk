@@ -132,8 +132,9 @@ class TestSceneExporter(MayaTkTestCase):
         and the FBX preset loaded, and both exits there passed the ``finally``
         that closes it: an empty set returned, a preset that would not load
         raised. Left open, the next export added a second handler -- every line
-        written twice -- and Windows kept the file locked (2026-09-15)."""
-        logger = logging.getLogger(type(self.exporter).__name__)
+        written twice -- and Windows kept the file locked (2026-09-15). The
+        handler lives on the exporter's own logger (2026-10-09)."""
+        logger = self.exporter.logger
 
         def file_handlers():
             return [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
@@ -3200,6 +3201,60 @@ class TestSceneExporter(MayaTkTestCase):
             f"a rule-relative path is one Maya loads, not a missing one: {messages}",
         )
 
+    def test_check_valid_paths_reports_through_a_plain_logger(self):
+        """A TaskManager driven directly takes any logger -- the bake-range and
+        render-effects tests build one on a plain ``logging.Logger`` -- and the
+        checks built their node links through ``logger.log_link``
+        unconditionally, so the first missing texture raised AttributeError
+        instead of being reported. The link falls back to the node's name, as
+        the snapshot notes' links already did.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        tm = TaskManager(logging.getLogger("test_plain_logger_links"))
+        file_node = self._assign_texture(
+            self.cube, os.path.join(self.temp_dir, "nowhere", "gone.png")
+        )
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+
+        passed, messages = tm.check_valid_paths()
+
+        self.assertFalse(passed)
+        self.assertTrue(
+            any(m.startswith(f"Missing Texture: {file_node} -> ") for m in messages),
+            messages,
+        )
+
+    def test_the_report_lines_degrade_through_a_plain_logger(self):
+        """Not only the links: the grouped listings (``log_group``) and the
+        snapshot notes' panel link exist only on a toolkit logger too, so a
+        TaskManager driven with a plain one raised the moment a check or task
+        had something to list -- an LOD-suffixed mesh, an excluded group.
+        """
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        logger = logging.getLogger("test_plain_logger_groups")
+        tm = TaskManager(logger)
+        lod = cmds.polyCube(name="PROP_LOD0")[0]
+        scrap = cmds.polyCube(name="scrap")[0]
+        cmds.group(scrap, name="temp_grp")
+        tm.objects = cmds.ls([lod, "|temp_grp|scrap"], long=True)
+
+        with self.assertLogs(logger, "INFO") as logged:  # the listings are INFO
+            passed, _messages = tm.check_geometry_lod_suffix()
+            tm.ignore_groups("temp_grp")
+
+        self.assertTrue(passed)
+        self.assertTrue(
+            any("LOD suffixes detected (1)" in line for line in logged.output),
+            logged.output,
+        )
+        self.assertTrue(
+            any("Excluded" in line and "temp_grp" in line for line in logged.output),
+            logged.output,
+        )
+        self.assertEqual(tm._note_link(ptk.SceneRecords.SHOTS.key), "Open Shots")
+
     def test_resolve_invalid_texture_paths_leaves_a_rule_relative_path_alone(self):
         """The repair task must not rebind a path that already resolves.
 
@@ -3647,6 +3702,8 @@ class TestSceneExporter(MayaTkTestCase):
                 "sourceimages/wood/bark.png",
                 "the write must still read the project-relative form",
             )
+            # Before the restores, which close the run and clear the record.
+            self.assertNotIn("project-relative texture paths", tm.kept_edits)
             tm.run_deferred_restores()
         finally:
             os.chdir(original_cwd)
@@ -3657,7 +3714,118 @@ class TestSceneExporter(MayaTkTestCase):
             MatUtils.resolve_path(after, search=False),
             f"{after!r} no longer resolves in the active project",
         )
-        self.assertNotIn("project-relative texture paths", tm.kept_edits)
+
+    def _texture_only_the_active_project_resolves(
+        self, same_named_in_scene_project, lock_plug=False
+    ):
+        """The scene saved under its own project while the user's ACTIVE
+        project is another, holding the texture a stored RELATIVE path names:
+        valid where the user is, nowhere in the scene's project. With
+        *same_named_in_scene_project*, the scene's sourceimages holds a
+        DIFFERENT file of the same name; with *lock_plug*, the path plug is
+        locked, as a referenced or published asset's is. Returns
+        ``(file_node, stored, real)``, *real* being the file the user's
+        session shows."""
+        ws_root = self._make_workspace_scene()
+        if same_named_in_scene_project:
+            os.makedirs(os.path.join(ws_root, "sourceimages"), exist_ok=True)
+            with open(os.path.join(ws_root, "sourceimages", "bark.png"), "wb") as f:
+                f.write(b"ANOTHER BARK")
+        active = os.path.join(self.temp_dir, "active_project")
+        real = os.path.join(active, "sourceimages", "wood", "bark.png")
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        with open(os.path.join(active, "workspace.mel"), "w") as f:
+            f.write('workspace -fr "sourceImages" "sourceimages";\n')
+        with open(real, "wb") as f:
+            f.write(b"PNGDATA")
+        original_ws = cmds.workspace(q=True, rd=True)
+        self.addCleanup(lambda: cmds.workspace(original_ws, openWorkspace=True))
+        cmds.workspace(active, openWorkspace=True)
+
+        file_node = self._assign_texture(self.cube, real)
+        stored = "sourceimages/wood/bark.png"
+        self._set_ftn_verbatim(file_node, stored)
+        if lock_plug:
+            cmds.setAttr(f"{file_node}.fileTextureName", lock=True)
+        self.exporter.task_manager.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        return file_node, stored, real
+
+    def test_resolve_never_rebinds_a_link_the_active_project_resolves(self):
+        """Auto Set Workspace switches to the scene's own project for the write,
+        where a path valid only in the user's active project resolves nowhere.
+        Resolve Invalid Texture Paths read that working link as broken and
+        rebound it by name to a same-named file of the scene's project --
+        another texture shipped, and the rebind KEPT in the scene. The write
+        reads the file the user sees; the scene keeps its own path.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        file_node, stored, real = self._texture_only_the_active_project_resolves(
+            same_named_in_scene_project=True
+        )
+        tm = self.exporter.task_manager
+        original_cwd = os.getcwd()
+        try:
+            tm.set_workspace(enable=True)
+            tm.resolve_invalid_texture_paths()
+            during = cmds.getAttr(f"{file_node}.fileTextureName")
+            self.assertTrue(
+                os.path.isfile(during) and os.path.samefile(during, real),
+                f"the write reads {during!r}, not the file the user sees",
+            )
+            self.assertNotIn("rebound missing texture paths", tm.kept_edits)
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
+
+        after = cmds.getAttr(f"{file_node}.fileTextureName")
+        self.assertEqual(after, stored, "the scene must get its own path back")
+        self.assertTrue(MatUtils.resolve_path(after, search=False))
+
+    def test_a_link_the_active_project_resolves_passes_the_path_check(self):
+        """With no same-named file to rebind to, the same link was left for
+        Check Valid Paths, which failed the export on a texture the user's
+        session shows."""
+        file_node, stored, _real = self._texture_only_the_active_project_resolves(
+            same_named_in_scene_project=False
+        )
+        tm = self.exporter.task_manager
+        original_cwd = os.getcwd()
+        try:
+            tm.set_workspace(enable=True)
+            tm.resolve_invalid_texture_paths()
+            passed, messages = tm.check_valid_paths()
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertTrue(passed, messages)
+        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), stored)
+
+    def test_a_locked_link_the_active_project_resolves_is_reported_not_raised(self):
+        """A referenced or published asset's path plug is locked: staging the
+        active project's spelling raised RuntimeError, which the task runner
+        re-raises, so the whole export died where the node used to be reported
+        for Check Valid Paths to gate. Reported, and nothing staged for it."""
+        file_node, stored, _real = self._texture_only_the_active_project_resolves(
+            same_named_in_scene_project=False, lock_plug=True
+        )
+        tm = self.exporter.task_manager
+        original_cwd = os.getcwd()
+        try:
+            tm.set_workspace(enable=True)
+            with self.assertLogs(tm.logger, "WARNING") as logged:
+                tm.resolve_invalid_texture_paths()  # must not raise
+            self.assertNotIn(f"texture_path:{file_node}", tm._deferred_restores)
+            tm.run_deferred_restores()
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertTrue(
+            any(file_node in line and "locked" in line for line in logged.output),
+            logged.output,
+        )
+        self.assertEqual(cmds.getAttr(f"{file_node}.fileTextureName"), stored)
 
     def test_relative_paths_are_kept_when_the_active_project_is_the_scenes(self):
         """The other half: with the scene's own project already active there is
@@ -3859,13 +4027,20 @@ class TestSceneExporter(MayaTkTestCase):
             )
 
     def test_smart_bake_skips_its_layer_reduction_where_the_write_resamples_it(self):
-        """A write that splits the declared takes forces
-        ``FBXExportBakeComplexAnimation`` over the shot union, re-sampling the
-        override layer per frame, so a key reduction inside the layer never
-        ships: ~50 s of a production run for ``static``/``flat``, up to 1 %
-        injected error for ``extremes``/``simplify``. Everywhere else the level
-        reaches SmartBake. Added: 2026-09-19
+        """A write that BAKES re-samples the override layer per frame, so a key
+        reduction inside the layer never ships: ~50 s of a production run for
+        ``static``/``flat``, up to 1 % injected error for
+        ``extremes``/``simplify``. A split forces
+        ``FBXExportBakeComplexAnimation`` over the shot union; any other write
+        bakes when the loaded preset does -- an override layer keyed at
+        10/100/200 ships 191 keys over 10-200 with Resample All off (Maya 2025
+        / FBX 2020.3.6) -- and counting the split alone let such an export
+        reduce the layer and then sample the reduction. Everywhere else the
+        level reaches SmartBake. Added: 2026-09-19; the baking preset
+        2026-10-05.
         """
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.node_utils.data_nodes import DataNodes
 
         tm = self.exporter.task_manager
@@ -3874,6 +4049,10 @@ class TestSceneExporter(MayaTkTestCase):
             DataNodes,
             {"shots": [{"clip": "Shot_1", "start": 1, "end": 10, "objects": []}]},
         )
+        # The bake flag is the loaded preset's: pinned here, and put back.
+        baking = "true" if FbxUtils.baking_enabled() else "false"
+        self.addCleanup(mel.eval, f"FBXExportBakeComplexAnimation -v {baking}")
+        mel.eval("FBXExportBakeComplexAnimation -v false")
 
         def level_reaching_the_baker(run):
             tm.run = run
@@ -3903,6 +4082,21 @@ class TestSceneExporter(MayaTkTestCase):
             level_reaching_the_baker(splits),
             "extremes",
             "a scene that declares no takes splits nothing",
+        )
+
+        # A preset that bakes re-samples the layer, split or not.
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        self.assertFalse(level_reaching_the_baker(whole))
+        self.assertFalse(level_reaching_the_baker(splits), "no takes, but it bakes")
+        self.assertEqual(
+            level_reaching_the_baker(whole.replace(animation_write_back=True)),
+            "extremes",
+            "a write-back keeps the layer's keys in the scene",
+        )
+        self.assertEqual(
+            level_reaching_the_baker(whole.replace(output_format="usd")),
+            "extremes",
+            "a USD layer is written as the scene samples",
         )
 
     def test_smart_bake_stages_its_own_restore(self):
@@ -4398,8 +4592,14 @@ class TestSceneExporter(MayaTkTestCase):
         next clean export drops it (and the stash never leaks across runs)."""
         import json
 
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
         export_path = os.path.join(self.temp_dir, "test.fbx")
-        manifest_path = os.path.join(self.temp_dir, ".test.scene_data.json")
+        # The record lives in the per-user store, never beside the export.
+        manifest_path = SceneDataSidecar.manifest_path_for(export_path)
+        os.makedirs(os.path.dirname(manifest_path), exist_ok=True)
 
         tm = self.exporter.task_manager
         tm.objects = [
@@ -4421,7 +4621,7 @@ class TestSceneExporter(MayaTkTestCase):
             raw = json.load(f)
         self.assertEqual(raw["hierarchy"]["last_diff"]["missing"], ["ExportGroup|Gone"])
         # The stash's routing tag is an absolute authoring path — the
-        # sidecar ships beside the deliverable and records no machine
+        # record is treated as part of the export and records no machine
         # paths, so the tag must never reach disk.
         self.assertNotIn("export_path", raw["hierarchy"]["last_diff"])
         self.assertNotIn(self.temp_dir.replace("\\", "/").split("/")[-1], str(raw))
@@ -4447,7 +4647,13 @@ class TestSceneExporter(MayaTkTestCase):
         # In the export's OWN scope: the baseline is per-scene now, so a path
         # under an unrelated root is a different scope rather than a missing
         # node. The subject of this test is the last_diff leak, not the diff.
-        with open(os.path.join(self.temp_dir, ".assetA.scene_data.json"), "w") as f:
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        record_a = SceneDataSidecar.manifest_path_for(tm.export_path)
+        os.makedirs(os.path.dirname(record_a), exist_ok=True)
+        with open(record_a, "w") as f:
             json.dump(
                 {
                     "format": 3,
@@ -4469,7 +4675,7 @@ class TestSceneExporter(MayaTkTestCase):
         tm.write_scene_data_sidecar()
 
         with open(
-            os.path.join(self.temp_dir, ".assetB.scene_data.json"),
+            SceneDataSidecar.manifest_path_for(tm.export_path),
             encoding="utf-8",
         ) as f:
             raw = json.load(f)
@@ -4945,9 +5151,12 @@ class TestExportDataNodeOption(MayaTkTestCase):
                 tasks={"export_data_node": True, "apply_declared_takes": "full"},
             )
         )
-        with open(
-            os.path.join(out, ".full_mode.scene_data.json"), encoding="utf-8"
-        ) as f:
+        from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
+            SceneDataSidecar,
+        )
+
+        record = SceneDataSidecar.manifest_path_for(os.path.join(out, "full_mode.fbx"))
+        with open(record, encoding="utf-8") as f:
             data = json.load(f)["data_export"]
         meta = data["shot_metadata"]
         self.assertEqual(meta.get(ptk.MeshConvert.SHOT_CLIP_MODE_KEY), "full")
@@ -5518,6 +5727,131 @@ class TestExcludeRigHelpersOption(MayaTkTestCase):
         # The scene is never edited: the next export needs the rig again.
         self.assertTrue(cmds.objExists("|rig|ctrl_GRP|ctrl"))
 
+    def test_the_file_is_finished_away_from_the_output_folder(self):
+        """Every pass that rewrites the written FBX runs on a LOCAL copy, and
+        the finished file reaches the output folder once. In a synced folder
+        (production, 2026-10-08) the sync client still held the just-written
+        230 MB FBX when the rig pass swapped its rewrite in -- Access is denied
+        -- and the deliverable shipped with every rig helper it was meant to
+        drop."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        seen = {}
+        real_drop, real_embed = FbxUtils.drop_rig_apparatus, FbxUtils.embed_dependencies
+
+        def drop(path, *args, **kwargs):
+            seen["drop"] = path
+            return real_drop(path, *args, **kwargs)
+
+        def embed(path, *args, **kwargs):
+            seen["embed"] = path
+            return real_embed(path, *args, **kwargs)
+
+        with (
+            patch.object(FbxUtils, "drop_rig_apparatus", staticmethod(drop)),
+            patch.object(FbxUtils, "embed_dependencies", staticmethod(embed)),
+        ):
+            dropped = self._export("staged", drop_rig_apparatus=True)
+
+        out = os.path.normcase(os.path.abspath(self.temp_dir))
+        for name, path in seen.items():
+            self.assertNotEqual(
+                os.path.normcase(os.path.dirname(os.path.abspath(path))),
+                out,
+                f"{name} rewrote the file in the output folder",
+            )
+        self.assertEqual(set(seen), {"drop", "embed"})
+        self.assertTrue({"rig", "ctrl"}.isdisjoint(dropped), sorted(dropped))
+        self.assertFalse([n for n in os.listdir(self.temp_dir) if n.endswith(".part")])
+
+    def test_the_stage_is_spelled_for_the_ansi_code_page(self):
+        """Every FBX run now writes under %TEMP% first, and ``cmds.file``
+        refuses a path the ANSI code page cannot hold (a Cyrillic user name on
+        cp1252, measured by ``AppLauncher.ansi_safe_path``): the stage is
+        spelled through it, as the Blender pull's payloads are.
+        Added: 2026-10-10
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        spelled, seen = [], {}
+        real_safe, real_drop = (
+            ptk.AppLauncher.ansi_safe_path,
+            FbxUtils.drop_rig_apparatus,
+        )
+
+        def safe(path, *args, **kwargs):
+            result = real_safe(path, *args, **kwargs)
+            # What it returned: the spelling the write must then use.
+            spelled.append(os.path.normcase(os.path.abspath(str(result))))
+            return result
+
+        def drop(path, *args, **kwargs):
+            seen["drop"] = path
+            return real_drop(path, *args, **kwargs)
+
+        with (
+            patch.object(ptk.AppLauncher, "ansi_safe_path", staticmethod(safe)),
+            patch.object(FbxUtils, "drop_rig_apparatus", staticmethod(drop)),
+        ):
+            self._export("ansi_stage", drop_rig_apparatus=True)
+
+        stage = os.path.normcase(os.path.abspath(os.path.dirname(seen["drop"])))
+        self.assertIn(stage, spelled, "the stage never went through ansi_safe_path")
+
+    def test_a_glb_the_output_folder_refuses_is_kept_where_the_log_says(self):
+        """A GLB written beside the FBX that cannot land -- nor be parked
+        beside its destination -- stays in the stage, and the log names it
+        there. The stage was removed all the same, taking the only copy with
+        it (the FBX's own refusal already kept it).
+        Added: 2026-10-10
+        """
+        tm = self.exporter.task_manager
+        delivered = {}
+
+        def fake_glb(fbx_path=None, announce=True):
+            glb = os.path.splitext(fbx_path)[0] + ".glb"
+            with open(glb, "wb") as f:
+                f.write(b"glTF")
+            return glb
+
+        real_deliver = SceneExporter._deliver
+
+        def deliver(exporter, staged, destination):
+            if destination.endswith(".glb"):
+                with patch.object(
+                    ptk.FileUtils,
+                    "deliver_file",
+                    lambda staged_, _dest: (staged_, "held open"),
+                ):
+                    placed = real_deliver(exporter, staged, destination)
+            else:
+                placed = real_deliver(exporter, staged, destination)
+            delivered[os.path.splitext(destination)[1]] = placed
+            return placed
+
+        roots = cmds.ls(["skel_root", "body", "rig"], long=True)
+        with (
+            patch.object(tm, "create_glb", fake_glb),
+            patch.object(SceneExporter, "_deliver", deliver),
+        ):
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.temp_dir,
+                    objects=roots,
+                    output_name="kept_glb",
+                    tasks={"output_format": "fbx_glb"},
+                )
+            )
+        kept = delivered[".glb"]
+        self.addCleanup(shutil.rmtree, os.path.dirname(kept), True)
+        self.assertEqual(
+            os.path.normcase(os.path.abspath(delivered[".fbx"])),
+            os.path.normcase(
+                os.path.abspath(os.path.join(self.temp_dir, "kept_glb.fbx"))
+            ),
+        )
+        self.assertTrue(os.path.isfile(kept), f"the kept GLB is gone: {kept}")
+
     def test_a_usd_run_leaves_it_inert(self):
         run, _tasks, notes = ptk.ExportRun.from_tasks(
             {"output_format": "usd", "drop_rig_apparatus": True}
@@ -5768,7 +6102,9 @@ class TestMangledNameGuards(MayaTkTestCase):
         self.addCleanup(ShotStore.clear_active)
         store = ShotStore()
         ShotStore.set_active(store)
-        store.define_shot("Hold", 1, 20, objects=[cmds.ls(handle, long=True)[0]])
+        member = cmds.ls(handle, long=True)[0]
+        store.define_shot("Hold", 1, 20, objects=[member])
+        store.set_object_pinned(member)
         self.tm.objects = [cmds.ls(group, long=True)[0]]
 
         self.tm.conform_shape_names()
@@ -5776,6 +6112,8 @@ class TestMangledNameGuards(MayaTkTestCase):
         self.tm.run_deferred_restores()
 
         self.assertEqual(store.shots[0].objects, ["|DoorGroup|door_handle"])
+        # The pin follows its member: one left on the old path keeps nothing.
+        self.assertEqual(store.pinned_objects, {"|DoorGroup|door_handle"})
         meta = ptk.SceneRecords.SHOTS.load(DataNodes) or {}
         self.assertEqual([s["clip"] for s in meta.get("shots", [])], ["Hold"])
 
@@ -7467,26 +7805,27 @@ class TestTexturePathPipeline(MayaTkTestCase):
         status, msgs = self.tm.check_hidden_geometry()
         self.assertTrue(status, f"animated-visibility object flagged: {msgs}")
 
-    # -- leftover UV snapshots -------------------------------------------
+    # -- leftover UV snapshots (retired check) ----------------------------
 
-    def test_check_uv_snapshots_names_a_leftover_snapshot_set(self):
-        """An auto-unwrap backup set left behind ships as a real UV set, and
-        the second one is TEXCOORD_1, the lightmap channel. The check reports
-        it and leaves it: an export never edits what it reads.
-        Added: 2026-09-15
+    def test_retired_check_uv_snapshots_still_reports_and_warns(self):
+        """Auto Unwrap's backup can no longer outlive its unwrap
+        (``UvUtils.uv_snapshot``), so the exporter stopped running this check;
+        a direct call keeps reporting until ``remove_in``, with a notice.
+        Added: 2026-10-08
         """
+        import warnings
+
         shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
         cmds.polyUVSet(shape, create=True, uvSet="_uv_snap_0ef03239")
         self.tm.objects = [self.cube_long]
-        status, msgs = self.tm.check_uv_snapshots()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            status, msgs = self.tm.check_uv_snapshots()
         self.assertFalse(status)
         self.assertTrue(any("_uv_snap_0ef03239" in m for m in msgs), msgs)
-        sets = cmds.polyUVSet(shape, query=True, allUVSets=True)
-        self.assertIn("_uv_snap_0ef03239", sets, "a check must not delete")
-
-    def test_check_uv_snapshots_passes_a_mesh_without_one(self):
-        self.tm.objects = [self.cube_long]
-        self.assertEqual(self.tm.check_uv_snapshots(), (True, []))
+        self.assertTrue(
+            any(issubclass(w.category, DeprecationWarning) for w in caught), caught
+        )
 
     # -- default materials -----------------------------------------------
 
@@ -7854,14 +8193,14 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
             )
         self.assertIs(seen.get("glb"), True)
 
-    def test_a_loose_media_fbx_run_keeps_its_content_choices(self):
-        """An FBX deliverable legitimately ships its maps beside itself -- that
-        is what ``convert_to_relative_paths`` is for -- and its cameras are
-        ordinary content. Only the GLB, whose viewer owns the camera and lights
-        the asset by its published recipe rather than by scene lights, makes
-        those losses rather than choices."""
+    def test_an_fbx_run_embeds_its_media_and_keeps_its_content_choices(self):
+        """An FBX deliverable carries its maps -- nothing ships beside it (the
+        user's rule, 2026-10-05) -- and its cameras are ordinary content. Only
+        the GLB, whose viewer owns the camera and lights the asset by its
+        published recipe rather than by scene lights, makes those losses
+        rather than choices."""
         options = self.exporter._default_fbx_options(glb_deliverable=False)
-        self.assertIs(options["FBXExportEmbeddedTextures"], False)
+        self.assertIs(options["FBXExportEmbeddedTextures"], True)
         self.assertIs(options["FBXExportInstances"], True)
         self.assertNotIn("FBXExportCameras", options)
         self.assertNotIn("FBXExportLights", options)
@@ -9083,8 +9422,8 @@ class TestPostWriteVerification(MayaTkTestCase):
 
         With versioning on, ``write_scene_data_sidecar`` writes
         ``.{base_stem}.scene_data.json`` so a series shares one manifest,
-        while ``ExportVerifier._sidecar_beside`` looks beside the file for
-        ``.{stem}.scene_data.json``. Left to guess, ``clips_vs_takes`` and
+        while ``ExportVerifier._sidecar_beside`` looks for the file's own
+        ``.{stem}.scene_data.json`` first. Left to guess, ``clips_vs_takes`` and
         ``fbx_takes`` -- the two gates that catch a dropped take -- would SKIP
         silently on every versioned export. The exporter knows the real path.
         """
@@ -9104,6 +9443,7 @@ class TestPostWriteVerification(MayaTkTestCase):
         with open(glb, "wb") as handle:
             handle.write(b"glTF-stub")
         expected = SceneDataSidecar.manifest_path_for(tm.export_path, base_stem=True)
+        os.makedirs(os.path.dirname(expected), exist_ok=True)
         with open(expected, "w", encoding="utf-8") as handle:
             handle.write("{}")
         self.assertNotEqual(
@@ -9296,10 +9636,14 @@ class TestCheckScheduling(QuickTestCase):
     def test_every_check_declares_what_it_reads(self):
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
 
+        # A retired check kept as a ptk.Deprecation alias (PEP 702 marker) is
+        # no longer scheduled, so it declares nothing.
         methods = {
             name
             for name in dir(TaskManager)
-            if name.startswith("check_") and name != "check_definitions"
+            if name.startswith("check_")
+            and name != "check_definitions"
+            and not getattr(getattr(TaskManager, name), "__deprecated__", None)
         }
         missing = sorted(methods - set(TaskManager.CHECK_DEPENDENCIES))
         self.assertFalse(
@@ -9642,6 +9986,29 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         passed, messages = self.tm.check_valid_paths()
 
         self.assertTrue(passed, messages)
+
+    def test_a_lightmap_outside_the_export_set_does_not_ride_the_record(self):
+        """The check above skips it, and so must the record the write ships:
+        the post-write embed ships every map the record names, so a hidden
+        group of stale copies shipped five outdated lightmaps and failed the
+        verifier on two it could not find (2026-10-09). The scene keeps its
+        whole record once the run unwinds. Added: 2026-10-09"""
+        import json
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        other = cmds.ls(cmds.polyCube(name="NotShipping")[0], long=True)[0]
+        self._commit(self.cube, self._touch("bake", "LitCube_LightMap.exr"))
+        self._commit(other, self._gone("NotShipping_LightMap.exr"))
+
+        def stored():
+            raw = ptk.SceneRecords.LIGHTMAPS.read_text(DataNodes)
+            return sorted(o["name"] for o in json.loads(raw)["objects"])
+
+        self.tm._publish_scene_records()
+        self.assertEqual(stored(), ["LitCube"], "the write ships the export set's")
+        self.tm.run_deferred_restores()
+        self.assertEqual(stored(), ["LitCube", "NotShipping"], "the scene keeps all")
 
     def test_the_resolve_task_heals_a_stale_hint(self):
         import json
@@ -10840,6 +11207,118 @@ class TestBakeRangeModes(MayaTkTestCase):
         self.tm._publish_scene_records()
 
         self.assertEqual(seen.get("span"), (10, 200))
+
+    # -- the origin of a write the preset resamples -------------------------
+    #
+    # A run that splits no takes (Full Sequence clips, or no shots) keeps the
+    # loaded preset's Resample All as set, and with it on the write keys every
+    # curve over the bake range: the whole-timeline take reaches the range
+    # wherever it runs past the keys. The origin reports what that FBX carries.
+
+    def _origin_and_fbx_span(self, mode):
+        """The clip origin a shotless run publishes under a preset that left
+        Resample All on, and the span its whole-timeline take carries once
+        the FBX is written (``FbxFile.take_spans``, the measurement the GLB
+        conversion places its clips by)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")
+        self.addCleanup(self.mel.eval, f"{FbxUtils.RESAMPLE_ALL} -v false")
+        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
+        self.tm.run = self.tm.run.replace(bake_range_mode=mode)
+        seen = self._published_origin()
+
+        self.tm._publish_scene_records()
+        self.tm.set_bake_animation_range(mode)
+        artifacts = ptk.TempArtifacts("se_resampled_origin", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        fbx_path = artifacts.path(extension=".fbx")
+        cmds.select(self.group, replace=True)
+        cmds.file(
+            fbx_path,
+            force=True,
+            options="v=0;",
+            type="FBX export",
+            exportSelected=True,
+        )
+        self.tm.run_deferred_restores()
+
+        fbx = ptk.FbxFile.load(fbx_path, raw_payloads=False, span_arrays=("KeyTime",))
+        ((first, last),) = fbx.take_spans().values()
+        fps = self.mel.eval("currentTimeUnitToFPS()")
+        return seen.get("span"), (round(first * fps), round(last * fps))
+
+    def test_a_resampling_preset_publishes_the_scene_range_its_fbx_carries(self):
+        """The Scene Animation Range row: the write keys 5-310 around keys at
+        10-200, and the origin used to say 10-200 -- check_clip_origin WARNed
+        on every such export, and any reader of the carrier was 5 frames off."""
+        published, carried = self._origin_and_fbx_span("scene")
+
+        self.assertEqual(carried, (5, 310))
+        self.assertEqual(published, carried)
+
+    def test_a_resampling_preset_with_the_range_off_publishes_its_fbx_span(self):
+        """Bake Range OFF: the write bakes over the range the preset carries
+        (1-48 here), and the origin follows the keys and that range alike."""
+        published, carried = self._origin_and_fbx_span(None)
+
+        self.assertEqual(published, carried)
+
+    def test_a_resampling_preset_leaves_a_key_extent_origin_alone(self):
+        """Auto over a shotless scene bakes the key extent itself, so the
+        resample moves nothing and the origin stays on the keys."""
+        published, carried = self._origin_and_fbx_span("auto")
+
+        self.assertEqual(published, (10, 200))
+        self.assertEqual(published, carried)
+
+    def test_check_clip_origin_passes_an_export_its_preset_resamples(self):
+        """End to end, the verifier's view: the carrier's published ``*`` and
+        the span the GLB's clips were cut against -- measured from the FBX by
+        the conversion -- agree, so ``check_clip_origin`` passes instead of
+        WARNing that the producer's prediction is off. Keyed visibility,
+        because with no shots that channel is what publishes the origin."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        cmds.setKeyframe(self.child, attribute="visibility", time=10, value=1)
+        cmds.setKeyframe(self.child, attribute="visibility", time=150, value=0)
+        cmds.playbackOptions(animationStartTime=5, animationEndTime=310)
+        artifacts = ptk.TempArtifacts("se_resampled_verify", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        out = artifacts.dir_path()
+        preset = os.path.join(out, "resample_all.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def _load(*_args, **_kwargs):
+            # What a preset that bakes with Resample All on leaves in the plugin.
+            self.mel.eval("FBXExportBakeComplexAnimation -v true")
+            self.mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v true")
+
+        # The "preset" and the GLB pins stay in the plugin after the write.
+        self.addCleanup(self.mel.eval, "FBXResetExport")
+        exporter = SceneExporter(log_level="WARNING")
+        exporter.confirm = lambda question: False
+        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load):
+            self.assertTrue(
+                exporter.perform_export(
+                    export_dir=out,
+                    objects=[self.group],
+                    preset_file=preset,
+                    output_name="resampled",
+                    tasks={
+                        "export_data_node": True,
+                        "set_bake_animation_range": "scene",
+                        "output_format": "fbx_glb",
+                    },
+                )
+            )
+        report = ptk.ExportVerifier(
+            glb=os.path.join(out, "resampled.glb"),
+            fbx=os.path.join(out, "resampled.fbx"),
+        ).run()
+        rows = {row.check: row.status for row in report.rows}
+        self.assertEqual(rows.get("clip_origin"), "PASS", report.summary())
 
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):

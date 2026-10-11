@@ -1862,14 +1862,14 @@ class TestRizomBridgeNonAsciiPaths(MayaTkTestCase):
     RizomUV 2020.1 reads the ``-cfi`` argument in the ANSI code page and the UTF-8
     bytes of the paths INSIDE its Lua as ANSI (serial runs, 2026-09-27): a ``-cfi``
     script under a Cyrillic folder hangs to the timeout, and ``ZomLoad`` /
-    ``ZomSave`` under a cp1252 "José" folder time out as well; the 8.3 forms of
-    the same folders pass. A user whose profile (so %TEMP%) has such a name had
-    every round-trip hang. The bridge hands RizomUV
+    ``ZomSave`` under an accented folder cp1252 holds ("é") time out as well; the
+    8.3 forms of the same folders pass. A user whose profile (so %TEMP%) has such
+    a name had every round-trip hang. The bridge hands RizomUV
     ``AppLauncher.ansi_safe_path`` spellings: plain ASCII inside the Lua, the
     code page's reach on the command line.
     """
 
-    FOLDERS = ("Jos\u00e9", "\u0416\u0443\u043a")  # inside cp1252 / outside it
+    FOLDERS = ("Zo\u00eb", "\u2605")  # inside cp1252 / outside it
 
     def setUp(self):
         super().setUp()

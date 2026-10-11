@@ -123,6 +123,23 @@ class TestRigUtils(MayaTkTestCase):
         pos = cmds.xform(loc_pos, q=True, ws=True, t=True)
         self.assertAlmostEqual(pos[0], 5.0)
 
+    def test_create_locator_size_sizes_the_shape_not_the_transform(self):
+        """``size`` is the locator's DISPLAY: its shape's localScale.
+
+        ``scale`` sizes the transform, which everything parented under the
+        locator inherits; ``size`` draws the cross bigger and leaves the
+        channels unit -- blendertk's ``create_locator(size=)``, the Empty's
+        display size.
+        """
+        loc = RigUtils.create_locator(name="sized_loc", size=2.5)
+        shape = cmds.listRelatives(loc, shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{shape}.localScale")[0]], [2.5] * 3
+        )
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{loc}.scale")[0]], [1.0] * 3
+        )
+
     def test_create_locator_at_object(self):
         """Test create_locator_at_object method."""
         # Setup
@@ -153,6 +170,75 @@ class TestRigUtils(MayaTkTestCase):
         self.assertAlmostEqual(
             cmds.xform(loc, query=True, worldSpace=True, translation=True)[0], 10.0
         )
+
+    def test_create_locator_at_object_loc_scale_sizes_the_locator(self):
+        """``loc_scale`` sizes the locator's DISPLAY; its channels stay zeroed.
+
+        Bug: the locator was built scaled as a TRANSFORM, and the rig then wrote
+        the object's world matrix over that and froze it -- so every rig drew a
+        unit cross whatever the panel's Locator Scale said (measured in a fresh
+        mayapy: localScale 1.0 for loc_scale=2.5). The cube is scaled, so the
+        size also has to come through the freeze, which takes that scale off
+        the locator.
+        Fixed: 2026-10-10
+        """
+        cmds.xform(self.cube, scale=(2, 3, 1))
+        RigUtils.create_locator_at_object(
+            self.cube,
+            loc_scale=2.5,
+            grp_suffix="_GRP",
+            loc_suffix="_LOC",
+            obj_suffix="_GEO",
+        )
+        shape = cmds.listRelatives("test_cube_LOC", shapes=True, fullPath=True)[0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{shape}.localScale")[0]], [2.5] * 3
+        )
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr("test_cube_LOC.scale")[0]], [1.0] * 3
+        )
+
+    def test_create_locator_at_object_selects_and_returns_every_locator(self):
+        """Every locator built is selected and returned, not just the last.
+
+        The select sat inside the per-object loop with ``replace=True``, so a
+        multi-object rig left only the final locator selected, and the method
+        returned nothing -- blendertk's twin returns its locators.
+        Fixed: 2026-10-10
+        """
+        locs = RigUtils.create_locator_at_object(
+            [self.cube, self.sphere],
+            grp_suffix="_GRP",
+            loc_suffix="_LOC",
+            obj_suffix="_GEO",
+        )
+        expected = sorted(cmds.ls(["test_cube_LOC", "test_sphere_LOC"], long=True))
+        self.assertIsInstance(locs, list)
+        self.assertEqual(sorted(cmds.ls(locs, long=True)), expected)
+        self.assertEqual(sorted(cmds.ls(selection=True, long=True)), expected)
+
+    def test_create_locator_at_object_rotate_order_keeps_spin_on_one_channel(self):
+        """A prop picked up and then spun about its own axis keys ONE channel.
+
+        Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): every locator was built in
+        Maya's default "xyz", where only an object-space X spin stays on one
+        channel. The wrench was keyed to rx=98 to lift it, then spun about its
+        own Z -- and rx/ry/rz all moved. ``rotate_order`` lets the rig put the
+        spin axis first, so the same spin writes rz alone.
+        """
+        RigUtils.create_locator_at_object(self.cube, rotate_order="zyx")
+        loc = "test_cube_LOC"
+        self.assertEqual(cmds.getAttr(f"{loc}.rotateOrder", asString=True), "zyx")
+        cmds.setAttr(f"{loc}.rotate", 98.3, -6.4, -0.15)
+        before = cmds.getAttr(f"{loc}.rotate")[0]
+        cmds.rotate(0, 0, 15, loc, relative=True, objectSpace=True, forceOrderXYZ=True)
+        after = cmds.getAttr(f"{loc}.rotate")[0]
+        self.assertAlmostEqual(after[0], before[0], places=4)
+        self.assertAlmostEqual(after[1], before[1], places=4)
+        self.assertAlmostEqual(after[2], before[2] + 15, places=4)
+
+        with self.assertRaises(ValueError):
+            RigUtils.create_locator_at_object(self.sphere, rotate_order="abc")
 
     def test_create_locator_at_group_preserves_position(self):
         """Verify locator is placed at the group's content center, not scene root.

@@ -132,7 +132,11 @@ class Detection(_DetectionInternal):
 
     @staticmethod
     def curve_moves_in(
-        crv: str, start: float, end: float, value_tolerance: float = 1e-4
+        crv: str,
+        start: float,
+        end: float,
+        value_tolerance: float = 1e-4,
+        evaluated: bool = False,
     ) -> bool:
         """True when *crv* has keys inside ``[start, end]`` whose values vary
         by more than *value_tolerance*.
@@ -140,10 +144,21 @@ class Detection(_DetectionInternal):
         The one motion test behind shot membership
         (``ShotSequencer._find_keyed_transforms``) and the sequencer's track
         backfill: a key is not animation, a change of value is.
+
+        *evaluated* also reads the curve AT the window's two ends, so a window
+        holding one key of a curve that moves through it counts: the frames a
+        bound hands to the next shot hold the key it moves to, or from, and
+        the motion runs on to the cut.  A key inside is still required.
         """
         import maya.cmds as cmds
 
         vals = cmds.keyframe(crv, q=True, time=(start, end), valueChange=True) or []
+        if evaluated and vals:
+            for t in (start, end):
+                vals += (
+                    cmds.keyframe(crv, q=True, eval=True, time=(t, t), valueChange=True)
+                    or []
+                )
         return bool(vals) and (max(vals) - min(vals)) > value_tolerance
 
     @staticmethod

@@ -65,6 +65,79 @@ class _GameShaderInternal(object):
                 cmds.disconnectAttr(src, f"{node}.{plug}")
 
     @staticmethod
+    def _connect_tangent_normal(texture: str, shader, attr: str) -> str:
+        """Feed a tangent-space normal map into *shader*.*attr* through bump2d.
+
+        The one wiring every normal input on the physically-based surfaces
+        shares -- the base normal and OpenPBR's / Standard Surface's coat
+        normal -- so the two cannot drift apart.
+
+        Parameters:
+            texture (str): The normal map's path.
+            shader: The shader node.
+            attr (str): The vector input, e.g. ``"normalCamera"``.
+
+        Returns:
+            str: The created file node.
+        """
+        texture_node = NodeUtils.create_render_node(
+            "file",
+            fileTextureName=texture,
+            colorSpace="Raw",
+            name=ptk.format_path(texture, section="name"),
+        )
+        bump_node = cmds.shadingNode("bump2d", asUtility=True)
+        cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Tangent space normals
+        # Use outAlpha (grayscale) instead of outColor for bump2d compatibility
+        cmds.connectAttr(
+            f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True
+        )
+        cmds.connectAttr(f"{bump_node}.outNormal", f"{shader}.{attr}", force=True)
+        return texture_node
+
+    def _connect_lobe_map(self, texture: str, texture_type: str, shader) -> bool:
+        """Wire an OpenPBR lobe map -- coat, sheen, transmission, subsurface,
+        specular level / tint, anisotropy, thin film, diffuse roughness.
+
+        Table-driven, not a branch per type: ``ptk.MapRegistry.LOBE_TYPE_CHANNELS``
+        names the channel, ``ShaderAttributeMap`` the slot on this shader type,
+        so openPBRSurface and standardSurface share one path and a lobe the
+        shader lacks (Standard Surface's thin film) is a reported miss. A lobe
+        PARAMETER map opens its lobe's weight (``open_lobe_gate``): every lobe
+        defaults to off, so the coat colour of an untouched coat renders
+        nothing.
+
+        Parameters:
+            texture (str): The map's path.
+            texture_type (str): A ``LOBE_TYPE_CHANNELS`` map type.
+            shader: openPBRSurface / standardSurface node.
+
+        Returns:
+            bool: True when the map drives its slot.
+        """
+        channel = ptk.MapRegistry.LOBE_TYPE_CHANNELS[texture_type]
+        slot = ShaderAttributeMap.resolve_live_slot(str(shader), channel)
+        if not slot:
+            return False
+        if channel in ShaderAttributeMap.VECTOR_CHANNELS:
+            self._connect_tangent_normal(texture, shader, slot[0])
+            connected = True
+        else:
+            srgb = ptk.MapFactory.resolve_color_space(texture) == "sRGB"
+            texture_node = NodeUtils.create_render_node(
+                "file",
+                fileTextureName=texture,
+                colorSpace="sRGB" if srgb else "Raw",
+                name=ptk.format_path(texture, section="name"),
+            )
+            connected = ShaderAttributeMap.connect_channel(
+                texture_node, channel, str(shader)
+            )
+        if connected:
+            ShaderAttributeMap.open_lobe_gate(str(shader), channel)
+        return connected
+
+    @staticmethod
     def _graph_label(node) -> str:
         """Name the loaded StingrayPBS graph for a report line."""
         mode = MatUtils.get_stingray_opacity_mode(node)
@@ -721,7 +794,7 @@ class _GameShaderInternal(object):
 
 
 class GameShader(ptk.LoggingMixin, _GameShaderInternal):
-    """A class to manage the creation of a shader network using StingrayPBS or Standard Surface shaders.
+    """A class to manage the creation of a shader network using StingrayPBS, Standard Surface or OpenPBR Surface shaders.
     Classifies a set of texture maps by type and wires them into the shader graph, creating
     whatever conversion nodes each map needs along the way. Renderer-agnostic: an Arnold
     preview network is ``ArnoldBridge``'s concern, applied after the material exists.
@@ -1125,17 +1198,20 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             return None
 
         if not name:
-            name = ptk.MapFactory.get_base_texture_name(
-                textures[0], prefix=prefix, suffix=suffix
-            )
+            # Read against the set: its own name may end in a lobe word.
+            name = ptk.MapFactory.classify_textures(
+                textures, prefix=prefix, suffix=suffix
+            )[textures[0]][1]
         # Idempotent affix application: strips any pre-existing occurrence of the
         # configured prefix/suffix from `name` before re-applying, so a filename
         # like "Mat_brick_Albedo.png" with prefix="Mat_" yields "Mat_brick", not
         # "Mat_Mat_brick". Also collapses dangling underscores on either end.
         name = ptk.StrUtils.apply_affix(name, prefix=prefix, suffix=suffix)
 
-        # Pre-compute map type for each texture to avoid redundant lookups
-        type_cache = {t: ptk.MapFactory.resolve_map_type(t) for t in textures}
+        # Pre-compute map type for each texture, the set read as ONE batch: a
+        # set named for a lobe (`Hero_Coat`) wires its `Hero_Coat_Roughness` as
+        # Roughness, an OpenPBR set its `rock_Coat_Roughness` as coat roughness.
+        type_cache = ptk.MapFactory.resolve_map_types(textures)
         # An `Albedo_Transparency` whose alpha is mere padding IS a base colour:
         # left classified as the alpha-bearing type it would supersede a real
         # standalone `Opacity` in the conflict pass (the registry rule cannot
@@ -1217,13 +1293,15 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         # resolves nowhere -- every map of a scene pulled through a fresh
         # mayapy (default workspace on C:) rendered black (2026-08-22).
         for texture in textures:
-            if base_dir and ptk.FileUtils.is_under(texture, base_dir):
-                texture = ptk.convert_to_relative_path(texture, base_dir)
-            texture_name = ptk.format_path(texture, "file")
-            # Use pre-computed type cache; fall back to resolve for converted paths
+            # The set's reading, looked up BEFORE the path is relativized (the
+            # cache is keyed by the path the set arrived with); a path the
+            # cache never saw falls back to its per-file reading.
             texture_type = type_cache.get(texture) or ptk.MapFactory.resolve_map_type(
                 texture,
             )
+            if base_dir and ptk.FileUtils.is_under(texture, base_dir):
+                texture = ptk.convert_to_relative_path(texture, base_dir)
+            texture_name = ptk.format_path(texture, "file")
 
             if texture_type is None:
                 rows.append(["✗", "Unknown", texture_name, "unrecognized map type"])
@@ -1361,7 +1439,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             # Note: We do NOT set transmission to 1.0 (glass).
             # We ONLY enable thinWalled for correct cutout/foliage behavior.
             # Opacity is driven by the 'opacity' (alpha) input connection later.
-            cmds.setAttr(f"{std_node}.thinWalled", True)
+            ShaderAttributeMap.set_thin_walled(std_node, "standardSurface")
 
         return std_node
 
@@ -1395,8 +1473,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         cmds.connectAttr(f"{op_node}.outColor", f"{sg_node}.surfaceShader", force=True)
 
         if opacity:
-            if cmds.attributeQuery("geometryThinWalled", node=op_node, exists=True):
-                cmds.setAttr(f"{op_node}.geometryThinWalled", True)
+            ShaderAttributeMap.set_thin_walled(op_node, "openPBRSurface")
 
         return op_node
 
@@ -1524,7 +1601,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         elif texture_type in self.PACKED_CHANNEL_MAPS:
             return self._wire_packed_map(sr_node, texture_type, texture)
 
-        elif "Normal" in texture_type:
+        elif texture_type in ptk.MapRegistry.NORMAL_TYPES:
             if not self._has_attr(sr_node, "TEX_normal_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_normal_map")
             texture_node = _file_node()
@@ -1748,23 +1825,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             # Ensure FBX export preserves the texture
             self._ensure_fbx_safe_connection(texture_node, std_node, "MSAO_Map")
 
-        elif "Normal" in texture_type:
+        elif texture_type in ptk.MapRegistry.NORMAL_TYPES:
             # Standard Surface uses bump2d for normal maps
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                name=ptk.format_path(texture, section="name"),
-            )
-            bump_node = cmds.shadingNode("bump2d", asUtility=True)
-            cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Tangent space normals
-            # Use outAlpha (grayscale) instead of outColor for bump2d compatibility
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True
-            )
-            cmds.connectAttr(
-                f"{bump_node}.outNormal", f"{std_node}.normalCamera", force=True
-            )
+            self._connect_tangent_normal(texture, std_node, "normalCamera")
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
@@ -1815,6 +1878,9 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 texture_node, "opacity", std_node, shader_type="standardSurface"
             )
 
+        elif texture_type in ptk.MapRegistry.LOBE_TYPE_CHANNELS:
+            return self._connect_lobe_map(texture, texture_type, std_node)
+
         else:
             return False
 
@@ -1831,8 +1897,14 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             Roughness            -> specularRoughness (float)
             Normal               -> bump2d.outNormal -> geometryNormal (vector)
             Emissive             -> emissionColor (color3) + emissionLuminance
-            Opacity              -> geometryOpacity (color3, RGB driven by alpha)
+            Opacity              -> geometryOpacity (scalar, from alpha)
             AO                   -> multiplied with baseColor (no native AO input)
+            Lobe maps            -> coat*, fuzz*, transmission*, subsurface*,
+                                    thinFilm*, specularWeight / Color,
+                                    specularRoughnessAnisotropy,
+                                    baseDiffuseRoughness, geometryCoatNormal
+                                    (``ptk.MapRegistry.LOBE_TYPE_CHANNELS``;
+                                    a lobe parameter map opens its weight)
 
         Parameters:
             texture (str): The file path of the texture image to be connected.
@@ -1861,7 +1933,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             cmds.connectAttr(
                 f"{texture_node}.outColor", f"{op_node}.baseColor", force=True
             )
-            # geometryOpacity is color3 — the shared connector broadcasts the alpha.
+            # The shared connector reconciles alpha -> geometryOpacity's arity.
             ShaderAttributeMap.connect_channel(
                 texture_node, "opacity", op_node, shader_type="openPBRSurface"
             )
@@ -1998,7 +2070,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
             self._ensure_fbx_safe_connection(texture_node, op_node, "MSAO_Map")
 
-        elif "Normal" in texture_type:
+        elif texture_type in ptk.MapRegistry.NORMAL_TYPES:
             # Feed via bump2d in tangent-space mode. The vector input's name is
             # version-dependent: Maya 2025's openPBRSurface exposes the classic
             # `normalCamera` and has NO `geometryNormal` (probed on 2025 —
@@ -2015,20 +2087,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             )
             if not normal_plug:
                 return self._missing_slot(op_node, texture_type, "geometryNormal")
-            texture_node = NodeUtils.create_render_node(
-                "file",
-                fileTextureName=texture,
-                colorSpace="Raw",
-                name=ptk.format_path(texture, section="name"),
-            )
-            bump_node = cmds.shadingNode("bump2d", asUtility=True)
-            cmds.setAttr(f"{bump_node}.bumpInterp", 1)  # Tangent space normals
-            cmds.connectAttr(
-                f"{texture_node}.outAlpha", f"{bump_node}.bumpValue", force=True
-            )
-            cmds.connectAttr(
-                f"{bump_node}.outNormal", f"{op_node}.{normal_plug}", force=True
-            )
+            self._connect_tangent_normal(texture, op_node, normal_plug)
 
         elif texture_type == "Emissive":
             texture_node = NodeUtils.create_render_node(
@@ -2072,10 +2131,13 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 alphaIsLuminance=1,
                 name=ptk.format_path(texture, section="name"),
             )
-            # geometryOpacity is color3 — the shared connector broadcasts the alpha.
+            # The shared connector reconciles alpha -> geometryOpacity's arity.
             ShaderAttributeMap.connect_channel(
                 texture_node, "opacity", op_node, shader_type="openPBRSurface"
             )
+
+        elif texture_type in ptk.MapRegistry.LOBE_TYPE_CHANNELS:
+            return self._connect_lobe_map(texture, texture_type, op_node)
 
         else:
             return False

@@ -1,7 +1,7 @@
 # coding=utf-8
 """Dedicated scale-keys module to keep AnimUtils lean and testable."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -41,10 +41,14 @@ class ScaleKeys:
         merge_touching: bool = False,
         verbose: bool = False,
         verbose_header: str = None,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         self.utils = AnimUtils
+        self.on_replace = on_replace
+        self.on_move = on_move
         self.merge_touching = merge_touching
         self.ignore_holds = ignore_holds
 
@@ -334,8 +338,19 @@ class ScaleKeys:
         pivot: float,
         factor: float,
         time_range: Optional[Tuple[float, float]] = None,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ) -> int:
-        """Execute a scale operation directly."""
+        """Execute a scale operation directly.
+
+        A key outside *time_range* that a scaled key lands on is REPLACED, cut
+        first: ``scaleKey`` stacks the mover a hair beside it (two keys on one
+        frame, measured 2026-10-05). ``on_replace(curve, frames)`` hears the
+        keys cut, then ``on_move(curve, pairs)`` the ``(old, new)`` frames of
+        the keys scaled -- ``scaleKey`` maps them exactly (keys may cross).
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         keys_scaled = 0
         for curve in curves:
             if not cmds.objExists(curve):
@@ -345,18 +360,29 @@ class ScaleKeys:
                 "timeScale": factor,
                 "timePivot": pivot,
             }
+            range_kw = {}
             if time_range:
-                kwargs["time"] = time_range
+                kwargs["time"] = range_kw["time"] = time_range
                 # Verify keys exist in range before scaling to avoid warnings/errors
                 if not cmds.keyframe(curve, query=True, time=time_range):
                     continue
-                keys_scaled += cmds.keyframe(
-                    curve, query=True, keyframeCount=True, time=time_range
-                )
-            else:
-                keys_scaled += cmds.keyframe(curve, query=True, keyframeCount=True)
+            times = cmds.keyframe(curve, query=True, timeChange=True, **range_kw) or []
+            keys_scaled += len(times)
+            pairs = [(t, pivot + (t - pivot) * factor) for t in times]
+            pairs = [(old, new) for old, new in pairs if abs(new - old) >= 1e-9]
+            replaced = (
+                AnimUtils._landed_on(curve, pairs, moving=True)
+                if time_range and pairs
+                else []
+            )
+            for t in replaced:
+                cmds.cutKey(curve, time=(t, t), clear=True)
 
             cmds.scaleKey(curve, **kwargs)
+            if replaced and on_replace is not None:
+                on_replace(curve, replaced)
+            if pairs and on_move is not None:
+                on_move(curve, pairs)
         return keys_scaled
 
     def _execute_move_operation(
@@ -368,7 +394,13 @@ class ScaleKeys:
         """Execute a move operation directly."""
         if not cmds.objExists(curve):
             return 0
-        return self.utils._move_curve_keys(curve, time_pairs, allow_merge=allow_merge)
+        return self.utils._move_curve_keys(
+            curve,
+            time_pairs,
+            allow_merge=allow_merge,
+            on_replace=self.on_replace,
+            on_move=self.on_move,
+        )
 
     # Processing helpers
 
@@ -743,6 +775,8 @@ class ScaleKeys:
                         pivot_time,
                         effective_factor,
                         query_time_arg,
+                        on_replace=self.on_replace,
+                        on_move=self.on_move,
                     )
 
         # Execute aggregated moves
@@ -780,6 +814,8 @@ class ScaleKeys:
                 use_intervals=False,
                 avoid_overlap=False,
                 preserve_gaps=True,
+                on_replace=self.on_replace,
+                on_move=self.on_move,
             )
 
     def _stagger_scaled_segments(
@@ -1049,11 +1085,14 @@ class ScaleKeys:
         pos_ops.sort(key=get_start_time, reverse=True)
         neg_ops.sort(key=get_start_time)
 
-        for op in pos_ops:
-            SegmentKeys.shift_curves(op["curves"], op["shift"], op["time"])
-
-        for op in neg_ops:
-            SegmentKeys.shift_curves(op["curves"], op["shift"], op["time"])
+        for op in pos_ops + neg_ops:
+            SegmentKeys.shift_curves(
+                op["curves"],
+                op["shift"],
+                op["time"],
+                on_replace=self.on_replace,
+                on_move=self.on_move,
+            )
 
     def _report_speed(
         self,
@@ -1464,6 +1503,12 @@ class ScaleKeys:
                 each segment so they are scaled/shifted with the segment.
             verbose: If True, prints detailed information including original time ranges.
             verbose_header: Optional custom text to prefix the verbose output headers.
+            on_replace: ``on_replace(curve, frames)`` hears the keys a scaled
+                (or snapped) key lands on and so REPLACES -- what the shot
+                system releases its claims on. Mirror of blendertk's.
+            on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames
+                of the keys moved -- by the scale, then by the overlap
+                stagger -- each where it actually landed.
         """
         # In overlap-group pivot mode, touching segments (end == start) must be
         # treated as a single overlap group during scaling to avoid applying

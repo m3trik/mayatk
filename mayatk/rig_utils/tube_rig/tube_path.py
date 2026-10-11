@@ -235,17 +235,26 @@ class TubePath(_TubePathInternal):
         The shared traversal behind ``get_edge_loop_centers`` (which averages
         each group into a centre) and ``get_vertex_rings`` (which hands the
         groups to the skin solve).
+
+        A mesh can hold several ring walks -- one per tube-like shell of a
+        combined mesh (a cable plug: connector, body and cable shells). The
+        LONGEST walk (by centre path length) is the tube; the first one in id
+        order is merely whichever shell was combined first. Seeding from it
+        rigged a 1-unit plug body instead of its 8-unit cable on one of two
+        otherwise identical plugs. A single-tube mesh has one walk, unchanged.
         """
-        # Seed with a CLOSED (circumferential) edge loop. An arbitrary first
-        # edge may be LONGITUDINAL (common on user-modeled pipes; polyCylinder
-        # just happens to number a rim edge first) — seeding from one
-        # transposes the loop/ring traversal, and every "cross-section centre"
-        # becomes a longitudinal-strip centroid: a small ring of points around
-        # the mesh centroid instead of a path down the tube. Closure is the
-        # topology-exact discriminator (see ``_loop_topology``). Skip edges
-        # already covered by a rejected loop, so the scan is bounded by the
-        # number of distinct loops, not the edge count.
-        first_loop = None
+        # Seed each walk with a CLOSED (circumferential) edge loop. An
+        # arbitrary edge may be LONGITUDINAL (common on user-modeled pipes;
+        # polyCylinder just happens to number a rim edge first) — seeding from
+        # one transposes the loop/ring traversal, and every "cross-section
+        # centre" becomes a longitudinal-strip centroid: a small ring of points
+        # around the mesh centroid instead of a path down the tube. Closure is
+        # the topology-exact discriminator (see ``_loop_topology``). Every
+        # edge of a rejected loop or of a walked tube is skipped thereafter,
+        # so the scan is bounded by the number of distinct loops.
+        points = fn_mesh.getPoints(om.MSpace.kWorld)
+        best: List[List[int]] = []
+        best_length = -1.0
         checked_edges = set()
         for edge_idx in range(fn_mesh.numEdges):
             if edge_idx in checked_edges:
@@ -255,20 +264,44 @@ class TubePath(_TubePathInternal):
                 checked_edges.add(edge_idx)
                 continue
             checked_edges.update(loop)
-            if len(loop) >= 3:
-                unique_edges, vertex_ids, _ = TubePath._loop_topology(fn_mesh, loop)
-                if len(vertex_ids) == len(unique_edges):
-                    first_loop = loop
-                    break
-        if not first_loop:
-            return []
+            if len(loop) < 3:
+                continue
+            unique_edges, vertex_ids, _ = TubePath._loop_topology(fn_mesh, loop)
+            if len(vertex_ids) != len(unique_edges):
+                continue
+            rings, walked_edges = TubePath._walk_rings(mesh, fn_mesh, loop[0])
+            checked_edges.update(walked_edges)
+            length = TubePath._ring_path_length(rings, points)
+            if length > best_length:  # ties keep the first walk: stable order
+                best, best_length = rings, length
+        return best
 
-        # Get the edge ring from the first loop edge — yields one edge per cross-section.
-        ring_edges = cmds.polySelect(mesh, q=True, edgeRing=first_loop[0])
+    @staticmethod
+    def _ring_path_length(rings: List[List[int]], points) -> float:
+        """Length of the path through *rings*' centroids, in ring order."""
+        centres = []
+        for ring in rings:
+            accum = om.MVector(0.0, 0.0, 0.0)
+            for v in ring:
+                accum += om.MVector(points[v])
+            centres.append(accum / len(ring))
+        return sum((b - a).length() for a, b in zip(centres, centres[1:]))
+
+    @staticmethod
+    def _walk_rings(mesh, fn_mesh, seed_edge: int) -> Tuple[List[List[int]], set]:
+        """The cross-section rings of the tube *seed_edge*'s closed loop lies on.
+
+        Returns:
+            (rings, edges): the rings in walk order, and every edge of their
+            loops (so the caller never walks the same tube twice).
+        """
+        # The edge ring through the seed yields one edge per cross-section.
+        ring_edges = cmds.polySelect(mesh, q=True, edgeRing=seed_edge)
         if not ring_edges:
-            return []
+            return [], set()
 
         visited_loops = set()
+        walked_edges = set()
         rings: List[List[int]] = []
         for edge_idx in ring_edges:
             loop_edges = cmds.polySelect(mesh, q=True, edgeLoop=edge_idx)
@@ -291,11 +324,59 @@ class TubePath(_TubePathInternal):
             if unique_edges in visited_loops:
                 continue
             visited_loops.add(unique_edges)
+            walked_edges.update(unique_edges)
             # Cyclic order, or id order on topology the walk can't order --
             # the fallback keeps set-consumers (the skin solve reads a ring as
             # a GROUP) working regardless.
             rings.append(TubePath.order_cycle(edge_pairs) or sorted(vertex_ids))
-        return rings
+        return rings, walked_edges
+
+    @staticmethod
+    def _detached_shells(
+        fn_mesh, rings: List[List[int]], max_radius: Optional[float] = None
+    ) -> List[List[int]]:
+        """Vertex ids of every shell of the mesh that holds none of *rings*.
+
+        A combined mesh's other parts -- a cable plug's connector and body
+        beside the cable its rings run down -- are rigid pieces, not tube.
+        Handed to the skin solve as ring-like GROUPS, each part takes one
+        station and so one weight row, and moves rigidly instead of bending
+        across the joints it overlaps.
+
+        *max_radius* keeps only COMPACT parts: those whose every vertex lies
+        within it of the part's centroid. A long shell -- a jacket sleeving
+        the tube, a double-walled hose's other wall -- must keep bending with
+        the tube, not ride one station as a rigid stick.
+        """
+        parent = list(range(fn_mesh.numVertices))
+
+        def root(v):
+            while parent[v] != v:
+                parent[v] = parent[parent[v]]
+                v = parent[v]
+            return v
+
+        for e in range(fn_mesh.numEdges):
+            a, b = (root(v) for v in fn_mesh.getEdgeVertices(e))
+            if a != b:
+                parent[a] = b
+        tube = {root(v) for ring in rings for v in ring}
+        shells = {}
+        for v in range(fn_mesh.numVertices):
+            r = root(v)
+            if r not in tube:
+                shells.setdefault(r, []).append(v)
+        if max_radius is None:
+            return list(shells.values())
+        points = fn_mesh.getPoints(om.MSpace.kWorld)
+        compact = []
+        for ids in shells.values():
+            centre = sum((om.MVector(points[v]) for v in ids), om.MVector()) / len(ids)
+            if all(
+                (om.MVector(points[v]) - centre).length() <= max_radius for v in ids
+            ):
+                compact.append(ids)
+        return compact
 
     @staticmethod
     def get_vertex_rings(mesh) -> List[List[int]]:
@@ -398,19 +479,55 @@ class TubePath(_TubePathInternal):
             # irregular caps), since that probe misreads self-approaching
             # tubes the same way greedy ordering does.
             start, end = TubePath._topological_cap_centers(fn_mesh, rings)
+            reached = start is not None and end is not None
+            # A FLAT cap adds no length: a triangle fan's centre vertex lies
+            # in its rim ring's plane, a hair off the ring centroid. Appended,
+            # it made a near-zero path segment that knocked the parametric
+            # skin's joint stations out of order (production cable plugs fell
+            # back to a geodesic bind). The end is still REACHED -- it is the
+            # ring itself -- so no surface probe runs for it either.
+            if len(rings) >= 2:
+                start = TubePath._cap_beyond(start, rings[0], rings[1], points)
+                end = TubePath._cap_beyond(end, rings[-1], rings[-2], points)
             if start is not None:
                 loop_centers = [start] + list(loop_centers)
             if end is not None:
                 loop_centers = list(loop_centers) + [end]
             loop_centers = TubePath._dedupe_consecutive(loop_centers)
-            if start is None or end is None:
+            if not reached:
                 loop_centers = TubePath._complete_cap_ends(mesh, loop_centers)
 
         return loop_centers, len(loop_centers)
 
     @staticmethod
+    def _cap_beyond(cap, end_ring, inner_ring, points) -> Optional["om.MPoint"]:
+        """*cap* when it stands beyond *end_ring* along the tube, else None.
+
+        "Beyond" means past the ring's plane by a tenth of the ring's radius,
+        measured along the direction from *inner_ring* (its neighbour) out
+        through *end_ring*.
+        """
+        if cap is None:
+            return None
+
+        def centre(ring):
+            accum = om.MVector(0.0, 0.0, 0.0)
+            for v in ring:
+                accum += om.MVector(points[v])
+            return accum / len(ring)
+
+        c_end, c_inner = centre(end_ring), centre(inner_ring)
+        outward = c_end - c_inner
+        if outward.length() < 1e-9:
+            return cap
+        radius = sum((om.MVector(points[v]) - c_end).length() for v in end_ring)
+        radius /= len(end_ring)
+        along = (om.MVector(cap) - c_end) * outward.normal()
+        return cap if along > 0.1 * radius else None
+
+    @staticmethod
     def get_end_normals(
-        mesh, rings: Optional[List[List[int]]] = None
+        mesh, rings: Optional[List[List[int]]] = None, start_point=None
     ) -> Tuple[Optional["om.MVector"], Optional["om.MVector"]]:
         """Unit normals of the tube's two end cross-sections, pointing along
         the path (start normal into the tube, end normal out of it).
@@ -424,6 +541,14 @@ class TubePath(_TubePathInternal):
         Falls back to ``None`` per end when the topology yields no rings, so
         callers keep their chord-derived frame. *rings* skips the loop walk
         when the caller already holds them (``get_vertex_rings``).
+
+        Parameters:
+            mesh: The tube mesh.
+            rings: Cross-section rings already extracted (None = extract).
+            start_point: The path's START (e.g. a centerline's first point).
+                The rings run in topology order, which a reversed rig runs
+                against: the end whose ring centre lies nearer *start_point*
+                is the start. None = the rings' own first ring.
 
         Returns:
             (start_normal, end_normal), or (None, None) without usable rings.
@@ -458,12 +583,22 @@ class TubePath(_TubePathInternal):
         if n_first is None or n_last is None:
             return None, None
         # Newell's sign follows winding order, which carries no relation to
-        # the tube's direction — orient both against the path itself.
-        along = (c_last - c_first).normal()
-        if n_first * along < 0:
+        # the tube's direction — orient each end against its NEIGHBOURING
+        # ring (into the tube at the first, out of it at the last). The
+        # end-to-end chord can't decide it: on a U-bend both ends open the
+        # same way and the chord runs sideways to both.
+        c_second = _plane_normal(rings[1])[0]
+        c_penult = _plane_normal(rings[-2])[0]
+        if n_first * (c_second - c_first) < 0:
             n_first = -n_first
-        if n_last * along < 0:
+        if n_last * (c_last - c_penult) < 0:
             n_last = -n_last
+        if start_point is not None:
+            p = om.MVector(*(float(start_point[i]) for i in range(3)))
+            if (p - c_last).length() < (p - c_first).length():
+                # The path runs against the rings: its start is their last
+                # end, entered the opposite way.
+                return -n_last, -n_first
         return n_first, n_last
 
     @staticmethod

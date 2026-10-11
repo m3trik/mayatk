@@ -734,18 +734,23 @@ class _MaterialQueryInternal:
         """Body of :meth:`MatUtils.get_mat_swatch_icon`."""
         from qtpy.QtGui import QPixmap, QColor, QIcon
 
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
         try:
             matName = str(mat)
 
+            # The attribute that holds the base colour's VALUE on this type --
+            # the shader map's answer, so openPBR / aiStandardSurface /
+            # StingrayPBS swatch like standardSurface instead of probing a
+            # `color` they do not have and falling back to blank.
             mat_type = cmds.nodeType(matName)
-            if mat_type == "standardSurface":
-                color_attr = "baseColor"
-            else:
-                color_attr = "color"
+            color_attr = (
+                ShaderAttributeMap.constant_attr(mat_type, "baseColor") or "color"
+            )
 
-            r = int(cmds.getAttr(f"{matName}.{color_attr}R") * 255)
-            g = int(cmds.getAttr(f"{matName}.{color_attr}G") * 255)
-            b = int(cmds.getAttr(f"{matName}.{color_attr}B") * 255)
+            r, g, b = (
+                int(c * 255) for c in cmds.getAttr(f"{matName}.{color_attr}")[0][:3]
+            )
             pixmap = QPixmap(size[0], size[1])
             pixmap.fill(QColor.fromRgb(r, g, b))
         except Exception:

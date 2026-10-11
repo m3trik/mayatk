@@ -292,8 +292,9 @@ class TestSelectVisualWaitsForRefill(MayaTkTestCase):
         for target, attr, kwargs in (
             # Idle is ours to run: queue the deferred callables.
             (cb_mod.cmds, "evalDeferred", {"side_effect": self._queue}),
-            # The cmds fallback is measured dead in 2025; keep it off the scene.
-            (ChannelBox, "select", {}),
+            # The command path (``select``) is tested on its own below; here it
+            # reports "did not land" unless a test says otherwise.
+            (ChannelBox, "select", {"return_value": False}),
         ):
             patcher = mock.patch.object(target, attr, **kwargs)
             patcher.start()
@@ -350,14 +351,27 @@ class TestSelectVisualWaitsForRefill(MayaTkTestCase):
         self._run_idle()
         self.assertEqual(view.selected_texts(), ["Translate Y"])
 
-    def test_hidden_box_warns_without_retrying(self):
-        # Hidden (e.g. tabbed behind the Outliner) it stays empty until shown.
+    def test_a_hidden_box_selects_through_the_command_without_retrying(self):
+        """Repro (Channels, Maya 2025): with the box tabbed behind the Attribute
+        Editor, table rows never reached ``-sma``, so Set Selected Keys keyed
+        nothing.  Hidden it stays empty until shown -- but the command lands."""
         self._use_view(_FakeChannelBoxView([""] * 4, visible=False))
+        ChannelBox.select.return_value = True
 
         ChannelBox.select_visual(["translateX"])
         self.assertEqual(self.deferred, [])
-        self.assertEqual(len(self.warnings), 1, self.warnings)
-        self.assertIn("hidden", self.warnings[0])
+        ChannelBox.select.assert_called_once_with(["translateX"])
+        self.assertEqual(self.warnings, [])
+
+    def test_a_hidden_box_the_command_misses_stays_quiet(self):
+        """Tabbed away after being shown, Maya empties the box and it takes
+        nothing; the panel stands in for it (``TestStandIn``), so a click in
+        the panel is no reason to warn."""
+        self._use_view(_FakeChannelBoxView([""] * 4, visible=False))
+
+        ChannelBox.select_visual(["translateX"])
+        ChannelBox.select.assert_called_once_with(["translateX"])
+        self.assertEqual(self.warnings, [])
 
     def test_attr_not_shown_warns_without_retrying(self):
         self._use_view(_FakeChannelBoxView(self.POPULATED))
@@ -400,6 +414,124 @@ class TestConnectToAnEmptyBox(MayaTkTestCase):
             )
             ChannelBox.disconnect_selection_changed(slot)
         self.assertEqual(hits, [1])
+
+
+class TestSelectByPlug(MayaTkTestCase):
+    """``channelBox -e -select`` takes ``node.attr`` plugs on the box's lead.
+
+    Measured on Maya 2025 (fresh GUI): bare names ("translateX", "tx") select
+    nothing -- what left ``select`` "dead" -- while plugs select whether the box
+    is shown or hidden, and highlight the row when shown.  With two objects
+    selected only the lead's plug (``-mol`` lists it first) selects.  Neither
+    ``select=""`` nor ``select=[]`` clears; the Qt selection model does.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        import mayatk.ui_utils.channel_box as cb_mod
+
+        self.lead = cmds.polyCube(name="cubeB")[0]
+        self.other = cmds.polyCube(name="cubeA")[0]
+        self.edits = []
+        self.sma = []
+
+        def channel_box(*args, **kwargs):
+            if kwargs.get("e") or kwargs.get("edit"):
+                self.edits.append(kwargs)
+                return None
+            if kwargs.get("mol"):
+                return [self.lead, self.other]
+            if kwargs.get("sma"):
+                return list(self.sma)
+            return None
+
+        for target, attr, kw in (
+            (cb_mod.cmds, "channelBox", {"side_effect": channel_box}),
+            (ChannelBox, "_control_name", {"return_value": "mainChannelBox"}),
+        ):
+            patcher = mock.patch.object(target, attr, **kw)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_bare_names_become_plugs_on_the_lead_object(self):
+        self.sma = ["tx", "ry"]
+        landed = ChannelBox.select(["translateX", f"{self.other}.rotateY"])
+        self.assertEqual(
+            [e.get("select") for e in self.edits],
+            [[f"{self.lead}.translateX", f"{self.other}.rotateY"]],
+        )
+        self.assertTrue(landed)
+
+    def test_reports_a_selection_that_did_not_land(self):
+        self.sma = ["tx"]
+        self.assertFalse(ChannelBox.select(["translateX", "rotateY"]))
+
+    def test_an_empty_list_clears_through_the_qt_model(self):
+        from unittest import mock
+
+        view = _FakeChannelBoxView(["cubeB", "Translate X"], visible=False)
+        view.selectionModel().select(
+            view.model().index(1, 0), view.selectionModel().SelectionFlag.Select
+        )
+        with mock.patch.object(ChannelBox, "_main_view", return_value=view):
+            self.assertTrue(ChannelBox.select([]))
+        self.assertEqual(view.selected_texts(), [])
+        self.assertEqual(self.edits, [], "the command cannot clear")
+
+
+class TestStandIn(MayaTkTestCase):
+    """A panel listing channels in the box's place stands in for its selection.
+
+    Repro (Channels panel, Maya 2025, box tabbed behind the Outliner): rows
+    selected in the panel, Set Selected Keys keyed nothing.  Measured: Maya
+    empties a box tabbed away after being shown -- rows, ``-mol`` and the
+    selection itself -- and takes no ``-select`` until shown again, so the
+    selection cannot be put there; the panel's is read instead.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        self.Attributes = Attributes
+        self.box = []
+        patcher = mock.patch.object(
+            ChannelBox, "get_selected_attrs", side_effect=lambda *a, **k: self.box
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        saved = list(ChannelBox._stand_ins)
+        ChannelBox._stand_ins[:] = []
+        self.addCleanup(lambda: ChannelBox._stand_ins.__setitem__(slice(None), saved))
+
+    def test_the_panel_selection_counts_while_the_box_has_none(self):
+        ChannelBox.add_stand_in(lambda: ["ty", "tz"])
+        self.assertEqual(self.Attributes.get_selected_channels(), ["ty", "tz"])
+
+    def test_the_box_selection_wins_when_it_has_one(self):
+        ChannelBox.add_stand_in(lambda: ["ty"])
+        self.box = ["rx"]
+        self.assertEqual(self.Attributes.get_selected_channels(), ["rx"])
+
+    def test_the_first_stand_in_with_a_selection_answers(self):
+        def broken():
+            raise RuntimeError("panel torn down")
+
+        for source in (broken, lambda: [], lambda: ["sx"], lambda: ["sy"]):
+            ChannelBox.add_stand_in(source)
+        self.assertEqual(ChannelBox.stand_in_selection(), ["sx"])
+
+    def test_a_removed_stand_in_is_not_asked(self):
+        def source():
+            return ["ty"]
+
+        ChannelBox.add_stand_in(source)
+        ChannelBox.add_stand_in(source)  # registered once
+        ChannelBox.remove_stand_in(source)
+        ChannelBox.remove_stand_in(source)  # unknown: ignored
+        self.assertEqual(ChannelBox.stand_in_selection(), [])
 
 
 class TestClearSelection(MayaTkTestCase):

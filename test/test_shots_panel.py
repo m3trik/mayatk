@@ -42,7 +42,7 @@ BUTTONS = (
     "btn_trim_both",
     "btn_add_leading_space",
     "btn_add_trailing_space",
-    "btn_delete_stale",
+    "btn_delete_shots",
 )
 
 
@@ -92,23 +92,23 @@ class TestShotsPanel(MayaTkTestCase):
             "spn_space",
             "btn_trim_empty",
             # All Shots group
-            "spn_gap",
-            "spn_shift_all",
+            "btn_apply_gap",
+            "btn_shift_all",
             "btn_trim_all",
-            "btn_delete_stale",
-            "btn_delete_all",
+            "btn_delete_shots",
         )
         missing = [n for n in expected if getattr(self.ui, n, None) is None]
         self.assertEqual(missing, [])
 
-    def test_delete_stale_shots_is_offered_while_the_store_has_shots(self):
-        """All Shots > Delete Stale Shots: enabled while the store holds a
-        shot, and the click decides. Deleting an object raises no store event,
-        so a state judged at the last one went stale -- the export's Open
-        Shots link opened the panel with the button greyed out. With none
-        stale it says so and deletes nothing; with one (every member gone,
-        nothing keyed in its frames) it asks with the names and deletes that
-        record only -- the live shot and its keys stay."""
+    def test_delete_shots_is_offered_while_the_store_has_shots(self):
+        """All Shots > Delete Shots, on its default scope (Stale): enabled
+        while the store holds a shot, and the click decides. Deleting an
+        object raises no store event, so a state judged at the last one went
+        stale -- the export's Open Shots link opened the panel with the button
+        greyed out. With none stale it says so and deletes nothing; with one
+        (every member gone, nothing keyed in its frames) it asks with the
+        names and deletes that record only -- the live shot and its keys
+        stay."""
         import maya.cmds as cmds
         from unittest import mock
         from pythontk import ShotBlock
@@ -133,14 +133,15 @@ class TestShotsPanel(MayaTkTestCase):
 
         try:
             ctrl.refresh_state()
-            self.assertTrue(self.ui.btn_delete_stale.isEnabled())
+            self.ui.cmb_delete_scope.setCurrentIndex(0)
+            self.assertTrue(self.ui.btn_delete_shots.isEnabled())
             with mock.patch.object(
                 QtWidgets.QMessageBox, "question", new=staticmethod(answer)
             ):
-                self.slots.btn_delete_stale()  # nothing stale yet
+                self.slots.btn_delete_shots()  # nothing stale yet
                 self.assertEqual((asked, len(store.shots)), ([], 2))
                 cmds.delete(gone)  # its keys go with it; no store event
-                self.slots.btn_delete_stale()
+                self.slots.btn_delete_shots()
             self.assertIn("Gone [40–60]", asked[0])
             self.assertEqual([s.name for s in store.shots], ["Live"])
             self.assertEqual(
@@ -148,18 +149,61 @@ class TestShotsPanel(MayaTkTestCase):
             )
             store.shots = []
             ctrl.refresh_state()
-            self.assertFalse(self.ui.btn_delete_stale.isEnabled())
+            self.assertFalse(self.ui.btn_delete_shots.isEnabled())
         finally:
             store.shots = []
             store.set_active_shot(None)  # the re-sync picked the survivor
+
+    def test_the_scope_decides_what_delete_shots_takes(self):
+        """One button, three scopes, picked in its option box and named on
+        the button (2026-10-07: "consolidate to one global delete shots
+        button ... delete stale, delete all, delete empty")."""
+        import maya.cmds as cmds
+        from unittest import mock
+        from pythontk import ShotBlock
+        from qtpy import QtWidgets
+
+        live = cmds.ls(cmds.polyCube(name="scopeLive")[0], long=True)[0]
+        cmds.setKeyframe(live, attribute="translateX", t=1, v=0)
+        cmds.setKeyframe(live, attribute="translateX", t=20, v=5)
+        store = self._store()
+        cmb = self.ui.cmb_delete_scope
+        self.assertEqual(
+            [cmb.itemData(i) for i in range(cmb.count())], ["stale", "empty", "all"]
+        )
+        answer = staticmethod(lambda *a, **kw: QtWidgets.QMessageBox.Yes)
+        try:
+            for scope, label, left in (
+                ("empty", "Delete Empty Shots", ["Live"]),
+                ("all", "Delete All Shots", []),
+            ):
+                store.shots = [
+                    ShotBlock(1, "Live", 0, 20, [live]),
+                    ShotBlock(2, "Empty", 40, 60),
+                ]
+                cmb.setCurrentIndex(cmb.findData(scope))
+                self.assertEqual(self.ui.btn_delete_shots.text(), label)
+                with mock.patch.object(QtWidgets.QMessageBox, "question", new=answer):
+                    self.slots.btn_delete_shots()
+                self.assertEqual([s.name for s in store.shots], left, scope)
+                self.assertEqual(
+                    cmds.keyframe(live, query=True, timeChange=True), [1.0, 20.0]
+                )
+        finally:
+            cmb.setCurrentIndex(0)
+            store.shots = []
+            store.set_active_shot(None)
 
     def test_the_option_box_menus_build_their_widgets(self):
         """uitk registers option-box widgets on the ui by objectName."""
         expected = (
             "chk_delete_contents",
             "chk_close_gap",
+            "spn_gap",
             "cmb_gap_scope",
             "chk_override_locks",
+            "cmb_delete_scope",
+            "spn_shift_all",
         ) + BUTTONS
         missing = [n for n in expected if getattr(self.ui, n, None) is None]
         self.assertEqual(missing, [])
@@ -176,10 +220,45 @@ class TestShotsPanel(MayaTkTestCase):
     def test_shift_all_defaults_to_zero(self):
         """A re-base target is about THIS sequence, not the last one."""
         self.assertAlmostEqual(self.ui.spn_shift_all.value(), 0.0)
+        self.assertFalse(self.ui.spn_shift_all.restore_state)
 
     def test_override_locked_gaps_is_off_by_default(self):
         """A lock is honoured unless the user says otherwise."""
         self.assertFalse(self.ui.chk_override_locks.isChecked())
+
+    def test_the_gap_amount_lives_in_apply_gaps_option_box(self):
+        """Apply Gap is the group's button; the amount is one of its options
+        (2026-10-07: "convert the global apply gap spinbox into a pushbutton
+        and move the gap amount spinbox to its menu options")."""
+        from qtpy import QtWidgets
+
+        btn = self.ui.btn_apply_gap
+        self.assertIsInstance(btn, QtWidgets.QPushButton)
+        self.assertTrue(self.ui.all_shots.isAncestorOf(btn))
+        menu = btn.option_box.menu
+        self.assertTrue(menu.isAncestorOf(self.ui.spn_gap))
+        self.assertTrue(menu.isAncestorOf(self.ui.cmb_gap_scope))
+        # The store owns the amount: a QSettings restore would carry the last
+        # scene's gap into this one.
+        self.assertFalse(self.ui.spn_gap.restore_state)
+
+    def test_apply_gap_names_the_amount_it_applies(self):
+        """The amount is out of sight in the option box, so the button says it."""
+        from pythontk import ShotBlock
+
+        store = self._store()
+        store.shots = [ShotBlock(1, "A", 0, 20, []), ShotBlock(2, "B", 32, 50, [])]
+        old_gap = store.gap
+        try:
+            store.gap = 12.0
+            self.slots.controller._sync_from_store()
+            self.assertEqual(self.ui.spn_gap.value(), 12)
+            self.assertEqual(self.ui.btn_apply_gap.text(), "Apply Gap: 12")
+            self.ui.spn_gap.setValue(5)
+            self.assertEqual(self.ui.btn_apply_gap.text(), "Apply Gap: 5")
+        finally:
+            store.gap = old_gap
+            store.shots = []
 
     def test_gap_scope_combo_offers_every_scope(self):
         cmb = self.ui.cmb_gap_scope
@@ -204,6 +283,106 @@ class TestShotsPanel(MayaTkTestCase):
         finally:
             ctrl.on_gap_changed = real
             self.ui.chk_override_locks.setChecked(False)
+
+    def test_shift_to_is_a_button_naming_the_frame_in_its_option_box(self):
+        """2026-10-10: "shift to should be a pushbutton in the same style as
+        gap and delete buttons" -- Apply Gap's shape."""
+        from qtpy import QtWidgets
+
+        btn = self.ui.btn_shift_all
+        self.assertIsInstance(btn, QtWidgets.QPushButton)
+        self.assertTrue(self.ui.all_shots.isAncestorOf(btn))
+        self.assertTrue(btn.option_box.menu.isAncestorOf(self.ui.spn_shift_all))
+        try:
+            self.ui.spn_shift_all.setValue(24)
+            self.assertEqual(btn.text(), "Shift To: 24")
+        finally:
+            self.ui.spn_shift_all.setValue(0)
+        self.assertEqual(btn.text(), "Shift To: 0")
+
+    def _three_shots(self):
+        from pythontk import ShotBlock
+
+        store = self._store()
+        store.shots = [
+            ShotBlock(1, "A", 0, 20, []),
+            ShotBlock(2, "B", 30, 50, []),
+            ShotBlock(3, "C", 60, 80, []),
+        ]
+        store.set_active_shot(1)
+        self.slots.controller._sync_from_store()
+        return store
+
+    def _rows(self):
+        cmb = self.ui.cmb_shot_select
+        return [(cmb.itemData(i), cmb.itemText(i)) for i in range(cmb.count())]
+
+    def test_the_dropdown_follows_a_shot_picked_elsewhere(self):
+        """2026-10-10: "the shots combobox doesn't update properly and is often
+        missing shots during editing".  A pick in the Shot Sequencer reaches
+        this panel as ActiveShotChanged, and the sync relabelled the row the
+        dropdown still showed -- another shot's -- with the active one: C was
+        listed twice and A was gone."""
+        store = self._three_shots()
+        try:
+            store.set_active_shot(3)  # the Sequencer's pick
+            self.assertEqual(
+                self._rows(),
+                [(1, "A  [0–20]"), (2, "B  [30–50]"), (3, "C  [60–80]")],
+            )
+            self.assertEqual(self.ui.cmb_shot_select.currentData(), 3)
+            store.update_shot(1, name="A2")  # a shot that is not the active one
+            self.assertEqual(self._rows()[0], (1, "A2  [0–20]"))
+        finally:
+            store.set_active_shot(None)
+            store.shots = []
+
+    def test_previous_and_next_step_through_the_shots(self):
+        """2026-10-10: the Shot Sequencer dropdown's option-box buttons."""
+        store = self._three_shots()
+        ctrl = self.slots.controller
+        nav = self.ui.cmb_shot_select._shots_nav_options
+        try:
+            self.assertEqual(sorted(nav), ["new", "next", "prev"])
+            self.assertFalse(nav["prev"].widget.isEnabled(), "first shot")
+            self.assertTrue(nav["next"].widget.isEnabled())
+            ctrl.on_navigate_shot(1)
+            ctrl.on_navigate_shot(1)
+            self.assertEqual(store.active_shot_id, 3)
+            self.assertEqual(self.ui.cmb_shot_select.currentData(), 3)
+            self.assertFalse(nav["next"].widget.isEnabled(), "last shot")
+            ctrl.on_navigate_shot(1)  # past the end: nothing
+            self.assertEqual(store.active_shot_id, 3)
+            ctrl.on_navigate_shot(-1)
+            self.assertEqual(store.active_shot_id, 2)
+        finally:
+            store.set_active_shot(None)
+            store.shots = []
+
+    def test_new_shot_appends_one_initial_length_long(self):
+        """The Shot Sequencer's New Shot, here: the gap after the last shot,
+        Initial Length long, and it becomes the active shot.  Clickable with
+        no shot at all -- the dropdown is disabled then."""
+        store = self._store()
+        old = (store.gap, store.initial_shot_length)
+        nav = self.ui.cmb_shot_select._shots_nav_options
+        try:
+            store.shots = []
+            self.slots.controller._sync_from_store()
+            self.assertFalse(self.ui.cmb_shot_select.isEnabled())
+            self.assertTrue(nav["new"].widget.isEnabled())
+            store.gap, store.initial_shot_length = 10.0, 50.0
+            self.slots.controller.on_new_shot()
+            self.slots.controller.on_new_shot()
+            first, second = store.sorted_shots()
+            self.assertEqual(second.start - first.end, 10.0)
+            self.assertEqual(second.end - second.start, 50.0)
+            self.assertEqual(store.active_shot_id, second.shot_id)
+            self.assertEqual(self.ui.cmb_shot_select.currentData(), second.shot_id)
+        finally:
+            store.gap, store.initial_shot_length = old
+            store.set_active_shot(None)
+            store.shots = []
 
     def test_shift_all_reports_a_sequence_already_where_it_is_asked_for(self):
         from pythontk import ShotBlock

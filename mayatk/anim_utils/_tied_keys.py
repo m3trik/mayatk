@@ -375,8 +375,10 @@ class _TiedKeysInternal:
         )
 
     @classmethod
-    def _untie_keyframes(cls, objects):
-        """Body of :meth:`AnimUtils.untie_keyframes`."""
+    def _untie_keyframes(cls, objects, on_delete=None):
+        """Body of :meth:`AnimUtils.untie_keyframes`; ``on_delete(curve, frames)``
+        hears the bookends removed, per curve (what the shot system releases
+        its claims on)."""
         # Use the helper method to detect tied keyframes
         tied_keyframes = cls.get_tied_keyframes(objects)
 
@@ -388,6 +390,8 @@ class _TiedKeysInternal:
                 for time in tied_times:
                     cmds.cutKey(attr, time=(time, time), clear=True)
                     keys_removed += 1
+                if tied_times and on_delete is not None:
+                    on_delete(attr, list(tied_times))
 
         # The scene is untied now — drop the bookend records so stale entries
         # can't linger on these objects' curves.

@@ -42,6 +42,11 @@ class EnvUtils(ptk.HelpMixin):
         ".mb": "mayaBinary",
     }
 
+    #: Scene files opened in place of a source scene (the Reference Manager's
+    #: open-as-new scratch twins in temp): normcased path -> that source
+    #: (:meth:`set_scene_source`).
+    _scene_sources: ClassVar[Dict[str, str]] = {}
+
     @staticmethod
     def get_env_info(key=None):
         """Fetch information about the current Maya environment.
@@ -785,21 +790,59 @@ class EnvUtils(ptk.HelpMixin):
         ws = EnvUtils.current_workspace(path)
         return ws.root if ws else ""
 
+    @classmethod
+    def set_scene_source(
+        cls, scene: str, source: Optional[str] = None
+    ) -> Optional[str]:
+        """Record that the scene file *scene* stands in for the scene *source*;
+        ``None`` forgets it. Returns the recorded source (absolute), or ``None``.
+
+        A foreign scene the Reference Manager opens as new is a scratch copy in
+        temp (``ptk.ScratchTwins``), but the work in it belongs to its source's
+        project: :meth:`scene_project_root` resolves such a scene from its
+        source. Held for the session. Twin of ``btk.EnvUtils.set_scene_source``.
+        """
+        if not scene:
+            return None
+        key = os.path.normcase(os.path.abspath(scene))
+        if not source:
+            cls._scene_sources.pop(key, None)
+            return None
+        cls._scene_sources[key] = os.path.abspath(source)
+        return cls._scene_sources[key]
+
+    @classmethod
+    def scene_source(cls, scene: Optional[str] = None) -> Optional[str]:
+        """The scene the scene file *scene* (default: the open one) stands in
+        for (:meth:`set_scene_source`), or ``None``. Twin of
+        ``btk.EnvUtils.scene_source``."""
+        if scene is None:
+            scene = cls.saved_scene_path()
+        if not scene:
+            return None
+        return cls._scene_sources.get(os.path.normcase(os.path.abspath(scene)))
+
     @staticmethod
     def scene_project_root() -> Optional[str]:
         """The project the open scene's files belong to; ``None`` without one.
 
-        The scene FILE's own project (``DataNodes.project_root``: its nearest
-        ``workspace.mel``, else its folder) -- the one its records are spelled
-        from -- or, while the scene is unsaved, the session's
-        (:meth:`workspace_root`). The boundary a tool keeps when it writes,
+        The scene FILE's own project (``DataNodes.project_root_of``: its
+        nearest ``workspace.mel``, else its folder) -- the one its records are
+        spelled from -- or, while the scene is unsaved, the session's
+        (:meth:`workspace_root`). A scene opened in place of a source scene
+        (:meth:`scene_source`, the Reference Manager's open-as-new scratch in
+        temp) has its source's. The boundary a tool keeps when it writes,
         renames or retires files (a lightmap bake, Keep Names In Sync): a
         folder two projects share is the other one's too, and no scene of
         this project can see that one's reads.
         """
         from mayatk.node_utils.data_nodes import DataNodes
 
-        root = DataNodes.project_root() or EnvUtils.workspace_root()
+        scene = DataNodes.scene_path()
+        root = (
+            DataNodes.project_root_of(EnvUtils.scene_source(scene) or scene)
+            or EnvUtils.workspace_root()
+        )
         return os.path.abspath(root) if root else None
 
     @staticmethod

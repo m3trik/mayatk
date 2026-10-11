@@ -3,11 +3,14 @@
 """Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 headless-Blender round-trip (FBX intermediate by default; USD per call via ``via="usd"``).
 
-glTF rides the same pipeline because Maya ships no glTF importer at all -- headless
-Blender is the only route a .glb has into a Maya scene. It differs from a .blend only
-in how the conversion Blender opens it (import into an emptied factory scene, and its
-packed images unpacked to a source-keyed texture dir so both intermediates can point
-at real files); everything downstream -- routes, cache, manifest, instancing -- is shared.
+glTF rides the same pipeline because Maya ships no glTF importer at all. Headless
+Blender is the preferred converter: it differs from a .blend only in how the
+conversion opens it (import into an emptied factory scene, and its packed images
+unpacked to a source-keyed texture dir so both intermediates can point at real files),
+and a KTX2 file -- which Blender's importer refuses -- reaches it as a copy with those
+images decoded. Without a Blender, or when the Blender at hand fails on the file,
+``pythontk.MeshConvert.gltf_to_fbx`` writes the SAME payload (FBX + manifest) in
+pure Python. Everything downstream -- cache, manifest, instancing -- is shared.
 
 FBX is the default because its instancing is carried by the format itself on both
 sides -- no sidecar replay stands between a linked duplicate and a real Maya
@@ -74,8 +77,9 @@ _TEMPLATES = {"fbx": _IMPORT_TEMPLATE, "usd": _IMPORT_TEMPLATE_USD}
 SUPPORTED_EXTENSIONS = (".blend",)
 
 # glTF containers the conversion opens by IMPORT (into an emptied factory scene)
-# rather than by open_mainfile -- Maya ships no glTF importer of its own, so the
-# headless-Blender pull is the only route a .glb has into a Maya scene. Kept OUT of
+# rather than by open_mainfile -- Maya ships no glTF importer of its own, so a .glb
+# comes in through the headless-Blender pull, else through pythontk's built-in
+# converter (see import_scene). Kept OUT of
 # SUPPORTED_EXTENSIONS on purpose: that tuple answers "which files are Blender
 # *scenes*" for get_importable_scenes (the Reference Manager's browse), and a glTF
 # is a delivery container, not a scene. A glTF's images are PACKED in the container,
@@ -595,27 +599,55 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             texture_dir = self._texture_dir(src)
         blender_exe = self.require_blender()
         self.logger.info(f"Converting {os.path.basename(src)} via {blender_exe} ...")
-        # The conversion Blender is launched FROM Maya, so it inherits Maya's
-        # environment -- an OCIO var pointing inside Maya's own install would
-        # override Blender's color management with a Maya-authored config. Same
-        # hand-off hazard the send path already handles; reuse the spec's helper
-        # (a studio config outside Maya's tree passes through untouched).
-        result = self._run_script(
-            blender_exe,
-            self.render_script(
-                src,
-                out_path,
-                via=via,
-                texture_dir=texture_dir or "",
-                **{
-                    k: v for k, v in script_opts.items() if k not in self._KEY_ONLY_OPTS
-                },
-            ),
-            artifact=out_path,
-            timeout=timeout,
-            env=_SPEC.launch_env(),  # None when there is nothing to strip
-            on_output=on_output,
-        )
+        scratch = ptk.TempArtifacts("blender_to_mtk_src", policy="scoped")
+        try:
+            opened = src
+            if self._is_gltf(src) and src.lower().endswith(".glb"):
+                # Blender's glTF importer refuses a file whose textures need
+                # KHR_texture_basisu -- every KTX2 deliverable -- so it opens a copy
+                # with those images decoded (None: the file reads as it is). An
+                # assist, never a gate: a file this cannot parse or decode goes to
+                # Blender as it is, and Blender says what is wrong with it.
+                try:
+                    opened = (
+                        ptk.MeshConvert.decode_glb_textures(
+                            src, scratch.path(extension=".glb"), overwrite=True
+                        )
+                        or src
+                    )
+                except (ValueError, OSError, RuntimeError) as e:
+                    self.logger.warning(f"KTX2 textures not decoded for Blender: {e}")
+            # The conversion Blender is launched FROM Maya, so it inherits Maya's
+            # environment -- an OCIO var pointing inside Maya's own install would
+            # override Blender's color management with a Maya-authored config. Same
+            # hand-off hazard the send path already handles; reuse the spec's helper
+            # (a studio config outside Maya's tree passes through untouched).
+            try:
+                result = self._run_script(
+                    blender_exe,
+                    self.render_script(
+                        opened,
+                        out_path,
+                        via=via,
+                        texture_dir=texture_dir or "",
+                        **{
+                            k: v
+                            for k, v in script_opts.items()
+                            if k not in self._KEY_ONLY_OPTS
+                        },
+                    ),
+                    artifact=out_path,
+                    timeout=timeout,
+                    env=_SPEC.launch_env(),  # None when there is nothing to strip
+                    on_output=on_output,
+                )
+            except RuntimeError as e:
+                failure = self._conversion_failure(src, e)
+                if failure is e:
+                    raise
+                raise failure from e
+        finally:
+            scratch.cleanup()
         self.logger.info(
             f"Converted to {via.upper()} in {result.duration:.1f}s "
             f"({os.path.getsize(result.artifact) // 1024} KB)."
@@ -636,6 +668,29 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             env=env,
             on_output=on_output,
         )
+
+    def _conversion_failure(self, src: str, error: RuntimeError) -> RuntimeError:
+        """*error* from a failed conversion run, as one line a person can read.
+
+        The runner's message carries the child's whole output tail -- right for
+        the log, where it goes, and 1 200 characters of traceback and temp paths in
+        the message box every panel shows it in (one refusal reported three times
+        over, measured on a KTX2 .glb). The box gets the child's own last word
+        (``pythontk.ScriptRunner.failure_summary``). An error that is not the
+        runner's (a test stub, a bug) passes through as raised.
+        """
+        if not hasattr(error, "output"):
+            return error
+        self.logger.warning(str(error))
+        reason = getattr(error, "summary", None) or (
+            f"exit code {getattr(error, 'returncode', '?')}; its output is in the log"
+        )
+        concise = RuntimeError(
+            f"Blender could not convert {os.path.basename(src)}: {reason}"
+        )
+        concise.script_path = getattr(error, "script_path", None)
+        concise.output = error.output
+        return concise
 
     @classmethod
     def _cache_key(cls, src: str, script_opts: Dict[str, Any], via: str = "usd") -> str:
@@ -677,6 +732,51 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             use_cache=use_cache and os.path.isfile(src),
         )
 
+    def _gltf_fallback(self, src: str, use_cache: bool, script_opts: Dict[str, Any]):
+        """``(result, via, converter label)`` of :meth:`_cached_gltf_fallback`:
+        the payload is FBX whatever route was asked for."""
+        return (
+            self._cached_gltf_fallback(
+                src, use_cache=use_cache, script_opts=script_opts
+            ),
+            "fbx",
+            "pythontk",
+        )
+
+    def _cached_gltf_fallback(
+        self, src: str, *, use_cache: bool, script_opts: Dict[str, Any]
+    ) -> "ptk.CachedArtifact.Result":
+        """The Blender-free conversion of glTF *src*: ``ptk.MeshConvert.gltf_to_fbx``.
+
+        The same payload the Blender route writes -- an FBX, its texture-manifest
+        sidecar, images in the same source-keyed :meth:`_texture_dir` -- in the
+        same store, under its own key: the converter's module joins the identity
+        the way a template does, so a converter fix invalidates what it wrote.
+        """
+        import inspect
+
+        include_animation = bool(script_opts.get("include_animation", True))
+        key = ptk.CachedArtifact.key(
+            # The version covers the converter's own helpers (the FBX writer),
+            # which the module file alone does not.
+            ("gltf_to_fbx", include_animation, ptk.__version__),
+            files=[src, inspect.getsourcefile(ptk.MeshConvert.gltf_to_fbx)],
+        )
+        return ptk.CachedArtifact(
+            "blender_to_mtk", extension=".fbx", max_age_days=_CACHE_MAX_AGE_DAYS
+        ).get(
+            key,
+            lambda out: ptk.MeshConvert.gltf_to_fbx(
+                src,
+                out,
+                texture_dir=self._texture_dir(src),
+                include_animation=include_animation,
+                overwrite=True,
+            ),
+            sidecars=(ptk.HandoffManifest.SUFFIX,),
+            use_cache=use_cache and os.path.isfile(src),
+        )
+
     # ------------------------------------------------------------------ import
     def import_scene(
         self,
@@ -706,13 +806,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
                 A glTF takes the SAME round-trip as a .blend and honours the same
                 ``via`` — Maya ships no glTF importer, so headless Blender is the
-                only route in. Two things differ, both handled Blender-side: the
+                preferred way in. Two things differ, both handled Blender-side: the
                 container is opened by *import* into an emptied factory scene
                 rather than by ``open_mainfile``, and its images (packed in the
                 container by definition) are unpacked to a source-keyed texture
                 dir so both intermediates can reference them on disk. A glTF's
                 metallic/roughness therefore survives the FBX route through the
-                texture manifest exactly as a .blend's does.
+                texture manifest exactly as a .blend's does. A KTX2 glTF reaches
+                Blender as a copy with its images decoded (Blender's importer
+                refuses ``KHR_texture_basisu``). With no Blender installed, or when
+                Blender fails on the file, ``ptk.MeshConvert.gltf_to_fbx`` writes
+                the same FBX + manifest payload in pure Python (``via`` is then
+                FBX; see that method for what crosses).
             via: Conversion intermediate for ``.blend`` and glTF sources. ``"fbx"``
                 (default) = the classic material model + texture-manifest
                 sidecar rebuilt through the ``GameShader`` engine; instancing
@@ -810,20 +915,48 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         self._rig_mode_opts(script_opts, rig_mode)
         relay = ptk.ProgressRelay(progress, stages=2)
-        got = self._cached_conversion(
-            src,
-            via=via,
-            use_cache=use_cache,
-            timeout=timeout,
-            script_opts=script_opts,
-            on_output=relay.reader(0, "Blender"),
-        )
+        converter = "Blender"
+        if self._is_gltf(src) and not self.blender_path:
+            # Blender is preferred for a glTF, never required.
+            if not os.path.isfile(src):
+                raise FileNotFoundError(f"glTF not found: {src}")
+            self.logger.info(
+                "No Blender found; converting with pythontk's built-in glTF -> FBX."
+            )
+            got, via, converter = self._gltf_fallback(src, use_cache, script_opts)
+        else:
+            try:
+                got = self._cached_conversion(
+                    src,
+                    via=via,
+                    use_cache=use_cache,
+                    timeout=timeout,
+                    script_opts=script_opts,
+                    on_output=relay.reader(0, "Blender"),
+                )
+            except ptk.OperationCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001 -- any Blender failure on a glTF
+                if not (self._is_gltf(src) and os.path.isfile(src)):
+                    raise
+                self.logger.warning(
+                    f"{e} -- converting with pythontk's built-in glTF -> FBX instead."
+                )
+                try:
+                    got, via, converter = self._gltf_fallback(
+                        src, use_cache, script_opts
+                    )
+                except Exception as fallback:  # noqa: BLE001 -- report both
+                    raise RuntimeError(
+                        f"{e}; the built-in converter failed too: {fallback}"
+                    ) from fallback
         out_path, tmp = got.path, got.scratch
         relay.report(
             0,
             1,
             1,
-            "Blender: " + ("reused the cached conversion" if got.hit else "converted"),
+            f"{converter}: "
+            + ("reused the cached conversion" if got.hit else "converted"),
         )
 
         # Both routes sidecar what their intermediate cannot carry. FBX: the
@@ -2891,8 +3024,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             "Opacity": "opacity",
         }
         kwargs: Dict[str, Any] = {"shader_type": shader_type or "stingray"}
+        # The material's files read as one set (`GameShader` reads them so too):
+        # a set named for a lobe keeps its `Hero_Coat_Opacity` an Opacity.
+        map_types = ptk.MapFactory.resolve_map_types(files)
         for path in files:
-            map_type = ptk.MapFactory.resolve_map_type(path)
+            map_type = map_types[path]
             if map_type in flags:
                 kwargs[flags[map_type]] = True
 

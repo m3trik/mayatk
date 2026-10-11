@@ -18,11 +18,13 @@ from base_test import MayaTkTestCase, QuickTestCase
 
 
 class TestLogicalChannels(QuickTestCase):
-    def test_returns_eight_known_channels(self):
+    def test_returns_the_core_channels_then_the_openpbr_lobes(self):
+        from mayatk.mat_utils.shader_attribute_map import LOBE_CHANNELS
+
         channels = ShaderAttributeMap.logical_channels()
         self.assertEqual(
-            set(channels),
-            {
+            channels[:8],
+            (
                 "baseColor",
                 "emission",
                 "specular",
@@ -31,8 +33,37 @@ class TestLogicalChannels(QuickTestCase):
                 "opacity",
                 "normal",
                 "ambientOcclusion",
-            },
+            ),
         )
+        self.assertEqual(channels[8:], LOBE_CHANNELS)
+
+    def test_the_lobes_are_the_shared_vocabulary(self):
+        """Every lobe channel is one pythontk names, so a map type wires the same
+        input here as on blendertk's Principled table."""
+        import pythontk as ptk
+
+        from mayatk.mat_utils.shader_attribute_map import LOBE_CHANNELS
+
+        shared = set(ptk.MapRegistry.LOBE_TYPE_CHANNELS.values()) - {"specular"}
+        self.assertEqual(set(LOBE_CHANNELS), shared)
+
+    def test_openpbr_declares_every_lobe(self):
+        from mayatk.mat_utils.shader_attribute_map import LOBE_CHANNELS
+
+        for channel in LOBE_CHANNELS:
+            self.assertIsNotNone(
+                ShaderAttributeMap.get_attr("openPBRSurface", channel), channel
+            )
+
+    def test_the_classic_shaders_declare_no_lobe(self):
+        from mayatk.mat_utils.shader_attribute_map import LOBE_CHANNELS
+
+        for shader_type in ("lambert", "blinn", "phong", "StingrayPBS"):
+            for channel in LOBE_CHANNELS:
+                self.assertIsNone(
+                    ShaderAttributeMap.get_attr(shader_type, channel),
+                    f"{shader_type}.{channel}",
+                )
 
 
 class TestGetAttr(QuickTestCase):
@@ -178,12 +209,14 @@ class TestConstantAttr(QuickTestCase):
 
     def test_a_normal_is_never_a_value(self):
         """An undriven normal input means the surface's own normal; its literal
-        (``normalCamera`` (1, 1, 1)) is no tangent-space value."""
+        (``normalCamera`` (1, 1, 1), ``geometryCoatNormal`` (0, 0, 0)) is no
+        tangent-space value -- the coat normal included."""
         for shader_type in ShaderAttributeMap.SHADER_ATTRS:
-            with self.subTest(shader_type):
-                self.assertIsNone(
-                    ShaderAttributeMap.constant_attr(shader_type, "normal")
-                )
+            for logical in ("normal", "coatNormal"):
+                with self.subTest(shader_type=shader_type, logical=logical):
+                    self.assertIsNone(
+                        ShaderAttributeMap.constant_attr(shader_type, logical)
+                    )
 
     def test_every_other_type_holds_it_on_the_declared_slot(self):
         self.assertEqual(
@@ -540,6 +573,115 @@ class TestConnectChannel(MayaTkTestCase):
                 )
         finally:
             cmds.setAttr(f"{self.shader}.opacityB", lock=False)
+
+
+class TestOpenPBRLobes(MayaTkTestCase):
+    """The lobe channels against a live openPBRSurface / standardSurface."""
+
+    def _shader(self, node_type, name):
+        try:
+            return cmds.shadingNode(node_type, asShader=True, name=name)
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+
+    def test_every_declared_lobe_slot_exists_on_the_live_node(self):
+        """The declarations are attribute names Maya really has (probed 2025.3)."""
+        for node_type in ("openPBRSurface", "standardSurface"):
+            shader = self._shader(node_type, f"lobe_{node_type}")
+            for attr in ShaderAttributeMap.slot_attrs(node_type):
+                if (
+                    attr == "geometryNormal"
+                ):  # the newer-Maya spelling; see SLOT_ALTERNATES
+                    continue
+                with self.subTest(node_type=node_type, attr=attr):
+                    self.assertTrue(
+                        cmds.attributeQuery(attr, node=shader, exists=True), attr
+                    )
+
+    def test_a_specular_level_texture_is_doubled_into_the_weight(self):
+        """0.5 is the authored neutral, 1.0 the weight's: the file's own gain
+        carries the factor, so the slot stays driven by the file directly."""
+        for node_type in ("openPBRSurface", "standardSurface"):
+            shader = self._shader(node_type, f"spec_{node_type}")
+            file_node = self._file("/x/rock_Specular_Level.png")
+            self.assertTrue(
+                ShaderAttributeMap.connect_channel(file_node, "specularWeight", shader)
+            )
+            self.assertEqual(cmds.getAttr(f"{file_node}.colorGain")[0], (2.0, 2.0, 2.0))
+            self.assertEqual(cmds.getAttr(f"{file_node}.alphaGain"), 2.0)
+            # Re-wiring the same file must not compound the gain.
+            ShaderAttributeMap.connect_channel(file_node, "specularWeight", shader)
+            self.assertEqual(cmds.getAttr(f"{file_node}.alphaGain"), 2.0)
+
+    def test_a_weight_unit_map_keeps_its_own_gain(self):
+        """The gain belongs to the LEVEL map type, not the slot: a map already
+        in weight units (hand-wired, or a legacy scene's) re-wired by a retype,
+        a manifest replay or a transfer must not come back doubled."""
+        shader = self._shader("openPBRSurface", "spec_weight_units")
+        file_node = self._file("/x/rock_spec_weight.png")
+        self.assertTrue(
+            ShaderAttributeMap.connect_channel(file_node, "specularWeight", shader)
+        )
+        self.assertEqual(cmds.getAttr(f"{file_node}.colorGain")[0], (1.0, 1.0, 1.0))
+
+    def test_texture_scale_converts_a_weight_unit_map_to_the_level(self):
+        shader = self._shader("openPBRSurface", "scale_opbr")
+        weight = self._file("/x/rock_spec_weight.png")
+        ShaderAttributeMap.connect_channel(weight, "specularWeight", shader)
+        self.assertEqual(
+            ShaderAttributeMap.texture_scale(shader, "specularWeight"), 0.5
+        )
+        level = self._file("/x/rock_Specular_Level.png")
+        ShaderAttributeMap.connect_channel(level, "specularWeight", shader)
+        self.assertIsNone(ShaderAttributeMap.texture_scale(shader, "specularWeight"))
+        self.assertIsNone(ShaderAttributeMap.texture_scale(shader, "roughness"))
+
+    @staticmethod
+    def _file(path):
+        node = cmds.shadingNode("file", asTexture=True)
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        return node
+
+    def test_a_lobe_parameter_opens_its_weight_once(self):
+        shader = self._shader("openPBRSurface", "gate_opbr")
+        self.assertTrue(ShaderAttributeMap.open_lobe_gate(shader, "coatColor"))
+        self.assertEqual(cmds.getAttr(f"{shader}.coatWeight"), 1.0)
+        # An authored weight is the user's, not a default to overwrite.
+        cmds.setAttr(f"{shader}.fuzzWeight", 0.3)
+        self.assertFalse(ShaderAttributeMap.open_lobe_gate(shader, "sheenColor"))
+        self.assertAlmostEqual(cmds.getAttr(f"{shader}.fuzzWeight"), 0.3, places=5)
+        # A weight channel gates nothing itself.
+        self.assertFalse(ShaderAttributeMap.open_lobe_gate(shader, "coat"))
+
+    def test_a_driven_weight_is_left_to_its_map(self):
+        shader = self._shader("openPBRSurface", "gate_driven")
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outColorR", f"{shader}.coatWeight")
+        self.assertFalse(ShaderAttributeMap.open_lobe_gate(shader, "coatRoughness"))
+
+    def test_thin_walled_is_spelled_per_type(self):
+        """OpenPBR's switch is ``geometryThinWalled``; probing ``thinWalled``
+        alone left every retyped OpenPBR cutout solid."""
+        for node_type, attr in (
+            ("openPBRSurface", "geometryThinWalled"),
+            ("standardSurface", "thinWalled"),
+        ):
+            shader = self._shader(node_type, f"thin_{node_type}")
+            self.assertTrue(ShaderAttributeMap.set_thin_walled(shader))
+            self.assertTrue(cmds.getAttr(f"{shader}.{attr}"), node_type)
+        self.assertFalse(
+            ShaderAttributeMap.set_thin_walled(
+                cmds.shadingNode("lambert", asShader=True)
+            )
+        )
+
+    def test_slot_attrs_include_the_alternates(self):
+        attrs = ShaderAttributeMap.slot_attrs("openPBRSurface")
+        self.assertIn("geometryNormal", attrs)
+        self.assertIn("normalCamera", attrs)
+        self.assertIn("geometryCoatNormal", attrs)
+        self.assertEqual(len(attrs), len(set(attrs)))
+        self.assertEqual(ShaderAttributeMap.slot_attrs("bogus"), ())
 
 
 if __name__ == "__main__":

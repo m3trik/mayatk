@@ -1058,19 +1058,10 @@ class _TextureFilesInternal:
 
     @staticmethod
     def _texture_node_stem(file_name: str) -> str:
-        """*file_name* as a node name: no extension, no tile / frame token (nor
-        the separator before it -- ``rock.<UDIM>.png`` -> ``rock``), Maya-legal."""
-        stem = os.path.splitext(file_name)[0]
-        token = ptk.TiledPath.TOKEN_RE.pattern
-        stem = re.sub(rf"[._]?(?:{token})", "", stem, flags=re.IGNORECASE)
-        stem = re.sub(r"[^0-9A-Za-z_]", "_", stem).strip("_")
+        """*file_name* as a node name: ``ptk.TiledPath.stem`` (no extension, no
+        tile / frame token -- ``rock.<UDIM>.png`` -> ``rock``), Maya-legal."""
+        stem = re.sub(r"[^0-9A-Za-z_]", "_", ptk.TiledPath.stem(file_name)).strip("_")
         return f"_{stem}" if stem[:1].isdigit() else stem
-
-    @staticmethod
-    def _stored_with_name(stored: str, new_name: str) -> str:
-        """*stored* with its file name replaced, its folder spelled as it was."""
-        head = re.split(r"[\\/]", stored)[-1]
-        return stored[: len(stored) - len(head)] + new_name
 
     @classmethod
     def _rename_texture_file(cls, path, new_name, file_nodes):
@@ -1115,31 +1106,12 @@ class _TextureFilesInternal:
                 try:
                     Attributes.set_plug_literal(
                         f"{node}.fileTextureName",
-                        cls._stored_with_name(stored, new_name),
+                        ptk.TiledPath.with_name(stored, new_name),
                     )
                     nodes.append(node)
                 except RuntimeError as e:
                     cmds.warning(f"{node}: renamed on disk, but not repointed: {e}")
         return {"renamed": pairs, "nodes": nodes}
-
-    @staticmethod
-    def _lightmap_for_base(map_name: str, old_base: str, new_base: str):
-        """*map_name* spelled for *new_base* when it is *old_base*'s lightmap,
-        else ``None``.
-
-        A bake names its map after the texture set it lights --
-        ``<base>_Lightmap[_N].exr``, the affix the convention's ``lightmap``
-        entry -- so the whole stem has to be that: ``rockery_Lightmap`` is not
-        ``rock``'s.
-        """
-        stem, ext = os.path.splitext(os.path.basename(map_name))
-        prefix, suffix = ptk.NamingConvention.affix_parts("lightmap")
-        match = re.fullmatch(
-            rf"({re.escape(prefix)}){re.escape(old_base)}({re.escape(suffix)}[_-]*\d*)",
-            stem,
-            flags=re.IGNORECASE,
-        )
-        return f"{match[1]}{new_base}{match[2]}{ext}" if match else None
 
     @staticmethod
     def _fixed_name(node: str) -> bool:
@@ -1179,6 +1151,33 @@ class _TextureFilesInternal:
             for node, name in renames.items()
             if name != node.rsplit("|", 1)[-1] and not cls._fixed_name(node)
         ]
+
+    @classmethod
+    def _put_back_renames(cls, done, lightmaps) -> List[str]:
+        """Undo the renames a sync made before one failed, newest first.
+
+        A file held open by another app (WinError 32) failed a sync part-way and
+        left the files renamed before it on their new names, the material, its
+        nodes and lightmap on the old (review, 2026-10-05). *done* is ``[(old
+        path, new name, (old map, new map) | None)]``: each file is renamed back
+        through :meth:`_rename_texture_file`, so the nodes it repointed follow it
+        home inside the same undo chunk, and a lightmap's markers are re-stamped
+        back first. Returns the files that could not be put back.
+        """
+        failed = []
+        for old_abs, new_name, restamped in reversed(done):
+            try:
+                if restamped is not None:
+                    lightmaps.rename_lightmap(restamped[1], restamped[0])
+                cls._rename_texture_file(
+                    ptk.TiledPath.with_name(old_abs, new_name),
+                    os.path.basename(old_abs.replace("\\", "/")),
+                    None,
+                )
+            except Exception as error:  # noqa: BLE001 -- report the rest
+                cmds.warning(f"Could not put back {new_name}: {error}")
+                failed.append(new_name)
+        return failed
 
     @classmethod
     def _sync_material_names(
@@ -1242,6 +1241,15 @@ class _TextureFilesInternal:
         # name's to change.
         found = ptk.MapFactory.dominant_texture_set([n for n in names.values() if n])
         old_base = found[0] if found else ""
+        # Each name's set, read against the others the way the vote read them:
+        # alone, a set named for a lobe (`Hero_Coat`) reads `Hero_Coat_Normal`
+        # as a coat map of `Hero` -- another set's, left unrenamed.
+        bases = {
+            name: base
+            for name, (_type, base) in ptk.MapFactory.classify_textures(
+                [n for n in names.values() if n]
+            ).items()
+        }
         if not old_base and any(names.values()):
             plan["skipped"].append(
                 "No texture names a map type, so there is no texture set to "
@@ -1257,7 +1265,7 @@ class _TextureFilesInternal:
                 continue
             if not old_base:
                 continue  # no set to follow (reported above)
-            if ptk.MapFactory.get_base_texture_name(name).lower() != old_base.lower():
+            if bases[name].lower() != old_base.lower():
                 foreign.append(name)
                 continue
             if not name.lower().startswith(old_base.lower()):
@@ -1300,7 +1308,7 @@ class _TextureFilesInternal:
         # The set's lightmap follows the set: bound by name, it is named after it.
         if plan["textures"] and lightmaps is not None:
             for dep in lightmaps.lightmap_dependencies():
-                new_map = cls._lightmap_for_base(dep["map"], old_base, base)
+                new_map = ptk.MapFactory.lightmap_for_base(dep["map"], old_base, base)
                 if not new_map or new_map == dep["map"]:
                     continue
                 if not dep["path"]:
@@ -1319,11 +1327,24 @@ class _TextureFilesInternal:
             return plan
 
         with CoreUtils.undo_chunk("Sync Material Names"):
-            for old_abs, new_name in plan["textures"]:
-                cls._rename_texture_file(old_abs, new_name, None)
-            for path, old_map, new_map in plan["lightmaps"]:
-                cls._rename_texture_file(path, new_map, None)
-                lightmaps.rename_lightmap(old_map, new_map)
+            done = []  # put back, newest first, should a later rename fail
+            try:
+                for old_abs, new_name in plan["textures"]:
+                    cls._rename_texture_file(old_abs, new_name, None)
+                    done.append((old_abs, new_name, None))
+                for path, old_map, new_map in plan["lightmaps"]:
+                    cls._rename_texture_file(path, new_map, None)
+                    done.append((path, new_map, None))
+                    lightmaps.rename_lightmap(old_map, new_map)
+                    done[-1] = (path, new_map, (old_map, new_map))
+            except Exception as error:
+                failed = cls._put_back_renames(done, lightmaps)
+                raise ValueError(
+                    f"Names not synced -- {error}. The {len(done)} file(s) renamed "
+                    "before it were put back"
+                    + (f", except {', '.join(failed)}" if failed else "")
+                    + "."
+                ) from error
             for key in ("file_nodes", "companions"):
                 plan[key] = [(node, cmds.rename(node, new)) for node, new in plan[key]]
             if plan["material"]:

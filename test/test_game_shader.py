@@ -2812,6 +2812,187 @@ class GameShaderTest(unittest.TestCase):
         # Should create network successfully with valid parameters
         self.assertIsNotNone(network)
 
+    # -------------------------------------------------------------------------
+    # OpenPBR lobes
+    # -------------------------------------------------------------------------
+
+    LOBE_SET = (
+        "Base_Color",
+        "Roughness",
+        "Coat_Roughness",
+        "Coat_Normal",
+        "Sheen_Color",
+        "Transmission",
+        "Specular_Level",
+        "Subsurface_Color",
+        "Thin_Film_Thickness",
+    )
+
+    @staticmethod
+    def _upstream_file(shader, attr):
+        """The file node driving ``shader.attr`` (or a child), through utility
+        nodes such as bump2d. ``listHistory`` on a plug answers for the whole
+        NODE, so it walks the plug's own inputs instead."""
+        plugs = [f"{shader}.{attr}"] + [
+            f"{shader}.{attr}{c}"
+            for c in "RGBXYZ"
+            if cmds.attributeQuery(f"{attr}{c}", node=shader, exists=True)
+        ]
+        frontier = [
+            n
+            for p in plugs
+            for n in (cmds.listConnections(p, source=True, destination=False) or [])
+        ]
+        seen = set()
+        while frontier:
+            node = frontier.pop(0)
+            if node in seen:
+                continue
+            seen.add(node)
+            if cmds.nodeType(node) == "file":
+                return node
+            frontier += cmds.listConnections(node, source=True, destination=False) or []
+        return None
+
+    @classmethod
+    def _upstream_type(cls, shader, attr):
+        """Map type of the file driving ``shader.attr``, or None."""
+        node = cls._upstream_file(shader, attr)
+        if node is None:
+            return None
+        return ptk.MapFactory.resolve_map_type(
+            os.path.basename(cmds.getAttr(f"{node}.fileTextureName"))
+        )
+
+    def _build_lobes(self, shader_type, name):
+        try:
+            self.shader.create_network(
+                self._texture_set(*self.LOBE_SET),
+                name=name,
+                config="PBR Metallic/Roughness",
+                shader_type=shader_type,
+            )
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+
+    def test_open_pbr_wires_every_lobe_map(self):
+        """An OpenPBR set lands on openPBRSurface lobe by lobe.
+
+        Before the lobe types existed the set classified as base maps -- a coat
+        roughness WAS the material's roughness -- and the lobes the connector
+        did not know (transmission, sheen, specular level, thin film) were
+        reported as having no slot, though openPBRSurface has every one.
+        """
+        self._build_lobes("open_pbr", "opbr_lobes")
+        shader = "opbr_lobes"
+        for attr, expected in (
+            ("specularRoughness", "Roughness"),
+            ("coatRoughness", "Clearcoat_Roughness"),
+            ("geometryCoatNormal", "Clearcoat_Normal"),
+            ("fuzzColor", "Sheen_Color"),
+            ("transmissionWeight", "Transmission"),
+            ("specularWeight", "Specular_Level"),
+            ("subsurfaceColor", "Subsurface_Color"),
+            ("thinFilmThickness", "Thin_Film_Thickness"),
+        ):
+            with self.subTest(attr=attr):
+                self.assertEqual(self._upstream_type(shader, attr), expected)
+
+    def test_a_lobe_parameter_map_switches_its_lobe_on(self):
+        """Every lobe weight defaults to 0: a coat colour on a coat of weight 0
+        renders nothing. A parameter map with no weight map opens the weight."""
+        self._build_lobes("open_pbr", "opbr_gates")
+        for weight in (
+            "coatWeight",
+            "fuzzWeight",
+            "subsurfaceWeight",
+            "thinFilmWeight",
+        ):
+            with self.subTest(weight=weight):
+                self.assertEqual(cmds.getAttr(f"opbr_gates.{weight}"), 1.0)
+
+    def test_a_specular_level_map_is_doubled_into_the_weight(self):
+        """Specular level is authored 0.5 = neutral; OpenPBR's weight is 1.0 =
+        neutral. Wired raw, every level map halved the reflections."""
+        self._build_lobes("open_pbr", "opbr_spec")
+        file_node = self._upstream_file("opbr_spec", "specularWeight")
+        self.assertEqual(cmds.getAttr(f"{file_node}.colorGain")[0], (2.0, 2.0, 2.0))
+
+    def test_standard_surface_shares_the_lobe_wiring(self):
+        """The same table drives standardSurface; its missing thin-film weight
+        makes the film a reported miss, not a silent one."""
+        self._build_lobes("standard_surface", "std_lobes")
+        shader = "std_lobes"
+        for attr, expected in (
+            ("specularRoughness", "Roughness"),
+            ("coatRoughness", "Clearcoat_Roughness"),
+            ("coatNormal", "Clearcoat_Normal"),
+            ("sheenColor", "Sheen_Color"),
+            ("transmission", "Transmission"),
+            ("specular", "Specular_Level"),
+            ("subsurfaceColor", "Subsurface_Color"),
+        ):
+            with self.subTest(attr=attr):
+                self.assertEqual(self._upstream_type(shader, attr), expected)
+        for weight in ("coat", "sheen", "subsurface"):
+            self.assertEqual(cmds.getAttr(f"{shader}.{weight}"), 1.0, weight)
+        # Standard Surface's film is nanometres with no weight: left unwired.
+        self.assertFalse(self._slot_sources(shader, "thinFilmThickness"))
+
+    def test_a_set_named_for_a_lobe_wires_base_maps(self):
+        """A garment set ``Hero_Coat`` drives the BASE inputs, not the coat.
+
+        Read file by file, ``Hero_Coat_Roughness`` is a coat roughness of a set
+        ``Hero``; read with its set (``ptk.MapFactory.resolve_map_types``) it is
+        the garment's own roughness.
+        """
+        from PIL import Image
+
+        out = tempfile.mkdtemp(dir=self.temp_dir)
+        textures = []
+        for map_name in ("BaseColor", "Roughness", "Normal"):
+            path = os.path.join(out, f"Hero_Coat_{map_name}.png")
+            Image.new("RGBA", (8, 8), (128, 128, 128, 255)).save(path)
+            textures.append(path)
+        try:
+            self.shader.create_network(
+                textures,
+                name="hero_coat_mat",
+                config="PBR Metallic/Roughness",
+                shader_type="open_pbr",
+            )
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+        shader = "hero_coat_mat"
+        self.assertTrue(self._slot_sources(shader, "specularRoughness"))
+        self.assertTrue(self._slot_sources(shader, "normalCamera"))
+        self.assertFalse(self._slot_sources(shader, "coatRoughness"))
+        self.assertFalse(self._slot_sources(shader, "geometryCoatNormal"))
+
+    def test_a_non_tangent_normal_bake_is_not_the_surface_normal(self):
+        """An object-space bake is not a tangent-space normal map.
+
+        The connectors gated on ``"Normal" in texture_type``, which every
+        normal-ish bake passes -- ``Normal_Object`` was wired into the surface
+        normal and shaded wrong with no warning.
+        """
+        textures = self._texture_set("Base_Color", "Normal_Object")
+        for shader_type, attr in (
+            ("stingray", "TEX_normal_map"),
+            ("standard_surface", "normalCamera"),
+            ("open_pbr", "normalCamera"),
+        ):
+            with self.subTest(shader_type=shader_type):
+                cmds.file(new=True, force=True)
+                name = f"os_normal_{shader_type}"
+                try:
+                    self.shader.create_network(
+                        textures, name=name, shader_type=shader_type
+                    )
+                except RuntimeError as error:
+                    self.skipTest(str(error))
+                self.assertFalse(self._slot_sources(name, attr), attr)
+
 
 class GameShaderFBXTest(QuickTestCase):
     """Tests for FBX export compatibility."""

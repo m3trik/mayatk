@@ -961,6 +961,24 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(ShadowRig.find_shadow_planes([self.cube]), [])
         self.assertEqual(ShadowRig.planes_for_nodes([self.cube]), [rig.shadow_plane])
 
+    def test_a_scoped_export_names_only_the_export_sets_planes(self):
+        """The record is export-scoped: a plane outside the export set would
+        ship its silhouette with nothing to bind it to. An empty scope ships
+        none (``find_shadow_planes`` would read it as the whole scene).
+        Added: 2026-10-09"""
+        rig = self._make()
+        scoped = ShadowRig.export_record(ptk.ExportContext(scope=("Box_shadow_grp",)))
+        self.assertEqual([p["name"] for p in scoped.payload["planes"]], ["Box_shadow"])
+        self.assertIsNone(
+            ShadowRig.export_record(ptk.ExportContext(scope=(self.cube,)))
+        )
+        self.assertIsNone(ShadowRig.export_record(ptk.ExportContext(scope=())))
+        whole = ShadowRig.export_record(ptk.ExportContext())
+        self.assertIn(
+            rig.shadow_plane.split("|")[-1],
+            [p["name"] for p in whole.payload["planes"]],
+        )
+
     # ------------------------------------------------------------------ export metadata
     def test_export_metadata(self):
         """create()/bake() publish the shadow_metadata channel on the
@@ -1110,6 +1128,113 @@ class TestShadowRig(MayaTkTestCase):
             sorted(self._record(n)["contact"] for n in ("Box_shadow", "Crate_shadow")),
             ["Box_contact_loc", "Crate_contact_loc"],
         )
+
+    # ------------------------------------------------------------------ combined rigs
+    def _combined(self, targets, **kwargs):
+        kwargs.setdefault("light_pos", (5, 10, 5))
+        kwargs.setdefault("texture_res", 32)
+        rig = ShadowRig.create(targets, **kwargs)
+        self._textures.extend(p for p in (rig.texture_path, rig.horizon_path) if p)
+        return rig
+
+    def test_a_combined_rigs_contact_hangs_where_every_target_moves_with_it(self):
+        """The contact -- the map's frame, the plane's anchor -- rides what
+        moves the WHOLE set: the targets' common parent (a group, or the
+        target the others hang under), else the rig's own group at the world
+        origin. It hung under the first target, so the set's frame followed
+        one member. Added: 2026-10-10"""
+        crate = cmds.polyCube(name="Crate", width=1, height=1, depth=1)[0]
+        cmds.setAttr(f"{crate}.translateX", 3.0)
+        grp = cmds.group(self.cube, crate, name="Set")
+        cube, crate = f"{grp}|{self.cube}", f"{grp}|{crate}"
+        rig = self._combined([cube, crate])
+        parent = cmds.listRelatives(rig.contact_locator, parent=True, fullPath=True)
+        self.assertEqual(parent, cmds.ls(grp, long=True))
+        before = rig._contact_point()
+        cmds.setAttr(f"{grp}.translateZ", 2.0)
+        self.assertAlmostEqual(rig._contact_point()[2] - before[2], 2.0, places=5)
+        # a prop on a table: the table is the parent they share
+        cup = cmds.polyCube(name="Cup", width=0.2, height=0.3, depth=0.2)[0]
+        cmds.parent(cup, cube)
+        on_table = self._combined([cube, f"{cube}|{cup}"], source_name="lamp")
+        parent = cmds.listRelatives(
+            on_table.contact_locator, parent=True, fullPath=True
+        )
+        self.assertEqual(parent, cmds.ls(cube, long=True))
+        # nothing in common: the rig's own group, which ships with the plane
+        a = cmds.polyCube(name="Left")[0]
+        b = cmds.polyCube(name="Right")[0]
+        cmds.setAttr(f"{b}.translateX", 4.0)
+        loose = self._combined([a, b], source_name="sun_loc")
+        parent = cmds.listRelatives(loose.contact_locator, parent=True, fullPath=True)
+        self.assertEqual(parent, cmds.ls(loose.group, long=True))
+        bbox = cmds.exactWorldBoundingBox([a, b])
+        for got, want in zip(
+            loose._contact_point(),
+            ((bbox[0] + bbox[3]) / 2, bbox[1], (bbox[2] + bbox[5]) / 2),
+        ):
+            self.assertAlmostEqual(got, want, places=4)
+
+    def test_a_target_moved_on_its_own_restales_a_combined_rig_and_refits_it(self):
+        """One member of a Combined rig carried away from the others: stale
+        (the source's bearing in the contact's frame never moved, so it never
+        was), and Recalculate re-fits -- the contact back on the set's base,
+        the bounding cylinder re-measured -- before it re-draws and re-bakes.
+        Added: 2026-10-10"""
+        crate = cmds.polyCube(name="Crate", width=1, height=1, depth=1)[0]
+        cmds.setAttr(f"{crate}.translateX", 3.0)
+        rig = self._combined(
+            [self.cube, crate], rig_type="horizon", horizon_size=32, horizon_spans=2
+        )
+        plane = rig.shadow_plane
+        self.assertFalse(ShadowRig.silhouette_is_stale(plane))
+        radius = cmds.getAttr(f"{plane}.footprintRadius")
+        baked = os.path.getmtime(rig.horizon_path)
+        cmds.setAttr(f"{crate}.translateX", 7.0)
+        self.assertTrue(ShadowRig.silhouette_is_stale(plane), "a member moved")
+        self.assertEqual(ShadowRig.recalculate_stale(), [plane])
+        self.assertFalse(ShadowRig.silhouette_is_stale(plane))
+        bbox = cmds.exactWorldBoundingBox([self.cube, crate])
+        contact = ShadowRig.from_plane(plane)._contact_point()
+        for got, want in zip(
+            contact, ((bbox[0] + bbox[3]) / 2, bbox[1], (bbox[2] + bbox[5]) / 2)
+        ):
+            self.assertAlmostEqual(got, want, places=4)
+        self.assertGreater(cmds.getAttr(f"{plane}.footprintRadius"), radius + 1.5)
+        self.assertGreater(os.path.getmtime(rig.horizon_path), baked)
+        record = self._record(plane.split("|")[-1])
+        a0, a1, _, _ = record["horizon"]["bounds"]
+        self.assertGreater(a1 - a0, 8.0, "the map covers the moved crate")
+
+    def test_a_set_scaled_to_nothing_is_not_an_error_for_the_stale_check(self):
+        """A set popping in from scale 0 scales the contact with it. Maya clamps
+        the zero to 1e-12, so the frame inverts but every offset in it is float
+        noise: the digest changed with nothing moved, and the stale check -- run
+        by Follow Source's callback -- would call the set moved. The layout is
+        unknowable, so it reads as unmoved. Added: 2026-10-10"""
+        crate = cmds.polyCube(name="Crate", width=1, height=1, depth=1)[0]
+        cmds.setAttr(f"{crate}.translateX", 3.0)
+        grp = cmds.group(self.cube, crate, name="Set")
+        rig = self._combined([f"{grp}|{self.cube}", f"{grp}|{crate}"])
+        cmds.setAttr(f"{grp}.scale", 0.0, 0.0, 0.0, type="double3")
+        self.assertEqual(rig._layout(), "")
+        self.assertFalse(rig._layout_moved())
+        # The bearing half answers as it always has; the call must not raise.
+        ShadowRig.silhouette_is_stale(rig.shadow_plane)
+
+    def test_a_combined_rig_over_targets_animating_on_their_own_warns(self):
+        """A Combined rig is ONE rigid caster: its map and frame follow the
+        contact, so a member keyed to move on its own leaves its shadow where
+        it was drawn at runtime. Said at create, naming Per object.
+        Added: 2026-10-10"""
+        crate = cmds.polyCube(name="Crate", width=1, height=1, depth=1)[0]
+        cmds.setKeyframe(crate, attribute="translateX", time=1, value=3.0)
+        cmds.setKeyframe(crate, attribute="translateX", time=10, value=6.0)
+        with self.assertLogs(ShadowRig.logger, level="WARNING") as caught:
+            self._combined([self.cube, crate])
+        text = "\n".join(caught.output)
+        self.assertIn("Crate", text)
+        self.assertIn("Per object", text)
 
     def test_pack_atlas_remaps_uvs_and_rewrites_tiles_in_place(self):
         """Two rigs pack into one silhouette atlas: each plane's UVs land in

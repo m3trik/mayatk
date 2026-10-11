@@ -563,6 +563,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         as_strings: bool = False,
         time_range: Optional[Tuple[float, float]] = None,
         selected_only: bool = False,
+        on_delete: Optional[Callable[[str, List[float]], Any]] = None,
     ) -> List[str]:
         """Simplify curves by removing keys that don't contribute to shape.
 
@@ -594,6 +595,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             selected_only: Reduce only the currently selected keys
                 (``filterCurve -selectedKeys``).  A curve with no selected
                 key is left alone.
+            on_delete: ``on_delete(curve, frames)`` hears the frames of the keys
+                the reducer removed, per curve -- what the shot system
+                releases its claims on. Mirror of blendertk's.
 
         Returns:
             A list of curves that were simplified.
@@ -606,6 +610,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             as_strings=as_strings,
             time_range=time_range,
             selected_only=selected_only,
+            on_delete=on_delete,
         )
 
     @classmethod
@@ -620,10 +625,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         time_range_threshold: float = 1e6,
         value_threshold: float = 1e6,
         quiet: bool = False,
+        on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None,
     ) -> Dict[str, Any]:
         """Legacy wrapper maintained for backwards compatibility.
 
         The implementation now lives in :class:`AnimCurveDiagnostics`.
+
+        Parameters:
+            on_delete: ``on_delete(curve, frames)`` hears the keys the repair
+                deleted, per curve (``None`` frames: the whole curve went) --
+                what the shot system releases its claims on.  The other
+                parameters are :meth:`AnimCurveDiagnostics.repair_corrupted_curves`'.
         """
         return cls._repair_corrupted_curves(
             objects=objects,
@@ -634,6 +646,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             time_range_threshold=time_range_threshold,
             value_threshold=value_threshold,
             quiet=quiet,
+            on_delete=on_delete,
         )
 
     @classmethod
@@ -646,6 +659,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         quiet: bool = False,
         stats: Optional[dict] = None,
         max_error: Optional[float] = None,
+        on_delete: Optional[Callable[[str, List[float]], Any]] = None,
     ) -> List[str]:
         """Reduce baked curves to their shape-defining keys and refit the tangents.
 
@@ -687,6 +701,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 plain constraint bakes under an animated parent, 293 of 1063
                 curves over 5% -- which the refinement brings inside the bound
                 for a few keys per curve.
+            on_delete: ``on_delete(curve, frames)`` hears the frames of the
+                tweens removed, per curve -- what the shot system releases its
+                claims on.
 
         Returns:
             The curves that were reduced.
@@ -698,6 +715,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             quiet=quiet,
             stats=stats,
             max_error=max_error,
+            on_delete=on_delete,
         )
 
     @classmethod
@@ -718,6 +736,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         stats: Optional[dict] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         through_blends: bool = True,
+        on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None,
     ) -> List[str]:
         """Optimize animation keys for the given objects by removing static curves,
         redundant flat keys, and simplifying curves.
@@ -749,6 +768,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 ``curves_after``, ``static_deleted``, ``flat_removed``,
                 ``simplified``, and ``auto_frozen`` counts (plus the
                 :meth:`reduce_to_extremes` stats in extremes mode).
+            on_delete (callable, optional): ``on_delete(curve, frames)`` hears
+                the keys every pass deleted, per curve; ``frames`` is ``None``
+                for a static curve deleted whole -- what the shot system
+                releases its claims on.
 
         Tangents: surviving keys of any curve that lost keys are frozen from
         ``auto`` to ``fixed`` (FBX reinterprets ``auto`` on sparse curves).  A
@@ -771,6 +794,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             stats=stats,
             progress_callback=progress_callback,
             through_blends=through_blends,
+            on_delete=on_delete,
         )
 
     @staticmethod
@@ -925,16 +949,19 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     def get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]:
-        """Get tangent information (types, angles, and weights) for a given attribute at a specific time.
+        """Get tangent information (types, angles, weights and lock) for a given attribute at a specific time.
 
         Parameters:
             attr_name (str): The name of the attribute.
             time (float): The time at which to query the tangent information.
 
         Returns:
-            Dict[str, Any]: A dictionary containing tangent information.
-                Empty dict when no key exists at *time* (``set_tangent_info``
-                treats an empty dict as a no-op).
+            Dict[str, Any]: A dictionary containing tangent information --
+                ``inTangentType`` / ``outTangentType``, ``inAngle`` /
+                ``outAngle``, ``inWeight`` / ``outWeight``, and ``lock``
+                (``False`` for broken tangents).  Empty dict when no key
+                exists at *time* (``set_tangent_info`` treats an empty dict
+                as a no-op).
         """
         return AnimUtils._get_tangent_info(attr_name=attr_name, time=time)
 
@@ -947,6 +974,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         Applies tangent types in a separate call after angles/weights so that
         type-specific tangents (e.g. stepped) are not overridden by the
         angle/weight values which would implicitly force the type to 'fixed'.
+        A ``lock`` entry is honoured around them: a broken key is unlocked
+        before its angles (a unified one would swing its other side with
+        each), a unified one locked after.
 
         Parameters:
             attr_name (str): The attribute name.
@@ -1044,6 +1074,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         retain_spacing=False,
         channel_box_attrs_only=False,
         align: str = "auto",
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Move keyframes to the given frame with comprehensive control options.
 
@@ -1064,6 +1096,14 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 ``"end"`` — the latest key aligns to *frame*.
                 ``"auto"`` (default) — if the midpoint of the key range is
                 before *frame*, behaves like ``"end"``; otherwise ``"start"``.
+            on_replace (callable, optional): Called as ``on_replace(curve, frames)``,
+                once per anim curve, with the frames of the keys a moved key
+                replaced -- an unselected (or out-of-range) key it landed on -- for
+                a caller holding something on them: the shot system's claims
+                (``ShotStore.release_replaced``).
+            on_move (callable, optional): Called as ``on_move(curve, pairs)``, once
+                per anim curve after its ``on_replace``, with the ``(old, new)``
+                frames of the keys moved (``ShotStore.remap_moved``).
         Returns:
             bool: True if keys were moved successfully, False otherwise.
         """
@@ -1075,6 +1115,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             retain_spacing=retain_spacing,
             channel_box_attrs_only=channel_box_attrs_only,
             align=align,
+            on_replace=on_replace,
+            on_move=on_move,
         )
 
     @staticmethod
@@ -1168,6 +1210,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         selected_keys_only: bool = False,
         exact_gap: bool = False,
         prevent_collisions: bool = True,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Adjusts the spacing between keyframes for specified objects at a given time,
         with an option to preserve and adjust a keyframe at the specified time.
@@ -1198,7 +1242,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             prevent_collisions (bool): If True (default), performs a dry-run
                 collision check before moving any keys. If any destination time
                 would land on an existing unmoved key, the entire operation is
-                aborted and a warning is issued.
+                aborted and a warning is issued.  If False, a moved key REPLACES
+                the unmoved key it lands on.
+            on_replace (callable, optional): Called as ``on_replace(curve, frames)``,
+                once per anim curve, with the frames of the unmoved keys a moved key
+                replaced (only with ``prevent_collisions=False``) -- for a caller
+                holding something on them: the shot system's claims
+                (``ShotStore.release_replaced``).
+            on_move (callable, optional): Called as ``on_move(curve, pairs)``, once
+                per anim curve after its ``on_replace``, with the ``(old, new)``
+                frames of the keys moved (``ShotStore.remap_moved``).
         """
         return cls._adjust_key_spacing(
             objects=objects,
@@ -1209,6 +1262,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             selected_keys_only=selected_keys_only,
             exact_gap=exact_gap,
             prevent_collisions=prevent_collisions,
+            on_replace=on_replace,
+            on_move=on_move,
         )
 
     @staticmethod
@@ -1251,6 +1306,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         time_range: Optional[Union[int, Tuple[int, int]]] = None,
         ignore: Union[str, List[str], None] = None,
         attributes: Union[str, List[str], None] = None,
+        on_delete: Optional[Callable[[str, List[float]], Any]] = None,
     ) -> int:
         """Removes all intermediate keyframes, keeping only the first and last key on each attribute.
         If attributes are selected in the channel box, only those will be affected.
@@ -1270,6 +1326,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 over the Channel Box highlight, so a caller that already knows which
                 channels the user picked (the shot sequencer's key selection) does not
                 depend on a UI highlight having landed.
+            on_delete: ``on_delete(curve, frames)`` hears the frames of the keys
+                removed, per curve -- what the shot system releases its claims
+                on, as for a replaced key. Mirror of blendertk's.
 
         Returns:
             int: Number of keyframes removed.
@@ -1288,7 +1347,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             remove_intermediate_keys(cmds.ls(selection=True), time_range=(10, 50))
         """
         return AnimUtils._remove_intermediate_keys(
-            objects=objects, time_range=time_range, ignore=ignore, attributes=attributes
+            objects=objects,
+            time_range=time_range,
+            ignore=ignore,
+            attributes=attributes,
+            on_delete=on_delete,
         )
 
     @staticmethod
@@ -1300,6 +1363,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         delete_original=False,
         mode="horizontal",
         value_pivot=0.0,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Invert keyframes, preferring selected keys over all keys.
 
@@ -1320,6 +1385,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         recomputes itself (``auto``, ``linear``, ``flat``, ...) stay their own
         type rather than being frozen into ``fixed`` handles.
 
+        An inverted key that lands on a key the edit does not carry on itself
+        replaces it (``setKeyframe``'s overwrite): an unselected key, or -- a
+        reversed copy that keeps its sources -- a source another key's copy
+        lands on.  A key its own copy lands on is only re-keyed.
+
         Parameters:
             objects (str/list, optional): Objects whose keys to invert.
                 Defaults to the current selection.
@@ -1331,6 +1401,17 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 Implied when time is None. Defaults to False.
             mode (str): Inversion mode. "horizontal" (time), "vertical" (value), or "both". Defaults to "horizontal".
             value_pivot (float): Pivot value for vertical inversion. Defaults to 0.0.
+            on_replace (callable, optional): Called as ``on_replace(curve, frames)``,
+                once per anim curve, with the frames of the keys an inverted key
+                replaced -- for a caller holding something on them: the shot
+                system's claims (``ShotStore.release_replaced``). Mirror of
+                blendertk's ``invert_keys``.
+            on_move (callable, optional): Called as ``on_move(curve, pairs)``, once
+                per anim curve after its ``on_replace``, with the ``(old, new)``
+                frames of the keys the edit moved: every inverted key of an
+                in-place mirror (or of a copy that deletes its sources); none for a
+                copy that keeps them. For a caller whose holdings ride with the
+                keys: the shot system's claims (``ShotStore.remap_moved``).
         """
         return AnimUtils._invert_keys(
             objects=objects,
@@ -1339,6 +1420,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             delete_original=delete_original,
             mode=mode,
             value_pivot=value_pivot,
+            on_replace=on_replace,
+            on_move=on_move,
         )
 
     @staticmethod
@@ -1347,12 +1430,16 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         objects: Optional[List[str]] = None,
         target_frame: Optional[float] = None,
         use_earliest: bool = True,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ) -> bool:
         """Aligns the starting keyframes of selected keyframes in the graph editor across multiple objects.
 
         This method finds the earliest (or latest) selected keyframe across all objects and shifts
         each object's selected keyframes so they start at the same frame. Only processes selected
-        keyframes from the graph editor.
+        keyframes from the graph editor.  Each object's selection moves as one block, keeping its
+        spacing; a key that is not selected stays put, and one the block lands on is replaced
+        (the Graph Editor's overwrite) -- mirror of blendertk's ``align_selected_keyframes``.
 
         Parameters:
             objects (Optional[List[str]]): Objects to align. If None, uses current selection.
@@ -1362,6 +1449,14 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             use_earliest (bool): If True, aligns to the earliest per-object selection start.
                                 If False, aligns to the latest per-object selection start.
                                 Only used when target_frame is None. Default is True.
+            on_replace (Optional[Callable]): Called as ``on_replace(curve, frames)``, once per
+                anim curve, with the frames of the keys a moved key replaced -- for a caller
+                holding something on them: the shot system's claims
+                (``ShotStore.release_replaced``).
+            on_move (Optional[Callable]): Called as ``on_move(curve, pairs)``, once per anim
+                curve after its ``on_replace``, with the ``(old, new)`` frames of the keys
+                the block moved -- for a caller whose holdings ride with the keys: the shot
+                system's claims (``ShotStore.remap_moved``).
 
         Returns:
             bool: True if keyframes were successfully aligned, False otherwise.
@@ -1377,7 +1472,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             align_selected_keyframes(use_earliest=False)
         """
         return AnimUtils._align_selected_keyframes(
-            objects=objects, target_frame=target_frame, use_earliest=use_earliest
+            objects=objects,
+            target_frame=target_frame,
+            use_earliest=use_earliest,
+            on_replace=on_replace,
+            on_move=on_move,
         )
 
     @staticmethod
@@ -1388,6 +1487,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         when: str = "start",
         offset: int = 0,
         group_overlapping: bool = False,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
     ) -> int:
         """Sets visibility keyframes for objects with options for timing and grouping.
 
@@ -1410,6 +1510,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             group_overlapping (bool): If True, treats objects with overlapping keyframe ranges
                 as a single group, setting visibility keys based on the group's combined range.
                 Default is False.
+            on_replace (Optional[Callable]): Called as ``on_replace(curve, frames)``, once per
+                visibility curve, with the frames of the visibility keys a new key replaced (one
+                holding the other state) -- for a caller holding something on them: the shot
+                system's claims (``ShotStore.release_replaced``).
 
         Returns:
             int: Number of visibility keyframes created.
@@ -1430,6 +1534,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             when=when,
             offset=offset,
             group_overlapping=group_overlapping,
+            on_replace=on_replace,
         )
 
     @staticmethod
@@ -1441,6 +1546,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         time_range: Optional[Tuple[float, float]] = None,
         include_driven: bool = False,
         through_blends: bool = True,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ) -> int:
         """Snaps keyframes with decimal time values to whole frame numbers.
 
@@ -1466,6 +1572,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             through_blends (bool): Also snap the keys behind a layered or
                 constrained channel's blend node (default). See
                 :meth:`objects_to_curves`.
+            on_move (Optional[Callable]): Called as ``on_move(curve, pairs)``, once per
+                anim curve, with the ``(old, new)`` frames of the keys snapped -- for a
+                caller whose holdings ride with the keys: the shot system's claims
+                (``ShotStore.remap_moved``).  A snap never replaces a key: one whose
+                target is occupied stays where it is.
 
         Returns:
             int: Number of keyframes that were snapped to whole frames.
@@ -1493,6 +1604,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             time_range=time_range,
             include_driven=include_driven,
             through_blends=through_blends,
+            on_move=on_move,
         )
 
     @classmethod
@@ -1503,6 +1615,8 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         relative: bool = False,
         transfer_tangents: bool = False,
         optimize: bool = False,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_delete: Optional[Callable[[str, Optional[List[float]]], Any]] = None,
     ):
         """Transfer keyframes from the first selected object to the subsequent objects.
 
@@ -1514,12 +1628,20 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             relative (bool): If True, apply keyframes relative to the current values of the target objects.
             transfer_tangents (bool): If True, transfer the tangent handles along with the keyframes.
             optimize (bool): If True, run optimize_keys on the source before transferring.
+            on_replace (callable, optional): Called as ``on_replace(curve, frames)``, once
+                per target anim curve, with the frames of the target keys a transferred key
+                replaced (one holding another value) -- for a caller holding something on
+                them: the shot system's claims (``ShotStore.release_replaced``).
+            on_delete (callable, optional): As :meth:`optimize_keys`'s -- the SOURCE
+                keys (and curves) the ``optimize`` pass deletes.
         """
         return cls._transfer_keyframes(
             objects=objects,
             relative=relative,
             transfer_tangents=transfer_tangents,
             optimize=optimize,
+            on_replace=on_replace,
+            on_delete=on_delete,
         )
 
     @staticmethod
@@ -1574,7 +1696,13 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
-    def delete_keys(objects=None, *attributes, time=None, channel_box_only=False):
+    def delete_keys(
+        objects=None,
+        *attributes,
+        time=None,
+        channel_box_only=False,
+        on_delete: Optional[Callable[[str, List[float]], Any]] = None,
+    ):
         """Deletes keyframes for specified attributes on given objects, optionally within a time range.
 
         This function can delete keyframes for all attributes or specified attributes, and within the entire timeline
@@ -1598,6 +1726,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                     - tuple/list of 3+ elements: (t1, t2, t3, ...) - Delete at each frame recursively
             channel_box_only (bool): If True, only deletes keys for attributes selected in the channel box.
                                     Ignores the *attributes parameter. Default is False.
+            on_delete: ``on_delete(curve, frames)`` hears the frames of the keys deleted,
+                per curve -- what the shot system releases its claims on, as for a
+                replaced key. Mirror of blendertk's.
 
         Notes:
             - Pipe-separated strings are processed recursively (e.g., 'before|current' deletes both ranges)
@@ -1619,7 +1750,11 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             delete_keys([obj1, obj2], channel_box_only=True) # Delete only for channel box selected attributes
         """
         return AnimUtils._delete_keys(
-            objects, *attributes, time=time, channel_box_only=channel_box_only
+            objects,
+            *attributes,
+            time=time,
+            channel_box_only=channel_box_only,
+            on_delete=on_delete,
         )
 
     @staticmethod
@@ -1905,6 +2040,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
     @CoreUtils.undoable
     def untie_keyframes(
         objects: List[str] = None,
+        on_delete: Optional[Callable[[str, List[float]], Any]] = None,
     ) -> Dict[str, Dict[str, List[float]]]:
         """Removes bookend keyframes added by tie_keyframes, but preserves genuine animation keys.
 
@@ -1919,6 +2055,9 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         Parameters:
             objects (List[str], optional): List of transform node names to process.
                 If None, all keyed objects in the scene will be used.
+            on_delete (callable, optional): ``on_delete(curve, frames)`` hears the
+                bookend frames removed, per curve -- what the shot system
+                releases its claims on.
 
         Returns:
             Dict[str, Dict[str, List[float]]]: The removed keys, mapping each
@@ -1932,7 +2071,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             # Remove bookend keys for specific objects
             untie_keyframes([obj1, obj2])
         """
-        return AnimUtils._untie_keyframes(objects=objects)
+        return AnimUtils._untie_keyframes(objects=objects, on_delete=on_delete)
 
     @staticmethod
     def create_animation_layer(
@@ -2097,8 +2236,10 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
 
             When *tangent_detail* is True each key dict also contains
             ``"inAngle"``, ``"outAngle"``, ``"inWeight"``,
-            ``"outWeight"`` (floats), and the attribute entry gains
-            ``"preInfinity"`` and ``"postInfinity"`` (strings).
+            ``"outWeight"`` (floats) and ``"lock"`` (bool: ``False`` for a
+            broken tangent, which :meth:`paste_keys` keeps broken), and the
+            attribute entry gains ``"preInfinity"`` and ``"postInfinity"``
+            (strings).
 
             Empty dict when nothing could be copied.
         """
@@ -2117,6 +2258,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         target_time=None,
         match_source: bool = True,
         refresh_channel_box: bool = True,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
         **kwargs,
     ) -> int:
         """Paste previously copied attribute values as keyframes.
@@ -2143,6 +2285,12 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                 object — useful for pasting one object's animation onto
                 a different object.
             refresh_channel_box: Update the Channel Box after keying.
+            on_replace: Called as ``on_replace(curve, frames)``, once per anim
+                curve, with the frames of the keys a pasted key replaced: a key
+                on a pasted frame holding another value (pasting the value a key
+                already holds only re-keys it) -- for a caller holding something
+                on them: the shot system's claims (``ShotStore.release_replaced``).
+                Mirror of blendertk's ``paste_keys``.
             **kwargs: Extra flags forwarded to ``cmds.setKeyframe``
                 (e.g. ``breakdown``, ``hierarchy``, ``shape``,
                 ``controlPoints``, ``animLayer``).
@@ -2156,6 +2304,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             target_time=target_time,
             match_source=match_source,
             refresh_channel_box=refresh_channel_box,
+            on_replace=on_replace,
             **kwargs,
         )
 
@@ -2199,7 +2348,18 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         """
         return AnimUtils._fit_playback_range(objects=objects, padding=padding)
 
-    # ---- key selection readers ---------------------------------------------
+    # ---- key selection -----------------------------------------------------
+
+    @staticmethod
+    def clear_key_selection() -> None:
+        """Deselect every key, whatever is or is not selected.
+
+        The bare ``selectKey -clear`` raises "Error retrieving default
+        arguments" when no object AND no key is selected (measured
+        2026-10-07): it reads the selection as its target.  With no key
+        selected there is nothing to clear, so it is skipped then.
+        """
+        AnimUtils._clear_key_selection()
 
     @staticmethod
     def get_selected_key_times(

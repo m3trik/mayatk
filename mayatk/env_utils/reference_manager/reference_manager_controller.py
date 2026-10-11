@@ -1435,6 +1435,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             self.logger.info(f"Opened scene: {file_path}")
             # The previous scene is gone: drop any untouched foreign scratch twin it was.
             _scratch_twins().discard_except(file_path)
+            if file_path != workspace_source:
+                # The scratch stands in for its source: the scene's project is the
+                # source's, not the temp folder (EnvUtils.scene_project_root).
+                EnvUtils.set_scene_source(file_path, workspace_source)
         except Exception as e:
             self.logger.error(f"Failed to open scene: {e}")
             self.sb.message_box(

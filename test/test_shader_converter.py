@@ -325,6 +325,78 @@ class TestConvertToStandardSurface(MayaTkTestCase, _DecalSceneMixin):
         self.assertTrue(cmds.getAttr(f"{self.new_mat}.thinWalled"))
 
 
+class TestConvertToOpenPBR(MayaTkTestCase, _DecalSceneMixin):
+    """The retype to openPBRSurface: its switches are spelled its own way."""
+
+    def setUp(self):
+        super().setUp()
+        self.mat = self.build_decal_material()
+        try:
+            self.new_mat = ShaderConverter.convert(self.mat, target="open_pbr")[
+                self.mat
+            ]
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(self.new_mat) != "openPBRSurface":
+            self.skipTest("openPBRSurface unavailable in this session")
+
+    def tearDown(self):
+        self.artifacts.cleanup()
+        super().tearDown()
+
+    def test_thin_walled_is_set_for_cutout_behavior(self):
+        """``_build_target`` probed only ``thinWalled``; OpenPBR's is
+        ``geometryThinWalled``, so a retyped cutout came out solid -- unlike
+        the same set built by GameShader."""
+        self.assertTrue(cmds.getAttr(f"{self.new_mat}.geometryThinWalled"))
+
+    def test_opacity_is_driven_by_alpha(self):
+        plugs = (
+            cmds.listConnections(
+                f"{self.new_mat}.geometryOpacity", source=True, plugs=True
+            )
+            or []
+        )
+        self.assertEqual({p.split(".")[0] for p in plugs}, {self.color_file})
+
+
+class TestLobesCarryAcrossModels(MayaTkTestCase):
+    """standardSurface -> openPBRSurface keeps its coat / sheen / transmission.
+
+    The lobes were no channel at all, so a retype dropped every one: a coated
+    car paint arrived uncoated, its coat roughness map gone.
+    """
+
+    def test_lobe_values_and_maps_survive_the_retype(self):
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="paint_ss")
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name="paint_ssSG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name="paint_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        cmds.setAttr(f"{mat}.coat", 0.7)
+        cmds.setAttr(f"{mat}.sheen", 0.4)
+        cmds.setAttr(f"{mat}.subsurfaceScale", 0.25)
+        coat_file = cmds.shadingNode("file", asTexture=True, name="paint_coat_rough")
+        cmds.connectAttr(f"{coat_file}.outColorR", f"{mat}.coatRoughness")
+        try:
+            new_mat = ShaderConverter.convert(mat, target="open_pbr")[mat]
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        if cmds.nodeType(new_mat) != "openPBRSurface":
+            self.skipTest("openPBRSurface unavailable in this session")
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.coatWeight"), 0.7, places=5)
+        self.assertAlmostEqual(cmds.getAttr(f"{new_mat}.fuzzWeight"), 0.4, places=5)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{new_mat}.subsurfaceRadius"), 0.25, places=5
+        )
+        self.assertEqual(
+            cmds.listConnections(f"{new_mat}.coatRoughness", source=True) or [],
+            [coat_file],
+        )
+
+
 class TestConvertOpaqueMaterials(MayaTkTestCase, _DecalSceneMixin):
     """An opaque material carries opacity only as its DEFAULT value.
 

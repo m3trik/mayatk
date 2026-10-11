@@ -1708,6 +1708,38 @@ class TestForeignScratch(unittest.TestCase):
         self.assertEqual(twins.extension, ".ma")
 
 
+class TestForeignOpenStandsInForItsSource(unittest.TestCase):
+    """A foreign row opens through a scratch twin in temp that stands in for its
+    SOURCE (``EnvUtils.set_scene_source``), so the scene's project -- the
+    boundary a lightmap bake, Keep Names In Sync and the Texture Path Editor
+    keep -- is the source's, not the temp folder (BACKLOG 2026-10-04, decided
+    2026-10-05). Mirror of blendertk's open-as-new check."""
+
+    def test_open_scene_records_the_scratch_as_standing_in_for_its_source(self):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot, controller.sb, controller.ui = slot, slot.sb, slot.ui
+        controller.logger = MockLogger()
+        slot._bake_foreign_path = lambda path: "/cache/room.ma"
+        source = "/proj/scenes/room.blend"
+        scratch = "/temp/mtk_opened_0123456789/room_blend.ma"
+        twins = MagicMock()
+        twins.create.return_value = scratch
+        self.addCleanup(ref_ctrl.EnvUtils.set_scene_source, scratch, None)
+        with (
+            patch.object(ref_ctrl, "_scratch_twins", return_value=twins),
+            patch.object(ref_engine.os.path, "exists", return_value=True),
+            patch.object(ref_engine.cmds, "file", create=True) as mock_file,
+        ):
+            self.assertTrue(controller.open_scene(source, set_workspace=False))
+        mock_file.assert_any_call(scratch, open=True, force=True)
+        self.assertEqual(
+            ref_ctrl.EnvUtils.scene_source(scratch), os.path.abspath(source)
+        )
+
+
 class _FakeRef:
     """Minimal stand-in for a scene reference (``.path`` / ``.namespace``)."""
 

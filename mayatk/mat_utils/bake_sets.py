@@ -24,6 +24,13 @@ the scene answers:
 
 * :class:`LightmapExcludeSet` -- the objects a lightmap bake gives no map of
   their own, while they stay in the render and light the rest.
+* :class:`LightmapBakeSet` -- the objects the last lightmap bake acted on, so
+  the bake can be re-selected and re-run.
+
+A set may be stored under its plain name or under the naming convention's
+spelling of it (the ``objectSet`` affix, ``_SET`` by default --
+:meth:`BakeSet.conventional_name`); either spelling reads, and :meth:`BakeSet.define`
+writes the one asked for.
 
 Hidden members need no special treatment: Maya's FBX exporter writes hidden
 geometry verbatim (verified on 2025), so the export never touches the scene.
@@ -36,6 +43,8 @@ try:
     from maya import cmds
 except ImportError:
     pass
+
+import pythontk as ptk
 
 
 class BakeSet:
@@ -52,14 +61,44 @@ class BakeSet:
     #: :meth:`clear` remove them so a scene never carries two competing
     #: definitions.
     LEGACY_SET_NAMES: Tuple[str, ...] = ()
+    #: The ``pythontk.NamingConvention`` entry whose affix a conventional
+    #: spelling carries (the Naming panel's Set suffix).
+    CONVENTION_KEY: str = "objectSet"
+
+    @classmethod
+    def conventional_name(cls) -> str:
+        """:attr:`SET_NAME` spelled by the naming convention (``lightmapBaker_baked_SET``).
+
+        The plain name when the convention's set entry is empty.
+        """
+        return ptk.NamingConvention.apply(cls.SET_NAME, cls.CONVENTION_KEY)
+
+    @classmethod
+    def _spellings(cls) -> Tuple[str, ...]:
+        """Every name the set may be stored under: plain, conventional, legacy.
+
+        The conventional spelling twice over -- the convention as it stands
+        and as it shipped -- so a set saved before a studio changed its set
+        affix still reads.
+        """
+        shipped = ptk.NamingConvention.DEFAULTS.get(cls.CONVENTION_KEY)
+        names = (cls.SET_NAME, cls.conventional_name())
+        if shipped is not None:
+            names += (shipped.apply(cls.SET_NAME),)
+        return tuple(dict.fromkeys(names + cls.LEGACY_SET_NAMES))
 
     @classmethod
     def _resolve_set(cls) -> Optional[str]:
-        """The set node to read from: canonical first, then legacy names."""
-        for name in (cls.SET_NAME,) + cls.LEGACY_SET_NAMES:
+        """The set node to read from: plain, then conventional, then legacy names."""
+        for name in cls._spellings():
             if cmds.objExists(name):
                 return name
         return None
+
+    @classmethod
+    def name(cls) -> Optional[str]:
+        """The name the set is stored under in this scene, or ``None``."""
+        return cls._resolve_set()
 
     @classmethod
     def exists(cls) -> bool:
@@ -89,29 +128,24 @@ class BakeSet:
         members = cls.members()
         if not members:
             return []
-        # Only a TRANSFORM member stands for what is under it; faces of a mesh
-        # name that mesh alone, not the children parented below it.
-        groups = [
-            m
-            for m in members
-            if "." not in m and cmds.objectType(m, isAType="transform")
-        ]
-        below = (
-            cmds.listRelatives(
-                groups, allDescendents=True, fullPath=True, type="transform"
-            )
-            if groups
-            else None
-        ) or []
-        return TextureBaker.resolve_meshes(members + below)
+        return TextureBaker.resolve_meshes(members, descendants=True)
 
     @classmethod
-    def define(cls, objects: Optional[List[str]] = None) -> List[str]:
+    def define(
+        cls, objects: Optional[List[str]] = None, conventional: bool = False
+    ) -> List[str]:
         """Replace the set's contents with *objects* (default: the selection).
 
         Returns the resulting members. An empty input deletes the set --
         "no set" is the absence of the node, so a cleared set never lingers as
         a confusing empty container.
+
+        Parameters:
+            objects: The members; ``None`` for the selection, ``[]`` to clear.
+            conventional: Store the set under :meth:`conventional_name` (the
+                naming convention's Set affix) rather than :attr:`SET_NAME`.
+                Either way every other spelling goes, so a scene carries one
+                definition.
         """
         # ``None`` means "use the selection"; an explicit empty list means
         # "clear" -- collapsing the two would make ``define([])`` silently
@@ -120,21 +154,44 @@ class BakeSet:
             objects = cmds.ls(selection=True, long=True) or []
         else:
             objects = cmds.ls(objects, long=True) or []
+        name = cls.conventional_name() if conventional else cls.SET_NAME
         # ONE undo step: cleared and rebuilt as two, a single Ctrl+Z after
         # "Set From Selection" restored nothing and left NO set -- and the next
         # bake re-baked whatever the old set had excluded.
         from mayatk.core_utils._core_utils import CoreUtils
 
-        with CoreUtils.undo_chunk(f"Define {cls.SET_NAME}"):
+        with CoreUtils.undo_chunk(f"Define {name}"):
             cls.clear()
             if objects:
-                cmds.sets(objects, name=cls.SET_NAME)
+                cmds.sets(objects, name=name)
         return cls.members() if objects else []
 
     @classmethod
+    def respell(cls, conventional: bool) -> Optional[str]:
+        """Rename an existing set to its plain or conventional spelling; the name it ends under.
+
+        ``None`` when the scene has no such set. One undo step.
+        """
+        current = cls._resolve_set()
+        if current is None:
+            return None
+        wanted = cls.conventional_name() if conventional else cls.SET_NAME
+        if current == wanted:
+            return current
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_chunk(f"Rename {current}"):
+            for name in cls._spellings():
+                if name not in (current, wanted) and cmds.objExists(name):
+                    cmds.delete(name)
+            if cmds.objExists(wanted):
+                cmds.delete(wanted)
+            return cmds.rename(current, wanted)
+
+    @classmethod
     def clear(cls) -> None:
-        """Delete the set node(s) (members themselves are untouched)."""
-        for name in (cls.SET_NAME,) + cls.LEGACY_SET_NAMES:
+        """Delete the set node under every spelling (members themselves are untouched)."""
+        for name in cls._spellings():
             if cmds.objExists(name):
                 cmds.delete(name)
 
@@ -171,7 +228,10 @@ class LightmapExcludeSet(BakeSet):
     """Objects every lightmap bake of the scene gives no map of their own.
 
     Excluded objects stay in the render: Arnold still traces them, so they
-    keep casting shadows and bouncing light onto the objects that DO bake.
+    keep casting shadows and bouncing light onto the objects that DO bake --
+    the way to keep a static object's shadow without baking it, since a mesh
+    neither baked nor excluded moves and is out of the render
+    (``LightmapBaker._out_of_render``).
     Only their own bake is skipped, and a bake reverts nothing first, so a
     map baked earlier (a hero prop at a higher preset) survives a room
     re-bake. Read by :meth:`mayatk.LightmapBaker.bake_targets`, so the
@@ -179,3 +239,19 @@ class LightmapExcludeSet(BakeSet):
     """
 
     SET_NAME = "lightmapBaker_exclude"
+
+
+class LightmapBakeSet(BakeSet):
+    """The objects the last lightmap bake acted on.
+
+    Written by the Lightmap Baker panel after a bake when its *Save After
+    Bake* switch is on: every object the bake was asked to bake -- the Scope
+    minus the Exclude set and what Arnold renders nothing of -- whether or not
+    it finished, so selecting the set and baking again re-runs that bake.
+    Each bake replaces it; the panel names it plain or by the naming
+    convention (:meth:`BakeSet.conventional_name`). A script reads it the
+    same way: ``LightmapBakeSet.define(result.maps)`` after
+    :meth:`mayatk.LightmapBaker.bake`.
+    """
+
+    SET_NAME = "lightmapBaker_baked"

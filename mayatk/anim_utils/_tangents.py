@@ -192,8 +192,12 @@ class _TangentInternal:
                 continue
             in_type = snapshot["inTangentType"]
             out_type = snapshot["outTangentType"]
+            # The lock is the same with the handles swapped: a broken key stays
+            # broken (``set_tangent_info`` unlocks it before its angles).
+            lock = {"lock": snapshot["lock"]} if "lock" in snapshot else {}
             mirrored.append(
                 {
+                    **lock,
                     # A stepped tangent's own handle is flat (angle 0) and it
                     # cannot live on the in side, so it crosses over as "flat";
                     # the migration pass below re-homes the hold itself.
@@ -413,6 +417,9 @@ class _TangentInternal:
             "outWeight": cmds.keyTangent(
                 attr_name, query=True, time=(time,), outWeight=True
             )[0],
+            "lock": bool(
+                (cmds.keyTangent(attr_name, query=True, time=(time,), lock=True))[0]
+            ),
         }
 
     @staticmethod
@@ -420,18 +427,27 @@ class _TangentInternal:
         """Body of :meth:`AnimUtils.set_tangent_info`."""
         types = {}
         weights_angles = {}
+        lock = None
         for k, v in tangent_info.items():
-            if "TangentType" in k:
+            if k == "lock":
+                lock = bool(v)
+            elif "TangentType" in k:
                 types[k] = v
             else:
                 weights_angles[k] = v
 
+        # A broken key is unlocked BEFORE its angles: a unified one swings the
+        # other side with each angle it is given, so the second would win both.
+        if lock is False:
+            cmds.keyTangent(attr_name, time=(time,), edit=True, lock=False)
         # Angles/weights first (these may implicitly set type to 'fixed')
         if weights_angles:
             cmds.keyTangent(attr_name, time=(time,), edit=True, **weights_angles)
         # Types last so they take precedence
         if types:
             cmds.keyTangent(attr_name, time=(time,), edit=True, **types)
+        if lock:
+            cmds.keyTangent(attr_name, time=(time,), edit=True, lock=True)
 
     @classmethod
     def _step_keys(cls, objects, keys, tangent, resolution_order):
