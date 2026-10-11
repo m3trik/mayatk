@@ -16,6 +16,7 @@ Companion modules provide orthogonal concerns:
 """
 
 import logging
+import os
 import re
 import wave
 from dataclasses import dataclass
@@ -240,6 +241,35 @@ class AudioUtils(ptk.HelpMixin):
             else path
             for tid, path in data.items()
         }
+
+    @staticmethod
+    def track_files(
+        track_ids: List[str], carrier: Optional[str] = None
+    ) -> List[Tuple[str, str]]:
+        """``(file name, path)`` of each track in *track_ids* whose file exists.
+
+        The file name is the TRACK ID with the file's extension: an
+        ``audio_manifest`` event names its track, and a consumer matches the
+        clip by that name (unitytk's importer, by stem) -- so an FBX
+        deliverable embeds each track's audio under it
+        (``FbxUtils.embed_dependencies``). A track with no file on disk is
+        left out.
+
+        Parameters:
+            track_ids: The tracks to look up, in the order wanted.
+            carrier: The carrier whose file map is read; the scene's first
+                one by default.
+
+        Returns:
+            ``[(track id + extension, path), ...]`` in *track_ids* order.
+        """
+        file_map = AudioUtils.load_file_map(carrier)
+        found: List[Tuple[str, str]] = []
+        for track_id in track_ids:
+            path = file_map.get(track_id)
+            if isinstance(path, str) and os.path.isfile(path):
+                found.append((f"{track_id}{os.path.splitext(path)[1]}", path))
+        return found
 
     @staticmethod
     def _load_stored_file_map(carrier: Optional[str] = None) -> Dict[str, str]:
@@ -585,6 +615,41 @@ class AudioUtils(ptk.HelpMixin):
             TrackEvent(track_id, start, stop=stop)
             for start, stop in cls.pair_on_off_events(cls.read_keys(track_id, carrier))
         ]
+
+    @classmethod
+    def read_all_events(
+        cls, carrier: Optional[str] = None
+    ) -> Dict[str, List[Tuple[float, Optional[float]]]]:
+        """Every track's on/off spans: ``{track_id: [(start, stop), ...]}``.
+
+        The batched form of :meth:`read_events` for a whole-scene scan (the
+        shot sequencer's audio lane, the shot store's empty-shot check): the
+        track attrs :meth:`list_track_attrs` returns are trusted, skipping the
+        per-track ``has_track`` / ``attributeQuery`` round trip, and paired by
+        :meth:`pair_on_off_events`.  A track with no key is left out; a
+        ``stop`` of ``None`` plays to the file's end.  Mirror of blendertk's.
+
+        Parameters:
+            carrier: The carrier to read; the scene's first one by default.
+        """
+        if cmds is None:
+            return {}
+        if carrier is None:
+            carriers = cls.find_carriers()
+            if not carriers:
+                return {}
+            carrier = carriers[0]
+        out: Dict[str, List[Tuple[float, Optional[float]]]] = {}
+        for attr_name in cls.list_track_attrs(carrier):
+            plug = f"{carrier}.{attr_name}"
+            frames = cmds.keyframe(plug, q=True) or []
+            if not frames:
+                continue
+            vals = cmds.keyframe(plug, q=True, valueChange=True) or []
+            events = cls.pair_on_off_events(sorted(zip(frames, vals)))
+            if events:
+                out[cls.track_id_from_attr(attr_name)] = events
+        return out
 
     # ------------------------------------------------------------------
     # Events — key write

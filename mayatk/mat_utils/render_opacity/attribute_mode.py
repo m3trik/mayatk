@@ -442,6 +442,22 @@ class OpacityAttributeMode(ptk.LoggingMixin):
             )
 
     @classmethod
+    def _clear_visibility_keys(cls, obj) -> None:
+        """Clear *obj*'s ``visibility`` keys and leave it shown.
+
+        The presence channel's mirror goes with the channel (``create`` refuses
+        an object whose visibility is already keyed, so its keys ARE the
+        mirror). The keys go even from a locked ``visibility`` (``cutKey``
+        ignores the lock); a locked or driven one just keeps its value.
+        """
+        vis_plug = cls._long_plug(obj, "visibility")
+        cmds.cutKey(vis_plug, clear=True)
+        if not cmds.getAttr(vis_plug, lock=True) and not cmds.listConnections(
+            vis_plug, source=True, destination=False
+        ):
+            cmds.setAttr(vis_plug, True)
+
+    @classmethod
     def _resolve_auto_fade(
         cls, obj, reference_time: float, spec: ChannelSpec = OPACITY
     ) -> bool:
@@ -707,7 +723,8 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     def remove(cls, objects, spec: Optional[ChannelSpec] = None):
         """Delete the channel's attribute(s) and their curves from *objects*.
 
-        *spec* ``None`` removes every channel the object carries.
+        *spec* ``None`` removes every channel the object carries. The presence
+        channel also takes its ``visibility`` mirror, leaving the object shown.
         """
         specs = [spec_for(spec)] if spec is not None else list(CHANNELS.values())
         for obj in objects:
@@ -718,6 +735,7 @@ class OpacityAttributeMode(ptk.LoggingMixin):
                 if one.drives_presence:
                     # Clean up any legacy condition-node visibility driver
                     cls._remove_legacy_vis_driver(obj)
+                    cls._clear_visibility_keys(obj)
                 stop_attrs = one.color_stops.keys if one.color_stops else ()
                 for attr in (one.name,) + tuple(stop_attrs):
                     if not attr or not cmds.attributeQuery(attr, node=obj, exists=True):

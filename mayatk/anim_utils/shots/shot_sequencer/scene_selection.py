@@ -10,6 +10,8 @@ scene (outliner, channels, Graph Editor); the track and header context menus.
 
 from qtpy import QtWidgets
 
+import pythontk as ptk
+
 try:
     import maya.cmds as cmds
     import maya.mel as mel
@@ -307,12 +309,37 @@ class SceneSelectionMixin:
             ``[{clip_id, times}, ...]`` — one entry per clip with
             selected :class:`KeyframeItem` children.
         """
-        if cmds is None or self._syncing:
+        if self._syncing:
             # During a rebuild the scene selection empties as items are torn
             # down.  Mirroring that into Maya would clear the user's Graph
             # Editor key selection on every refresh.
             return
+        self._show_key_selection(key_groups)
+        if cmds is None:
+            return
         self._mirror_key_selection(key_groups)
+
+    def _show_key_selection(self, key_groups: list) -> None:
+        """Put the selected keys on the footer -- how many, their frame range,
+        on which channels of which objects
+        (``ShotSequencer.describe_key_selection``; 2026-10-10: "footer should
+        show key specific info when keys are selected like frame range,
+        etc").  An emptied key selection leaves the footer as it is: the clip
+        selection that outlives it already wrote it."""
+        widget = self._get_sequencer_widget()
+        if widget is None:
+            return
+        rows = []
+        for group in key_groups:
+            clip = widget.get_clip(group["clip_id"])
+            if clip is not None:
+                data = clip.data
+                rows.append(
+                    (data.get("obj") or "", data.get("attr_name"), group["times"])
+                )
+        text = ptk.ShotSequencer.describe_key_selection(rows)
+        if text:
+            self._set_footer(text)
 
     def _mirror_key_selection(self, key_groups: list) -> None:
         """Put *key_groups* on Maya's Graph Editor key selection.
@@ -336,12 +363,36 @@ class SceneSelectionMixin:
             if not obj_name or not attr_name:
                 continue
             rows.append((obj_name, attr_name, group["times"]))
+        if rows:
+            # Before the keys: selecting an object clears Maya's key selection.
+            self._select_key_objects([o for o, _a, _t in rows])
         self._apply_key_selection(rows)
         if rows:
             # An EMPTIED key selection says nothing about attribute scope --
             # the clip selection that outlives it already made that call, and
             # clearing here would undo it whenever the two signals cross.
             self._mirror_channel_box_attrs([a for _o, a, _t in rows])
+
+    def _select_key_objects(self, objects) -> None:
+        """Add the selected keys' *objects* to Maya's object selection.
+
+        The Graph Editor lists the SELECTED objects' curves, so a key whose
+        object is not selected is selected where nobody can see it -- open the
+        Graph Editor, or expand its collapsed tab, and nothing shows
+        (2026-10-07: "can we select keys in the graph editor when they are
+        selected in the sequencer without showing the graph editor if its tab
+        is currently minimized?").  Nothing is opened or expanded, as
+        :meth:`_select_and_show`.  ADDED, not replaced: a wider selection --
+        the clips around those keys, or whatever the user picked elsewhere --
+        stays.  Undo-free, as every mirror here.
+        """
+        # The clips' own object names, as _apply_key_selection reads them.
+        long_names = cmds.ls(list(objects), long=True)
+        selected = set(cmds.ls(selection=True, long=True) or [])
+        missing = [n for n in dict.fromkeys(long_names or []) if n not in selected]
+        if missing:
+            with CoreUtils.undo_disabled():
+                cmds.select(missing, add=True)
 
     def _select_target_keys(self, targets: list) -> None:
         """Put the key menu's *targets* on Maya's Graph Editor selection.
@@ -377,8 +428,12 @@ class SceneSelectionMixin:
             curves_for_attr,
         )
 
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         with CoreUtils.undo_disabled():
-            cmds.selectKey(clear=True)
+            # Not the bare selectKey -clear: with nothing selected it raised,
+            # and the panel's key selection never reached Maya at all.
+            AnimUtils.clear_key_selection()
             for obj_name, attr_name, times in rows:
                 tt = tuple((t, t) for t in times)
                 if not tt:

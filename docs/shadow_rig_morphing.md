@@ -234,7 +234,8 @@ a pop is acceptable. **C** is retired: dominated on every row.
    DCC material's *emission* slot at weight 0 — that is what makes Embed
    Textures ship it in the FBX and FBX2glTF carry it as the GLB's
    `emissiveTexture`. Binding is by record, not by slot: the DCC also writes
-   the PNG loose beside the FBX (as lightmaps are), the Unity importer finds
+   the PNG to disk and the Scene Exporter embeds it in the FBX as a named file
+   (as it does lightmaps), the Unity importer extracts it, finds
    it by the record's name and pins its import settings on first import by a
    `_horizon` stem (sRGB **off**, alpha-is-transparency **off**, no mipmaps,
    clamp, uncompressed or a measured format), and on the GLB route a manifest
@@ -390,6 +391,20 @@ block of K tiles the way a projected rig packs one.
 - **Per object**: one rig per selected transform, each with its own contact,
   quad, tile and record; a table with props on it stays a Combined rig.
   Per object × per source is N × M planes.
+- **Combined is one rigid caster** (2026-10-10): one map, one anchor, so its
+  contact hangs on what moves EVERY target -- their lowest common ancestor
+  (a group they share; the table the props hang under; a single target
+  itself), else the rig's own `_shadow_grp` at the world origin, which ships
+  with the plane. It hung under the first target, so the set's frame
+  followed one member. Each render stamps a digest of every target's
+  matrix in the contact's frame (`silhouetteLayout`): a member moved on its own is stale
+  (the source's bearing in the contact's frame never moved, so it never
+  was), and Recalculate / Follow Source re-fit -- the contact back on the
+  set's base, the bounding cylinder re-measured -- before re-drawing and
+  re-baking. At runtime the engines move only the contact, so `create`
+  warns about members keyed to move on their own: those want Per object.
+  (Overlapping Per object shadows of one source still darken twice where
+  they overlap: each plane blends on its own.)
 - **Shared atlas** (Level 1): one atlas PNG and one material per rig type per
   scene. The projected tile is addressed by the plane's own UVs, so it is
   fallback-safe; the horizon block by a per-plane rect the shader reads.
@@ -556,15 +571,19 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
   up its local Y as exported, `frame_a` / `frame_b` in **FBX/glTF axes**
   (Maya `b = (0,0,1)`, Blender `b = (0,0,-1)`; its exporter maps local +Y to
   FBX -Z). The bake runs in a **rigid** copy of that frame (axes normalised):
-  the contact locator is parented under the target and inherits its scale,
+  the contact locator hangs under the target (or the targets' common
+  parent) and inherits its scale,
   while every consumer normalises the axes -- measured, a target scaled x2
   baked a 1 m map of a 2 m cube before this.
 - **Footprint** (`horizon.bounds = [a0, a1, b0, b1]`, frame units): the
   target's horizontal extent padded by `ShadowHorizon.DEFAULT_PADDING` (10 %
-  of the larger extent, each side), rasterised at `horizon.size` pixels per
+  of the larger of the horizontal extent and the HEIGHT, each side; it was
+  the extent alone until 2026-10-10), rasterised at `horizon.size` pixels per
   side (`S`, a power of two: 128 default, 256 the adaptive ladder's next
   rung). The march runs only inside it, so the padding is also how far a
-  penumbra can reach sideways past the prop's outline.
+  penumbra can reach sideways past the prop's outline -- and a penumbra's
+  reach grows with the height the shadow falls from: padded by its width, a
+  5 cm pole's was cut at 5 mm and drew a quarter of its shadow too light.
 - **Columns**: per pixel up to `horizon.spans` (`K`, default 2) solid
   vertical spans `[lo, hi]`, heights above the ground plane -- the surface
   crossings at the pixel centre, sorted and paired by the faces' orientation
@@ -576,10 +595,12 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
   face below the ground is clamped to it: a box cut by the ground is solid
   from the ground up.
 - **Penumbra data**: per pixel the Euclidean distance to the nearest solid
-  column (pixels) and that column's hull; and, for the shader, a **pyramid**
-  over the columns -- per level the hull of a cell *and its eight neighbours*
-  (an empty pixel's nearest column can sit in the next cell over) and the
-  cell's least distance, zero exactly when it holds a column.
+  column (pixels) and that column's hull; per solid pixel the **interior**
+  distance to the nearest empty one (`HeightFieldMap.interior`, the inner
+  penumbra's sideways turn); and, for the shader, a **pyramid** over the
+  columns -- per level the hull of a cell *and its eight neighbours* (an
+  empty pixel's nearest column can sit in the next cell over) and the cell's
+  least distance, zero exactly when it holds a column.
 - **Channels** (one RGBA8 image, `S` tall and `S x (K + 2)` wide; row 0 of
   every tile is the frame's `b0` edge -- data, never flipped;
   `horizon.height_scale` is the height a 16-bit channel value of 65535
@@ -591,7 +612,14 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
   tile `K + 1`: level `l` (`1 .. log2 S`) occupies `S >> l` rows from row
   `S - (S >> (l - 1))` and as many columns; `R` the dilated hull's bottom
   and `G` its top (8-bit, `G == 0` = nothing near), `B, A` the cell's least
-  distance. `horizon.mapping = "heightfield"`, `horizon.encoding = 2`,
+  distance; the levels fill the tile's left half, and its right half holds
+  the interior field, 8-bit in 1/4 pixel: texel `(S/2 + x/2, y/2)` carries
+  the four pixels it covers as `R` (even `x`, even `y`), `G` (odd, even), `B`
+  (even, odd), `A` (odd, odd), and texel `(S/2, S/2)` the marker `(83, 72, 1,
+  165)` that says so. A map baked before the field has zeros there: it
+  still reads, with the inner penumbra from heights alone, so the layout,
+  the encoding and the record did not change. `horizon.mapping =
+  "heightfield"`, `horizon.encoding = 2`,
   `horizon.levels = log2 S`. `horizon.rect` is the block's rect inside the
   type atlas -- the block's **exact** rect, never gutter-inset, since the
   shader addresses texels through it. Every texel is **fetched**
@@ -601,24 +629,52 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
 - **Shader** (per fragment, in the contact frame; the fragment's height
   replaced by the ground plane's; `L` = source - fragment, or `-direction`;
   `rho` = the source's angular radius, `asin(size / 2 / |L|)` or
-  `angle / 2`):
+  `angle / 2`; `c` = the cosine of the ray's elevation). Angles are true
+  angles at the fragment: the ray runs `t / c` to a point `t` out, so a
+  height gap `h` subtends `h c^2 / t` and a lateral one `l c / t`. The
+  answer is the share of the source's DISC the prop hides -- the circular
+  segment `disc(s) = (acos s - s sqrt(1 - s^2)) / pi` of a signed angle `s`
+  over `rho`, `1/2` on the hard edge:
 
 ```
 d = L.horizontal / |L.horizontal|;  slope = L.up / |L.horizontal|   (t runs along d, frame units)
-clip [tEnter, tExit] to the footprint;  level = log2 S;  clearance = inf
+clip [tEnter, tExit] to the footprint;  level = log2 S;  clearance = inf;  rise = side = 0
 while t < tExit:
   cell = the level's cell at o + d t;  te = its exit;  h0, h1 = slope t, slope te
-  level > 0: read the cell: a column inside (distance 0) -> descend iff gap([h0, h1], dilated hull) <= rho te
-                            empty                       -> descend iff (distance - 1.5) pixel <= rho te
+  level > 0: read the cell: a column inside (distance 0) -> descend iff gap([h0, h1], dilated hull) <= rho te / c^2
+                                                            (skipped while the hull lies ABOVE the ray: rise = inf)
+                            empty                       -> descend iff (distance - 1.5) pixel <= rho te / c
              else skip it: t = te
-  level = 0: a span k with gap([h0, h1], [lo_k, hi_k]) == 0 -> return 1
-             gap = min over the spans (a solid pixel), or hypot(lateral, vertical) (an empty pixel:
-                   the distance field and the nearest hull read BILINEARLY at the ray's midpoint;
-                   lateral = (distance - 0.5) pixel, vertical = gap([h0, h1], hull))
-             clearance = min(clearance, gap / tmid);  t = te
+  level = 0: rise = max(rise, max over the spans topping the ray (hi_k >= h0) of (hi_k - h0) c^2 / tmid)
+             a span k with gap([h0, h1], [lo_k, hi_k]) == 0 -> blocked:
+                   side = max(side, (interior - 0.5) pixel c / tmid)   (the interior field BILINEARLY
+                   at the ray's midpoint; no field: side = inf)
+             else, while never blocked: clearance = min(clearance, gap c^2 / tmid) on a solid pixel, or
+                   hypot(lateral c, vertical c^2) / tmid on an empty one (the distance field and the nearest
+                   hull BILINEARLY at the midpoint; lateral = (distance - 0.5) pixel, vertical = gap([h0, h1], hull))
+             blocked and min(rise, side) >= rho -> stop (the disc is hidden whole);  t = te
   after a cell, climb as far as the boundary just crossed is aligned
-alpha = intensity opacity (rho > 0 ? clamp(1 - clearance / rho, 0, 1) : 0)
+alpha = opacity (rho > 0 ? disc(blocked ? -min(rise, side) / rho : clearance / rho) : blocked)
 ```
+
+  So the penumbra straddles the hard edge, half out and half in, and a
+  member thinner than the penumbra keeps no umbra: its shadow greys out with
+  distance. A blocked ray's depth is the least turn that frees it: up, over
+  every span above it ANYWHERE along the walk (tilting up only moves where a
+  ray meets a thin seat, so the seat's thickness is no escape), or sideways
+  out of the deepest column it crosses (the interior distance, which also
+  finds a slab's nearest edge); a column cell skipped above the ray needs a
+  turn over `rho` to rise past, so the skip and the exact walk agree.
+  *Replaced on 2026-10-10:* the ramp was `1 - clearance / rho`, outward from
+  the hard edge only, with angles as gap over the HORIZONTAL distance -- 1/c
+  too large sideways and 1/c^2 too large vertically. Measured against the
+  disc-integrated hard shadow on the same map (`test_shadow_horizon`
+  `test_the_penumbra_matches_the_area_light_integral`; a box and a chair, a
+  6 deg source at 30 and 65 deg): mean error over the penumbra band 0.18-0.31
+  (old) against 0.05-0.09, the band 2-8x too narrow under the high source
+  (old) against within a quarter; total darkness 4-24 % over (old) against
+  within 2 % on solid props (a pole: +10-30 %, a single ray's edge model
+  reading each side of a thin member as a half-plane).
 
   This is **one text, not a specification**: it is
   `pythontk/geo_utils/shadow_horizon.glsl`, which every engine and both DCCs
@@ -633,7 +689,10 @@ alpha = intensity opacity (rho > 0 ? clamp(1 - clearance / rho, 0, 1) : 0)
   disagreement with the exact projection, `samples = 6`, `size = 192`): box,
   table, chair and stool 0.00 %, arch 0.2 % (raw 1.1 / 2.2 / 1.8 / 2.3 /
   4.8 %, edge registration on thin shadows); 7-16 traversal steps per ray on
-  average, p98 32-106, against 300-550 for a plain half-pixel march. Two
+  average, p98 32-106, against 300-550 for a plain half-pixel march (the
+  centred penumbra, 2026-10-10: 22 on average, p98 98, on the chair under a
+  3 deg source -- the penumbra is 2-8x wider, and a blocked ray walks on
+  until it is buried `rho` deep). Two
   things the measurements taught: 8-bit heights cost the arch and the lamp
   one to two points, so heights are 16-bit; and a per-pixel lateral distance
   made the penumbra jump a quarter of its width when a boundary-hugging ray
@@ -642,6 +701,50 @@ alpha = intensity opacity (rho > 0 ? clamp(1 - clearance / rho, 0, 1) : 0)
   midpoint. A line-for-line Python port of the traversal agrees with the
   reference to 1e-9 on the viewer's fixture; the GPU pins are the engine
   tests.
+
+### Real-time cost and the horizon cache (2026-10-10)
+
+The rig exists for engines that cannot afford real-time shadows (R5), so its
+cost was measured against one: a three.js page (the viewer's three 0.169) at
+one 2048-pixel Quest-class eye on an Intel Iris Xe, a room of 16 chairs
+(shadow planes on 16-19 % of the screen) and one shadow filling a third of it,
+against a `DirectionalLight` with a 2048 PCF-soft shadow map
+(`pythontk/test/temp_tests/_shadow_gpu_bench.py`, scratch; same-page A/B, the
+median of interleaved rounds, ms a frame over no shadows):
+
+| | room | one shadow up close |
+|:--|--:|--:|
+| PCF shadow map | +2.7-3.0 | +3.0-3.8 |
+| projected rig (one fetch a pixel) | +0.3 | +0.1 |
+| horizon march per pixel, the outward ramp | +4.1-7.5 | +5.9 |
+| horizon march per pixel, the centred penumbra | +10-17 | +11-19 |
+| horizon cache, a target and a render per plane, all re-marched each frame | +8-13 | +1.0 |
+| **horizon cache, one atlas, one pass, all re-marched each frame** | **+3.4** | **+0.6-1.1** |
+| horizon cache, the light still | +0.3 | +0.3 |
+
+Marched per pixel the horizon rig is no real-time option: 1.5-6x a shadow
+map, doubled again by a headset's second eye. So the engines CACHE it: a
+plane's shadow is marched over its own UVs into its rect of ONE R8 atlas (a
+texel per three map pixels, a 256-texel slot per plane, a one-texel gutter,
+sampled half a texel in) and the plane samples that -- one bilinear fetch a
+pixel, the projected rig's cost, and one march for both eyes. A plane
+re-marches only when its placement, the source or the ground moves in the
+CONTACT's frame (a turntable spin, or a prop carried with its own light,
+re-marches nothing), every due plane in one pass (a render target switch is a
+tile flush on a mobile GPU; one per plane had cost four times the march),
+within a per-frame texel budget (65536, about seven chair-sized planes), the
+stalest first; a plane the budget defers keeps the placement it was marched
+at, so its image and its position never disagree. Viewer:
+`shadow_rig.js` (`session.cache`, `session.cacheStats`); Unity:
+`ShadowPlaneCache` with the shader's `SHADOWPLANECACHE` pass, the atlas bound
+globally (`_ShadowCache`) so the shared material stays instanced, per plane
+`_CacheRect` / `_Cached` (`ShadowPlaneController.cacheShadow`). The DCC
+previews march per pixel: a viewport is not the budget. Pinned:
+`test_shadow_web` (the cached pole against the reference: mean 0.026, worst
+0.23 at the pole's needle-sharp foot where the slot caps; a still light and a
+turntable spin re-march nothing, a moved source once) and
+`test_shadow_plane_runtime_integration` `test_05b`; the per-pixel parity pins
+turn the cache off.
 
 ### The projected map and the atlas
 

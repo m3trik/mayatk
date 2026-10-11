@@ -16,6 +16,7 @@ Covers:
 All tests run WITHOUT Maya by mocking maya.cmds/cmds.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -295,7 +296,7 @@ class TestUpdateWithRanges(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 # Qt setup
-from qtpy import QtWidgets
+from qtpy import QtCore, QtWidgets
 
 _app = QtWidgets.QApplication.instance()
 if _app is None:
@@ -330,6 +331,13 @@ class _ControllerHarness:
         slots_instance.ui.footer._status_label = MagicMock()
         slots_instance.ui.btn_build = MagicMock()
         slots_instance.sb.get_setting.return_value = None
+        # Wired as production wires it -- a field's ``ui`` is its panel, the
+        # panel's ``sb`` the switchboard -- answering a standalone host's ""
+        # suffix, so the recent-paths store keys on a real name rather than on
+        # a MagicMock's repr (TestHarnessPersistsUnderRealKeys).
+        slots_instance.sb._host_suffix.return_value = ""
+        slots_instance.ui.sb = slots_instance.sb
+        slots_instance.ui.txt_csv_path.ui = slots_instance.ui
         # An empty source field: the scene's own shots are the source.
         slots_instance.ui.txt_csv_path.text.return_value = ""
 
@@ -344,6 +352,28 @@ class _ControllerHarness:
         # Load steps
         self.steps = _make_steps("A01", "A02", "A03")
         self.ctrl._steps = self.steps
+        # The store's invalidation registry is class-level: a controller left
+        # in it answers every later test's scene swap.
+        self.addCleanup(self.ctrl.remove_callbacks)
+
+
+class TestHarnessPersistsUnderRealKeys(unittest.TestCase, _ControllerHarness):
+    """Nothing a harness-built controller persists is keyed on a MagicMock.
+
+    The recent-CSV-paths store keys on its ``settings_key`` plus the host
+    suffix the field's switchboard answers (``field.ui.sb._host_suffix()``),
+    and a bare MagicMock answered with another MagicMock: every controller
+    built here persisted under ``RecentValues/<MagicMock name=...>``, a new key
+    per test (2,995 of them in a developer's live store, 2026-10-04). The
+    sandbox now keeps them off that store, but a key named after a mock is a
+    store nothing will ever read again, in a sandbox or out of it.
+    """
+
+    def test_recent_csv_paths_persist_under_their_settings_key(self):
+        self.setup_controller()
+
+        settings = self.ctrl._recent_csv_option.store._settings
+        self.assertEqual(settings.namespace, "shot_manifest_csv_paths")
 
 
 class TestResolveRanges(unittest.TestCase, _ControllerHarness):
@@ -354,7 +384,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_user_pin_overrides_auto_fill(self, mock_dur, mock_regions):
@@ -370,7 +400,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertTrue(a02[3])  # is_user
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_gap_detection_used_for_auto_fill(self, mock_dur, mock_regions):
@@ -391,7 +421,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
             self.assertFalse(r[3])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_many_regions_pruned_to_step_count(self, mock_dur, mock_regions):
@@ -415,7 +445,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved[2][1], 200.0)  # A03
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_end_derived_from_next_start(self, mock_dur, mock_regions):
@@ -430,7 +460,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertAlmostEqual(resolved[0][2], resolved[1][1] - 5.0, places=1)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_from_step_idx_freezes_prefix(self, mock_dur, mock_regions):
@@ -456,7 +486,7 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved_partial[2][1], 200.0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_set_start_cascades_subsequent(self, mock_dur, mock_regions):
@@ -490,7 +520,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_no_collision_when_ranges_are_ordered(self, mock_dur, mock_regions):
@@ -507,7 +537,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertEqual(count, 0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_collision_detected_when_ranges_overlap(self, mock_dur, mock_regions):
@@ -528,7 +558,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertGreater(count, 0)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_no_collision_when_ranges_are_contiguous(self, mock_dur, mock_regions):
@@ -550,7 +580,7 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.assertEqual(count, 0, "Contiguous ranges should not be collisions")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_collision_applies_background_color(self, mock_dur, mock_regions):
@@ -653,7 +683,7 @@ class TestRangeAbsorption(unittest.TestCase, _ControllerHarness):
         _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
     def test_user_end_past_next_gap_pushes_downstream(self, mock_dur, mock_regions):
@@ -799,7 +829,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.addCleanup(patcher.stop)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_detect_populates_steps_and_ranges(self, mock_regions):
         """detect() fills _steps and _user_ranges from detection results."""
@@ -815,7 +845,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._user_ranges["Shot 2"], (60.0, 100.0))
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_detect_ranges_are_editable_user_ranges(self, mock_regions):
         """Detection ranges are stored as user_ranges (non-dim, editable)."""
@@ -832,7 +862,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertTrue(self.ctrl._all_ranges_complete())
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_detect_clears_csv_path(self, mock_regions):
         """detect() clears the CSV path, entering detection mode."""
@@ -846,7 +876,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertTrue(self.ctrl._is_detection_mode)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_detect_no_animation_clears_table(self, mock_regions):
         """detect() with no regions clears the table and shows a message.
@@ -862,7 +892,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._csv_path, "")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_csv_after_detect_replaces_data(self, mock_regions):
         """Loading a CSV after detect replaces the detection data."""
@@ -878,7 +908,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertFalse(self.ctrl._is_detection_mode)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_detect_after_csv_replaces_data(self, mock_regions):
         """Detecting after CSV load replaces CSV data."""
@@ -895,7 +925,7 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._csv_path, "")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_all_ranges_complete_false_for_csv(self, mock_regions):
         """_all_ranges_complete() returns False when CSV steps lack user ranges."""
@@ -905,106 +935,216 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
         self.assertFalse(self.ctrl._all_ranges_complete())
 
 
-class TestDescriptionEdit(unittest.TestCase, _ControllerHarness):
-    """Test that Description column is editable in both CSV and detection modes."""
+class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
+    """Step names, descriptions and object names edit through Local Edits
+    (``ManifestEditor``): always in force, recorded against the sheet's IDs,
+    kept on the scene's store, never written into the loaded steps; View
+    Original Sheet shows the sheet as delivered, read-only, Build off."""
+
+    SHEET = "/some/file.csv"
 
     def setUp(self):
         self.setup_controller()
-        _fresh_store()
-        self.ui.spn_gap = MagicMock(value=MagicMock(return_value=5.0))
-        self.ui.txt_csv_path = MagicMock()
-        # Patch QMessageBox so confirmation dialog auto-confirms
-        patcher = patch(
-            "qtpy.QtWidgets.QMessageBox",
+        self.store = _fresh_store()
+
+    def _load(self, on=True):
+        """Load the sheet; *on* False views the original sheet."""
+        self.ctrl._load_data(_make_steps("A01", "A02", "A03"), csv_path=self.SHEET)
+        self.ctrl._editor.view_original(not on)
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+
+    def _commit(self, item, column, text):
+        """Open the cell the way a double-click does, type, commit."""
+        self.assertTrue(self.ctrl._editor.begin_edit(item, column))
+        item.setText(column, text)  # what the editor's commit writes
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+
+    def test_edits_are_in_force_by_default(self):
+        """2026-10-10 ("the general idea is sound"): the edits are the
+        manifest's own revision -- always applied and editable -- where an
+        option, off by default, used to gate both."""
+        self._load()
+        self.assertTrue(
+            self.ctrl._editor.begin_edit(self.tree.topLevelItem(0), COL_STEP)
         )
-        self._mock_msgbox = patcher.start()
-        self._mock_msgbox.question.return_value = self._mock_msgbox.Yes
-        self.addCleanup(patcher.stop)
+        self.assertIsNotNone(self.ctrl._editor._pending)
 
-    @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
-    )
-    def test_description_edit_detection_mode(self, mock_regions):
-        """Editing Description column in detection mode updates step.description."""
-        mock_regions.return_value = [
-            {"name": "S1", "start": 0.0, "end": 10.0, "objects": ["a"]},
-        ]
-        self.ctrl.detect()
+    def test_the_retired_option_leaves_the_users_settings(self):
+        key = f"{self.ctrl._settings.namespace}/local_edits"
+        qs = self.ctrl._settings.settings
+        qs.setValue(key, True)
+        self.addCleanup(qs.remove, key)
+        self.setup_controller()
+        self.assertFalse(qs.contains(key))
 
-        tree = self.ui.tbl_steps
-        parent = tree.topLevelItem(0)
-        tree.blockSignals(True)
-        parent.setText(COL_DESC, "My description")
-        tree.blockSignals(False)
+    def test_viewing_the_original_sheet_edits_nothing(self):
+        self._load(on=False)
+        parent = self.tree.topLevelItem(0)
+        for col in (COL_STEP, COL_DESC):
+            self.assertTrue(self.ctrl._editor.begin_edit(parent, col))
+            self.assertIsNone(self.ctrl._editor._pending, "no editor opened")
+        self.assertIn("View Original Sheet", self.ui.footer.setText.call_args[0][0])
 
-        self.ctrl._on_item_changed(parent, COL_DESC)
-        self.assertEqual(self.ctrl._steps[0].description, "My description")
+    def test_the_original_view_shows_the_sheet_turns_build_off_and_loses_nothing(self):
+        self._load()
+        self._commit(self.tree.topLevelItem(0), COL_STEP, "Renamed")
+        self.ctrl._editor.view_original(True)
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "A01")
+        self.ui.b003.setEnabled.assert_called_with(False)
+        with patch.object(self.ctrl, "_ensure_steps") as ensure:
+            self.ctrl.build()
+        ensure.assert_not_called()  # refused before anything ran
+        self.ctrl._editor.view_original(False)
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "Renamed")
+        self.assertEqual(
+            self.store.manifest_edits[self.SHEET]["steps"]["A01"], {"name": "Renamed"}
+        )
 
-    def test_description_edit_csv_mode(self):
-        """Editing Description column in CSV mode updates step.description."""
-        # Steps from setup_controller (CSV mode: _csv_path is empty but
-        # steps exist - simulate CSV mode by setting a path)
-        self.ctrl._csv_path = "/some/file.csv"
-
-        tree = self.ui.tbl_steps
-        self.ctrl._populate_table()
-        parent = tree.topLevelItem(0)
-
-        tree.blockSignals(True)
-        parent.setText(COL_DESC, "Updated description")
-        tree.blockSignals(False)
-
-        self.ctrl._on_item_changed(parent, COL_DESC)
+    def test_description_edit_is_a_local_edit(self):
+        self._load()
+        self._commit(self.tree.topLevelItem(0), COL_DESC, "Updated description")
         self.assertEqual(self.ctrl._steps[0].description, "Updated description")
+        self.assertEqual(self.ctrl._sheet_steps[0].description, "Content for A01")
+        record = self.store.manifest_edits[self.SHEET]["steps"]["A01"]
+        self.assertEqual(record, {"description": "Updated description"})
+
+    def test_rename_keeps_the_step_id_and_its_typed_range(self):
+        """Bug (superseded): a rename rewrote ``step_id`` -- the step's shot
+        binding -- so a renamed built step built a second shot.
+        Fixed: 2026-10-06"""
+        self._load()
+        self.ctrl._user_ranges["A01"] = (10.0, 50.0)
+        self._commit(self.tree.topLevelItem(0), COL_STEP, "Renamed")
+        step = self.ctrl._steps[0]
+        self.assertEqual((step.step_id, step.shot_name), ("A01", "Renamed"))
+        self.assertEqual(self.ctrl._user_ranges["A01"], (10.0, 50.0))
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "Renamed")
+
+    def test_empty_or_taken_names_are_refused(self):
+        self._load()
+        for name in ("   ", "a02"):
+            self._commit(self.tree.topLevelItem(0), COL_STEP, name)
+            self.assertEqual(self.ctrl._steps[0].shot_name, "A01")
+        self.assertNotIn(self.SHEET, self.store.manifest_edits)
+
+    def test_a_closed_behavior_menu_is_deleted(self):
+        """Bug: each click on an object's Behaviors cell parented a new menu
+        to the cell's label and never deleted it -- one hidden menu kept per
+        click until the table was next drawn.
+        Fixed: 2026-10-10"""
+        from qtpy.QtCore import QCoreApplication, QEvent
+        from uitk.widgets.menu import Menu
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+            COL_BEHAVIORS,
+        )
+
+        self._load()
+        label = self.tree.itemWidget(self.tree.topLevelItem(0).child(0), COL_BEHAVIORS)
+        for _ in range(2):
+            label.clicked.emit()  # opens the menu; nothing ticked
+            menus = label.findChildren(Menu)
+            self.assertEqual(len(menus), 1)
+            menus[0].hide()
+            QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertEqual(label.findChildren(Menu), [])
 
 
-class TestStepNameEdit(unittest.TestCase, _ControllerHarness):
-    """Test that Step name column is editable and re-keys user ranges."""
+class TestRowTags(unittest.TestCase, _ControllerHarness):
+    """Colour tags on the step rows, picked from the real context menu: the
+    user's kept on the scene's store under the sheet (never a Local Edit),
+    the template's ``color_by`` shown under them."""
+
+    SHEET = "/some/tagged.csv"
 
     def setUp(self):
         self.setup_controller()
-        _fresh_store()
+        self.store = _fresh_store()
+        self.tags = self.ctrl._row_tags
 
-    def test_rename_updates_step_id(self):
-        """Editing Step column updates step_id on the dataclass."""
-        self.ctrl._populate_table()
-        tree = self.ui.tbl_steps
-        parent = tree.topLevelItem(0)
+    def _load(self, steps=None):
+        steps = steps or _make_steps("A01", "A02", "A03")
+        self.ctrl._load_data(steps, csv_path=self.SHEET)
+        return [self.tree.topLevelItem(i) for i in range(len(steps))]
 
-        tree.blockSignals(True)
-        parent.setText(COL_STEP, "NewName")
-        tree.blockSignals(False)
+    def _pick(self, item, swatch):
+        """Right-click step row *item*, click swatch *swatch* (0: clear)."""
+        from qtpy.QtCore import Qt
+        from qtpy.QtTest import QTest
+        from qtpy.QtWidgets import QMenu, QWidgetAction
 
-        self.ctrl._on_item_changed(parent, COL_STEP)
-        self.assertEqual(self.ctrl._steps[0].step_id, "NewName")
+        def chosen(menu, *_args):
+            row = next(
+                a.defaultWidget()
+                for a in menu.actions()
+                if isinstance(a, QWidgetAction)
+            )
+            QTest.mouseClick(row.swatches[swatch], Qt.LeftButton)
+            return None
 
-    def test_rename_rekeys_user_ranges(self):
-        """Renaming a step re-keys its entry in _user_ranges."""
-        self.ctrl._user_ranges["A01"] = (10.0, 50.0)
-        self.ctrl._populate_table()
-        tree = self.ui.tbl_steps
-        parent = tree.topLevelItem(0)
+        with patch.object(self.tree, "itemAt", return_value=item):
+            with patch.object(QMenu, "exec_", chosen):
+                self.ctrl._show_item_menu(self.tree.visualItemRect(item).center())
 
-        tree.blockSignals(True)
-        parent.setText(COL_STEP, "Renamed")
-        tree.blockSignals(False)
+    def _shown(self, items):
+        return [self.tags.shown_tag(item) for item in items]
 
-        self.ctrl._on_item_changed(parent, COL_STEP)
-        self.assertNotIn("A01", self.ctrl._user_ranges)
-        self.assertEqual(self.ctrl._user_ranges["Renamed"], (10.0, 50.0))
+    def test_a_pick_tags_the_selected_steps_and_survives_a_reload(self):
+        a01, a02, a03 = self._load()
+        self.tree.clearSelection()
+        a01.setSelected(True)
+        a03.setSelected(True)
+        self._pick(a01, 3)
+        self.assertEqual(
+            self.store.manifest_tags, {self.SHEET: {"A01": "tag3", "A03": "tag3"}}
+        )
+        self.assertNotIn(self.SHEET, self.store.manifest_edits, "not a Local Edit")
+        self.assertEqual(self._shown(self._load()), ["tag3", None, "tag3"])
 
-    def test_empty_name_rejected(self):
-        """Empty or whitespace-only names are silently rejected."""
-        self.ctrl._populate_table()
-        tree = self.ui.tbl_steps
-        parent = tree.topLevelItem(0)
+    def test_an_unselected_step_is_tagged_alone(self):
+        a01, a02, _a03 = self._load()
+        self.tree.clearSelection()
+        a01.setSelected(True)
+        self._pick(a02, 1)
+        self.assertEqual(self.store.manifest_tags[self.SHEET], {"A02": "tag1"})
 
-        tree.blockSignals(True)
-        parent.setText(COL_STEP, "   ")
-        tree.blockSignals(False)
+    def test_a_closed_item_menu_is_not_kept(self):
+        """Bug: every right-click parented a fresh ``QMenu`` to the tree and
+        never deleted it, so each menu (swatch row and all) lived as long as
+        the panel.
+        Fixed: 2026-10-09"""
+        from qtpy.QtCore import QCoreApplication, QEvent, Qt
+        from qtpy.QtWidgets import QMenu
 
-        self.ctrl._on_item_changed(parent, COL_STEP)
-        self.assertEqual(self.ctrl._steps[0].step_id, "A01")  # unchanged
+        a01, _a02, _a03 = self._load()
+        for swatch in (1, 2, 0):
+            self._pick(a01, swatch)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        self.assertEqual(
+            self.tree.findChildren(QMenu, "", Qt.FindDirectChildrenOnly), []
+        )
+
+    def test_object_rows_show_their_steps_colour(self):
+        a01, _a02, _a03 = self._load()
+        self._pick(a01, 4)
+        self.assertEqual(self.tags.shown_tag(a01.child(0)), "tag4")
+
+    def test_color_by_section_shows_under_the_users_pick(self):
+        """The template's ``color_by``: each section its own colour -- the
+        next section a far hue, never the neighbouring one (tag4 after tag1:
+        ``Palette.contrast_order``); a pick shows over it, and clearing the
+        pick shows the section's again."""
+        steps = _make_steps("A01", "A02", "B01")
+        steps[2].section = "B"
+        self.ctrl._active_mapping = {"color_by": "section"}
+        a01, a02, b01 = self._load(steps)
+        self.assertEqual(self._shown((a01, a02, b01)), ["tag1", "tag1", "tag4"])
+        self._pick(a02, 5)
+        self.assertEqual(self.tags.shown_tag(a02), "tag5")
+        self._pick(a02, 0)
+        self.assertEqual(self.tags.shown_tag(a02), "tag1")
+        self.assertNotIn(self.SHEET, self.store.manifest_tags)
 
 
 class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
@@ -1017,9 +1157,9 @@ class TestBuildDetectionMode(unittest.TestCase, _ControllerHarness):
         self.ui.txt_csv_path = MagicMock()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     @patch("qtpy.QtWidgets.QMessageBox")
     def test_build_after_detect_uses_detection_ranges(
@@ -1149,7 +1289,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ui.txt_csv_path = MagicMock()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
     def test_resolve_ranges_returns_empty_when_no_selected_keys(self, _mock_sel):
@@ -1159,7 +1299,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved, [])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
     def test_resolve_ranges_empty_even_with_user_ranges(self, _mock_sel):
@@ -1176,10 +1316,10 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved, [])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_build_aborts_when_no_selected_keys(
         self, mock_active, mock_manifest_cls, _mock_sel
@@ -1199,10 +1339,10 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.sync.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_build_aborts_even_with_complete_user_ranges(
         self, mock_active, mock_manifest_cls, _mock_sel
@@ -1236,7 +1376,7 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.sync.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
     )
     def test_resolve_ranges_no_sequential_fallback_with_partial_regions(self, mock_sel):
         """_resolve_ranges must not add sequential-placement entries for steps
@@ -1259,9 +1399,9 @@ class TestUseSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.assertEqual(resolved[0][0], "A01")
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_build_only_syncs_resolved_steps_in_selected_keys_mode(
         self, mock_active, mock_manifest_cls, mock_sel
@@ -1671,7 +1811,7 @@ class TestLoadCsvSeedsStoreRanges(unittest.TestCase, _ControllerHarness):
         self.store.define_shot("A02", 50, 80, ["obj_A02"])
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ManifestModel.parse_csv"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_source.ManifestModel.parse_csv"
     )
     def test_store_ranges_seeded_into_user_ranges(self, mock_parse):
         mock_parse.return_value = _make_steps("A01", "A02", "A03")
@@ -1767,7 +1907,7 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         self.store = _fresh_store()
         self.store.define_shot("A01", 10, 40, ["obj_A01"])
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_incremental_passes_zero_duration_flag(self, mock_cls):
         """sync() should receive zero_duration_fallback=True in incremental mode."""
         mock_builder = MagicMock()
@@ -1784,6 +1924,26 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
             or (len(call_kwargs.args) > 4 and call_kwargs.args[4]),
             "sync should be called with zero_duration_fallback=True",
         )
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
+    def test_a_typed_start_alone_builds_at_that_frame(self, mock_cls):
+        """Bug: Set Start to Current Frame types ``(frame, None)``, and the
+        incremental Build handed that ``None`` end straight to the engine,
+        whose zero-duration placement adds to it (a TypeError: Build failed).
+        A typed start alone is a place: zero-length there.
+        Fixed: 2026-10-10"""
+        mock_builder = MagicMock()
+        mock_builder.sync.return_value = ({}, {}, [])
+        mock_cls.return_value = mock_builder
+        _mock_undo_info(self)
+        self.ctrl._steps = _make_steps("A01", "A02")
+        self.ctrl._user_ranges["A02"] = (300.0, None)
+
+        self.ctrl.build()
+
+        ranges = mock_builder.sync.call_args.kwargs["ranges"]
+        self.assertEqual(ranges["A01"], (10, 40), "a built step keeps its shot")
+        self.assertEqual(ranges["A02"], (300.0, 300.0))
 
 
 class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
@@ -1813,10 +1973,10 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         even in CSV mode."""
         with (
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions",
+                "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions",
             ) as mock_auto,
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+                "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
                 return_value=[],
             ) as mock_sel,
         ):
@@ -1825,7 +1985,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
             mock_sel.assert_called_once()
             mock_auto.assert_not_called()
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_build_uses_selected_keys_in_csv_mode(self, mock_cls):
         """build() in CSV mode with non-auto detection_mode should use
         selected-keys detection for range verification."""
@@ -1835,7 +1995,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         _mock_undo_info(self)
 
         with patch(
-            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+            "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
             return_value=[],
         ) as mock_sel:
             self.ctrl.build()
@@ -2086,7 +2246,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         self.store.define_shot("A02", 100, 200, ["obj_A02"])
         self.store.define_shot("A03", 200, 300, ["obj_A03"])
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_new_shot_placed_between_neighbors(self, mock_cls):
         """A new step B01 inserted between A02 and A03 should get
         (200, 200) — A02's end — not (300+, 300+)."""
@@ -2107,7 +2267,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
             ranges["B01"], (200, 200), "New step should be at predecessor A02's end"
         )
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_consecutive_new_shots_stack(self, mock_cls):
         """Two adjacent new steps should both stack at the same position."""
         mock_builder = MagicMock()
@@ -2126,7 +2286,7 @@ class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
         self.assertEqual(ranges["B01"], (100, 100))
         self.assertEqual(ranges["B02"], (100, 100))
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_new_shot_at_start_of_csv(self, mock_cls):
         """A new step at the very start of the CSV should use the
         first existing neighbor's start position."""
@@ -2308,51 +2468,168 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
             BEHAVIOR_STATUS_COLORS["error"] = orig_fg
 
 
-class TestLastResultsPreservation(unittest.TestCase, _ControllerHarness):
-    """Verify _last_results isn't wiped by non-structural store events."""
+class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
+    """Every shot edit, made in any panel, reaches the table (2026-10-07:
+    "the manifest doesn't refresh properly on many actions").  The engine's
+    bound edits write the shots directly -- no ShotUpdated -- so a sheet's
+    built rows used to keep their old Start / End, and only after a Build in
+    this session did any event refresh them."""
 
     def setUp(self):
+        self.store = _fresh_store()
         self.setup_controller()
+        self.store.define_shot("A01", 10, 50, metadata={"step": "A01"})
+        self.ctrl._source, self.ctrl._csv_path = "csv", "X:/sheet.csv"
+        self.ctrl._first_shown = True
+        self.ctrl._populate_table()
 
-    def test_shot_updated_preserves_results(self):
-        """ShotUpdated should not clear _last_results."""
+    def _cells(self, step_id):
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
+            COL_END,
+            COL_START,
+        )
+
+        for i in range(self.tree.topLevelItemCount()):
+            row = self.tree.topLevelItem(i)
+            if row.text(0) == step_id:
+                return row.text(COL_START), row.text(COL_END)
+        return None
+
+    def test_a_built_row_shows_its_shot_from_the_start(self):
+        self.assertEqual(self._cells("A01"), ("10", "50"))
+
+    def test_a_bound_edit_made_elsewhere_reaches_the_built_row(self):
+        shot = self.store.shot_by_name("A01")
+        with self.store.scene_edit("trim"):
+            shot.end = 40.0  # as the engine's trim writes it: no ShotUpdated
+            self.store.mark_dirty()
+        self.assertEqual(self._cells("A01"), ("10", "40"))
+
+    def test_a_shot_deleted_or_added_elsewhere_reshapes_a_sheet(self):
+        """Bug: with a sheet loaded, only Start / End followed the store -- a
+        step whose shot was deleted elsewhere still read as built (its range
+        locked), and a shot added elsewhere never showed as "not in doc".
+        Fixed: 2026-10-07"""
+        from qtpy.QtCore import Qt
+
+        a01 = self.store.shot_by_name("A01")
+        self.store.remove_shot(a01.shot_id)
+        self.assertEqual(self._cells("A01"), ("", ""), "no shot, no range")
+        row = next(
+            self.tree.topLevelItem(i)
+            for i in range(self.tree.topLevelItemCount())
+            if self.tree.topLevelItem(i).text(0) == "A01"
+        )
+        self.assertTrue(row.flags() & Qt.ItemIsEditable, "an unbuilt row takes a range")
+        extra = self.store.define_shot("Extra", 300, 340)
+        self.assertEqual(self._cells("Extra"), ("300", "340"), "listed, not in doc")
+        with self.store.scene_edit("trim"):
+            extra.end = 330.0
+        self.assertEqual(self._cells("Extra")[1], "330", "its range follows too")
+        self.assertEqual(self._cells("A01"), ("", ""))  # the table was redrawn
+
+    def test_an_unbuilt_row_keeps_its_own_range(self):
+        self.ctrl._user_ranges["A02"] = (60.0, 90.0)
+        self.ctrl._populate_table()
+        with self.store.scene_edit("trim"):
+            self.store.shot_by_name("A01").end = 40.0
+        self.assertEqual(self._cells("A02"), ("60", "90"))
+
+    def test_a_showing_assessment_is_run_again_once_edits_settle(self):
         from types import SimpleNamespace
-        from mayatk.anim_utils.shots._shots import ShotUpdated, ShotBlock
+        from mayatk.anim_utils.shots._shots import (
+            ActiveShotChanged,
+            BatchComplete,
+            ShotRemoved,
+            ShotsEdited,
+            ShotUpdated,
+        )
 
-        sentinel = [SimpleNamespace(built=True, needs_build=False)]
-        self.ctrl._last_results = sentinel
-        self.ctrl._steps = [object()]  # non-empty to pass guard
-        self.ctrl._on_store_event(ShotUpdated(shot=ShotBlock(0, "A", 0, 10)))
-        self.assertIs(self.ctrl._last_results, sentinel)
+        shot = self.store.shot_by_name("A01")
+        for event in (
+            ShotUpdated(shot=shot),
+            ShotRemoved(shot_id=99),
+            BatchComplete(),
+            ShotsEdited(label="trim"),
+        ):
+            with self.subTest(event=event.name):
+                sentinel = [SimpleNamespace(built=True, needs_build=False)]
+                self.ctrl._last_results = sentinel
+                with patch.object(self.ctrl, "_reassess_soon") as soon:
+                    self.ctrl._on_store_event(event)
+                soon.assert_called_once_with()
+                self.assertIs(self.ctrl._last_results, sentinel, "kept until re-run")
+        with patch.object(self.ctrl, "_reassess_soon") as soon:
+            self.ctrl._on_store_event(ActiveShotChanged(shot_id=shot.shot_id))
+        soon.assert_not_called()
 
-    def test_active_shot_changed_preserves_results(self):
-        """ActiveShotChanged should not clear _last_results."""
-        from types import SimpleNamespace
-        from mayatk.anim_utils.shots._shots import ActiveShotChanged
+    def test_with_no_assessment_showing_none_is_run(self):
+        from mayatk.anim_utils.shots._shots import ShotsEdited
 
-        sentinel = [SimpleNamespace(built=True, needs_build=False)]
-        self.ctrl._last_results = sentinel
-        self.ctrl._steps = [object()]
-        self.ctrl._on_store_event(ActiveShotChanged(shot_id=0))
-        self.assertIs(self.ctrl._last_results, sentinel)
+        self.ctrl._last_results = []
+        with patch.object(self.ctrl, "_reassess_soon") as soon:
+            self.ctrl._on_store_event(ShotsEdited(label="trim"))
+        soon.assert_not_called()
 
-    def test_shot_removed_clears_results(self):
-        """ShotRemoved SHOULD clear _last_results."""
-        from mayatk.anim_utils.shots._shots import ShotRemoved
+    def test_a_hidden_panel_re_assesses_when_shown(self):
+        self.ctrl.ui.isVisible = MagicMock(return_value=False)
+        with patch.object(self.ctrl, "assess") as assess:
+            self.ctrl._reassess()
+            assess.assert_not_called()
+            self.ctrl.ui.isVisible.return_value = True
+            self.ctrl._on_show()
+            assess.assert_called_once_with(skip_key_check=True)
+            self.ctrl._on_show()
+            assess.assert_called_once_with(skip_key_check=True)
 
-        self.ctrl._last_results = [object()]
-        self.ctrl._steps = [object()]
-        self.ctrl._on_store_event(ShotRemoved(shot_id=0))
-        self.assertEqual(self.ctrl._last_results, [])
 
-    def test_batch_complete_clears_results(self):
-        """BatchComplete SHOULD clear _last_results."""
-        from mayatk.anim_utils.shots._shots import BatchComplete
+class TestBuildOptions(unittest.TestCase, _ControllerHarness):
+    """The header menu's Build options reach the engine: Rebuild Edited Shots
+    (off by default) and one toggle per behavior type, both kept per user."""
 
-        self.ctrl._last_results = [object()]
-        self.ctrl._steps = [object()]
-        self.ctrl._on_store_event(BatchComplete())
-        self.assertEqual(self.ctrl._last_results, [])
+    def setUp(self):
+        self.store = _fresh_store()
+        self.setup_controller()
+        self.addCleanup(self.ctrl._settings.clear, "rebuild_edited")
+        self.addCleanup(self.ctrl._settings.clear, "disabled_behaviors")
+
+    def test_edited_shots_are_kept_by_default(self):
+        self.assertFalse(self.ctrl._rebuild_edited)
+        self.assertFalse(self.ctrl._manifest(self.store).rebuild_edited)
+
+    def test_the_options_reach_the_engine(self):
+        self.ctrl._on_rebuild_edited_toggled(True)
+        self.ctrl._set_behavior_enabled("highlight", False)
+        mani = self.ctrl._manifest(self.store)
+        self.assertTrue(mani.rebuild_edited)
+        self.assertEqual(mani.disabled_behaviors, frozenset({"highlight"}))
+        self.ctrl._set_behavior_enabled("highlight", True)
+        self.assertEqual(
+            self.ctrl._manifest(self.store).disabled_behaviors, frozenset()
+        )
+
+    def test_a_typed_range_never_moves_a_built_shot(self):
+        """A built row cannot be typed in, so a range for it was typed before
+        it was built; a rebuild applied it over the shot's own bounds."""
+        steps = _make_steps("A01", behaviors=[])
+        self.ctrl._steps = steps
+        self.store.define_shot("A01", 10, 70, metadata={"step": "A01"})
+        self.ctrl._user_ranges = {"A01": (10.0, 50.0)}
+        seen = {}
+        engine = self.ctrl._manifest(self.store)
+
+        def sync(build_steps, ranges=None, **_kw):
+            seen.update(ranges or {})
+            return {}, {}, []
+
+        engine.sync = sync
+        with (
+            patch.object(self.ctrl, "_manifest", return_value=engine),
+            patch.object(self.ctrl, "_apply_post_build"),
+        ):
+            _mock_undo_info(self)
+            self.ctrl.build()
+        self.assertEqual(seen.get("A01"), (10, 70))
 
 
 # ---------------------------------------------------------------------------
@@ -2631,6 +2908,7 @@ class TestShotsControllerStoreEvents(unittest.TestCase):
         self.ctrl._sync_from_store = MagicMock()
         self.ctrl._sync_shot_editor = MagicMock()
         self.ctrl._sync_footer = MagicMock()
+        self.ctrl._relabel_shot_row = MagicMock()  # reads the panel's ui
 
     def test_shot_defined_triggers_full_sync(self):
         from mayatk.anim_utils.shots._shots import ShotDefined
@@ -2658,6 +2936,15 @@ class TestShotsControllerStoreEvents(unittest.TestCase):
         self.ctrl._on_store_event(ShotUpdated(shot=shot))
         self.ctrl._sync_from_store.assert_not_called()
         self.ctrl._sync_shot_editor.assert_called_once()
+        self.ctrl._relabel_shot_row.assert_called_once_with(shot)  # its row only
+
+    def test_a_sequencer_edit_triggers_full_sync(self):
+        """A trim or drag in the Shot Sequencer writes the bounds directly;
+        its ``scene_edit`` announcement is all this panel hears of it."""
+        from mayatk.anim_utils.shots._shots import ShotsEdited
+
+        self.ctrl._on_store_event(ShotsEdited(label="trim"))
+        self.ctrl._sync_from_store.assert_called_once()
 
 
 class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
@@ -2678,10 +2965,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.store = _fresh_store()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_skip_zero_calls_selected_keys_with_empty_steps(self, mock_auto, mock_sel):
         """With skip_zero mode and empty steps, _detect_regions must call
@@ -2699,10 +2986,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         self.assertEqual(len(regions), 1)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_auto_mode_still_calls_detect_shot_regions(self, mock_auto, mock_sel):
         """With auto mode, _detect_regions must call detect_shot_regions."""
@@ -2717,10 +3004,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_sel.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_csv_mode_respects_store_detection_mode(self, mock_auto, mock_sel):
         """When a CSV is loaded and detection_mode is skip_zero,
@@ -2735,10 +3022,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_auto.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_settings_changed_triggers_detect_after_first_show(
         self, mock_auto, mock_sel
@@ -2763,10 +3050,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_sel.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_settings_changed_skipped_before_first_show(self, mock_auto, mock_sel):
         """SettingsChanged before _on_first_show must NOT trigger detect(),
@@ -2788,10 +3075,10 @@ class TestDetectRegionsHonoursMode(unittest.TestCase, _ControllerHarness):
         mock_auto.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     def test_settings_changed_refreshes_ranges_in_csv_mode(self, mock_auto, mock_sel):
         """SettingsChanged in CSV mode must refresh ranges (not replace
@@ -2839,7 +3126,7 @@ class TestRecipeChangeKeepsTheTable(unittest.TestCase, _ControllerHarness):
     """
 
     _DETECT = (
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host"
         ".Detection.detect_shot_regions"
     )
     _REGIONS = [{"name": "Shot 1", "start": 10.0, "end": 50.0, "objects": ["ctrl"]}]
@@ -2864,10 +3151,14 @@ class TestRecipeChangeKeepsTheTable(unittest.TestCase, _ControllerHarness):
 
     def test_a_recipe_change_stales_the_last_assess(self):
         self.ctrl._last_results = [StepStatus(step_id="Shot 1", built=False)]
-        with patch(self._DETECT, return_value=self._REGIONS):
+        with (
+            patch(self._DETECT, return_value=self._REGIONS),
+            patch.object(self.ctrl, "_reassess_soon") as soon,
+        ):
             self.store.update_effect_recipe(fade_frames=20)
         self.assertEqual(self.ctrl._last_results, [])
         self.ui.b003.setEnabled.assert_called_with(False)
+        soon.assert_called_once_with()  # ...and runs again by itself
 
     def test_a_detection_setting_still_redetects_once(self):
         with patch(self._DETECT, return_value=self._REGIONS) as detect:
@@ -2905,10 +3196,10 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         self.ctrl._csv_path = ""
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_aborts_no_keys_selected(
         self, mock_active, mock_manifest_cls, _mock_sel
@@ -2925,9 +3216,9 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_proceeds_when_keys_selected(
         self, mock_active, mock_manifest_cls, mock_sel
@@ -2948,9 +3239,9 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_auto_mode_no_guard(self, mock_active, mock_manifest_cls, mock_auto):
         """assess() in auto mode runs without selected-keys guard."""
@@ -2967,9 +3258,9 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         mock_builder.assess.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_passes_skip_discovery_in_selected_keys_mode(
         self, mock_active, mock_manifest_cls, mock_sel
@@ -2999,9 +3290,9 @@ class TestAssessSelectedKeysGuard(unittest.TestCase, _ControllerHarness):
         )
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_no_skip_discovery_in_auto_mode(
         self, mock_active, mock_manifest_cls, mock_auto
@@ -3048,7 +3339,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl._csv_path = ""
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -3060,10 +3351,10 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl.sb.message_box.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_assess_shows_message_box_when_no_keys(
         self, mock_active, mock_manifest_cls, mock_sel
@@ -3075,7 +3366,7 @@ class TestMessageBoxOnUserActions(unittest.TestCase, _ControllerHarness):
         self.ctrl.sb.message_box.assert_called_once()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.regions_from_selected_keys",
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.regions_from_selected_keys",
         return_value=[],
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
@@ -3107,7 +3398,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         self.ctrl._first_shown = True
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_re_detects_in_detection_mode(self, mock_active, mock_detect):
@@ -3126,7 +3417,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         self.assertIsNone(self.ctrl._store)
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_reloads_the_scenes_manifest(self, mock_active, mock_detect):
@@ -3144,7 +3435,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         mock_detect.assert_not_called()
 
     @patch(
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots._shots.ShotStore.active")
     def test_scene_change_skipped_before_first_show(self, mock_active, mock_detect):
@@ -3173,7 +3464,7 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
                 return_value=new_store,
             ),
             patch(
-                "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.Detection.detect_shot_regions",
+                "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions",
                 return_value=[],
             ),
         ):
@@ -3211,7 +3502,7 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
     """
 
     _DETECT = (
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host"
         ".Detection.detect_shot_regions"
     )
 
@@ -3245,7 +3536,7 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
         self.assertEqual(top.text(COL_DESC), "Arm reaches out")
         self.assertEqual(self.ctrl._user_ranges["lever"], (50, 90))
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_a_scene_source_build_never_removes_or_records_a_sheet(self, mock_cls):
         """Built from the scene's shots (here: the sheet in the field failed),
         a build neither removes shots nor stamps the unused sheet as the
@@ -3344,7 +3635,7 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
         for shot in list(self.store.shots):
             self.store.remove_shot(shot.shot_id)
         selected = (
-            "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+            "mayatk.anim_utils.shots.shot_manifest.manifest_host"
             ".Detection.regions_from_selected_keys"
         )
         with (
@@ -3372,13 +3663,14 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Auto-fill Missing Assets + Copy Asset Names
+# Tests: Auto-fill Missing Assets
 # ---------------------------------------------------------------------------
 
 
 class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
-    """A sheet's asset-less steps take the scene's objects, and Copy Asset
-    Names puts the sheet's asset column back on the clipboard with them in."""
+    """A sheet's asset-less steps take the scene's objects -- and Export
+    hands them on with their steps (Copy Asset Names, which pasted them back
+    over the sheet's asset column, gave way to Export on 2026-10-10)."""
 
     CSV = (
         "Step,Step Contents,Asset Names\n"
@@ -3387,7 +3679,7 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
         "A02.),Lid lifts,lid_geo\n"
     )
     _DETECT = (
-        "mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots"
+        "mayatk.anim_utils.shots.shot_manifest.manifest_host"
         ".Detection.detect_shot_regions"
     )
 
@@ -3403,6 +3695,17 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
                 return_value=self.store,
             ),
             patch(self._DETECT, return_value=[]),
+            # The shot's members exist and are assets: this module's own claim,
+            # not an accident of which maya.cmds a conftest left in place (in a
+            # real Maya, the scene holds none of them).
+            *(
+                patch(
+                    "mayatk.anim_utils.shots.shot_manifest._shot_manifest"
+                    f".ShotManifest.{check}",
+                    return_value=True,
+                )
+                for check in ("_object_exists", "_is_asset_candidate")
+            ),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -3412,6 +3715,13 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
         with open(self.csv, "w", encoding="utf-8", newline="") as fh:
             fh.write(self.CSV)
         self.ctrl._steps = []
+        self.addCleanup(self.ctrl._settings.setValue, "export_options", "")
+        # Export hands the clipboard a Python-built QMimeData. Under the offscreen
+        # platform the clipboard keeps it in a Qt global that dies at libc exit,
+        # after Python: its wrapper's teardown then faulted the run there (exit
+        # 139 after a green summary). Clearing it frees the data while Python
+        # still runs.
+        self.addCleanup(QtWidgets.QApplication.clipboard().clear)
 
     def _load(self, enabled):
         # The template's option, applied: what its Auto-fill row sets.
@@ -3436,17 +3746,201 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
         steps = self._load(False)
         self.assertEqual(steps["A01"].objects, [])
 
-    def test_copy_puts_the_aligned_asset_column_on_the_clipboard(self):
+    def test_the_filled_names_export_with_their_steps(self):
         self._load(True)
-        self.ctrl._copy_asset_names()
+        self.ctrl._set_export_option("to", "clipboard")
+        self.ctrl._set_export_option("objects", "cell")
+        self.ctrl._set_export_option("columns", ["step", "objects"])
+        self.ctrl.export()
         mime = QtWidgets.QApplication.clipboard().mimeData()
-        self.assertEqual(mime.text(), 'Asset Names\n"door_geo\nhandle"\n\nlid_geo')
+        self.assertEqual(
+            mime.text(), 'Step\tObjects\nA01\t"door_geo\nhandle"\nA02\tlid_geo'
+        )
         self.assertIn("<td>door_geo<br>handle</td>", mime.html())
 
-    def test_copy_without_fills_says_so(self):
-        self._load(False)
-        self.ctrl._copy_asset_names()
-        self.assertIn("Nothing to copy", self.ctrl.ui.footer.setText.call_args.args[0])
+
+# ---------------------------------------------------------------------------
+# Tests: Export (the button beside Assess, and its option menu)
+# ---------------------------------------------------------------------------
+
+
+class TestExportButton(unittest.TestCase, _ControllerHarness):
+    """Export hands the manifest on as the table has it -- its rows in its
+    order, Local Edits applied, the scene's shot names and the status -- as
+    CSV, JSON or Markdown, to a file or the clipboard, the way its option menu
+    says; it never writes the loaded sheet.
+
+    2026-10-10 (user: "the copy asset names action ... doesn't seem very
+    useful ... Let's just have an export button with option menu that gives
+    options for format, etc").
+    """
+
+    def setUp(self):
+        import pythontk as ptk
+
+        self.setup_controller()
+        self.store = _fresh_store()
+        p = patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=self.store
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        for key in ("export_options", "export_dir", "hide_missing"):
+            self.addCleanup(
+                self.ctrl._settings.setValue, key, self.ctrl._settings.value(key)
+            )
+        self.ctrl._settings.setValue("export_options", "")
+        self.ctrl._store = self.store
+        self.ctrl._active_mapping = None
+        self.store.define_shot(
+            "A01_1", 0, 111, objects=["|g|KEYS", "|g|LOCK"], metadata={"step": "A01"}
+        )
+        self.store.define_shot("A01_2", 121, 231, objects=["|g|LOCK_B"])
+        self.store.define_shot("A02", 241, 321, objects=["|g|obj_A02"])
+        tmp = ptk.TempArtifacts("mtk_manifest_export", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.dir_path()
+        self.sheet = os.path.join(self.dir, "sheet.csv")
+        with open(self.sheet, "w", encoding="utf-8", newline="") as fh:
+            fh.write("Step,Step Contents,Asset Names\n")
+        # The clipboard's QMimeData must die while Python runs (see
+        # TestAutoFillAssetsController).
+        self.addCleanup(QtWidgets.QApplication.clipboard().clear)
+
+    def _load(self):
+        self.ctrl._load_data(_make_steps("A01", "A02", "A03"), csv_path=self.sheet)
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+
+    def _row(self, text):
+        tree = self.tree
+        return next(
+            tree.topLevelItem(i)
+            for i in range(tree.topLevelItemCount())
+            if tree.topLevelItem(i).text(COL_STEP) == text
+        )
+
+    def _footer(self):
+        return self.ui.footer.setText.call_args.args[0]
+
+    def _copy(self, **options):
+        """Export to the clipboard with *options*; the copied text."""
+        self.ctrl._set_export_option("to", "clipboard")
+        for key, value in options.items():
+            self.ctrl._set_export_option(key, value)
+        self.ctrl.export()
+        return QtWidgets.QApplication.clipboard().text()
+
+    def test_the_rows_go_as_the_table_has_them(self):
+        """The shot split off in the Sequencer sits after A01, as in the
+        table; A01's shot keeps the scene's name; A03 has none yet."""
+        self._load()
+        text = self._copy(columns=["step", "name", "shot", "status"])
+        self.assertEqual(
+            text.splitlines(),
+            [
+                "Step\tName\tShot\tStatus",
+                "A01\tA01\tA01_1\tbuilt",
+                "\t\tA01_2\tnot in doc",
+                "A02\tA02\tA02\tbuilt",
+                "A03\tA03\t\tmissing shot",
+            ],
+        )
+        self.assertEqual(
+            self._footer(), "Copied 4 rows as CSV -- paste it into a spreadsheet."
+        )
+
+    def test_a_local_edit_and_hidden_missing_shots_are_what_goes(self):
+        self._load()
+        row = self._row("A02")
+        self.assertTrue(self.ctrl._editor.begin_edit(row, COL_STEP))
+        row.setText(COL_STEP, "Lid_Up")
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+        self.ctrl._settings.setValue("hide_missing", True)
+        self.ctrl._redraw()
+        text = self._copy(columns=["step", "name", "shot"])
+        self.assertEqual(
+            text.splitlines()[1:],
+            ["A01\tA01\tA01_1", "\t\tA01_2", "A02\tLid_Up\tA02"],
+        )
+
+    def test_the_selected_rows_an_object_row_selecting_its_step(self):
+        self._load()
+        self._row("A02").child(0).setSelected(True)
+        text = self._copy(rows="selected", columns=["step", "objects"])
+        self.assertEqual(text.splitlines(), ["Step\tObjects", "A02\tobj_A02"])
+
+    def test_nothing_selected_says_so_and_copies_nothing(self):
+        self._load()
+        QtWidgets.QApplication.clipboard().setText("before")
+        self.assertEqual(self._copy(rows="selected"), "before")
+        self.assertIn("select the rows to export", self._footer())
+
+    def test_json_and_markdown_go_as_their_text(self):
+        self._load()
+        out = json.loads(self._copy(format="json", columns=["step", "start", "end"]))
+        self.assertEqual(out[0], {"step": "A01", "start": 0.0, "end": 111.0})
+        self.assertIsNone(out[1]["step"])
+        md = self._copy(format="markdown", columns=["step", "status"])
+        self.assertEqual(
+            md.splitlines()[:3],
+            ["| Step | Status |", "| --- | --- |", "| A01 | built |"],
+        )
+
+    def test_a_file_in_the_chosen_format_beside_the_sheet(self):
+        self._load()
+        self.ctrl._set_export_option("format", "json")
+        self.sb.save_file_dialog.return_value = os.path.join(self.dir, "out")
+        self.ctrl.export()
+        kwargs = self.sb.save_file_dialog.call_args.kwargs
+        self.assertEqual(
+            kwargs["start_dir"], os.path.join(self.dir, "sheet_manifest.json")
+        )
+        with open(os.path.join(self.dir, "out.json"), encoding="utf-8") as fh:
+            self.assertEqual(len(json.load(fh)), 4)
+        self.assertEqual(self._footer(), "Exported 4 rows to out.json.")
+        self.assertEqual(self.ctrl._settings.value("export_dir"), self.dir)
+
+    def test_the_loaded_sheet_is_never_written(self):
+        self._load()
+        self.sb.save_file_dialog.return_value = self.sheet
+        self.ctrl.export()
+        with open(self.sheet, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "Step,Step Contents,Asset Names\n")
+        self.assertIn("never writes it", self._footer())
+
+    def test_an_option_that_is_no_longer_a_choice_falls_back(self):
+        self.ctrl._settings.setValue(
+            "export_options",
+            {"format": "xlsx", "rows": "selected", "columns": ["end", "x", "step"]},
+        )
+        options = self.ctrl._export_options()
+        self.assertEqual(options["format"], "csv")
+        self.assertEqual(options["rows"], "selected")
+        self.assertEqual(options["columns"], ["step", "end"])
+
+    def test_the_option_menu_sets_the_options_and_names_them_on_the_button(self):
+        """The menu acted on, as a user does: pick JSON, untick a column."""
+        from uitk.widgets.pushButton import PushButton
+
+        host = QtWidgets.QWidget()
+        self.addCleanup(host.deleteLater)
+        btn = PushButton(host, setText="Export")
+        QtWidgets.QHBoxLayout(host).addWidget(btn)
+        self.ui.b004 = btn
+        self.ctrl._setup_export_menu()
+        fmt = self.ctrl._export_widgets["format"]
+        fmt.setCurrentIndex(fmt.findData("json"))
+        self.assertEqual(self.ctrl._export_options()["format"], "json")
+        self.assertFalse(self.ctrl._export_widgets["objects"].isEnabled())
+        self.assertIn("as JSON to a file", btn.toolTip())
+        columns = self.ctrl._export_widgets["columns"]
+        columns.item(0).setCheckState(QtCore.Qt.Unchecked)  # Step
+        self.assertNotIn("step", self.ctrl._export_options()["columns"])
+        self.assertIn(
+            columns.parentWidget(), btn.option_box.menu.findChildren(QtWidgets.QWidget)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3499,7 +3993,22 @@ class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
         self.assertIsNone(self.store.shot_by_name("OLD"))
         self.assertEqual(len(self.store._boundary_undo), before + 1)
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots.ShotManifest")
+    def test_removing_an_orphan_keeps_the_tables_expansion(self):
+        """Bug: Remove Shot redrew the table with a bare ``_populate_table``
+        -- every expanded row collapsed and a showing assessment's colours
+        went -- where every other store edit made from a row's menu redraws
+        through ``_redraw``.
+        Fixed: 2026-10-10"""
+        self.store.define_shot("A01", 1, 40)
+        orphan = self.store.define_shot("OLD", 50, 90)
+        self.ctrl._steps = _make_steps("A01")
+        self.ctrl._populate_table()
+        self.ctrl._step_items(["A01"])[0].setExpanded(True)
+        self.ctrl._remove_orphan(orphan)
+        self.assertIsNone(self.store.shot_by_name("OLD"))
+        self.assertTrue(self.ctrl._step_items(["A01"])[0].isExpanded())
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
     def test_build_never_removes_and_is_one_undoable_edit(self, mock_cls):
         self.store.define_shot("OLD", 50, 90)
         self.ctrl._steps = _make_steps("A01")
@@ -3576,6 +4085,202 @@ class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
             json.loads(self.ctrl._settings.value(key)),
             {"fill_missing_assets": True, "audio": "derive"},
         )
+
+
+class TestShotsTheDocDoesNotList(unittest.TestCase, _ControllerHarness):
+    """A sheet whose scene was edited in the Shot Sequencer (the production
+    case, SOL_REPLACE_ASSEMBLY 2026-10-10: eight shots split off there, 37 of
+    57 steps never animated): every shot shows its members, sits where the
+    timeline has it, and its row offers what a shot needs -- open, reveal,
+    add to the manifest, pair with a step, remove; steps lock by row or by
+    section; steps with no shot can be hidden, and Build follows the table."""
+
+    SHEET = "X:/split.csv"
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        p = patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=self.store
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(self.ctrl._settings.setValue, "hide_missing", False)
+        self.ctrl._store = self.store
+        self.ctrl._active_mapping = None
+        self.store.define_shot(
+            "A01_1", 0, 111, objects=["|g|KEYS", "|g|LOCK"], metadata={"step": "A01"}
+        )
+        self.store.define_shot("A01_2", 121, 231, objects=["|g|LOCK_B"])
+        self.store.define_shot("A02", 241, 321, objects=["|g|obj_A02"])
+
+    def _load(self, original=False):
+        """Load the sheet; *original* views it as delivered."""
+        steps = _make_steps("A01", "A02", "A03")
+        steps[2].section = "B"
+        self.ctrl._load_data(steps, csv_path=self.SHEET)
+        self.ctrl._editor.view_original(original)
+
+    def _rows(self):
+        return [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
+
+    def _row(self, text):
+        return next(r for r in self._rows() if r.text(COL_STEP) == text)
+
+    @staticmethod
+    def _children(row):
+        return [row.child(j).text(COL_DESC) for j in range(row.childCount())]
+
+    def _menu(self, item, pick=None):
+        """Right-click *item*; trigger the entry whose text starts with
+        *pick* (submenus searched).  Returns ``{text: enabled}``."""
+        from qtpy.QtWidgets import QMenu
+
+        seen = {}
+
+        def run(menu, *_args):
+            found = []
+
+            def walk(m):
+                for a in m.actions():
+                    if a.text():
+                        seen[a.text()] = a.isEnabled()
+                    if a.menu():
+                        walk(a.menu())
+                    elif pick and a.text().startswith(pick) and not found:
+                        found.append(a)
+
+            walk(menu)
+            if found:
+                found[0].trigger()
+            return None
+
+        with patch.object(self.tree, "itemAt", return_value=item):
+            with patch.object(QMenu, "exec_", run):
+                self.ctrl._show_item_menu(self.tree.visualItemRect(item).center())
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+        return seen
+
+    def test_a_split_shot_sits_beside_the_shot_it_was_split_from(self):
+        """Bug: a shot no step pairs with was listed after the last step, its
+        members not shown ("added shots are appended to the end of the
+        manifest instead of shown in shot order"; "all shots ... should
+        display their members").
+        Fixed: 2026-10-10"""
+        self._load()
+        self.assertEqual(
+            [r.text(COL_STEP) for r in self._rows()], ["A01", "A01_2", "A02", "A03"]
+        )
+        self.assertEqual(self._children(self._row("A01_2")), ["LOCK_B"])
+        # A step's shot shows its members the step does not list, too.
+        self.assertEqual(self._children(self._row("A01")), ["obj_A01", "KEYS", "LOCK"])
+        self.assertEqual(self._children(self._row("A02")), ["obj_A02"])
+
+    def test_a_shot_not_in_the_doc_has_the_menu_a_shot_needs(self):
+        self._load()
+        seen = self._menu(self._row("A01_2"))
+        for text, enabled in (
+            ("Open 'A01_2' in Shot Sequencer", True),
+            ("Open 'A01_2' in Shots", True),
+            ("Show 'LOCK_B' in Outliner", True),
+            ("Add 'A01_2' to the Manifest", True),
+            ("Pair 'A01_2' with Step", True),  # A03 has no shot
+            ("Remove Shot 'A01_2'", True),
+        ):
+            self.assertEqual(seen.get(text), enabled, text)
+        member = self._row("A01_2").child(0)
+        self.assertIn("Copy 'LOCK_B' to Clipboard", self._menu(member))
+        self.ctrl._editor.view_original(True)  # read-only: nothing joins
+        seen = self._menu(self._row("A01_2"))
+        self.assertFalse(seen["Add 'A01_2' to the Manifest"])
+
+    def test_adding_a_shot_makes_it_a_step_where_it_sits(self):
+        self._load()
+        self._menu(self._row("A01_2"), pick="Add 'A01_2'")
+        self.assertEqual(
+            self.store.manifest_edits[self.SHEET]["added"],
+            [{"step_id": "A01_2", "after": "A01"}],
+        )
+        self.assertEqual(self.store.shot_by_name("A01_2").metadata["step"], "A01_2")
+        from qtpy.QtCore import Qt
+
+        row = self._row("A01_2")
+        self.assertIsInstance(row.data(0, Qt.UserRole), BuilderStep)
+        self.assertEqual(
+            [r.text(COL_STEP) for r in self._rows()], ["A01", "A01_2", "A02", "A03"]
+        )
+        self.assertEqual(self._children(row), ["LOCK_B"])
+        self.assertTrue(self.ctrl._step_is_built("A01_2"))
+        self.assertEqual(self.ctrl._orphan_shots(), [])
+
+    def test_pairing_a_shot_with_a_step_binds_it(self):
+        self._load()
+        before = len(self.store._boundary_undo)
+        self._menu(self._row("A01_2"), pick="A03")
+        self.assertEqual(len(self.store._boundary_undo), before + 1, "one undo")
+        self.assertEqual(self.store.shot_by_name("A01_2").metadata["step"], "A03")
+        self.assertEqual(self.ctrl._pairing().shots["A03"].name, "A01_2")
+        self.assertEqual(
+            [r.text(COL_STEP) for r in self._rows()], ["A01", "A02", "A03"]
+        )
+        self.assertEqual(self._children(self._row("A03")), ["obj_A03", "LOCK_B"])
+
+    def test_a_step_with_no_shot_pairs_with_a_free_shot(self):
+        self._load()
+        self._menu(self._row("A03"), pick="A01_2")
+        self.assertEqual(self.ctrl._pairing().shots["A03"].name, "A01_2")
+
+    def test_a_section_locks_and_its_rows_take_no_edits_until_unlocked(self):
+        self._load()
+        self._menu(self._row("A01"), pick="Lock Section 'A'")
+        self.assertTrue(self.store.shot_by_name("A01_1").locked)
+        self.assertTrue(self.store.shot_by_name("A02").locked)
+        self.assertFalse(self.store.shot_by_name("A01_2").locked, "not a step's")
+        self.assertTrue(self.ctrl._editor.begin_edit(self._row("A01"), COL_STEP))
+        self.assertIsNone(self.ctrl._editor._pending, "no editor opened")
+        self.assertIn("locked", self.ui.footer.setText.call_args[0][0])
+        self.assertNotIn("Hide 'obj_A01'", self._menu(self._row("A01").child(0)))
+        self._menu(self._row("A01"), pick="Unlock 'A01'")
+        self.assertFalse(self.store.shot_by_name("A01_1").locked)
+        self.assertTrue(self.ctrl._editor.begin_edit(self._row("A01"), COL_STEP))
+        self.assertIsNotNone(self.ctrl._editor._pending)
+
+    def test_a_shots_members_take_no_local_edits(self):
+        self._load()
+        keys = self._row("A01").child(1)
+        self.assertEqual(keys.text(COL_DESC), "KEYS")
+        self.assertFalse(self.ctrl._editor.begin_edit(keys, COL_DESC))
+        self.assertNotIn("Hide 'KEYS'", self._menu(keys))
+
+    def test_hiding_waits_for_a_step_to_have_a_shot(self):
+        """Kept on per user, Hide Missing Shots would empty the table of a
+        fresh sheet -- every step is still to build; it applies once one has a
+        shot."""
+        for shot in list(self.store.shots):
+            self.store.remove_shot(shot.shot_id)
+        self.ctrl._settings.setValue("hide_missing", True)
+        self._load()
+        self.assertEqual(
+            [r.text(COL_STEP) for r in self._rows()], ["A01", "A02", "A03"]
+        )
+        self.assertEqual(len(self.ctrl._shown_steps()), 3)
+
+    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
+    def test_hidden_missing_shots_are_neither_shown_nor_built(self, mock_cls):
+        """("we should be able to hide missing shots in the manifest")"""
+        self._load()
+        self.ctrl._on_hide_missing_toggled(True)
+        self.assertEqual(
+            [r.text(COL_STEP) for r in self._rows()], ["A01", "A01_2", "A02"]
+        )
+        builder = MagicMock()
+        builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+        mock_cls.return_value = builder
+        _mock_undo_info(self)
+        self.ctrl.build()
+        built = [s.step_id for s in builder.sync.call_args.args[0]]
+        self.assertEqual(built, ["A01", "A02"], "A03 has no shot: hidden, not built")
 
 
 class TestReapplyReportsWhatItDid(unittest.TestCase, _ControllerHarness):
@@ -4589,7 +5294,7 @@ class TestRefreshState(unittest.TestCase):
         self.ctrl.ui = MagicMock()
         self.ctrl.ui.cmb_detection_mode = MagicMock()
         self.ctrl.ui.spn_detection = MagicMock()
-        self.ctrl.ui.spn_gap = MagicMock()
+        self.ctrl.ui.btn_apply_gap = MagicMock()
 
     def test_no_shots_detection_relevant(self):
         """With no shots and animation, detection widgets are enabled."""
@@ -4599,7 +5304,7 @@ class TestRefreshState(unittest.TestCase):
             self.ctrl.refresh_state()
         self.ctrl.ui.cmb_detection_mode.setEnabled.assert_called_with(True)
         self.ctrl.ui.spn_detection.setEnabled.assert_called_with(True)
-        self.ctrl.ui.spn_gap.setEnabled.assert_called_with(False)
+        self.ctrl.ui.btn_apply_gap.setEnabled.assert_called_with(False)
 
     def test_with_shots_detection_disabled(self):
         """With existing shots, detection widgets are disabled."""
@@ -4609,7 +5314,7 @@ class TestRefreshState(unittest.TestCase):
             self.ctrl.refresh_state()
         self.ctrl.ui.cmb_detection_mode.setEnabled.assert_called_with(False)
         self.ctrl.ui.spn_detection.setEnabled.assert_called_with(False)
-        self.ctrl.ui.spn_gap.setEnabled.assert_called_with(True)
+        self.ctrl.ui.btn_apply_gap.setEnabled.assert_called_with(True)
 
     def test_auto_no_animation_disables_threshold(self):
         """In auto mode with no animation, min gap spinner is disabled."""

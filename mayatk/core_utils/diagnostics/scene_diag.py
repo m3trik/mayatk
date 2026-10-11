@@ -357,20 +357,6 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
             "notes": notes,
         }
 
-    # Map types that contain actual color data (should use sRGB)
-    # All others are non-color data and should use Raw/Linear
-    COLOR_MAP_TYPES = frozenset(
-        {
-            "Base_Color",
-            "Albedo_Transparency",
-            "Diffuse",
-            "Emissive",
-            "Specular",
-            "Subsurface_Scattering",
-            "Sheen",
-        }
-    )
-
     @classmethod
     def fix_missing_color_spaces(
         cls,
@@ -394,7 +380,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
         re-enabled only after every node has a valid value, using ``evalDeferred``
         so the DG is idle.
 
-        Uses pythontk's TextureMapFactory.resolve_map_type for robust texture type
+        Uses pythontk's MapFactory.resolve_map_type for robust texture type
         detection based on comprehensive suffix matching.
 
         Parameters
@@ -407,7 +393,7 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
             If None, auto-detects best Raw/Linear variant from available spaces.
         auto_detect : bool
             If True, attempts to detect texture type from filename using
-            TextureMapFactory.resolve_map_type and assigns appropriate color space.
+            MapFactory.resolve_map_type and assigns appropriate color space.
         dry_run : bool
             If True, only report what would be changed without modifying nodes.
         verbose : bool
@@ -760,9 +746,17 @@ class SceneDiagnostics(_SceneDiagnosticsInternal):
 
         for candidate in candidates:
             try:
-                map_type = ptk.TextureMapFactory.resolve_map_type(candidate)
+                # `MapFactory`: the retired `TextureMapFactory` name raised
+                # AttributeError here, the except below swallowed it, and
+                # every texture -- normals and roughness too -- came back sRGB.
+                map_type = ptk.MapFactory.resolve_map_type(candidate)
                 if map_type:
-                    return color_space if map_type in cls.COLOR_MAP_TYPES else raw_space
+                    # The registry's color_space is the SSoT. A list kept here
+                    # drifted from it -- it called Sheen (a weight) colour and
+                    # knew none of the OpenPBR lobe tints.
+                    entry = ptk.MapRegistry().get(map_type)
+                    is_color = entry is not None and entry.color_space == "sRGB"
+                    return color_space if is_color else raw_space
             except Exception:
                 continue
 

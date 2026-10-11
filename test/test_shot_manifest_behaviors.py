@@ -403,9 +403,42 @@ class MemberResolutionTest(MayaTkTestCase):
         self.assertEqual(
             self.store.resolve_member("door_geo"), ("door_geo", "ambiguous")
         )
-        self._cube("lid_geo", parent="setA")
-        self._cube("lid_geo", parent="setB")
+        lids = [
+            self._cube("lid_geo", parent="setA"),
+            self._cube("lid_geo", parent="setB"),
+        ]
         self.assertEqual(self.store.resolve_member("lid_geo"), ("lid_geo", "ambiguous"))
+        self.assertEqual(sorted(self.store.member_nodes("lid_geo")), sorted(lids))
+
+    def test_show_in_outliner_selects_every_node_a_shared_name_answers_to(self):
+        """Regression: a name two nodes share raised ``More than one object
+        matches name`` from the context menu's Show in Outliner -- the very
+        nodes the user needs selected to fix the duplicate."""
+        from types import SimpleNamespace
+
+        from mayatk.anim_utils.shots.shot_manifest.shot_manifest_slots import (
+            ShotManifestController as Ctrl,
+        )
+
+        lids = [
+            self._cube("lid_geo", parent="setA"),
+            self._cube("lid_geo", parent="setB"),
+        ]
+        door = self._cube("door_geo")
+        # An audio row's node is no transform: found by its name.
+        sound = cmds.ls(cmds.createNode("audio", name="click_snd"), long=True)[0]
+        footers = []
+        stub = SimpleNamespace(
+            _active_store=lambda: self.store,
+            _set_footer=lambda text, **_kw: footers.append(text),
+        )
+        stub._reveal_targets = Ctrl._reveal_targets
+        Ctrl._show_in_outliner(stub, ["lid_geo", "door_geo", "click_snd", "hinge_geo"])
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, long=True)), sorted(lids + [door, sound])
+        )
+        self.assertIn("'lid_geo' (2)", footers[-1])
+        self.assertIn("'hinge_geo' not found", footers[-1])
 
     def test_a_build_keys_the_namespaced_node_a_doc_name_finds(self):
         door = self._in_namespace("AC", "door_geo")

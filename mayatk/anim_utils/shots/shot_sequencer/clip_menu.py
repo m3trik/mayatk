@@ -4,7 +4,7 @@
 
 Provides :class:`ClipMenuMixin` -- mixed into
 :class:`~.shot_sequencer_controller.ShotSequencerController`. The clip and gap
-context menus, Move to Shot, clip locking, and deleting, stashing and
+context menus, Move / Copy to Shot, clip locking, and deleting, stashing and
 retrieving the keys under clips.
 """
 
@@ -80,9 +80,9 @@ class ClipMenuMixin:
             shots = self.sequencer.sorted_shots()
             if seqs and len(shots) > 1:
                 menu.addSeparator()
-                move_label = f"Move to Shot ({len(seqs)})" if multi else "Move to Shot"
-                move_menu = menu.addMenu(move_label)
-                self._populate_move_to_shot(move_menu, seqs)
+                self._add_send_to_shot_menu(
+                    menu, seqs, suffix=f" ({len(seqs)})" if multi else ""
+                )
 
     def _clips_to_sequences(self, widget, clip_ids, include_read_only=False):
         """Convert widget clip ids to unified sequence dicts.
@@ -142,11 +142,56 @@ class ClipMenuMixin:
             seqs.append(seq)
         return seqs
 
+    def _add_send_to_shot_menu(
+        self, menu, seqs: list, noun: str = "clip", suffix: str = ""
+    ):
+        """Add the Move / Copy to Shot submenu to *menu* and return it.
+
+        ONE list of shots with a Copy toggle at its head, not a Move and a
+        Copy submenu listing the same shots twice (2026-10-07: "copy to shot
+        alongside the existing move to shot.  Is there a way to make this less
+        redundant?").  The toggle keeps the menu open and retitles the submenu
+        with what a pick now does; it holds for the session, so a run of
+        copies is one toggle.  *suffix* follows the title (a selection count).
+        """
+        from qtpy import QtWidgets
+
+        sub = QtWidgets.QMenu(menu)
+        menu.addMenu(sub)
+
+        def retitle() -> None:
+            verb = "Copy" if self._copy_to_shot else "Move"
+            sub.setTitle(f"{verb} to Shot{suffix}")
+
+        def set_copy(on: bool) -> None:
+            self._copy_to_shot = bool(on)
+            retitle()
+
+        box = QtWidgets.QCheckBox("Copy  (keep the originals)")
+        box.setChecked(self._copy_to_shot)
+        box.setToolTip(
+            "On: a pick copies the selection into that shot, leaving it where\n"
+            "it is.  Off: a pick moves it.  Audio clips move only."
+        )
+        box.toggled.connect(set_copy)
+        holder = QtWidgets.QWidget(sub)
+        lay = QtWidgets.QHBoxLayout(holder)
+        lay.setContentsMargins(8, 3, 8, 3)
+        lay.addWidget(box)
+        row = QtWidgets.QWidgetAction(sub)
+        row.setDefaultWidget(holder)
+        sub.addAction(row)
+        sub.addSeparator()
+        retitle()
+        self._populate_send_to_shot(sub, seqs, noun=noun)
+        return sub
+
     #: The two moves an animator makes most: one shot along the sequence.
     _RELATIVE_MOVES = (("Next Shot", "merge_next"), ("Previous Shot", "merge_prev"))
 
-    def _populate_move_to_shot(self, move_menu, seqs: list, noun: str = "clip"):
-        """Fill a Move to Shot submenu: the neighbours first, then every shot.
+    def _populate_send_to_shot(self, move_menu, seqs: list, noun: str = "clip"):
+        """Fill a Move / Copy to Shot submenu: the neighbours first, then
+        every shot.
 
         **Next Shot** and **Previous Shot** head the list so the common move --
         nudging a selection one shot along the sequence -- is always in the
@@ -154,11 +199,12 @@ class ClipMenuMixin:
         shot the selection lives in (the active shot when it spans several),
         and each is listed only when that neighbour exists.  Below a
         separator comes every shot by name and range, minus the one the whole
-        selection already occupies.
+        selection already occupies.  A pick moves or copies by the submenu's
+        toggle as it stands when clicked (:attr:`_copy_to_shot`).
 
         Parameters:
             move_menu: The submenu to fill.
-            seqs: Sequence dicts to move (clips or key selections).
+            seqs: Sequence dicts to send (clips or key selections).
             noun: What the footer counts afterwards -- ``"clip"`` or ``"key"``.
         """
         source_ids = {self.sequencer._source_shot_id_for(sq) for sq in seqs}
@@ -188,22 +234,37 @@ class ClipMenuMixin:
             label, shot_id = entry
             act = move_menu.addAction(label)
             act.triggered.connect(
-                lambda _checked=False, sid=shot_id: self._move_clips_to_shot(
-                    seqs, sid, noun=noun
+                lambda _checked=False, sid=shot_id: self._send_to_shot(
+                    seqs, sid, noun=noun, copy=self._copy_to_shot
                 )
             )
 
-    def _move_clips_to_shot(self, sequences, dest_shot_id, noun: str = "clip"):
-        """Run move_sequences_to_shot, undoable, then refresh.
+    def _send_to_shot(
+        self, sequences, dest_shot_id, noun: str = "clip", copy: bool = False
+    ):
+        """Move -- or *copy* -- *sequences* into *dest_shot_id* as one undo
+        step (``move_sequences_to_shot`` / ``copy_sequences_to_shot``), then
+        refresh.
 
-        Reports the outcome in the footer.  The move is a no-op whenever
-        every selected sequence already lives in the destination — that
-        used to look like the command silently failing.  *noun* is what the
-        footer counts: a clip menu moves clips, a key menu moves keys.
+        Reports the outcome in the footer.  Nothing happens when every
+        selected sequence already lives in the destination, and the footer
+        says so -- that used to look like the command silently failing; a
+        copy of audio alone says audio is not copied.  *noun* is what the
+        footer counts: a clip menu sends clips, a key menu sends keys.
         """
+        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
+
+        title = "Copy to Shot" if copy else "Move to Shot"
+        if copy and sequences:
+            sequences = [sq for sq in sequences if sq["kind"] == "anim"]
+            if not sequences:
+                self._set_footer(
+                    f"{title}: audio clips are not copied.", color="#E0A0A0"
+                )
+                return
         if self.sequencer is None or not sequences:
             self._set_footer(
-                "Move to Shot: nothing movable in the selection.", color="#E0A0A0"
+                f"{title}: nothing to send in the selection.", color="#E0A0A0"
             )
             return
         dest = self.sequencer.shot_by_id(dest_shot_id)
@@ -214,26 +275,38 @@ class ClipMenuMixin:
         ]
         if not movable:
             self._set_footer(
-                "Move to Shot: selection is already in "
+                f"{title}: selection is already in "
                 f"{dest.name if dest else 'that shot'}.",
                 color="#E0A0A0",
             )
             return
 
-        with self.sequencer.store.scene_edit("movetoshot"):
-            self.sequencer.move_sequences_to_shot(movable, dest_shot_id)
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._sync_to_widget()
-        self._sync_combobox()
-        self._apply_view_playback_range()
+        send = (
+            self.sequencer.copy_sequences_to_shot
+            if copy
+            else self.sequencer.move_sequences_to_shot
+        )
+        try:
+            with self.sequencer.store.scene_edit(
+                "copytoshot" if copy else "movetoshot"
+            ):
+                send(movable, dest_shot_id)
+        except ShotBoundaryConflict as exc:
+            # A refusal is an answer, not a crash (the shot lane reports its
+            # own the same way).  The restore point stays: room may have been
+            # opened before a ripple was declined, and Ctrl+Z takes it back.
+            self.logger.warning(str(exc))
+            self._after_shot_change()  # the redraw sets a footer of its own
+            self._set_footer(f"{title}: {exc}", color="#E0A0A0")
+            return
+        self._after_shot_change()
         n = (
             sum(len(sq.get("times") or ()) for sq in movable)
             if noun == "key"
             else len(movable)
         )
         self._set_footer(
-            f"Moved {n} {noun}{'s' if n != 1 else ''} to "
+            f"{'Copied' if copy else 'Moved'} {n} {noun}{'s' if n != 1 else ''} to "
             f"{dest.name if dest else dest_shot_id}"
         )
 
@@ -342,10 +415,25 @@ class ClipMenuMixin:
         self._syncing = True
         try:
             with self.sequencer.store.scene_edit("delkeys"):
+                # Every claim on a deleted key goes with it -- a behavior's
+                # authored one too, which the reconcile below (samples and
+                # holds) never reaches.
+                release = self.sequencer.store.release_replaced()
                 for plug, start, end in ops:
                     try:
+                        # Read first: a curve that loses every key goes with them.
+                        doomed = [
+                            (
+                                crv,
+                                cmds.keyframe(crv, q=True, tc=True, time=(start, end)),
+                            )
+                            for crv in cmds.keyframe(plug, q=True, name=True) or []
+                        ]
                         cmds.cutKey(plug, time=(start, end), clear=True)
                         deleted = True
+                        for crv, times in doomed:
+                            if times:
+                                release(crv, times)
                     except Exception:
                         self.logger.debug(
                             "_delete_clip_keys: cutKey failed for '%s'.",
@@ -541,6 +629,9 @@ class ClipMenuMixin:
             self._syncing = True
             try:
                 with self.sequencer.store.scene_edit("delkeys"):
+                    # Every claim on a deleted key goes with it, a behavior's
+                    # too (the reconcile below reaches samples and holds only).
+                    release = self.sequencer.store.release_replaced()
                     for clip_id, times in by_clip.items():
                         clip = widget.get_clip(clip_id)
                         if clip is None:
@@ -562,6 +653,7 @@ class ClipMenuMixin:
                                 try:
                                     cmds.cutKey(str(crv), time=(t, t), clear=True)
                                     cut_ok = True
+                                    release(str(crv), [t])
                                 except Exception:
                                     self.logger.debug(
                                         "_delete_selected_clip_keys: cutKey failed "

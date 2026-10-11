@@ -108,6 +108,45 @@ class TestAlphaModeSection(MayaTkTestCase):
         cube, _ = self._standard_surface("solidStd")
         self.assertNotIn("solidStd", SceneState.read([cube]).get("alpha_mode") or {})
 
+    def _open_pbr(self, name, opacity=None, connect=False):
+        try:
+            mat = cmds.shadingNode("openPBRSurface", asShader=True, name=name)
+        except RuntimeError as error:  # openPBR needs a recent 2025+
+            self.skipTest(str(error))
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        sg = cmds.sets(
+            renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"
+        )
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        if opacity is not None:
+            cmds.setAttr(f"{mat}.geometryOpacity", opacity)
+        if connect:
+            tex = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+            cmds.connectAttr(f"{tex}.outAlpha", f"{mat}.geometryOpacity")
+        return cube, mat
+
+    def test_open_pbr_opacity_is_blend(self):
+        """openPBR's opacity is the SCALAR ``geometryOpacity``: the reader knew
+        only standardSurface's colour ``opacity``, so an openPBR cutout or tint
+        reached the GLB opaque."""
+        from mayatk.env_utils.scene_state import SceneState
+
+        for name, kwargs in (
+            ("opbrTint", {"opacity": 0.5}),
+            ("opbrCutout", {"connect": True}),
+        ):
+            with self.subTest(name):
+                cube, _ = self._open_pbr(name, **kwargs)
+                entry = (SceneState.read([cube]).get("alpha_mode") or {}).get(name)
+                self.assertEqual(entry, {"mode": "BLEND"})
+
+    def test_open_pbr_opaque_contributes_nothing(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, _ = self._open_pbr("solidOpbr")
+        self.assertNotIn("solidOpbr", SceneState.read([cube]).get("alpha_mode") or {})
+
     def _legacy(self, name, node_type="phong", transparency=None, connect=False):
         mat = cmds.shadingNode(node_type, asShader=True, name=name)
         cube = cmds.polyCube(name=f"{name}_geo")[0]
@@ -261,6 +300,52 @@ class TestEmissionWeight(MayaTkTestCase):
         self.assertEqual(
             SceneState.read([cube])["emissive"]["emitMat"]["color"], [0.5, 0.5, 0.5]
         )
+
+
+class TestBaseWeight(MayaTkTestCase):
+    """The diffuse albedo is ``base`` x ``baseColor`` on standardSurface and
+    aiStandardSurface (OpenPBR's ``baseWeight`` likewise). The FBX maps neither,
+    and a reader of the colour alone shipped a lowered weight as if it were 1
+    -- brighter than it renders, and than unitytk's importer, which folds the
+    weight in. (All three default to 1.0, over a 0.8 colour.)"""
+
+    def _cube(self, name, shader_type="standardSurface"):
+        cube = cmds.polyCube(name=f"{name}_geo")[0]
+        mat = cmds.shadingNode(shader_type, asShader=True, name=name)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        return cube, mat
+
+    def test_the_weight_is_the_shader_maps(self):
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        ss = cmds.shadingNode("standardSurface", asShader=True)
+        self.assertEqual(ShaderAttributeMap.base_weight(ss), 1.0, "the default")
+        cmds.setAttr(f"{ss}.base", 0.8)
+        self.assertAlmostEqual(ShaderAttributeMap.base_weight(ss), 0.8)
+        lam = cmds.shadingNode("lambert", asShader=True)
+        self.assertEqual(ShaderAttributeMap.base_weight(lam), 1.0, "unweighted")
+
+    def test_a_constant_colour_carries_its_weight(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, mat = self._cube("weighted")
+        cmds.setAttr(f"{mat}.baseColor", 0.5, 0.25, 1.0, type="double3")
+        cmds.setAttr(f"{mat}.base", 0.5)
+        color = SceneState.read([cube])["base_color"][mat]["color"]
+        for got, want in zip(color, [0.25, 0.125, 0.5]):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_a_driven_weight_reads_as_one(self):
+        """A map on ``base``: the FBX writes the scalar as 1, and so does
+        unitytk's reader -- the GLB matches it rather than a frame's sample."""
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        _cube, mat = self._cube("drivenWeight")
+        ramp = cmds.shadingNode("ramp", asTexture=True)
+        cmds.connectAttr(f"{ramp}.outAlpha", f"{mat}.base", force=True)
+        self.assertEqual(ShaderAttributeMap.base_weight(mat), 1.0)
 
 
 if __name__ == "__main__":

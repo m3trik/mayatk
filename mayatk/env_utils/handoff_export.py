@@ -92,6 +92,14 @@ class MayaExportMixin:
     #: texturing target never receives animation to begin with.
     drop_rig_apparatus: bool = False
 
+    #: Export the scene's animation (and split its declared takes) when the
+    #: request does not say: the ``INCLUDE_ANIMATION`` param wins whenever it
+    #: is given. A bridge whose consumer plays the FBX's takes and whose panel
+    #: offers no animation knob opts in -- the Unity bridge, whose importer
+    #: builds one clip per take. Off by default, where every DCC hand-off panel
+    #: carries the knob. Mirror of blendertk's flag of the same name.
+    include_animation: bool = False
+
     def _export_stagers(self) -> Tuple[str, ...]:
         """:attr:`export_stagers` as a tuple: the stagers this bridge runs.
 
@@ -99,6 +107,11 @@ class MayaExportMixin:
         stagers here.
         """
         return tuple(self.export_stagers)
+
+    def _includes_animation(self, params: Dict[str, Any]) -> bool:
+        """Whether this send carries animation: ``INCLUDE_ANIMATION`` when
+        *params* gives it, else :attr:`include_animation`."""
+        return bool(params.get("INCLUDE_ANIMATION", self.include_animation))
 
     def lightmap_search_dirs(self) -> List[str]:
         """Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
@@ -287,9 +300,7 @@ class MayaExportMixin:
             "FBXExportTangents": True,
             "FBXExportEmbeddedTextures": bool(params.get("EMBED_TEXTURES", True)),
             "FBXExportTriangulate": bool(params.get("TRIANGULATE", False)),
-            "FBXExportBakeComplexAnimation": bool(
-                params.get("INCLUDE_ANIMATION", False)
-            ),
+            "FBXExportBakeComplexAnimation": self._includes_animation(params),
             "FBXExportAnimationOnly": False,
             "FBXExportCameras": False,
             "FBXExportLights": False,
@@ -370,7 +381,7 @@ class MayaExportMixin:
             # ``apply_takes`` writes sticky MEL state per take, so a raise partway
             # through its loop leaves a partial split armed while the count that
             # would trigger the cleanup was never assigned.
-            wants_animation = bool(params.get("INCLUDE_ANIMATION", False))
+            wants_animation = self._includes_animation(params)
             try:
                 if wants_animation:
                     # Realize the shots the scene DECLARES as named AnimStacks, so
@@ -529,7 +540,7 @@ class MayaExportMixin:
                 "useRegistry" if bool(params.get("INCLUDE_MATERIALS", True)) else "none"
             ),
         )
-        if bool(params.get("INCLUDE_ANIMATION", False)):
+        if self._includes_animation(params):
             frame_range = UsdUtils.sampling_frame_range(transforms)
             if frame_range:
                 options["frameRange"] = frame_range

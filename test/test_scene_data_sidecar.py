@@ -6,6 +6,9 @@ These tests don't require Maya — the sidecar is a path/JSON helper that
 sits below the cmds/mel layer.  Run with the workspace venv:
 
     & .venv\\Scripts\\python.exe -m pytest mayatk\\test\\test_scene_data_sidecar.py -v
+
+The records live in a per-user store (``SceneDataSidecar.store_dir``), so the
+module points the user-config root at a throwaway dir (``setUpModule``).
 """
 
 import json
@@ -13,6 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 # Allow running directly without installing mayatk.
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +28,26 @@ for p in (
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import pythontk as ptk
+from pythontk.core_utils.test_sandbox import TestSandbox
+
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
+
+_SANDBOX = TestSandbox.user_config()
+
+
+def setUpModule():
+    _SANDBOX.__enter__()
+
+
+def tearDownModule():
+    _SANDBOX.__exit__(None, None, None)
+
+
+def _placed(path: str) -> str:
+    """*path* with its folder created: a record's store is made on write."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
 
 class BaseStemTest(unittest.TestCase):
@@ -155,12 +178,15 @@ class EnsureBaseNameTest(unittest.TestCase):
 
     def test_already_base_name_returns_path(self):
         with tempfile.TemporaryDirectory() as d:
-            existing = os.path.join(d, ".shot.scene_data.json")
+            export = os.path.join(d, "shot_v003.fbx")
+            existing = _placed(
+                SceneDataSidecar.manifest_path_for(export, base_stem=True)
+            )
             open(existing, "w").close()
-            result = SceneDataSidecar.ensure_base_name(os.path.join(d, "shot_v003.fbx"))
+            result = SceneDataSidecar.ensure_base_name(export)
             self.assertEqual(result, existing)
-            # No migration should have occurred — file count is 1.
-            self.assertEqual(len(os.listdir(d)), 1)
+            # No migration should have occurred — the store holds one file.
+            self.assertEqual(len(os.listdir(SceneDataSidecar.store_dir(export))), 1)
 
     def test_v1_named_base_manifest_promoted(self):
         # A base-stem manifest under the old naming is renamed, not re-scanned.
@@ -171,7 +197,8 @@ class EnsureBaseNameTest(unittest.TestCase):
             result = SceneDataSidecar.ensure_base_name(os.path.join(d, "shot_v003.fbx"))
             self.assertEqual(os.path.basename(result), ".shot.scene_data.json")
             self.assertFalse(os.path.exists(legacy))
-            self.assertEqual(len(os.listdir(d)), 1)
+            # Nothing stays beside the deliverable: the record moved to the store.
+            self.assertEqual(os.listdir(d), [])
 
     def test_migrates_latest_legacy_to_base(self):
         with tempfile.TemporaryDirectory() as d:
@@ -186,8 +213,10 @@ class EnsureBaseNameTest(unittest.TestCase):
             self.assertEqual(os.path.basename(result), ".shot.scene_data.json")
             self.assertTrue(os.path.exists(result))
             self.assertFalse(os.path.exists(legacy))
-            # The older legacy is left intact (not our job to clean up).
-            self.assertTrue(os.path.exists(other))
+            # The older legacy is not promoted: it moves into the store as is.
+            self.assertFalse(os.path.exists(other))
+            stored = os.path.join(os.path.dirname(result), os.path.basename(other))
+            self.assertTrue(os.path.exists(stored))
 
     def test_prev_backup_carried_forward(self):
         with tempfile.TemporaryDirectory() as d:
@@ -240,10 +269,25 @@ class MigrateLegacyTest(unittest.TestCase):
 
     def test_noop_when_current_exists(self):
         with tempfile.TemporaryDirectory() as d:
-            current = os.path.join(d, ".shot.scene_data.json")
+            export = os.path.join(d, "shot.fbx")
+            current = _placed(SceneDataSidecar.manifest_path_for(export))
             open(current, "w").close()
-            result = SceneDataSidecar.migrate_legacy(os.path.join(d, "shot.fbx"))
+            result = SceneDataSidecar.migrate_legacy(export)
             self.assertEqual(result, current)
+
+    def test_a_record_left_beside_moves_into_the_store(self):
+        with tempfile.TemporaryDirectory() as d:
+            export = os.path.join(d, "shot.fbx")
+            beside = os.path.join(d, ".shot.scene_data.json")
+            with open(beside, "w") as f:
+                json.dump({"paths": ["A"]}, f)
+            # A reader moves nothing: the folder may be shared.
+            self.assertEqual(SceneDataSidecar.read_manifest(export), {"A"})
+            self.assertTrue(os.path.exists(beside))
+            result = SceneDataSidecar.migrate_legacy(export)
+            self.assertEqual(result, SceneDataSidecar.manifest_path_for(export))
+            self.assertEqual(os.listdir(d), [])
+            self.assertEqual(SceneDataSidecar.read_manifest(export), {"A"})
 
     def test_orphaned_prev_backup_migrated(self):
         # Manifest deleted but its v1-named .prev survives: the fallback
@@ -396,7 +440,9 @@ class ManifestFormatTest(unittest.TestCase):
                 "hash": SceneDataSidecar._paths_hash(paths),
             }
             with open(
-                SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8"
+                _placed(SceneDataSidecar.manifest_path_for(export)),
+                "w",
+                encoding="utf-8",
             ) as f:
                 json.dump(v1, f)
             self.assertEqual(SceneDataSidecar.read_manifest(export), set(paths))
@@ -441,13 +487,17 @@ class SingleFileContractTest(unittest.TestCase):
             SceneDataSidecar.write_manifest(export, {"A", "A|B"}, data={"k": 2})
             manifest = SceneDataSidecar.manifest_path_for(export)
             self.assertFalse(os.path.exists(manifest + ".prev"))
-            # The manifest is the only sidecar in the folder.
-            self.assertEqual(os.listdir(d), [os.path.basename(manifest)])
+            # The manifest is the only file in the store, and nothing is
+            # left beside the deliverable.
+            self.assertEqual(
+                os.listdir(os.path.dirname(manifest)), [os.path.basename(manifest)]
+            )
+            self.assertEqual(os.listdir(d), [])
 
     def test_write_sweeps_v2_companions(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
-            manifest = SceneDataSidecar.manifest_path_for(export)
+            manifest = _placed(SceneDataSidecar.manifest_path_for(export))
             leftovers = [
                 manifest + ".prev",
                 os.path.join(d, ".shot.hierarchy.json.prev"),
@@ -464,7 +514,9 @@ class SingleFileContractTest(unittest.TestCase):
     def test_write_sweeps_companions_under_base_stem(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot_v003.fbx")
-            manifest = SceneDataSidecar.manifest_path_for(export, base_stem=True)
+            manifest = _placed(
+                SceneDataSidecar.manifest_path_for(export, base_stem=True)
+            )
             leftovers = [
                 manifest + ".prev",
                 os.path.join(d, ".shot.hierarchy_diff.txt"),
@@ -477,11 +529,16 @@ class SingleFileContractTest(unittest.TestCase):
                 self.assertFalse(os.path.exists(p), p)
 
     def test_failed_write_leaves_no_tmp(self):
-        # A write into a nonexistent directory fails without littering.
+        # A write that fails returns None without littering either folder.
         with tempfile.TemporaryDirectory() as d:
-            export = os.path.join(d, "missing_subdir", "shot.fbx")
-            result = SceneDataSidecar.write_manifest(export, {"A"})
+            export = os.path.join(d, "shot.fbx")
+            with patch.object(
+                ptk.FileUtils, "atomic_write_text", side_effect=OSError("disk full")
+            ):
+                result = SceneDataSidecar.write_manifest(export, {"A"})
             self.assertIsNone(result)
+            self.assertEqual(os.listdir(d), [])
+            self.assertEqual(os.listdir(SceneDataSidecar.store_dir(export)), [])
 
 
 class LastDiffTest(unittest.TestCase):
@@ -696,7 +753,9 @@ class AncestorScopeTest(unittest.TestCase):
             export = os.path.join(d, "shot.fbx")
             legacy = ["G|C", "G|C|CShape"]
             with open(
-                SceneDataSidecar.manifest_path_for(export), "w", encoding="utf-8"
+                _placed(SceneDataSidecar.manifest_path_for(export)),
+                "w",
+                encoding="utf-8",
             ) as f:
                 json.dump(
                     {

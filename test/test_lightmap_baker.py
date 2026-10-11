@@ -83,6 +83,15 @@ def _read(path):
     return cv2.imread(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
 
 
+def _hidden_meshes():
+    """The scene's mesh shapes switched off by their own ``visibility``."""
+    return {
+        shape
+        for shape in cmds.ls(type="mesh", long=True, noIntermediate=True) or []
+        if not cmds.getAttr(f"{shape}.visibility")
+    }
+
+
 class _FakeBaker:
     """Stands in for TextureBaker: records the call, emits a synthetic EXR.
 
@@ -104,17 +113,19 @@ class _FakeBaker:
         self.card_color = None
         self.card_diffuse = None
         self.called_panorama = None
+        self.hidden_at_bake = None
 
     def render_panorama(self, position, path, width=1024, hide=None, lights=None):
         """A panorama as ``TextureBaker.render_panorama`` writes one: 2:1, every
         direction a hit (alpha 1), the call recorded -- with the lights that
-        were on as it rendered."""
+        were on, and the meshes that were off, as it rendered."""
         self.called_panorama = {
             "position": [float(c) for c in position],
             "width": width,
             "hide": list(hide or []),
             "lights": list(lights or []),
             "lit": LightUtils.contributing_lights(),
+            "hidden": _hidden_meshes(),
         }
         cv2, np = _cv2()
         cv2.imwrite(path, np.full((width // 2, width, 4), 0.5, np.float32))
@@ -147,6 +158,7 @@ class _FakeBaker:
         self.called_on_progress = on_progress
         self.called_shader = shader
         self.called_batch = batch
+        self.hidden_at_bake = _hidden_meshes()
         self.card_seen_at_bake = bool(shader) and cmds.objExists(shader)
         if self.card_seen_at_bake:
             self.card_color = cmds.getAttr(f"{shader}.color")[0]
@@ -235,6 +247,54 @@ class TestDilateLightmap(MayaTkTestCase):
         self.assertGreater(float(out[:, 56:].min()), 1.0)
         # Interior untouched.
         self.assertAlmostEqual(float(out[4, 30, 0]), 2.0, places=3)
+
+    def test_an_island_running_to_the_frame_loses_its_outer_ring_too(self):
+        """Reported on a production room: baseboard joints in the atlas read 7-23x
+        their strip (925 in a scratch bake). The strip's layout runs to u/v 0
+        and 1, so its end texels sit on the render frame, and the coverage
+        erode -- there to drop the ring whose filter tail collects what lies
+        past an island -- exempted the frame. The end is buried ~1 cm in the
+        wall it meets: its row leaked the light (16787 at one sample), a ROW of
+        spikes the denoiser's 3x3 median cannot see, stitched across the joint
+        and dilated into the gutter. Beyond the frame is not island: the frame
+        ring is eroded and continued from inside, as every border is."""
+        cv2, np = _cv2()
+        p = os.path.join(self.tmp, "frame.exr")
+        img = np.zeros((16, 16, 4), np.float32)
+        img[..., 3] = 1.0
+        img[..., :3] = 1.6
+        img[:, :5, :3] = 0.05  # a real contact shadow, 32x under the lit level
+        img[15, :, :3] = 4000.0  # the buried end row, leaking
+        cv2.imwrite(p, img)
+        whole = [  # a layout filling the square, edge to edge
+            [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+            [(0.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+        ]
+        self.assertTrue(
+            LightmapBaker._dilate_lightmap(
+                p, alpha_threshold=0.05, iterations=8, uv_triangles=whole
+            )
+        )
+        out = _read(p)
+        self.assertLess(float(out[15].max()), 4.0)  # the leaking row continued
+        self.assertAlmostEqual(float(out[15, 10, 0]), 1.6, delta=0.2)
+        # The shadow beside the light is signal, however sharp the step.
+        self.assertAlmostEqual(float(out[7, 2, 0]), 0.05, places=3)
+        self.assertAlmostEqual(float(out[7, 10, 0]), 1.6, places=3)
+        # An atlas tile carries the same: the frame ring is no longer its own.
+        p2 = os.path.join(self.tmp, "frame_tile.exr")
+        cv2.imwrite(p2, img)
+        LightmapBaker._dilate_lightmap(
+            p2,
+            alpha_threshold=0.05,
+            iterations=8,
+            uv_triangles=whole,
+            keep_coverage=True,
+        )
+        tile = _read(p2)
+        self.assertEqual(float(tile[15, 10, 3]), 0.0)
+        self.assertEqual(float(tile[7, 10, 3]), 1.0)
+        self.assertLess(float(tile[15, :, :3].max()), 4.0)
 
     def test_edge_extension_texels_are_refilled_from_uv_coverage(self):
         # THE production artifact (shipped ROOM_ENV room, profiled from the
@@ -554,6 +614,47 @@ class TestLightmapBakerArnold(MayaTkTestCase):
         # only where it stands between the light and the floor.
         self.assertAlmostEqual(shadowed_lit / open_lit, 1.0, delta=0.2)
 
+    def test_what_the_bake_leaves_out_casts_no_shadow(self):
+        """The converse, as production met it (2026-10-07): props on a cart,
+        interactive and so never baked, shadowed the cart's map. A mesh that
+        is not baked, not baked before and not in the Exclude set moves, so it
+        is out of the render: the floor bakes as if the box were not there."""
+        _, np = _cv2()
+        floor = cmds.ls(
+            cmds.polyPlane(name="mvFloor", w=2, h=2, sx=1, sy=1)[0], long=True
+        )[0]
+        box = cmds.ls(cmds.polyCube(name="mvBox", w=1, h=0.2, d=1)[0], long=True)[0]
+        cmds.setAttr(f"{box}.translateY", 1.0)
+        light = cmds.directionalLight(intensity=1.0)
+        cmds.setAttr(f"{cmds.listRelatives(light, parent=True)[0]}.rotateX", -90)
+
+        def bake_floor(folder):
+            result = LightmapBaker(resolution=32, samples=2).bake(
+                [floor], packing="per_object", output_dir=os.path.join(self.tmp, folder)
+            )
+            self.assertEqual(list(result.maps), [floor], result.refused)
+            lum = _read(result.maps[floor]).astype(np.float64).mean(axis=2)
+            return np.percentile(lum, 5)
+
+        with_box = bake_floor("with")
+        self.assertTrue(cmds.getAttr(f"{box}.visibility"), "handed back as found")
+        self.assertTrue(
+            all(
+                cmds.getAttr(f"{s}.visibility")
+                for s in cmds.listRelatives(box, shapes=True, fullPath=True)
+            ),
+            "handed back as found",
+        )
+        cmds.delete(box)
+        without = bake_floor("without")
+        self.assertAlmostEqual(
+            with_box / without,
+            1.0,
+            delta=0.2,
+            msg=f"the unbaked box shadowed the floor: darkest texels "
+            f"{with_box:.4f} with it, {without:.4f} without",
+        )
+
     def test_lightmap_is_albedo_independent(self):
         # The composite invariant that survives the fused removal: the engine
         # multiplies albedo x lightmap, so the lightmap itself must NOT vary
@@ -620,10 +721,12 @@ class TestLightmapBakerArnold(MayaTkTestCase):
             "during the floor's bake (per-object carding regression)",
         )
 
+        # The wall bakes too: one the bake leaves out is out of the render, and
+        # would take its bounce with it whatever the pin did.
         dark = LightmapBaker(
             resolution=32, samples=3, gi_depth=0, gi_samples=2
-        ).bake_separated([floor], output_dir=os.path.join(self.tmp, "d0"))
-        red0 = float(_read(next(iter(dark.values())))[..., 2].mean())
+        ).bake_separated([floor, wall], output_dir=os.path.join(self.tmp, "d0"))
+        red0 = float(_read(dark[floor_key])[..., 2].mean())
         self.assertLess(
             red0,
             0.25 * red,
@@ -1040,6 +1143,30 @@ class TestCommitLightmap(MayaTkTestCase):
 
         hierarchies = sorted(tuple(o["hierarchy"]) for o in self._manifest()["objects"])
         self.assertEqual(hierarchies, [("hierGrpA", "hierLeaf"), ("hierLeaf",)])
+
+    def test_a_scoped_export_names_only_the_export_sets_objects(self):
+        """The record is export-scoped: a marker outside the export set ships
+        its map with nothing to bind it to. Measured 2026-10-09: a production
+        FBX named five objects of a hidden TEMP group, the post-write embed
+        shipped their outdated maps, and two it could not find failed the
+        verifier. The scope is roots, descendants included; none is the
+        scene. Added: 2026-10-09"""
+        a, _, _ = self._cube_with_material("shipLeaf")
+        cmds.group(a, name="SHIP_GRP")
+        ship = cmds.ls("SHIP_GRP|shipLeaf", long=True)[0]
+        _, _, stale = self._cube_with_material("staleLeaf")
+        UvUtils.create_lightmap_uvs([ship, stale], map_size=64, quiet=True)
+        LightmapBaker(resolution=64).commit_lightmap({ship: self.tex, stale: self.tex})
+
+        def names(scope):
+            record = LightmapRecords.export_record(ptk.ExportContext(scope=scope))
+            return (
+                sorted(o["name"] for o in record.payload["objects"]) if record else []
+            )
+
+        self.assertEqual(names(("|SHIP_GRP",)), ["shipLeaf"])
+        self.assertEqual(names(None), ["shipLeaf", "staleLeaf"])
+        self.assertEqual(names(()), [])
 
     def test_manifest_keeps_the_namespace_the_export_carries(self):
         """The published name must equal the exported node name.
@@ -2156,15 +2283,23 @@ class TestPackAtlas(MayaTkTestCase):
             a: self._partial_exr("cropA.exr", colors[a], frac),
             b: self._partial_exr("cropB.exr", colors[b], frac),
         }
-        out = LightmapBaker(resolution=64).pack_atlas(mapping, output_dir=self.tmp)
+        baker = LightmapBaker(resolution=64)
+        out = baker.pack_atlas(mapping, output_dir=self.tmp)
+        cells = dict(next(iter(baker.atlas_plan([a, b]).values())))
         atlas = cv2.imread(out[a][0], cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
         h, w = atlas.shape[:2]
 
         for obj in (a, b):
             _path, (sx, sy, ox, oy) = out[obj]
-            # The crop engaged: the 1/3-wide island is stretched across the
-            # whole cell, so the published u-scale exceeds a full cell's.
-            self.assertGreater(sx, 1.0, f"{obj}: rect not crop-composed ({sx})")
+            # The crop engaged: the 1/3-wide island spans its WHOLE cell (to
+            # the border-texel centres the rect is published at), not a third
+            # of a cell left two-thirds dead.
+            self.assertAlmostEqual(
+                sx * frac,
+                cells[obj][0],
+                delta=2.0 / w,
+                msg=f"{obj}: rect not crop-composed",
+            )
             # Sampling INSIDE the island through the published rect returns
             # this object's own texels (the engine's exact computation).
             for u, v in ((0.05, 0.1), (0.30, 0.5), (0.16, 0.9)):
@@ -2836,6 +2971,129 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         # it, which is exactly what bake-full-then-pack used to render.
         self.assertTrue(all(max(wh) < baker.resolution for wh in sizes.values()))
 
+    @staticmethod
+    def _gap(a, b):
+        """Texels between two (row0, row1, col0, col1) cells; <= 0 when they touch."""
+        ar0, ar1, ac0, ac1 = a
+        br0, br1, bc0, bc1 = b
+        return max(bc0 - ac1, ac0 - bc1, br0 - ar1, ar0 - br1)
+
+    def test_every_cell_keeps_its_gutter_at_a_low_resolution(self):
+        """Reported: at a lower resolution the atlas's cells overlap. The tiled
+        layout insets each cell by a gutter its cell can afford, so small cells
+        met their neighbours with none (bilinear taps and every mip read the
+        next object's light), and a cell under a texel was never placed while
+        its object still sampled the atlas there."""
+        sg = self._sg("planGutter")
+        cubes = [
+            self._cube(f"planGutter{i}", sg, size=0.2 + (i % 7) ** 2 * 0.35)
+            for i in range(36)
+        ]
+        baker = LightmapBaker(resolution=256)
+        plan = baker.atlas_plan(cubes)
+        entries = plan[list(plan)[0]]
+        cells = ptk.ImgUtils.atlas_pixel_rects(
+            [rect for _n, rect in entries], baker.resolution
+        )
+        gutter = baker._atlas_gutter()
+        for i, (row0, row1, col0, col1) in enumerate(cells):
+            self.assertGreaterEqual(min(row1 - row0, col1 - col0), 2, cells[i])
+            for j in range(i):
+                self.assertGreaterEqual(
+                    self._gap(cells[i], cells[j]), 2 * gutter, (cells[i], cells[j])
+                )
+
+    def test_copies_of_one_mesh_take_equal_cells_in_name_order(self):
+        """Reported on a production room: baseboards traded lighting between bakes.
+        Copies of one mesh are one size, but Maya measures their areas in
+        single precision (rotated copies of one baseboard: 0.8500002 to
+        0.8499908), and the tiled layout ordered cells by that noise -- the
+        same room laid its eight baseboards out differently in two bakes.
+        Equal copies must take equal cells, in name order, every time."""
+        sg = self._sg("planCopies")
+        plane = cmds.polyPlane(name="planCopyA", w=5, h=0.17, sx=1, sy=1)[0]
+        copies = [cmds.ls(plane, long=True)[0]]
+        for name, angle in (("planCopyB", 90), ("planCopyC", 180), ("planCopyD", 270)):
+            node = cmds.instance(plane, name=name)[0]
+            cmds.xform(node, worldSpace=True, rotation=(0, angle, 0))
+            copies.append(cmds.ls(node, long=True)[0])
+        # Every copy's own path: a shared shape assigned once binds one copy.
+        cmds.sets(copies, edit=True, forceElement=sg)
+        other = self._cube("planCopyOther", sg, size=2.0)
+        baker = LightmapBaker(resolution=512)
+        plan = baker.atlas_plan(copies + [other])
+        rects = dict(plan[list(plan)[0]])
+        cells = dict(
+            zip(copies, ptk.ImgUtils.atlas_pixel_rects([rects[c] for c in copies], 512))
+        )
+        sizes = {(r1 - r0, c1 - c0) for r0, r1, c0, c1 in cells.values()}
+        self.assertEqual(len(sizes), 1, cells)
+        reading = sorted(copies, key=lambda c: (cells[c][0], cells[c][2]))
+        self.assertEqual(reading, sorted(copies))
+
+    def _plan_cell_aspect(self, obj, others):
+        """Width over height of *obj*'s planned cell, packed beside *others*."""
+        baker = LightmapBaker(resolution=512)
+        plan = baker.atlas_plan([obj] + others)
+        rect = dict(plan[list(plan)[0]])[obj]
+        ((row0, row1, col0, col1),) = ptk.ImgUtils.atlas_pixel_rects([rect], 512)
+        return (col1 - col0) / (row1 - row0), baker
+
+    def test_a_cell_takes_its_surfaces_shape(self):
+        """A layout spanning a quarter of its square's width is placed in a
+        cell of that box's shape ON THE SURFACE: a cell bent to tile the square
+        gives one object two texel densities, and the cell is only as good as
+        the coarser (a production floor: 0.6 x 1.2 cm per texel). Here the
+        quarter-width layout is the cube's own, squeezed 4x across u, so its
+        box measures four times wider on the surface than in uv."""
+        sg = self._sg("planAspect")
+        strip = self._cube("planAspectStrip", sg, size=2.0)
+        shape = cmds.listRelatives(strip, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        cmds.polyAutoProjection(
+            f"{shape}.f[*]", uvSetName="lightmap", layout=2, scaleMode=1, ch=False
+        )
+        cmds.polyEditUV(
+            f"{shape}.map[*]",
+            uvSetName="lightmap",
+            pivotU=0,
+            pivotV=0,
+            scaleU=0.25,
+            scaleV=1.0,
+        )
+        others = [self._cube(f"planAspect{i}", sg, size=1.0) for i in range(3)]
+        aspect, baker = self._plan_cell_aspect(strip, others)
+        bbox = baker._lightmap_uv_bbox(strip)
+        expected = 4.0 * (bbox[2] - bbox[0]) / (bbox[3] - bbox[1])
+        self.assertAlmostEqual(aspect, expected, delta=0.08 * expected)
+
+    def test_a_stretched_layout_gets_a_cell_of_its_surfaces_shape(self):
+        """Reported on a production room: every wall and baseboard's lightmap layout
+        fills its square whatever its shape (WALL_N 131 x 394 cm, BASEBOARD_A
+        13 x 395 cm), so a square cell shipped their stretch -- 6 texels/cm up a
+        baseboard and 0.2 along it, where the cabinets' shadows fall. A 4 x 1
+        panel laid out over the whole square gets a 4:1 cell."""
+        sg = self._sg("planStretch")
+        panel = cmds.polyPlane(name="planStretchPanel", w=4, h=1, sx=1, sy=1)[0]
+        panel = cmds.ls(panel, long=True)[0]
+        cmds.sets(panel, edit=True, forceElement=sg)
+        shape = cmds.listRelatives(panel, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, copy=True, uvSet="map1", newUVSet="lightmap")
+        # The panel's own uvs fill the square along u (its 4-unit side) and v.
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        coords = cmds.polyEditUV(f"{shape}.map[*]", query=True)
+        us, vs = coords[0::2], coords[1::2]
+        for i, (u, v) in enumerate(zip(us, vs)):
+            cmds.polyEditUV(
+                f"{shape}.map[{i}]",
+                relative=False,
+                uValue=(u - min(us)) / (max(us) - min(us)),
+                vValue=(v - min(vs)) / (max(vs) - min(vs)),
+            )
+        others = [self._cube(f"planStretch{i}", sg, size=1.0) for i in range(3)]
+        aspect, _baker = self._plan_cell_aspect(panel, others)
+        self.assertAlmostEqual(aspect, 4.0, delta=0.3)
+
     def test_bake_size_is_quantized_and_capped(self):
         baker = LightmapBaker(resolution=2048)
         quantum = LightmapBaker._ATLAS_BAKE_QUANTUM
@@ -2846,24 +3104,45 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         self.assertLess(sizes["a"], baker.resolution)
         self.assertEqual(sizes["b"], baker.resolution)  # never above a full map
 
+    def test_an_elongated_cell_renders_its_area_not_its_long_side(self):
+        """The pack keeps a cropped layout's aspect (a 1:3 wall panel), and RTT
+        renders one SQUARE frame: supersampled by its long side, a 1:3 cell
+        would render 3x the texels a square cell of its area does. It gets the
+        same supersample^2 render texels per cell texel, never fewer than one
+        per texel along its long side."""
+        baker = LightmapBaker(resolution=4096)
+        quantum = LightmapBaker._ATLAS_BAKE_QUANTUM
+        ss = LightmapBaker._ATLAS_SUPERSAMPLE
+        with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
+            sizes = baker._plan_bake_sizes(
+                {"square": (200, 200), "wall": (116, 346), "strip": (20, 600)}
+            )
+        self.assertEqual(sizes["square"], -(-200 * ss // quantum) * quantum)
+        self.assertLess(sizes["wall"], 346 * ss)
+        self.assertGreaterEqual(sizes["wall"] ** 2, ss**2 * 116 * 346)
+        self.assertLess(sizes["wall"] ** 2, ss**2 * 116 * 346 * 1.2 + quantum**2)
+        self.assertGreaterEqual(sizes["strip"], 600)  # its long side, at least
+
     def test_an_atlas_tile_renders_above_its_cell(self):
         """The assembler's INTER_AREA resize averages a tile's noise before the
         cell is denoised: tiles rendered AT their cell kept every sample's noise
         and read as splotches in the WebXR preview (2026-09-21). A tile renders
-        at :attr:`_ATLAS_SUPERSAMPLE` times its cell, never above the full map.
-        2 since 2026-10-01: on a production floor at four bounces, 4x took 75s
-        for 0.39% shadow mottle and 2x 22s for 0.52% (two seeds, shipped cell)."""
+        :attr:`_ATLAS_SUPERSAMPLE` squared texels for every texel of its cell,
+        never above the full map. 2 since 2026-10-01: on a production floor at
+        four bounces, 4x took 75s for 0.39% shadow mottle and 2x 22s for 0.52%
+        (two seeds, shipped cell)."""
         baker = LightmapBaker(resolution=1024)
         ss = baker._ATLAS_SUPERSAMPLE
         self.assertGreaterEqual(ss, 2)
         with mock.patch.object(LightmapBaker, "_lightmap_uv_bbox", return_value=None):
             sizes = baker._plan_bake_sizes(
-                {"prop": (100, 100), "floor": (256, 218), "wall": (600, 300)}
+                {"prop": (100, 100), "floor": (256, 218), "room": (700, 600)}
             )
         self.assertGreaterEqual(sizes["prop"], ss * 100)
-        self.assertGreaterEqual(sizes["floor"], ss * 256)
+        self.assertGreaterEqual(sizes["floor"] ** 2, ss**2 * 256 * 218)
+        self.assertGreaterEqual(sizes["floor"], 256)
         self.assertLessEqual(sizes["floor"], baker.resolution)
-        self.assertEqual(sizes["wall"], baker.resolution)  # capped at a full map
+        self.assertEqual(sizes["room"], baker.resolution)  # capped at a full map
 
     def test_a_partial_island_renders_its_region_not_a_magnified_square(self):
         """A layout covering part of its square renders JUST its island's region.
@@ -2960,6 +3239,59 @@ class TestAtlasPlanFirst(MayaTkTestCase):
         self.assertIs(seen["create_uvs"], False)
         # The pack receives the SAME plan the sizes came from.
         self.assertEqual(seen["plan"], plan)
+
+    def test_a_layout_the_bake_rebuilds_is_planned_as_rebuilt(self):
+        """The plan is drawn before the bake builds missing lightmap UVs and
+        rebuilds failing ones (an overlapping set), so it sized and shaped
+        those objects from a layout that never renders: a panel whose two
+        faces share one square-filling, 2:1-stretched layout was given a 2:1
+        cell, then rebuilt in its own proportions and squeezed into it. The
+        pack must receive the plan of the layouts that render."""
+        sg = self._sg("bakeRebuilt")
+        panel = cmds.polyPlane(name="bakeRebuiltPanel", w=4, h=1, sx=2, sy=1)[0]
+        panel = cmds.ls(panel, long=True)[0]
+        cmds.sets(panel, edit=True, forceElement=sg)
+        shape = cmds.listRelatives(panel, shapes=True, fullPath=True)[0]
+        cmds.polyUVSet(shape, create=True, uvSet="lightmap")
+        cmds.polyUVSet(shape, currentUVSet=True, uvSet="lightmap")
+        cmds.polyProjection(
+            f"{shape}.f[0]", type="Planar", md="y", uvSetName="lightmap"
+        )
+        cmds.polyProjection(
+            f"{shape}.f[1]", type="Planar", md="y", uvSetName="lightmap"
+        )
+        coords = cmds.polyEditUV(f"{shape}.map[*]", query=True)
+        us, vs = coords[0::2], coords[1::2]
+        for i, (u, v) in enumerate(zip(us, vs)):  # both faces over the whole square
+            cmds.polyEditUV(
+                f"{shape}.map[{i}]",
+                relative=False,
+                uValue=0.0 if u <= sum(us) / len(us) else 1.0,
+                vValue=0.0 if v <= sum(vs) / len(vs) else 1.0,
+            )
+        cubes = [self._cube(f"bakeRebuilt{i}", sg, size=1.0) for i in range(3)]
+        objects = [panel] + cubes
+        baker = LightmapBaker(resolution=256)
+        seen = {}
+
+        def fake_bake(_self, objects, output_dir=None, size=None, **kwargs):
+            return {
+                o: os.path.join(self.tmp, f"{o.rsplit('|', 1)[-1]}.exr")
+                for o in objects
+            }
+
+        def fake_pack(_self, mapping, output_dir=None, plan=None, **kwargs):
+            seen["plan"] = plan
+            return {o: (p, [1.0, 1.0, 0.0, 0.0]) for o, p in mapping.items()}
+
+        with (
+            mock.patch.object(LightmapBaker, "_bake_white_card", fake_bake),
+            mock.patch.object(LightmapBaker, "pack_atlas", fake_pack),
+        ):
+            baker.bake_atlas(objects, output_dir=self.tmp)
+
+        rendered = baker.atlas_plan(objects)  # the layouts as they now are
+        self.assertEqual(seen["plan"], rendered)
 
     def test_a_held_destination_takes_an_adjacent_name_rather_than_the_bake(self):
         # The un-consolidated maps come out of a work dir the caller sweeps on
@@ -3317,6 +3649,98 @@ class TestExcludeSet(MayaTkTestCase):
         self.assertEqual(
             [name for entries in plan.values() for name, _rect in entries], [keep]
         )
+
+
+@unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+class TestWhatMovesIsOutOfTheRender(MayaTkTestCase):
+    """What a bake renders: what it bakes, what was baked before, and the
+    Exclude set. Any other visible mesh moves -- an interactive prop, never
+    baked -- and a shadow it cast would stay in the maps wherever it went
+    (production, 2026-10-07: props on a cart shadowed the cart's map). It is
+    out of the render for the bake and handed back as found. A fake backend
+    records which meshes were off as it rendered.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("lm_movers", policy="scoped")
+        ).dir_path()
+
+    @staticmethod
+    def _cube(name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    @staticmethod
+    def _shapes(node):
+        return cmds.listRelatives(node, shapes=True, fullPath=True) or []
+
+    def _bake(self, objects, packing="per_object"):
+        fake = _FakeBaker()
+        result = LightmapBaker(resolution=64, baker=fake).bake(
+            objects, packing=packing, output_dir=self.tmp
+        )
+        self.assertTrue(result.maps, result.refused)
+        return fake
+
+    def test_only_what_moves_is_out_of_the_render(self):
+        floor, prop = self._cube("mvFloor"), self._cube("mvProp")
+        wall, crate = self._cube("mvWall"), self._cube("mvCrate")
+        cv2, np = _cv2()
+        earlier = os.path.join(self.tmp, "earlier.exr")
+        cv2.imwrite(earlier, np.full((8, 8, 3), 0.5, np.float32))
+        LightmapRecords.commit({wall: earlier})  # baked before: static
+        LightmapExcludeSet.define([crate])  # static by the set's word
+
+        fake = self._bake([floor])
+
+        self.assertEqual(fake.hidden_at_bake, set(self._shapes(prop)))
+        self.assertFalse(_hidden_meshes(), "every mesh is handed back as found")
+
+    def test_an_atlas_bake_renders_every_target_at_once(self):
+        """Left out per bake, not per tile: each target is in the render of
+        every other's, so they shade one another."""
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        a, b, prop = self._cube("mvA"), self._cube("mvB"), self._cube("mvAtlasProp")
+        for cube in (a, b):
+            cmds.sets(self._shapes(cube), edit=True, forceElement=sg)
+
+        fake = self._bake([a, b], packing="atlas")
+
+        self.assertEqual(fake.hidden_at_bake, set(self._shapes(prop)))
+
+    def test_an_instance_of_a_baked_mesh_stays_in(self):
+        """The render hides a mesh, not an instance: hiding an unbaked
+        instance would take its baked twin out with it."""
+        floor = self._cube("mvInstanced")
+        cmds.instance(floor, name="mvTwin")
+
+        fake = self._bake([floor])
+
+        self.assertEqual(fake.hidden_at_bake, set())
+
+    def test_a_baked_mesh_under_one_that_moves_stays_in(self):
+        """Its own mesh goes, never a child's: a baked shelf under a moving
+        drawer's transform still renders."""
+        drawer = self._cube("mvDrawer")
+        shelf = cmds.ls(cmds.parent(self._cube("mvShelf"), drawer)[0], long=True)[0]
+
+        fake = self._bake([shelf])
+
+        self.assertEqual(fake.hidden_at_bake, set(self._shapes(drawer)))
+
+    def test_a_failed_bake_still_hands_the_scene_back(self):
+        floor, prop = self._cube("mvFailFloor"), self._cube("mvFailProp")
+
+        class _Failing(_FakeBaker):
+            def bake(self, *args, **kwargs):
+                raise RuntimeError("render failed")
+
+        with self.assertRaises(RuntimeError):
+            LightmapBaker(resolution=64, baker=_Failing()).bake(
+                [floor], packing="per_object", output_dir=self.tmp
+            )
+        self.assertFalse(_hidden_meshes(), f"{prop} left hidden")
 
 
 class TestBesideTextures(MayaTkTestCase):
@@ -3777,6 +4201,89 @@ class TestBakeWorkflow(MayaTkTestCase):
         self.assertFalse(refused)
         self.assertIn("Exclude set", refused.refused)
 
+    def test_a_selected_group_bakes_the_meshes_under_it(self):
+        """Selecting a group is "bake this": production (2026-10-07) selected a
+        bake set's members -- a mesh and two groups -- and the bake took the
+        mesh alone, leaving the cart and the room with maps from before."""
+        room = cmds.group(empty=True, name="wfRoomGrp")
+        floor, wall = self._cube("wfGrpFloor"), self._cube("wfGrpWall")
+        floor, wall = cmds.ls(cmds.parent(floor, wall, room), long=True)
+        body = self._cube("wfGrpBody")
+
+        self.assertEqual(
+            sorted(LightmapBaker.bake_targets([room, body])),
+            sorted([floor, wall, body]),
+        )
+        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
+            [room, body], packing="per_object", output_dir=self.tmp
+        )
+        self.assertEqual(set(result.maps), {floor, wall, body}, result.refused)
+        # Only a MESH names itself alone: one with a mesh parented below bakes
+        # without it.
+        lid = cmds.ls(cmds.parent(self._cube("wfGrpLid"), body)[0], long=True)[0]
+        body = cmds.ls(body, long=True)[0]
+        self.assertEqual(LightmapBaker.bake_targets([body]), [body])
+        self.assertNotIn(lid, LightmapBaker.bake_targets([body]))
+
+    def test_a_selected_locator_bakes_the_meshes_under_it(self):
+        """A locator parenting meshes is a group to the artist, and to a rig:
+        production (2026-10-09, SOLDERING_ASSEMBLY) nests a table's meshes
+        under ``SOLDERING_TABLE_LOC``. A locator has a shape, so it was no
+        group (``NodeUtils.is_group``): a re-bake of the table re-baked the
+        mesh beside it and left the six under it on a six-day-old map. Any
+        node that is not itself a mesh now stands for the meshes below it.
+        Added: 2026-10-09"""
+        loc = cmds.spaceLocator(name="wfTableLoc")[0]
+        legs = self._cube("wfLegs")
+        top, body = self._cube("wfTop"), self._cube("wfBody")
+        ctrl = cmds.circle(name="wfScaleCtrl")[0]
+        cmds.parent(body, ctrl)
+        cmds.parent(top, ctrl, loc)
+        top, body = cmds.ls("wfTop", "wfBody", long=True)
+
+        self.assertEqual(sorted(LightmapBaker.bake_targets([loc])), sorted([top, body]))
+        self.assertEqual(
+            sorted(LightmapBaker.bake_targets([legs, loc])), sorted([legs, top, body])
+        )
+        self.assertEqual(LightmapBaker.bake_targets(["wfScaleCtrl"]), [body])
+
+    def test_a_selected_bake_set_bakes_its_members_and_the_exclude_set_overrules(self):
+        """The production workflow (SOLDERING_ASSEMBLY, 2026-10-09): an include
+        set -- the room group, a locator nesting the table, a mesh, the lights
+        -- and the Exclude set, which overrules it. Selecting the set node
+        (Outliner) handed the bake the set itself, which is no mesh: "Select
+        one or more mesh objects". A set stands for its members like a group
+        for its descendants, through the one resolver every scope uses.
+        Added: 2026-10-09"""
+        room = cmds.group(empty=True, name="wfSetRoom")
+        floor = cmds.ls(cmds.parent(self._cube("wfSetFloor"), room)[0], long=True)[0]
+        loc = cmds.spaceLocator(name="wfSetLoc")[0]
+        top, button = self._cube("wfSetTop"), self._cube("wfSetButton")
+        cmds.parent(top, button, loc)
+        top, button = cmds.ls("wfSetTop", "wfSetButton", long=True)
+        legs = self._cube("wfSetLegs")
+        light = cmds.shadingNode("areaLight", asLight=True)  # its transform
+        include = cmds.sets([room, loc, legs, light], name="wfLightBake_SET")
+        LightmapExcludeSet.define([button])
+
+        self.assertEqual(
+            sorted(LightmapBaker.bake_targets([include])), sorted([floor, top, legs])
+        )
+        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
+            [include], packing="per_object", output_dir=self.tmp
+        )
+        self.assertEqual(set(result.maps), {floor, top, legs}, result.refused)
+        self.assertEqual(result.excluded, [button])
+        # A shading group is a set too (NodeUtils.expand_sets): it stands for
+        # the meshes it shades -- never for itself, which is what reached the
+        # renderer before -- and the Exclude set still comes off.
+        sg = cmds.listConnections(
+            cmds.listRelatives(floor, shapes=True)[0], type="shadingEngine"
+        )[0]
+        self.assertEqual(
+            sorted(LightmapBaker.bake_targets([sg])), sorted([floor, top, legs])
+        )
+
     def test_a_hidden_mesh_is_named_hidden_not_excluded(self):
         """``excluded`` is the Exclude set's, and a hidden mesh is left out for
         a reason of its own. Counted together, a Scene bake of the production
@@ -4115,6 +4622,23 @@ class TestReflectionProbe(MayaTkTestCase):
             self.tmp.replace("\\", "/").lower(),
             [d.replace("\\", "/").lower() for d in LightmapRecords.search_dirs()],
         )
+
+    def test_what_moves_is_out_of_the_probe_as_it_is_out_of_the_bake(self):
+        """The probe shows the room the maps lit: what moves shades neither
+        (it stands elsewhere by the time anything reflects it), while an
+        Exclude-set member is the room, seen and shading in both."""
+        room, table, prop = self._room()
+        crate = cmds.ls(
+            cmds.polyCube(name="pbCrate", width=50, height=50)[0], long=True
+        )[0]
+        cmds.move(300, 25, 300, crate)
+        LightmapExcludeSet.define([crate])
+        _result, fake = self._bake([room, table])
+        call = fake.called_panorama
+        prop_shapes = set(cmds.listRelatives(prop, shapes=True, fullPath=True))
+        self.assertEqual(call["hidden"], prop_shapes)
+        self.assertEqual(set(call["hide"]), prop_shapes, "the crate is the room")
+        self.assertFalse(_hidden_meshes(), "handed back as found")
 
     def test_what_moves_outside_the_room_does_not_pull_the_probe(self):
         """A scratch copy parked beside the room (a production scene keeps a
@@ -5172,6 +5696,22 @@ class _Label:
         self._text = text
 
 
+class _BakeSetButton:
+    """Enough of the Bake Set row's button: its option box lists the row's two
+    switches in the order the panel adds them -- Save After Bake, then the
+    naming convention -- and a Clear action with no state."""
+
+    class _Box:
+        def __init__(self, save, convention):
+            self.options = [_Toggle(save), _Toggle(convention), object()]
+
+        def get_options(self):
+            return list(self.options)
+
+    def __init__(self, save=False, convention=False):
+        self.option_box = _BakeSetButton._Box(save, convention)
+
+
 class _Sb:
     """Enough of the switchboard for a confirmation: records each question and
     answers it with *answer*, a Qt standard-button name -- ``confirm`` is True
@@ -5203,9 +5743,14 @@ class _SlotUi:
         adaptive=True,
         beside=False,
         probe=True,
+        save_set=False,
+        set_convention=False,
     ):
         self.footer = _Footer()
         self.cmb_device = _DeviceCombo(device)
+        # The Bake Set row: Save After Bake and the naming switch ride its button.
+        self.select_bake_set = _BakeSetButton(save_set, set_convention)
+        self.lbl_bake_set = _Label("Bake Set:")
         # Each switch rides the option box of the field it qualifies.
         self.cmb_resolution = _ResolutionCombo(res, denoise=denoise)
         self.spn_samples = _Spin(samples, switch=adaptive)
@@ -5544,6 +6089,70 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         # default when there's no project) -- same resolver the slot uses.
         self.assertEqual(baker.bake_output_dir, LightmapBakerSlots._sourceimages_dir())
         self.assertIn("Baked", ui.footer.text)
+
+    def test_b000_saves_the_bake_objects_as_the_bake_set_when_asked(self):
+        """Save After Bake: every bake replaces the scene's Bake Set with the
+        objects it acted on -- the Exclude set's counterpart for what WAS
+        baked -- named plain, or by the naming convention's Set suffix when
+        the row's tag switch is on. Off, or a bake that refused, saves none."""
+        from mayatk.mat_utils.bake_sets import LightmapBakeSet
+
+        self.addCleanup(LightmapBakeSet.clear)
+        table = {**ptk.NamingConvention.DEFAULTS}
+        table["objectSet"] = ptk.AffixRule("_SET", "auto", "Set")
+        pin = mock.patch.object(ptk.NamingConvention, "_cache", table)
+        pin.start()
+        self.addCleanup(pin.stop)
+
+        cube = self._select_cube("bakeSetCube")
+        self._slots(_SlotUi()).b000()  # the default: off
+        self.assertFalse(LightmapBakeSet.exists())
+
+        ui = _SlotUi(save_set=True)
+        self._slots(ui).b000()
+        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked")
+        self.assertEqual(LightmapBakeSet.members(), [cube])
+        self.assertIn("as lightmapBaker_baked", ui.footer.text)
+        self.assertEqual(ui.lbl_bake_set.text(), "Bake Set (1):")
+
+        other = self._select_cube("bakeSetOther")
+        ui = _SlotUi(save_set=True, set_convention=True)
+        self._slots(ui).b000()
+        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked_SET")
+        self.assertFalse(cmds.objExists("lightmapBaker_baked"))
+        self.assertEqual(LightmapBakeSet.members(), [other])  # replaced, not added
+
+        _FakeWorkflow.refusal = "Arnold is not loaded."
+        cmds.select(cube, replace=True)
+        self._slots(_SlotUi(save_set=True)).b000()
+        self.assertEqual(LightmapBakeSet.members(), [other])  # untouched
+
+    def test_the_tag_switch_renames_the_bake_set_and_says_so_only_then(self):
+        """Toggling the naming switch renames a set already in the scene, and
+        the footer names the change; a switch that leaves the name as it was
+        (or a scene with no set) reports no rename."""
+        from mayatk.mat_utils.bake_sets import LightmapBakeSet
+
+        self.addCleanup(LightmapBakeSet.clear)
+        table = {**ptk.NamingConvention.DEFAULTS}
+        table["objectSet"] = ptk.AffixRule("_SET", "auto", "Set")
+        pin = mock.patch.object(ptk.NamingConvention, "_cache", table)
+        pin.start()
+        self.addCleanup(pin.stop)
+
+        ui = _SlotUi()
+        slots = self._slots(ui)
+        slots._respell_bake_set(True)  # no set yet
+        self.assertNotIn("renamed", ui.footer.text)
+        LightmapBakeSet.define([self._select_cube("bakeSetRespell")])
+        slots._respell_bake_set(True)
+        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked_SET")
+        self.assertIn(
+            "renamed: lightmapBaker_baked -> lightmapBaker_baked_SET", ui.footer.text
+        )
+        ui.footer.text = ""
+        slots._respell_bake_set(True)  # already so spelled
+        self.assertNotIn("renamed", ui.footer.text)
 
     def test_b000_atlas_packing_bakes_the_atlas_and_says_so(self):
         # ONE atlas bake, not bake_separated + pack_atlas: the layout is
@@ -6658,6 +7267,7 @@ class TestPanelLayout(unittest.TestCase):
                 "header",
                 "cmb_scope",
                 "exclude_layout",
+                "bake_set_layout",
                 "cmb002",
                 "cmb_device",
                 "quality_group",
@@ -6684,9 +7294,15 @@ class TestPanelLayout(unittest.TestCase):
         boxes = [
             w.get("name")
             for w in self.root.iter("widget")
-            if w.get("class") == "QCheckBox"
+            if w.get("class") in ("QCheckBox", "CheckBox")  # uitk's counts too
         ]
         self.assertEqual(boxes, [], "every switch rides its field's option box")
+
+    def test_the_bake_set_row_mirrors_the_exclude_row(self):
+        """A label and one button; Save After Bake and the naming switch ride
+        the button's option box, as every switch on this panel does."""
+        row = [child.get("name") for child in self._items("bake_set_layout")]
+        self.assertEqual(row, ["lbl_bake_set", "select_bake_set"])
 
     def test_the_action_group_is_the_last_thing_before_the_footer(self):
         names = [child.get("name") for child in self._main_items()]

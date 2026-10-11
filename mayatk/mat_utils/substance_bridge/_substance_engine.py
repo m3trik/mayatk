@@ -892,14 +892,17 @@ class SubstanceEngine(ptk.HandoffBridge):
         if not materials or not staged:
             return {}
 
-        # Staged mesh maps grouped by base texture name -> {usage: path}.
+        # Staged mesh maps grouped by base texture name -> {usage: path}. Each
+        # batch reads its files against each other (`classify_textures`), so a
+        # set named for a lobe (`Hero_Coat`) keeps its normal a mesh map.
         by_base: Dict[str, Dict[str, str]] = {}
-        for path in cls.mesh_map_files(staged):
-            usage = cls.MESH_MAP_TYPES[ptk.MapFactory.resolve_map_type(path)]
-            base = ptk.MapFactory.get_base_texture_name(
-                path, prefix=prefix, suffix=suffix
-            )
-            by_base.setdefault(base, {}).setdefault(usage, path)
+        readings = ptk.MapFactory.classify_textures(
+            staged, prefix=prefix, suffix=suffix
+        )
+        for path, (map_type, base) in readings.items():
+            usage = cls.MESH_MAP_TYPES.get(map_type)
+            if usage:
+                by_base.setdefault(base, {}).setdefault(usage, path)
 
         assignments: Dict[str, Dict[str, str]] = {}
         for material, slots in materials.items():
@@ -907,7 +910,12 @@ class SubstanceEngine(ptk.HandoffBridge):
             # names could otherwise resolve a usage to a different file on
             # each run, since set iteration order is hash-seed dependent.
             bases = sorted(
-                {ptk.MapFactory.get_base_texture_name(p) for p in slots.values() if p}
+                {
+                    base
+                    for _type, base in ptk.MapFactory.classify_textures(
+                        [p for p in slots.values() if p]
+                    ).values()
+                }
             )
             found: Dict[str, str] = {}
             for base in bases:
@@ -924,11 +932,11 @@ class SubstanceEngine(ptk.HandoffBridge):
         Painter files a ``--mesh-map`` by reading the filename suffix; a
         base-color or roughness map handed to that flag is not a mesh map
         under any name, so passing the whole staged set (as this bridge
-        used to) just hands Painter files it has no slot for.
+        used to) just hands Painter files it has no slot for. The paths read
+        as one batch (``MapFactory.resolve_map_types``).
         """
-        return [
-            p for p in paths if ptk.MapFactory.resolve_map_type(p) in cls.MESH_MAP_TYPES
-        ]
+        map_types = ptk.MapFactory.resolve_map_types(paths)
+        return [p for p in paths if map_types[p] in cls.MESH_MAP_TYPES]
 
     @staticmethod
     def _project_setup_ops(
@@ -1125,6 +1133,11 @@ class SubstanceEngine(ptk.HandoffBridge):
         sources.sort(
             key=lambda p: ptk.MapFactory.resolve_map_type(p) not in self._UNPACKERS
         )
+        # The base each affix wraps, the sources read as one batch: a set named
+        # for a lobe (`Hero_Coat`) keeps its whole name ahead of the suffix.
+        readings = ptk.MapFactory.classify_textures(
+            sources, prefix=prefix, suffix=suffix
+        )
 
         staged: List[str] = []
         for src in sources:
@@ -1133,7 +1146,10 @@ class SubstanceEngine(ptk.HandoffBridge):
                 staged.extend(components)
                 continue
             dst = os.path.join(
-                output_dir, self._affix_basename(os.path.basename(src), prefix, suffix)
+                output_dir,
+                self._affix_basename(
+                    os.path.basename(src), prefix, suffix, core=readings[src][1]
+                ),
             )
             try:
                 if os.path.abspath(src) != os.path.abspath(dst):
@@ -1194,12 +1210,16 @@ class SubstanceEngine(ptk.HandoffBridge):
             )
             return None
 
-        components: List[str] = []
-        for path in produced or []:
-            path = str(path)
-            if not os.path.isfile(path):
-                continue
-            components.append(self._apply_affix(path, prefix, suffix))
+        produced = [str(p) for p in produced or [] if os.path.isfile(str(p))]
+        # One unpack's components are one set (`<base>_AO`, `<base>_Roughness`):
+        # read together, a set named for a lobe keeps its name.
+        readings = ptk.MapFactory.classify_textures(
+            produced, prefix=prefix, suffix=suffix
+        )
+        components: List[str] = [
+            self._apply_affix(path, prefix, suffix, core=readings[path][1])
+            for path in produced
+        ]
         if not components:
             return None
         self.logger.info(
@@ -1211,8 +1231,14 @@ class SubstanceEngine(ptk.HandoffBridge):
         return components
 
     @staticmethod
-    def _affix_basename(basename: str, prefix: str = "", suffix: str = "") -> str:
+    def _affix_basename(
+        basename: str, prefix: str = "", suffix: str = "", core: Optional[str] = None
+    ) -> str:
         """Apply the Texture Affix to one texture filename.
+
+        *core* is the base the affix wraps when the caller read it against the
+        file's set (``MapFactory.classify_textures``: a set named for a lobe,
+        ``Hero_Coat``, is not ``Hero``); else the file's own base name.
 
         A **prefix** simply leads the name. A **suffix** lands before the
         map-type token, never after it: Painter classifies a map by the LAST
@@ -1236,9 +1262,10 @@ class SubstanceEngine(ptk.HandoffBridge):
         if not prefix and not suffix:
             return basename
         stem, ext = os.path.splitext(basename)
-        core = ptk.MapFactory.get_base_texture_name(
-            basename, prefix=prefix, suffix=suffix
-        )
+        if core is None:
+            core = ptk.MapFactory.get_base_texture_name(
+                basename, prefix=prefix, suffix=suffix
+            )
         # A suffix the registry left on the base (``body_hero`` from
         # ``body_hero_Normal``): drop it so re-applying can't double it.
         if (
@@ -1259,16 +1286,18 @@ class SubstanceEngine(ptk.HandoffBridge):
         return f"{prefix}{core}{suffix}{tail}{ext}"
 
     @classmethod
-    def _apply_affix(cls, path: str, prefix: str = "", suffix: str = "") -> str:
+    def _apply_affix(
+        cls, path: str, prefix: str = "", suffix: str = "", core: Optional[str] = None
+    ) -> str:
         """Rename *path* in place to carry the affix; returns the final path.
 
-        The on-disk counterpart to :meth:`_affix_basename`, for files a map
-        unpacker has already written under its own name.
+        The on-disk counterpart to :meth:`_affix_basename` (*core* as there),
+        for files a map unpacker has already written under its own name.
         """
         if not prefix and not suffix:
             return path
         directory, base = os.path.split(path)
-        renamed = cls._affix_basename(base, prefix, suffix)
+        renamed = cls._affix_basename(base, prefix, suffix, core=core)
         if renamed == base:
             return path
         dst = os.path.join(directory, renamed)

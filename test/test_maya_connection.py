@@ -358,6 +358,28 @@ class TestMayaConnectionMocked(unittest.TestCase):
         self.assertEqual(mock_connect.call_count, 1)
         self.assertEqual(mock_connect.call_args_list[0][0], ("localhost", 7002))
 
+    def test_auto_mode_force_new_instance_never_touches_a_listening_port(self):
+        """``mode="auto"`` detected its mode by connecting to port 7002 -- where
+        a user's Maya listens -- even when a forced new instance can only
+        launch. No socket may reach a port before the launch. (``maya.cmds`` is
+        hidden so a GUI-pass host does not resolve "auto" to interactive.)"""
+        conn = MayaConnection()
+
+        with (
+            patch.dict(sys.modules, {"maya.cmds": None}),
+            patch.object(MayaConnection, "get_available_port", return_value=7010),
+            patch.object(MayaConnection, "_connect_via_port", return_value=True),
+            patch.object(
+                MayaConnection, "_launch_maya_gui", return_value=7010
+            ) as mock_launch,
+            patch("mayatk.env_utils.maya_connection.socket.socket") as mock_socket,
+        ):
+            result = conn.connect(mode="auto", port=7010, force_new_instance=True)
+
+        self.assertTrue(result)
+        mock_launch.assert_called_once()
+        mock_socket.return_value.connect_ex.assert_not_called()
+
     @patch("subprocess.check_output")
     def test_get_pid_from_port_parses_netstat(self, mock_check_output):
         """Test parsing netstat output for PID resolution."""
@@ -712,7 +734,8 @@ class TestPortCollisionResilience(unittest.TestCase):
 
         Listening rows are identified by the locale-independent foreign
         address ``:0`` — the state token is localized on non-English
-        Windows (e.g. German ABHOEREN), so it must not be relied on.
+        Windows (a German one does not print LISTENING), so it must not be
+        relied on.
         An ESTABLISHED row for the same local port must not match.
         """
         with patch("subprocess.check_output") as mock_out:
@@ -720,7 +743,7 @@ class TestPortCollisionResilience(unittest.TestCase):
                 "  TCP    127.0.0.1:7003 127.0.0.1:52345   ESTABLISHED   7777\n"
                 "  TCP    0.0.0.0:7003   0.0.0.0:0   LISTENING   1234\n"
                 "  TCP    0.0.0.0:70031  0.0.0.0:0   LISTENING   9999\n"
-                "  TCP    [::]:7004      [::]:0      ABHOEREN    4321\n"
+                "  TCP    [::]:7004      [::]:0      LOCALIZED   4321\n"
             )
             self.assertEqual(MayaConnection.get_pid_from_port(7003), 1234)
             self.assertEqual(MayaConnection.get_pid_from_port(7004), 4321)

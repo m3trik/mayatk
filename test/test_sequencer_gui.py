@@ -456,9 +456,10 @@ class TestCollectSegments(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestDeleteStaleShots(unittest.TestCase):
-    """The shot list's Delete Stale Shots: names the shots whose objects and
+    """The shot list's Delete Shots > Stale: names the shots whose objects and
     keys are gone, asks, and drops their records -- one undo step, and no
-    key or live shot moves (a Delete Shot would close the gap behind each)."""
+    key or live shot moves (a Delete Shot would close the gap behind each).
+    Empty, the other narrow scope, takes every shot with nothing keyed in it."""
 
     def setUp(self):
         from types import SimpleNamespace
@@ -481,9 +482,9 @@ class TestDeleteStaleShots(unittest.TestCase):
             _set_footer=self.footer.append,
         )
 
-    def _remove(self, button):
-        """Run the action, answering its question with *button*; return the
-        question's text.  Patched with a function, never a bare MagicMock: a
+    def _remove(self, button, scope="stale"):
+        """Run the *scope* delete, answering its question with *button*; return
+        the question's text.  Patched with a function, never a bare MagicMock: a
         QObject subclass faults natively on a mock attribute (uitk/CLAUDE.md)."""
         from unittest import mock
         from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
@@ -499,7 +500,7 @@ class TestDeleteStaleShots(unittest.TestCase):
         with mock.patch.object(
             QtWidgets.QMessageBox, "question", new=staticmethod(answer)
         ):
-            ShotSequencerController.delete_stale_shots(self.ctrl)
+            ShotSequencerController.delete_shots(self.ctrl, scope)
         return asked[0] if asked else ""
 
     def test_confirmed_it_drops_only_the_stale_and_moves_no_key(self):
@@ -519,6 +520,62 @@ class TestDeleteStaleShots(unittest.TestCase):
         self._remove(QtWidgets.QMessageBox.Yes)
         self.assertTrue(self.store.restore_boundary_snapshot())
         self.assertEqual(sorted(s.name for s in self.store.shots), ["Gone", "Live"])
+
+    def test_the_empty_scope_takes_every_shot_that_holds_nothing(self):
+        """A new shot never filled, past the animation (no member, no key);
+        one that names a live object keyed only outside it (2026-10-10:
+        "delete empty is leaving behind empty shots"); and the stale one."""
+        self.store.define_shot("Unfilled", 200, 240)
+        self.store.define_shot("Cleared", 170, 190, [str(self.live)])
+        asked = self._remove(QtWidgets.QMessageBox.Yes, scope="empty")
+        for row in ("Unfilled [200–240]", "Cleared [170–190]", "Gone [1–50]"):
+            self.assertIn(row, asked)
+        self.assertIn("nothing keyed in their frames", asked)
+        self.assertEqual([s.name for s in self.store.shots], ["Live"])
+        self.assertEqual(self.footer, ["Deleted 3 empty shot(s)"])
+        self.assertEqual(
+            cmds.keyframe(self.live, q=True, timeChange=True), [120.0, 160.0]
+        )
+
+    def test_a_system_sample_does_not_fill_a_shot(self):
+        """The shot system's own bound samples are its bookkeeping, not the
+        shot's content: a shot holding only one is empty."""
+        cmds.setKeyframe(self.live, attribute="translateX", t=175, v=3.0)
+        crv = cmds.keyframe(self.live, attribute="translateX", q=True, name=True)[0]
+        self.store.define_shot("Sampled", 170, 190, [str(self.live)])
+        led = self.store.edit_ledger
+        led.record_key(crv, 175.0, -1, "start")
+        self.assertIn("Sampled", [s.name for s in self.store.empty_shots()])
+        led.release_key(crv, 175.0)  # now the animator's key
+        self.assertNotIn("Sampled", [s.name for s in self.store.empty_shots()])
+
+    def test_a_system_sample_does_not_fill_a_shot_that_names_nothing(self):
+        """Bug: a shot naming nothing is judged by the whole scene's curves,
+        and that scan counted the shot system's own bound samples -- with a
+        gap on, a New Shot's start pin on every curve passing it read as
+        content, and Delete Empty left the shot behind.
+        Fixed: 2026-10-10"""
+        cmds.setKeyframe(self.live, attribute="translateX", t=175, v=3.0)
+        crv = cmds.keyframe(self.live, attribute="translateX", q=True, name=True)[0]
+        self.store.define_shot("New", 170, 190)
+        led = self.store.edit_ledger
+        led.record_key(crv, 175.0, -1, "start")
+        self.assertIn("New", [s.name for s in self.store.empty_shots()])
+        led.release_key(crv, 175.0)  # now the animator's key
+        self.assertNotIn("New", [s.name for s in self.store.empty_shots()])
+
+    def test_audio_playing_through_a_shot_fills_it(self):
+        """The Sequencer draws a shot's audio clips as its content: a
+        narration shot whose objects hold still is not empty -- even with the
+        clip's on and off keys outside the shot."""
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        AudioUtils.write_key("narration", frame=165, value=1)
+        AudioUtils.write_key("narration", frame=195, value=0)
+        self.store.define_shot("Narrated", 170, 190, [str(self.live)])
+        self.assertNotIn("Narrated", [s.name for s in self.store.empty_shots()])
+        self.store.define_shot("Silent", 200, 240, [str(self.live)])
+        self.assertIn("Silent", [s.name for s in self.store.empty_shots()])
 
 
 # =========================================================================
@@ -1327,6 +1384,379 @@ class TestActiveShotAtPlayhead(_ControllerCase):
         self.assertEqual(self.ctrl.active_shot_id, self._shot("S0").shot_id)
 
 
+class TestAShortNamedMemberDrawsATrack(_ControllerCase):
+    """A member is stored as it was given -- often a short name -- and the
+    track builder's existence check compared it against ``ls -long`` paths,
+    so ``ctlA`` read as missing next to ``|ctlA`` and drew no track at all
+    unless it was pinned (found 2026-10-06 building this fixture)."""
+
+    def test_a_short_named_member_gets_its_track(self):
+        self.assertEqual(self._shot("S0").objects, ["ctlA"])
+        # The membership reconcile re-points a short name at its long path
+        # (``_resolved_name``) before the track builder runs, which left this
+        # check reaching only names it had already rewritten: held off here,
+        # the builder meets the short name itself.
+        self.ctrl._reconcile_needed = False
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        self.assertEqual(self._shot("S0").objects, ["ctlA"], "reconciled anyway")
+        self.assertIn("ctlA", [t.name for t in self.widget.tracks()])
+
+
+class TestSystemSamplesDrawNoDot(_ControllerCase):
+    """The shot system's claimed bound samples shape the curve but are not
+    the animator's keys: an expanded track draws no dot for them, so a
+    navigation or snap never stops on one either.
+
+    Reported 2026-10-06: "auto generated border keys ... cause clutter in the
+    sequencer" -- every claimed sample drew a key dot on the shot's bound.
+    """
+
+    def test_a_claimed_sample_has_no_dot(self):
+        # Keys 0, 40, 45: the one at 40 is claimed, INSIDE the clip's span, so
+        # only the flag can hide its dot (out of span a dot hides anyway).
+        cmds.setKeyframe(self.a, attribute="translateX", time=45, value=9)
+        crv = cmds.listConnections(f"{self.a}.translateX", type="animCurve")[0]
+        sid = self._shot("S0").shot_id
+        self.store.edit_ledger.record_key(crv, 40.0, sid, "end")
+        self.store.set_active_shot(sid)
+        self.ctrl._sync_to_widget(shot_id=sid)
+        tid = next(t.track_id for t in self.widget.tracks() if t.name == "ctlA")
+        self.widget.expand_track(tid)
+        _process_events()
+        dots = {
+            round(k._time): k.isVisible()
+            for c in self.widget.clips()
+            if c.sub_row and c.track_id == tid
+            for k in self.widget._clip_items[c.clip_id]._keyframe_items
+        }
+        self.assertTrue(dots.get(0) and dots.get(45), dots)
+        self.assertIs(dots.get(40), False, "the claimed sample drew a dot")
+
+
+class TestANewShotTakesThePlayhead(_ControllerCase):
+    """Creating a shot moves the playhead to its start (2026-10-06)."""
+
+    def test_the_one_click_new_shot(self):
+        cmds.currentTime(10)
+        self.ctrl._create_shot_one_click()
+        shot = self.ctrl.sequencer.shot_by_id(self.ctrl.active_shot_id)
+        self.assertNotIn(shot.name, ("S0", "S1"))
+        self.assertEqual(cmds.currentTime(q=True), shot.start)
+
+    def test_an_inserted_shot(self):
+        cmds.currentTime(10)
+        self.ctrl._insert_shot(self._shot("S1").shot_id, before=True)
+        shot = self.ctrl.sequencer.shot_by_id(self.ctrl.active_shot_id)
+        self.assertNotIn(shot.name, ("S0", "S1"))
+        self.assertEqual(cmds.currentTime(q=True), shot.start)
+
+
+class TestChangingShotsMovesThePlayhead(_ControllerCase):
+    """A shot change puts the playhead on the new shot's first frame, behind
+    one global header option that is on by default (2026-10-07: "the playhead
+    is still not moving to the start of a shot when we change shots.  this
+    should be a global option in the shot sequencer header").  Every way of
+    changing shots takes the same path."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.currentTime(10)
+        self.store.set_active_shot(self._shot("S0").shot_id)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+
+    def _now(self):
+        return cmds.currentTime(q=True)
+
+    def test_the_option_is_on_by_default(self):
+        self.assertTrue(self.ctrl._playhead_to_shot_start)
+
+    def test_next_shot(self):
+        self.ctrl._navigate_shot(1)
+        self.assertEqual(self._now(), 60.0)
+
+    def test_the_dropdown(self):
+        from types import SimpleNamespace
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerSlots,
+        )
+
+        cmb = self.slots.ui.cmb_shot
+        idx = next(
+            i for i in range(cmb.count()) if cmb.itemData(i) == self._shot("S1").shot_id
+        )
+        host = SimpleNamespace(ui=self.slots.ui, controller=self.ctrl)
+        ShotSequencerSlots.cmb_shot(host, idx)
+        self.assertEqual(self.store.active_shot_id, self._shot("S1").shot_id)
+        self.assertEqual(self._now(), 60.0)
+
+    def test_a_click_on_a_shot_block(self):
+        self.ctrl.on_shot_block_clicked("S1")
+        self.assertEqual(self._now(), 60.0)
+
+    def test_a_shot_picked_in_another_panel(self):
+        """The Shots window, the manifest's Open in Shot Sequencer."""
+        # The panel listens to the ACTIVE store; this fixture's is not one.
+        self.store.add_listener(self.ctrl._on_store_event)
+        self.addCleanup(self.store.remove_listener, self.ctrl._on_store_event)
+        self.store.set_active_shot(self._shot("S1").shot_id)
+        self.assertEqual(self._now(), 60.0)
+
+    def test_a_slot_filled_after_a_delete_is_no_shot_change(self):
+        """The Shots window selects the first shot once the active one is
+        deleted: that fills an empty slot, the user changed no shot."""
+        self.store.add_listener(self.ctrl._on_store_event)
+        self.addCleanup(self.store.remove_listener, self.ctrl._on_store_event)
+        self.store.set_active_shot(None)
+        self.store.set_active_shot(self._shot("S1").shot_id)
+        self.assertEqual(self._now(), 10.0)
+
+    def test_the_shot_already_active_leaves_it(self):
+        self.ctrl.on_shot_block_clicked("S0")
+        self.assertEqual(self._now(), 10.0)
+
+    def test_off_leaves_it_and_a_new_shot_too(self):
+        self.ctrl._set_playhead_to_shot_start(False)
+        self.ctrl._navigate_shot(1)
+        self.assertEqual(self.store.active_shot_id, self._shot("S1").shot_id)
+        self.assertEqual(self._now(), 10.0)
+        self.ctrl._create_shot_one_click()
+        self.assertEqual(self._now(), 10.0)
+
+    def test_the_move_is_no_undo_step(self):
+        """A view move: Ctrl+Z after it must reach the user's last edit."""
+        cmds.undoInfo(state=True)
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=3.0)
+        self.ctrl._navigate_shot(1)
+        cmds.undo()
+        self.assertNotIn(20.0, self._keys(self.a), "Ctrl+Z undid the key")
+
+
+class TestAnEditDrawsOnce(_ControllerCase):
+    """``ShotsEdited`` -- every ``scene_edit``'s announcement, for the panels
+    that did not make the edit -- is not a reason for the sequencer to draw
+    again: it redraws after its own edits, so reacting drew each twice."""
+
+    def test_the_announcement_draws_nothing(self):
+        from unittest.mock import patch
+        from mayatk.anim_utils.shots._shots import ShotsEdited
+
+        with patch.object(self.ctrl, "_sync_to_widget") as draw:
+            self.ctrl._on_store_event(ShotsEdited(label="trim"))
+        draw.assert_not_called()
+
+
+class TestCopyToShotFromThePanel(_ControllerCase):
+    """The panel's Copy to Shot (2026-10-07): the originals stay, the copy
+    lands in the destination, the footer says Copied, and one Ctrl+Z takes
+    the copy back."""
+
+    def test_a_copied_clip_lands_and_one_undo_takes_it_back(self):
+        cmds.undoInfo(state=True, infinity=True)
+        footers = []
+        self.ctrl._set_footer = lambda text, **_kw: footers.append(text)
+        s0, s1 = self._shot("S0"), self._shot("S1")
+        seqs = [
+            sq
+            for sq in self.ctrl.sequencer.collect_shot_sequences(
+                s0.shot_id, include_audio=False
+            )
+            if sq["obj"].split("|")[-1] == "ctlA"
+        ]
+        self.assertTrue(seqs)
+        self.ctrl._send_to_shot(seqs, s1.shot_id, copy=True)
+        keys = self._keys(self.a)
+        self.assertTrue({0.0, 40.0} <= set(keys), f"the originals stay: {keys}")
+        s1 = self._shot("S1")
+        self.assertTrue(
+            [t for t in keys if s1.start <= t <= s1.end], f"nothing landed: {keys}"
+        )
+        self.assertEqual(footers[-1], "Copied 1 clip to S1")
+        cmds.undo()
+        self.assertEqual(self._keys(self.a), [0.0, 40.0], "one undo takes it back")
+
+    def test_audio_alone_is_not_copied(self):
+        footers = []
+        self.ctrl._set_footer = lambda text, **_kw: footers.append(text)
+        self.ctrl._send_to_shot(
+            [{"kind": "audio", "obj": "trk", "start": 0.0, "end": 10.0}],
+            self._shot("S1").shot_id,
+            copy=True,
+        )
+        self.assertEqual(footers, ["Copy to Shot: audio clips are not copied."])
+
+    def test_a_refused_landing_is_reported_not_raised(self):
+        """A landing that would make two shots share a sample whose poses
+        disagree is refused by the engine; the menu says so in the footer
+        (the shot lane's edits do) instead of handing over a traceback."""
+        from unittest.mock import patch
+        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
+
+        footers = []
+        self.ctrl._set_footer = lambda text, **_kw: footers.append(text)
+        seqs = self.ctrl.sequencer.collect_shot_sequences(
+            self._shot("S0").shot_id, include_audio=False
+        )
+        with patch.object(
+            self.ctrl.sequencer,
+            "copy_sequences_to_shot",
+            side_effect=ShotBoundaryConflict([("ctlA_translateX", 60.0, [5.0, 0.0])]),
+        ):
+            self.ctrl._send_to_shot(seqs, self._shot("S1").shot_id, copy=True)
+        self.assertTrue(footers[-1].startswith("Copy to Shot: "), footers)
+        self.assertIn("ctlA_translateX", footers[-1])
+
+
+class TestANewShotUndoes(_ControllerCase):
+    """A new shot is one undo step, from Maya's own Ctrl+Z as from the
+    panel's, and every view follows it back.  Reported 2026-10-07: "new shot
+    creation is not undoable, or if it is, the sequencer doesn't refresh
+    properly" -- both were true: the first shot of a scene changed nothing
+    Maya records, so Maya's undo went to the operation before it, and the
+    panel's undo put the store back but left the dropdown and the highlight
+    on the shot it had just removed."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.undoInfo(state=True, infinity=True)
+        self.store.set_active_shot(self._shot("S0").shot_id)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+
+    def _listed(self):
+        cmb = self.ctrl.ui.cmb_shot
+        return [cmb.itemData(i) for i in range(cmb.count())]
+
+    def _assert_back_on_s0(self):
+        s0 = self._shot("S0")
+        self.assertEqual([s.name for s in self.store.sorted_shots()], ["S0", "S1"])
+        self.assertEqual(self._listed(), [s0.shot_id, self._shot("S1").shot_id])
+        self.assertEqual(self.store.active_shot_id, s0.shot_id, "the shot it was on")
+        self.assertEqual(self.ctrl.active_shot_id, s0.shot_id)
+        self.assertEqual(self.widget.range_highlight(), (s0.start, s0.end))
+
+    def test_mayas_undo_takes_back_the_first_shot_of_a_scene(self):
+        for shot in list(self.store.shots):
+            self.store.remove_shot(shot.shot_id)
+        self.ctrl._sync_combobox()
+        cmds.setKeyframe(self.a, at="translateY", t=5, v=1)  # the op before it
+        self.ctrl._create_shot_one_click()
+        self.assertEqual(len(self.store.shots), 1)
+        cmds.undo()
+        _process_events()
+        self.assertEqual(self.store.shots, [], "Maya's undo reached the new shot")
+        self.assertEqual(self._listed(), [])
+        self.assertEqual(
+            cmds.keyframe(self.a, q=True, at="translateY"), [5.0], "not the op before"
+        )
+        cmds.redo()
+        _process_events()
+        self.assertEqual(len(self.store.shots), 1)
+        self.assertEqual(self.store.active_shot_id, self.store.shots[0].shot_id)
+
+    def test_the_panels_undo_puts_the_dropdown_and_view_back(self):
+        self.ctrl._create_shot_one_click()
+        new_id = self.store.active_shot_id
+        self.assertIn(new_id, self._listed())
+        self.ctrl.on_undo()
+        _process_events()
+        self._assert_back_on_s0()
+        self.ctrl.on_redo()
+        _process_events()
+        self.assertIn(new_id, self._listed())
+        self.assertEqual(self.ctrl.active_shot_id, new_id, "redo: the new one again")
+
+    def test_mayas_undo_puts_the_dropdown_and_view_back(self):
+        self.ctrl._create_shot_one_click()
+        cmds.undo()
+        _process_events()
+        self._assert_back_on_s0()
+
+    def test_an_inserted_shot_undoes(self):
+        self.ctrl._insert_shot(self._shot("S1").shot_id, before=True)
+        self.assertEqual(len(self.store.shots), 3)
+        cmds.undo()
+        _process_events()
+        self._assert_back_on_s0()
+        self.assertEqual(self._keys(self.b), [60.0, 100.0], "the ripple went back")
+
+    def test_a_detected_shot_undoes(self):
+        """It was defined outside any scene_edit: no restore point, so no
+        undo at all."""
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from mayatk.anim_utils.shots.shot_sequencer import shot_sequencer_slots
+
+        cand = {"name": "Shot_1", "start": 130.0, "end": 170.0, "objects": []}
+        self.ctrl.sequencer.detect_next_shot = lambda **_kw: cand
+        panel = SimpleNamespace(controller=self.ctrl, ui=None)
+        with mock.patch.object(
+            shot_sequencer_slots.ShotEditDialog,
+            "show",
+            return_value=("Detected", 130.0, 170.0, ""),
+        ):
+            shot_sequencer_slots.ShotSequencerSlots._detect_next_shot(panel)
+        detected = self.store.shot_by_name("Detected")
+        self.assertIsNotNone(detected)
+        self.assertEqual(self.ctrl.active_shot_id, detected.shot_id)
+        self.assertEqual(cmds.currentTime(q=True), 130.0, "the playhead landed")
+        cmds.undo()
+        _process_events()
+        self._assert_back_on_s0()
+
+
+class TestTheEditedShotIsTheOneShown(_ControllerCase):
+    """An edit made on a shot other than the active one -- the shot lane's
+    menu reaches every band -- draws THAT shot, so it becomes the active one:
+    the timeline showed it while the dropdown and Maya's playback range stayed
+    on the other (found in review, 2026-10-07)."""
+
+    def test_padding_another_shot_makes_it_active(self):
+        s0, s1 = self._shot("S0"), self._shot("S1")
+        self.store.set_active_shot(s0.shot_id)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        self.ctrl._add_shot_space(s1.shot_id, 10, "trailing")
+        s1 = self._shot("S1")
+        self.assertEqual(self.store.active_shot_id, s1.shot_id)
+        self.assertEqual(self.ctrl.active_shot_id, s1.shot_id, "the dropdown")
+        self.assertEqual(self.widget.range_highlight(), (s1.start, s1.end))
+
+
+class TestEditShotOpensThePinnedShotsWindow(_ControllerCase):
+    """Edit Shot opens the Shots window PINNED (2026-10-06): opened from the
+    sequencer to edit a shot, it has to stay up while the user works in it,
+    and its pin button then reads as the one that puts it away."""
+
+    class _Window:
+        def __init__(self, buttons=("pin",)):
+            from types import SimpleNamespace
+
+            self.pinned = False
+            self.header = SimpleNamespace(buttons={b: object() for b in buttons})
+
+        def set_pinned(self, value):
+            self.pinned = bool(value)
+
+    def test_edit_shot_pins_the_window(self):
+        window = self._Window()
+        self.slots.sb.handlers.marking_menu.show.return_value = window
+        self.ctrl._edit_shot_dialog(self._shot("S1"))
+        self.slots.sb.handlers.marking_menu.show.assert_called_with("shots")
+        self.assertTrue(window.pinned)
+        self.assertEqual(self.store.active_shot_id, self._shot("S1").shot_id)
+
+    def test_a_window_with_no_pin_button_is_left_unpinned(self):
+        """A pinned window refuses hide(); with no pin button to undo it, it
+        would be stranded on screen.  Such a window never auto-hides anyway."""
+        window = self._Window(buttons=("hide",))
+        self.slots.sb.handlers.marking_menu.show.return_value = window
+        self.ctrl._edit_shot_dialog(self._shot("S1"))
+        self.assertFalse(window.pinned)
+
+
 class TestShotLaneMenu(_ControllerCase):
     """The shot menu: a compact root whose verbs fan out into their forms."""
 
@@ -1351,10 +1781,10 @@ class TestShotLaneMenu(_ControllerCase):
             ):
                 self.assertIn(label, root)
             self.assertNotIn("Trim Leading Space", root, "lives in the flyout")
-            for gone in ('Delete "S0"\u2026', "Refresh"):
-                self.assertNotIn(
-                    gone, root, "the dropdown menu deletes; the header refreshes"
-                )
+            self.assertNotIn("Refresh", root, "the header refreshes")
+            # 2026-10-10: "the shot context menu should also have a delete
+            # shot button" -- last, the one row that takes keys with it.
+            self.assertEqual(root[-1], 'Delete "S0"\u2026')
             by_text = {
                 w.text(): w for w in menu.list._row_widgets() if hasattr(w, "text")
             }
@@ -1391,6 +1821,29 @@ class TestShotLaneMenu(_ControllerCase):
                 self.assertNotIn(gone, root)
         finally:
             menu.dispose()
+
+    def test_delete_row_deletes_the_shot_under_the_click(self):
+        from unittest import mock
+
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        menu = self.ctrl._build_shot_lane_context_menu(90.0)  # over S1
+        try:
+            row = next(
+                w
+                for w in menu.list._row_widgets()
+                if hasattr(w, "text") and w.text() == 'Delete "S1"…'
+            )
+            with mock.patch.object(
+                QtWidgets.QMessageBox,
+                "question",
+                return_value=QtWidgets.QMessageBox.Yes,
+            ):
+                row.click()
+            _process_events()
+        finally:
+            menu.dispose()
+        self.assertEqual([s.name for s in self.store.shots], ["S0"])
 
     def test_outside_every_shot_only_creation_remains(self):
         self.ctrl._sync_combobox()
@@ -1698,6 +2151,11 @@ class TestKeySelectionEdits(_ControllerCase):
     reached every member's every attribute over the whole span.
     """
 
+    def setUp(self):
+        super().setUp()
+        # The panel's clipboard lives on the class (it survives a re-init).
+        type(self.ctrl)._key_clipboard = {}
+
     def _targets(self, times=None):
         """The ``(obj, attr, times, shot_id)`` rows the key menu works from."""
         return [
@@ -1743,7 +2201,9 @@ class TestKeySelectionEdits(_ControllerCase):
             menu.deleteLater()
 
     def test_no_menu_row_duplicates_a_bound_key(self):
-        """Copy / Paste / Delete are Ctrl+C / Ctrl+V / Delete, not rows."""
+        """Copy / Paste / Delete are Ctrl+C / Ctrl+V / Delete, not rows -- and
+        no row reaches Maya's own clipboard (2026-10-10: removed, as blendertk
+        has none; a Graph Editor view in the panel is the plan)."""
         from qtpy import QtWidgets
 
         menu = QtWidgets.QMenu()
@@ -1783,17 +2243,246 @@ class TestKeySelectionEdits(_ControllerCase):
         self.ctrl._snap_selected_keys(self._targets([0.0, 20.4, 40.0]))
         self.assertEqual(self._keys(self.a), [0.0, 20.0, 40.0])
 
-    def test_copy_then_paste_round_trips_through_the_panel_clipboard(self):
-        self.ctrl._sync_combobox()
-        self.ctrl._copy_selected_keys(self._targets())
-        self.assertTrue(self.ctrl._copied_keys, "the panel holds the copy")
+    # -- the shot system's claims follow the key edits (mirror of blendertk) --
 
-    def test_a_scene_swap_empties_the_clipboard(self):
-        """It is keyed by object NAME, so a paste after the swap would land
-        the old scene's values on whatever now answers to that name."""
-        self.ctrl._copied_keys = {"ctlA": {"translateX": [{"time": 0, "value": 1}]}}
-        self.ctrl._on_store_invalidated()
-        self.assertIsNone(self.ctrl._copied_keys)
+    def _claim(self, frame, behavior="fade_in"):
+        """Claim cube A's translateX key at *frame* for a behavior of S0."""
+        crv = cmds.keyframe(self.a, at="translateX", q=True, name=True)[0]
+        self.ctrl.sequencer.ledger.record_authored(
+            crv, frame, self._shot("S0").shot_id, behavior, str(self.a)
+        )
+        return crv
+
+    def test_align_releases_the_claims_of_a_key_it_lands_on(self):
+        """A key Align lands on is replaced and takes its claims with it: left
+        on the frame, a behavior's claim passed to the arriving key, which the
+        next Build deleted (BACKLOG 2026-10-04)."""
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=2.0)  # A: 0, 20, 40
+        other = _make_cube("ctlC", {0: 1.0, 30: 2.0})
+        crv = self._claim(0.0)
+        sid = self._shot("S0").shot_id
+        self.ctrl._sync_combobox()
+
+        # Every selection starts on the earliest start (0): A's block lands
+        # its 20 on A's own unselected, claimed 0.
+        self.ctrl._align_selected_keys(
+            [
+                (str(other), "translateX", [0.0], sid),
+                (str(self.a), "translateX", [20.0, 40.0], sid),
+            ]
+        )
+
+        self.assertEqual(self._keys(self.a), [0.0, 20.0])
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 0.0), led.to_dict())
+
+    def test_invert_releases_the_claims_of_a_key_it_lands_on(self):
+        for t, v in ((10, 1.0), (30, 3.0)):
+            cmds.setKeyframe(self.a, at="translateX", t=t, v=v)  # A: 0, 10, 30, 40
+        crv = self._claim(30.0)
+        self.ctrl._sync_combobox()
+
+        # Over [0, 40] the selected 10 lands on the unselected, claimed 30.
+        self.ctrl._invert_selected_keys(self._targets([0.0, 10.0, 40.0]))
+
+        self.assertEqual(self._keys(self.a), [0.0, 30.0, 40.0])
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 30.0), led.to_dict())
+
+    def test_invert_carries_the_claims_of_a_key_it_moves(self):
+        """A claimed key the mirror MOVES keeps its claims: left at 10 they
+        passed to the key arriving from 30, and the moved key read as the
+        animator's."""
+        for t, v in ((10, 1.0), (30, 3.0)):
+            cmds.setKeyframe(self.a, at="translateX", t=t, v=v)  # A: 0, 10, 30, 40
+        crv = self._claim(10.0)
+        self.ctrl._sync_combobox()
+
+        self.ctrl._invert_selected_keys(self._targets([0.0, 10.0, 30.0, 40.0]))
+
+        led = self.ctrl.sequencer.ledger
+        self.assertEqual(led.authored(), [(crv, 30.0)], led.to_dict())
+
+    def test_paste_releases_the_claims_of_a_key_it_replaces(self):
+        """Ctrl+V over a claimed key replaces it: its claims go with it."""
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=2.0)  # A: 0, 20, 40
+        crv = self._claim(20.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([40.0]))  # the value 5
+        cmds.currentTime(20)
+
+        self.ctrl._paste_selected_keys(self._targets([40.0]))
+
+        self.assertEqual(
+            cmds.keyframe(
+                self.a, at="translateX", q=True, time=(20, 20), valueChange=True
+            ),
+            [5.0],
+        )
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 20.0), led.to_dict())
+
+    def test_thin_releases_the_claims_of_the_keys_it_removes(self):
+        """A deleted key takes its claims with it: left on the frame, a
+        behavior's claim passed to the next key to land there."""
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=2.0)  # A: 0, 20, 40
+        crv = self._claim(20.0)
+        self.ctrl._sync_combobox()
+
+        self.ctrl._thin_selected_keys(self._targets([0.0, 20.0, 40.0]))
+
+        self.assertEqual(self._keys(self.a), [0.0, 40.0])
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 20.0), led.to_dict())
+
+    def test_simplify_releases_the_claims_of_the_keys_it_removes(self):
+        """Both passes: a ramp key the reducer drops (the SHAPE pass) and a
+        hold key the FLAT pass drops each give up their claims."""
+        for f in range(0, 41, 4):  # a straight ramp: every middle key is neutral
+            cmds.setKeyframe(self.a, at="translateX", t=f, v=float(f))
+        cmds.keyTangent(self.a, at=["translateX"], itt="linear", ott="linear")
+        crv = self._claim(8.0)
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._keys(self.a)))
+
+        self.assertEqual(self._keys(self.a), [0.0, 40.0])
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 8.0), led.to_dict())
+
+    def test_simplify_releases_the_claim_of_a_redundant_hold_key(self):
+        for f, v in ((0, 1.0), (10, 1.0), (20, 1.0), (30, 1.0), (40, 0.0)):
+            cmds.setKeyframe(self.a, at="translateX", t=f, v=v)
+        cmds.keyTangent(self.a, at=["translateX"], ott="step")
+        crv = self._claim(20.0)
+        self.ctrl._sync_combobox()
+
+        self.ctrl._simplify_selected_keys(self._targets(self._keys(self.a)))
+
+        self.assertEqual(self._keys(self.a), [0.0, 40.0])
+        led = self.ctrl.sequencer.ledger
+        self.assertFalse(led.owns_any(crv, 20.0), led.to_dict())
+
+    def _b_row(self, times):
+        return [(str(self.b), "translateX", times, self._shot("S1").shot_id)]
+
+    def _ott(self, cube, frame):
+        crv = cmds.keyframe(cube, at="translateX", q=True, name=True)[0]
+        return cmds.keyTangent(crv, q=True, time=(frame, frame), ott=True)[0]
+
+    def _value(self, cube, frame):
+        return cmds.keyframe(cube, at="translateX", q=True, t=(frame, frame), vc=True)
+
+    def test_the_panels_copy_pastes_onto_another_object(self):
+        """Ctrl+C / Ctrl+V are the panel's own clipboard (2026-10-10)."""
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([40.0]))  # A: the value 5
+        cmds.currentTime(80)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+        self.assertEqual(self._keys(self.b), [60.0, 80.0, 100.0])
+        self.assertEqual(self._value(self.b, 80), [5.0])
+
+    def test_a_copied_gap_hold_pastes_as_the_key_was_before_the_hold(self):
+        """2026-10-10: copying keys in the Graph Editor carried the shot
+        system's gap hold -- the step it writes on the last key before a gap
+        -- into the paste, as if the animator had keyed it."""
+        self.ctrl._sync_combobox()
+        self.ctrl.sequencer.reconcile_system_edits()  # holds A@40, before S1
+        crv = cmds.keyframe(self.a, at="translateX", q=True, name=True)[0]
+        claim = self.ctrl.sequencer.ledger.claimed_step(crv, 40.0)
+        self.assertIsNotNone(claim, "the fixture's seam is not held")
+        self.assertEqual(self._ott(self.a, 40), "step")
+
+        self.ctrl._copy_selected_keys(self._targets([0.0, 40.0]))
+        cmds.currentTime(70)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+
+        self.assertEqual(self._keys(self.b), [60.0, 70.0, 100.0, 110.0])
+        self.assertEqual(self._ott(self.b, 110), claim[1])
+        self.assertEqual(self._ott(self.a, 40), "step", "the source's hold stays")
+
+    def test_a_step_pasted_over_a_held_seam_is_copied_as_a_step(self):
+        """Bug: Ctrl+C read every step on a claimed seam as the system's
+        hold, so the animator's own stepped key pasted over it (the claim
+        stays on the frame) was copied with the old pre-hold tangent.
+        Fixed: 2026-10-10"""
+        self.ctrl._sync_combobox()
+        self.ctrl.sequencer.reconcile_system_edits()  # holds A@40, before S1
+        crv = cmds.keyframe(self.a, at="translateX", q=True, name=True)[0]
+        self.assertIsNotNone(self.ctrl.sequencer.ledger.claimed_step(crv, 40.0))
+        # What a Graph Editor paste leaves: another value, a fixed in side.
+        cmds.setKeyframe(self.a, at="translateX", t=40, v=7.0)
+        cmds.keyTangent(crv, time=(40, 40), itt="fixed", ott="step")
+
+        self.ctrl._copy_selected_keys(self._targets([40.0]))
+        cmds.currentTime(70)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+
+        self.assertEqual(self._value(self.b, 70), [7.0])
+        self.assertEqual(self._ott(self.b, 70), "step")
+
+    def test_an_animators_step_is_copied_as_a_step(self):
+        cmds.keyTangent(self.a, at="translateX", time=(0, 0), ott="step")
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([0.0]))
+        cmds.currentTime(80)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+        self.assertEqual(self._ott(self.b, 80), "step")
+
+    def test_the_spacing_between_rows_survives_and_nothing_selected_pastes_back(
+        self,
+    ):
+        """The earliest copied key lands on the playhead and the rest keep
+        their distance from it, across rows -- with nothing selected, back on
+        the rows they came from."""
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([40.0]) + self._b_row([100.0]))
+        cmds.currentTime(10)
+        self.ctrl._paste_selected_keys([])
+        self.assertEqual(self._keys(self.a), [0.0, 10.0, 40.0])
+        self.assertEqual(self._keys(self.b), [60.0, 70.0, 100.0])
+        self.assertEqual(self._value(self.b, 70), [5.0])
+
+    def test_a_broken_tangent_pastes_broken(self):
+        crv = cmds.keyframe(self.a, at="translateX", q=True, name=True)[0]
+        cmds.setKeyframe(self.a, at="translateX", t=20, v=2.0)
+        cmds.keyTangent(crv, time=(20, 20), lock=False)
+        cmds.keyTangent(crv, time=(20, 20), inAngle=30.0, outAngle=-15.0)
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([20.0]))
+        cmds.currentTime(80)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+        b_crv = cmds.keyframe(self.b, at="translateX", q=True, name=True)[0]
+        self.assertEqual(
+            cmds.keyTangent(b_crv, q=True, time=(80, 80), lock=True), [False]
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(b_crv, q=True, time=(80, 80), inAngle=True)[0], 30.0, 3
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(b_crv, q=True, time=(80, 80), outAngle=True)[0], -15.0, 3
+        )
+
+    def test_a_paste_onto_rows_gone_since_the_copy_says_nothing_pasted(self):
+        """Bug: the paste counted (and selected) every copied row whatever
+        landed -- the clipboard outlives the scene, so a row whose object was
+        deleted since keyed nothing yet read "Pasted 1 key onto 1 row".
+        Fixed: 2026-10-10"""
+        self.ctrl._sync_combobox()
+        self.ctrl._copy_selected_keys(self._targets([40.0]))
+        cmds.delete(self.a)
+        cmds.currentTime(80)
+        self.ctrl._paste_selected_keys([])  # back onto the copied rows
+        self.assertIn("Nothing pasted", self.ctrl.ui.footer.setText.call_args[0][0])
+
+    def test_nothing_copied_pastes_nothing(self):
+        self.ctrl._sync_combobox()
+        cmds.selectKey(clear=True)
+        cmds.selectKey(self.a, attribute="translateX", time=(0, 40))
+        cmds.copyKey(animation="keys")  # Maya's clipboard is not the panel's
+        cmds.currentTime(80)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+        self.assertEqual(self._keys(self.b), [60.0, 100.0])
 
     def test_the_scoped_edit_reports_whether_it_ran(self):
         ran, _ = self.ctrl._key_selection_edit([], "noop", lambda o, s: None)
@@ -1987,14 +2676,8 @@ class TestAttributeSelectionMirrorsTheChannelBox(_ControllerCase):
 
 
 @base_test.skipIfBatch("the Graph Editor is a GUI window")
-class TestSelectionLeavesTheGraphEditorAlone(_ControllerCase):
-    """A panel click mirrors the selection into Maya; it opens no editor.
-
-    An open Graph Editor follows the scene selection by itself, so the panel
-    never needs to open one.  It used to (``GraphEditor``, which is
-    ``tearOffRestorePanel``) on every clip or header click: a closed Graph
-    Editor popped open, and a collapsed one expanded.
-    """
+class _GraphEditorCase(_ControllerCase):
+    """A controller over a live widget, with every Graph Editor closed first."""
 
     def setUp(self):
         # Decided before the fixture exists: a skip raised in setUp skips
@@ -2039,6 +2722,16 @@ class TestSelectionLeavesTheGraphEditorAlone(_ControllerCase):
         tid = self.widget.add_track("probe")
         return self.widget.add_clip(tid, 0, 40, obj=str(self.a), attr_name="translateX")
 
+
+class TestSelectionLeavesTheGraphEditorAlone(_GraphEditorCase):
+    """A panel click mirrors the selection into Maya; it opens no editor.
+
+    An open Graph Editor follows the scene selection by itself, so the panel
+    never needs to open one.  It used to (``GraphEditor``, which is
+    ``tearOffRestorePanel``) on every clip or header click: a closed Graph
+    Editor popped open, and a collapsed one expanded.
+    """
+
     def test_a_clip_click_leaves_a_closed_graph_editor_closed(self):
         self.ctrl.on_selection_changed([self._sub_row_clip()])
         _process_events()
@@ -2068,6 +2761,112 @@ class TestSelectionLeavesTheGraphEditorAlone(_ControllerCase):
         _process_events()
         objects = cmds.selectionConnection(listed, query=True, object=True) or []
         self.assertEqual([o.split("|")[-1] for o in objects], [str(self.b)])
+
+
+class TestAKeySelectionReachesTheGraphEditor(_GraphEditorCase):
+    """Keys selected in the panel are selected in the Graph Editor, and a
+    closed or collapsed Graph Editor stays that way (2026-10-07: "can we
+    select keys in the graph editor when they are selected in the sequencer
+    without showing the graph editor if its tab is currently minimized?").
+
+    The Graph Editor lists the SELECTED objects' curves, so a key whose object
+    is not selected is selected where nobody can see it -- and selecting an
+    object CLEARS Maya's key selection (measured), so the objects go on the
+    selection first and the keys after.
+    """
+
+    def _selected_keys(self) -> dict:
+        return {
+            crv: cmds.keyframe(crv, query=True, selected=True, timeChange=True)
+            for crv in cmds.keyframe(query=True, selected=True, name=True) or []
+        }
+
+    def _a_tx(self) -> str:
+        return cmds.listConnections(f"{self.a}.translateX", type="animCurve")[0]
+
+    def _picked(self) -> set:
+        return {n.split("|")[-1] for n in cmds.ls(sl=True, long=True) or []}
+
+    def _select_keys(self, cid, times):
+        """The panel's key mirror, its deferred Channel Box half run inline:
+        Maya's idle queue never runs while the harness drives it through the
+        command port, so ``flushIdleQueue`` would wait forever."""
+        from unittest import mock
+        from mayatk.anim_utils.shots.shot_sequencer import scene_selection
+
+        with mock.patch.object(
+            scene_selection.cmds, "evalDeferred", new=lambda fn, **_kw: fn()
+        ):
+            self.ctrl.on_key_selection_changed([{"clip_id": cid, "times": times}])
+        _process_events()
+
+    def test_the_keys_object_is_selected_and_its_keys_stay_selected(self):
+        cmds.select(str(self.b), replace=True)  # not the key's object
+        self._select_keys(self._sub_row_clip(), [40.0])
+        self.assertEqual(self._selected_keys(), {self._a_tx(): [40.0]})
+        self.assertIn(str(self.a), self._picked(), "the Graph Editor lists it")
+
+    def test_the_footer_names_the_selected_keys(self):
+        """The footer reads the selection: how many keys, their frames, on
+        which channel of which object (2026-10-10: "footer should show key
+        specific info when keys are selected like frame range, etc")."""
+        from unittest import mock
+
+        with mock.patch.object(self.ctrl, "_set_footer") as footer:
+            self._select_keys(self._sub_row_clip(), [0.0, 40.0])
+        text = footer.call_args[0][0]
+        self.assertTrue(text.startswith("2 keys · frames 0–40 (40f"), text)
+        self.assertIn("translateX on", text)
+
+    def test_nothing_selected_in_maya_is_no_obstacle(self):
+        """With no object and no key selected, the clear before the mirror
+        raised ("Error retrieving default arguments") and no key was selected
+        at all -- nor was an emptied panel selection mirrored."""
+        cmds.select(clear=True)
+        self.ctrl.on_key_selection_changed([])  # an emptied selection
+        cmds.select(clear=True)
+        self._select_keys(self._sub_row_clip(), [40.0])
+        self.assertEqual(self._selected_keys(), {self._a_tx(): [40.0]})
+
+    def test_a_wider_object_selection_is_kept(self):
+        cmds.select([str(self.a), str(self.b)], replace=True)
+        self._select_keys(self._sub_row_clip(), [40.0])
+        self.assertEqual(self._picked(), {str(self.a), str(self.b)})
+        self.assertEqual(self._selected_keys(), {self._a_tx(): [40.0]})
+
+    def test_a_closed_graph_editor_stays_closed(self):
+        self._select_keys(self._sub_row_clip(), [0.0])
+        self.assertEqual(self._shown(), [])
+        self.assertEqual(self._selected_keys(), {self._a_tx(): [0.0]})
+
+    def test_a_collapsed_graph_editor_stays_collapsed(self):
+        import maya.mel as mel
+
+        mel.eval("GraphEditor")  # the user's own open
+        _process_events()
+        panels = self._shown()
+        if not panels:
+            self.skipTest("the Graph Editor did not open")
+        window = panels[0] + "Window"
+        if not cmds.workspaceControl(window, exists=True):
+            self.skipTest("this layout holds the Graph Editor in a view pane")
+        # The harness's Maya reads the user's prefs: put back the floating
+        # state found, so no layout it might save carries this dock.
+        if cmds.workspaceControl(window, query=True, floating=True):
+            self.addCleanup(cmds.workspaceControl, window, edit=True, floating=True)
+        cmds.workspaceControl(window, edit=True, dockToMainWindow=("right", False))
+        cmds.workspaceControl(window, edit=True, collapse=True)
+        _process_events()
+        if not cmds.workspaceControl(window, query=True, collapse=True):
+            self.skipTest("this Maya does not collapse the docked Graph Editor")
+        self._select_keys(self._sub_row_clip(), [40.0])
+        self.assertTrue(cmds.workspaceControl(window, query=True, collapse=True))
+        self.assertEqual(self._selected_keys(), {self._a_tx(): [40.0]})
+        listed = cmds.outlinerEditor(
+            panels[0] + "OutlineEd", query=True, mainListConnection=True
+        )
+        objects = cmds.selectionConnection(listed, query=True, object=True) or []
+        self.assertIn(str(self.a), [o.split("|")[-1] for o in objects])
 
 
 class TestBoundCapDrags(_ControllerCase):

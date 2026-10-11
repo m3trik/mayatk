@@ -88,7 +88,7 @@ class _ArticulatedRigInternal:
         "sz",
     )
     #: Maya's rotate orders, in ``rotateOrder`` enum order.
-    ROTATE_ORDERS: Tuple[str, ...] = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+    ROTATE_ORDERS: Tuple[str, ...] = Matrices.ROTATE_ORDERS
 
     @staticmethod
     def _long(node) -> Optional[str]:

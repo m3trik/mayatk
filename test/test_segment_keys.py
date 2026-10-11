@@ -1177,5 +1177,61 @@ class TestAuditRegressionFixes(MayaTkTestCase if _HAS_MAYA else unittest.TestCas
         self.assertEqual(min(t2), 30.0)
 
 
+class TestShiftCurvesHooks(MayaTkTestCase if _HAS_MAYA else unittest.TestCase):
+    """``shift_curves`` reports the keys it moves (``on_move``): every key
+    travels the full offset (``option="over"``, past unmoved keys), so each
+    ``(old, old + offset)`` pair is where that key landed."""
+
+    def setUp(self):
+        super().setUp()
+        if not _HAS_MAYA:
+            self.skipTest("Maya not available")
+        obj = cmds.polyCube(name="shift_hooks_cube")[0]
+        for t in (0, 10, 20):
+            cmds.setKeyframe(obj, attribute="translateX", time=t, value=t)
+        self.crv = cmds.keyframe(obj, attribute="translateX", query=True, name=True)[0]
+        self.moved = []
+
+    def _on_move(self, crv, pairs):
+        self.moved.append((crv, sorted((round(o, 4), round(n, 4)) for o, n in pairs)))
+
+    def test_a_range_shift_reports_each_key_it_moved(self):
+        SegmentKeys.shift_curves([self.crv], 5, (10, 20), on_move=self._on_move)
+
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 15.0), (20.0, 25.0)])])
+
+    def _pairs(self):
+        times = cmds.keyframe(self.crv, query=True, timeChange=True) or []
+        values = cmds.keyframe(self.crv, query=True, valueChange=True) or []
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times, values)]
+
+    def test_a_shift_onto_an_unmoved_key_replaces_it(self):
+        """Maya's default move STACKED the mover on the unmoved key it landed
+        on (two keys on frame 20, measured 2026-10-05) -- what Stagger's
+        end-to-start placement does at every seam of a split curve.  The key
+        landed on is cut first, as every key edit here replaces."""
+        replaced = []
+        SegmentKeys.shift_curves(
+            [self.crv],
+            10,
+            (10, 10),
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+            on_move=self._on_move,
+        )
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(replaced, [(self.crv, [20.0])])
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 20.0)])])
+
+    def test_a_shift_travels_past_an_unmoved_key(self):
+        """The default move stopped a key at the unmoved one it would pass
+        and stacked it there (10 moved +15 stopped ON 20): the shift now goes
+        where it was told, as every other range move here does."""
+        SegmentKeys.shift_curves([self.crv], 15, (10, 10), on_move=self._on_move)
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 20.0), (25.0, 10.0)])
+        self.assertEqual(self.moved, [(self.crv, [(10.0, 25.0)])])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

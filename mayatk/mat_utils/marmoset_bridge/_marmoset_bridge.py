@@ -164,12 +164,15 @@ class _MarmosetBridgeInternal(object):
                     unpack_cache[path] = [
                         str(p) for p in produced or () if p and os.path.isfile(str(p))
                     ]
+                # One unpack's components are one set, read together: a set
+                # named for a lobe (`Hero_Coat`) keeps its roughness a roughness.
+                try:
+                    ctypes = ptk.MapFactory.resolve_map_types(unpack_cache[path])
+                except Exception:  # noqa: BLE001
+                    ctypes = {}
                 for component in unpack_cache[path]:
-                    try:
-                        ctype = (
-                            ptk.MapFactory.resolve_map_type(component) or ""
-                        ).lower()
-                    except Exception:  # noqa: BLE001
+                    ctype = (ctypes.get(component) or "").lower()
+                    if not ctype:
                         continue
                     if ctype in accepts:
                         slots[slot] = component.replace("\\", "/")

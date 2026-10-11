@@ -301,6 +301,62 @@ class TestEnvUtilsWorkspaceModel(_SandboxedTemplates, MayaTkTestCase):
         self.assertIsNone(EnvUtils.create_workspace(""))
 
 
+class TestSceneProjectRoot(MayaTkTestCase):
+    """scene_project_root -- the boundary a lightmap bake and Keep Names In Sync
+    keep when they write, rename or retire files. Twin of blendertk's."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="ws_project_root_")
+        previous = cmds.workspace(q=True, rd=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    @staticmethod
+    def _save_scene(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        return path
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(os.path.normpath(path or ""))
+
+    def test_a_scene_opened_as_new_belongs_to_its_source_project(self):
+        """The Reference Manager opens a Blender scene as new through a scratch
+        copy in temp, and opens the SOURCE's project. The boundary was the
+        scratch's own folder, so Beside Material Textures took no texture
+        folder and a re-bake into the project set aside nothing it superseded
+        (BACKLOG 2026-10-04, decided 2026-10-05)."""
+        proj = _make_workspace_dir(self.tmp, "proj")
+        source = os.path.join(proj, "scenes", "room.blend")
+        with open(source, "w") as f:
+            f.write("")
+        scratch = self._save_scene(
+            os.path.join(self.tmp, "mtk_opened_0123456789", "room_blend.ma")
+        )
+        cmds.workspace(proj, openWorkspace=True)
+        EnvUtils.set_scene_source(scratch, source)
+        self.addCleanup(EnvUtils.set_scene_source, scratch, None)
+        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+
+    def test_a_broad_project_never_outranks_the_scenes_own(self):
+        """blendertk's broad-pin rule, which Maya's has by construction: the
+        scene FILE's nearest workspace.mel names its project, so a session
+        project holding several never opens the others' folders to it."""
+        broad = _make_workspace_dir(self.tmp, "broad")
+        mine = _make_workspace_dir(broad, "mine")
+        _make_workspace_dir(broad, "theirs")
+        self._save_scene(os.path.join(mine, "scenes", "room.ma"))
+        cmds.workspace(broad, openWorkspace=True)
+        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(mine))
+
+
 class TestWorkspaceManagerDefaults(QuickTestCase):
     """Property defaults and accessors."""
 

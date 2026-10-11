@@ -182,6 +182,29 @@ class TestUpdateMaterialsRetype(MayaTkTestCase, _MaterialSceneMixin):
             "the retyped material reached the wiring stage",
         )
 
+    def test_a_retype_to_open_pbr_is_updated_too(self):
+        """openPBRSurface had no connector: the retype converted the material
+        and deleted the source, then the wireable filter dropped the result as
+        "no connector" -- the texture update never ran."""
+        was = cmds.ls(self.mat, uuid=True)[0]
+        try:
+            results = MatUpdater.update_materials(
+                materials=[self.mat],
+                config=dict(self.config),
+                shader_type="open_pbr",
+            )
+        except RuntimeError as error:
+            self.skipTest(f"openPBRSurface unavailable: {error}")
+        self.assertFalse(cmds.ls(was, uuid=True), "the blinn should be retired")
+        updated = list(results)
+        self.assertEqual(len(updated), 1, results)
+        if cmds.nodeType(updated[0]) != "openPBRSurface":
+            self.skipTest("openPBRSurface unavailable in this session")
+        self.assertTrue(
+            cmds.listConnections(f"{updated[0]}.baseColor", type="file"),
+            "the retyped material reached the wiring stage",
+        )
+
     def test_without_a_shader_type_the_legacy_material_is_skipped(self):
         """The pre-existing behaviour, pinned so the widening above is visibly
         the thing that changes it."""

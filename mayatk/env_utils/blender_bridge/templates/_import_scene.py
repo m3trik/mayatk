@@ -98,13 +98,21 @@ def _image_filename(image, taken, classified=None):
     else:
         stem, ext = os.path.splitext(os.path.basename(image.name or "image"))
     stem = re.sub(r"[^A-Za-z0-9_.-]", "_", stem).strip("._") or "image"
-    if ext.lower() not in _IMAGE_EXTENSIONS.values():
-        ext = _IMAGE_EXTENSIONS.get(image.file_format, ".png")
+    # The encoder decides, never the name: a glTF names images freely (WebP
+    # lightmaps shipped as "x_Lightmap.png"), and a reader trusts the extension.
+    ext = _IMAGE_EXTENSIONS.get(image.file_format) or (
+        ext if ext.lower() in _IMAGE_EXTENSIONS.values() else ".png"
+    )
     name, n = stem + ext, 1
     while name.lower() in taken:
         name, n = "%s_%d%s" % (stem, n, ext), n + 1
     taken.add(name.lower())
     return name
+
+
+# Image formats Maya cannot read (a file node pointed at one reports 0 x 0); an
+# unpacked image in one is written as PNG instead.
+_MAYA_UNREADABLE_FORMATS = ("WEBP",)
 
 
 # Principled inputs whose upstream image identifies the map. Both the pre-4.x and
@@ -250,6 +258,10 @@ def _unpack_images(bpy):
     for image in bpy.data.images:
         if image.packed_file is None:
             continue
+        if image.file_format in _MAYA_UNREADABLE_FORMATS:
+            # Re-encoded on save (measured on 5.1): a glTF's WebP map written as
+            # WebP is a file node reading 0 x 0 on the Maya side.
+            image.file_format = "PNG"
         path = os.path.join(
             TEX_DIR, _image_filename(image, taken, classified.get(image))
         )
@@ -275,7 +287,7 @@ def _import_gltf(bpy):
     keeps a rename from breaking the pull -- the same per-version tolerance the
     export call applies to its kwargs.
     """
-    errors = []
+    missing = []
     for name, op in (
         ("import_scene.gltf", getattr(bpy.ops.import_scene, "gltf", None)),
         ("wm.gltf_import", getattr(bpy.ops.wm, "gltf_import", None)),
@@ -286,11 +298,36 @@ def _import_gltf(bpy):
             op(filepath=SRC_PATH)
             return
         except Exception as e:
-            errors.append("%s: %s" % (name, e))
+            # Only an UNREGISTERED spelling moves on to the next one. A registered
+            # importer that refuses the file has said why, and that reason is the
+            # error -- trying the other spelling would bury it under "could not
+            # be found" (measured: KHR_texture_basisu, reported three times over).
+            if "could not be found" not in str(e):
+                raise RuntimeError(re.sub(r"^Error:\s*", "", str(e).strip())) from None
+            missing.append(name)
     raise RuntimeError(
-        "no usable glTF importer in this Blender (%s)"
-        % ("; ".join(errors) or "none found")
+        "no glTF importer in this Blender (tried %s)" % ", ".join(missing or ["none"])
     )
+
+
+def _drop_material_extras(bpy):
+    """Remove the custom properties the glTF importer copies onto MATERIALS from
+    their ``extras``.
+
+    Blender's FBX exporter writes a material's custom properties, and Maya's FBX
+    importer cannot place one of them: it errors per property per mesh
+    ("setAttr: No object matches name: ...|<material>.fromFBX" -- 56 lines for one
+    FBX2glTF deliverable, every material of which carries ``extras.fromFBX``). They
+    describe the file the glTF was converted FROM, not the scene. Object extras
+    stay: those land as attributes.
+    """
+    dropped = 0
+    for mat in bpy.data.materials:
+        for key in list(mat.keys()):
+            del mat[key]
+            dropped += 1
+    if dropped:
+        print("dropped %d glTF material extra(s)" % dropped)
 
 
 def open_source(bpy):
@@ -307,6 +344,7 @@ def open_source(bpy):
         return
     bpy.ops.wm.read_factory_settings(use_empty=True)
     _import_gltf(bpy)
+    _drop_material_extras(bpy)
     _unpack_images(bpy)
 
 
@@ -403,8 +441,20 @@ _PRINCIPLED_CHANNELS = {
     "Alpha": "opacity",
     "Emission Color": "emission",
     "Emission": "emission",
-    "Specular IOR Level": "specular",
-    "Specular": "specular",
+    "Specular IOR Level": "specularWeight",
+    "Specular": "specularWeight",
+    "Specular Tint": "specular",
+    "Diffuse Roughness": "diffuseRoughness",
+    "Anisotropic": "anisotropy",
+    "Transmission Weight": "transmission",
+    "Subsurface Weight": "subsurface",
+    "Subsurface Scale": "subsurfaceRadius",
+    "Coat Weight": "coat",
+    "Coat Tint": "coatColor",
+    "Coat Roughness": "coatRoughness",
+    "Sheen Weight": "sheen",
+    "Sheen Tint": "sheenColor",
+    "Sheen Roughness": "sheenRoughness",
 }
 
 
@@ -710,15 +760,17 @@ def _action_fcurves(action, slot=None):
 
     Dependency-free copy of ``btk.AnimUtils._slot_fcurves`` (pinned by AST
     identity): 4.4+ actions are layered and 5.x drops the flat ``action.fcurves``
-    entirely, so keys live in per-slot channelbags. Pass the object's
+    entirely, so keys live in per-slot channelbags (read first: on 4.4-5.0 the flat
+    list is a FIRST-slot proxy). Pass the object's
     ``action_slot``: one action can drive several objects through slots, and a
     slot-blind read hands each of them every other object's curves.
     """
-    legacy = getattr(action, "fcurves", None)
-    if legacy is not None:
-        return list(legacy)
+    layers = getattr(action, "layers", None)
+    if not layers:
+        legacy = getattr(action, "fcurves", None)
+        return list(legacy) if legacy is not None else []
     out = []
-    for layer in action.layers:
+    for layer in layers:
         for strip in layer.strips:
             if slot is not None:
                 cb = strip.channelbag(slot)

@@ -88,3 +88,13 @@ import pythontk as ptk  # noqa: E402
 
 ptk.TestSandbox.activate()
 _sandbox_qsettings()
+
+# And the presets root, which needs no Qt: a direct run (``python
+# mock_tests/test_x.py``) loads only this conftest, never the parent one that
+# redirects it, and the panel tests here save presets.
+try:
+    from uitk.testing import TestSandbox as _UitkSandbox
+except ImportError:  # pragma: no cover - uitk not installed
+    pass
+else:
+    _UitkSandbox.presets()

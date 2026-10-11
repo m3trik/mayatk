@@ -1,6 +1,11 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Constants, column layout, and pure helper functions for the Shot Manifest UI."""
+"""Constants, column layout, and pure helper functions for the Shot Manifest UI.
+
+Shared text: blendertk carries this module identical
+(``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
+copied over.  Only ``manifest_host.py`` differs between the two.
+"""
 
 from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa: F401
     RangeResolver as _PyRangeResolver,
@@ -9,7 +14,7 @@ from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa:
 # canonical home is the engine class; re-exported under the historical name for callers
 prune_to_top_boundaries = _PyRangeResolver.prune_to_top_boundaries  # noqa: F401
 
-from mayatk.anim_utils.shots._shots import SHOT_PALETTE
+from pythontk import SHOT_PALETTE  # noqa: E402
 
 # QSettings namespace
 SETTINGS_NS = "ShotManifest"
@@ -27,7 +32,7 @@ COL_END = 5
 
 STEP_ICON_COLOR = "#8E8E8E"  # neutral dark grey for parent step rows
 
-# Assessment status colours — shared palette from _shots (single source of truth).
+# Assessment status colours — the pythontk engine's palette (single source of truth).
 PASTEL_STATUS = SHOT_PALETTE
 
 # Foreground colors for behavior issue states on child rows.
@@ -51,7 +56,9 @@ class ManifestData:
         return name.replace("_", " ").title() if name else ""
 
     @staticmethod
-    def format_behavior_html(behaviors, broken=(), status_color=None, stale=()) -> str:
+    def format_behavior_html(
+        behaviors, broken=(), status_color=None, stale=(), disabled=()
+    ) -> str:
         """Return rich-text HTML for a list of behavior names.
 
         Parameters:
@@ -64,10 +71,24 @@ class ManifestData:
                 in this colour (e.g. the error colour for missing objects).
             stale: Subset of *behaviors* keyed under an older effect recipe
                 (Build re-keys them), rendered in the ``stale`` colour.
+            disabled: Behavior types turned off (header menu): struck through
+                in the ``locked`` grey, whatever else applies.
         """
         if not behaviors:
             return ""
         spans = []
+        off = set(disabled)
+        if off:
+            grey = PASTEL_STATUS["locked"][0]
+            on = [b for b in behaviors if b not in off]
+            html = ManifestData.format_behavior_html(on, broken, status_color, stale)
+            struck = [
+                f'<span style="color:{grey};text-decoration:line-through">'
+                f"{ManifestData.fmt_behavior(b)}</span>"
+                for b in behaviors
+                if b in off
+            ]
+            return "  ".join(([html] if html else []) + struck)
         if status_color:
             for b in behaviors:
                 display = ManifestData.fmt_behavior(b)
@@ -85,13 +106,3 @@ class ManifestData:
                 else:
                     spans.append(display)
         return "  ".join(spans)
-
-    @staticmethod
-    def try_load_maya_icons():
-        """Return the :class:`NodeIcons` class if Maya is available, else ``None``."""
-        try:
-            from mayatk.ui_utils.node_icons import NodeIcons
-            import maya.cmds as cmds  # noqa: F401 — availability check
-        except ImportError:
-            return None
-        return NodeIcons

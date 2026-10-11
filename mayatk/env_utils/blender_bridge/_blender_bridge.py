@@ -1050,7 +1050,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         reassemble: bool = True,
         **params: Any,
     ) -> Optional[Dict[str, Any]]:
-        """Bake the selection's lightmaps in a headless Blender; the scene comes back lit.
+        """Bake the scene's lightmaps (or *objects*') in a headless Blender; it comes back lit.
 
         The send-to-bake operation: named convenience over
         :meth:`~pythontk.ScriptLaunchBridge.round_trip` with the ``bake_lightmaps``

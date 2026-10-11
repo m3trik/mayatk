@@ -515,28 +515,16 @@ class TextureBaker(ptk.LoggingMixin):
         """The image at *path* as cv2 decodes it (float BGR[A] for an EXR), or ``None``.
 
         ``None`` when it does not decode -- cut short, absent, or no codec in
-        this process (:meth:`_exr_trouble` tells the last apart). Read through
-        Python's own file IO and decoded in memory: ``cv2.imread`` opens no
-        path that is not ASCII on Windows, and its ``None`` for a map in a
-        folder named ``Büro`` read as a render that wrote nothing -- a good
-        map, deleted.
+        this process (:meth:`_exr_trouble` tells the last apart). Read with
+        ``ptk.ImgUtils.cv2_read`` (Python's own file IO, decoded in memory):
+        ``cv2.imread`` opens no path that is not ASCII on Windows, and its
+        ``None`` for a map in a folder named ``Résumé ★`` read as a render
+        that wrote nothing -- a good map, deleted.
         """
         cv2 = cls._cv2()
         if cv2 is None:
             return None
-        import numpy as np
-
-        try:
-            data = np.fromfile(path, dtype=np.uint8)
-        except (OSError, ValueError):
-            return None
-        if not data.size:
-            return None
-        with cls._codec_temp():
-            try:
-                return cv2.imdecode(data, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
-            except cv2.error:
-                return None
+        return ptk.ImgUtils.cv2_read(path, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
 
     @staticmethod
     def _cv2():
@@ -552,41 +540,18 @@ class TextureBaker(ptk.LoggingMixin):
         return cv2
 
     @staticmethod
-    @contextlib.contextmanager
     def _codec_temp():
-        """Spell the temp folder in ASCII for OpenCV, for the block.
+        """Spell the temp folder in ASCII for OpenCV, for the block: ``ptk.ImgUtils.cv2_temp``.
 
         OpenCV's EXR codec encodes and decodes through a scratch FILE in the
         temp folder, opened by a narrow path: under a temp folder whose path
-        is not ASCII -- a Windows user named José -- every EXR encode and
+        is not ASCII -- a Windows user named Zoë -- every EXR encode and
         decode failed. Its short (8.3) spelling names the same folder in
-        ASCII where the volume keeps short names; ``TEMP`` and ``TMP`` carry
-        it for the block. Anywhere else this changes nothing, and
+        ASCII where the volume keeps short names, and carries it in ``TMP``
+        and ``TEMP`` for the block. Anywhere else this changes nothing, and
         :meth:`_exr_trouble` reports what is left.
         """
-        import tempfile
-
-        temp = tempfile.gettempdir()
-        short = ""
-        if os.name == "nt" and not temp.isascii():
-            import ctypes
-
-            buffer = ctypes.create_unicode_buffer(32768)
-            if ctypes.windll.kernel32.GetShortPathNameW(temp, buffer, len(buffer)):
-                short = buffer.value
-        if not short or not short.isascii():
-            yield
-            return
-        saved = {key: os.environ.get(key) for key in ("TEMP", "TMP")}
-        os.environ["TEMP"] = os.environ["TMP"] = short
-        try:
-            yield
-        finally:
-            for key, value in saved.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        return ptk.ImgUtils.cv2_temp()
 
     @classmethod
     def _exr_trouble(cls) -> Optional[str]:
@@ -772,7 +737,7 @@ class TextureBaker(ptk.LoggingMixin):
         return os.path.join(root, subdir)
 
     @staticmethod
-    def resolve_meshes(objects=None) -> List[str]:
+    def resolve_meshes(objects=None, descendants: bool = False) -> List[str]:
         """Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
 
         Both backends render a SURFACE: a light, a locator, an empty group or a
@@ -789,6 +754,18 @@ class TextureBaker(ptk.LoggingMixin):
         Mirrors ``blendertk.TextureBaker.resolve_meshes`` (name + behavior, not
         signature: Maya passes node strings, bpy passes object refs).
 
+        Parameters:
+            objects: Nodes, shapes or components; ``None`` for the selection.
+            descendants: A set given stands for its members
+                (:meth:`NodeUtils.expand_sets` -- a bake set selected in the
+                Outliner), and a transform that is not itself a mesh -- a
+                group, or the locator or control a rig nests its meshes under
+                -- for the mesh transforms below it: selecting one is "bake
+                what is in it". A mesh or a component names its own mesh
+                alone. Only a shapeless group counted until 2026-10-09: a
+                table nested under a ``*_LOC`` locator re-baked none of its
+                meshes.
+
         Returns deduped long transform names, each owning a non-intermediate
         mesh shape with at least one face.
         """
@@ -796,6 +773,24 @@ class TextureBaker(ptk.LoggingMixin):
             return []
         if objects is None:
             objects = cmds.ls(selection=True, long=True) or []
+        if descendants:
+            given = cmds.ls(NodeUtils.expand_sets(objects), long=True) or []
+            parents = [
+                node
+                for node in cmds.ls(given, transforms=True, long=True) or []
+                if not cmds.listRelatives(
+                    node, shapes=True, type="mesh", noIntermediate=True
+                )
+            ]
+            below = (
+                cmds.listRelatives(
+                    parents, allDescendents=True, fullPath=True, type="transform"
+                )
+                if parents
+                else None
+            ) or []
+            # Parents before children, as an Outliner reads.
+            objects = given + sorted(below, key=lambda n: n.count("|"))
         pool: List[str] = []
         # Membership in a set: a Scene-scope resolve walks every mesh, several
         # times a bake and once per Undo through the Exclude label, and a list
@@ -808,6 +803,11 @@ class TextureBaker(ptk.LoggingMixin):
             if cmds.objectType(transform, isAType="shape"):
                 parent = cmds.listRelatives(transform, parent=True, fullPath=True)
                 transform = parent[0] if parent else transform
+            elif not cmds.objectType(transform, isAType="transform"):
+                # A set, a material: ``listRelatives -shapes`` reads through a
+                # set to its members', so a set passed this test as its own
+                # mesh and reached the renderer by name.
+                continue
             if transform in seen:
                 continue
             seen.add(transform)

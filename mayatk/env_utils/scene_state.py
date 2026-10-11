@@ -66,8 +66,11 @@ class SceneState:
     # graph: a driven or non-opaque channel IS alpha blend, and the FBX
     # cannot say so (measured 2026-09-02: a standardSurface whose opacity
     # came from a texture's alpha reached the GLB OPAQUE -- its silhouette
-    # embedded by the base-colour section and rendered solid).
-    SURFACE_OPACITY_SHADERS = frozenset({"standardSurface", "aiStandardSurface"})
+    # embedded by the base-colour section and rendered solid). openPBR's is
+    # the scalar ``geometryOpacity`` (``ShaderAttributeMap`` names each one).
+    SURFACE_OPACITY_SHADERS = frozenset(
+        {"standardSurface", "aiStandardSurface", "openPBRSurface"}
+    )
 
     # Shaders that gate emission behind a SEPARATE scalar --
     # ``{node_type: (attribute, mode)}``. The shader map's table
@@ -182,7 +185,7 @@ class SceneState:
             node_type = cmds.nodeType(mat)
             if node_type in cls.SURFACE_OPACITY_SHADERS:
                 # Blend, never mask: the channel is continuous.
-                if cls._surface_opacity_is_driven(mat):
+                if cls._surface_opacity_is_driven(mat, node_type):
                     result[mat] = {"mode": "BLEND"}
                 continue
             if node_type in cls.FBX_NATIVE_SHADERS:
@@ -204,27 +207,33 @@ class SceneState:
         return result
 
     @classmethod
-    def _surface_opacity_is_driven(cls, mat: str) -> bool:
-        """Is *mat*'s ``opacity`` connected or below 1.0 on any channel?"""
-        return cls._channel_is_driven(mat, "opacity", clear=1.0)
+    def _surface_opacity_is_driven(cls, mat: str, node_type: str) -> bool:
+        """Is *mat*'s opacity connected or below 1.0 on any channel?"""
+        slot = ShaderAttributeMap.get_attr(node_type, "opacity")
+        return bool(slot) and cls._channel_is_driven(mat, slot[0], clear=1.0)
 
     @staticmethod
     def _channel_is_driven(mat: str, channel: str, clear: float) -> bool:
-        """Is *mat*'s colour *channel* connected (on the compound or a child)
-        or away from *clear* -- the value that means fully opaque -- on any
-        component? Maya allows a compound and its children to be wired
-        independently, so both are checked."""
+        """Is *mat*'s *channel* connected (on the compound or a child) or away
+        from *clear* -- the value that means fully opaque -- on any component?
+        Maya allows a compound and its children to be wired independently, so
+        both are checked. A scalar channel (openPBR's ``geometryOpacity``) is
+        its own single component; read as a colour it raised, and the reader
+        took the failure for "opaque"."""
         plug = f"{mat}.{channel}"
         if not cmds.objExists(plug):
             return False
         for candidate in [plug] + [f"{plug}{c}" for c in "RGB"]:
-            if cmds.listConnections(candidate, source=True, destination=False):
+            if cmds.objExists(candidate) and cmds.listConnections(
+                candidate, source=True, destination=False
+            ):
                 return True
         try:
-            rgb = list(cmds.getAttr(plug)[0])[:3]
+            value = cmds.getAttr(plug)
+            components = list(value[0])[:3] if isinstance(value, list) else [value]
         except (RuntimeError, ValueError, TypeError, IndexError):
             return False
-        return max(abs(float(c) - clear) for c in rgb) > 1e-4
+        return max(abs(float(c) - clear) for c in components) > 1e-4
 
     @classmethod
     def _read_base_color(
@@ -240,24 +249,36 @@ class SceneState:
         left alone rather than re-asserted at a subtly different value: the
         exporter folds Maya's ``diffuse`` weight in, and overwriting with the
         raw colour would make the preview brighter than the FBX intends.
+
+        For the same reason a modern shader's own base WEIGHT is folded in
+        (:meth:`ShaderAttributeMap.base_weight`: ``base`` x ``baseColor``, the
+        albedo it renders), and rides as the factor over a texture -- as
+        unitytk's importer folds it, so the two deliverables agree.
         """
         result: Dict[str, Dict[str, Any]] = {}
 
         for mat in materials:
             if not cmds.objExists(mat):
                 continue
-            if cmds.nodeType(mat) in cls.FBX_NATIVE_SHADERS:
+            node_type = cmds.nodeType(mat)
+            if node_type in cls.FBX_NATIVE_SHADERS:
                 continue
 
             entry: Dict[str, Any] = {}
+            weight = ShaderAttributeMap.base_weight(mat, node_type)
             texture = (textures.get(mat) or {}).get("baseColor")
             if texture:
                 entry["texture"] = texture
+                if abs(weight - 1.0) > 1e-6:
+                    entry["color"] = [weight] * 3
 
-            mapping = ShaderAttributeMap.get_attr(cmds.nodeType(mat), "baseColor")
+            mapping = ShaderAttributeMap.get_attr(node_type, "baseColor")
             if mapping and not texture:
                 try:
-                    entry["color"] = list(cmds.getAttr(f"{mat}.{mapping[0]}")[0])[:3]
+                    entry["color"] = [
+                        c * weight
+                        for c in list(cmds.getAttr(f"{mat}.{mapping[0]}")[0])[:3]
+                    ]
                 except (RuntimeError, ValueError, TypeError, IndexError):
                     pass
 

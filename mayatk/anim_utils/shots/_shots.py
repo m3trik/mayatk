@@ -35,7 +35,7 @@ except ImportError:
     cmds = None  # type: ignore[assignment]
     mel = None  # type: ignore[assignment]
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 try:
     from qtpy.QtCore import QSettings
@@ -53,6 +53,7 @@ from pythontk.core_utils.engines.shots.shot_model import (  # noqa: F401 — re-
     ActiveShotChanged,
     SettingsChanged,
     BatchComplete,
+    ShotsEdited,
     StoreInvalidated,
     ScenePersistence,
     CLIP_NAME_STRATEGIES,
@@ -84,6 +85,7 @@ __all__ = [
     "ActiveShotChanged",
     "SettingsChanged",
     "BatchComplete",
+    "ShotsEdited",
     "StoreInvalidated",
     "ScenePersistence",
     "MayaScenePersistence",
@@ -365,21 +367,19 @@ class _ShotStoreInternal(object):
         return cmds.ls(names, long=True) or []
 
     @staticmethod
-    def _resolve_member_name(name) -> Tuple[str, str]:
-        """``(node, reason)`` for a doc object name -- see
-        :meth:`ShotStore.resolve_member`."""
+    def _member_nodes(name) -> List[str]:
+        """Long names of every transform answering to a doc object name --
+        see :meth:`ShotStore.member_nodes`."""
         try:
             import maya.cmds as cmds
         except ImportError:
-            return str(name), "found"
+            return [str(name)]
         name = str(name)
         hits = cmds.ls(name, long=True, type="transform") or []
         if not hits and ":" not in name.split("|")[-1]:
             # A referenced asset lives in a namespace the doc does not write.
             hits = cmds.ls(name, long=True, type="transform", recursive=True) or []
-        if len(hits) == 1:
-            return hits[0], "found"
-        return name, ("ambiguous" if hits else "missing")
+        return hits
 
 
 class ShotStore(ptk.ShotStore, _ShotStoreInternal):
@@ -432,18 +432,22 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         NAMED undo chunk, and tags the restore point with ``(paired,
         marker)`` describing what Maya recorded:
 
-        * ``paired`` — whether the chunk actually landed on the queue.  An
-          edit that moved only shot BOUNDS touches no scene data, and Maya
-          discards an empty chunk, so nothing is recorded; a consumer that
-          fires ``cmds.undo()`` anyway pops the user's PREVIOUS, unrelated
-          operation.  (Verified: an empty chunk leaves ``undoName``
+        * ``paired`` — whether the chunk actually landed on the queue.  An edit
+          that changed the shot records puts a step there even when it touched
+          no scene data (:meth:`_record_undo_step`), so it is ``False`` only
+          for an edit that changed nothing, one that raised before changing
+          anything, or one made with undo off; a consumer that fires
+          ``cmds.undo()`` for an unpaired point would pop the user's PREVIOUS,
+          unrelated operation.  (Verified: an empty chunk leaves ``undoName``
           reporting the entry before it.)
         * ``marker`` — the queue's top right after the edit.  If it has
           changed by the time undo runs, something else happened since, so
           the native undo belongs to THAT and this restore point stays put.
 
         Pass ``snapshot=False`` for an edit that must not record a restore
-        point (it then only supplies the named chunk).
+        point (it then only supplies the named chunk).  An edit that changed
+        the shot records ends by saying so (:class:`ShotsEdited`), as every
+        store's ``scene_edit`` does.
         """
         if cmds is None:
             yield
@@ -454,11 +458,43 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         cmds.undoInfo(openChunk=True, chunkName=name)
         try:
             yield
+            changed = snapshot and self.changed_since_snapshot()
+            # Only for an edit that changed what the store alone holds: one
+            # that changed nothing must not cost the user a dead Ctrl+Z.
+            if changed:
+                self._record_undo_step()
         finally:
             cmds.undoInfo(closeChunk=True)
             if snapshot:
                 top = self.undo_queue_top()
                 self.tag_boundary_snapshot((top == name, top))
+        if changed:
+            self._notify(ShotsEdited(label=label))
+
+    @staticmethod
+    def _record_undo_step() -> None:
+        """Put one no-op step in the open chunk, so Maya keeps the chunk.
+
+        An edit that changed only shot RECORDS (a new shot, a delete that
+        keeps the keys, a bound moved over empty frames) changes nothing Maya
+        records, and Maya discards an empty chunk: the edit had no step of its
+        own, so Maya's Ctrl+Z went to the operation before it and the shot
+        stayed (2026-10-07: "new shot creation is not undoable" -- the first
+        shot of a scene, every time).  With a step on the queue, Maya's own
+        undo and redo reach the edit wherever the focus is, and the panel's
+        Undo/Redo event handler applies its restore point.
+
+        The step re-sets the lock of the private data node's ``caching`` plug
+        to what it already is: no value changes, nothing re-evaluates, and the
+        record is a few bytes where re-writing the shot record would put a
+        copy of it in every step.  The node is created outside the undo queue
+        (:meth:`DataNodes.ensure_internal`), so undoing the step never takes
+        it away.  blendertk's twin stamps an edit serial inside its step.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        plug = f"{DataNodes.ensure_internal()}.caching"
+        cmds.setAttr(plug, lock=cmds.getAttr(plug, lock=True))
 
     # ---- scene hooks -------------------------------------------------------
 
@@ -580,7 +616,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         (SmartBake's own restore skips those links for the same reason) --
         blendertk skips an action only its fake user holds.  Read from each
         curve's own key index (``AnimUtils.curve_key_spans``): no key is listed
-        or walked.
+        or walked, but on the few curves the ledger samples -- a key the shot
+        system holds as a bound sample (``edit_ledger``) is its bookkeeping,
+        not content, as :meth:`_members_keyed_windows` reads it.
         """
         windows = list(windows)
         if cmds is None:
@@ -604,18 +642,84 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         )
         if not wired:
             return [False] * len(windows)
-        return [span is not None for span in AnimUtils.curve_key_spans(wired, windows)]
+        ledger = self.edit_ledger
+        sampled = set(ledger.keyed_curves())
+        plain = [c for c in wired if c not in sampled]
+        claimed = [c for c in wired if c in sampled]
+        keyed = (
+            [span is not None for span in AnimUtils.curve_key_spans(plain, windows)]
+            if plain
+            else [False] * len(windows)
+        )
+        # A gap hold pins every curve passing a new shot's start: that sample
+        # alone must not fill a shot that names nothing (Delete Empty).
+        for i, (start, end) in enumerate(windows):
+            if not keyed[i] and claimed:
+                keyed[i] = any(
+                    not ledger.owns_key(crv, t)
+                    for crv in claimed
+                    for t in cmds.keyframe(crv, q=True, time=(start, end), tc=True)
+                    or []
+                )
+        return keyed
 
-    def resolve_member(self, name: str) -> Tuple[str, str]:
-        """Resolve a doc object *name* to one scene transform.
+    def _audio_windows(self, windows) -> List[bool]:
+        """Per ``(start, end)`` window, whether an audio event plays in it
+        (``ptk.ShotStore.empty_shots``) -- every track's on/off spans."""
+        if cmds is None:
+            return super()._audio_windows(windows)
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        spans = (s for events in AudioUtils.read_all_events().values() for s in events)
+        return self._spans_overlap(spans, list(windows))
+
+    def _members_keyed_windows(self, entries) -> List[Optional[bool]]:
+        """Per ``(names, (start, end))``, whether a curve of the named objects
+        keys a frame inside the window -- ``None`` when none of the names
+        resolves (``ptk.ShotStore.empty_shots``).  Every curve driving a member,
+        through layers; a key the shot system holds as a bound sample
+        (``edit_ledger``) is its bookkeeping, not the shot's content.
+        """
+        if cmds is None:
+            return super()._members_keyed_windows(entries)
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        ledger = self.edit_ledger
+        sampled = set(ledger.keyed_curves())
+        out: List[Optional[bool]] = []
+        for names, (start, end) in entries:
+            nodes = self._resolve_long_names(names)
+            if not nodes:
+                out.append(None)
+                continue
+            curves = AnimUtils.objects_to_curves(nodes)
+            # The curves holding no sample answer from their key index at once
+            # (the shot list's menu asks every scope each time it opens); only
+            # the few the ledger samples are read key by key.
+            plain = [c for c in curves if c not in sampled]
+            if plain and AnimUtils.curve_key_spans(plain, [(start, end)])[0]:
+                out.append(True)
+                continue
+            out.append(
+                any(
+                    not ledger.owns_key(crv, t)
+                    for crv in curves
+                    if crv in sampled
+                    for t in cmds.keyframe(crv, q=True, time=(start, end), tc=True)
+                    or []
+                )
+            )
+        return out
+
+    def member_nodes(self, name: str) -> List[str]:
+        """Long names of every transform answering to a doc object *name*.
 
         Exact first; a name the scene holds only inside a namespace (a
-        referenced asset, ``AC:door_geo`` for ``door_geo``) is found next.
-        Returns ``(long_name, "found")``, or ``(name, "missing")`` /
-        ``(name, "ambiguous")`` -- several transforms answering to it is a
-        finding, never a silent pick.
+        referenced asset, ``AC:door_geo`` for ``door_geo``) is looked up
+        next.  :meth:`~pythontk.ShotStore.resolve_member` reads one hit as
+        found, several as ambiguous.
         """
-        return _ShotStoreInternal._resolve_member_name(name)
+        return _ShotStoreInternal._member_nodes(name)
 
     def _resolve_long_names(self, names):
         """Resolve object names to long DAG paths (drops missing objects)."""

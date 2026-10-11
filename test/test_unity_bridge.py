@@ -52,6 +52,14 @@ class TestUnityBridgeUnit(unittest.TestCase):
         self.assertIs(UnityBridge.resample_takes, True)
         self.assertIs(MayaExportMixin.resample_takes, False)
 
+    def test_it_animates_unless_a_request_says_otherwise(self):
+        """Unity builds the clips from the takes, and this panel offers no
+        animation knob; a DCC hand-off keeps its own (the mixin default)."""
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+
+        self.assertIs(getattr(UnityBridge, "include_animation", None), True)
+        self.assertIs(getattr(MayaExportMixin, "include_animation", None), False)
+
     def test_params_defaults(self):
         d = UnityBridge().params_defaults()
         self.assertEqual(d["ASSETS_SUBDIR"], "Imported")
@@ -219,6 +227,45 @@ class TestUnityBridgeSend(MayaTkTestCase):
                 self.assertEqual(
                     (round(first / tick), round(last / tick)), (start, end), key
                 )
+
+    def test_a_send_with_the_panels_params_ships_one_take_per_shot(self):
+        """The Unity panel offers no animation knob, so INCLUDE_ANIMATION never
+        reached the hand-off: no take was split, ``resample_takes`` never ran,
+        and Unity built a single ``Take 001`` clip for a scene that declares its
+        shots. The bridge animates unless a request says otherwise.
+        Added: 2026-10-05
+        """
+        import pythontk as ptk
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        cube = cmds.polyCube(name="UnityPanelAnim")[0]
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="translateX", time=40, value=10)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("ShotA", 1, 20, objects=[cube])
+        store.define_shot("ShotB", 21, 40, objects=[cube])
+        store.publish_export_view()
+
+        panel = {"ASSETS_SUBDIR": "Bridge", "ASSET_NAME": "panel_takes"}
+        result = self.bridge.send(
+            [cube], template="copy_to_assets", mode="send_to", params=panel
+        )
+        self.assertIsNotNone(result, "send returned None (delivery failed)")
+        takes = ptk.FbxFile.load(result["asset"], raw_payloads=False).take_names()
+        self.assertIn("ShotA", takes)
+        self.assertIn("ShotB", takes)
+
+        still = self.bridge.send(
+            [cube],
+            template="copy_to_assets",
+            mode="send_to",
+            params=dict(panel, ASSET_NAME="panel_still", INCLUDE_ANIMATION=False),
+        )
+        self.assertNotIn(
+            "ShotA", ptk.FbxFile.load(still["asset"], raw_payloads=False).take_names()
+        )
 
     def test_send_aborts_when_no_project(self):
         cube = cmds.polyCube(name="UnityNoProj")[0]

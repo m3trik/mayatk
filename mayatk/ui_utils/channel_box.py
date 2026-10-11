@@ -339,36 +339,58 @@ class ChannelBox:
 
     @classmethod
     def select(cls, attr_names):
-        """Select attributes in the channel box by short name.
+        """Select attributes in the channel box through ``channelBox -select``.
 
-        Uses ``cmds.channelBox -select`` as a **best-effort** mechanism.
-        In Maya 2025 this flag is accepted but silently does nothing;
-        callers that need a guaranteed highlight should use
-        ``select_visual`` instead.
+        The flag takes ``node.attr`` plugs on the box's lead object (``-mol``
+        lists it first); a bare name selects nothing.  Measured on Maya 2025,
+        a plug lands on a shown box (highlighting the row) and on one not yet
+        shown this session, whose Qt model ``select_visual`` cannot use.  A
+        box hidden AFTER being shown -- tabbed behind the Outliner -- is
+        emptied by Maya, selection included, and takes nothing until shown
+        again (see :meth:`add_stand_in`).  Nothing the flag takes clears the
+        selection, so an empty list clears through the Qt selection model.
 
         Parameters:
-            attr_names (str | list[str]): Short attribute names.
-                Pass an empty list / ``None`` to clear the selection.
+            attr_names (str | list[str]): Attribute names (any form the node
+                accepts) or ``node.attr`` plugs, passed as they are.  Empty /
+                ``None`` clears the selection.
+
+        Returns:
+            bool: ``True`` if every name is selected afterwards (or the
+                selection was cleared).
         """
         if isinstance(attr_names, str):
             attr_names = [attr_names]
+        attr_names = list(attr_names or [])
+
+        if not attr_names:
+            view = cls._main_view(require_rows=False)
+            try:
+                view.selectionModel().clearSelection()
+                return True
+            except (AttributeError, RuntimeError):
+                return False
 
         cb = cls._control_name()
         if not cb:
-            return
-
-        attr_list = list(attr_names) if attr_names else []
+            return False
+        lead = (cmds.channelBox(cb, q=True, mol=True) or cmds.ls(sl=True) or [""])[0]
+        if not lead and any("." not in a for a in attr_names):
+            return False  # nothing shown: no object to name the plugs on
+        plugs = [a if "." in a else f"{lead}.{a}" for a in attr_names]
         try:
-            cmds.channelBox(cb, e=True, select=attr_list)
+            cmds.channelBox(cb, e=True, select=plugs)
         except Exception:
             log.debug("select: cmds.channelBox -select failed", exc_info=True)
-            return
+            return False
 
-        try:
-            cmds.channelBox(cb, e=True, update=True)
-        except Exception:
-            # Maya 2025 refreshAE.mel bug — selection may still have taken effect.
-            log.debug("select: update raised (expected in 2025)", exc_info=True)
+        wanted = set()
+        for plug in plugs:
+            try:
+                wanted.add(cmds.attributeName(plug, short=True))
+            except Exception:
+                return False  # no such plug: it cannot have been selected
+        return wanted <= set(cls.get_selected_attrs("all"))
 
     # Idle turns ``select_visual`` waits for an unfilled channel box before
     # it gives up and warns (measured: one turn is enough after a node change).
@@ -446,16 +468,16 @@ class ChannelBox:
         """Select attributes and ensure the highlight is visible in the UI.
 
         Wraps the ``mainChannelBox`` as a ``QTableView`` and sets the
-        selection directly on its ``QItemSelectionModel``.  This is the
-        **only reliable mechanism** in Maya 2025 — ``cmds.channelBox
-        -select`` is accepted but silently does nothing.
+        selection directly on its ``QItemSelectionModel``, matching rows by
+        any name form (nice, long, short).
 
         The channel box refills on Maya's idle turn, not synchronously, so a
         call made just after its node changed finds blank rows.  That call is
         retried on the following idle turns (the newest call wins), and the
-        highlight then lands a moment after this returns.  Only a box that is
-        hidden, never refills, or does not show the attributes gets a warning
-        and the ``select()`` fallback.
+        highlight then lands a moment after this returns.  A box that is
+        hidden, never refills, or does not show the attributes goes through
+        :meth:`select` instead.  A miss there warns, except on a hidden box:
+        Maya empties that one, and :meth:`stand_in_selection` covers it.
 
         Parameters:
             attr_names (str | list[str]): Short attribute names.
@@ -487,24 +509,71 @@ class ChannelBox:
             except Exception:
                 log.debug("select_visual: could not defer a retry", exc_info=True)
 
-        # --- cmds fallback (best-effort, measured dead in 2025) ------------
-        # Measured on Maya 2025 against a POPULATED channel box: `channelBox
-        # -e -select` leaves `-q -sma` empty for both short ("tx") and long
-        # ("translateX") names.  So reaching here means the highlight almost
-        # certainly did NOT land — warn rather than fail silently.
+        # The Qt model could not take it; the command reaches a box the Qt
+        # model cannot (see ``select``).
+        if cls.select(attr_names) or reason == "hidden":
+            return
         log.warning(
-            "select_visual: channel box highlight not set for %s — %s. "
-            "Falling back to cmds.channelBox -select, which does not take "
-            "effect in Maya 2025.",
+            "select_visual: channel box selection not set for %s -- %s, and "
+            "cmds.channelBox -select did not land either.",
             attr_names,
             cls._SELECT_FAILURES[reason],
         )
-        cls.select(attr_names)
 
     @classmethod
     def clear_selection(cls):
         """Deselect all attributes in the channel box."""
         cls.select_visual([])
+
+    # ------------------------------------------------------------------
+    # Stand-ins: panels that list channels in the box's place
+    # ------------------------------------------------------------------
+
+    _stand_ins: list = []
+
+    @classmethod
+    def add_stand_in(cls, source):
+        """Register a panel that lists channels in place of the box.
+
+        Maya empties the channel box while it is not shown -- tabbed behind
+        the Outliner, say -- selection included (measured, Maya 2025), so a
+        channel selection made in a panel such as mayatk's Channels cannot be
+        put in it.  The panel registers instead, and
+        :meth:`stand_in_selection` reports its selection to whatever reads
+        "the selected channels" (:meth:`Attributes.get_selected_channels`).
+
+        Parameters:
+            source (callable): Takes no arguments; returns the short names of
+                the channels selected in the panel (``[]`` for none, and
+                while the panel is not shown).  Registered once however often
+                it is added.
+        """
+        if source not in cls._stand_ins:
+            cls._stand_ins.append(source)
+
+    @classmethod
+    def remove_stand_in(cls, source):
+        """Unregister a :meth:`add_stand_in` source; unknown ones are ignored."""
+        if source in cls._stand_ins:
+            cls._stand_ins.remove(source)
+
+    @classmethod
+    def stand_in_selection(cls):
+        """Return the channels selected in the first stand-in that has any.
+
+        Returns:
+            list[str]: Short attribute names; ``[]`` when no stand-in has a
+                selection.  A source that raises is skipped.
+        """
+        for source in list(cls._stand_ins):
+            try:
+                names = list(source() or [])
+            except Exception:
+                log.debug("stand_in_selection: %r failed", source, exc_info=True)
+                continue
+            if names:
+                return names
+        return []
 
     # ------------------------------------------------------------------
     # Full attribute queries

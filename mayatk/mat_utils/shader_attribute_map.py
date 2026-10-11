@@ -11,22 +11,38 @@ import math
 from typing import Optional, Tuple, Dict, Any, Callable
 from collections import namedtuple
 
+import pythontk as ptk
+
 # Each slot is: (attribute_name, output_plug)
 # Example: ("TEX_roughness_map", "outColorR")
 ShaderAttrSlot = Optional[Tuple[str, str]]
 
+_CORE_CHANNELS = (
+    "baseColor",  # Albedo/Diffuse/Base Color
+    "emission",  # Emissive/Glow
+    "specular",  # Specular/F0 -- the specular colour (tint) on the PBR surfaces
+    "roughness",  # Roughness/Gloss/Eccentricity
+    "metallic",  # Metalness/Metallic
+    "opacity",  # Opacity/Transparency
+    "normal",  # Normal/Bump
+    "ambientOcclusion",  # Ambient Occlusion
+)
+
+#: The OpenPBR lobe channels: pythontk's ``MapRegistry.LOBE_TYPE_CHANNELS`` (the
+#: shared vocabulary blendertk wires Principled from), less the core channel the
+#: specular tint shares. Derived, not listed, so a lobe pythontk adds is a field
+#: here with no edit. Only the physically-based surfaces declare them, so they
+#: default to None and the classic shaders need not spell them out.
+LOBE_CHANNELS = tuple(
+    channel
+    for channel in dict.fromkeys(ptk.MapRegistry.LOBE_TYPE_CHANNELS.values())
+    if channel not in _CORE_CHANNELS
+)
+
 ShaderAttrs = namedtuple(
     "ShaderAttrs",
-    [
-        "baseColor",  # Albedo/Diffuse/Base Color
-        "emission",  # Emissive/Glow
-        "specular",  # Specular/F0
-        "roughness",  # Roughness/Gloss/Eccentricity
-        "metallic",  # Metalness/Metallic
-        "opacity",  # Opacity/Transparency
-        "normal",  # Normal/Bump
-        "ambientOcclusion",  # Ambient Occlusion
-    ],
+    [*_CORE_CHANNELS, *LOBE_CHANNELS],
+    defaults=(None,) * len(LOBE_CHANNELS),
 )
 
 
@@ -43,7 +59,8 @@ class _ShaderAttributeMapInternal(object):
         The channel that exposes this is **opacity**: every PBR shader here
         declares it as ``outAlpha`` (opacity IS the image's alpha), while the
         attribute itself is a ``float3`` -- ``standardSurface.opacity``,
-        ``openPBRSurface.geometryOpacity``, ``lambert.transparency``.
+        ``lambert.transparency`` (``openPBRSurface.geometryOpacity`` is a scalar
+        and connects directly).
 
         Substituting a different SOURCE plug to make the types line up (the old
         blanket ``outColor`` fallback) silently changes WHICH DATA flows: it
@@ -66,6 +83,22 @@ class _ShaderAttributeMapInternal(object):
         except RuntimeError:
             # A single-channel source into a compound slot -- drive each child.
             return MatUtils.connect_to_channels(src_plug, node, attr)
+
+    @staticmethod
+    def _apply_gain(file_node: str, gain: float) -> None:
+        """Scale what *file_node* outputs by *gain* -- colour and alpha alike.
+
+        Set, never multiplied, so re-wiring the same file (a converter or
+        manifest replay of a network this built) cannot compound it.
+        Best-effort: a locked or connected gain keeps the connection.
+        """
+        import maya.cmds as cmds
+
+        try:
+            cmds.setAttr(f"{file_node}.colorGain", gain, gain, gain, type="double3")
+            cmds.setAttr(f"{file_node}.alphaGain", gain)
+        except (RuntimeError, ValueError):
+            pass
 
     @staticmethod
     def _prepare_alpha_source(file_node: str) -> None:
@@ -158,6 +191,15 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         # MetallicSmoothness puts smoothness there, so ``outAlpha`` turned a
         # non-metal ~78% metal (a transferred table rendered at a third of its
         # source's brightness). R is also the channel StingrayPBS samples.
+        #
+        # The lobes: Standard Surface (and Arnold's, which shares its names --
+        # probed on Maya 2025.3 + MtoA) carries every OpenPBR lobe but thin
+        # film's weight. ``subsurfaceRadius`` is OpenPBR's SCALAR radius, which
+        # is Standard Surface's ``subsurfaceScale``; its float3
+        # ``subsurfaceRadius`` is OpenPBR's ``subsurfaceRadiusScale``. Thin film
+        # stays undeclared: Standard Surface measures it in nanometres with no
+        # weight (thickness 0 is off), so OpenPBR's default 0.5 um film -- off
+        # only by its weight -- would arrive switched on.
         "aiStandardSurface": ShaderAttrs(
             baseColor=("baseColor", "outColor"),
             emission=("emissionColor", "outColor"),
@@ -170,6 +212,21 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
                 "outColor",
             ),  # connect to aiNormalMap.outValue, not file.outColor
             ambientOcclusion=None,
+            diffuseRoughness=("diffuseRoughness", "outColorR"),
+            specularWeight=("specular", "outColorR"),
+            anisotropy=("specularAnisotropy", "outColorR"),
+            transmission=("transmission", "outColorR"),
+            transmissionColor=("transmissionColor", "outColor"),
+            subsurface=("subsurface", "outColorR"),
+            subsurfaceColor=("subsurfaceColor", "outColor"),
+            subsurfaceRadius=("subsurfaceScale", "outColorR"),
+            coat=("coat", "outColorR"),
+            coatColor=("coatColor", "outColor"),
+            coatRoughness=("coatRoughness", "outColorR"),
+            coatNormal=("coatNormal", "outColor"),
+            sheen=("sheen", "outColorR"),
+            sheenColor=("sheenColor", "outColor"),
+            sheenRoughness=("sheenRoughness", "outColorR"),
         ),
         "standardSurface": ShaderAttrs(
             baseColor=("baseColor", "outColor"),
@@ -180,6 +237,21 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             opacity=("opacity", "outAlpha"),
             normal=("normalCamera", "outColor"),
             ambientOcclusion=None,
+            diffuseRoughness=("diffuseRoughness", "outColorR"),
+            specularWeight=("specular", "outColorR"),
+            anisotropy=("specularAnisotropy", "outColorR"),
+            transmission=("transmission", "outColorR"),
+            transmissionColor=("transmissionColor", "outColor"),
+            subsurface=("subsurface", "outColorR"),
+            subsurfaceColor=("subsurfaceColor", "outColor"),
+            subsurfaceRadius=("subsurfaceScale", "outColorR"),
+            coat=("coat", "outColorR"),
+            coatColor=("coatColor", "outColor"),
+            coatRoughness=("coatRoughness", "outColorR"),
+            coatNormal=("coatNormal", "outColor"),
+            sheen=("sheen", "outColorR"),
+            sheenColor=("sheenColor", "outColor"),
+            sheenRoughness=("sheenRoughness", "outColorR"),
         ),
         "StingrayPBS": ShaderAttrs(
             baseColor=("TEX_color_map", "outColor"),
@@ -206,6 +278,8 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             normal=("TEX_normal_map", "outColor"),
             ambientOcclusion=("TEX_ao_map", "outColor"),
         ),
+        # Every OpenPBR lobe, named as the spec names it (probed on Maya
+        # 2025.3). ``geometryOpacity`` is a scalar there, not a colour.
         "openPBRSurface": ShaderAttrs(
             baseColor=("baseColor", "outColor"),
             emission=("emissionColor", "outColor"),
@@ -215,8 +289,210 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             opacity=("geometryOpacity", "outAlpha"),
             normal=("geometryNormal", "outColor"),
             ambientOcclusion=None,
+            diffuseRoughness=("baseDiffuseRoughness", "outColorR"),
+            specularWeight=("specularWeight", "outColorR"),
+            anisotropy=("specularRoughnessAnisotropy", "outColorR"),
+            transmission=("transmissionWeight", "outColorR"),
+            transmissionColor=("transmissionColor", "outColor"),
+            subsurface=("subsurfaceWeight", "outColorR"),
+            subsurfaceColor=("subsurfaceColor", "outColor"),
+            subsurfaceRadius=("subsurfaceRadius", "outColorR"),
+            coat=("coatWeight", "outColorR"),
+            coatColor=("coatColor", "outColor"),
+            coatRoughness=("coatRoughness", "outColorR"),
+            coatNormal=("geometryCoatNormal", "outColor"),
+            sheen=("fuzzWeight", "outColorR"),
+            sheenColor=("fuzzColor", "outColor"),
+            sheenRoughness=("fuzzRoughness", "outColorR"),
+            thinFilm=("thinFilmWeight", "outColorR"),
+            thinFilmThickness=("thinFilmThickness", "outColorR"),
         ),
     }
+
+    #: Channels whose input is a VECTOR (a tangent-space normal), never a
+    #: value: an undriven one means the surface's own normal, and its literal
+    #: (``normalCamera`` reads (1, 1, 1), ``geometryCoatNormal`` (0, 0, 0)) is
+    #: no tangent-space value. See :meth:`constant_attr`.
+    VECTOR_CHANNELS = ("normal", "coatNormal")
+
+    #: ``(shader type, logical channel) -> (map type, gain)``: a map TYPE whose
+    #: texels are authored on a different scale from the slot. A
+    #: ``Specular_Level`` map holds the authored level, 0.5 the neutral 4% F0
+    #: (Substance, Blender, Unreal -- see ``ptk.MapRegistry``), while these
+    #: shaders' specular WEIGHT is neutral at 1.0: wired raw, every level map
+    #: halved the reflections. Keyed by the map type, not the slot alone, so a
+    #: file already in weight units -- a hand-wired or legacy map, which does
+    #: not classify as a level -- keeps its own gain: a retype, a manifest
+    #: replay or a transfer re-wires it unchanged instead of doubling it.
+    #: Applied as the file node's own colour/alpha gain, so the slot stays
+    #: driven by the file directly -- the converter's tracer and the FBX writer
+    #: both read a texture only one hop upstream.
+    TEXTURE_GAINS: Dict[Tuple[str, str], Tuple[str, float]] = {
+        ("standardSurface", "specularWeight"): ("Specular_Level", 2.0),
+        ("aiStandardSurface", "specularWeight"): ("Specular_Level", 2.0),
+        ("openPBRSurface", "specularWeight"): ("Specular_Level", 2.0),
+    }
+
+    @classmethod
+    def _texture_gain(
+        cls, file_node: str, shader_type: str, logical: str
+    ) -> Optional[float]:
+        """The :attr:`TEXTURE_GAINS` gain *file_node*'s texture takes into
+        *logical* on *shader_type*: only when its filename classifies as the
+        declared map type, else None (its own gain stands)."""
+        import maya.cmds as cmds
+
+        entry = cls.TEXTURE_GAINS.get((shader_type, logical))
+        if entry is None:
+            return None
+        map_type, gain = entry
+        try:
+            path = cmds.getAttr(f"{file_node}.fileTextureName") or ""
+        except (RuntimeError, ValueError):
+            return None
+        return gain if ptk.MapFactory.resolve_map_type(path) == map_type else None
+
+    @classmethod
+    def texture_scale(
+        cls, shader: str, logical: str, shader_type: Optional[str] = None
+    ) -> Optional[float]:
+        """Factor that brings the texels driving *logical* into the units of
+        its declared :attr:`TEXTURE_GAINS` map type, or None when they already
+        are (or nothing declares one).
+
+        The file node's own gain is what the slot reads, so texels times that
+        gain are the slot's value; a map written as the declared type is read
+        back through the declared gain. A ``Specular_Level`` source (gain 2)
+        is already in level units; a weight-unit map (gain 1) is 1/2 -- carried
+        unscaled into a level map, its re-wire doubled it. For whoever re-bakes
+        the texels into a new map: the UV transfer.
+
+        Parameters:
+            shader (str): The live shader node.
+            logical (str): Logical channel name.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            float | None: ``own gain / declared gain``.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return None
+        entry = cls.TEXTURE_GAINS.get((shader_type, logical))
+        slot = cls.resolve_live_slot(shader, logical, shader_type) if entry else None
+        file_node = MatUtils.get_texture_file_node(shader, slot[0]) if slot else None
+        if not file_node:
+            return None
+        try:
+            own = float(cmds.getAttr(f"{file_node}.colorGain")[0][0])
+        except (RuntimeError, ValueError, TypeError, IndexError):
+            return None
+        scale = own / entry[1]
+        return None if abs(scale - 1.0) < 1e-6 else scale
+
+    #: The boolean that makes a surface thin-walled (a cutout leaf, not a
+    #: solid): every PBR builder sets it for an opacity map. OpenPBR spells it
+    #: ``geometryThinWalled``, so a builder probing only ``thinWalled`` left
+    #: every retyped openPBR solid.
+    THIN_WALLED_ATTRS: Dict[str, str] = {
+        "standardSurface": "thinWalled",
+        "aiStandardSurface": "thinWalled",
+        "openPBRSurface": "geometryThinWalled",
+    }
+
+    @classmethod
+    def set_thin_walled(cls, shader: str, shader_type: Optional[str] = None) -> bool:
+        """Make *shader* thin-walled, if its type has the switch.
+
+        Parameters:
+            shader (str): The live shader node.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            bool: True when the attribute was set.
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return False
+        attr = cls.THIN_WALLED_ATTRS.get(shader_type)
+        if not attr or not cmds.attributeQuery(attr, node=str(shader), exists=True):
+            return False
+        cmds.setAttr(f"{shader}.{attr}", True)
+        return True
+
+    @classmethod
+    def open_lobe_gate(
+        cls, shader: str, logical: str, shader_type: Optional[str] = None
+    ) -> bool:
+        """Switch on the lobe a just-wired *logical* map belongs to.
+
+        Every lobe weight defaults to 0, so a coat colour, roughness or normal
+        on an untouched coat renders nothing (see ``ptk.MapRegistry.LOBE_GATES``).
+        Opens the weight at 1.0 -- unless a map already drives it, or it was
+        already above 0 (an authored weight is the user's, not a default).
+
+        Parameters:
+            shader (str): The live shader node.
+            logical (str): The channel that was just wired.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            bool: True when a weight was opened.
+        """
+        import maya.cmds as cmds
+
+        gate = ptk.MapRegistry.LOBE_GATES.get(logical)
+        if not gate:
+            return False
+        slot = cls.resolve_live_slot(shader, gate, shader_type)
+        if not slot:
+            return False
+        plug = f"{shader}.{slot[0]}"
+        try:
+            if cmds.listConnections(plug, source=True, destination=False):
+                return False
+            if cmds.getAttr(plug):
+                return False
+            cmds.setAttr(plug, 1.0)
+            return True
+        except (RuntimeError, ValueError):
+            return False
+
+    @classmethod
+    def slot_attrs(cls, shader_type: str) -> Tuple[str, ...]:
+        """Every attribute a texture may drive on *shader_type*.
+
+        The declared slots plus their :attr:`SLOT_ALTERNATES`, de-duplicated
+        in declaration order -- the teardown list for a rewire, so a channel
+        cannot be wired by the map and left connected by the teardown.
+
+        Parameters:
+            shader_type (str): Maya node type.
+
+        Returns:
+            tuple: Attribute names; empty for an undeclared type.
+        """
+        attrs = cls.SHADER_ATTRS.get(shader_type)
+        if attrs is None:
+            return ()
+        names = []
+        for logical in cls.logical_channels():
+            slot = getattr(attrs, logical)
+            if slot:
+                names.append(slot[0])
+            for alternate, _ in cls.SLOT_ALTERNATES.get((shader_type, logical), ()):
+                names.append(alternate)
+        return tuple(dict.fromkeys(names))
 
     @classmethod
     def logical_channels(cls) -> Tuple[str, ...]:
@@ -251,10 +527,10 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
 
         :attr:`CONSTANT_ATTRS` where the type keeps it apart, else the declared
         slot. None where no attribute holds a VALUE: a ShaderFX ``TEX_*``
-        sampler with no uniform (``TEX_ao_map``, ``TEX_normal_map``), and
-        ``normal`` everywhere -- an undriven normal input means the surface's
-        own normal, and its literal (standardSurface's ``normalCamera`` is
-        (1, 1, 1)) is not a tangent-space value.
+        sampler with no uniform (``TEX_ao_map``, ``TEX_normal_map``), and the
+        :attr:`VECTOR_CHANNELS` everywhere -- an undriven normal input means the
+        surface's own normal, and its literal (standardSurface's
+        ``normalCamera`` is (1, 1, 1)) is not a tangent-space value.
 
         Parameters:
             shader_type (str): Maya node type.
@@ -263,7 +539,7 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         Returns:
             str | None: The attribute name.
         """
-        if logical == "normal":
+        if logical in cls.VECTOR_CHANNELS:
             return None
         attr = cls.CONSTANT_ATTRS.get(shader_type, {}).get(logical)
         if attr:
@@ -347,9 +623,58 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             return 1.0 if value > 0.0 else 0.0
         return value
 
+    #: Shaders whose base colour is scaled by a SEPARATE weight --
+    #: ``{node_type: attribute}``: the diffuse albedo is weight x colour.
+    #: Maya's FBX exporter folds the legacy models' ``diffuse`` weight into
+    #: their colour and maps these not at all, so a reader of the colour
+    #: alone ran ``1 / weight`` too bright wherever an artist lowered it (the
+    #: three default to 1.0, over a 0.8 colour).
+    BASE_WEIGHT_ATTRS: Dict[str, str] = {
+        "aiStandardSurface": "base",
+        "standardSurface": "base",
+        "openPBRSurface": "baseWeight",
+    }
+
+    @classmethod
+    def base_weight(cls, shader: str, shader_type: Optional[str] = None) -> float:
+        """The shader's base-colour weight, or 1.0 when it has none.
+
+        A DRIVEN weight (a map on it) is 1.0 too: the FBX writes a map-driven
+        scalar as 1, and unitytk's importer reads that, so the GLB carries the
+        same rather than one frame's sample of the map.
+
+        Parameters:
+            shader (str): The live shader node.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            float: The weight.
+        """
+        import maya.cmds as cmds
+
+        if not shader_type:
+            try:
+                shader_type = cmds.nodeType(shader)
+            except RuntimeError:
+                return 1.0
+        attr = cls.BASE_WEIGHT_ATTRS.get(shader_type)
+        plug = f"{shader}.{attr}" if attr else None
+        if plug is None or not cmds.objExists(plug):
+            return 1.0
+        if cmds.listConnections(plug, source=True, destination=False):
+            return 1.0
+        try:
+            return float(cmds.getAttr(plug))
+        except (RuntimeError, ValueError, TypeError):
+            return 1.0
+
     @classmethod
     def read_constant(
-        cls, shader: str, logical: str, shader_type: Optional[str] = None
+        cls,
+        shader: str,
+        logical: str,
+        shader_type: Optional[str] = None,
+        texture_units: bool = False,
     ) -> Optional[Tuple[float, ...]]:
         """*logical*'s literal on *shader*, in the channel's own terms.
 
@@ -368,6 +693,13 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             shader (str): The live shader node.
             logical (str): Logical channel name.
             shader_type (str, optional): Skips the ``nodeType`` lookup.
+            texture_units (bool): The value as the channel's declared map
+                type would hold it -- divided by its :attr:`TEXTURE_GAINS`
+                gain, so a specular weight of 1.0 reads as the 0.5 a
+                ``Specular_Level`` map (what the UV transfer writes) stores.
+                For filling a texture beside real maps (the UV transfer's
+                constant sources); a shader-to-shader copy wants the slot's
+                own units, the default.
 
         Returns:
             tuple | None: The value as floats (a scalar is a 1-tuple).
@@ -403,6 +735,10 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         if logical == "emission":
             weight = cls.emission_weight(shader, shader_type)
             values = tuple(v * weight for v in values)
+        if texture_units:
+            entry = cls.TEXTURE_GAINS.get((shader_type, logical))
+            if entry:
+                values = tuple(v / entry[1] for v in values)
         return values
 
     @classmethod
@@ -465,6 +801,9 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             return False  # a texture on a uniform is a flat constant, not a map
         if plug in cls.ALPHA_DERIVED_PLUGS:
             cls._prepare_alpha_source(file_node)
+        gain = cls._texture_gain(file_node, shader_type, logical)
+        if gain is not None:
+            cls._apply_gain(file_node, gain)
         if not cls._connect_plug(f"{file_node}.{plug}", shader, attr):
             return False
         cls._enable_map_toggle(shader, attr)

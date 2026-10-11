@@ -935,8 +935,10 @@ class TestTextureTransfer(MayaTkTestCase):
 
     def _surface(self, name, texture=None):
         """A standardSurface + SG with a NON-channel input (a checker node on
-        ``coatColor``): the stand-in for a StingrayPBS's IBL cubes, which no
-        transfer writes and the assigned copy must keep."""
+        ``transmissionScatter``): the stand-in for a StingrayPBS's IBL cubes,
+        which no transfer writes and the assigned copy must keep. (Not
+        ``coatColor``: the coat is an OpenPBR lobe channel, re-baked onto the
+        new layout like the base colour.)"""
         mat = cmds.shadingNode("standardSurface", asShader=True, name=name)
         sg = cmds.sets(
             name=f"{name}SG", renderable=True, noSurfaceShader=True, empty=True
@@ -944,7 +946,7 @@ class TestTextureTransfer(MayaTkTestCase):
         cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader")
         cmds.setAttr(f"{mat}.coat", 0.5)
         extra = cmds.shadingNode("checker", asTexture=True, name=f"{name}_extra")
-        cmds.connectAttr(f"{extra}.outColor", f"{mat}.coatColor")
+        cmds.connectAttr(f"{extra}.outColor", f"{mat}.transmissionScatter")
         if texture:
             f = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
             cmds.setAttr(f"{f}.fileTextureName", texture, type="string")
@@ -984,7 +986,7 @@ class TestTextureTransfer(MayaTkTestCase):
         )
         self.assertEqual(cmds.nodeType("from_src"), "standardSurface")
         self.assertAlmostEqual(cmds.getAttr("from_src.coat"), 0.5)
-        self.assertEqual(cmds.listConnections("from_src.coatColor"), [extra])
+        self.assertEqual(cmds.listConnections("from_src.transmissionScatter"), [extra])
         self.assertTrue(self._wears_new_map("from_src"))
         self.assertIn("from_src", TextureTransfer().face_materials(tgt)[0])
         self.assertIn(mat, TextureTransfer().face_materials(src)[0])
@@ -1009,8 +1011,84 @@ class TestTextureTransfer(MayaTkTestCase):
             output_name="keep_in",
             assign=True,
         )
-        self.assertEqual(cmds.listConnections("keep_in.coatColor"), [extra])
+        self.assertEqual(cmds.listConnections("keep_in.transmissionScatter"), [extra])
         self.assertTrue(self._wears_new_map("keep_in"))
+
+    def test_a_coat_map_is_rebaked_onto_the_new_layout(self):
+        """The coat is an OpenPBR lobe channel: the assigned copy has its coat
+        slots cleared for re-wiring, so the transfer must bake them. It knew
+        only the core channels, so the coat roughness map was simply lost."""
+        plane = self._plane("coatPlane")
+        mat, sg, _extra = self._surface("coatMat", texture=self.checker_path)
+        coat = cmds.shadingNode("file", asTexture=True, name="coatMat_coat")
+        cmds.setAttr(f"{coat}.fileTextureName", self.checker_path, type="string")
+        cmds.connectAttr(f"{coat}.outColorR", f"{mat}.coatRoughness")
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="coat_out",
+            assign=True,
+        )
+        files = cmds.listConnections("coat_out.coatRoughness", type="file") or []
+        self.assertEqual(len(files), 1, files)
+        path = cmds.getAttr(f"{files[0]}.fileTextureName")
+        self.assertTrue(
+            os.path.normpath(path).startswith(os.path.normpath(self.out_dir)), path
+        )
+        self.assertEqual(ptk.MapFactory.resolve_map_type(path), "Clearcoat_Roughness")
+
+    def test_a_weight_unit_specular_map_keeps_its_value(self):
+        """A specular map already in WEIGHT units (gain 1; not named a level)
+        is written out as a ``Specular_Level`` map, which re-wires doubled --
+        so its texels are halved on the way (``ShaderAttributeMap.texture_scale``)
+        and the copy reads what the source read."""
+        plane = self._plane("specPlane")
+        mat, sg, _extra = self._surface("specMat", texture=self.checker_path)
+        spec = cmds.shadingNode("file", asTexture=True, name="specMat_spec")
+        cmds.setAttr(f"{spec}.fileTextureName", self.checker_path, type="string")
+        cmds.connectAttr(f"{spec}.outColorR", f"{mat}.specular")
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="spec_out",
+            assign=True,
+        )
+        (out_file,) = cmds.listConnections("spec_out.specular", type="file") or [None]
+        self.assertIsNotNone(out_file)
+        gain = cmds.getAttr(f"{out_file}.colorGain")[0][0]
+        src = np.asarray(Image.open(self.checker_path).convert("L"), np.float64)
+        dst = np.asarray(
+            Image.open(cmds.getAttr(f"{out_file}.fileTextureName")).convert("L"),
+            np.float64,
+        )
+        # The slot reads texels x gain; the source read them x 1.
+        self.assertAlmostEqual(dst.mean() * gain, src.mean(), delta=4.0)
+
+    def test_a_specular_level_fill_is_in_texture_units(self):
+        """A source with no specular-level map fills the baked level map at
+        its weight HALVED: the rewire doubles the map back (the level-to-weight
+        gain), so a weight-1.0 fill painted as 1.0 played at 2.0."""
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="specFill")
+        self.assertEqual(
+            TextureTransfer.material_constant(mat, "specularWeight"), (0.5,)
+        )
+        self.assertEqual(TextureTransfer.material_constant(mat, "metallic"), (0.0,))
 
     def test_a_copy_relinks_array_element_inputs(self):
         """An input on an ARRAY element (a layeredShader's ``inputs[0].color``)

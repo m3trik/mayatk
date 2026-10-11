@@ -286,10 +286,7 @@ class RenderEffects(ptk.LoggingMixin):
             names = [o.split("|")[-1].split(":")[-1] for o in vis_keyed]
             if delete_visibility_keys:
                 for obj in vis_keyed:
-                    vis_plug = f"{(cmds.ls(obj, long=True) or [obj])[0]}.visibility"
-                    cmds.cutKey(vis_plug, clear=True)
-                    # Reset visibility to on after removing keys
-                    cmds.setAttr(vis_plug, True)
+                    OpacityAttributeMode._clear_visibility_keys(obj)
                 cls.logger.info("Deleted visibility keys on: %s", ", ".join(names))
             else:
                 msg = (

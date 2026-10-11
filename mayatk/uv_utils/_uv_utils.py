@@ -2,7 +2,7 @@
 # coding=utf-8
 import contextlib
 import uuid
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Iterator, List, Optional, Sequence, Tuple, Union
 
 try:
     import maya.cmds as cmds
@@ -196,26 +196,97 @@ class UvUtils(ptk.HelpMixin):
         counts, uv_ids = mesh.getAssignedUVs(name)
         if not len(uv_ids):
             return empty
-
-        # Plain Python ints for the fan loop: it touches every face-vertex, and
-        # indexing a numpy array there boxes each element (the packer's
-        # `_uv_arrays` measured the same loop at 198ms vs 296ms on a 102k-face
-        # mesh). `counts` carries one entry per polygon -- 0 for an unmapped
-        # one -- so the running offsets stay aligned with face indices.
-        ids = list(uv_ids)
-        starts = [0, *np.cumsum(np.asarray(counts, dtype=np.int64)).tolist()]
-        tris = []
-        for face in range(len(counts)):
-            face_ids = ids[starts[face] : starts[face + 1]]
-            for k in range(1, len(face_ids) - 1):
-                tris.append((face_ids[0], face_ids[k], face_ids[k + 1]))
-        if not tris:
+        offsets, _faces = UvUtils._fan_offsets(counts)
+        if not len(offsets):
             return empty
 
         uvs = np.stack(
             [np.asarray(us, dtype=float), np.asarray(vs, dtype=float)], axis=1
         )
-        return uvs[np.asarray(tris, dtype=np.int64)]
+        return uvs[np.asarray(uv_ids, dtype=np.int64)[offsets]]
+
+    @staticmethod
+    def get_uv_world_triangles(shape: str, uv_set: Optional[str] = None):
+        """*shape*'s UV-space triangles paired with the world-space corners they map.
+
+        The triangles of :meth:`get_uv_triangles` -- the same fan over the same
+        assigned UVs, in the same order -- each with its corners' world
+        positions: what relates a layout to the surface it covers.
+        ``ptk.ImgUtils.uv_axis_scale`` reads from them how much surface each UV
+        axis spans (a layout stretched to fill its square shows its stretch);
+        a triangle's texel density is the ratio of its two areas.
+
+        Parameters:
+            shape: Mesh shape, or a transform -- whose own instance is read, so
+                each copy of a shared mesh stands where it stands.
+            uv_set: UV set name. The mesh's current set when omitted.
+
+        Returns:
+            ``(uvs, points)``: ``(N, 3, 2)`` UV corners and ``(N, 3, 3)`` world
+            corners, row for row; both empty when the set has no assigned UVs.
+        """
+        import maya.api.OpenMaya as om
+        import numpy as np
+
+        empty = (np.zeros((0, 3, 2), dtype=float), np.zeros((0, 3, 3), dtype=float))
+        node = str(shape)
+        if cmds.objectType(node, isAType="transform"):
+            shapes = cmds.listRelatives(
+                node, shapes=True, noIntermediate=True, fullPath=True, type="mesh"
+            )
+            if not shapes:
+                return empty
+            node = shapes[0]
+        selection = om.MSelectionList()
+        selection.add(node)
+        mesh = om.MFnMesh(selection.getDagPath(0))
+
+        name = uv_set or mesh.currentUVSetName()
+        us, vs = mesh.getUVs(name)
+        counts, uv_ids = mesh.getAssignedUVs(name)
+        if not len(uv_ids):
+            return empty
+        offsets, faces = UvUtils._fan_offsets(counts)
+        if not len(offsets):
+            return empty
+        # The same corners in the per-face VERTEX list: it holds every face,
+        # where the assigned-uv list skips unmapped ones, so each triangle is
+        # moved from its face's start in one list to its start in the other.
+        vertex_counts, vertex_ids = mesh.getVertices()
+        counts = np.asarray(counts, dtype=np.int64)
+        vertex_counts = np.asarray(vertex_counts, dtype=np.int64)
+        shift = (np.cumsum(vertex_counts) - vertex_counts) - (
+            np.cumsum(counts) - counts
+        )
+        points = np.asarray(
+            [(p.x, p.y, p.z) for p in mesh.getPoints(om.MSpace.kWorld)], dtype=float
+        )
+        uvs = np.stack(
+            [np.asarray(us, dtype=float), np.asarray(vs, dtype=float)], axis=1
+        )
+        corners = np.asarray(vertex_ids, dtype=np.int64)[offsets + shift[faces, None]]
+        return uvs[np.asarray(uv_ids, dtype=np.int64)[offsets]], points[corners]
+
+    @staticmethod
+    def _fan_offsets(counts):
+        """Every polygon's fan as offsets into its per-face-vertex list.
+
+        ``(offsets, faces)``: ``(T, 3)`` positions of each triangle's corners in
+        the flat list *counts* describes (one entry per polygon; 0 for an
+        unmapped one, which gets no triangles) and ``(T,)`` the polygon each
+        came from -- triangles in face order, each face's fan ``(0, k, k + 1)``.
+        """
+        import numpy as np
+
+        counts = np.asarray(counts, dtype=np.int64)
+        per_face = np.maximum(counts - 2, 0)
+        faces = np.repeat(np.arange(len(counts), dtype=np.int64), per_face)
+        k = (
+            np.arange(len(faces), dtype=np.int64)
+            - (np.cumsum(per_face) - per_face)[faces]
+        )
+        base = (np.cumsum(counts) - counts)[faces]
+        return np.stack([base, base + k + 1, base + k + 2], axis=1), faces
 
     @classmethod
     @CoreUtils.undoable
@@ -2077,9 +2148,9 @@ class UvUtils(ptk.HelpMixin):
         Returns a list of ``(shape, original_set, snapshot_set)`` tuples
         that can be passed to ``restore_uv_snapshot`` or ``discard_uv_snapshot``.
 
-        Pairs naturally with destructive UV ops (rizom bridge, auto-unwrap,
-        ...) to give users an explicit "revert" path that survives the
-        undo queue.
+        Prefer :meth:`uv_snapshot`, which pairs this with the restore or
+        discard on every exit; a backup set left on a mesh ships as a real UV
+        set. All or nothing: a call that raises takes back every set it made.
 
         Parameters:
             objects: Transforms or shapes to snapshot.
@@ -2090,36 +2161,73 @@ class UvUtils(ptk.HelpMixin):
         """
         token = uuid.uuid4().hex[:8]
         snapshots: List[UvSnapshot] = []
-        for obj in objects:
-            # The RENDERABLE shape: get_shape_node returns a deformed mesh's orig
-            # shape and its live one in hash order, and backing up the orig means
-            # the destructive op this is guarding edits the OTHER shape -- the
-            # "revert" then restores nothing and the UVs are simply gone.
-            shape = NodeUtils.get_shape(obj)
-            if not shape:
-                continue
-            shape = str(shape)
-            current_list = cmds.polyUVSet(shape, query=True, currentUVSet=True) or []
-            if not current_list:
-                continue
-            current = current_list[0]
-            # Ensure the snapshot name is unique on this shape.
-            existing = set(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
-            candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}"
-            n = 1
-            while candidate in existing:
-                candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}_{n}"
-                n += 1
-            # Create the set then explicitly populate it. `polyUVSet -copy`
-            # alone leaves the new set empty on some Maya builds.
-            cmds.polyUVSet(shape, create=True, uvSet=candidate)
-            UvUtils._copy_uv_set_in_place(shape, current, candidate)
-            # `-create` makes the new set current. Taking a backup must not
-            # change which set is being worked on, or every UV edit that
-            # follows lands in the backup and is lost when it's discarded.
-            cmds.polyUVSet(shape, currentUVSet=True, uvSet=current)
-            snapshots.append((shape, current, candidate))
+        try:
+            for obj in objects:
+                # The RENDERABLE shape: get_shape_node returns a deformed mesh's
+                # orig shape and its live one in hash order, and backing up the
+                # orig means the destructive op this is guarding edits the OTHER
+                # shape -- the "revert" then restores nothing.
+                shape = NodeUtils.get_shape(obj)
+                if not shape:
+                    continue
+                shape = str(shape)
+                current_list = (
+                    cmds.polyUVSet(shape, query=True, currentUVSet=True) or []
+                )
+                if not current_list:
+                    continue
+                current = current_list[0]
+                # Ensure the snapshot name is unique on this shape.
+                existing = set(cmds.polyUVSet(shape, query=True, allUVSets=True) or [])
+                candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}"
+                n = 1
+                while candidate in existing:
+                    candidate = f"{prefix}_{UvUtils._SNAPSHOT_SESSION}_{token}_{n}"
+                    n += 1
+                # Create the set then explicitly populate it. `polyUVSet -copy`
+                # alone leaves the new set empty on some Maya builds. Recorded
+                # before the fill, so a fill that raises is taken back below.
+                cmds.polyUVSet(shape, create=True, uvSet=candidate)
+                snapshots.append((shape, current, candidate))
+                UvUtils._copy_uv_set_in_place(shape, current, candidate)
+                # `-create` and the copy make the new set current. Taking a
+                # backup must not change which set is being worked on, or every
+                # UV edit that follows lands in the backup and is lost when it's
+                # discarded.
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=current)
+        except BaseException:
+            UvUtils.discard_uv_snapshot(snapshots)
+            raise
         return snapshots
+
+    @staticmethod
+    @contextlib.contextmanager
+    def uv_snapshot(
+        objects: Sequence[Union[str, object]], prefix: str = "_uv_snap"
+    ) -> Iterator[List[UvSnapshot]]:
+        """Back up each object's active UV set for the length of a block.
+
+        A normal exit discards the backups; ANY raise -- a cancel
+        (``ptk.OperationCancelled``) or Force Stop (``KeyboardInterrupt``)
+        included, both BaseExceptions on purpose -- restores them and
+        re-raises. The backup never outlives the block, so it cannot reach a
+        saved scene, where it would ship as a real UV set (the second one is
+        ``TEXCOORD_1``, the lightmap channel).
+
+        Parameters:
+            objects: Transforms or shapes to back up.
+            prefix: Base name for the backup sets (see :meth:`snapshot_uv_sets`).
+
+        Yields:
+            The ``(shape, original_set, snapshot_set)`` tuples taken.
+        """
+        snapshots = UvUtils.snapshot_uv_sets(objects, prefix)
+        try:
+            yield snapshots
+        except BaseException:
+            UvUtils.restore_uv_snapshot(snapshots)
+            raise
+        UvUtils.discard_uv_snapshot(snapshots)
 
     @staticmethod
     @CoreUtils.undoable
@@ -2160,12 +2268,18 @@ class UvUtils(ptk.HelpMixin):
         Call after a destructive UV op succeeds and the user has signaled
         they're committing to the result.
         """
-        for shape, _original_set, snap_set in snapshots:
+        for shape, original_set, snap_set in snapshots:
             if not cmds.objExists(shape):
                 continue
             all_sets = cmds.polyUVSet(shape, query=True, allUVSets=True) or []
-            if snap_set in all_sets:
-                cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
+            if snap_set not in all_sets:
+                continue
+            # Deleting the current set leaves Maya to pick one; hand it back to
+            # the set the snapshot was taken from.
+            current = cmds.polyUVSet(shape, query=True, currentUVSet=True) or []
+            if snap_set in current and original_set in all_sets:
+                cmds.polyUVSet(shape, currentUVSet=True, uvSet=original_set)
+            cmds.polyUVSet(shape, delete=True, uvSet=snap_set)
 
     @staticmethod
     def find_uv_snapshots(
@@ -3102,7 +3216,9 @@ class UvUtils(ptk.HelpMixin):
         Parameters:
             objects (str/obj/list): Meshes / transforms to process.
             uv_set (str): Lightmap set name. Default ``LIGHTMAP_UV_SET``.
-            map_size (int): Target lightmap resolution (drives gutter padding).
+            map_size (int): Target lightmap resolution. The islands' gutter is
+                :meth:`calculate_uv_padding` normalized -- 1/256 of the layout at
+                any size (a texel at 256 px) -- so it does not change the result.
             planes (int): ``polyAutoProjection`` planes (6 = axis-aligned box).
             force (bool): Regenerate even if a valid lightmap set is present.
             freeze_history (bool): If True, bake the projection and delete
@@ -3113,7 +3229,9 @@ class UvUtils(ptk.HelpMixin):
             quiet (bool): Suppress logging.
 
         Returns:
-            dict: ``{shape: {"uv_set": str, "created": bool, "reused": bool}}``,
+            dict: ``{shape: {"uv_set": str, "created": bool, "reused": bool,
+            "bakeable": bool}}`` -- ``bakeable`` False when a regenerated
+            layout still fails :meth:`UvDiagnostics.is_bakeable_lightmap`,
             keyed by the RENDERABLE shape's full DAG path (never the orig shape of
             a deformed mesh, and never a leaf name two groups could share).
             ``uv_set`` is the set that actually exists, which is not necessarily
@@ -3169,6 +3287,7 @@ class UvUtils(ptk.HelpMixin):
                         "uv_set": existing_lm,
                         "created": False,
                         "reused": True,
+                        "bakeable": True,  # the reuse condition
                     }
                     continue
 
@@ -3267,6 +3386,21 @@ class UvUtils(ptk.HelpMixin):
                     f"{shape}.{UvDiagnostics.LIGHTMAP_UV_TAG}", target, type="string"
                 )
 
+                # The regenerated layout answers to the check that sent it here:
+                # an auto-projection can still overlap (a 9544-face production
+                # door kept 375 overlapping faces, 2026-10-08), and faces
+                # sharing texels mix each other's light. Named loudly, quiet or
+                # not -- it bakes, but its artist should know. Before the
+                # restore below: the check makes the set current.
+                bakeable = UvDiagnostics.is_bakeable_lightmap(shape, target)
+                if not bakeable:
+                    print(
+                        f"[lightmap-uv] {shape}: the generated lightmap UVs still "
+                        "overlap or leave the 0-1 square; faces sharing texels mix "
+                        "each other's light. Unwrap it by hand (or with "
+                        "UvUtils.auto_unwrap) for a clean bake."
+                    )
+
                 # Restore the previously-current set (default to the texture
                 # primary). Reordering moves sets, it never adds or drops one, so
                 # `now` is still the membership to test against.
@@ -3274,7 +3408,12 @@ class UvUtils(ptk.HelpMixin):
                 if restore in now:
                     cmds.polyUVSet(shape, currentUVSet=True, uvSet=restore)
 
-                results[shape] = {"uv_set": target, "created": True, "reused": False}
+                results[shape] = {
+                    "uv_set": target,
+                    "created": True,
+                    "reused": False,
+                    "bakeable": bakeable,
+                }
                 if not quiet:
                     print(f"[lightmap-uv] {shape}: {results[shape]}")
             except Exception as e:  # loud even when quiet -- a silent skip is worse

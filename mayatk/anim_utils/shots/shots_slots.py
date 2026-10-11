@@ -13,6 +13,7 @@ from mayatk.anim_utils.shots._shots import (
     StoreEvent,
     StoreInvalidated,
     BatchComplete,
+    ShotsEdited,
     ShotDefined,
     ActiveShotChanged,
     SettingsChanged,
@@ -43,9 +44,7 @@ class ShotsController(ptk.LoggingMixin):
             "spn_shot_end",
             "txt_shot_desc",
             "spn_move_to",
-            "spn_shift_all",
             "spn_space",
-            "spn_gap",
             "spn_detection",
             "cmb_detection_mode",
             "spn_initial_length",
@@ -103,14 +102,18 @@ class ShotsController(ptk.LoggingMixin):
             )
             txt_name.commit_refused.connect(self._on_shot_name_refused)
 
-        self._sync_from_store()
-        self._bind_store_listener()
+        # The option boxes before the first sync: the gap amount is one of
+        # Apply Gap's options, and the sync fills it.
         self._setup_delete_menu()
         self._setup_move_menu()
         self._setup_trim_menu()
         self._setup_space_menu()
         self._setup_gap_menu()
         self._setup_shift_menu()
+        self._setup_delete_shots_menu()
+        self._setup_shot_nav()
+        self._sync_from_store()
+        self._bind_store_listener()
 
         # Subscribe to class-level invalidation so the UI refreshes when
         # the persistence layer detects a scene change — no duplicate
@@ -192,12 +195,19 @@ class ShotsController(ptk.LoggingMixin):
         self._bind_store_listener()
 
     def _on_store_event(self, event: StoreEvent) -> None:
-        """Re-sync widgets when the store changes externally."""
+        """Re-sync widgets when the store changes externally.
+
+        ``ShotsEdited`` included: a Shot Sequencer trim, resize or drag writes
+        the bounds directly, and is the only word this panel gets of it.
+        """
         if isinstance(
-            event, (BatchComplete, ShotDefined, ShotRemoved, SettingsChanged)
+            event,
+            (BatchComplete, ShotDefined, ShotRemoved, SettingsChanged, ShotsEdited),
         ):
             self._sync_from_store()
         elif isinstance(event, (ActiveShotChanged, ShotUpdated)):
+            if isinstance(event, ShotUpdated):
+                self._relabel_shot_row(event.shot)
             self._sync_shot_editor()
             self._sync_footer()
 
@@ -275,22 +285,22 @@ class ShotsController(ptk.LoggingMixin):
             )
 
         # All Shots group -- every control there needs at least one shot.
-        # Delete Stale Shots too, and the click decides whether one is stale
-        # (on_delete_stale_shots says "No stale shots"): deleting an object
-        # raises no store event, so a state judged at the last one goes stale
-        # -- the export log's Open Shots link opened the panel with the button
-        # greyed out -- and judging it here looked every member and frame up
-        # in the scene on every store event.
+        # Delete Shots too, and the click decides whether its scope holds one
+        # (on_delete_shots says "No stale shots"): deleting an object raises no
+        # store event, so a state judged at the last one goes stale -- the
+        # export log's Open Shots link opened the panel with the button greyed
+        # out -- and judging it here looked every member and frame up in the
+        # scene on every store event.
         for name in (
-            "spn_gap",
-            "spn_shift_all",
+            "btn_apply_gap",
+            "btn_shift_all",
             "btn_trim_all",
-            "btn_delete_stale",
-            "btn_delete_all",
+            "btn_delete_shots",
         ):
             w = getattr(self.ui, name, None)
             if w is not None:
                 w.setEnabled(has_shots)
+        self.label_delete_shots()
 
     # ---- sync ------------------------------------------------------------
 
@@ -353,6 +363,7 @@ class ShotsController(ptk.LoggingMixin):
             spn_gap.blockSignals(True)
             spn_gap.setValue(int(gap))
             spn_gap.blockSignals(False)
+            self.label_apply_gap()
 
         self._populate_shot_combobox(store)
         self._sync_footer(store)
@@ -373,10 +384,7 @@ class ShotsController(ptk.LoggingMixin):
         cmb.clear()
         if store is not None:
             for shot in store.sorted_shots():
-                cmb.addItem(
-                    f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]",
-                    shot.shot_id,
-                )
+                cmb.addItem(self.shot_label(shot), shot.shot_id)
             # Select the active shot, or auto-select the first one
             active_id = store.active_shot_id
             matched = False
@@ -398,6 +406,20 @@ class ShotsController(ptk.LoggingMixin):
         """Load the active shot's fields into the editor widgets."""
         if store is None:
             store = self._active_store()
+        cmb = getattr(self.ui, "cmb_shot_select", None)
+        active = (
+            store.shot_by_id(store.active_shot_id)
+            if store is not None and store.active_shot_id is not None
+            else None
+        )
+        if (
+            cmb is not None
+            and active is not None
+            and self._shot_row(cmb, active.shot_id) < 0
+        ):
+            # A shot the dropdown does not list yet: rebuilding it syncs this.
+            self._populate_shot_combobox(store)
+            return
 
         self._refreshing_editor = True
         try:
@@ -407,17 +429,14 @@ class ShotsController(ptk.LoggingMixin):
             txt_desc = getattr(self.ui, "txt_shot_desc", None)
             btn_del = getattr(self.ui, "b000", None)
             btn_trim = getattr(self.ui, "btn_trim_empty", None)
-            cmb = getattr(self.ui, "cmb_shot_select", None)
-            shot = None
-            if store is not None and store.active_shot_id is not None:
-                shot = store.shot_by_id(store.active_shot_id)
+            shot = active
 
             spn_move = getattr(self.ui, "spn_move_to", None)
 
             has_shot = shot is not None
             has_any_shots = cmb is not None and cmb.count() > 0
             if cmb is not None:
-                cmb.setEnabled(has_any_shots)
+                cmb.setEnabled(has_any_shots)  # re-enables its option buttons
             for w in (txt_name, spn_start, spn_end, txt_desc):
                 if w is not None:
                     w.setEnabled(has_shot)
@@ -462,6 +481,7 @@ class ShotsController(ptk.LoggingMixin):
                     txt_desc.blockSignals(True)
                     txt_desc.setText("")
                     txt_desc.blockSignals(False)
+                self._update_shot_nav_state()
                 return
 
             if txt_name is not None and txt_name.text() != shot.name:
@@ -486,16 +506,19 @@ class ShotsController(ptk.LoggingMixin):
                 txt_desc.setText(shot.description)
                 txt_desc.blockSignals(False)
 
-            # Keep combobox display text in sync after edits
+            # The dropdown follows the active shot, wherever it was picked.
+            # It used to relabel its CURRENT row with the active shot -- after
+            # a pick in the Shot Sequencer that row was another shot's, so one
+            # shot was listed twice and the other was gone (2026-10-10: "the
+            # shots combobox doesn't update properly and is often missing
+            # shots during editing").
             if cmb is not None:
-                idx = cmb.currentIndex()
-                if idx >= 0:
-                    cmb.blockSignals(True)
-                    cmb.setItemText(
-                        idx,
-                        f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]",
-                    )
-                    cmb.blockSignals(False)
+                row = self._shot_row(cmb, shot.shot_id)
+                cmb.blockSignals(True)
+                cmb.setCurrentIndex(row)
+                cmb.setItemText(row, self.shot_label(shot))
+                cmb.blockSignals(False)
+            self._update_shot_nav_state()
 
             # Sync the move-to spinbox's CURRENT position (its range was
             # set above, before the no-active-shot early return).
@@ -513,6 +536,133 @@ class ShotsController(ptk.LoggingMixin):
                 spn_move.blockSignals(False)
         finally:
             self._refreshing_editor = False
+
+    @staticmethod
+    def shot_label(shot) -> str:
+        """A shot's row in the dropdown: ``"Shot_1  [1\u2013100]"``."""
+        return f"{shot.name}  [{shot.start:.0f}\u2013{shot.end:.0f}]"
+
+    @staticmethod
+    def _shot_row(cmb, shot_id) -> int:
+        """The dropdown row listing *shot_id*, or -1."""
+        return next((i for i in range(cmb.count()) if cmb.itemData(i) == shot_id), -1)
+
+    def _relabel_shot_row(self, shot) -> None:
+        """Refresh the row of *shot* -- any shot, not only the active one."""
+        cmb = getattr(self.ui, "cmb_shot_select", None)
+        if cmb is None or shot is None:
+            return
+        row = self._shot_row(cmb, shot.shot_id)
+        if row >= 0:
+            cmb.blockSignals(True)
+            cmb.setItemText(row, self.shot_label(shot))
+            cmb.blockSignals(False)
+
+    # ---- shot navigation (the dropdown's option box) ---------------------
+
+    def _setup_shot_nav(self) -> None:
+        """Previous / Next / New Shot buttons on the dropdown's option box --
+        the Shot Sequencer dropdown's own (2026-10-10: "give the shot combobox
+        an option_box previous and next icon buttons to match the shot
+        sequencer's shot combobox ... a plus icon add shot icon button").
+
+        Built once per widget and late-bound through ``cmb._nav_controller``,
+        so a slots re-init over the same loaded UI repoints them rather than
+        stacking a second set (the Sequencer's own contract).  New Shot stays
+        clickable with no shot listed: the dropdown is disabled then, and the
+        option box disables its buttons with it.
+        """
+        cmb = getattr(self.ui, "cmb_shot_select", None)
+        if cmb is None or not hasattr(cmb, "option_box"):
+            return
+        cmb._nav_controller = self
+        options = getattr(cmb, "_shots_nav_options", None)
+        if options is None:
+            from uitk.widgets.optionBox.options.action import ActionOption
+
+            options = {}
+            for key, icon, tooltip, order, callback in (
+                (
+                    "prev",
+                    "chevron_left",
+                    "Previous Shot",
+                    0,
+                    lambda: cmb._nav_controller.on_navigate_shot(-1),
+                ),
+                (
+                    "next",
+                    "chevron_right",
+                    "Next Shot",
+                    1,
+                    lambda: cmb._nav_controller.on_navigate_shot(1),
+                ),
+                (
+                    "new",
+                    "add",
+                    "New Shot\nAfter the last shot, the gap on, Initial Length long.",
+                    2,
+                    lambda: cmb._nav_controller.on_new_shot(),
+                ),
+            ):
+                options[key] = ActionOption(
+                    wrapped_widget=cmb,
+                    callback=callback,
+                    icon=icon,
+                    tooltip=tooltip,
+                    order=order,
+                )
+            cmb.option_box.set_order(["action"])
+            for option in options.values():
+                cmb.option_box.add_option(option)
+            options["new"].widget.setProperty("keepEnabledWhenWrappedDisabled", True)
+            cmb._shots_nav_options = options
+        self._nav_options = options
+
+    def _update_shot_nav_state(self) -> None:
+        """Previous / Next enabled where there is a shot to step to.
+
+        Run after any change to the dropdown's own enabled state: the option
+        box re-enables every one of its buttons with it.
+        """
+        options = getattr(self, "_nav_options", None)
+        cmb = getattr(self.ui, "cmb_shot_select", None)
+        if not options or cmb is None:
+            return
+        idx, count = cmb.currentIndex(), cmb.count()
+        options["prev"].widget.setEnabled(cmb.isEnabled() and idx > 0)
+        options["next"].widget.setEnabled(cmb.isEnabled() and 0 <= idx < count - 1)
+
+    def on_navigate_shot(self, delta: int) -> None:
+        """Make the previous (-1) or next (+1) shot the active one."""
+        cmb = getattr(self.ui, "cmb_shot_select", None)
+        store = self._active_store()
+        if cmb is None or store is None:
+            return
+        idx = cmb.currentIndex() + delta
+        if 0 <= idx < cmb.count() and cmb.itemData(idx) is not None:
+            store.set_active_shot(cmb.itemData(idx))
+
+    def on_new_shot(self) -> None:
+        """Append a new shot and make it the active one.
+
+        The Shot Sequencer's New Shot, through the same engine call
+        (``ShotSequencer.new_shot``): ``Shot_<n>``, the gap after the last
+        shot, Initial Length (Build) long -- one undoable edit.
+        """
+        store = self._active_store()
+        if store is None:
+            return
+        seq = self._sequencer_cls()(store=store)
+        made = []
+        if not self._boundary_edit(
+            store, "newshot", lambda: made.append(seq.new_shot())
+        ):
+            return
+        shot = made[0]
+        store.set_active_shot(shot.shot_id)
+        self._set_footer(
+            f"Created {shot.name} \u00b7 {shot.start:.0f}\u2013{shot.end:.0f}"
+        )
 
     # ---- widget → store pushes -------------------------------------------
 
@@ -779,6 +929,76 @@ class ShotsController(ptk.LoggingMixin):
             ),
         )
 
+    #: The Delete Shots scopes as ``(label, scope)``, narrowest first -- one
+    #: table for this panel's option box and the Sequencer's shot-list menu.
+    #: The scopes are ``ShotStore.DELETE_SCOPES``.
+    DELETE_SCOPES = (("Stale", "stale"), ("Empty", "empty"), ("All", "all"))
+
+    #: What each scope takes, as the clause after "shot(s)" -- "Delete 3
+    #: shot(s) <clause>?" -- for the question and the Sequencer's tooltips.
+    SCOPE_CLAUSES = {
+        "stale": "whose objects are all gone from the scene and which key nothing",
+        "empty": "with nothing keyed in their frames",
+        "all": "",
+    }
+
+    @classmethod
+    def scope_label(cls, scope: str) -> str:
+        """The menu word for *scope*: ``"stale"`` -> ``"Stale"``."""
+        return next(label for label, s in cls.DELETE_SCOPES if s == scope)
+
+    @classmethod
+    def scope_count(cls, shots, scope: str) -> str:
+        """*shots* counted the way the questions say it: "all 4 shot(s)",
+        "2 shot(s) with nothing keyed in their frames"."""
+        if scope == "all":
+            return f"all {len(shots)} shot(s)"
+        return f"{len(shots)} shot(s) {cls.SCOPE_CLAUSES[scope]}"
+
+    def _setup_delete_shots_menu(self) -> None:
+        """Attach the scope picker to Delete Shots' option box.
+
+        One button for every multi-shot delete (2026-10-07: "consolidate to
+        one global delete shots button ... delete stale, delete all, delete
+        empty"), labelled with the scope it takes so a click never surprises.
+        Stale leads: the narrowest, and the one an export's stale-shot note
+        sends the user here for.
+        """
+        btn = getattr(self.ui, "btn_delete_shots", None)
+        if btn is None:
+            return
+        from uitk.widgets.widgetComboBox import WidgetComboBox
+
+        cmb = btn.option_box.menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_delete_scope",
+            setToolTip=(
+                "Which shots Delete Shots takes:\n"
+                "Stale -- every object they name is gone and nothing in their\n"
+                "frames is keyed.\n"
+                "Empty -- nothing they name is keyed in their frames (a shot\n"
+                "naming nothing: nothing in the scene is).\n"
+                "All -- every shot.\n"
+                "Records only, whichever: no keyframe is touched, no shot moves."
+            ),
+        )
+        for label, scope in self.DELETE_SCOPES:
+            cmb.addItem(label, scope)
+        self.label_delete_shots()
+
+    def delete_scope(self) -> str:
+        """The scope Delete Shots takes (``"stale"`` until one is picked)."""
+        cmb = getattr(self.ui, "cmb_delete_scope", None)
+        scope = cmb.currentData() if cmb is not None else None
+        return scope if scope in self._store_cls().DELETE_SCOPES else "stale"
+
+    def label_delete_shots(self) -> None:
+        """Name the picked scope on Delete Shots: "Delete Empty Shots"."""
+        btn = getattr(self.ui, "btn_delete_shots", None)
+        if btn is not None:
+            label = self.scope_label(self.delete_scope())
+            btn.setText(f"Delete {label} Shots")
+
     def _setup_move_menu(self) -> None:
         """Attach an option box action to the move-to spinbox."""
         spn = getattr(self.ui, "spn_move_to", None)
@@ -837,29 +1057,55 @@ class ShotsController(ptk.LoggingMixin):
         )
 
     def _setup_shift_menu(self) -> None:
-        """Attach the shift action to the "Shift To" spinbox's option box."""
-        spn = getattr(self.ui, "spn_shift_all", None)
-        if spn is None:
+        """Put Shift To's frame in its option box and name it on the button --
+        Apply Gap's shape (2026-10-10: "shift to should be a pushbutton in
+        the same style as gap and delete buttons").  A click shifts."""
+        btn = getattr(self.ui, "btn_shift_all", None)
+        if btn is None:
             return
-        menu = spn.option_box.menu
-        menu.add(
-            "QPushButton",
-            setText="Shift All Shots",
-            setObjectName="btn_shift_all",
-            setToolTip=(
-                "Move every shot so the first one starts on this frame.\n"
-                "The spacing between shots is kept."
-            ),
+        spn = btn.option_box.menu.add(
+            "QDoubleSpinBox",
+            setObjectName="spn_shift_all",
+            setPrefix="Start Frame: ",
+            setDecimals=0,
+            setMinimum=-100000,
+            setMaximum=100000,
+            setToolTip="Frame the first shot should start on.",
         )
+        spn.restore_state = False
+        spn.valueChanged.connect(self.label_shift_all)
+        self.label_shift_all()
+
+    def label_shift_all(self, *_args) -> None:
+        """Name the frame on Shift To: "Shift To: 1"."""
+        btn = getattr(self.ui, "btn_shift_all", None)
+        spn = getattr(self.ui, "spn_shift_all", None)
+        if btn is not None and spn is not None:
+            btn.setText(f"Shift To: {spn.value():g}")
 
     def _setup_gap_menu(self) -> None:
-        """Attach scope combobox and action button to the gap spinbox option box."""
-        spn = getattr(self.ui, "spn_gap", None)
-        if spn is None:
+        """Fill Apply Gap's option box: the amount, its scope, the lock override.
+
+        The amount is the store's (``store.gap``, filled by
+        :meth:`_sync_from_store`), so it never restores from QSettings -- that
+        carried the last scene's gap into this one.  Out of sight in the option
+        box, it is named on the button (:meth:`label_apply_gap`).
+        """
+        btn = getattr(self.ui, "btn_apply_gap", None)
+        if btn is None:
             return
         from uitk.widgets.widgetComboBox import WidgetComboBox
 
-        menu = spn.option_box.menu
+        menu = btn.option_box.menu
+        spn = menu.add(
+            "QDoubleSpinBox",
+            setObjectName="spn_gap",
+            setPrefix="Gap: ",
+            setMaximum=100000,
+            setToolTip="Frames between one shot's end and the next one's start.",
+        )
+        spn.restore_state = False
+        spn.valueChanged.connect(self.label_apply_gap)
         cmb_scope = menu.add(
             WidgetComboBox,
             setObjectName="cmb_gap_scope",
@@ -881,12 +1127,13 @@ class ShotsController(ptk.LoggingMixin):
                 "consults them."
             ),
         )
-        menu.add(
-            "QPushButton",
-            setText="Apply Gap",
-            setObjectName="btn_apply_gap",
-            setToolTip="Apply the gap value to the selected shots.",
-        )
+
+    def label_apply_gap(self, *_args) -> None:
+        """Name the amount on Apply Gap: "Apply Gap: 12"."""
+        btn = getattr(self.ui, "btn_apply_gap", None)
+        spn = getattr(self.ui, "spn_gap", None)
+        if btn is not None and spn is not None:
+            btn.setText(f"Apply Gap: {spn.value():g}")
 
     def _option_checked(self, name: str, default: bool = True) -> bool:
         """State of an option-box checkbox that may not have been built yet."""
@@ -939,12 +1186,11 @@ class ShotsController(ptk.LoggingMixin):
                 )
             )
 
-        # Paired or not is decided by scene_edit from what Maya actually
-        # recorded: cutting the contents lands on the undo queue, removing
-        # only the record does not.
+        # One undo step either way: cutting the contents lands on the queue,
+        # and removing only the record lands scene_edit's own step.  The
+        # store drops the active id with the shot.
         if not self._boundary_edit(store, "delshot", _run):
             return
-        store.set_active_shot(None)
         cut = result.get("curves_cut", 0)
         closed = result.get("closed", 0.0)
         parts = [f"Deleted {result.get('name', shot.name)}"]
@@ -955,80 +1201,77 @@ class ShotsController(ptk.LoggingMixin):
         self._set_footer(" \u00b7 ".join(parts))
 
     @staticmethod
-    def confirm_stale_removal(stale, parent=None) -> bool:
-        """Ask before ``ShotStore.remove_stale_shots``, naming *stale*.
+    def confirm_removal(shots, scope: str = "stale", parent=None) -> bool:
+        """Ask before ``ShotStore.remove_shots_in_scope``, naming *shots*.
 
-        The one question for every entry point -- this panel's All Shots
-        group and the Sequencer's shot list -- so the two cannot drift.
+        The one question for every entry point -- this panel's Delete Shots
+        and the Sequencer's shot list -- so the two cannot drift.
         """
         from qtpy import QtWidgets
 
+        label = ShotsController.scope_label(scope)
+        what = ShotsController.scope_count(shots, scope)
         listed = "\n".join(
-            f"  {s.name} [{s.start:.0f}–{s.end:.0f}]" for s in stale[:12]
+            f"  {s.name} [{s.start:.0f}–{s.end:.0f}]" for s in shots[:12]
         )
-        if len(stale) > 12:
-            listed += f"\n  … and {len(stale) - 12} more"
+        if len(shots) > 12:
+            listed += f"\n  … and {len(shots) - 12} more"
         reply = QtWidgets.QMessageBox.question(
             parent,
-            "Delete Stale Shots",
-            f"Delete {len(stale)} shot(s) whose objects are all gone from the "
-            f"scene and which key nothing?\n\n{listed}\n\n"
-            "No keyframe is touched and no other shot moves.",
+            f"Delete {label} Shots",
+            f"Delete {what}?\n\n{listed}\n\n"
+            "Their records only: no keyframe is touched and no other shot moves.",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
         )
         return reply == QtWidgets.QMessageBox.Yes
 
-    def on_delete_stale_shots(self) -> None:
-        """Delete the stale shots after naming them (All Shots group).
+    @staticmethod
+    @ptk.Deprecation.symbol(
+        "ShotsController.confirm_removal", remove_in="0.23.0", since="2026-10-07"
+    )
+    def confirm_stale_removal(stale, parent=None) -> bool:
+        return ShotsController.confirm_removal(stale, "stale", parent)
 
-        A stale shot names only objects the scene no longer holds and keys
-        nothing in its frames (``ShotStore.stale_shots``) -- what a scene saved
-        from another keeps of the shots whose animation it deleted, and what
-        every export already leaves out.  Records only, as one undoable edit:
-        no key is touched and no shot moves, where Delete cuts a shot's keys
-        and closes the gap behind it.
+    def on_delete_shots(self, scope: str = "stale") -> None:
+        """Delete the shots of *scope* after naming them (All Shots group).
+
+        ``"stale"``: every object they name is gone and nothing in their frames
+        is keyed -- what a scene saved from another keeps of the shots whose
+        animation it deleted, and what every export already leaves out.
+        ``"empty"``: nothing they name is keyed in their frames.
+        ``"all"``: every shot (``ShotStore.shots_in_scope``).  Records only, as
+        one undoable edit: no key is touched and no shot moves, where Delete
+        cuts the selected shot's keys and closes the gap behind it.
         """
         store = self._active_store()
         if store is None:
             return
-        stale = store.stale_shots()
-        if not stale:
-            self._set_footer("No stale shots")
+        kind = "" if scope == "all" else f"{scope} "
+        doomed = store.shots_in_scope(scope)
+        if not doomed:
+            self._set_footer(f"No {kind}shots")
             return
-        if not self.confirm_stale_removal(stale, self.ui):
+        if not self.confirm_removal(doomed, scope, self.ui):
             return
         removed = []
         if self._boundary_edit(
-            store, "delstale", lambda: removed.extend(store.remove_stale_shots())
+            store,
+            f"del{scope}",
+            lambda: removed.extend(store.remove_shots_in_scope(scope)),
         ):
-            self._set_footer(f"Deleted {len(removed)} stale shot(s)")
+            self._set_footer(f"Deleted {len(removed)} {kind}shot(s)")
 
+    @ptk.Deprecation.symbol(
+        "ShotsController.on_delete_shots", remove_in="0.23.0", since="2026-10-07"
+    )
+    def on_delete_stale_shots(self) -> None:
+        self.on_delete_shots("stale")
+
+    @ptk.Deprecation.symbol(
+        "ShotsController.on_delete_shots", remove_in="0.23.0", since="2026-10-07"
+    )
     def on_delete_all_shots(self) -> None:
-        """Delete every shot after confirmation."""
-        from qtpy import QtWidgets
-
-        store = self._active_store()
-        if store is None or not store.shots:
-            return
-
-        count = len(store.shots)
-        reply = QtWidgets.QMessageBox.question(
-            self.ui,
-            "Delete All Shots",
-            f"Delete all {count} shot(s)?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
-
-        # One BatchComplete instead of N ShotRemoved events — each event
-        # triggers a full rebuild in every listening UI (settings panel,
-        # manifest, sequencer).
-        with store.scene_edit("delallshots"):  # unpaired — no scene data
-            with store.batch_update():
-                for shot in list(store.shots):
-                    store.remove_shot(shot.shot_id)
-                store.set_active_shot(None)
+        self.on_delete_shots("all")
 
     def on_move_shot(self) -> None:
         """Move the active shot to the position specified by spn_move_to."""
@@ -1185,6 +1428,7 @@ class ShotsSlots(ptk.LoggingMixin):
                             "Choose a generation mode and set <b>Min Gap</b>.",
                             "Open the Shot Manifest or Shot Sequencer to generate shots.",
                             "Edit one shot in <b>Selected Shot</b>; act on the whole timeline in <b>All Shots</b>.",
+                            "The shot dropdown's arrows step to the previous / next shot; <b>+</b> appends a new one (Initial Length long, the gap after the last shot).",
                         ],
                     ),
                     (
@@ -1220,11 +1464,10 @@ class ShotsSlots(ptk.LoggingMixin):
                     (
                         "All Shots",
                         [
-                            "<b>Gap</b> \u2014 Frame gap. Click option box \u25b8 to choose scope (All Shots / Start / End / Start &amp; End) and apply. <b>Override Locked Gaps</b> there spends the value on locked gaps too, without unlocking them.",
-                            "<b>Shift To</b> \u2014 Frame the first shot should start on; option box \u25b8 to move every shot by the same amount, keeping their spacing.",
+                            "<b>Apply Gap</b> \u2014 Re-space the shots to the gap its option box \u25b8 holds. The option box also picks the scope (All Shots / Start / End / Start &amp; End) and <b>Override Locked Gaps</b>, which spends the gap on locked gaps too, without unlocking them.",
+                            "<b>Shift To</b> \u2014 Moves every shot so the first one starts on the frame set in its option box \u25b8 (named on the button), keeping their spacing and the animation inside them.",
                             "<b>Trim Empty (All)</b> \u2014 Trim every shot; option box \u25b8 for leading / trailing only.",
-                            "<b>Delete Stale Shots</b> \u2014 Deletes the shots whose objects are all gone from the scene and which key nothing (a scene saved from another keeps them; exports already leave them out). No key or other shot moves.",
-                            "<b>Delete All Shots</b> \u2014 Clears the store. Keyframes stay in the scene.",
+                            "<b>Delete Shots</b> \u2014 Deletes shot records by scope, picked in the option box \u25b8 and named on the button: <b>Stale</b> (every object they name is gone from the scene and nothing in their frames is keyed; exports already leave them out), <b>Empty</b> (nothing they name is keyed in their frames) or <b>All</b>. No key or other shot moves.",
                         ],
                     ),
                 ],
@@ -1283,13 +1526,13 @@ class ShotsSlots(ptk.LoggingMixin):
         """Delete the selected shot."""
         self.controller.on_delete_shot()
 
-    def btn_delete_all(self):
-        """Delete every shot (All Shots group)."""
-        self.controller.on_delete_all_shots()
+    def btn_delete_shots(self):
+        """Delete the shots of the scope picked in the option box (All Shots)."""
+        self.controller.on_delete_shots(self.controller.delete_scope())
 
-    def btn_delete_stale(self):
-        """Delete the stale shots (All Shots group)."""
-        self.controller.on_delete_stale_shots()
+    def cmb_delete_scope(self, index):
+        """A scope was picked: the button says what a click now deletes."""
+        self.controller.label_delete_shots()
 
     def btn_move_shot(self):
         """Move shot to the position in spn_move_to."""
@@ -1311,7 +1554,7 @@ class ShotsSlots(ptk.LoggingMixin):
         )
 
     def btn_shift_all(self):
-        """Re-base every shot onto the frame in spn_shift_all."""
+        """Re-base every shot onto the frame in the option box (spn_shift_all)."""
         spn = getattr(self.ui, "spn_shift_all", None)
         if spn is not None:
             self.controller.on_shift_all_shots(float(spn.value()))

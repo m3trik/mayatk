@@ -176,11 +176,11 @@ class _AutoUnwrapInternal:
         selection = cmds.ls(selection=True, long=True) or []
         try:
             with CoreUtils.undo_chunk(f"Auto Unwrap ({engine})"):
-                # Every snapshot is restored or discarded before its unwrap
-                # returns, so one an EARLIER session took is the leftover of a
-                # run that died mid-mesh, and it would ship as a real UV set
-                # (TEXCOORD_1 when it is the second). Swept inside the chunk, so
-                # undoing this unwrap brings it back with everything else.
+                # A snapshot never outlives its unwrap (``uv_snapshot``), so
+                # one an EARLIER session took is legacy -- older code, or a
+                # process that died mid-mesh -- and would ship as a real UV
+                # set (TEXCOORD_1 when it is the second). Swept inside the
+                # chunk, so undoing this unwrap brings it back with the rest.
                 uv_utils.discard_uv_snapshot(
                     uv_utils.find_uv_snapshots(meshes, stale_only=True)
                 )
@@ -222,53 +222,29 @@ class _AutoUnwrapInternal:
     def _unwrap_one(
         cls, uv_utils, mesh, engine, params, map_size, layout, orient, tmp, result
     ) -> None:
-        """Round-trip one mesh, recording success or an isolated failure."""
-        snapshot = uv_utils.snapshot_uv_sets([mesh])
+        """Round-trip one mesh, recording success or an isolated failure.
+
+        The mesh's UVs are backed up for exactly the round trip: put back if it
+        raises -- a cancel included, which still stops the run -- and dropped
+        once it lands, so the backup set never outlives this call.
+        """
         created: List[str] = []
         try:
-            payload = tmp.path(extension=".obj")
-            cls._export_obj(mesh, payload)
-            unwrapped = cls._engine_unwrap(payload, engine, **params)
-            tmp.register(unwrapped)
-
-            imported, created = cls._import_obj(unwrapped)
-            if not imported:
-                raise RuntimeError("engine output contained no mesh")
-            if not (cmds.polyEvaluate(imported[0], uvcoord=True) or 0):
-                raise RuntimeError("engine output contained no UVs")
-
-            # Ministry of Flat writes one ``vt`` per face corner and never
-            # shares an index between two faces, even where the coordinates are
-            # bit-identical, so the import arrives with a UV point per corner --
-            # i.e. every edge of the mesh a UV border. Welding coincident UVs
-            # restores the seams the engine actually meant. ``polyMergeUV`` can
-            # only merge UVs belonging to the same vertex, so it cannot join
-            # islands that were meant to stay apart; the distance is a
-            # float-noise guard rather than a seam-closing radius (the result is
-            # identical anywhere from 1e-6 to 1e-3, well under the engine's
-            # island gutter). A no-op for engines that already share -- BFF
-            # deduplicates its ``vt`` table.
-            cmds.polyMergeUV(imported[0], distance=1e-5, constructionHistory=False)
-
-            # Both engines return the input topology untouched, so a
-            # component-space transfer maps UVs back exactly -- no spatial
-            # sampling and no tolerance to tune. The guard turns a write-back
-            # that unbinds a rigged mesh into this mesh's recorded failure
-            # (UVs restored from the snapshot below) instead of a dead rig.
-            with NodeUtils.deformers_preserved([mesh], label="Auto Unwrap"):
-                uv_utils.transfer_uvs(imported[0], mesh, match_by_similarity=False)
-                if layout == "pack":
-                    uv_utils._pack_shells(mesh, map_size=map_size, orient=orient)
-                elif layout == "fit":
-                    # Keep the engine's own island arrangement, just scale it
-                    # into the tile -- Ministry of Flat packs into a rectangle
-                    # that routinely overruns 0-1.
-                    uv_utils._fit_uvs_to_tile(mesh)
+            with uv_utils.uv_snapshot([mesh]):
+                cls._round_trip(
+                    uv_utils,
+                    mesh,
+                    engine,
+                    params,
+                    map_size,
+                    layout,
+                    orient,
+                    tmp,
+                    created,
+                )
         except Exception as error:  # noqa: BLE001 - one bad mesh must not stop the rest
-            uv_utils.restore_uv_snapshot(snapshot)
             result.failed.append((mesh, str(error)))
         else:
-            uv_utils.discard_uv_snapshot(snapshot)
             result.succeeded.append(mesh)
         finally:
             # One at a time: deleting a transform takes its shape with it, so a
@@ -276,3 +252,52 @@ class _AutoUnwrapInternal:
             for node in created:
                 if cmds.objExists(node):
                     cmds.delete(node)
+
+    @classmethod
+    def _round_trip(
+        cls, uv_utils, mesh, engine, params, map_size, layout, orient, tmp, created
+    ) -> None:
+        """Export *mesh*, unwrap it, and write the engine's UVs back onto it.
+
+        Nodes the import makes are appended to *created* as soon as they exist,
+        for the caller to delete whatever happens.
+        """
+        payload = tmp.path(extension=".obj")
+        cls._export_obj(mesh, payload)
+        unwrapped = cls._engine_unwrap(payload, engine, **params)
+        tmp.register(unwrapped)
+
+        imported, nodes = cls._import_obj(unwrapped)
+        created.extend(nodes)
+        if not imported:
+            raise RuntimeError("engine output contained no mesh")
+        if not (cmds.polyEvaluate(imported[0], uvcoord=True) or 0):
+            raise RuntimeError("engine output contained no UVs")
+
+        # Ministry of Flat writes one ``vt`` per face corner and never
+        # shares an index between two faces, even where the coordinates are
+        # bit-identical, so the import arrives with a UV point per corner --
+        # i.e. every edge of the mesh a UV border. Welding coincident UVs
+        # restores the seams the engine actually meant. ``polyMergeUV`` can
+        # only merge UVs belonging to the same vertex, so it cannot join
+        # islands that were meant to stay apart; the distance is a
+        # float-noise guard rather than a seam-closing radius (the result is
+        # identical anywhere from 1e-6 to 1e-3, well under the engine's
+        # island gutter). A no-op for engines that already share -- BFF
+        # deduplicates its ``vt`` table.
+        cmds.polyMergeUV(imported[0], distance=1e-5, constructionHistory=False)
+
+        # Both engines return the input topology untouched, so a
+        # component-space transfer maps UVs back exactly -- no spatial
+        # sampling and no tolerance to tune. The guard turns a write-back
+        # that unbinds a rigged mesh into this mesh's recorded failure
+        # (UVs restored from the caller's snapshot) instead of a dead rig.
+        with NodeUtils.deformers_preserved([mesh], label="Auto Unwrap"):
+            uv_utils.transfer_uvs(imported[0], mesh, match_by_similarity=False)
+            if layout == "pack":
+                uv_utils._pack_shells(mesh, map_size=map_size, orient=orient)
+            elif layout == "fit":
+                # Keep the engine's own island arrangement, just scale it
+                # into the tile -- Ministry of Flat packs into a rectangle
+                # that routinely overruns 0-1.
+                uv_utils._fit_uvs_to_tile(mesh)

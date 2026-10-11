@@ -536,6 +536,23 @@ class TestAssignedTextureStaging(unittest.TestCase):
         )
         self.assertEqual(len(staged), len(set(staged)), f"duplicates in {staged}")
 
+    def test_a_suffix_lands_after_a_set_name_that_ends_in_a_lobe_word(self):
+        """``Hero_Coat`` is the set: read alone, ``Hero_Coat_Roughness`` is a
+        coat roughness of ``Hero`` and the suffix split the set name."""
+        src_dir = Path(self.tmpdir) / "src"
+        sources = []
+        for name in ("Hero_Coat_BaseColor.png", "Hero_Coat_Roughness.png"):
+            (src_dir / name).write_bytes(b"fake")
+            sources.append(str(src_dir / name))
+        self._patch_mat_utils(sources)
+        staged = SubstanceBridge()._stage_assigned_textures(
+            ["dummy_obj"], str(self.out_dir), suffix="_hero"
+        )
+        self.assertEqual(
+            sorted(Path(p).name for p in staged),
+            ["Hero_Coat_hero_BaseColor.png", "Hero_Coat_hero_Roughness.png"],
+        )
+
 
 class TestRenderTemplateJs(unittest.TestCase):
     """Render template's RPC_SCRIPT must produce valid JS after substitution.
@@ -1553,6 +1570,23 @@ class TestMeshMapClassification(unittest.TestCase):
         # nothing to Painter's detection either -- don't ship it as one.
         self.assertEqual(SubstanceBridge.mesh_map_files(["C:/t/body.png"]), [])
 
+    def test_a_set_named_for_a_lobe_ships_its_normal(self):
+        # Read alone `Hero_Coat_Normal` is a coat normal (no mesh map); beside
+        # its set's base colour it is the set `Hero_Coat`'s own normal.
+        self.assertEqual(
+            SubstanceBridge.mesh_map_files(
+                ["C:/t/Hero_Coat_BaseColor.png", "C:/t/Hero_Coat_Normal.png"]
+            ),
+            ["C:/t/Hero_Coat_Normal.png"],
+        )
+        # An OpenPBR set keeps its coat normal off the base normal's slot.
+        self.assertEqual(
+            SubstanceBridge.mesh_map_files(
+                ["C:/t/rock_BaseColor.png", "C:/t/rock_Coat_Normal.png"]
+            ),
+            [],
+        )
+
     def test_both_normal_conventions_map_to_one_usage(self):
         self.assertEqual(
             SubstanceBridge.MESH_MAP_TYPES["Normal_DirectX"],
@@ -1589,6 +1623,19 @@ class TestMeshMapAssignments(unittest.TestCase):
         self.assertEqual(
             SubstanceBridge._mesh_map_assignments(materials, staged),
             {"MAT_Body": {"ambient_occlusion": "C:/out/body_AO.png"}},
+        )
+
+    def test_a_set_named_for_a_lobe_keys_by_its_whole_name(self):
+        materials = {
+            "MAT_Coat": {
+                "baseColor": "C:/maya/Hero_Coat_BaseColor.png",
+                "normal": "C:/maya/Hero_Coat_Normal.png",
+            }
+        }
+        staged = ["C:/out/Hero_Coat_BaseColor.png", "C:/out/Hero_Coat_Normal.png"]
+        self.assertEqual(
+            SubstanceBridge._mesh_map_assignments(materials, staged),
+            {"MAT_Coat": {"normal": "C:/out/Hero_Coat_Normal.png"}},
         )
 
     def test_material_with_no_mesh_maps_is_omitted(self):

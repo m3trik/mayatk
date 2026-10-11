@@ -158,6 +158,53 @@ class TestUvSnapshot(MayaTkTestCase):
         self.assertEqual(len({name for _s, _c, name in taken}), 2, taken)
         self.assertEqual(UvUtils.find_uv_snapshots([cube], stale_only=True), [])
 
+    def test_a_snapshot_that_fails_to_populate_leaves_no_set(self):
+        """The set is created before it is filled; a fill that raises used to
+        leave it behind with no caller holding its name to discard it.
+        Added: 2026-10-08
+        """
+        from unittest.mock import patch
+
+        cube = cmds.polyCube(name="snap_partial")[0]
+        before = _all_uv_sets(cube)
+        with patch.object(
+            UvUtils, "_copy_uv_set_in_place", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                UvUtils.snapshot_uv_sets([cube])
+        self.assertEqual(_all_uv_sets(cube), before)
+        self.assertEqual(_current_uv_set(cube), "map1")
+
+    def test_uv_snapshot_block_cleans_up_on_every_exit(self):
+        """``uv_snapshot`` discards on a normal exit and restores on ANY raise --
+        a BaseException (cancel, Force Stop) included, which an ``except
+        Exception`` around the paired calls let through with the backup still
+        on the mesh. Added: 2026-10-08
+        """
+        import pythontk as ptk
+
+        cube = cmds.polyCube(name="snap_block")[0]
+        before = _all_uv_sets(cube)
+        with UvUtils.uv_snapshot([cube]) as taken:
+            self.assertEqual(len(taken), 1)
+            self.assertIn(taken[0][2], _all_uv_sets(cube))
+        self.assertEqual(_all_uv_sets(cube), before)
+
+        def uvs():
+            return sorted(
+                round(c, 5) for c in cmds.polyEditUV(f"{cube}.map[*]", query=True)
+            )
+
+        authored = uvs()
+        for error in (ptk.OperationCancelled, KeyboardInterrupt, RuntimeError):
+            with self.assertRaises(error):
+                with UvUtils.uv_snapshot([cube]):
+                    cmds.polyEditUV(f"{cube}.map[*]", uValue=0.5, vValue=0.5)
+                    self.assertNotEqual(uvs(), authored, "the edit must land")
+                    raise error()
+            self.assertEqual(_all_uv_sets(cube), before, error.__name__)
+            self.assertEqual(uvs(), authored, f"not restored on {error.__name__}")
+
     def test_restore_is_undoable_via_chunk(self):
         cube = cmds.polyCube(name="undo_cube")[0]
         snapshots = UvUtils.snapshot_uv_sets([cube])

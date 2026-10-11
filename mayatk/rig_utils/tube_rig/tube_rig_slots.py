@@ -261,8 +261,9 @@ class TubeRigSlots:
                     (
                         "FK Chain (Tail/Tentacle)",
                         [
-                            "Nested FK controls, one per joint.",
-                            "Good for: tails, tentacles, hand-keyed tubes.",
+                            "A few FK controls, each bending its span of "
+                            "joints in a smooth arc (Num Controls).",
+                            "Good for: tails, tentacles, cables, hand-keyed tubes.",
                         ],
                     ),
                 ],
@@ -290,11 +291,12 @@ class TubeRigSlots:
         ui.s001.setToolTip(
             self.sb.tooltip.fmt(
                 title="Number of Controls",
-                body="Driver control count for the Spline rig. Increase for "
-                "complex shapes.",
+                body="Driver control count for the Spline and FK rigs. Increase "
+                "for complex shapes.",
                 notes=[
                     "<b>Auto-Bend</b> requires exactly 3 controls.",
-                    "FK rigs create one control per joint instead.",
+                    "FK: each control bends its span of joints; a count at or "
+                    "above the joint count gives one control per joint.",
                 ],
             )
         )
@@ -312,8 +314,14 @@ class TubeRigSlots:
         ui.chk000.setToolTip(
             self.sb.tooltip.fmt(
                 title="Reverse Direction",
-                body="Builds the joint chain from the far end (swaps start/end).",
-                notes=["Applies to Step 1 and the One-Click build."],
+                body="Builds the chain from the tube's other end: the ROOT (the "
+                "end that stays put; FK rotation carries toward the tip) and the "
+                "TIP swap ends.",
+                notes=[
+                    "Applies to every build: Step 1 and <b>One-Click</b>.",
+                    "Rigged the wrong way round? Toggle it and rebuild — a "
+                    "plug pulled out of its top wants its root at the bottom.",
+                ],
             )
         )
         ui.chk_stretch.setToolTip(
@@ -384,7 +392,7 @@ class TubeRigSlots:
                             "<b>Spline:</b> IK spline, start/mid/end controls, "
                             "twist, stretch, auto-bend.",
                             "<b>Anchor:</b> two end controls with distance stretch.",
-                            "<b>FK:</b> nested FK controls, one per joint.",
+                            "<b>FK:</b> FK controls, each bending its span of joints.",
                         ],
                     ),
                 ],

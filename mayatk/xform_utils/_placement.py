@@ -4,7 +4,8 @@
 
 Bounding boxes, centers, distances and orientation; moving, dropping, scaling
 and aiming objects; three-point and vertex alignment; overlap and plane checks;
-and the local/world matrix accessors. Reached through
+the local/world matrix accessors; and pose-preserving rotate-order changes.
+Reached through
 :class:`mayatk.XformUtils`; nothing here is called directly.
 """
 
@@ -23,6 +24,7 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.xform_utils.matrices import Matrices
 
 
 class _PlacementInternal:
@@ -835,3 +837,119 @@ class _PlacementInternal:
             raise ValueError(f"set_object_matrix expected 16 elements, got {len(flat)}")
         flag = {"worldSpace": True} if world else {"objectSpace": True}
         cmds.xform(str(node), matrix=flat, **flag)
+
+    @staticmethod
+    def _rotate_order_index(order) -> int:
+        """The ``rotateOrder`` enum index of *order* (a name or an index)."""
+        orders = Matrices.ROTATE_ORDERS
+        if isinstance(order, int) and 0 <= order < len(orders):
+            return order
+        name = str(order).lower()
+        if name not in orders:
+            raise ValueError(
+                f"Invalid rotate order {order!r}; expected one of {orders}."
+            )
+        return orders.index(name)
+
+    @staticmethod
+    def _resolve_in_order(poses, index):
+        """*poses* (``MEulerRotation``) re-solved into rotate order *index*.
+
+        Each solution is chained to the previous one so the values stay
+        continuous (no 360 or alternate-solution flips); the first takes the
+        solution numerically nearest its own old channels.
+        """
+        solved, prev = [], None
+        for euler in poses:
+            target = (
+                prev
+                if prev is not None
+                else om.MEulerRotation(euler.x, euler.y, euler.z, index)
+            )
+            prev = euler.reorder(index).closestSolution(target)
+            solved.append(prev)
+        return solved
+
+    @classmethod
+    def _set_rotate_order(cls, objects, order, preserve):
+        """Body of :meth:`XformUtils.set_rotate_order`."""
+        auto = str(order).lower() == "auto"
+        index = None if auto else cls._rotate_order_index(order)
+        changed = []
+        if not objects:  # cmds.ls(None) lists the whole scene
+            return changed
+        for node in cmds.ls(objects, type="transform", long=True) or []:
+            old = cmds.getAttr(f"{node}.rotateOrder")
+            if old == index:
+                continue
+            if not preserve and not auto:
+                cmds.setAttr(f"{node}.rotateOrder", index)
+                changed.append(node)
+                continue
+            plugs = [f"{node}.r{a}" for a in "xyz"]
+            sources = [
+                (cmds.listConnections(p, s=True, d=False, scn=True) or [None])[0]
+                for p in plugs
+            ]
+            curves = [
+                s for s in sources if s and cmds.nodeType(s).startswith("animCurveT")
+            ]
+            # A constraint, anim layer or expression owns the rotation (re-keying
+            # under it would fight the driver), or a locked channel cannot take
+            # its re-solved value: either way the new order would turn the node.
+            reason = (
+                "driven by something other than keyframes"
+                if len(curves) != len([s for s in sources if s])
+                else "locked"
+                if any(cmds.getAttr(p, lock=True) for p in plugs)
+                else None
+            )
+            if reason:
+                cmds.warning(
+                    f"[set_rotate_order] Skipped '{node}': its rotation is {reason}."
+                )
+                continue
+            if not curves:
+                if auto:  # nothing keyed to read an order from
+                    continue
+                cmds.xform(node, roo=Matrices.ROTATE_ORDERS[index], preserve=True)
+                changed.append(node)
+                continue
+            # Sample the pose at every rotate key and re-solve it in the new
+            # order: the pose AT each key is unchanged.
+            unit = om.MAngle.uiUnit()
+            times = sorted({t for c in curves for t in cmds.keyframe(c, q=True) or []})
+            poses = []
+            for t in times:
+                values = cmds.getAttr(f"{node}.rotate", time=t)[0]
+                radians = [om.MAngle(v, unit).asRadians() for v in values]
+                poses.append(om.MEulerRotation(*radians, old))
+            if auto:
+                # Score every order on the keys themselves: the one that moves
+                # each key-to-key step through the fewest channels.
+                orders = Matrices.ROTATE_ORDERS
+                degrees = {
+                    name: [
+                        tuple(om.MAngle(a).asDegrees() for a in (e.x, e.y, e.z))
+                        for e in cls._resolve_in_order(poses, i)
+                    ]
+                    for i, name in enumerate(orders)
+                }
+                target = orders.index(
+                    ptk.MathUtils.best_rotate_order(degrees, current=orders[old])
+                )
+                if target == old:
+                    continue
+            else:
+                target = index
+            cmds.setAttr(f"{node}.rotateOrder", target)
+            for t, solved in zip(times, cls._resolve_in_order(poses, target)):
+                for axis, value in zip("xyz", (solved.x, solved.y, solved.z)):
+                    cmds.setKeyframe(
+                        node,
+                        attribute=f"r{axis}",
+                        time=t,
+                        value=om.MAngle(value).asUnits(unit),
+                    )
+            changed.append(node)
+        return changed

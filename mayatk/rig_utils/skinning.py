@@ -1170,13 +1170,23 @@ class SkinUtils(ptk.HelpMixin):
         try:
             # Cluster was created in this same undo chunk: the non-undoable batch
             # write is safe (undoing the chunk deletes the deformer entirely).
-            cls.set_weights(
-                skin_cluster,
-                weights,
-                influences=influences,
-                normalize=True,
-                undoable=False,
-            )
+            # The solve pins every row to sum to exactly 1, so the write needs
+            # no normalizing -- yet an INTERACTIVE cluster re-normalizes every
+            # setWeights whatever its flag, warning "Specified weights required
+            # modification for normalization" on rows already exact (every
+            # tube-rig build printed it). Write with the mode off, then restore.
+            mode = cmds.getAttr(f"{skin_cluster}.normalizeWeights")
+            cmds.setAttr(f"{skin_cluster}.normalizeWeights", 0)
+            try:
+                cls.set_weights(
+                    skin_cluster,
+                    weights,
+                    influences=influences,
+                    normalize=False,
+                    undoable=False,
+                )
+            finally:
+                cmds.setAttr(f"{skin_cluster}.normalizeWeights", mode)
         except Exception:
             # This call created the cluster, so it owns the rollback. Left
             # behind, a half-written cluster is worse than none: the geometry

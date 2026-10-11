@@ -221,9 +221,10 @@ class TestChunkChildStdin(unittest.TestCase):
 
     def test_the_chunk_command_line_carries_no_path(self):
         """mayapy decodes its command line in the ANSI code page (measured on Maya
-        2025: "Jos\\u00e9" arrived as "Jos\\udce9", Cyrillic as "???"), so a checkout
-        under such a folder handed it a driver that does not exist. The driver and
-        its config ride in the env instead (``AppLauncher.python_args_via_env``)."""
+        2025: "\\u00e9" arrived as the lone surrogate "\\udce9", Cyrillic as
+        "???"), so a checkout under such a folder handed it a driver that does not
+        exist. The driver and its config ride in the env instead
+        (``AppLauncher.python_args_via_env``)."""
         import json
 
         runner = rt.MayaTestRunner(port=7903)
@@ -235,7 +236,7 @@ class TestChunkChildStdin(unittest.TestCase):
             calls.append((cmd, kwargs))
             raise OSError("launch refused by the test")
 
-        driver = Path("X:/Jos\u00e9 \u0416\u0443\u043a/_suite_driver.py")
+        driver = Path("X:/Zo\u00eb \u2605/_suite_driver.py")
         popen = mock.patch.object(rt.subprocess, "Popen", side_effect=fake_popen)
         with mock.patch.object(rt, "DRIVER_PATH", driver), popen:
             with contextlib.redirect_stdout(io.StringIO()):
@@ -337,18 +338,21 @@ class TestChunkTempIsolation(unittest.TestCase):
         self.assertTrue(crash_files(child_temp), os.listdir(child_temp))
 
 
-class TestOnlyALaunchedMayaSandboxesSettings(unittest.TestCase):
+class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
     """The driver's config says whether its Maya is one this runner launched.
 
-    ``sandbox_settings`` arms uitk's QSettings + preset redirect in the suite
-    driver (``test_suite_driver``): without it a panel test wrote its fixtures
-    into the developer's live uitk store. The redirect swaps the QSettings
-    class for the rest of the process, so it suits a mayapy chunk or a GUI
-    Maya the runner launched, and never the user's own session -- the
-    in-session harness (Script Editor) or ``--reuse`` -- which it would outlive.
+    ``launched`` lets the suite driver's sandbox -- uitk's QSettings + preset
+    redirect with pythontk's guards (``test_suite_driver``) -- stay up for
+    good, which suits a mayapy chunk or a GUI Maya the run closes. The user's
+    own session -- the in-session harness (Script Editor) or ``--reuse`` --
+    gets it for the run only, since it would outlive the run; so does a GUI
+    Maya the run leaves open (``--keep-maya``, ``--no-wait``), where a
+    permanent sandbox refused every browser launch (the WebXR preview's tab)
+    and kept the user's settings in throwaway stores.
 
-    No Maya: the chunk launch is refused and the GUI connection stubbed, and
-    the config the driver would have read is read back from disk.
+    No Maya: the chunk launch is refused and the GUI connection stubbed (the
+    send fails once the config is written), and the config the driver would
+    have read is read back from disk.
     """
 
     def setUp(self):
@@ -376,30 +380,216 @@ class TestOnlyALaunchedMayaSandboxesSettings(unittest.TestCase):
             self.runner.temp_test_dir / f"chunk_{os.getpid()}_00_1.json"
         )
 
-    def _gui_config(self, mode, reuse=False):
+    def _gui_config(self, mode, reuse=False, keep_maya=False, no_wait=False):
         self.runner.reuse_instance = reuse
+        self.runner.keep_maya = keep_maya
         self.runner.connection = mock.Mock(mode=mode)
         self.runner.connect_to_maya = lambda: True
-        self.runner.send_code = lambda code: True
+        self.runner.send_code = lambda code: False
         with contextlib.redirect_stdout(io.StringIO()):
-            sent = self.runner._run_via_port(
-                ["test_x"], {"test_x": "test_x.py"}, False, no_wait=True
+            self.runner._run_via_port(
+                ["test_x"], {"test_x": "test_x.py"}, False, no_wait=no_wait
             )
-        self.assertEqual(sent, "nowait")
         return self._read_config(self.runner.temp_test_dir / f"gui_{os.getpid()}.json")
 
-    def test_a_mayapy_chunk_is_sandboxed(self):
-        self.assertIs(self._chunk_config().get("sandbox_settings"), True)
+    def test_a_mayapy_chunk_is_launched(self):
+        self.assertIs(self._chunk_config().get("launched"), True)
 
-    def test_a_gui_maya_the_runner_launched_is_sandboxed(self):
-        self.assertIs(self._gui_config("port").get("sandbox_settings"), True)
+    def test_a_gui_maya_the_run_closes_is_launched(self):
+        self.assertIs(self._gui_config("port").get("launched"), True)
+
+    def test_a_gui_maya_the_run_leaves_open_is_not(self):
+        for flags in ({"keep_maya": True}, {"no_wait": True}):
+            with self.subTest(**flags):
+                config = self._gui_config("port", **flags)
+                self.assertIs(config.get("launched"), False, config)
 
     def test_the_users_own_session_is_not(self):
         """The in-session harness (Script Editor), and an attach (``--reuse``)."""
         for mode, reuse in (("interactive", False), ("port", True)):
             with self.subTest(mode=mode, reuse=reuse):
                 config = self._gui_config(mode, reuse)
-                self.assertFalse(config.get("sandbox_settings", False), config)
+                self.assertFalse(config.get("launched", False), config)
+
+
+class TestAnInSessionRunLeavesTheUsersTempAlone(unittest.TestCase):
+    """The runner redirects TEMP for the processes it spawns -- not in-session.
+
+    In the Script Editor (``MayaTestRunner().run_tests``) the runner runs in
+    the user's own Maya and spawns nothing; its ``TestSandbox.temp()`` there
+    left their session's temp dir in a root deleted when Maya exits, and the
+    driver's sandbox, up for the run only, found that guard standing and left
+    it standing. The driver gives an in-session run a root of its own.
+
+    No Maya: the session check and the GUI pass are stubbed.
+    """
+
+    def _isolations(self, inside_maya):
+        runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(runner.results_file.unlink, True)
+        status = {"failed_modules": [], "not_run": []}
+        with (
+            mock.patch.object(rt, "_inside_maya", return_value=inside_maya),
+            mock.patch.object(runner, "_isolate_temp") as isolate,
+            mock.patch.object(runner, "_run_via_port", return_value=True),
+            mock.patch.object(runner, "_finalize_results", return_value=status),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            runner.run_tests(["test_x"], gui=True)
+        return isolate.call_count
+
+    def test_in_session_the_temp_dir_is_left_alone(self):
+        self.assertEqual(self._isolations(inside_maya=True), 0)
+
+    def test_a_run_the_runner_hosts_still_isolates_its_temp(self):
+        self.assertEqual(self._isolations(inside_maya=False), 1)
+
+
+class _FakeChunk:
+    """A mayapy chunk that initializes, starts ``test_x`` and never finishes it;
+    it exits on its own after *exits_after* polls (never, by default), and a
+    kill does not end it within any wait (*wait_raises*)."""
+
+    def __init__(self, progress, exits_after=None, wait_raises=False):
+        progress.write_text("INIT_DONE\nSTARTED test_x\n", encoding="utf-8")
+        self.polls = 0
+        self.exits_after = exits_after
+        self.wait_raises = wait_raises
+        self.killed = False
+        self.pid = 4242
+
+    def poll(self):
+        self.polls += 1
+        if self.exits_after is not None and self.polls > self.exits_after:
+            return 0
+        return None
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        if self.wait_raises:
+            raise rt.subprocess.TimeoutExpired("mayapy", timeout)
+        return 0
+
+
+class TestAHungChunk(unittest.TestCase):
+    """A hung chunk is killed on its module's own budget, and a kill that does
+    not take never ends the run.
+
+    ``test_texture_baker`` runs 780-880 s headless against the 900 s default
+    ``--module-timeout``: one slow day from being killed as hung, and raising
+    the default for every module would make every real hang cost as much. It
+    gets its own budget (``MODULE_TIMEOUTS``); the flag stays the floor.
+
+    A killed mayapy that will not exit (held by its licence checkout, or stuck
+    in a driver call) made ``proc.wait(timeout=30)`` raise ``TimeoutExpired``
+    through the run, which then ended with a traceback instead of recording
+    the module.
+    """
+
+    def setUp(self):
+        self.runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(self.runner.results_file.unlink, True)
+        self.runner.temp_test_dir.mkdir(exist_ok=True)
+        self.progress = self.runner.temp_test_dir / f"chunk_{os.getpid()}_00_1.progress"
+        self.addCleanup(self._remove_chunk_files)
+
+    def _remove_chunk_files(self):
+        for stale in self.runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            stale.unlink(missing_ok=True)
+
+    def _run(self, chunk):
+        popen = mock.patch.object(rt.subprocess, "Popen", return_value=chunk)
+        with popen, contextlib.redirect_stdout(io.StringIO()) as out:
+            result = self.runner._run_chunk(
+                "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+            )
+        return result, out.getvalue()
+
+    def test_a_module_gets_its_own_budget_and_the_flag_stays_the_floor(self):
+        self.runner.module_timeout = 900
+        self.assertEqual(self.runner._hang_timeout("test_texture_baker"), 1800)
+        self.assertEqual(self.runner._hang_timeout("test_x"), 900)
+        self.assertEqual(self.runner._hang_timeout(None), 900)
+        self.runner.module_timeout = 3000
+        self.assertEqual(self.runner._hang_timeout("test_texture_baker"), 3000)
+
+    def test_a_slow_module_within_its_budget_is_not_killed(self):
+        self.runner.module_timeout = 0  # any other module would be killed at once
+        chunk = _FakeChunk(self.progress, exits_after=2)
+        with mock.patch.dict(rt.MODULE_TIMEOUTS, {"test_x": (3600, "slow")}):
+            self._run(chunk)
+        self.assertFalse(chunk.killed)
+
+    def test_a_kill_that_does_not_take_still_records_and_defers_the_module(self):
+        self.runner.module_timeout = 0
+        chunk = _FakeChunk(self.progress, wait_raises=True)
+
+        (ok, deferred), out = self._run(chunk)
+
+        self.assertTrue(chunk.killed)
+        self.assertEqual((ok, deferred), (True, ["test_x"]), out)
+        self.assertIn("test_x: TIMEOUT", self.runner.results_file.read_text())
+
+
+class TestTheGuiWaitFollowsTests(unittest.TestCase):
+    """A GUI pass is stalled only when no TEST has started for the window.
+
+    Bug: the stall clock moved only when a whole module finished, so every
+    module longer than the 600 s window was killed while healthy --
+    ``test_sequencer`` timed out twice and could never be verified ("no
+    module finished in 600s").  The driver's ``TEST <id>`` heartbeat on the
+    progress stream now keeps it alive; a real hang still stops it.
+    Fixed: 2026-10-10
+    """
+
+    def setUp(self):
+        self.runner = rt.MayaTestRunner(port=7904)
+        self.addCleanup(self.runner.results_file.unlink, True)
+        self.runner.temp_test_dir.mkdir(exist_ok=True)
+        stem = self.runner.temp_test_dir / f"gui_wait_{os.getpid()}"
+        self.results = stem.with_suffix(".results")
+        self.progress = stem.with_suffix(".progress")
+        for path in (self.results, self.progress):
+            self.addCleanup(path.unlink, True)
+        self.progress.write_text("STARTED test_long\n", encoding="utf-8")
+
+    def _wait(self, beat):
+        """Wait with a clock that moves 400 s per poll; *beat* starts a test
+        on each poll, and the suite completes after the sixth."""
+        clock = {"now": 0.0, "polls": 0}
+
+        def sleep(_seconds):
+            clock["now"] += 400.0
+            clock["polls"] += 1
+            if beat:
+                with open(self.progress, "a", encoding="utf-8") as fh:
+                    fh.write(f"TEST t{clock['polls']}\n")
+            if clock["polls"] == 6:
+                self.results.write_text(rt.SUITE_COMPLETE_MARKER, encoding="utf-8")
+
+        with (
+            mock.patch.object(rt.time, "monotonic", lambda: clock["now"]),
+            mock.patch.object(rt.time, "sleep", sleep),
+            contextlib.redirect_stdout(io.StringIO()) as out,
+        ):
+            done = self.runner.wait_for_results(
+                self.results,
+                timeout=99999,
+                idle_timeout=600,
+                progress_path=self.progress,
+            )
+        return done, out.getvalue()
+
+    def test_a_long_module_whose_tests_keep_starting_is_waited_for(self):
+        done, out = self._wait(beat=True)
+        self.assertTrue(done, out)
+
+    def test_no_test_starting_for_the_window_is_still_a_stall(self):
+        done, out = self._wait(beat=False)
+        self.assertFalse(done)
+        self.assertIn("no test started in 600s", out)
 
 
 if __name__ == "__main__":

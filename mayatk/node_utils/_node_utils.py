@@ -594,6 +594,50 @@ class NodeUtils(ptk.HelpMixin):
                 transforms.append(xform)
         return transforms
 
+    @staticmethod
+    def expand_sets(objects: Union[str, object, List[Union[str, object]]]) -> List[str]:
+        """*objects* with every object set replaced by its members.
+
+        A set stands for what is in it, as a group does for its descendants:
+        an Outliner-selected bake set reaches a caller as the set node, which
+        carries none of the DAG attributes the caller goes on to read. Nested
+        sets are walked, each once; a shading group is a set too. Every other
+        node -- a component included -- passes through as given, in order.
+
+        Parameters:
+            objects: Node names (or objects that stringify to them), sets
+                among them.
+
+        Returns:
+            The names, each set replaced in place by its members (as
+            ``cmds.sets`` names them).
+        """
+        names = CoreUtils.as_strings(objects)
+        if not names:
+            return []
+        # One batched type query; the walk below keeps the argument order
+        # (a batched ``ls`` hands names back in ITS order, not the caller's).
+        sets = set(cmds.ls([n.split(".")[0] for n in names], type="objectSet") or [])
+        if not sets:
+            return list(names)
+        result: List[str] = []
+        visited: set = set()
+
+        def walk(items):
+            for name in items:
+                if name.split(".")[0] not in sets:
+                    result.append(name)
+                    continue
+                if name in visited:
+                    continue
+                visited.add(name)
+                members = cmds.sets(name, query=True) or []
+                sets.update(cmds.ls(members, type="objectSet") or [])
+                walk(members)
+
+        walk(names)
+        return result
+
     @classmethod
     def get_unique_children(cls, objects):
         """Retrieves a unique list of objects' children (if any) in the scene, excluding the groups themselves.
@@ -621,10 +665,7 @@ class NodeUtils(ptk.HelpMixin):
                     # membership graph doesn't re-expand the same group N times.
                     if obj in visited:
                         continue
-                    if cmds.objectType(obj, isAType="objectSet"):
-                        visited.add(obj)
-                        expand(cmds.sets(obj, query=True) or [], final, visited)
-                    elif cls.is_group(obj):
+                    if cls.is_group(obj):
                         visited.add(obj)
                         expand(
                             cmds.listRelatives(
@@ -642,7 +683,7 @@ class NodeUtils(ptk.HelpMixin):
         # met the leaves in (argument order, then hierarchy order for a group;
         # a set's members arrive in Maya's own order and have none to keep).
         final = {}
-        expand(CoreUtils.as_strings(objects), final, set())
+        expand(cls.expand_sets(objects), final, set())
 
         return list(final)
 

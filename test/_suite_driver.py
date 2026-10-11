@@ -27,12 +27,14 @@ Config keys:
     reload (bool):          Reload pythontk/mayatk before running (only
                             meaningful in long-lived GUI sessions; fresh
                             processes skip it).
-    sandbox_settings (bool): Redirect uitk's QSettings + preset stores too --
-                            set only for a Maya the runner launched (see
-                            :func:`_activate_sandbox`); absent means False.
+    launched (bool):        A Maya the runner launched (a mayapy chunk, a GUI
+                            pass): the run's sandbox stays up for good. Absent
+                            or False -- the user's own Maya -- it is up for
+                            the run only (see :func:`_sandbox`).
 """
 
 import contextlib
+import functools
 import importlib.util
 import io
 import json
@@ -198,47 +200,127 @@ def _reload_packages():
         )
 
 
-def _activate_sandbox(settings_stores):
+@contextlib.contextmanager
+def _sandbox(launched):
     """Process-level isolation for the whole run: no real browser launch or
-    trash, one throwaway temp root (``pythontk.TestSandbox``).
+    trash, one throwaway temp root, and uitk's QSettings and preset stores
+    redirected into that root (``uitk.testing.TestSandbox``).
 
-    With *settings_stores*, ``uitk.testing.TestSandbox`` instead -- the same
-    guards, plus uitk's QSettings and preset stores redirected into that root.
     A panel a test builds persists its widget state through QSettings, and
     with pythontk's guards alone every run wrote it into the developer's live
     store (measured 2026-10-04: a GUI pass of ``test_articulated_rig_panel``
     rewrote ``articulated_rig`` under ``HKCU\\Software\\uitk\\shared\\switchboard``).
-    The runner asks for it only for a process it launched: the redirect swaps
-    the QSettings class for the rest of the process, so in the user's own Maya
-    (the in-session harness) their tools would go on writing a file that is
-    deleted when Maya exits. Called before any module loads -- a store built
-    earlier keeps the real class.
+
+    For good in a Maya the runner *launched*. For the run only in the user's
+    own (the in-session harness, ``--reuse``): ``activated()`` puts every guard
+    back on the way out, an exception included, where a permanent sandbox left
+    their session refusing browser launches and writing its settings, presets
+    and temp files into a root deleted when Maya exits. Entered before any
+    module loads -- a store built earlier keeps the real class.
 
     Without uitk (a minimal env) the run keeps pythontk's guards, and says so.
+    Yields the sandbox class, for :meth:`~pythontk.TestSandbox.rearm` after a
+    reload.
     """
-    if settings_stores:
+    with contextlib.ExitStack() as stack:
         try:
-            from uitk.testing import TestSandbox as SettingsSandbox
+            from uitk.testing import TestSandbox
 
-            qsettings_dir, _presets_dir = SettingsSandbox.activate()
+            if launched:
+                qsettings_dir, _presets_dir = TestSandbox.activate()
+            else:
+                qsettings_dir, _presets_dir = stack.enter_context(
+                    TestSandbox.activated()
+                )
             print(f"[Sandbox] uitk settings -> {qsettings_dir}")
-            return
         except Exception as e:
             print(
                 f"[Sandbox] uitk settings sandbox unavailable ({e}); "
                 "pythontk's guards only"
             )
-    from pythontk.core_utils.test_sandbox import TestSandbox
+            from pythontk.core_utils.test_sandbox import TestSandbox
 
-    TestSandbox.activate()
+            if launched:
+                TestSandbox.activate()
+            else:
+                stack.enter_context(TestSandbox.activated())
+        yield TestSandbox
 
 
+@contextlib.contextmanager
+def _session_state_kept(launched):
+    """In the user's own Maya, give back what the per-module reset takes down.
+
+    :func:`_reset_session_globals` disables every FBX export producer and
+    stager, the explicit auto-takes and the active ShotStore before each
+    module; in the in-session harness those are the USER's, and their next
+    export after a run lost its shot takes. Read before the run (and before
+    any reload, so these are their own class objects) and put back after it,
+    an exception included, with ``MAYATK_EXTENDED_TESTS``. Not restorable,
+    and so not restored: the FBX plug-in's export and take options
+    (``FBXResetExport`` has no full getter) and mayatk's script jobs.
+    A Maya the runner *launched* is left as the reset left it.
+    """
+    if launched:
+        yield
+        return
+    env = os.environ.get("MAYATK_EXTENDED_TESTS")
+    fbx = shots = None
+    try:
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        fbx = (
+            FbxUtils,
+            set(FbxUtils._session_producers),
+            dict(FbxUtils._session_stagers),
+            FbxUtils._explicit_auto_takes,
+        )
+    except Exception:  # a test env without the fbx module
+        pass
+    try:
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        shots = (ShotStore, ShotStore._active, ShotStore._auto_export_disabled)
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if env is None:
+            os.environ.pop("MAYATK_EXTENDED_TESTS", None)
+        else:
+            os.environ["MAYATK_EXTENDED_TESTS"] = env
+        if fbx is not None:
+            cls, producers, stagers, explicit = fbx
+            try:
+                cls._session_producers.clear()
+                cls._session_producers.update(producers)
+                cls._session_stagers.clear()
+                cls._session_stagers.update(stagers)
+                cls._explicit_auto_takes = explicit
+                cls._sync_auto_export_hook()
+            except Exception as e:
+                print(f"[Sandbox] export hooks not restored: {e}")
+        if shots is not None:
+            cls, active, disabled = shots
+            if active is None:
+                cls.clear_active()
+            else:
+                cls.set_active(active)
+            cls._auto_export_disabled = disabled
+
+
+@contextlib.contextmanager
 def _sandbox_shots_prefs(temp_dir):
-    """Redirect ShotStore prefs writes away from the user's cloud-synced store.
+    """Redirect ShotStore prefs writes away from the user's cloud-synced store
+    for the run, and give the override back on the way out -- in the user's own
+    Maya (the in-session harness) their prefs would otherwise go on landing in
+    a folder deleted when Maya exits.
 
     Set AFTER any reload so the override lands on the final class object.
     """
     global _sandbox_dir
+    store = previous = None
     try:
         import atexit
 
@@ -247,13 +329,20 @@ def _sandbox_shots_prefs(temp_dir):
         _sandbox_dir = tempfile.mkdtemp(
             prefix="shots_prefs_test_", dir=temp_dir or None
         )
+        previous = ShotStore._prefs_dir_override
         ShotStore._prefs_dir_override = _sandbox_dir
+        store = ShotStore
         # atexit covers the GUI path; the mayapy path cleans up explicitly in
         # main() because os._exit bypasses atexit.
         atexit.register(shutil.rmtree, _sandbox_dir, ignore_errors=True)
         print(f"[Sandbox] shots prefs -> {_sandbox_dir}")
     except Exception as e:
         print(f"[Sandbox] shots prefs override failed: {e}")
+    try:
+        yield
+    finally:
+        if store is not None:
+            store._prefs_dir_override = previous
 
 
 @contextlib.contextmanager
@@ -325,6 +414,39 @@ def _restore_real_maya_modules(snapshot):
             parent_mod = snapshot.get(parent_name)
             if parent_mod is not None:
                 setattr(parent_mod, child_name, real_mod)
+
+
+_CONFTESTS = {}  # folder -> its conftest module, loaded once per run
+
+
+def _load_test_module(module_name, module_path):
+    """Import a test module by path, its ``import conftest`` resolving to the
+    conftest nearest its own folder -- as pytest resolves it.
+
+    The run's ``sys.path`` holds ``test/``, ``extended/`` and ``mock_tests/``
+    (:func:`_ensure_sys_path`), ``mock_tests/`` ahead, so a root module's
+    ``from conftest import ...`` loaded the MOCK conftest, which plants mocked
+    ``maya`` modules unconditionally, in a real Maya.
+    """
+    folder = Path(module_path).resolve().parent
+    for candidate in (folder, *folder.parents):
+        conftest = candidate / "conftest.py"
+        if conftest.is_file():
+            module = _CONFTESTS.get(candidate)
+            if module is None:
+                spec = importlib.util.spec_from_file_location("conftest", conftest)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["conftest"] = module
+                spec.loader.exec_module(module)
+                _CONFTESTS[candidate] = module
+            sys.modules["conftest"] = module
+            break
+        if candidate == TEST_DIR:
+            break
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    test_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(test_module)
+    return test_module
 
 
 def _purge_mayatk_modules():
@@ -523,14 +645,19 @@ class _RecordingResult(unittest.TextTestResult):
     """A result that remembers which tests actually started.
 
     ``testsRun`` is a count, and a count cannot say WHICH test went missing.
+    Each start is also a ``TEST <id>`` heartbeat on *progress_file*: the
+    runner's stall clocks read it, so a module longer than the stall window
+    (``test_sequencer`` in the GUI pass, 2026-10-10) is not taken for a hung one.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, progress_file=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.started = []
+        self.progress_file = progress_file
 
     def startTest(self, test):
         self.started.append(test.id())
+        _progress(self.progress_file, f"TEST {test.id()}")
         super().startTest(test)
 
 
@@ -543,23 +670,26 @@ def run_suite(config):
     _ensure_sys_path()
 
     # Process-level isolation for the whole chunk -- no real browser launch,
-    # one throwaway temp root, and in a Maya the runner launched no live
-    # settings store -- before any module allocates. Here rather than only in
-    # conftest.py: most modules never import that file.
-    _activate_sandbox(config.get("sandbox_settings"))
+    # one throwaway temp root, no live settings store -- before any module
+    # allocates; in the user's own Maya, for this run only. Here rather than
+    # only in conftest.py: most modules never import that file.
+    with (
+        _sandbox(config.get("launched")) as sandbox,
+        _session_state_kept(config.get("launched")),
+    ):
+        if config.get("extended"):
+            os.environ["MAYATK_EXTENDED_TESTS"] = "1"
+        else:
+            os.environ.pop("MAYATK_EXTENDED_TESTS", None)
 
-    if config.get("extended"):
-        os.environ["MAYATK_EXTENDED_TESTS"] = "1"
-    else:
-        os.environ.pop("MAYATK_EXTENDED_TESTS", None)
+        if config.get("reload"):
+            _reload_packages()
+            # The reload re-executed pythontk: its new FileUtils trashes for
+            # real until the standing guards are carried over to it.
+            sandbox.rearm()
 
-    if config.get("reload"):
-        _reload_packages()
-
-    _sandbox_shots_prefs(config.get("temp_dir"))
-
-    with _sandbox_workspace():
-        return _run_modules(config)
+        with _sandbox_shots_prefs(config.get("temp_dir")), _sandbox_workspace():
+            return _run_modules(config)
 
 
 def _run_modules(config):
@@ -590,9 +720,7 @@ def _run_modules(config):
         _reset_session_globals()
 
         try:
-            spec = importlib.util.spec_from_file_location(module_name, module_path)
-            test_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(test_module)
+            test_module = _load_test_module(module_name, module_path)
 
             skip_reason = _module_skip_reason(test_module)
             if skip_reason is not None:
@@ -629,7 +757,10 @@ def _run_modules(config):
                 # collection exists.
                 collected_ids = list(_iter_test_ids(suite))
                 runner = unittest.TextTestRunner(
-                    verbosity=2, resultclass=_RecordingResult
+                    verbosity=2,
+                    resultclass=functools.partial(
+                        _RecordingResult, progress_file=progress_file
+                    ),
                 )
                 printed = io.StringIO()
                 saved_out, saved_err = sys.stdout, sys.stderr

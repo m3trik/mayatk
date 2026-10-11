@@ -45,7 +45,7 @@ class _OpacityInternal:
                 Scene-wide callers should pass one in — every material in a set
                 shares a texture folder, and the scan is a full directory walk.
         """
-        bases_by_dir: Dict[str, set] = {}
+        paths = []
         for file_node in cmds.ls(cmds.listHistory(mat) or [], type="file") or []:
             raw = cmds.getAttr(f"{file_node}.fileTextureName") or ""
             # search=False: we want the folder Maya actually reads this texture
@@ -53,25 +53,31 @@ class _OpacityInternal:
             # file in some other set's folder.
             path = cls.resolve_path(raw, search=False) or raw
             directory = os.path.dirname(path)
-            if not directory or not os.path.isdir(directory):
-                continue
-            base = ptk.MapFactory.get_base_texture_name(path)
+            if directory and os.path.isdir(directory):
+                paths.append(path)
+
+        # Each batch read as one (`classify_textures`): the material's maps, and
+        # each folder's files, so a set named for a lobe (`Hero_Coat`) finds
+        # its `Hero_Coat_Opacity` -- read alone, a coat weight of `Hero`.
+        bases_by_dir: Dict[str, set] = {}
+        for path, (_type, base) in ptk.MapFactory.classify_textures(paths).items():
             if base:
-                bases_by_dir.setdefault(directory, set()).add(base)
+                bases_by_dir.setdefault(os.path.dirname(path), set()).add(base)
 
         cache = {} if dir_cache is None else dir_cache
         for directory, bases in bases_by_dir.items():
             if directory not in cache:
                 # base name → the set's Opacity map, one scan per folder.
                 found: Dict[str, str] = {}
-                for entry in sorted(os.listdir(directory)):
-                    full = os.path.join(directory, entry)
-                    if not os.path.isfile(full):
-                        continue
-                    if ptk.MapFactory.resolve_map_type(full) != "Opacity":
-                        continue
-                    base = ptk.MapFactory.get_base_texture_name(full)
-                    if base:
+                files = [
+                    os.path.join(directory, entry)
+                    for entry in sorted(os.listdir(directory))
+                    if os.path.isfile(os.path.join(directory, entry))
+                ]
+                for full, (map_type, base) in ptk.MapFactory.classify_textures(
+                    files
+                ).items():
+                    if map_type == "Opacity" and base:
                         found.setdefault(base, full)
                 cache[directory] = found
 
@@ -99,10 +105,13 @@ class _OpacityInternal:
     def _find_opacity_source(cls, mat):
         """Body of :meth:`MatUtils.find_opacity_source`."""
         file_nodes = cmds.ls(cmds.listHistory(mat) or [], type="file") or []
+        paths = {n: cmds.getAttr(f"{n}.fileTextureName") or "" for n in file_nodes}
+        # The material's maps read as one set (a set named for a lobe keeps its
+        # `Hero_Coat_Opacity` an Opacity).
+        map_types = ptk.MapFactory.resolve_map_types([p for p in paths.values() if p])
         by_type: Dict[str, str] = {}
         for file_node in file_nodes:
-            path = cmds.getAttr(f"{file_node}.fileTextureName") or ""
-            map_type = ptk.MapFactory.resolve_map_type(path) if path else None
+            map_type = map_types.get(paths[file_node])
             if map_type in cls.OPACITY_MAP_TYPES:
                 by_type.setdefault(map_type, file_node)
 
@@ -175,7 +184,14 @@ class _OpacityInternal:
             # opacity from the albedo's brightness.
             if cmds.attributeQuery("alphaIsLuminance", node=source, exists=True):
                 path = cmds.getAttr(f"{source}.fileTextureName") or ""
-                map_type = ptk.MapFactory.resolve_map_type(path)
+                # Read against the material's other maps, as the source was found.
+                others = [
+                    cmds.getAttr(f"{n}.fileTextureName") or ""
+                    for n in cmds.ls(cmds.listHistory(mat) or [], type="file") or []
+                ]
+                map_type = ptk.MapFactory.resolve_map_types(
+                    [p for p in [path, *others] if p]
+                ).get(path)
                 if map_type in cls.OPACITY_MAP_TYPES:
                     cmds.setAttr(
                         f"{source}.alphaIsLuminance", int(map_type == "Opacity")

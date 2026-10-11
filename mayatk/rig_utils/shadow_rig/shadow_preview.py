@@ -101,7 +101,6 @@ uniform float gRectSY < string UIName = "Rect Scale Y"; > = 1.0;
 uniform float gRectOX < string UIName = "Rect Offset X"; > = 0.0;
 uniform float gRectOY < string UIName = "Rect Offset Y"; > = 0.0;
 uniform float gOpacity < string UIName = "Opacity"; > = 1.0;
-uniform float gIntensity < string UIName = "Intensity"; > = 1.0;
 
 // Bound to the map's 16-bit promotion (TEXTURE_SUFFIX), never the 8-bit map:
 // on this path VP2 sRGB-decodes any 8-bit texture -- Raw colour space, colour
@@ -175,7 +174,7 @@ vec4 SH_Fetch(int tile, int xi, int yi)
             vec4(gBoundsA0, gBoundsA1, gBoundsB0, gBoundsB1), gHeightScale, gGround);
         float a = ShAlpha(g, ps_world, gOrigin, gAxisA, gAxisB, gAxisUp,
                           vec4(gSource, gSourceW), vec2(gSourceDiameter, gSourceAngle));
-        colourOut = vec4(0.0, 0.0, 0.0, a * gOpacity * gIntensity);
+        colourOut = vec4(0.0, 0.0, 0.0, a * gOpacity);
     }}
 }}
 
@@ -225,7 +224,6 @@ float gRectSY < string UIName = "Rect Scale Y"; > = 1.0f;
 float gRectOX < string UIName = "Rect Offset X"; > = 0.0f;
 float gRectOY < string UIName = "Rect Offset Y"; > = 0.0f;
 float gOpacity < string UIName = "Opacity"; > = 1.0f;
-float gIntensity < string UIName = "Intensity"; > = 1.0f;
 
 Texture2D gHorizonTex
 <
@@ -280,7 +278,7 @@ float4 PS(VS_TO_PS In) : SV_Target
         float4(gBoundsA0, gBoundsA1, gBoundsB0, gBoundsB1), gHeightScale, gGround);
     float a = ShAlpha(g, In.World, gOrigin, gAxisA, gAxisB, gAxisUp,
                       float4(gSource, gSourceW), float2(gSourceDiameter, gSourceAngle));
-    return float4(0.0f, 0.0f, 0.0f, a * gOpacity * gIntensity);
+    return float4(0.0f, 0.0f, 0.0f, a * gOpacity);
 }}
 
 technique11 Main
@@ -791,11 +789,12 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
         }
         for name, value in constants.items():
             cmds.setAttr(f"{fx}.{name}", float(value))
-        # Opacity carries the expression's fade; intensity the artist's dial.
+        # Opacity carries the expression's fade AND the artist's intensity
+        # dial (the expression multiplies shadowIntensity in), as every engine
+        # reads it: applying the intensity again here drew it twice.
         cmds.connectAttr(
             f"{plane}.{ShadowRig.OPACITY_ATTR}", f"{fx}.gOpacity", force=True
         )
-        cmds.connectAttr(f"{plane}.shadowIntensity", f"{fx}.gIntensity", force=True)
 
     @staticmethod
     def _node(node_type: str, name: str) -> str:

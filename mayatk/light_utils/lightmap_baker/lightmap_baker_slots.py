@@ -20,7 +20,7 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.mat_utils.texture_baker import TextureBaker
-from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+from mayatk.mat_utils.bake_sets import LightmapBakeSet, LightmapExcludeSet
 from mayatk.env_utils._env_utils import EnvUtils
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 
@@ -171,11 +171,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         jobs = ScriptJobManager.instance()
         for event in ("SceneOpened", "NewSceneOpened", "Undo", "Redo"):
             try:
-                jobs.subscribe(event, self._refresh_exclusions, owner=self)
+                jobs.subscribe(event, self._refresh_scene_sets, owner=self)
             except Exception as error:  # noqa: BLE001 -- never block the panel
                 self.logger.debug(f"scriptJob {event!r} unavailable ({error})")
         jobs.connect_cleanup(self.ui, owner=self)
+        self._refresh_scene_sets()
+
+    def _refresh_scene_sets(self) -> None:
+        """Re-read both scene sets onto their labels (Exclude, Bake Set)."""
         self._refresh_exclusions()
+        self._refresh_bake_set()
 
     # ------------------------------------------------------------------
     # Header
@@ -212,7 +217,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     "whole Scene. Its button takes the HDRI environment in or out "
                     "of the bake. <b>Exclude</b> keeps objects from getting a map "
                     "of their own but leaves them in the render: they still cast "
-                    "shadows and bounce light onto everything that bakes.",
+                    "shadows and bounce light onto everything that bakes. Any "
+                    "other mesh that is neither baked nor excluded moves, and "
+                    "stays out of the render.",
+                    "<b>Bake Set</b>: with <i>Save After Bake</i> on, every bake "
+                    "stores the objects it acted on as a set in the scene, so "
+                    "selecting it re-runs that bake. Its tag button names the "
+                    "set with the naming convention's Set suffix (the Naming "
+                    "panel's, <i>_SET</i> by default).",
                     "<b>Packing</b>: one atlas per material (the default), or one "
                     "map per object. Its camera button also captures the room as a "
                     "<b>Reflection Probe</b>, for the reflections a lightmap cannot "
@@ -533,7 +545,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         """The mesh transforms the current Scope names (before the Exclude set).
 
         ``visible`` and ``scene`` gather across the scene so a bake needn't be
-        preceded by a manual select-all; ``selected`` takes the selection as-is.
+        preceded by a manual select-all; ``selected`` takes the selection, a
+        group standing for the meshes under it (a bake set's members are
+        often groups).
 
         Every scope resolves through ``TextureBaker.resolve_meshes`` -- the one
         definition of "bakeable" -- so a selection that also holds the room's
@@ -573,7 +587,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             all=scene_meshes,
             visible=visible_meshes,
         )
-        return TextureBaker.resolve_meshes(pool or [])
+        return TextureBaker.resolve_meshes(pool or [], descendants=True)
 
     def set_exclusions_init(self, widget) -> None:
         """Hang Select / Clear off the Exclude row, and make its hover live.
@@ -672,6 +686,175 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         LightmapExcludeSet.clear()
         self._refresh_exclusions()
         self.ui.footer.setText("Exclude set cleared — every object in Scope bakes.")
+
+    # ------------------------------------------------------------------
+    # Bake Set
+    # ------------------------------------------------------------------
+
+    #: Settings keys of the Bake Set row's two switches, panel-scoped: Save
+    #: After Bake (the global switch) and the naming-convention spelling.
+    _BAKE_SET_SAVE_KEY = "lightmap_baker_save_bake_set"
+    _BAKE_SET_CONVENTION_KEY = "lightmap_baker_bake_set_convention"
+
+    def select_bake_set_init(self, widget) -> None:
+        """Hang Save After Bake, the naming switch and Clear off the Bake Set row.
+
+        The row mirrors the Exclude row, and its switches ride the button's
+        option box as every switch on this panel does. **Save After Bake**
+        (the disk) is the global one: while it is on, every bake -- in any
+        scene; the state is per user -- saves the objects it acted on as the
+        scene's :class:`LightmapBakeSet`. The **tag** names that set plain
+        (``lightmapBaker_baked``) or by the naming convention
+        (``ptk.NamingConvention``'s Set affix, ``_SET`` by default -- the one
+        the Naming panel edits), renaming a set already in the scene on the
+        spot. The button selects the set; Clear deletes it. Added in that
+        order, which is how :meth:`_bake_set_switch` tells the two apart.
+        """
+        locked = ptk.Palette.status()["locked"][0]
+        widget.option_box.set_toggle(
+            icon="save",
+            tooltip_on="Save After Bake: every bake replaces this scene's Bake Set "
+            "with the objects it acted on, finished or not -- select it to "
+            "re-run the bake. One setting for every scene. Click to stop.",
+            tooltip_off="Bakes save no set. Click to have every bake store the "
+            "objects it acted on as this scene's Bake Set.",
+            initial=False,
+            disabled_color=locked,
+            settings_key=self._BAKE_SET_SAVE_KEY,
+        )
+        convention = ptk.NamingConvention.affix(LightmapBakeSet.CONVENTION_KEY)
+        widget.option_box.add_toggle(
+            icon="tag",
+            tooltip_on="Named by the naming convention: "
+            f"{LightmapBakeSet.conventional_name()} (the Naming panel's Set "
+            f"suffix, {convention or 'empty'}). Click to name it plain: "
+            f"{LightmapBakeSet.SET_NAME}.",
+            tooltip_off=f"Named plain: {LightmapBakeSet.SET_NAME}. Click to name "
+            f"it by the naming convention's Set suffix ({convention or 'empty'}).",
+            initial=False,
+            disabled_color=locked,
+            settings_key=self._BAKE_SET_CONVENTION_KEY,
+            on_toggled=self._respell_bake_set,
+        )
+        widget.option_box.add_action(
+            callback=self.clear_bake_set,
+            icon="clear",
+            tooltip="Delete the scene's Bake Set. The objects themselves are untouched.",
+            settings_key=False,
+        )
+        for target in (widget, self.ui.lbl_bake_set):
+            help_text = target.toolTip()
+            self.sb.tooltip.bind(
+                target, lambda text=help_text: self._bake_set_tooltip(text)
+            )
+
+    def _bake_set_switch(self, index: int) -> bool:
+        """The Bake Set row's switch *index* (0 Save After Bake, 1 naming), on or off.
+
+        A switch is an option with an on/off state (``is_on``) -- the row's
+        two toggles, in the order :meth:`select_bake_set_init` added them;
+        its Clear action has none. ``False`` before the row is wired.
+        """
+        widget = getattr(self.ui, "select_bake_set", None)
+        try:
+            switches = [
+                option
+                for option in widget.option_box.get_options()
+                if hasattr(option, "is_on")
+            ]
+        except Exception:  # noqa: BLE001 -- no option box on a bare widget
+            return False
+        return len(switches) > index and bool(switches[index].is_on)
+
+    def _save_bake_set(self) -> bool:
+        """Whether a bake saves its objects as the scene's Bake Set (Save After Bake)."""
+        return self._bake_set_switch(0)
+
+    def _bake_set_conventional(self) -> bool:
+        """Whether the Bake Set is named by the naming convention (the row's tag switch)."""
+        return self._bake_set_switch(1)
+
+    def _respell_bake_set(self, conventional: bool) -> None:
+        """Rename the scene's Bake Set to follow the tag switch, when there is one."""
+        if cmds is None:
+            return
+        before = LightmapBakeSet.name()
+        name = LightmapBakeSet.respell(bool(conventional))
+        self._refresh_bake_set()
+        if name and name != before:
+            self.ui.footer.setText(f"Bake Set renamed: {before} -> {name}.")
+
+    def _bake_set_tooltip(self, help_text: str) -> str:
+        """*help_text* over the objects the scene's Bake Set holds, live."""
+        try:
+            members = LightmapBakeSet.members() if cmds is not None else []
+            name = LightmapBakeSet.name() if cmds is not None else None
+        except Exception:  # noqa: BLE001 -- a tooltip must never raise into Qt
+            return help_text
+        return self.sb.tooltip.stored_items(
+            members,
+            body=help_text.replace("\n", "<br>"),
+            formatter=lambda n: n.rsplit("|", 1)[-1],
+            noun=f"object(s) in {name}" if name else "object(s) in the Bake Set",
+            empty_text="No Bake Set in this scene.",
+        )
+
+    def _refresh_bake_set(self) -> None:
+        """Show the Bake Set's member count on its label (``Bake Set (151):``)."""
+        label = getattr(self.ui, "lbl_bake_set", None)
+        if label is None or cmds is None:
+            return
+        try:
+            count = len(LightmapBakeSet.members())
+        except Exception:  # noqa: BLE001 -- a label refresh must never raise
+            count = 0
+        label.setText(f"Bake Set ({count}):" if count else "Bake Set:")
+
+    def select_bake_set(self) -> None:
+        """Select the Bake Set's members, hidden ones included."""
+        members = LightmapBakeSet.members()
+        self._refresh_bake_set()
+        if not members:
+            self.ui.footer.setText("No Bake Set in this scene.")
+            return
+        cmds.select(members, replace=True)
+        self.ui.footer.setText(
+            f"Selected {len(members)} object{'s' if len(members) != 1 else ''} "
+            f"of {LightmapBakeSet.name()}."
+        )
+
+    def clear_bake_set(self) -> None:
+        """Delete the scene's Bake Set; its objects are left untouched."""
+        if not LightmapBakeSet.exists():
+            self.ui.footer.setText("No Bake Set in this scene.")
+            return
+        name = LightmapBakeSet.name()
+        LightmapBakeSet.clear()
+        self._refresh_bake_set()
+        self.ui.footer.setText(f"{name} deleted; its objects are untouched.")
+
+    def _record_bake_set(self, result) -> str:
+        """Save *result*'s objects as the Bake Set when the panel asks to; the footer note.
+
+        Every object the bake acted on -- what it baked and what it left
+        unbaked (a cancel, a failed render) -- so the set re-runs the bake.
+        Nothing is saved for a bake that refused or produced nothing.
+        """
+        if not (self._save_bake_set() and result and cmds is not None):
+            return ""
+        objects = sorted(set(result.maps) | set(result.unbaked))
+        try:
+            members = LightmapBakeSet.define(
+                objects, conventional=self._bake_set_conventional()
+            )
+        except Exception as error:  # noqa: BLE001 -- the bake is committed already
+            self.logger.warning(f"Bake Set not saved: {error}")
+            return " Bake Set not saved (see Script Editor)."
+        self._refresh_bake_set()
+        return (
+            f" Saved {len(members)} object{'s' if len(members) != 1 else ''} "
+            f"as {LightmapBakeSet.name()}."
+        )
 
     # ------------------------------------------------------------------
     # Quality
@@ -918,7 +1101,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                     else f"Baked {total} object{'s' if total != 1 else ''}.",
                 ),
             )
-        self.ui.footer.setText(self._bake_report(result))
+        self.ui.footer.setText(
+            self._bake_report(result) + self._record_bake_set(result)
+        )
 
     def _bake_report(self, result) -> str:
         """The footer line for a :class:`LightmapBakeResult`.
@@ -988,7 +1173,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # resolve_meshes): read as transforms only, a face selection became
         # "nothing selected", and the dialog offered to revert EVERY baked object.
         raw = cmds.ls(selection=True, long=True) or []
-        selection = TextureBaker.resolve_meshes(raw) if raw else None
+        selection = TextureBaker.resolve_meshes(raw, descendants=True) if raw else None
         targets = self._baker.baked_objects(selection) if selection != [] else []
         if not targets:
             self.ui.footer.setText(

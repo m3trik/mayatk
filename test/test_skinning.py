@@ -406,6 +406,37 @@ class TestWeightTransfer(MayaTkTestCase):
 # ----------------------------------------------------------------------
 
 
+class TestBindToCurveIsQuiet(MayaTkTestCase):
+    """``bind_to_curve`` writes rows the solve already pinned to sum to 1.
+
+    Regression: the new cluster's INTERACTIVE normalization re-normalizes on
+    every ``setWeights`` -- whatever its normalize flag -- and warned
+    "Specified weights required modification for normalization" on every
+    tube-rig build, though no weight changed.
+    """
+
+    def test_bind_writes_the_solve_exactly_without_a_warning(self):
+        from maya.api import OpenMaya as om
+
+        tube = _make_cylinder()
+        joints = _make_chain([(-5, 0, 0), (-2, 0, 0), (1, 0, 0), (5, 0, 0)])
+        centerline = [(-5, 0, 0), (0, 0, 0), (5, 0, 0)]
+        solved, influences = CurveWeights.solve(tube, joints, centerline=centerline)
+        messages = []
+        callback = om.MCommandMessage.addCommandOutputCallback(
+            lambda message, _kind, _data: messages.append(message)
+        )
+        try:
+            skin = SkinUtils.bind_to_curve(tube, joints, centerline=centerline)
+        finally:
+            om.MMessage.removeCallback(callback)
+        self.assertFalse([m for m in messages if "normalization" in m], messages)
+        written, _ = SkinUtils.get_weights(skin)
+        self.assertLess(max(abs(a - b) for a, b in zip(written, solved)), 1e-12)
+        # The cluster keeps Maya's default (interactive) normalization.
+        self.assertEqual(cmds.getAttr(f"{skin}.normalizeWeights"), 1)
+
+
 class TestCurveWeights(MayaTkTestCase):
     CENTERLINE = [(-5, 0, 0), (0, 0, 0), (5, 0, 0)]
 

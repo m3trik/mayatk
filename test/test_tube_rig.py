@@ -1267,6 +1267,197 @@ class TestCoiledTubeCenterline(unittest.TestCase):
         )
 
 
+def _make_plug(name="plug", body_first=True, body_y=8.5):
+    """A combined multi-shell cable plug: a short 3-ring body over an 8-unit
+    cable, combined so the BODY owns the lowest edge ids when *body_first*.
+
+    The production pair (SOL_REPLACE_ASSEMBLY's PLUG_UPPER/LOWER_GEO, 4 shells
+    each) differed only in shell order, and the one whose short body came
+    first in id order rigged a 1-unit chain on the body instead of the cable.
+
+    Returns:
+        (mesh, cable_bottom, cable_top): the cable's end centres.
+    """
+    # sy=4: three INTERIOR rings (a capped cylinder's rim loops degenerate),
+    # so the body yields a valid 3-ring walk of its own, as production's did.
+    body = cmds.polyCylinder(r=0.5, h=1.0, sy=4, sx=6, name=f"{name}_body")[0]
+    cmds.move(0, body_y, 0, body)
+    cable = cmds.polyCylinder(r=0.2, h=8.0, sy=6, sx=6, name=f"{name}_cable")[0]
+    cmds.move(0, 4.0, 0, cable)
+    parts = [body, cable] if body_first else [cable, body]
+    mesh = cmds.polyUnite(*parts, ch=False, name=name)[0]
+    return mesh, om.MVector(0, 0, 0), om.MVector(0, 8, 0)
+
+
+class TestMultiShellCenterline(unittest.TestCase):
+    """A combined mesh's centerline follows its longest tube, whatever the
+    shell order -- and Reverse flips which end the chain roots at."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_centerline_follows_the_longest_shell(self):
+        for body_first in (True, False):
+            mesh, bottom, top = _make_plug(f"plug_{int(body_first)}", body_first)
+            centerline, _n = TubePath.get_centerline(mesh, num_joints=-1)
+            ys = [float(p[1]) for p in centerline]
+            self.assertGreater(max(ys) - min(ys), 7.0, f"body_first={body_first}: {ys}")
+
+    def test_reverse_flips_the_fk_root_end(self):
+        roots = []
+        for reverse in (False, True):
+            cmds.file(new=True, force=True)
+            mesh, bottom, top = _make_plug("plugRev")
+            rig = TubeRig(mesh, rig_name="PlugRev")
+            rig.build(strategy="fk", num_controls=3, reverse=reverse)
+            roots.append(om.MVector(*_ws(rig.bundle.joints[0])))
+            tip = om.MVector(*_ws(rig.bundle.joints[-1]))
+            self.assertGreater((tip - roots[-1]).length(), 7.0, f"reverse={reverse}")
+        self.assertGreater((roots[0] - roots[1]).length(), 7.0, "reverse kept the root")
+
+    def test_a_detached_shell_moves_rigidly(self):
+        """A combined mesh's other parts (the plug body beside its cable) are
+        rigid pieces: posing the chain must not bend them.
+
+        Regression: a detached shell's vertices took per-vertex stations, so
+        the production plug body flexed across the end joints it overlapped.
+        """
+        # The body sleeves over the cable's end (y 7.5..8.5 over a cable
+        # ending at 8), as production's did: half of it projects INSIDE the
+        # path, where per-vertex stations differ.
+        mesh, bottom, top = _make_plug("plugRigid", body_y=8.0)
+        rig = TubeRig(mesh, rig_name="PlugRigid")
+        rig.build(strategy="fk", num_controls=3)
+        tip_ctrl = rig.bundle.controls[-1]
+        rest = _all_vertex_positions(mesh)
+        # The body's every vertex is on its r=0.5 wall (n-gon caps, no centre).
+        body = [i for i, p in enumerate(rest) if math.hypot(p[0], p[2]) > 0.35]
+        self.assertEqual(len(body), 30)
+        tail_rest = om.MVector(*_ws(rig.bundle.joints[-1]))
+        cmds.setAttr(f"{tip_ctrl}.rotateZ", 40)
+        cmds.setAttr(f"{rig.bundle.controls[1]}.rotateZ", 30)
+        posed = _all_vertex_positions(mesh)
+        self.assertGreater(
+            (om.MVector(*_ws(rig.bundle.joints[-1])) - tail_rest).length(), 0.5
+        )
+        err = max(
+            abs(
+                (om.MVector(*rest[i]) - om.MVector(*rest[j])).length()
+                - (om.MVector(*posed[i]) - om.MVector(*posed[j])).length()
+            )
+            for i in body
+            for j in body
+            if j > i
+        )
+        self.assertLess(err, 1e-3, f"the detached body bent by {err:.4f}")
+
+    def test_rebind_and_step_bind_follow_a_reversed_chain(self):
+        """Rebind Skin and Step 3 re-measure the centerline in TOPOLOGY order.
+
+        Regression: on a Reverse build (root at the far end) that path ran
+        against the joints, so every station landed at one end and the whole
+        cable bound 100% to the tip joint (production PLUG_LOWER on rebind).
+        Both must reproduce the build's own weights.
+        """
+        from mayatk.rig_utils.skinning import SkinUtils
+
+        mesh, _bottom, _top = _make_plug("plugRebind", body_first=False)
+        rig = TubeRig(mesh, rig_name="PlugRebind")
+        rig.build(strategy="fk", num_controls=3, reverse=True)
+        built, _ = SkinUtils.get_weights(SkinUtils.get_skin_cluster(mesh))
+        for label, rebind in (
+            ("rebind_skin", lambda: rig.rebind_skin()),
+            ("bind_joint_chain", lambda: rig.bind_joint_chain(mesh, rig.joints)),
+        ):
+            rebind()
+            again, _ = SkinUtils.get_weights(SkinUtils.get_skin_cluster(mesh))
+            self.assertLess(max(abs(a - b) for a, b in zip(built, again)), 1e-6, label)
+
+    def test_a_long_detached_shell_still_bends(self):
+        """Only COMPACT parts go rigid: a separate jacket sleeving the cable
+        (a double-walled hose's other wall) runs the tube's length and must
+        bend with it, not ride one station as a rigid stick."""
+        mesh, _bottom, _top = _make_plug("plugJacket")
+        jacket = cmds.polyCylinder(r=0.25, h=6.0, sy=6, sx=6, name="jacket")[0]
+        cmds.move(0, 4.0, 0, jacket)
+        mesh = cmds.polyUnite(mesh, jacket, ch=False, name="plugJacketed")[0]
+        rig = TubeRig(mesh, rig_name="PlugJacket")
+        rig.build(strategy="fk", num_controls=3)
+        rest = _all_vertex_positions(mesh)
+        sleeve = [  # the jacket: r=0.25 wall, distinct from cable (0.2) and body (0.5)
+            i for i, p in enumerate(rest) if abs(math.hypot(p[0], p[2]) - 0.25) < 1e-3
+        ]
+        self.assertTrue(sleeve)
+        cmds.setAttr(f"{rig.bundle.controls[1]}.rotateZ", 40)
+        posed = _all_vertex_positions(mesh)
+        bend = max(
+            abs(
+                (om.MVector(*rest[i]) - om.MVector(*rest[j])).length()
+                - (om.MVector(*posed[i]) - om.MVector(*posed[j])).length()
+            )
+            for i in sleeve
+            for j in sleeve
+            if j > i
+        )
+        self.assertGreater(bend, 0.05, "the jacket rode the bend as a rigid stick")
+
+    def test_a_flat_fan_cap_adds_no_end_point(self):
+        """A triangle-fan cap's centre vertex lies IN its rim ring's plane.
+
+        Regression (production plugs): the rim was a closed ring, the fan's
+        centre 0.0014 off its centroid -- past the 0.001 dedupe -- so the
+        path began with a near-zero segment. The parametric skin then found
+        the joint stations out of order and fell back to a geodesic bind,
+        where bending the TIP control moved every vertex, root end included.
+        """
+        tube = cmds.polyCylinder(r=0.25, h=8.0, sy=6, sx=6, sc=1, name="fanCap")[0]
+        cmds.makeIdentity(tube, apply=True, t=1, r=1, s=1, n=0, pn=1)
+        fn = TubePath._mesh_fn(TubePath._resolve_mesh_shape(tube))
+        points = fn.getPoints(om.MSpace.kWorld)
+        # The two fan centres are the vertices ON the axis; nudge them just
+        # past the dedupe distance, as production's were.
+        for i, p in enumerate(points):
+            if abs(p.x) < 1e-6 and abs(p.z) < 1e-6:
+                cmds.move(
+                    0, 0.002 if p.y > 0 else -0.002, 0, f"{tube}.vtx[{i}]", r=True
+                )
+        centerline, _n = TubePath.get_centerline(tube, num_joints=-1)
+        steps = [
+            om.MVector(b[0] - a[0], b[1] - a[1], b[2] - a[2]).length()
+            for a, b in zip(centerline, centerline[1:])
+        ]
+        self.assertGreater(min(steps), 0.1, f"near-zero path segment: {steps}")
+
+        rig = TubeRig(tube, rig_name="FanCap")
+        rig.build(strategy="fk", num_controls=3)
+        rest = _all_vertex_positions(tube)
+        cmds.setAttr(f"{rig.bundle.controls[-1]}.rotateZ", 40)
+        posed = _all_vertex_positions(tube)
+        root = om.MVector(*_ws(rig.bundle.joints[0]))
+        near_root = [
+            i for i, p in enumerate(rest) if (om.MVector(*p) - root).length() < 1.0
+        ]
+        self.assertTrue(near_root)
+        moved = max(
+            (om.MVector(*rest[i]) - om.MVector(*posed[i])).length() for i in near_root
+        )
+        self.assertLess(moved, 1e-3, "the tip control moved the root end")
+
+    def test_reversed_end_normals_point_along_the_reversed_path(self):
+        """With the centerline reversed, the start normal must come from the
+        ring nearest the NEW start and point into the tube from there."""
+        mesh, bottom, top = _make_plug("plugN", body_first=False)
+        centerline, _n = TubePath.get_centerline(mesh, num_joints=-1)
+        reversed_line = list(centerline)[::-1]
+        start_n, end_n = TubePath.get_end_normals(mesh, start_point=reversed_line[0])
+        first, last = reversed_line[0], reversed_line[-1]
+        along = om.MVector(last[0], last[1], last[2]) - om.MVector(
+            first[0], first[1], first[2]
+        )
+        self.assertGreater(start_n * along.normal(), 0.9)
+        self.assertGreater(end_n * along.normal(), 0.9)
+
+
 class TestStepOneClickParity(unittest.TestCase):
     """The step-by-step operations (UI Steps 1/2/3) must run the same rig
     methods as the one-click build — same components, same skinning."""

@@ -74,6 +74,125 @@ class TestXformUtils(MayaTkTestCase):
         self.assertEqual(XformUtils.convert_axis("-z", to_integer=True), 5)
 
     # -------------------------------------------------------------------------
+    # Rotate Order Tests
+    # -------------------------------------------------------------------------
+
+    def _world_at(self, node, time):
+        cmds.currentTime(time)
+        return om.MMatrix(cmds.xform(node, q=True, ws=True, m=True))
+
+    def test_set_rotate_order_preserves_keyed_pose(self):
+        """Re-keying for a new order keeps the pose at every key, and the
+        new order puts the spin axis on one channel.
+
+        Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): a locator keyed to rx=98
+        in "xyz" could not spin about its own Z without moving all three
+        channels; changing the attribute alone would turn the prop.
+        """
+        node = self.cube1
+        for t, r in ((1, (0, 0, 0)), (10, (98.3, -6.4, -0.15)), (20, (98.3, -6.4, 40))):
+            for axis, v in zip("xyz", r):
+                cmds.setKeyframe(node, attribute=f"r{axis}", time=t, value=v)
+        before = {t: self._world_at(node, t) for t in (1, 10, 20)}
+
+        changed = XformUtils.set_rotate_order(node, "zyx")
+        self.assertEqual(len(changed), 1)
+        self.assertEqual(cmds.getAttr(f"{node}.rotateOrder", asString=True), "zyx")
+        for t, m in before.items():
+            self.assertTrue(self._world_at(node, t).isEquivalent(m, 1e-6), f"frame {t}")
+
+        cmds.currentTime(10)
+        r0 = cmds.getAttr(f"{node}.rotate")[0]
+        cmds.rotate(0, 0, 15, node, relative=True, objectSpace=True, forceOrderXYZ=True)
+        r1 = cmds.getAttr(f"{node}.rotate")[0]
+        self.assertAlmostEqual(r1[0], r0[0], places=4)
+        self.assertAlmostEqual(r1[1], r0[1], places=4)
+        self.assertAlmostEqual(r1[2], r0[2] + 15, places=4)
+
+    def test_set_rotate_order_auto_reads_the_turn_axis_off_the_keys(self):
+        """Bug (SOL_REPLACE_ASSEMBLY, SOCKET_WRENCH): lifted 98 on X, then
+        turned about its OWN Y to undo the nut -- the Y the socket hangs on.
+        zyx (the first fix) left Y in the middle, so the turn still keyed all
+        three channels and wobbled. "auto" must find a Y-first order from the
+        keys alone, keep every key's pose, and leave the turn on ry."""
+        node = self.cube1
+        cmds.currentTime(1)
+        cmds.setKeyframe(node, attribute="rotate", time=1)
+        cmds.currentTime(10)
+        cmds.setAttr(f"{node}.rotate", 98.3, -6.4, -0.15)
+        cmds.setKeyframe(node, attribute="rotate", time=10)
+        cmds.currentTime(20)
+        cmds.rotate(0, 60, 0, node, relative=True, objectSpace=True, forceOrderXYZ=True)
+        cmds.setKeyframe(node, attribute="rotate", time=20)
+        before = {t: self._world_at(node, t) for t in (1, 10, 15, 20)}
+
+        self.assertEqual(len(XformUtils.set_rotate_order(node, "auto")), 1)
+        order = cmds.getAttr(f"{node}.rotateOrder", asString=True)
+        self.assertEqual(order[0], "y", order)
+        for t in (1, 10, 20):
+            self.assertTrue(self._world_at(node, t).isEquivalent(before[t], 1e-6))
+        r10 = cmds.getAttr(f"{node}.rotate", time=10)[0]
+        r20 = cmds.getAttr(f"{node}.rotate", time=20)[0]
+        moved = [abs(b - a) > 1e-3 for a, b in zip(r10, r20)]
+        self.assertEqual(moved, [False, True, False], (r10, r20))
+
+    def test_set_rotate_order_auto_leaves_a_hinge_and_a_static_node_alone(self):
+        """A one-axis hinge is one channel in every order, and an unkeyed
+        node has no turn to read: neither is touched."""
+        cmds.setKeyframe(self.cube1, attribute="ry", time=1, value=0)
+        cmds.setKeyframe(self.cube1, attribute="ry", time=10, value=70)
+        cmds.setAttr(f"{self.cube2}.rotate", 30, 40, 50)
+        self.assertEqual(
+            XformUtils.set_rotate_order([self.cube1, self.cube2], "auto"), []
+        )
+        self.assertEqual(cmds.getAttr(f"{self.cube1}.rotateOrder"), 0)
+        self.assertEqual(cmds.getAttr(f"{self.cube2}.rotateOrder"), 0)
+
+    def test_set_rotate_order_keeps_curves_continuous(self):
+        """Each re-solved key chains to the previous one: no 360 or flip jumps."""
+        node = self.cube1
+        cmds.setAttr(f"{node}.rx", 30)
+        for t, rz in ((1, 0), (10, 170), (20, 340), (30, 510)):
+            cmds.setKeyframe(node, attribute="rz", time=t, value=rz)
+        XformUtils.set_rotate_order(node, "zxy")
+        for axis in "xyz":
+            values = cmds.keyframe(f"{node}.r{axis}", q=True, valueChange=True) or []
+            steps = [abs(b - a) for a, b in zip(values, values[1:])]
+            self.assertTrue(all(s < 180 for s in steps), f"r{axis}: {values}")
+
+    def test_set_rotate_order_static_and_driven(self):
+        """An unkeyed node keeps its pose; a constrained one is left alone."""
+        cmds.setAttr(f"{self.cube2}.rotate", 70, 20, 10)
+        before = self._world_at(self.cube2, 1)
+        XformUtils.set_rotate_order(self.cube2, 5)
+        self.assertTrue(self._world_at(self.cube2, 1).isEquivalent(before, 1e-6))
+
+        cmds.orientConstraint(self.cube2, self.sphere)
+        self.assertEqual(XformUtils.set_rotate_order(self.sphere, "zyx"), [])
+        self.assertEqual(cmds.getAttr(f"{self.sphere}.rotateOrder"), 0)
+        self.assertEqual(XformUtils.set_rotate_order([], "zyx"), [])
+        with self.assertRaises(ValueError):
+            XformUtils.set_rotate_order(self.cube2, "abc")
+
+    def test_set_rotate_order_leaves_a_locked_rotation_alone(self):
+        """A locked channel cannot take its re-solved value: changing the
+        order anyway turned the object while reporting success."""
+        for keyed in (False, True):
+            node = cmds.polyCube(name=f"locked_{int(keyed)}")[0]
+            cmds.setAttr(f"{node}.rotate", 70, 20, 10)
+            if keyed:
+                cmds.setKeyframe(node, attribute="rotate", time=1)
+            cmds.setAttr(f"{node}.rx", lock=True)
+            before = self._world_at(node, 1)
+            self.assertEqual(XformUtils.set_rotate_order(node, "zyx"), [], keyed)
+            self.assertEqual(cmds.getAttr(f"{node}.rotateOrder"), 0, keyed)
+            self.assertTrue(self._world_at(node, 1).isEquivalent(before, 1e-6), keyed)
+            # Without preserve the caller asked only for the attribute.
+            self.assertEqual(
+                len(XformUtils.set_rotate_order(node, 5, preserve=False)), 1
+            )
+
+    # -------------------------------------------------------------------------
     # Movement and Positioning Tests
     # -------------------------------------------------------------------------
 
@@ -1221,7 +1340,6 @@ class TestXformUtils(MayaTkTestCase):
     def test_freeze_transforms_skips_instanced_by_default(self):
         """Baking into a shared shape would rewrite every sibling's geometry —
         an instanced object must be skipped, leaving BOTH halves untouched."""
-        import mayatk as mtk
 
         src = cmds.polyCube(name="inst_src", width=2, height=1, depth=1)[0]
         inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
@@ -1265,7 +1383,6 @@ class TestXformUtils(MayaTkTestCase):
         Breaking the link alone is not enough — the transform would still carry
         the negative scale that exporters object to.
         """
-        import mayatk as mtk
 
         src = cmds.polyCube(name="bake_src", width=2, height=1, depth=1)[0]
         inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
@@ -1303,7 +1420,6 @@ class TestXformUtils(MayaTkTestCase):
     def test_uninstance_freeze_both_siblings_in_one_batch(self):
         """Both halves of an instanced pair in a single call: each must end up
         with its own shape and a baked scale, with neither half moving."""
-        import mayatk as mtk
 
         src = cmds.polyCube(name="pair_src", width=2, height=1, depth=1)[0]
         inst = mtk.EditUtils.mirror_instance(src, axis="x", pivot=(3.0, 0.0, 0.0))[0]
@@ -2616,12 +2732,12 @@ class TestFreezeUnlocksLockedDescendants(MayaTkTestCase):
         geo = cmds.polyCube(name="LK_GEO", w=2, h=2, d=2)[0]
         cmds.parent(geo, self.mid)
         cmds.setAttr(f"{geo}.translate", 1, 2, 3, type="double3")
-        self.geo = f"|LK_ROOT|LK_MID|LK_GEO"
+        self.geo = "|LK_ROOT|LK_MID|LK_GEO"
 
         # a locator branch: _resolve_lock_target redirects it to its child
         loc = cmds.spaceLocator(name="LK_LOC")[0]
         cmds.parent(loc, self.mid)
-        self.loc = f"|LK_ROOT|LK_MID|LK_LOC"
+        self.loc = "|LK_ROOT|LK_MID|LK_LOC"
         under_loc = cmds.polyCube(name="LK_UNDER", w=1, h=1, d=1)[0]
         cmds.parent(under_loc, loc)
         self.under_loc = f"{self.loc}|LK_UNDER"

@@ -1,43 +1,44 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Tree-widget presentation mixin for the Shot Manifest controller.
+"""The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
+the members of their shots, the shots no step pairs with), formatting, colour
+tags, assessment colouring and the behavior-label widgets.  The Start / End
+cells are :mod:`.range_column`'s.
 
-Groups every method that directly reads or writes QTreeWidget items:
-table population, formatting, range auto-fill display, collision
-painting, assessment colouring, and behavior-label widgets.
+Mixed into :class:`~.shot_manifest_controller.ShotManifestController`.
 
-Mixed into :class:`ShotManifestController` via MRO.
+Shared text: blendertk carries this module identical
+(``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
+copied over.  Only ``manifest_host.py`` differs between the two.
 """
 
 import pythontk as ptk
+from pythontk import BuilderObject, BuilderStep, StepStatus
 
-from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
-    BuilderStep,
-    BuilderObject,
-    StepStatus,
-)
-from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
-from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
-    ManifestData,
+from .behaviors import Behaviors
+from .manifest_data import (
     BEHAVIOR_STATUS_COLORS,
+    COL_BEHAVIORS,
+    COL_DESC,
+    COL_END,
+    COL_START,
+    COL_STEP,
     ERROR_COLOR,
     HEADERS,
-    STEP_ICON_COLOR,
     PASTEL_STATUS,
-    COL_STEP,
-    COL_DESC,
-    COL_BEHAVIORS,
-    COL_START,
-    COL_END,
+    STEP_ICON_COLOR,
+    ManifestData,
 )
-from mayatk.core_utils._core_utils import CoreUtils
-
+from .manifest_host import ManifestHost
 
 #: Tooltip line for an object the sheet's asset column did not list
 #: (``BuilderObject.origin``).
 _ORIGIN_NOTES = {
     "description": "Named in the step's description -- the asset column lists none.",
     "shot": "Auto-filled from the scene -- not listed in the sheet.",
+    # The members of a shot shown under its row (``_add_member_rows``).
+    "member": "In the step's shot, not listed in the manifest.",
+    "orphan_member": "A member of this shot.",
 }
 
 #: Object statuses about a behavior (counted on the step's Behaviors cell).
@@ -55,37 +56,22 @@ class ManifestTableMixin:
     Expects the host class to provide:
 
     - ``self.ui``  – the loaded UI with ``tbl_steps`` tree widget.
-    - ``self._steps``  – current list of :class:`BuilderStep`.
-    - ``self._user_ranges``  – dict of user-entered range overrides.
-    - ``self._last_resolved``  – last resolved range list.
+    - ``self._steps`` / ``self._sheet_steps``  – the steps shown, and the
+      source's own.
     - ``self._last_results``  – last assessment result list.
     - ``self._is_built``  – whether shots have been built.
-    - ``self._resolve_ranges()``  – range resolution entry point.
     - ``self._update_build_button()``  – button-state refresh.
     - ``self._set_footer(text, *, color)``  – footer label helper.
     - ``self._settings``  – :class:`SettingsManager` instance.
+    - ``self._editor``  – the :class:`ManifestEditor` (Local Edits).
+    - ``self._row_tags``  – the tree's ``RowTags`` (colour strip).
+    - ``self._active_store()`` / ``self._active_mapping``  – the scene's
+      store and the effective mapping template.
+    - ``self._rows()``  – the table's ``(step, shot)`` rows (``ShotPairing.rows``).
+    - ``self._locked_step_ids()``  – the steps whose shot is locked.
+    - the Start / End column's ``_restore_user_ranges()`` /
+      ``_refresh_timing()`` (``RangeColumnMixin`` / ``StoreFollowMixin``).
     """
-
-    @staticmethod
-    def _resolve_object_icon(obj_data, obj_name):
-        """Return a QIcon for a BuilderObject row, or ``None``.
-
-        Audio rows use the known node type directly so the icon resolves
-        even when the DG node hasn't been created yet.  Scene rows go
-        through the standard :class:`NodeIcons` scene-node lookup.
-        """
-        node_icons_cls = ManifestData.try_load_maya_icons()
-        if node_icons_cls is None:
-            return None
-        if isinstance(obj_data, BuilderObject) and obj_data.kind == "audio":
-            # Known type — bypass objExists check
-            from qtpy.QtGui import QIcon
-
-            icon = QIcon(f":/{node_icons_cls.icon_name_for_type('audio')}")
-            return icon if not icon.isNull() else None
-        return node_icons_cls.get_icon(obj_name)
-
-    # -- display settings --------------------------------------------------
 
     @property
     def _use_short_names(self) -> bool:
@@ -95,7 +81,25 @@ class ManifestTableMixin:
             return True
         return not settings.value("long_names", False)
 
-    # -- tree state save / restore -----------------------------------------
+    @staticmethod
+    def _row_key(item):
+        """What a top-level row is across redraws: its step's ID (a rename
+        changes the text, never the ID), else its text."""
+        from qtpy.QtCore import Qt
+
+        data = item.data(0, Qt.UserRole)
+        return data.step_id if isinstance(data, BuilderStep) else item.text(0)
+
+    def _row_icon(self, item) -> str:
+        """The icon of a top-level row: a lock for a step whose shot is
+        locked (final: Build leaves it, Local Edits refuse it), else a step."""
+        from qtpy.QtCore import Qt
+
+        data = item.data(0, Qt.UserRole)
+        locked = getattr(self, "_locked_rows", ())
+        if isinstance(data, BuilderStep) and data.step_id in locked:
+            return "lock"
+        return "step"
 
     def _save_tree_state(self):
         """Return expansion state and scroll position for later restore."""
@@ -104,7 +108,7 @@ class ManifestTableMixin:
         for i in range(tree.topLevelItemCount()):
             item = tree.topLevelItem(i)
             if item.isExpanded():
-                expanded.add(item.text(0))  # step_id column
+                expanded.add(self._row_key(item))
         scroll_val = tree.verticalScrollBar().value()
         return expanded, scroll_val
 
@@ -114,11 +118,9 @@ class ManifestTableMixin:
         tree = self.ui.tbl_steps
         for i in range(tree.topLevelItemCount()):
             item = tree.topLevelItem(i)
-            if item.text(0) in expanded:
+            if self._row_key(item) in expanded:
                 item.setExpanded(True)
         tree.verticalScrollBar().setValue(scroll_val)
-
-    # -- behavior label widgets --------------------------------------------
 
     def _color_behavior_label(self, obj, label, step_id: str = None) -> None:
         """Set the label HTML and tooltip using the latest assessment data.
@@ -146,9 +148,14 @@ class ManifestTableMixin:
             else:
                 broken = list(obj_st.broken_behaviors or [])
                 stale = list(obj_st.stale_behaviors or [])
+        off = self._disabled_behaviors()
         label.setText(
             ManifestData.format_behavior_html(
-                obj.behaviors, broken=broken, status_color=status_color, stale=stale
+                obj.behaviors,
+                broken=broken,
+                status_color=status_color,
+                stale=stale,
+                disabled=off,
             )
         )
         # Build a per-behavior status tooltip
@@ -157,6 +164,9 @@ class ManifestTableMixin:
             lines = []
             for b in obj.behaviors:
                 display = ManifestData.fmt_behavior(b)
+                if b in off:
+                    lines.append(f"\u2013 {display}  (turned off -- header menu)")
+                    continue
                 if b in stale:
                     lines.append(
                         f"\u21bb {display}  (keyed under an older effect "
@@ -203,6 +213,12 @@ class ManifestTableMixin:
         def _show_menu():
             from uitk.widgets.menu import Menu
 
+            if self._editor.refuse_viewing():
+                return
+            step = next((s for s in self._steps if s.step_id == step_id), None)
+            if self._editor.refuse_locked(step):
+                return
+
             menu = Menu(
                 parent=label,
                 position="cursorPos",
@@ -222,24 +238,26 @@ class ManifestTableMixin:
                 chk.setProperty("behavior_raw", raw_name)
                 cbs.append(chk)
             menu.on_hidden.connect(
-                lambda: self._on_behaviors_changed(obj, label, cbs, step_id)
+                lambda: self._on_behaviors_changed(obj, cbs, step_id)
             )
+            # One menu per click, parented to the label: else every click
+            # left a hidden menu behind until the table was next drawn.
+            menu.on_hidden.connect(menu.deleteLater)
             menu.show()
 
         self._color_behavior_label(obj, label, step_id=step_id)
         label.clicked.connect(_show_menu)
         tree.setItemWidget(child_item, COL_BEHAVIORS, label)
 
-    def _on_behaviors_changed(self, obj, label, checkboxes, step_id=None) -> None:
-        """Update BuilderObject.behaviors when checkboxes change."""
-        obj.behaviors = [
+    def _on_behaviors_changed(self, obj, checkboxes, step_id=None) -> None:
+        """Record the ticked behaviors as a Local Edit of *obj*
+        (``ManifestEditor.set_behaviors``): the table redraws with them, and
+        a Build is due -- it applies them, or releases the unticked ones' keys."""
+        behaviors = [
             chk.property("behavior_raw") for chk in checkboxes if chk.isChecked()
         ]
-        self._color_behavior_label(obj, label, step_id=step_id)
-        # A ticked or unticked behavior is the doc changing under the last
-        # Assess: a Build would act on it (apply it, or release its keys).
-        self._behaviors_edited = True
-        self._update_build_button()
+        if behaviors != obj.behaviors:
+            self._editor.set_behaviors(step_id, obj, behaviors)
 
     def _reapply_behavior(
         self, step_id: str, obj: BuilderObject, raise_errors: bool = False
@@ -291,19 +309,25 @@ class ManifestTableMixin:
             raise RuntimeError(problem)
         return False
 
-    # -- table population --------------------------------------------------
-
     def _populate_table(self) -> None:
-        """Fill the TreeWidget with parsed steps and expandable object rows."""
+        """Fill the tree with the manifest's rows (``ShotPairing.rows``): a
+        step row per step -- its objects, then the members of its shot it does
+        not list -- and a "not in doc" row per shot no step pairs with, its
+        members under it, where the timeline has it."""
         tree = self.ui.tbl_steps
         tree.clear()
         tree.setHeaderLabels(HEADERS)
         tree.setColumnCount(len(HEADERS))
         pairing = self._pairing()
+        # The steps whose shot is locked: their rows draw a lock (_row_icon).
+        self._locked_rows = self._locked_step_ids(pairing)
 
         _kind_cache: dict = {}
 
-        for step in self._steps:
+        for step, shot in self._rows(pairing):
+            if step is None:
+                self._add_shot_row(tree, shot)
+                continue
             section = (
                 f"{step.section}: {step.section_title}"
                 if step.section_title
@@ -311,7 +335,7 @@ class ManifestTableMixin:
             )
 
             parent = tree.create_item(
-                [step.step_id, section, step.display_text, "", "", ""],
+                [step.shot_name, section, step.display_text, "", "", ""],
                 data=step,
             )
             if pairing.how.get(step.step_id) == "order":
@@ -323,7 +347,9 @@ class ManifestTableMixin:
             # Child rows: object name in Description column, behavior label
             for obj in step.objects:
                 display = (
-                    CoreUtils.leaf_name(obj.name) if self._use_short_names else obj.name
+                    ManifestHost.leaf_name(obj.name)
+                    if self._use_short_names
+                    else obj.name
                 )
                 child = tree.create_item(
                     ["", "", display, "", "", ""],
@@ -347,6 +373,10 @@ class ManifestTableMixin:
                 self._make_behavior_label(
                     obj, tree, child, _kind_cache[obj.kind], step.step_id
                 )
+            if shot is not None:
+                self._add_member_rows(
+                    tree, parent, shot, listed=[o.name for o in step.objects]
+                )
 
         # Restrict editability: only Range column on parent rows, and only
         # for steps that aren't built yet — per row, not all-or-nothing,
@@ -356,8 +386,8 @@ class ManifestTableMixin:
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
             step = parent.data(0, _Qt.UserRole)
-            editable = isinstance(step, BuilderStep) and not self._step_is_built(
-                step.step_id
+            editable = (
+                isinstance(step, BuilderStep) and step.step_id not in pairing.shots
             )
             if editable:
                 parent.setFlags(parent.flags() | _Qt.ItemIsEditable)
@@ -367,46 +397,133 @@ class ManifestTableMixin:
                 child = parent.child(j)
                 child.setFlags(child.flags() & ~_Qt.ItemIsEditable)
 
-        # Shots no doc step pairs with: listed, never removed by a build.
-        self._add_orphan_rows(tree, self._orphan_shots(pairing))
+        self._shown_pairing = self._pairing_key(pairing)
 
-        # Restore user-entered range values that survive table rebuilds
+        # Restore user-entered range values that survive table rebuilds,
+        # then the built rows' live ranges: the store is their truth.
         self._restore_user_ranges(tree)
+        self._refresh_timing()
 
         self._apply_formatting(tree)
+        self._apply_row_tags(tree)
         tree.set_stretch_column(2)  # Stretch "Description" column
         tree.restore_column_state()  # Persist user header changes
+        self._editor.decorate()
 
-    def _add_orphan_rows(self, tree, shots) -> None:
-        """One italic, non-editable "not in doc" row per shot in *shots*; its
-        context menu offers the explicit Remove."""
+    def _add_shot_row(self, tree, shot):
+        """An italic, non-editable "not in doc" row for *shot* -- a shot no
+        step pairs with -- its members under it; its context menu adds it to
+        the manifest, pairs it with a step, or removes it."""
         from qtpy.QtCore import Qt
         from qtpy.QtGui import QBrush, QColor
 
         fg, _bg = PASTEL_STATUS.get("not_in_doc", (None, None))
         tip = StepStatus.HELP["not_in_doc"]
-        for shot in shots:
-            row = tree.create_item(
-                [
-                    shot.name,
-                    "",
-                    shot.description or "",
-                    "",
-                    f"{shot.start:.0f}",
-                    f"{shot.end:.0f}",
-                ],
-                data=shot,
+        row = tree.create_item(
+            [
+                shot.name,
+                "",
+                shot.description or "",
+                "",
+                f"{shot.start:.0f}",
+                f"{shot.end:.0f}",
+            ],
+            data=shot,
+        )
+        row.setFlags(row.flags() & ~Qt.ItemIsEditable)
+        font = row.font(COL_STEP)
+        font.setItalic(True)
+        for c in range(tree.columnCount()):
+            row.setFont(c, font)
+            row.setToolTip(c, tip)
+            if fg:
+                row.setForeground(c, QBrush(QColor(fg)))
+        self._add_member_rows(tree, row, shot, in_step=False)
+        return row
+
+    def _add_member_rows(self, tree, parent, shot, listed=(), in_step=True) -> None:
+        """A child row under *parent* per member of *shot* not among *listed*
+        (names, compared as ``ShotStore.member_key`` does): the shot's own
+        objects, shown before any Assess -- italic, never editable; under a
+        step (*in_step*) in the ``additional`` colours: in the shot, not in
+        the step.
+
+        Each row's data is a ``BuilderObject`` of origin ``"member"``: the
+        object rows' own actions (Outliner, Copy) reach it, Local Edits do
+        not -- the sheet does not list it.
+        """
+        from qtpy.QtCore import Qt
+        from qtpy.QtGui import QBrush, QColor
+
+        key = ptk.ShotStore.member_key
+        seen = {key(n) for n in listed}
+        a_fg, a_bg = (
+            PASTEL_STATUS.get("additional", (None, None)) if in_step else (None, None)
+        )
+        tip = _ORIGIN_NOTES["member" if in_step else "orphan_member"]
+        for name in shot.objects:
+            if key(name) in seen:
+                continue
+            seen.add(key(name))
+            display = ManifestHost.leaf_name(name) if self._use_short_names else name
+            child = tree.create_item(
+                ["", "", display, "", "", ""],
+                data=BuilderObject(name=name, origin="member"),
+                parent=parent,
             )
-            row.setFlags(row.flags() & ~Qt.ItemIsEditable)
-            font = row.font(COL_STEP)
+            child.setFlags(child.flags() & ~Qt.ItemIsEditable)
+            font = child.font(COL_DESC)
             font.setItalic(True)
             for c in range(tree.columnCount()):
-                row.setFont(c, font)
-                row.setToolTip(c, tip)
-                if fg:
-                    row.setForeground(c, QBrush(QColor(fg)))
+                child.setFont(c, font)
+                if a_fg:
+                    child.setForeground(c, QBrush(QColor(a_fg)))
+                if a_bg:
+                    child.setBackground(c, QBrush(QColor(a_bg)))
+            child.setToolTip(COL_DESC, f"{name}\n{tip}" if display != name else tip)
 
-    # -- formatting --------------------------------------------------------
+    def _step_items(self, step_ids) -> list:
+        """The step rows of *step_ids*, in table order."""
+        from qtpy.QtCore import Qt
+
+        wanted = set(step_ids)
+        tree = self.ui.tbl_steps
+        items = []
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            step = item.data(0, Qt.UserRole)
+            if isinstance(step, BuilderStep) and step.step_id in wanted:
+                items.append(item)
+        return items
+
+    def _apply_row_tags(self, tree) -> None:
+        """Colour the step rows: the user's tags (the scene's, for the loaded
+        sheet) over the template's automatic ``color_by``; an object row
+        shows its step's (``RowTags`` inheritance).  A "not in doc" row takes
+        the automatic colour of the step row above it: it sits inside that
+        span of the timeline, and a gap in the strip there read as a section
+        boundary."""
+        from qtpy.QtCore import Qt
+
+        tags = self._row_tags
+        user = ptk.ManifestTags.read(self._active_store(), self._editor.source_key)
+        rule = (self._active_mapping or {}).get("color_by", "none")
+        auto = ptk.ManifestTags.auto(
+            [*self._sheet_steps, *self._steps], rule, tags.slots
+        )
+        above = None
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            step = item.data(0, Qt.UserRole)
+            if not isinstance(step, BuilderStep):
+                if above:
+                    tags.set_tag([item], above, auto=True)
+                continue
+            if step.step_id in user:
+                tags.set_tag([item], user[step.step_id])
+            above = auto.get(step.step_id)
+            if above:
+                tags.set_tag([item], above, auto=True)
 
     def _apply_formatting(self, tree) -> None:
         """Set column/row tints, behavior colors, icons, and column widths."""
@@ -415,7 +532,7 @@ class ManifestTableMixin:
 
         content_col = COL_DESC
 
-        # Row tints via delegate (fillRect bypasses Maya QSS stripping).
+        # Row tints via delegate (fillRect bypasses the host's QSS stripping).
         tree._child_row_color = QColor(0, 0, 0, 55)
 
         # Column tints — darken Step and Behaviors columns
@@ -426,16 +543,16 @@ class ManifestTableMixin:
         # Icons: step icon on parents, type-coded icon on child Content column
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
-            tree.set_item_icon(parent, "step", color=STEP_ICON_COLOR)
+            tree.set_item_icon(parent, self._row_icon(parent), color=STEP_ICON_COLOR)
             for j in range(parent.childCount()):
                 child = parent.child(j)
                 obj_name = child.text(content_col)
                 if not obj_name:
                     continue
                 obj_data = child.data(0, Qt.UserRole)
-                maya_icon = self._resolve_object_icon(obj_data, obj_name)
-                if maya_icon is not None:
-                    child.setIcon(content_col, maya_icon)
+                icon = ManifestHost.object_icon(obj_data, obj_name)
+                if icon is not None:
+                    child.setIcon(content_col, icon)
                 else:
                     # Neutral grey before assessment; assessment will repaint
                     # with the actual status color if there's a problem.
@@ -454,177 +571,6 @@ class ManifestTableMixin:
         # Run registered formatters
         tree.apply_formatting()
 
-    # -- range display (auto-fill / revert / restore) ----------------------
-
-    def _auto_fill_ranges(self, resolved=None) -> list:
-        """Auto-fill the Range column using resolved ranges.
-
-        User-entered values are preserved; auto-filled values appear dim
-        and italic.
-
-        Parameters
-        ----------
-        resolved
-            Pre-computed resolved ranges.  When ``None``,
-            :meth:`_resolve_ranges` is called internally.
-
-        Returns
-        -------
-        list
-            The resolved ranges list (for reuse by collision validation).
-        """
-        if resolved is None:
-            resolved = self._resolve_ranges()
-        if not resolved:
-            return resolved
-
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        tree = self.ui.tbl_steps
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
-        step_map = {r[0]: r for r in resolved}
-
-        tree.blockSignals(True)
-        try:
-            for i in range(tree.topLevelItemCount()):
-                parent = tree.topLevelItem(i)
-                step_data = parent.data(0, Qt.UserRole)
-                if not isinstance(step_data, BuilderStep):
-                    continue
-                entry = step_map.get(step_data.step_id)
-                if entry is None:
-                    continue
-                step_id, start, end, is_user = entry
-                parent.setText(COL_START, f"{start:.0f}")
-                if end is not None:
-                    parent.setText(COL_END, f"{end:.0f}")
-                else:
-                    parent.setText(COL_END, "")
-                for col in (COL_START, COL_END):
-                    font = parent.font(col)
-                    if not is_user:
-                        parent.setForeground(col, dim)
-                        font.setItalic(True)
-                    else:
-                        font.setItalic(False)
-                    parent.setFont(col, font)
-        finally:
-            tree.blockSignals(False)
-        return resolved
-
-    def _validate_range_collisions(self, resolved=None) -> int:
-        """Check adjacent ranges for ordering violations and color conflicts.
-
-        Resets Start/End column foreground on all items, then recolors
-        collision participants in pastel red.
-
-        Returns the number of collisions found.
-        """
-        if resolved is None:
-            resolved = self._resolve_ranges()
-        if len(resolved) < 2:
-            return 0
-
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        tree = self.ui.tbl_steps
-        c_fg, c_bg = PASTEL_STATUS["collision"]
-        collision_fg = QBrush(QColor(c_fg))
-        collision_bg = QBrush(QColor(c_bg))
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
-        collisions = 0
-
-        # Build a map of step_id → tree item for quick lookup
-        item_map: dict = {}
-        resolved_map: dict = {}
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep):
-                item_map[step_data.step_id] = parent
-        for r in resolved:
-            resolved_map[r[0]] = r
-
-        # Block signals to prevent _on_item_changed from firing
-        # recursively while we update foregrounds/tooltips.
-        tree.blockSignals(True)
-        try:
-            # First pass: reset foreground, background, and tooltip for all range cells
-            for sid, item in item_map.items():
-                entry = resolved_map.get(sid)
-                is_user = entry[3] if entry else False
-                brush = QBrush() if is_user else dim
-                for col in (COL_START, COL_END):
-                    item.setForeground(col, brush)
-                    item.setBackground(col, QBrush())
-                    item.setToolTip(col, "")
-
-            # Second pass: mark collision items
-            for curr_id, next_id in ptk.RangeResolver.find_collisions(resolved):
-                collisions += 1
-                for sid in (curr_id, next_id):
-                    item = item_map.get(sid)
-                    if item is not None:
-                        for col in (COL_START, COL_END):
-                            item.setForeground(col, collision_fg)
-                            item.setBackground(col, collision_bg)
-                            item.setToolTip(
-                                col,
-                                "Range collision: overlaps with adjacent step",
-                            )
-        finally:
-            tree.blockSignals(False)
-
-        return collisions
-
-    def _revert_range_cell(self, item, step_id: str) -> None:
-        """Revert Start/End cells to their last resolved values after a rejected edit."""
-        tree = self.ui.tbl_steps
-        tree.blockSignals(True)
-        for entry in self._last_resolved:
-            if entry[0] == step_id:
-                _, s, e, _ = entry
-                item.setText(COL_START, f"{s:.0f}")
-                item.setText(COL_END, f"{e:.0f}" if e is not None else "")
-                break
-        else:
-            item.setText(COL_START, "")
-            item.setText(COL_END, "")
-        tree.blockSignals(False)
-
-    def _restore_user_ranges(self, tree) -> None:
-        """Write ``_user_ranges`` values back into Start/End cells after a table rebuild."""
-        from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
-
-        dim = QBrush(QColor(PASTEL_STATUS["locked"][0]))
-        tree.blockSignals(True)
-        try:
-            for i in range(tree.topLevelItemCount()):
-                parent = tree.topLevelItem(i)
-                step_data = parent.data(0, Qt.UserRole)
-                if not isinstance(step_data, BuilderStep):
-                    continue
-                user_range = self._user_ranges.get(step_data.step_id)
-                if user_range is None:
-                    # Auto-filled values appear dim (set by assess/auto-fill later)
-                    if parent.text(COL_START):
-                        parent.setForeground(COL_START, dim)
-                        parent.setForeground(COL_END, dim)
-                    continue
-                start, end = user_range
-                parent.setText(COL_START, f"{start:.0f}")
-                if end is not None:
-                    parent.setText(COL_END, f"{end:.0f}")
-                else:
-                    parent.setText(COL_END, "")
-        finally:
-            tree.blockSignals(False)
-
-    # -- assessment display ------------------------------------------------
-
     def _apply_assessment(self, results: list) -> None:
         """Walk tree items and apply pastel colors + tooltips from results."""
         from qtpy.QtCore import Qt
@@ -634,8 +580,8 @@ class ManifestTableMixin:
         col_count = tree.columnCount()
         content_col = COL_DESC
         beh_col = COL_BEHAVIORS
-        # Fresh results answer for every behavior edit made before them.
-        self._behaviors_edited = False
+        # Fresh results answer for every Local Edit made before them.
+        self._edited_since_assess = False
 
         status_map = {r.step_id: r for r in results}
 
@@ -690,7 +636,7 @@ class ManifestTableMixin:
             # Recolor step icon and step text to reflect status
             fg_hex, _ = PASTEL_STATUS.get(step_status.status, (None, None))
             icon_color = fg_hex or STEP_ICON_COLOR
-            tree.set_item_icon(parent, "step", color=icon_color)
+            tree.set_item_icon(parent, self._row_icon(parent), color=icon_color)
             if fg_hex:
                 parent.setForeground(COL_STEP, QBrush(QColor(fg_hex)))
             else:
@@ -743,13 +689,11 @@ class ManifestTableMixin:
 
                 if obj_st.status == "valid":
                     # Re-resolve icon: initial formatting may have set a
-                    # fallback X because the DG node didn't exist yet
+                    # fallback X because the node didn't exist yet
                     # (common for audio clips before build).
-                    maya_icon = self._resolve_object_icon(
-                        child_data, child.text(content_col)
-                    )
-                    if maya_icon is not None:
-                        child.setIcon(content_col, maya_icon)
+                    icon = ManifestHost.object_icon(child_data, child.text(content_col))
+                    if icon is not None:
+                        child.setIcon(content_col, icon)
                     continue
 
                 c_fg, c_bg = PASTEL_STATUS.get(obj_st.status, (None, None))
@@ -763,7 +707,9 @@ class ManifestTableMixin:
                         child.setBackground(c, bg)
 
                 if obj_st.status == "missing_object":
-                    child.setToolTip(content_col, "Object not found in Maya")
+                    child.setToolTip(
+                        content_col, f"Object not found in {ManifestHost.APP}"
+                    )
                 elif obj_st.status == "missing_behavior":
                     lines = []
                     for b in obj_st.broken_behaviors or obj_st.behaviors:
@@ -785,13 +731,21 @@ class ManifestTableMixin:
                         f"User-animated: keys {obj_st.key_range[0]:.0f}-{obj_st.key_range[1]:.0f}",
                     )
 
-            # Additional objects (in shot but not in CSV)
-            if step_status.additional_objects:
+            # Additional objects (in shot but not in CSV): the shot's members
+            # are listed already (_add_member_rows); what animates in its
+            # range without being one is added.
+            key = ptk.ShotStore.member_key
+            listed = {
+                key(parent.child(j).data(0, Qt.UserRole).name)
+                for j in range(parent.childCount())
+                if isinstance(parent.child(j).data(0, Qt.UserRole), BuilderObject)
+            }
+            extras = [n for n in step_status.additional_objects if key(n) not in listed]
+            if extras:
                 a_fg, a_bg = PASTEL_STATUS.get("additional", (None, None))
-                node_icons_cls = ManifestData.try_load_maya_icons()
-                for extra_name in step_status.additional_objects:
+                for extra_name in extras:
                     display = (
-                        CoreUtils.leaf_name(extra_name)
+                        ManifestHost.leaf_name(extra_name)
                         if self._use_short_names
                         else extra_name
                     )
@@ -816,17 +770,14 @@ class ManifestTableMixin:
                         bg = QBrush(QColor(a_bg))
                         for c in range(col_count):
                             extra_item.setBackground(c, bg)
-                    if node_icons_cls:
-                        maya_icon = node_icons_cls.get_icon(extra_name)
-                        if maya_icon is not None:
-                            extra_item.setIcon(content_col, maya_icon)
+                    icon = ManifestHost.object_icon(None, extra_name)
+                    if icon is not None:
+                        extra_item.setIcon(content_col, icon)
 
-    # -- expand helpers ----------------------------------------------------
+        self._editor.decorate()
 
     def expand_missing(self) -> None:
         """Expand all step rows that have missing objects, behaviors, or additional objects."""
-        from qtpy.QtCore import Qt
-
         if not self._last_results:
             self._set_footer("Build first to detect issues.")
             return
@@ -867,17 +818,11 @@ class ManifestTableMixin:
         self.logger.info("Expand Missing (%d steps):\n%s", len(lines), "\n".join(lines))
         self._set_footer(f"{len(problem_ids)} step(s) with issues expanded.")
 
-        tree = self.ui.tbl_steps
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep) and step_data.step_id in problem_ids:
-                parent.setExpanded(True)
+        for item in self._step_items(problem_ids):
+            item.setExpanded(True)
 
     def expand_extra(self) -> None:
         """Expand all step rows that have scene-discovered extra objects."""
-        from qtpy.QtCore import Qt
-
         if not self._last_results:
             self._set_footer("Assess or build first to detect extra objects.")
             return
@@ -887,9 +832,5 @@ class ManifestTableMixin:
             self._set_footer("No extra objects found.")
             return
 
-        tree = self.ui.tbl_steps
-        for i in range(tree.topLevelItemCount()):
-            parent = tree.topLevelItem(i)
-            step_data = parent.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep) and step_data.step_id in extra_ids:
-                parent.setExpanded(True)
+        for item in self._step_items(extra_ids):
+            item.setExpanded(True)

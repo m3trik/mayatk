@@ -115,8 +115,9 @@ class _TaskDefinitionsMixin:
                         "would otherwise drop it.",
                         "Refreshed from the live scene at export; no-op when there "
                         "is no metadata to carry.",
-                        "A readable copy is also written beside the export as "
-                        ".scene_data.json.",
+                        "The exporter keeps its own record of what shipped "
+                        "(.scene_data.json) in your user settings, never beside "
+                        "the export.",
                         "This ships the metadata only — it never changes the "
                         "animation. Splitting the timeline into clips is "
                         "<b>Animation Clips</b>.",
@@ -284,7 +285,13 @@ class _TaskDefinitionsMixin:
                         "Lightmap files are never moved — only the marker's "
                         "recorded folder changes. To gather them into the "
                         "project use Texture Path Editor ▸ Find &amp; Copy.",
-                        "Permanent scene change — not reverted after export.",
+                        "A rebind is a permanent scene change — not reverted "
+                        "after export.",
+                        "A path that resolves only in your active project (Auto "
+                        "Set Workspace switched to the scene's own for the "
+                        "write) is not a broken link: the write reads it from "
+                        "there and the scene keeps its own path — nothing is "
+                        "changed for good.",
                     ],
                 ),
                 "setChecked": True,
@@ -434,8 +441,8 @@ class _TaskDefinitionsMixin:
                         "per-map-type container decides.",
                         "<b>PNG … HDR</b> — write every map as that format.",
                         "<b>KTX2</b> — GPU-compressed Basis for web/XR "
-                        "runtimes (UASTC for normals/data, ETC1S for color; "
-                        "lightmaps stay lossless WebP). Ships only inside a "
+                        "runtimes (UASTC for normals, data and lightmaps, ETC1S "
+                        "for color). Ships only inside a "
                         "GLB, as KTX2 alone: the smallest deliverable, but it "
                         "needs a basisu-capable viewer (three.js KTX2Loader) "
                         "— Blender, Unreal or stock Unity cannot read its "
@@ -1143,24 +1150,6 @@ class _TaskDefinitionsMixin:
                 ),
                 "setChecked": True,
             },
-            "check_uv_snapshots": {
-                "widget_type": "QCheckBox",
-                "group": "Geometry",
-                "setText": "Check For Leftover UV Snapshots",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Leftover UV Snapshots",
-                    body="Fails the export when a mesh in the set still carries a "
-                    "<b>_uv_snap_*</b> backup UV set an interrupted Auto Unwrap "
-                    "left behind.",
-                    notes=[
-                        "The FBX writes it as a real UV set, and as the second "
-                        "one it becomes TEXCOORD_1, the channel lightmaps read.",
-                        "Reported, never removed: the next Auto Unwrap of the "
-                        "mesh sweeps it.",
-                    ],
-                ),
-                "setChecked": True,
-            },
             "check_objects_below_floor": {
                 # A depth is a bounded number, so it gets a spin box (same
                 # rationale as the size and path budgets): the value IS how far
@@ -1256,8 +1245,9 @@ class _TaskDefinitionsMixin:
                         "FBX plug-in silently cannot embed.",
                         "A path that fits on this machine can still break on one "
                         "without long paths enabled (260 characters).",
-                        "Sidecars written beside the export are longer than the "
-                        "export path itself, so leave headroom.",
+                        "Files an importer derives from the export (an FBX's "
+                        ".fbm media folder) are longer than the export path "
+                        "itself, so leave headroom.",
                         "Set to 0 (OFF) to disable.",
                     ],
                 ),

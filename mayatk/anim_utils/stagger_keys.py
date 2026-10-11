@@ -1,14 +1,13 @@
 # coding=utf-8
 """Dedicated stagger-keys module to keep AnimUtils lean and testable."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 try:
     import maya.cmds as cmds
 except ImportError:  # pragma: no cover - Maya environment required
     cmds = None
 
-import pythontk as ptk
 
 # Import CoreUtils using internal path to avoid circular imports
 from mayatk.core_utils._core_utils import CoreUtils
@@ -35,6 +34,8 @@ class StaggerKeys:
         ignore_visibility_holds: bool = True,
         verbose: bool = False,
         verbose_header: str = None,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Stagger the keyframes of selected objects with various positioning controls.
 
@@ -80,6 +81,13 @@ class StaggerKeys:
                 bridging gaps between segments.
             verbose: If True, prints detailed information including original time ranges.
             verbose_header: Optional custom text to prefix the verbose output headers.
+            on_replace: ``on_replace(curve, frames)`` hears the keys a staggered
+                segment lands on and replaces -- the next segment's start key,
+                where end-to-start placement lays a split curve's segments --
+                what the shot system releases its claims on.
+            on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames of
+                the keys staggered -- what the shot system carries its claims
+                along on. Mirror of blendertk's.
         """
         # Import shared helpers
         from mayatk.anim_utils._anim_utils import AnimUtils
@@ -172,6 +180,8 @@ class StaggerKeys:
             use_intervals=use_intervals,
             avoid_overlap=avoid_overlap,
             preserve_gaps=False,
+            on_replace=on_replace,
+            on_move=on_move,
         )
 
         # Ensure visibility tangents are always step, regardless of smooth_tangents

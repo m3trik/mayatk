@@ -77,6 +77,29 @@ class _TaskDataMixin:
     _shear_verdict: Optional[Dict[str, Any]] = None
     _assess_cache: Dict[tuple, Any]
 
+    # -- report lines a plain logger can carry ------------------------------
+    # A TaskManager driven directly takes any logger, and the toolkit's report
+    # extras (links, grouped listings) exist only on a LoggerExt-patched one:
+    # called unguarded, they raised AttributeError the moment a task or check
+    # had something to report. Each falls back to plain text instead.
+
+    def _log_link(self, text: str, action: str, **params: str) -> str:
+        """``logger.log_link`` where the logger builds links, else plain text:
+        *text*, with the file a link would open."""
+        build = getattr(self.logger, "log_link", None)
+        if build is not None:
+            return build(text, action, **params)
+        return f"{text}: {params['filepath']}" if "filepath" in params else text
+
+    def _log_group(self, title: str, items: List[str]) -> None:
+        """``logger.log_group`` where the logger has it, else ONE plain INFO
+        record: *title*, then each item on its own indented line."""
+        group = getattr(self.logger, "log_group", None)
+        if group is not None:
+            group(title, items)
+        else:
+            self.logger.info("\n".join([title, *(f"  {item}" for item in items)]))
+
     @property
     def export_path(self) -> str:
         """The deliverable this run writes (``run.export_path``).

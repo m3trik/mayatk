@@ -257,7 +257,7 @@ class TestSceneImportRendering(unittest.TestCase):
         that page cannot hold (Cyrillic on cp1252) the bake's ``cmds.file`` said
         "File not found" / "An invalid path was specified". The intermediate and
         the ``.ma`` reach the template in their 8.3 form, names kept."""
-        where = self._cyrillic_dir()
+        where = self._non_ansi_dir()
         src = os.path.join(where, "conv.fbx")
         with open(src, "w") as fh:
             fh.write("fbx")
@@ -272,13 +272,13 @@ class TestSceneImportRendering(unittest.TestCase):
         self.assertTrue(os.path.samefile(os.path.dirname(got_out), where))
         self.assertEqual(os.path.basename(got_out), "baked.ma")
 
-    def _cyrillic_dir(self):
+    def _non_ansi_dir(self):
         """A folder cp1252 cannot hold, or a skip where 8.3 names are unavailable."""
         if os.name != "nt":
             self.skipTest("the ANSI code page is Windows'")
         here = os.path.dirname(os.path.abspath(__file__))
         root = os.path.join(here, "temp_tests", f"host {os.getpid()}")
-        where = os.path.join(root, "Jos\u00e9 \u0416\u0443\u043a")
+        where = os.path.join(root, "Zo\u00eb \u2605")
         os.makedirs(where)
         self.addCleanup(shutil.rmtree, root, True)
         if not (ptk.AppLauncher._short_name(where) or "").isascii():
@@ -287,11 +287,11 @@ class TestSceneImportRendering(unittest.TestCase):
 
     def test_the_host_imports_the_payload_through_a_path_maya_can_open(self):
         """The HOST Maya reads the Blender conversion's payload from %TEMP% too:
-        with TEMP under "José Жук" its ``cmds.file`` import said "File not found"
-        (measured, fresh mayapy host). It is handed the 8.3 form."""
+        with TEMP under a Cyrillic name its ``cmds.file`` import said "File not
+        found" (measured, fresh mayapy host). It is handed the 8.3 form."""
         from unittest import mock
 
-        where = self._cyrillic_dir()
+        where = self._non_ansi_dir()
         payload = os.path.join(where, "conv.fbx")
         with open(payload, "w") as fh:
             fh.write("fbx")
@@ -317,7 +317,7 @@ class TestSceneImportRendering(unittest.TestCase):
         import glob
         import sys
 
-        where = self._cyrillic_dir()
+        where = self._non_ansi_dir()
         png = os.path.join(where, "crate_BaseColor.png")
         with open(png, "wb") as fh:
             fh.write(b"png")
@@ -356,11 +356,11 @@ class TestSceneImportRendering(unittest.TestCase):
 
     def test_the_bake_returns_a_path_the_host_can_reference(self):
         """``bake_scene`` returns the ``.ma`` the host passes to
-        ``cmds.file(reference=True)``; under TEMP "José Жук" that reference loaded
-        nothing (measured). It returns the 8.3 form."""
+        ``cmds.file(reference=True)``; under a TEMP named in Cyrillic that
+        reference loaded nothing (measured). It returns the 8.3 form."""
         from unittest import mock
 
-        where = self._cyrillic_dir()
+        where = self._non_ansi_dir()
         src = os.path.join(where, "scene.fbx")
         baked = os.path.join(where, "baked.ma")
         for path in (src, baked):
@@ -5491,6 +5491,357 @@ class TestUsdFastPathConform(MayaTkTestCase):
         self.assertIn("tall", [node.rsplit("|", 1)[-1] for node in imported])
         self.assertIn("tall_conform", imported)
         self.assertTrue(all(cmds.objExists(node) for node in imported), imported)
+
+
+def _triangle_glb(path):
+    """A one-triangle .glb: node "Tri" 1 m up, one untextured material."""
+    import struct as _struct
+
+    positions = _struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
+    indices = _struct.pack("<3H", 0, 1, 2) + b"\x00\x00"
+    blob = positions + indices
+    gltf = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "Tri", "mesh": 0, "translation": [0, 1, 0]}],
+        "meshes": [
+            {
+                "name": "TriMesh",
+                "primitives": [
+                    {"attributes": {"POSITION": 0}, "indices": 1, "material": 0}
+                ],
+            }
+        ],
+        "materials": [{"name": "Flat"}],
+        "buffers": [{"byteLength": len(blob)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(positions)},
+            {"buffer": 0, "byteOffset": len(positions), "byteLength": 6},
+        ],
+        "accessors": [
+            {
+                "bufferView": 0,
+                "componentType": 5126,
+                "count": 3,
+                "type": "VEC3",
+                "min": [0, 0, 0],
+                "max": [1, 1, 0],
+            },
+            {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"},
+        ],
+    }
+    payload = json.dumps(gltf).encode("utf-8")
+    payload += b" " * ((4 - len(payload) % 4) % 4)
+    rest = _struct.pack("<I4s", len(blob), b"BIN\x00") + blob
+    with open(path, "wb") as fh:
+        fh.write(_struct.pack("<4sII", b"glTF", 2, 20 + len(payload) + len(rest)))
+        fh.write(_struct.pack("<I4s", len(payload), b"JSON") + payload)
+        fh.write(rest)
+    return path
+
+
+class _NoBlender(BlenderSceneImport):
+    """An engine on a machine with no Blender install."""
+
+    @property
+    def blender_path(self):
+        return None
+
+
+class TestGltfWithoutBlender(unittest.TestCase):
+    """A glTF reaches Maya with or without Blender.
+
+    REGRESSION (2026-10-09): Blender was the ONLY route, so a machine without it
+    could not import a .glb at all, and Blender 5.1 refuses every KTX2
+    deliverable ("Extension KHR_texture_basisu is not available on this addon
+    version") -- the import failed with a 1 200 character message box. Blender
+    stays preferred; ``ptk.MeshConvert.gltf_to_fbx`` writes the same payload when
+    there is none or it fails, and a failed run reports one line.
+    """
+
+    def setUp(self):
+        self.temp = ptk.TempArtifacts("mtk_gltf_fallback", policy="scoped")
+        self.addCleanup(self.temp.cleanup)
+        self.glb = _triangle_glb(self.temp.path(extension=".glb"))
+        self.payload = []
+
+    def _route(self, engine, **kw):
+        """Run import_scene with both conversions and the import stubbed;
+        return the ``via`` the payload was imported as."""
+        fbx = self.temp.path(extension=".fbx")
+        open(fbx, "wb").close()
+        result = ptk.CachedArtifact.Result(fbx, True, None)
+        engine._cached_gltf_fallback = lambda src, **_: (
+            self.payload.append(src) or result
+        )
+
+        def imported(path, via="fbx", **_):
+            self.via = via
+            return ["|Tri"]
+
+        engine.import_payload = imported
+        engine.import_scene(self.glb, scene_settings=False, **kw)
+        return self.via
+
+    def test_no_blender_converts_with_the_built_in_converter(self):
+        self.assertEqual(self._route(_NoBlender(), via="usd"), "fbx")
+        self.assertEqual(self.payload, [os.path.abspath(self.glb)])
+
+    def test_a_blender_failure_on_a_gltf_falls_back(self):
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+
+        def refused(*_, **__):
+            raise RuntimeError("Blender could not convert x.glb: Extension refused")
+
+        engine._cached_conversion = refused
+        self.assertEqual(self._route(engine), "fbx")
+        self.assertEqual(len(self.payload), 1)
+
+    def test_a_blend_failure_is_not_retried(self):
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        blend = self.temp.path(extension=".blend")
+        open(blend, "wb").close()
+
+        def refused(*_, **__):
+            raise RuntimeError("broken scene")
+
+        engine._cached_conversion = refused
+        engine._cached_gltf_fallback = lambda *a, **k: self.fail("no fallback")
+        with self.assertRaisesRegex(RuntimeError, "broken scene"):
+            engine.import_scene(blend, scene_settings=False)
+
+    def test_both_failures_are_reported_together(self):
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+
+        def refused(*_, **__):
+            raise RuntimeError("blender-reason")
+
+        def also(*_, **__):
+            raise ValueError("converter-reason")
+
+        engine._cached_conversion = refused
+        engine._cached_gltf_fallback = also
+        with self.assertRaises(RuntimeError) as ctx:
+            engine.import_scene(self.glb, scene_settings=False)
+        self.assertIn("blender-reason", str(ctx.exception))
+        self.assertIn("converter-reason", str(ctx.exception))
+
+    def test_a_stop_request_is_never_a_fallback(self):
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+
+        def stopped(*_, **__):
+            raise ptk.OperationCancelled("stopped")
+
+        engine._cached_conversion = stopped
+        engine._cached_gltf_fallback = lambda *a, **k: self.fail("no fallback")
+        with self.assertRaises(ptk.OperationCancelled):
+            engine.import_scene(self.glb, scene_settings=False)
+
+    def test_a_failed_run_reports_one_line(self):
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+        error = RuntimeError(
+            "blender.exe did not produce ... Output tail:\n" + "x" * 900
+        )
+        error.output = "x" * 900
+        error.summary = "Extension KHR_texture_basisu is not available"
+        error.script_path = "s.py"
+        concise = engine._conversion_failure("C:/a/asset.glb", error)
+        self.assertEqual(
+            str(concise),
+            "Blender could not convert asset.glb: "
+            "Extension KHR_texture_basisu is not available",
+        )
+        self.assertEqual(concise.script_path, "s.py")
+        stub = RuntimeError("not the runner's")
+        self.assertIs(engine._conversion_failure("a.glb", stub), stub)
+
+    def test_a_refusing_importer_is_reported_once(self):
+        """The importer that is registered and refuses has said why; trying the
+        other spelling buried that under "could not be found"."""
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            importer = _template_function(template, "_import_gltf", deps=("SRC_PATH",))
+            tried = []
+
+            def refuse(**_):
+                tried.append("import_scene.gltf")
+                raise RuntimeError(
+                    "Error: Extension KHR_texture_basisu is not available on this "
+                    "addon version\n"
+                )
+
+            bpy = SimpleNamespace(
+                ops=SimpleNamespace(
+                    import_scene=SimpleNamespace(gltf=refuse),
+                    wm=SimpleNamespace(gltf_import=lambda **_: tried.append("wm")),
+                )
+            )
+            with self.subTest(template=template.name):
+                with self.assertRaises(RuntimeError) as ctx:
+                    importer(bpy)
+                self.assertEqual(
+                    str(ctx.exception),
+                    "Extension KHR_texture_basisu is not available on this addon version",
+                )
+                self.assertEqual(tried, ["import_scene.gltf"])
+
+    def test_an_unregistered_importer_spelling_moves_on(self):
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            importer = _template_function(template, "_import_gltf", deps=("SRC_PATH",))
+            tried = []
+
+            def missing(**_):
+                raise RuntimeError(
+                    'Calling operator "bpy.ops.import_scene.gltf" error, could not be found'
+                )
+
+            bpy = SimpleNamespace(
+                ops=SimpleNamespace(
+                    import_scene=SimpleNamespace(gltf=missing),
+                    wm=SimpleNamespace(gltf_import=lambda **_: tried.append("wm")),
+                )
+            )
+            with self.subTest(template=template.name):
+                importer(bpy)
+                self.assertEqual(tried, ["wm"])
+
+    def test_gltf_material_extras_do_not_reach_the_fbx(self):
+        """REGRESSION (2026-10-09): every FBX2glTF material carries
+        ``extras.fromFBX``; Blender kept it as a custom property, its FBX exporter
+        wrote it, and Maya's importer printed 56 setAttr errors for one file."""
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            drop = _template_function(template, "_drop_material_extras")
+
+            class _Material(dict):
+                pass
+
+            mat = _Material(fromFBX={"isTruePBR": True})
+            bpy = SimpleNamespace(data=SimpleNamespace(materials=[mat]))
+            with self.subTest(template=template.name):
+                drop(bpy)
+                self.assertEqual(dict(mat), {})
+            source = template.read_text(encoding="utf-8")
+            self.assertIn(
+                "    _drop_material_extras(bpy)\n    _unpack_images(bpy)", source
+            )
+
+    def test_a_webp_map_is_unpacked_as_png(self):
+        """REGRESSION (2026-10-09): a glTF's WebP lightmaps were written as WebP
+        (and one named "*.png" kept that extension over WebP bytes); Maya reads
+        neither -- a file node on one reports 0 x 0."""
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            unpack = _template_function(
+                template,
+                "_unpack_images",
+                deps=(
+                    "TEX_DIR",
+                    "_IMAGE_EXTENSIONS",
+                    "_MAYA_UNREADABLE_FORMATS",
+                    "_image_filename",
+                    "_classified_names",
+                    "_images_feeding",
+                    "_map_suffix",
+                    "_PBR_SOCKETS",
+                    "_GLTF_OUTPUT_SOCKETS",
+                ),
+            )
+            out_dir = self.temp.dir_path(name=f"tex_{template.stem}")
+            unpack.__globals__.update(TEX_DIR=out_dir, os=os)
+            saved = []
+
+            class _Image:
+                packed_file = object()
+
+                def __init__(self, name, file_format):
+                    self.name, self.file_format = name, file_format
+                    self.filepath_raw = ""
+
+                def save(self):
+                    saved.append(
+                        (os.path.basename(self.filepath_raw), self.file_format)
+                    )
+
+            images = [
+                _Image("OFFICE_Lightmap.png", "WEBP"),
+                _Image("atlas.webp", "WEBP"),
+            ]
+            bpy = SimpleNamespace(data=SimpleNamespace(images=images, materials=[]))
+            with self.subTest(template=template.name):
+                unpack(bpy)
+                self.assertEqual(
+                    sorted(saved),
+                    [("OFFICE_Lightmap.png", "PNG"), ("atlas.png", "PNG")],
+                )
+
+    def test_the_built_in_converter_folds_names_as_the_consumer_does(self):
+        from pythontk.file_utils.mesh_convert import _gltf2fbx
+
+        for name in ("Box.001", "1st", "a b-c", "ok_name", "café"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    _gltf2fbx._safe_name(name, "fallback"),
+                    BlenderSceneImport._maya_safe_name(name),
+                )
+
+    def test_a_stub_failure_is_raised_as_it_is(self):
+        """An error that is not the runner's passes through -- never chained to
+        itself as its own cause."""
+        engine = BlenderSceneImport(blender_path="X:/fake/blender.exe")
+
+        def fail(*_, **__):
+            raise RuntimeError("stub")
+
+        engine._run_script = fail
+        with self.assertRaises(RuntimeError) as ctx:
+            engine.convert(self.glb, self.temp.path(extension=".fbx"))
+        self.assertEqual(str(ctx.exception), "stub")
+        self.assertIsNot(ctx.exception.__cause__, ctx.exception)
+
+    def test_the_built_in_converter_names_maps_as_the_template_does(self):
+        """Both producers' files are classified by ONE consumer, by filename."""
+        import itertools
+
+        from pythontk.file_utils.mesh_convert import _gltf2fbx
+
+        roles = (
+            "Base Color",
+            "Alpha",
+            "Metallic",
+            "Roughness",
+            "Occlusion",
+            "Normal",
+            "Emission Color",
+        )
+        for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
+            suffix_for = _template_function(template, "_map_suffix")
+            for n in range(len(roles) + 1):
+                for combo in itertools.combinations(roles, n):
+                    with self.subTest(template=template.name, roles=combo):
+                        self.assertEqual(
+                            suffix_for(set(combo)), _gltf2fbx._map_suffix(set(combo))
+                        )
+
+
+class TestGltfFallbackImportsInMaya(MayaTkTestCase):
+    """The built-in converter's payload through the REAL importer and manifest
+    replay: what a Maya without Blender gets for a .glb (verified 2026-10-09 on
+    a production KTX2 assembly and a skinned, animated rig as well)."""
+
+    def test_a_glb_lands_without_blender(self):
+        temp = ptk.TempArtifacts("mtk_gltf_fallback_live", policy="scoped")
+        self.addCleanup(temp.cleanup)
+        glb = _triangle_glb(temp.path(extension=".glb"))
+        imported = _NoBlender().import_scene(glb, use_cache=False, scene_settings=False)
+        tri = [n for n in imported if n.rsplit("|", 1)[-1] == "Tri"]
+        self.assertEqual(len(tri), 1, imported)
+        # Metres in the file, centimetres in Maya.
+        self.assertEqual(
+            [round(v, 4) for v in cmds.xform(tri[0], q=True, ws=True, t=True)],
+            [0.0, 100.0, 0.0],
+        )
+        bbox = cmds.exactWorldBoundingBox(tri[0])
+        self.assertAlmostEqual(bbox[3] - bbox[0], 100.0, places=3)
+        self.assertEqual(cmds.polyEvaluate(tri[0], face=True), 1)
 
 
 if __name__ == "__main__":

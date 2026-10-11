@@ -1004,7 +1004,6 @@ class TestSamplesParameter(MayaTkTestCase):
         result_low = ScaleKeys.scale_keys(
             objects=[self.cube], mode="speed", factor=2.0, samples=4
         )
-        keys_low = cmds.keyframe(self.cube, at="tx", q=True, tc=True)
 
         # Reset
         cmds.cutKey(self.cube)
@@ -1015,7 +1014,6 @@ class TestSamplesParameter(MayaTkTestCase):
         result_high = ScaleKeys.scale_keys(
             objects=[self.cube], mode="speed", factor=2.0, samples=128
         )
-        keys_high = cmds.keyframe(self.cube, at="tx", q=True, tc=True)
 
         # Both should succeed (for linear motion, samples shouldn't matter much)
         self.assertGreater(result_low, 0)
@@ -1403,9 +1401,6 @@ class TestScaleKeysFixes(MayaTkTestCase):
         # Check visibility tangents
         times = cmds.keyframe(self.cube, at="visibility", q=True, tc=True)
         for t in times:
-            in_type = cmds.keyTangent(
-                self.cube, at="visibility", t=(t,), q=True, itt=True
-            )[0]
             out_type = cmds.keyTangent(
                 self.cube, at="visibility", t=(t,), q=True, ott=True
             )[0]
@@ -1448,6 +1443,121 @@ class TestAuditRegressionFixes(MayaTkTestCase):
 
         result = import_without_maya("mayatk.anim_utils.scale_keys", ("cmds", "om"))
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class TestScaleKeysClaimHooks(MayaTkTestCase):
+    """Scale Keys reports the keys it replaces and moves (``on_replace`` /
+    ``on_move``), so the shot system's claims follow -- released with a key a
+    scaled one lands on, carried along with a key it moves (mirror of
+    blendertk's ``ScaleKeys.scale_keys``)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="scale_hooks_cube")[0]
+        for t in (0, 10, 20):
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=t)
+        self.crv = cmds.keyframe(
+            self.cube, attribute="translateX", query=True, name=True
+        )[0]
+        self.log = []
+
+    def _hooks(self):
+        return {
+            "on_replace": lambda c, f: self.log.append(
+                ("replace", c, sorted(round(t, 4) for t in f))
+            ),
+            "on_move": lambda c, p: self.log.append(
+                ("move", c, sorted((round(o, 4), round(n, 4)) for o, n in p))
+            ),
+        }
+
+    def _pairs(self, crv=None):
+        crv = crv or self.crv
+        times = cmds.keyframe(crv, query=True, timeChange=True) or []
+        values = cmds.keyframe(crv, query=True, valueChange=True) or []
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times, values)]
+
+    def _scale_0_to_10_by_2(self, snap_mode):
+        """Keys 0 and 10 scale x2 about 0; the 20 outside the range stays."""
+        return ScaleKeys.scale_keys(
+            objects=[self.cube],
+            factor=2,
+            keys=(0, 10),
+            split_static=False,
+            snap_mode=snap_mode,
+            **self._hooks(),
+        )
+
+    def test_a_snapped_scale_replaces_the_key_it_lands_on(self):
+        self._scale_0_to_10_by_2("nearest")
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(
+            self.log,
+            [("replace", self.crv, [20.0]), ("move", self.crv, [(10.0, 20.0)])],
+        )
+
+    def test_an_unsnapped_scale_replaces_the_key_it_lands_on(self):
+        """``scaleKey`` over a time range does not replace a key outside it
+        that a scaled key lands on: it stacked the mover beside it (two keys
+        on frame 20, measured 2026-10-05). The landed-on key is cut first."""
+        self._scale_0_to_10_by_2(None)
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(
+            self.log,
+            [("replace", self.crv, [20.0]), ("move", self.crv, [(10.0, 20.0)])],
+        )
+
+    def test_a_nudged_key_is_reported_where_it_landed(self):
+        """snap_mode "none" nudges a key past a taken frame: nothing is
+        replaced, and the move reported is the frame the key went to."""
+        self._scale_0_to_10_by_2("none")
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 20.0), (20.001, 10.0)])
+        self.assertEqual(self.log, [("move", self.crv, [(10.0, 20.001)])])
+
+    def _overlap_pair(self, split_static):
+        """Two cubes scaled x3 per object, the second pushed past the first
+        by the overlap stagger; a fade claimed on the second's last key."""
+        import mayatk as mtk
+
+        c1 = cmds.polyCube(name="scale_hooks_c1")[0]
+        c2 = cmds.polyCube(name="scale_hooks_c2")[0]
+        for obj, keys in ((c1, ((1, 0), (10, 10))), (c2, ((15, 0), (25, 10)))):
+            for t, v in keys:
+                cmds.setKeyframe(obj, attribute="translateX", time=t, value=v)
+        crv2 = cmds.keyframe(c2, attribute="translateX", query=True, name=True)[0]
+        store = mtk.ShotStore()
+        store.edit_ledger.record_authored(crv2, 25.0, 0, "fade_out", c2)
+
+        ScaleKeys.scale_keys(
+            objects=[c1, c2],
+            mode="uniform",
+            factor=3.0,
+            group_mode="per_object",
+            prevent_overlap=True,
+            split_static=split_static,
+            on_replace=store.release_replaced([c1, c2]),
+            on_move=store.remap_moved([c1, c2]),
+        )
+        return store, crv2
+
+    def test_the_overlap_stagger_carries_a_claim_with_its_key(self):
+        """Scaled 25 -> 45, then staggered 45 -> 73 (split_static: the
+        segment stagger): the claim rides both moves."""
+        store, crv2 = self._overlap_pair(split_static=True)
+
+        self.assertEqual([t for t, _v in self._pairs(crv2)], [43.0, 73.0])
+        self.assertEqual(store.edit_ledger.authored(), [(crv2, 73.0)])
+
+    def test_the_whole_curve_overlap_stagger_carries_a_claim_with_its_key(self):
+        """The same through ``SegmentKeys.execute_stagger`` (no split): 25 ->
+        45 -> 58."""
+        store, crv2 = self._overlap_pair(split_static=False)
+
+        self.assertEqual([t for t, _v in self._pairs(crv2)], [28.0, 58.0])
+        self.assertEqual(store.edit_ledger.authored(), [(crv2, 58.0)])
 
 
 if __name__ == "__main__":

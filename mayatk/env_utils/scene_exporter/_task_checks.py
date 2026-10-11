@@ -24,7 +24,6 @@ from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.anim_utils._anim_utils import AnimUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import SceneDataSidecar
 from mayatk.env_utils.hierarchy_sync.hierarchy_baseline import HierarchyBaseline
@@ -52,7 +51,7 @@ class _TaskChecksMixin(_TaskDataMixin):
                     enough — a same-name collision, where every link would
                     otherwise read the same word.
         """
-        return self.logger.log_link(label or node.rsplit("|", 1)[-1], action, node=node)
+        return self._log_link(label or node.rsplit("|", 1)[-1], action, node=node)
 
     def _truncate_obj_entries(
         self, entries: List[str], limit: Optional[int] = None
@@ -158,7 +157,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             # is its own paragraph in the export panel, so a line per match
             # rendered the listing as N blank-line-separated sections.
             if self.logger.isEnabledFor(logging.INFO):
-                self.logger.log_group(f"LOD suffixes detected ({len(matches)})", items)
+                self._log_group(f"LOD suffixes detected ({len(matches)})", items)
 
         return True, messages
 
@@ -363,7 +362,7 @@ class _TaskChecksMixin(_TaskDataMixin):
         # gate. Logged directly — the runner only surfaces messages from
         # FAILING checks, so returning them on a pass would be a silent no-op.
         if notes and self.logger.isEnabledFor(logging.INFO):
-            self.logger.log_group(f"Texture optimization notes ({len(notes)})", notes)
+            self._log_group(f"Texture optimization notes ({len(notes)})", notes)
 
         if offenders:
             pass_desc = f"the {tpl!r} template" if tpl else "their map type"
@@ -386,8 +385,8 @@ class _TaskChecksMixin(_TaskDataMixin):
         a path that fits here still breaks on the next machine: the Windows
         260-character cap applies unless that machine opted into long paths.
 
-        Sidecars written beside the export (``.scene_data.json``, ``.fbm``
-        folders) are longer than the export path itself, so leave headroom by
+        Files an importer derives from the export (an FBX's ``.fbm`` media
+        folder) are longer than the export path itself, so leave headroom by
         setting a budget below the OS limit.
 
         Parameters:
@@ -1388,34 +1387,22 @@ class _TaskChecksMixin(_TaskDataMixin):
             ]
         return True, []
 
+    @ptk.Deprecation.symbol(
+        "UvUtils.find_uv_snapshots", remove_in="0.24.0", since="2026-10-08"
+    )
     def check_uv_snapshots(self) -> tuple:
-        """Report the auto-unwrap backup UV sets left on the export meshes.
+        """Retired export check: report ``_uv_snap_*`` backup sets on the meshes.
 
-        ``UvUtils.snapshot_uv_sets`` backs a mesh's UVs up into a ``_uv_snap_*``
-        set for the length of one unwrap; a run that dies mid-mesh leaves it for
-        good, and the FBX writes it as a real UV set -- the second one is
-        ``TEXCOORD_1``, the lightmap channel, which a consumer cannot tell from a
-        lightmap UV (measured: 183 of 757 meshes on a production scene).
-        Reported, never removed: an export does not edit what it reads, and the
-        next ``UvUtils.auto_unwrap`` of a mesh sweeps an earlier session's.
+        ``UvUtils.uv_snapshot`` now takes the backup back on every exit, so no
+        export runs this; a direct call still reports what it used to.
         """
+        from mayatk.uv_utils._uv_utils import UvUtils
+
         found = UvUtils.find_uv_snapshots(self._live_objects())
-        if not found:
-            return True, []
-        messages = []
-        for shape, _current, snapshot in found:
-            owner = (cmds.listRelatives(shape, parent=True, fullPath=True) or [shape])[
-                0
-            ]
-            messages.append(
-                f"Leftover UV snapshot '{snapshot}' on {self._obj_link(owner)} -- "
-                "it ships as a real UV set."
-            )
-        messages.append(
-            "Remove them with mtk.UvUtils.discard_uv_snapshot("
-            "mtk.UvUtils.find_uv_snapshots(objects)), or re-run Auto Unwrap."
-        )
-        return False, messages
+        return not found, [
+            f"Leftover UV snapshot '{snapshot}' on {shape}."
+            for shape, _, snapshot in found
+        ]
 
     def check_untied_keyframes(self) -> tuple:
         """Check if there are any untied keyframes on the specified objects."""
@@ -1793,9 +1780,7 @@ class _TaskChecksMixin(_TaskDataMixin):
                 messages.append(f"  … and {len(top_extra) - 20} more")
 
         if diff_path:
-            link = self.logger.log_link(
-                "Open full diff report", "open", filepath=diff_path
-            )
+            link = self._log_link("Open full diff report", "open", filepath=diff_path)
             messages.append(link)
 
         return False, messages

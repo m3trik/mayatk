@@ -96,13 +96,10 @@ class SceneCallbacksMixin:
             self._restore_shot_state()
         finally:
             self._syncing = False
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
         # The dropdown lists the shots in order and paints their bounds, so
         # it goes as stale as the timeline does -- an undone reorder left it
         # showing the order that had just been undone.
-        self._sync_combobox()
-        self._sync_to_widget()
+        self._after_shot_change()
 
     def _on_maya_redo(self, *_args) -> None:
         """Re-apply the redo-side boundary snapshot when Maya's redo fires.
@@ -122,13 +119,10 @@ class SceneCallbacksMixin:
             self._redo_shot_state()
         finally:
             self._syncing = False
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
         # The dropdown lists the shots in order and paints their bounds, so
         # it goes as stale as the timeline does -- an undone reorder left it
         # showing the order that had just been undone.
-        self._sync_combobox()
-        self._sync_to_widget()
+        self._after_shot_change()
 
     # ---- Maya keyframe-edited callback ------------------------------------
 

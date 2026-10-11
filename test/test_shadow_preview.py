@@ -135,7 +135,6 @@ class TestEffectText(unittest.TestCase):
             "gRectOX",
             "gRectOY",
             "gOpacity",
-            "gIntensity",
             "gHorizonTex",
         )
         for language in ("glsl", "hlsl"):

@@ -128,6 +128,10 @@ GUI_REQUIRED = {
     "test_shots_panel": (
         "loads the shots panel through MayaUiHandler, which is built against a GUI Maya"
     ),
+    "test_tube_rig_panel": (
+        "loads the tube_rig panel through MayaUiHandler; native-crashes mayapy "
+        "on load (2026-10-06)"
+    ),
     "test_emissive_groups_panel": (
         "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
@@ -181,6 +185,17 @@ GUI_REQUIRED = {
     "test_style_setter": (
         "cmds.displayRGBColor queries return None under batch, breaking the "
         "color snapshot/restore harness"
+    ),
+}
+
+# Headless modules that legitimately run past --module-timeout: name ->
+# (seconds, reason). A module's hang budget is the larger of its own and the
+# flag's, so a slow module is not killed as hung and every other module keeps
+# the short budget a real hang should cost.
+MODULE_TIMEOUTS = {
+    "test_texture_baker": (
+        1800,
+        "real Arnold bakes: 780-880 s headless (2026-10-05), against the 900 s default",
     ),
 }
 
@@ -322,10 +337,13 @@ class MayaTestRunner:
         jobs: int = 1,
         module_timeout: int = 900,
         wait_timeout: Optional[int] = None,
+        keep_maya: bool = False,
     ):
         self.host = host
         self.port = port
         self.reuse_instance = reuse_instance
+        # The GUI Maya stays open after the run (--keep-maya): see _run_via_port.
+        self.keep_maya = keep_maya
         self.mayapy = mayapy
         self.chunk_size = max(1, chunk_size)
         self.jobs = max(1, jobs)
@@ -665,8 +683,12 @@ except Exception as e:
         ``TestSandbox.activate()`` comes after that read, so every crashing
         chunk -- the case the resume machinery exists for -- littered the
         user's temp dir. :meth:`TestSandbox.temp` sets ``TEMP``/``TMP`` here, in
-        the runner, so every chunk (and the GUI pass) inherits the root, which
-        goes at this process's exit. Mirror of blendertk's runner.
+        the runner, so every chunk inherits the root, which goes at this
+        process's exit. Mirror of blendertk's runner. Not the GUI Maya: it is
+        launched detached and can outlive the run (``--keep-maya``, a killed
+        runner), so ``AppLauncher.launch`` hands it the host's environment
+        (``TestSandbox.host_environ``) -- given the root, a later run's sweep
+        deleted files from under a Maya the user was still working in.
 
         Best-effort by design: an unimportable pythontk is already a failing
         run, and it must fail on its own modules rather than here.
@@ -678,8 +700,6 @@ except Exception as e:
         except Exception as error:  # noqa: BLE001
             print(f"[WARN] temp isolation unavailable ({error}); chunks use real TEMP.")
             return None
-        # Announced so a module can ASSERT it inherited the redirect.
-        os.environ["MAYATK_TEST_TEMP_ROOT"] = root
         print(f"Temp: {root}")
         return root
 
@@ -775,6 +795,36 @@ except Exception as e:
 
         return ok, deferred
 
+    #: Seconds a killed chunk gets to exit before it is abandoned (:meth:`_reap`).
+    REAP_TIMEOUT = 30
+
+    def _hang_timeout(self, module: Optional[str]) -> int:
+        """Seconds without progress before *module*'s chunk counts as hung:
+        ``--module-timeout``, or the module's own budget when it is larger
+        (:data:`MODULE_TIMEOUTS`)."""
+        own = MODULE_TIMEOUTS.get(module, (0, ""))[0]
+        return max(self.module_timeout, own)
+
+    def _reap(self, proc, tag: str) -> bool:
+        """Kill a chunk's mayapy and wait for it; False when it will not exit.
+
+        A killed mayapy can outlive the wait -- held by its licence checkout,
+        or stuck in a driver call -- and ``proc.wait`` then raised
+        ``TimeoutExpired`` through the run, which ended in a traceback instead
+        of recording the module. The chunk is abandoned either way: its module
+        is still marked and deferred, and the process is left to exit.
+        """
+        proc.kill()
+        try:
+            proc.wait(timeout=self.REAP_TIMEOUT)
+            return True
+        except subprocess.TimeoutExpired:
+            self._emit(
+                f"  ({tag}) [WARNING] mayapy (pid {proc.pid}) still running "
+                f"{self.REAP_TIMEOUT}s after the kill -- abandoning it"
+            )
+            return False
+
     def _run_chunk(
         self,
         mayapy: str,
@@ -807,9 +857,9 @@ except Exception as e:
                 "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
                 "extended": extended,
                 "reload": False,
-                # A mayapy this runner launched: its settings stores are the
-                # run's to redirect (_suite_driver._activate_sandbox).
-                "sandbox_settings": True,
+                # A mayapy this runner launched: its sandbox may stay up for
+                # good (_suite_driver._sandbox).
+                "launched": True,
             }
             cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
 
@@ -857,7 +907,7 @@ except Exception as e:
                 last_activity = start
                 init_warned = False
                 seen_results = set()
-                finished_count = 0
+                marker_count = 0
 
                 while True:
                     rc = proc.poll()
@@ -883,9 +933,8 @@ except Exception as e:
                                     flush=True,
                                 )
 
-                    started, finished, _, has_init = _split_markers(
-                        _read_markers(prog_path)
-                    )
+                    markers = _read_markers(prog_path)
+                    started, finished, _, has_init = _split_markers(markers)
                     if not init_done and has_init:
                         init_done = True
                         last_activity = time.monotonic()
@@ -896,8 +945,10 @@ except Exception as e:
                             f"  ({tag}) maya.standalone ready "
                             f"({int(time.monotonic() - start)}s)"
                         )
-                    if len(finished) != finished_count:
-                        finished_count = len(finished)
+                    if len(markers) != marker_count:
+                        # A test started (the driver's TEST heartbeat) or a
+                        # module finished: a long module is not a hung one.
+                        marker_count = len(markers)
                         last_activity = time.monotonic()
 
                     if rc is not None:
@@ -915,21 +966,22 @@ except Exception as e:
                             )
                         if now - start > self.init_timeout + self.init_grace:
                             self._license_trap = True
-                            proc.kill()
-                            proc.wait(timeout=30)
+                            self._reap(proc, tag)
                             break
-                    elif now - last_activity > self.module_timeout:
-                        timed_out_module = next(
+                    else:
+                        in_flight = next(
                             (m for m in reversed(started) if m not in finished), None
                         )
-                        self._emit(
-                            f"  ({tag}) [WARNING] no progress for "
-                            f"{self.module_timeout}s — killing chunk "
-                            f"(hung module: {timed_out_module or 'unknown'})"
-                        )
-                        proc.kill()
-                        proc.wait(timeout=30)
-                        break
+                        budget = self._hang_timeout(in_flight)
+                        if now - last_activity > budget:
+                            timed_out_module = in_flight
+                            self._emit(
+                                f"  ({tag}) [WARNING] no progress for "
+                                f"{budget}s — killing chunk "
+                                f"(hung module: {timed_out_module or 'unknown'})"
+                            )
+                            self._reap(proc, tag)
+                            break
 
                     time.sleep(1.0)
             except BaseException:
@@ -1178,12 +1230,16 @@ except Exception as e:
         res_path = base.with_suffix(".txt")
         # A session this runner did not launch -- the user's own, in-session
         # (Script Editor) or attached with --reuse -- may hold stale modules,
-        # so it reloads; and it keeps its real settings stores, since the
-        # driver's redirect cannot be undone and would outlive the run there.
+        # so it reloads; and it is sandboxed for the run only, since a
+        # sandbox left up would outlive the run there.
         users_session = bool(
             self.reuse_instance
             or (self.connection and self.connection.mode == "interactive")
         )
+        # A Maya the run leaves open (--keep-maya, --no-wait) goes on as the
+        # user's: sandboxed for the run only too, or it refuses every browser
+        # launch and keeps their settings in throwaway stores from then on.
+        outlives_run = bool(no_wait or self.keep_maya)
         config = {
             "modules": gui_modules,
             "module_paths": {m: module_paths[m] for m in gui_modules},
@@ -1192,7 +1248,7 @@ except Exception as e:
             "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
             "extended": extended,
             "reload": users_session,
-            "sandbox_settings": not users_session,
+            "launched": not (users_session or outlives_run),
         }
         cfg_path.write_text(json.dumps(config, indent=1), encoding="utf-8")
         res_path.unlink(missing_ok=True)
@@ -1242,7 +1298,9 @@ finally:
         # cost of a GUI module on a busy box (one took ~6 min), so the old
         # max(600, 30*n) killed healthy runs.
         timeout = self.wait_timeout or max(1800, 90 * len(gui_modules))
-        completed = self.wait_for_results(res_path, timeout=timeout)
+        completed = self.wait_for_results(
+            res_path, timeout=timeout, progress_path=base.with_suffix(".progress")
+        )
         self._merge_into_master(res_path)
 
         # A module with no result line would otherwise vanish from the final
@@ -1273,6 +1331,7 @@ finally:
         timeout: int,
         poll_interval: float = 2.0,
         idle_timeout: int = 600,
+        progress_path=None,
     ) -> bool:
         """Poll Maya for test completion, with file-based fallback.
 
@@ -1285,13 +1344,17 @@ finally:
         13/15 modules with four seconds to spare, and the two casualties then
         counted as NOT RUN — which correctly blocks the badge, so a slow machine
         could never publish a number at all. ``idle_timeout`` is the real stall
-        detector (no module has finished in that long); ``timeout`` is the hard
-        ceiling that still bounds a pathological run.
+        detector -- no test has started (the driver's ``TEST`` heartbeat on
+        *progress_path*) and no module has finished in that long; counting
+        finished modules alone killed every module longer than the window
+        (``test_sequencer``, 2026-10-10). ``timeout`` is the hard ceiling that
+        still bounds a pathological run.
         """
         results_path = Path(results_path)
         start = time.monotonic()
         last_progress = start
         last_size = 0
+        heartbeats = 0
         use_socket = (
             self.connection
             and self.connection.is_connected
@@ -1309,8 +1372,12 @@ finally:
             if now - start >= timeout:
                 stop_reason = f"ceiling {timeout}s reached"
                 break
+            if progress_path is not None:
+                beats = len(_read_markers(progress_path))
+                if beats != heartbeats:
+                    heartbeats, last_progress = beats, now
             if now - last_progress >= idle_timeout:
-                stop_reason = f"no module finished in {idle_timeout}s"
+                stop_reason = f"no test started in {idle_timeout}s"
                 break
             elapsed = int(now - start)
 
@@ -1427,7 +1494,8 @@ finally:
 
         # Never spawn mayapy from inside an interactive Maya session — run
         # in THIS session instead (Script Editor usage).
-        if not gui and _inside_maya():
+        in_session = _inside_maya()
+        if not gui and in_session:
             gui = True
             print("[INFO] Interactive Maya session detected — running in-session.")
 
@@ -1470,10 +1538,13 @@ finally:
 
         phases_ok = True
         all_ran = True
-        # Before anything is spawned: every chunk (and the GUI pass) inherits it.
-        # Not under --no-wait: that Maya outlives this run, and the root with it
-        # would go at this process's exit.
-        if not no_wait:
+        # Before anything is spawned: every chunk inherits it (the GUI Maya,
+        # launched detached, gets the host's temp). Not under --no-wait: this
+        # run spawns no chunk and ends at once. Nor in the user's own Maya (the
+        # in-session harness): nothing is spawned, and a redirect made here
+        # would outlive the run there -- the driver's sandbox, up for the run
+        # only, gives it a root of its own.
+        if not (no_wait or in_session):
             self._isolate_temp()
 
         if headless_modules:
@@ -1718,6 +1789,7 @@ def main() -> int:
         jobs=jobs,
         module_timeout=module_timeout,
         wait_timeout=wait_timeout,
+        keep_maya=keep_maya,
     )
 
     if "--list" in args or "-l" in args:

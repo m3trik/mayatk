@@ -944,6 +944,59 @@ class TestAnimUtils(MayaTkTestCase):
         itt = cmds.keyTangent(dst_plug, q=True, time=(1, 1), inTangentType=True)
         self.assertEqual(itt[0], "spline", "inTangentType not restored")
 
+    def test_paste_keys_tangent_detail_keeps_a_broken_tangent_broken(self):
+        """Bug: ``copy_keys(tangent_detail=True)`` recorded no tangent lock,
+        so ``paste_keys`` re-made a broken key unified and its second angle
+        won both sides.
+        Fixed: 2026-10-10"""
+        src_plug = f"{self.cube}.translateX"
+        cmds.keyTangent(src_plug, time=(1, 1), edit=True, lock=False)
+        cmds.keyTangent(src_plug, time=(1, 1), edit=True, inAngle=40, outAngle=-20)
+        cmds.selectKey(src_plug, time=(1, 10), add=True)
+        copied = AnimUtils.copy_keys(
+            objects=[self.cube], mode="selected", tangent_detail=True
+        )
+
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=0)
+        AnimUtils.paste_keys(
+            objects=[self.sphere],
+            copied_data=copied,
+            target_time=1,
+            match_source=False,
+            refresh_channel_box=False,
+        )
+
+        dst_plug = f"{self.sphere}.translateX"
+        self.assertEqual(
+            cmds.keyTangent(dst_plug, q=True, time=(1, 1), lock=True), [False]
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(dst_plug, q=True, time=(1, 1), inAngle=True)[0], 40, 3
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(dst_plug, q=True, time=(1, 1), outAngle=True)[0], -20, 3
+        )
+
+    def test_a_time_flip_mirror_keeps_the_tangent_lock(self):
+        """Bug: ``_mirror_tangent_data``'s time flip (Invert Keys' horizontal
+        and both modes) built each key's entry without its lock, so a broken
+        key came back unified and one angle won both sides.
+        Fixed: 2026-10-10"""
+        snapshot = {
+            "inTangentType": "fixed",
+            "outTangentType": "fixed",
+            "inAngle": 40.0,
+            "outAngle": -20.0,
+            "inWeight": 1.0,
+            "outWeight": 1.0,
+            "lock": False,
+        }
+        for flip_value in (False, True):
+            (mirrored,) = AnimUtils._mirror_tangent_data(
+                [snapshot], flip_time=True, flip_value=flip_value
+            )
+            self.assertIs(mirrored["lock"], False)
+
     def test_paste_keys_tangent_detail_skips_angles_for_step(self):
         """Paste with tangent_detail data skips angle/weight for step tangents."""
 
@@ -2000,6 +2053,616 @@ class TestAnimUtils(MayaTkTestCase):
             valueChange=True,
         )
         self.assertTrue(tx_val or ty_val)
+
+    # -- a key Align / Invert lands on is REPLACED, and reported -------------
+
+    def _tx_curve(self, obj=None):
+        """The anim curve keying *obj*'s (default: the cube's) translateX."""
+        return cmds.keyframe(
+            obj or self.cube, attribute="translateX", query=True, name=True
+        )[0]
+
+    def _select_tx_keys(self, *times, obj=None):
+        """Select exactly these translateX keys in the Graph Editor sense."""
+        cmds.selectKey(clear=True)
+        for t in times:
+            cmds.selectKey(self._tx_curve(obj), time=(t, t), add=True)
+
+    @staticmethod
+    def _keyed_tx(name, pairs):
+        """``(object, its translateX curve)`` for a new cube keyed at *pairs*."""
+        obj = cmds.polyCube(name=name)[0]
+        for t, v in pairs:
+            cmds.setKeyframe(obj, attribute="translateX", time=t, value=v)
+        return obj, cmds.keyframe(obj, attribute="translateX", query=True, name=True)[0]
+
+    def test_align_selected_keyframes_replaces_the_key_it_lands_on(self):
+        """A selected key moved onto an unselected one REPLACES it, as the
+        Graph Editor's drag, ``setKeyframe`` and blendertk's twin do.
+
+        Regression: ``keyframe -option over`` does not replace a key on its
+        destination -- it stacks the mover a hair beside it, so two keys
+        shared one frame (measured 2026-10-05: times ``[4.99999983, 5.0,
+        10.0]``), and anything holding the frame matched both.
+        """
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=7)
+        cmds.select(self.cube)
+        self._select_tx_keys(1)
+
+        AnimUtils.align_selected_keyframes([self.cube], target_frame=5)
+
+        self.assertEqual(self._tx_key_pairs(), [(5.0, 0.0), (10.0, 10.0)])
+        self.assertEqual(
+            cmds.keyframe(self._tx_curve(), query=True, keyframeCount=True), 2
+        )
+
+    def test_align_selected_keyframes_reports_the_key_it_replaced(self):
+        """``on_replace(curve, frames)`` names the keys a moved key replaced:
+        what a caller holding something on them (the shot system's claims)
+        releases. Mirror of blendertk's ``align_selected_keyframes``."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=7)
+        cmds.select(self.cube)
+        self._select_tx_keys(1)
+        replaced = []
+
+        AnimUtils.align_selected_keyframes(
+            [self.cube],
+            target_frame=5,
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+        )
+
+        self.assertEqual(replaced, [(self._tx_curve(), [5.0])])
+
+    def test_invert_keys_reports_the_unselected_key_a_mirrored_one_replaced(self):
+        """With a Graph Editor selection only the selected keys mirror; one
+        landing on an unselected key overwrites it, and ``on_replace`` names
+        that key's frame. A key the mirror moves itself is never reported."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=3, value=1)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=8, value=5)
+        cmds.select(self.cube)
+        self._select_tx_keys(1, 3, 10)  # over [1, 10]: 3 lands on the unselected 8
+        replaced = []
+
+        AnimUtils.invert_keys(
+            mode="horizontal",
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+        )
+
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 10.0), (8.0, 1.0), (10.0, 0.0)])
+        self.assertEqual(replaced, [(self._tx_curve(), [8.0])])
+
+    def test_invert_keys_copy_reports_the_kept_keys_it_lands_on(self):
+        """A reversed COPY landing on a key the edit keeps overwrites it, and
+        is reported; a key its own copy lands on is re-keyed, not replaced."""
+        cmds.select(self.cube)
+        cmds.selectKey(clear=True)
+        replaced = {}
+
+        def on_replace(crv, frames):
+            replaced.setdefault(crv, []).extend(frames)
+
+        # t' = 11 - t: the copy of 1 lands on 10, the copy of 10 on 1.
+        AnimUtils.invert_keys(
+            time=1, relative=False, mode="horizontal", on_replace=on_replace
+        )
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 10.0), (10.0, 0.0)])
+        self.assertEqual(sorted(replaced.get(self._tx_curve(), [])), [1.0, 10.0])
+
+        replaced.clear()
+        # t' = 20 - t: 10 is its own copy, and 1's lands on the empty 19.
+        AnimUtils.invert_keys(
+            time=0, relative=True, mode="horizontal", on_replace=on_replace
+        )
+        self.assertEqual(replaced, {})
+
+    def test_invert_keys_leaves_the_key_clipboard_alone(self):
+        """The mirror deletes the sources it moved off with ``cutKey -clear``:
+        a bare ``cutKey`` put them on the animation clipboard, over the keys
+        the user had copied, so their next paste brought back the cut key."""
+        cmds.setKeyframe(self.sphere, attribute="translateZ", time=1, value=42)
+        cmds.copyKey(self.sphere, attribute="translateZ", time=(1, 1))
+        cmds.setKeyframe(self.cube, attribute="translateX", time=4, value=3)
+        cmds.select(self.cube)
+        cmds.selectKey(clear=True)
+
+        AnimUtils.invert_keys(mode="horizontal")  # 4 mirrors to 7: its source is cut
+
+        cmds.pasteKey(self.sphere, attribute="translateY", time=(5, 5))
+        self.assertEqual(
+            cmds.keyframe(
+                self.sphere, attribute="translateY", query=True, valueChange=True
+            ),
+            [42.0],
+        )
+
+    def test_align_releases_the_shot_claims_of_the_key_it_replaces(self):
+        """End to end with the consumer: ``ShotStore.release_replaced`` handed
+        as ``on_replace`` -- a claimed key at 20 that Align overwrites leaves
+        no claim. Left on the frame, a behavior's claim passed to the key that
+        landed there and the next Build deleted that animator key (tentacle's
+        Animation > Align Keys, BACKLOG 2026-10-04)."""
+        store = mtk.ShotStore()
+        led = store.edit_ledger
+        obj, crv = self._keyed_tx("claims_align", [(10, 1.0), (20, 2.0), (30, 3.0)])
+        led.record_authored(crv, 20.0, 0, "fade_in", obj)
+        led.record_step(crv, 20.0, "auto", "auto")
+        cmds.select(obj)
+        self._select_tx_keys(10, obj=obj)
+
+        AnimUtils.align_selected_keyframes(
+            [obj], target_frame=20, on_replace=store.release_replaced([obj])
+        )
+
+        self.assertEqual(
+            sorted(cmds.keyframe(crv, query=True, timeChange=True)), [20.0, 30.0]
+        )
+        self.assertFalse(
+            led.owns_any(crv, 20.0) or led.owns_step(crv, 20.0), led.to_dict()
+        )
+
+    def test_invert_releases_the_shot_claims_of_the_key_it_replaces(self):
+        """The Invert half of the above: a mirrored key landing on the
+        unselected, claimed key at 20 takes its claim with it."""
+        store = mtk.ShotStore()
+        led = store.edit_ledger
+        obj, crv = self._keyed_tx(
+            "claims_invert", [(10, 1.0), (15, 5.0), (20, 2.0), (25, 4.0)]
+        )
+        led.record_authored(crv, 20.0, 0, "fade_in", obj)
+        cmds.select(obj)
+        self._select_tx_keys(10, 15, 25, obj=obj)  # over [10, 25]: 15 lands on 20
+
+        AnimUtils.invert_keys(
+            mode="horizontal", on_replace=store.release_replaced([obj])
+        )
+
+        self.assertEqual(
+            sorted(cmds.keyframe(crv, query=True, timeChange=True)), [10.0, 20.0, 25.0]
+        )
+        self.assertFalse(led.owns_any(crv, 20.0), led.to_dict())
+
+    # -- a key Align / Invert MOVES is reported, and its claims ride along ----
+
+    def test_align_selected_keyframes_reports_the_keys_it_moves(self):
+        """``on_move(curve, pairs)`` names each key the block moved, ``(old,
+        new)`` per anim curve. Mirror of blendertk's ``on_move``."""
+        cmds.select(self.cube)
+        self._select_tx_keys(10)
+        moved = []
+
+        AnimUtils.align_selected_keyframes(
+            [self.cube],
+            target_frame=5,
+            on_move=lambda crv, pairs: moved.append((crv, list(pairs))),
+        )
+
+        self.assertEqual(moved, [(self._tx_curve(), [(10.0, 5.0)])])
+
+    def test_invert_keys_reports_the_keys_it_moves(self):
+        """In place every inverted key moves; a reversed copy that keeps its
+        sources moves none of them."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=4, value=3)
+        cmds.select(self.cube)
+        cmds.selectKey(clear=True)
+        moved = {}
+
+        def on_move(crv, pairs):
+            moved.setdefault(crv, []).extend(pairs)
+
+        AnimUtils.invert_keys(mode="horizontal", on_move=on_move)
+        self.assertEqual(
+            sorted(moved[self._tx_curve()]), [(1.0, 10.0), (4.0, 7.0), (10.0, 1.0)]
+        )
+
+        moved.clear()
+        AnimUtils.invert_keys(
+            time=20, relative=False, mode="horizontal", on_move=on_move
+        )
+        self.assertEqual(moved, {})
+
+    def test_invert_carries_the_claim_of_a_key_it_moves(self):
+        """The in-place Invert of {10, 15, 25, 30} with a fade claimed at 15:
+        the claim rides to 25 with its key (``ShotStore.remap_moved``). Left
+        at 15 it passed to the animator key that arrived from 25, which the
+        next Build deleted before keying the fade again beside its own key."""
+        store = mtk.ShotStore()
+        led = store.edit_ledger
+        obj, crv = self._keyed_tx(
+            "claims_moved", [(10, 1.0), (15, 2.0), (25, 3.0), (30, 4.0)]
+        )
+        led.record_authored(crv, 15.0, 0, "fade_in", obj)
+        cmds.select(obj)
+        cmds.selectKey(clear=True)
+
+        AnimUtils.invert_keys(
+            mode="horizontal",
+            on_replace=store.release_replaced([obj]),
+            on_move=store.remap_moved([obj]),
+        )
+
+        self.assertEqual(led.authored(), [(crv, 25.0)])
+        self.assertEqual(
+            cmds.keyframe(crv, query=True, time=(25, 25), valueChange=True), [2.0]
+        )
+
+    def test_align_carries_the_claim_of_a_key_it_moves(self):
+        store = mtk.ShotStore()
+        led = store.edit_ledger
+        obj, crv = self._keyed_tx("claims_aligned", [(10, 1.0), (30, 3.0)])
+        led.record_authored(crv, 10.0, 0, "fade_in", obj)
+        cmds.select(obj)
+        self._select_tx_keys(10, obj=obj)
+
+        AnimUtils.align_selected_keyframes(
+            [obj],
+            target_frame=20,
+            on_replace=store.release_replaced([obj]),
+            on_move=store.remap_moved([obj]),
+        )
+
+        self.assertEqual(led.authored(), [(crv, 20.0)])
+
+    def test_move_curve_keys_leaves_the_key_clipboard_alone(self):
+        """The retime mover (``scale_keys``) cuts the keys it moves and its
+        temporary anchor key with ``cutKey -clear``: a bare ``cutKey`` put them
+        on the animation clipboard, over the keys the user had copied."""
+        cmds.setKeyframe(self.sphere, attribute="translateZ", time=1, value=42)
+        cmds.copyKey(self.sphere, attribute="translateZ", time=(1, 1))
+        crv = self._tx_curve()
+
+        AnimUtils._move_curve_keys(crv, [(10.0, 15.0)])
+
+        self.assertEqual(
+            sorted(cmds.keyframe(crv, query=True, timeChange=True)), [1.0, 15.0]
+        )
+        cmds.pasteKey(self.sphere, attribute="translateY", time=(5, 5))
+        self.assertEqual(
+            cmds.keyframe(
+                self.sphere, attribute="translateY", query=True, valueChange=True
+            ),
+            [42.0],
+        )
+
+    # -- the other key edits that land a key on a keyed frame, or move keys --
+
+    def test_paste_keys_reports_the_keys_it_replaces(self):
+        """A pasted key on a key holding another value replaces it, and
+        ``on_replace`` names that frame; pasting the value a key already holds
+        only re-keys it (Ctrl+C / Ctrl+V in place)."""
+        cmds.select(self.cube)
+        self._select_tx_keys(10)
+        data = AnimUtils.copy_keys([self.cube], mode="selected")
+        replaced = []
+
+        def on_replace(crv, frames):
+            replaced.append((crv, list(frames)))
+
+        AnimUtils.paste_keys(
+            [self.cube], copied_data=data, target_time=1, on_replace=on_replace
+        )
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 10.0), (10.0, 10.0)])
+        self.assertEqual(replaced, [(self._tx_curve(), [1.0])])
+
+        replaced.clear()
+        AnimUtils.paste_keys(
+            [self.cube], copied_data=data, target_time=10, on_replace=on_replace
+        )
+        self.assertEqual(replaced, [], "pasting the value a key holds re-keyed it")
+
+    # -- Maya's key clipboard: what the Graph Editor copied ------------------
+
+    def test_clear_key_selection_with_nothing_selected(self):
+        """The bare ``selectKey -clear`` raises "Error retrieving default
+        arguments" when no object AND no key is selected (measured 2026-10-07);
+        with nothing selected there is nothing to clear."""
+        cmds.select(clear=True)  # takes the key selection with it
+        AnimUtils.clear_key_selection()
+        cmds.selectKey(self._tx_curve(), time=(10, 10), add=True)
+        AnimUtils.clear_key_selection()
+        self.assertIsNone(cmds.keyframe(query=True, selected=True, name=True))
+
+    def test_select_keys_with_nothing_selected(self):
+        """It cleared through the bare form first, so it raised instead."""
+        cmds.select(clear=True)
+        self.assertEqual(AnimUtils.select_keys([self.cube], "translateX"), 2)
+
+    def test_adjust_key_spacing_replaces_the_key_it_lands_on_and_reports(self):
+        """With collisions allowed a moved key REPLACES the unmoved key it
+        lands on (``option="over"`` stacked it beside), and both hooks hear it."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=5)
+        cmds.selectKey(clear=True)
+        replaced, moved = [], {}
+
+        AnimUtils.adjust_key_spacing(
+            [self.cube],
+            spacing=-5,
+            time=6,
+            relative=False,
+            prevent_collisions=False,
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+            on_move=lambda crv, pairs: moved.setdefault(crv, []).extend(pairs),
+        )
+
+        self.assertEqual(self._tx_key_pairs(), [(1.0, 0.0), (5.0, 10.0)])
+        self.assertEqual(replaced, [(self._tx_curve(), [5.0])])
+        self.assertEqual(moved[self._tx_curve()], [(10.0, 5.0)])
+
+    def test_adjust_key_spacing_keeps_the_claims_of_the_preserved_key(self):
+        """``preserve_keys`` leaves the key at the adjustment point where it
+        is (it is keyed back there), so its claims stay; with a negative
+        amount the key that lands on that point is overwritten by the re-key,
+        so its claims go."""
+        store = mtk.ShotStore()
+        led = store.edit_ledger
+        obj, crv = self._keyed_tx(
+            "claims_spacing", [(1, 0.0), (6, 3.0), (8, 7.0), (10, 10.0)]
+        )
+        led.record_authored(crv, 6.0, 0, "fade_in", obj)
+        led.record_authored(crv, 8.0, 0, "fade_out", obj)
+        cmds.selectKey(clear=True)
+
+        AnimUtils.adjust_key_spacing(
+            [obj],
+            spacing=-2,
+            time=6,
+            relative=False,
+            preserve_keys=True,
+            on_replace=store.release_replaced([obj]),
+            on_move=store.remap_moved([obj]),
+        )
+
+        self.assertEqual(
+            sorted(cmds.keyframe(crv, query=True, timeChange=True)),
+            [1.0, 4.0, 6.0, 8.0],
+        )
+        self.assertEqual(led.authored(), [(crv, 6.0)], led.to_dict())
+
+    def test_move_keys_to_frame_replaces_the_key_it_lands_on_and_reports(self):
+        """A selected key moved onto an unselected one replaces it instead of
+        stacking beside it, and both hooks hear it."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=5, value=7)
+        cmds.select(self.cube)
+        self._select_tx_keys(1)
+        replaced, moved = [], []
+
+        AnimUtils.move_keys_to_frame(
+            [self.cube],
+            frame=5,
+            selected_keys_only=True,
+            align="start",
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+            on_move=lambda crv, pairs: moved.append((crv, list(pairs))),
+        )
+
+        self.assertEqual(self._tx_key_pairs(), [(5.0, 0.0), (10.0, 10.0)])
+        self.assertEqual(replaced, [(self._tx_curve(), [5.0])])
+        self.assertEqual(moved, [(self._tx_curve(), [(1.0, 5.0)])])
+
+    def test_transfer_keyframes_reports_the_target_keys_it_replaces(self):
+        """A transferred key replaces the target's key on its frame when the
+        values differ; one already holding the value is only re-keyed."""
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=1, value=5)
+        cmds.setKeyframe(self.sphere, attribute="translateX", time=10, value=10)
+        cmds.selectKey(clear=True)
+        target = self._tx_curve(self.sphere)
+        replaced = []
+
+        AnimUtils.transfer_keyframes(
+            [self.cube, self.sphere],
+            on_replace=lambda crv, frames: replaced.append((crv, list(frames))),
+        )
+
+        self.assertEqual(replaced, [(target, [1.0])])
+
+    def test_set_visibility_keys_reports_the_key_it_replaces(self):
+        """A visibility key set on a frame holding the other state replaces
+        that key; one already holding the state is only re-keyed."""
+        cmds.setKeyframe(self.cube, attribute="visibility", time=1, value=1)
+        replaced = []
+
+        def on_replace(crv, frames):
+            replaced.append(list(frames))
+
+        AnimUtils.set_visibility_keys(
+            [self.cube], visible=False, when="start", on_replace=on_replace
+        )
+        self.assertEqual(replaced, [[1.0]])
+
+        replaced.clear()
+        AnimUtils.set_visibility_keys(
+            [self.cube], visible=False, when="start", on_replace=on_replace
+        )
+        self.assertEqual(replaced, [])
+
+    def test_snap_keys_to_frames_reports_the_keys_it_moves(self):
+        """Every key snapped is reported; one whose target is taken stays
+        where it is, and is not."""
+        cmds.setKeyframe(self.cube, attribute="translateX", time=4.4, value=4)
+        cmds.setKeyframe(self.cube, attribute="translateX", time=9.6, value=9)
+        moved = []
+
+        AnimUtils.snap_keys_to_frames(
+            [self.cube],
+            on_move=lambda crv, pairs: moved.append(
+                (crv, sorted((round(old, 3), round(new, 3)) for old, new in pairs))
+            ),
+        )
+
+        self.assertEqual(moved, [(self._tx_curve(), [(4.4, 4.0)])])
+
+    # -- the retime mover (Scale Keys) and the delete edits report too --------
+
+    @staticmethod
+    def _curve_pairs(crv):
+        times = cmds.keyframe(crv, query=True, timeChange=True) or []
+        values = cmds.keyframe(crv, query=True, valueChange=True) or []
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times, values)]
+
+    @staticmethod
+    def _edit_log():
+        """``(log, hooks)``: every on_replace / on_move / on_delete call, in
+        order, its frames rounded (``None``: the whole curve went)."""
+        log = []
+
+        def frames_of(frames):
+            if frames is None:
+                return None
+            return sorted(round(t, 4) for t in frames)
+
+        hooks = {
+            "on_replace": lambda c, f: log.append(("replace", c, frames_of(f))),
+            "on_move": lambda c, p: log.append(
+                ("move", c, sorted((round(o, 4), round(n, 4)) for o, n in p))
+            ),
+            "on_delete": lambda c, f: log.append(("delete", c, frames_of(f))),
+        }
+        return log, hooks
+
+    def test_move_curve_keys_merge_replaces_the_key_it_lands_on(self):
+        """With ``allow_merge`` (Scale Keys' snap) a moved key overwrites the
+        key on its frame: ``on_replace`` names that frame, then ``on_move``
+        the move -- what the shot system's claims follow."""
+        _obj, crv = self._keyed_tx("mck_merge", [(0, 0), (10, 10), (20, 20)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._move_curve_keys(crv, [(10.0, 20.0)], allow_merge=True, **hooks)
+
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(log, [("replace", crv, [20.0]), ("move", crv, [(10.0, 20.0)])])
+
+    def test_move_curve_keys_merge_of_two_movers_replaces_the_first(self):
+        """Two moved keys merged onto one frame: the later overwrites the
+        earlier, which is REPLACED -- reported at its source frame, where
+        whatever is held on it still is -- and not moved."""
+        _obj, crv = self._keyed_tx("mck_two", [(0, 0), (10, 10), (12, 12)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._move_curve_keys(
+            crv, [(10.0, 20.0), (12.0, 20.0)], allow_merge=True, **hooks
+        )
+
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 12.0)])
+        self.assertEqual(log, [("replace", crv, [10.0]), ("move", crv, [(12.0, 20.0)])])
+
+    def test_move_curve_keys_reports_a_nudged_key_where_it_landed(self):
+        """Without ``allow_merge`` a taken frame nudges the mover past it: the
+        move reported is where the key went, and nothing is replaced."""
+        _obj, crv = self._keyed_tx("mck_nudge", [(0, 0), (10, 10), (20, 20)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._move_curve_keys(crv, [(10.0, 20.0)], **hooks)
+
+        self.assertEqual(
+            self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0), (20.001, 10.0)]
+        )
+        self.assertEqual(log, [("move", crv, [(10.0, 20.001)])])
+
+    def test_delete_keys_reports_the_keys_it_deletes(self):
+        """``on_delete(curve, frames)`` names every key a delete removed:
+        what a caller holding something on them (the shot system's claims)
+        releases. Mirror of blendertk's ``delete_keys``."""
+        obj, crv = self._keyed_tx("del_keys", [(0, 0), (10, 10), (20, 20)])
+        log, hooks = self._edit_log()
+
+        AnimUtils.delete_keys(
+            [obj], "translateX", time=(5, 15), on_delete=hooks["on_delete"]
+        )
+
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0)])
+        self.assertEqual(log, [("delete", crv, [10.0])])
+
+    def test_delete_keys_reports_the_keys_of_a_curve_it_empties(self):
+        """A delete that takes every key deletes the curve with them, so its
+        keys are read BEFORE the cut -- after it there is no curve to ask."""
+        obj, crv = self._keyed_tx("del_all_keys", [(0, 0), (10, 10)])
+        log, hooks = self._edit_log()
+
+        AnimUtils.delete_keys([obj], "translateX", on_delete=hooks["on_delete"])
+
+        self.assertFalse(cmds.keyframe(obj, attribute="translateX", query=True))
+        self.assertEqual(log, [("delete", crv, [0.0, 10.0])])
+
+    def test_remove_intermediate_keys_reports_the_keys_it_deletes(self):
+        obj, crv = self._keyed_tx("thin_keys", [(0, 0), (10, 10), (20, 20)])
+        log, hooks = self._edit_log()
+
+        AnimUtils.remove_intermediate_keys([obj], on_delete=hooks["on_delete"])
+
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0)])
+        self.assertEqual(log, [("delete", crv, [10.0])])
+
+    def test_simplify_curve_reports_the_keys_it_deletes(self):
+        _obj, crv = self._keyed_tx("simplify_keys", [(0, 0), (10, 10), (20, 20)])
+        cmds.keyTangent(crv, inTangentType="linear", outTangentType="linear")
+        log, hooks = self._edit_log()
+
+        AnimUtils.simplify_curve([crv], on_delete=hooks["on_delete"])
+
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0)])
+        self.assertEqual(log, [("delete", crv, [10.0])])
+
+    def test_untie_keyframes_reports_the_bookends_it_deletes(self):
+        AnimUtils.tie_keyframes([self.cube], padding=1)  # bookends at 0 and 11
+        log, hooks = self._edit_log()
+
+        AnimUtils.untie_keyframes([self.cube], on_delete=hooks["on_delete"])
+
+        self.assertIn(("delete", self._tx_curve(), [0.0, 11.0]), log)
+
+    def test_optimize_keys_reports_the_keys_and_curves_it_deletes(self):
+        """A flat key the optimizer drops is named by its frame; a static
+        curve it deletes outright by ``None`` -- the whole curve, every claim
+        on it."""
+        obj = cmds.polyCube(name="opt_keys")[0]
+        for t, v in ((0, 1), (10, 1), (20, 1), (30, 5)):
+            cmds.setKeyframe(obj, attribute="translateX", time=t, value=v)
+        for t in (0, 10):  # held at its default: static, so deleted (lossless)
+            cmds.setKeyframe(obj, attribute="translateY", time=t, value=0)
+        tx = cmds.keyframe(obj, attribute="translateX", query=True, name=True)[0]
+        ty = cmds.keyframe(obj, attribute="translateY", query=True, name=True)[0]
+        log, hooks = self._edit_log()
+
+        AnimUtils.optimize_keys(
+            [obj], recursive=False, quiet=True, on_delete=hooks["on_delete"]
+        )
+
+        self.assertFalse(cmds.objExists(ty))
+        self.assertIn(("delete", ty, None), log)
+        self.assertIn(("delete", tx, [10.0]), log)
+
+    def test_transfer_keyframes_reports_the_source_keys_its_optimize_deletes(self):
+        """Bug: ``transfer_keyframes(optimize=True)`` dropped source keys
+        without a word, so a claim held on one (the shot system's) outlived
+        its key; blendertk's twin already took ``on_delete``.
+        Fixed: 2026-10-10"""
+        src, crv = self._keyed_tx("xfer_opt", [(0, 1), (10, 1), (20, 1), (30, 5)])
+        log, hooks = self._edit_log()
+
+        AnimUtils.transfer_keyframes(
+            [src, self.sphere], optimize=True, on_delete=hooks["on_delete"]
+        )
+
+        self.assertIn(("delete", crv, [10.0]), log)
+
+    def test_reduce_to_extremes_reports_the_tweens_it_removes(self):
+        obj = cmds.polyCube(name="extremes_keys")[0]
+        for t in range(21):
+            value = float(t if t <= 10 else 20 - t)  # a peak at 10
+            cmds.setKeyframe(obj, attribute="translateX", time=t, value=value)
+        crv = cmds.keyframe(obj, attribute="translateX", query=True, name=True)[0]
+        log, hooks = self._edit_log()
+
+        AnimUtils.reduce_to_extremes(
+            [obj], recursive=False, quiet=True, on_delete=hooks["on_delete"]
+        )
+
+        kept = cmds.keyframe(crv, query=True, timeChange=True)
+        gone = [float(t) for t in range(21) if float(t) not in kept]
+        self.assertTrue(gone, "the fixture should lose its tweens")
+        self.assertEqual(log, [("delete", crv, gone)])
 
     def test_transfer_keyframes(self):
         """Test transferring keyframes."""
@@ -6013,9 +6676,10 @@ class TestDeprecatedAsStrings(MayaTkTestCase):
             ),
         }
         for name, call in calls.items():
-            with self.subTest(method=name), self.assertWarns(
-                DeprecationWarning
-            ) as caught:
+            with (
+                self.subTest(method=name),
+                self.assertWarns(DeprecationWarning) as caught,
+            ):
                 call()
             self.assertIn("'time_tolerance'", str(caught.warning))
 

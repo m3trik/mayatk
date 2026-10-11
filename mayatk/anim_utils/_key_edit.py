@@ -366,7 +366,9 @@ class _KeyEditInternal:
             cmds.currentTime(original_time, edit=True)
 
     @classmethod
-    def _remove_intermediate_keys(cls, objects, time_range, ignore, attributes):
+    def _remove_intermediate_keys(
+        cls, objects, time_range, ignore, attributes, on_delete=None
+    ):
         """Body of :meth:`AnimUtils.remove_intermediate_keys`."""
         targets = cmds.ls(objects, flatten=True)
         if not targets:
@@ -410,7 +412,10 @@ class _KeyEditInternal:
             )
             if not intermediate_keys:
                 return 0
+            curve = (cmds.keyframe(target, query=True, name=True) or [target])[0]
             cmds.cutKey(target, time=window, clear=True)
+            if on_delete is not None:
+                on_delete(curve, list(intermediate_keys))
             return len(intermediate_keys)
 
         keys_removed = 0
@@ -446,7 +451,9 @@ class _KeyEditInternal:
         return keys_removed
 
     @classmethod
-    def _set_visibility_keys(cls, objects, visible, when, offset, group_overlapping):
+    def _set_visibility_keys(
+        cls, objects, visible, when, offset, group_overlapping, on_replace=None
+    ):
         """Body of :meth:`AnimUtils.set_visibility_keys`."""
         # Get objects to work with
         if objects is None:
@@ -516,13 +523,24 @@ class _KeyEditInternal:
                 cmds.warning(f"Invalid 'when' parameter: {when}. Using 'start'.")
                 target_frames = [start_frame + offset]
 
-            # Set visibility keys for each object in the group
+            # Set visibility keys for each object in the group -- replacing a
+            # visibility key already on the frame that holds the other state.
             for obj in objects_in_group:
+                crv, replaced = (
+                    cls._keyed_over(
+                        f"{obj}.visibility",
+                        [(frame, visibility_value) for frame in target_frames],
+                    )
+                    if on_replace is not None
+                    else (None, [])
+                )
                 for frame in target_frames:
                     cmds.setKeyframe(
                         obj, attribute="visibility", time=frame, value=visibility_value
                     )
                     keys_created += 1
+                if replaced:
+                    on_replace(crv, replaced)
 
         print(
             f"Created {keys_created} visibility keyframe(s) for {len(obj_keyframe_data)} object(s)/group(s)"
@@ -530,7 +548,7 @@ class _KeyEditInternal:
         return keys_created
 
     @classmethod
-    def _delete_keys(cls, objects, *attributes, time, channel_box_only):
+    def _delete_keys(cls, objects, *attributes, time, channel_box_only, on_delete=None):
         """Body of :meth:`AnimUtils.delete_keys`."""
         if objects is None:
             objects = cmds.ls(selection=True)
@@ -556,24 +574,49 @@ class _KeyEditInternal:
         # Handle recursive cases (pipe-separated or multi-element sequences)
         if isinstance(time_range, list):
             for t in time_range:
-                cls.delete_keys(objects, *attributes, time=t, channel_box_only=False)
+                cls.delete_keys(
+                    objects,
+                    *attributes,
+                    time=t,
+                    channel_box_only=False,
+                    on_delete=on_delete,
+                )
             return
+
+        range_kw = {"time": time_range} if time_range else {}
+
+        def _cut(targets):
+            # The keys about to go, per curve, for on_delete -- read first: a
+            # curve that loses every key is deleted with them.
+            doomed = []
+            if on_delete is not None:
+                try:
+                    names = cmds.keyframe(targets, query=True, name=True) or []
+                except RuntimeError:
+                    names = []
+                for crv in dict.fromkeys(names):
+                    times = cmds.keyframe(crv, query=True, timeChange=True, **range_kw)
+                    if times:
+                        doomed.append((crv, list(times)))
+            cmds.cutKey(targets, clear=True, **range_kw)
+            for crv, times in doomed:
+                on_delete(crv, times)
 
         # Optimized: batch cutKey operations
         if attributes:
             # Build list of attribute plugs for all objects
             attr_plugs = [f"{obj}.{attr}" for obj in objects for attr in attributes]
             if attr_plugs:
-                if time_range:
-                    cmds.cutKey(attr_plugs, time=time_range, clear=True)
-                else:
-                    cmds.cutKey(attr_plugs, clear=True)
+                _cut(attr_plugs)
         else:
             # Delete keyframes for all attributes - pass all objects at once
-            if time_range:
-                cmds.cutKey(objects, time=time_range, clear=True)
-            else:
-                cmds.cutKey(objects, clear=True)
+            _cut(objects)
+
+    @staticmethod
+    def _clear_key_selection() -> None:
+        """Body of :meth:`AnimUtils.clear_key_selection`."""
+        if cmds.keyframe(query=True, selected=True, name=True):
+            cmds.selectKey(clear=True)
 
     @classmethod
     def _select_keys(
@@ -619,7 +662,7 @@ class _KeyEditInternal:
 
         # Clear selection if not adding to it
         if not add_to_selection:
-            cmds.selectKey(clear=True)
+            cls.clear_key_selection()
 
         range_kw = {"time": time_range} if time_range else {}
 

@@ -180,7 +180,11 @@ class TestScopeWords(unittest.TestCase):
         stub._scope = lambda: label
         with (
             mock.patch.object(mod, "cmds", mock.Mock(ls=ls)),
-            mock.patch.object(mod.TextureBaker, "resolve_meshes", staticmethod(list)),
+            mock.patch.object(
+                mod.TextureBaker,
+                "resolve_meshes",
+                staticmethod(lambda pool, **_kw: list(pool)),
+            ),
             mock.patch.object(
                 DisplayUtils, "is_visible", staticmethod(lambda path: path == "|seen")
             ),

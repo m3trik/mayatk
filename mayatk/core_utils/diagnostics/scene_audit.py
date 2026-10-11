@@ -1668,7 +1668,9 @@ class SceneAnalyzer(ptk.LoggingMixin):
                 value = value[0]
             return value
 
-        for attr in ("transparency", "transmission"):
+        # standardSurface / aiStandardSurface `transmission`, openPBR
+        # `transmissionWeight` -- the same glass weight, two spellings.
+        for attr in ("transparency", "transmission", "transmissionWeight"):
             value = value_of(attr)
             if value == "driven":
                 return TRANSPARENCY_BLEND

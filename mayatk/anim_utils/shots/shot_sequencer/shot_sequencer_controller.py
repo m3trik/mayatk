@@ -11,7 +11,7 @@ interaction handlers from the concept mixins beside it:
 - ``scene_callbacks`` -- Maya undo/redo, keyframe-edit and time-change events.
 - ``undo_ledger`` -- the shot-boundary snapshots undo/redo step through.
 - ``shot_lane`` -- the shot lane's context menu and shot structure edits.
-- ``clip_menu`` -- clip context menus, Move to Shot, clip-key delete / stash.
+- ``clip_menu`` -- clip context menus, Move / Copy to Shot, clip-key delete / stash.
 - ``key_menu`` -- key context menus, tangent edits and drags, key edits.
 - ``widget_sync`` -- rebuilding the widget: tracks, clips, sub-rows, colours.
 - ``scene_selection`` -- tracks and the Maya selection / Graph Editor sync.
@@ -34,7 +34,11 @@ except ImportError:
 
 import pythontk as ptk
 
-from mayatk.anim_utils.shots._shots import StoreEvent
+from mayatk.anim_utils.shots._shots import (
+    ActiveShotChanged,
+    ShotsEdited,
+    StoreEvent,
+)
 from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
     ShotSequencer,
 )
@@ -116,7 +120,6 @@ class ShotSequencerController(
         self._sub_row_cache: dict = {}  # (shot_id, track_name) → sub-row data
         self._color_map_cache: Optional[dict] = None  # persisted attribute color map
         self._audio_segments_cache: Optional[tuple] = None  # (range_key, segments)
-        self._last_visible_key: Optional[tuple] = None  # fast-path gating key
         self._reconcile_needed: bool = True  # gated by DAG/store events
         self._shifted_out_keys: dict = {}  # obj_name → {time, …} shift-moved out
         # Last amount the padding prompt was answered with — padding a run of
@@ -127,11 +130,14 @@ class ShotSequencerController(
         # into, and _extend_reach caps how far out a new key may sit and
         # still count (ANY_REACH = no cap).
         self._extend_to_keys: bool = False
+        # Global "a shot change puts the playhead on the shot's first frame"
+        # (header menu; on by default -- the shot changed to is the one about
+        # to be worked in).
+        self._playhead_to_shot_start: bool = True
+        # Move / Copy to Shot's toggle: a pick copies while it is on.  Held
+        # for the session, so a run of copies is one toggle.
+        self._copy_to_shot: bool = False
         self._extend_reach: float = self.EXTEND_REACH_FRAMES
-        # Keys copied from the key menu, awaiting a paste (AnimUtils.copy_keys
-        # output).  Panel-scoped on purpose: it is the sequencer's clipboard,
-        # not Maya's, and it must survive a rebuild.
-        self._copied_keys = None
         self._prev_action = None  # OptionBox action for prev shot
         self._next_action = None  # OptionBox action for next shot
         self._view_mode_action = None  # OptionBox action for view mode cycle
@@ -275,17 +281,12 @@ class ShotSequencerController(
         """Rebind to the new active store after a scene swap."""
         self._unbind_store_listener()
         self._sequencer = None
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._audio_segments_cache = None
-        self._last_visible_key = None
-        self._reconcile_needed = True
+        self._drop_caches()
         # Cross-scene state must not survive the swap.  The boundary
         # ledger needs no clearing here — it lives on the STORE, so the new
         # scene's store starts with a fresh one and the old scene's dies
         # with its store.
         self._shifted_out_keys.clear()
-        self._copied_keys = None  # keyed by object NAME; the names are gone
         self._bind_store_listener()
         # Combobox first: _sync_to_widget resolves active_shot_id through
         # the combobox, which still holds the PREVIOUS scene's shot ids
@@ -302,11 +303,25 @@ class ShotSequencerController(
         """React to ShotStore mutations from any source (e.g. manifest build)."""
         if self._syncing or self.sequencer is None:
             return
-        self._segment_cache.clear()
-        self._sub_row_cache.clear()
-        self._audio_segments_cache = None
-        self._last_visible_key = None
-        self._reconcile_needed = True
+        if isinstance(event, ShotsEdited):
+            # An edit's own announcement (``scene_edit``), for the panels that
+            # did not make it.  This one redraws after each of its own edits,
+            # and another panel's reaches it through the events that edit
+            # raises: rebuilding here too drew every sequencer edit twice.
+            return
+        self._drop_caches()
+        if (
+            isinstance(event, ActiveShotChanged)
+            and event.shot_id is not None
+            and event.previous is not None
+        ):
+            # A shot picked in another panel -- the Shots window, the
+            # manifest's Open in Shot Sequencer -- is a shot change too.  One
+            # that only fills an empty slot is not: the Shots window selects
+            # the first shot once the active one is deleted.
+            shot = self.sequencer.shot_by_id(event.shot_id)
+            if shot is not None:
+                self._land_on_shot(shot)
         # Refresh combobox and widget when shots change externally
         self._sync_combobox()
         self._sync_to_widget()

@@ -364,6 +364,98 @@ class FbxUtils(ptk.HelpMixin):
             )
         return report
 
+    @staticmethod
+    def embed_dependencies(
+        file_path: str,
+        search_dirs: Optional[Iterable[str]] = None,
+        files: Optional[Iterable[Any]] = None,
+        logger: Optional[logging.Logger] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Embed every file a written FBX's scene records name, in place.
+
+        The records name their files by file name -- ``lightmap_metadata`` its
+        maps and reflection probe, ``shadow_metadata`` its silhouette, atlas
+        and horizon maps -- and a lighting-only bake binds its maps to no
+        material, so the FBX carried none of them and every consumer had them
+        copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
+        inside the file under its name, the form Unity's importer extracts,
+        resolved where this scene keeps it: *search_dirs*, else
+        :meth:`LightmapRecords.search_dirs` -- the folders the GLB build joins
+        the same names against. The audio the file's ``audio_manifest`` events
+        play rides in too, each track's file under its event's name
+        (:meth:`AudioUtils.track_files`). The Scene Exporter runs it on its
+        FBX after the GLB conversion, which binds its own copies.
+
+        Never raises -- a failure is a warning and the file stays as written.
+        A file that is not a binary FBX (an ASCII preset, which ships no
+        carrier) is left alone.
+
+        Parameters:
+            file_path: The FBX just written from this scene.
+            search_dirs: Folders to resolve the names against, in priority
+                order; ``None`` asks the scene.
+            files: Further files to embed (paths or ``(name, path)`` pairs);
+                ``None`` takes the audio the file's events play.
+            logger: Where the outcome is said; this module's otherwise.
+
+        Returns:
+            ``ptk.FbxMedia.embed_dependencies``'s report (``"named"``,
+            ``"embedded"``, ``"present"``, ``"missing"``, ``"bytes"``), or
+            ``None`` when the file is not a binary FBX or the pass failed.
+        """
+        log = logger or logging.getLogger(__name__)
+        if not ptk.FbxFile.is_fbx(file_path):
+            return None
+        try:
+            if search_dirs is None:
+                from mayatk.light_utils.lightmap_baker.lightmap_records import (
+                    LightmapRecords,
+                )
+
+                search_dirs = LightmapRecords.search_dirs()
+            if files is None:
+                files = FbxUtils._shipped_audio(file_path, log)
+            return ptk.FbxMedia.embed_dependencies(
+                file_path, search_dirs=list(search_dirs), files=files, logger=log
+            )
+        except Exception as error:  # noqa: BLE001 -- the deliverable already shipped
+            log.warning(f"FBX dependencies: not embedded -- the pass failed: {error}")
+            log.debug("Dependency pass failed.", exc_info=True)
+            return None
+
+    @staticmethod
+    def _shipped_audio(file_path: str, log) -> List[Tuple[str, str]]:
+        """``(file name, path)`` of the audio the FBX's events play.
+
+        Read off the ``audio_manifest`` the file itself carries (each event
+        names its track), resolved through the scene's file map; a track whose
+        file is missing is said once and left out.
+        """
+        import json
+
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        names: List[str] = []
+        fbx = ptk.FbxFile.load(file_path, raw_payloads=False)
+        for value in fbx.user_properties(ptk.SceneRecords.AUDIO.key):
+            try:
+                payload = json.loads(bytes(value).decode("utf-8"))
+            except (TypeError, ValueError, UnicodeDecodeError):
+                continue
+            events = payload.get("events") if isinstance(payload, dict) else None
+            for event in events or []:
+                name = str((event or {}).get("name") or "").strip()
+                if name and name.lower() != "none" and name not in names:
+                    names.append(name)
+        found = AudioUtils.track_files(names)
+        missing = sorted(set(names) - {os.path.splitext(n)[0] for n, _ in found})
+        if missing:
+            log.warning(
+                "FBX dependencies: no audio file for event(s) "
+                f"{', '.join(missing)}; the deliverable ships without them."
+            )
+        return found
+
     @classmethod
     def import_scene(
         cls,
@@ -984,7 +1076,7 @@ class FbxUtils(ptk.HelpMixin):
         cls, mode: str = ptk.ExportContext.PIPELINE, **decisions
     ) -> ptk.ExportContext:
         """A context for this scene: provenance filled in, *decisions*
-        (``clip_mode``, ``clip_span``) as given."""
+        (``clip_mode``, ``clip_span``, ``rendering``, ``scope``) as given."""
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}

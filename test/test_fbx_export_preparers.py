@@ -466,7 +466,7 @@ class TestExportHandoffBlock(MayaTkTestCase):
         self.assertIn("data_export.lightmap_metadata", block["reads"])
         self.assertNotIn("data_export.handoff", block["reads"], "not itself")
         # The sentence the whole block exists for.
-        self.assertIn("NOT", block["instructions"])
+        self.assertIn("No material references those maps", block["instructions"])
         self.assertIn("lightmapInfo", block["instructions"])
 
     def test_the_session_hook_path_stamps_it_too(self):

@@ -12,6 +12,8 @@ import os
 import sys
 import unittest
 
+import pythontk as ptk  # noqa: E402
+
 test_dir = os.path.dirname(os.path.abspath(__file__))
 if test_dir not in sys.path:
     sys.path.insert(0, test_dir)
@@ -350,8 +352,9 @@ class TestSequencerMoveResizeShared(MayaTkTestCase):
 class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
     """Reproduces: audio loaded via audio_clips UI, then Build pressed.
 
-    Mirrors ``shot_manifest_slots.build()``'s range_map construction so
-    the behavior under test is the same code path the Build button runs.
+    Builds through the range planning the Build button uses
+    (``RangeResolver.incremental_ranges`` once shots exist, else
+    ``resolve_ranges``), so the behavior under test is the button's.
     """
 
     def setUp(self):
@@ -365,9 +368,12 @@ class TestBuildButtonWithAudioClipsUI(MayaTkTestCase):
         super().tearDown()
 
     def _run_build(self, builder, steps, incremental: bool):
-        """Same range_map logic as shot_manifest_slots.build()."""
+        """Build *steps* with the ranges the controller's build() plans."""
         if incremental:
-            range_map = {s.name: (s.start, s.end) for s in self.store.sorted_shots()}
+            shots = builder.pair(steps).shots
+            range_map = ptk.RangeResolver.incremental_ranges(
+                steps, {sid: (s.start, s.end) for sid, s in shots.items()}
+            )
         else:
             resolved = RangeResolver.resolve_ranges(
                 steps=steps,

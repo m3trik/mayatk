@@ -45,7 +45,9 @@ SPACE_OBJECT = MSpace.kObject if MSpace is not None else 0
 SPACE_WORLD = MSpace.kWorld if MSpace is not None else 0
 
 # Euler rotation order mapping for MEulerRotation constructor
-_EULER_ORDER = {"xyz": 0, "yzx": 1, "zxy": 2, "xzy": 3, "yxz": 4, "zyx": 5}
+#: Maya's rotate orders, in ``rotateOrder`` (and ``MEulerRotation``) enum order.
+_ROTATE_ORDERS = ("xyz", "yzx", "zxy", "xzy", "yxz", "zyx")
+_EULER_ORDER = {order: index for index, order in enumerate(_ROTATE_ORDERS)}
 
 # Matrix plugs that are SINGULAR (not multi-instance). Read with
 # ``cmds.getAttr("node.attr")`` — passing an index raises. Anything else
@@ -1189,7 +1191,9 @@ class Matrices(
     - _NodeBuilders: Node graph construction
     """
 
-    pass
+    #: Maya's rotate orders, in ``rotateOrder`` enum order: a name's index is
+    #: its enum value.
+    ROTATE_ORDERS: Tuple[str, ...] = _ROTATE_ORDERS
 
     @staticmethod
     def get_matrix(node: str, attr: str = "worldMatrix", index: int = 0) -> List[float]:

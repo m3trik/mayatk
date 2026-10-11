@@ -8,7 +8,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/_anim_utils.py` — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
 - constants: STANDARD_TRANSFORM_ATTRS
 - `class AnimUtils(_AnimUtilsInternal, pythontk.HelpMixin)`
-  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
+  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
 
 ### `anim_utils/_tied_keys.py` — Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
 - constants: TIED_KEYS_ATTR
@@ -88,7 +88,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MayaScenePersistence`
   - methods: store_cls, save, load, record_changed, remove_callbacks
 - `class ShotStore(pythontk.ShotStore, _ShotStoreInternal)`
-  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, resolve_member, publish_export_view, export_transfer, apply_transfer, transfer_out, transfer_in, merge_carrier, discard_carrier
+  - methods: active, undo_queue_top, scene_edit, has_animation, detect_regions, assess, member_nodes, publish_export_view, export_transfer, apply_transfer, transfer_out, transfer_in, merge_carrier, discard_carrier
 
 ### `anim_utils/shots/shot_manifest/_shot_manifest.py` — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - `class ShotManifest(pythontk.core_utils.engines.shots.manifest.manifest_engine.ShotManifest, _ShotManifestInternal)`
@@ -98,28 +98,62 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Behaviors(pythontk.core_utils.engines.shots.manifest.behaviors.Behaviors, _BehaviorsInternal)`
   - methods: apply_behavior, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
 
+### `anim_utils/shots/shot_manifest/export_menu.py` — The Shot Manifest's Export button (beside Assess) and its option menu: the
+- `class ExportMenuMixin`
+  - methods: export
+
+### `anim_utils/shots/shot_manifest/header_menu.py` — The Shot Manifest's header menu: display options (Long Names, Hide Missing
+- `class HeaderMenuMixin`
+
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, BEHAVIOR_STATUS_COLORS, ERROR_COLOR
 - `class ManifestData`
-  - methods: fmt_behavior, format_behavior_html, try_load_maya_icons
+  - methods: fmt_behavior, format_behavior_html
+
+### `anim_utils/shots/shot_manifest/manifest_editor.py` — Local Edits for the Shot Manifest panel: change the table, never the sheet.
+- `class ManifestEditor`
+  - methods: enabled, add_header_options, view_original, refuse_viewing, reset, source_key, load, save, apply, stale, refresh, refuse_locked, begin_edit, commit_edit, set_behaviors, add_menu_actions, add_step, add_shot, remove_step, hide_steps, hide_object, move_object, rename_all, revert_step, revert_object, decorate
+
+### `anim_utils/shots/shot_manifest/manifest_host.py` — What the Shot Manifest panel needs from Maya: its store, engine and detection
+- `class ManifestHost`
+  - methods: store_cls, manifest_cls, detection, available, current_frame, find_nodes, reveal, leaf_name, object_icon
+
+### `anim_utils/shots/shot_manifest/manifest_source.py` — Where the Shot Manifest's steps come from: a build sheet (a CSV path or link,
+- `class ManifestSourceMixin`
+  - methods: detect
+
+### `anim_utils/shots/shot_manifest/mapping_picker.py` — The Shot Manifest's mapping template: the picker in the header menu (built-in
+- `class MappingPickerMixin`
+
+### `anim_utils/shots/shot_manifest/range_column.py` — The Shot Manifest table's Start / End column: what a step's range is
+- `class RangeColumnMixin`
 
 ### `anim_utils/shots/shot_manifest/range_resolver.py` — Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
 - `class RangeResolver`
   - methods: resolve_ranges
 
-### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest UI.
-- `class ShotManifestController(ManifestTableMixin, pythontk.LoggingMixin)`
-  - methods: detect, remove_callbacks, build, assess
-- `class ShotManifestSlots(pythontk.LoggingMixin)`
-  - methods: header_init, btn_expand_missing, btn_expand_extra, btn_settings, b002, b003
+### `anim_utils/shots/shot_manifest/row_menus.py` — The Shot Manifest rows' context menus and what they do: a step row's (colour
+- `class RowMenusMixin`
 
-### `anim_utils/shots/shot_manifest/table_presenter.py` — Tree-widget presentation mixin for the Shot Manifest controller.
+### `anim_utils/shots/shot_manifest/shot_manifest_controller.py` — The Shot Manifest panel's controller: its state, the steps the table shows,
+- `class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportMenuMixin, pythontk.LoggingMixin)`
+  - methods: build, assess
+
+### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
+- `class ShotManifestSlots(pythontk.LoggingMixin)`
+  - methods: header_init, btn_expand_missing, btn_expand_extra, btn_settings, b002, b003, b004
+
+### `anim_utils/shots/shot_manifest/store_follow.py` — The Shot Manifest panel following the scene's store: its events (a shot
+- `class StoreFollowMixin`
+  - methods: remove_callbacks
+
+### `anim_utils/shots/shot_manifest/table_presenter.py` — The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
 - `class ManifestTableMixin`
   - methods: expand_missing, expand_extra
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer(pythontk.ShotSequencer)`
-  - methods: reconcile_all_shots, collect_object_segments, detect_shots, move_attribute_keys, move_curve_keys, recreate_curve_keys, move_stepped_keys, scale_object_keys, scale_shot_keys
+  - methods: reconcile_all_shots, collect_object_segments, detect_shots, move_attribute_keys, copy_attribute_keys, move_curve_keys, recreate_curve_keys, scale_object_keys, scale_shot_keys
 
 ### `anim_utils/shots/shot_sequencer/clip_menu.py` — Clip context menus and clip-level key operations.
 - `class ClipMenuMixin`
@@ -160,7 +194,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shot_sequencer/shot_lane.py` — The shot lane: its context menu and the shot structure edits.
 - `class ShotLaneMixin`
-  - methods: on_zone_context_menu, delete_shot, delete_stale_shots, move_shot_to_position, merge_shot_with, split_shot_at
+  - methods: on_zone_context_menu, delete_shot, delete_shots, delete_stale_shots, move_shot_to_position, merge_shot_with, split_shot_at
 
 ### `anim_utils/shots/shot_sequencer/shot_nav.py` — Shot navigation and combobox synchronization.
 - `class ShotNavMixin`
@@ -190,9 +224,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shots_slots.py` — Switchboard slots for the Shots settings UI.
 - `class ShotsController(pythontk.LoggingMixin)`
-  - methods: remove_callbacks, refresh_state, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, on_delete_shot, confirm_stale_removal, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
+  - methods: remove_callbacks, refresh_state, shot_label, on_navigate_shot, on_new_shot, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, scope_label, scope_count, delete_scope, label_delete_shots, label_shift_all, label_apply_gap, on_delete_shot, confirm_removal, confirm_stale_removal, on_delete_shots, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
 - `class ShotsSlots(pythontk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_all, btn_delete_stale, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
+  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_shots, cmb_delete_scope, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
@@ -223,7 +257,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, RESERVED_TRACK_IDS
 - `class TrackEvent`
 - `class AudioUtils(pythontk.HelpMixin)`
-  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, write_key, key_clip, track_curve, clip_length_frames, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
+  - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, track_files, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, read_all_events, write_key, key_clip, track_curve, clip_length_frames, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(pythontk.LoggingMixin)`
@@ -512,7 +546,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, scene_project_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, scene_source, scene_project_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -610,7 +644,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -760,7 +794,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_baker_slots.py` — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - `class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, select_bake_set_init, select_bake_set, clear_bake_set, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
@@ -778,10 +812,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/bake_sets.py` — Scene-stored bake sets: named object sets the bake tools read.
 - `class BakeSet`
-  - methods: exists, members, meshes, define, clear
+  - methods: conventional_name, name, exists, members, meshes, define, respell, clear
 - `class BakeSourceSet(BakeSet)`
   - methods: companion_path
 - `class LightmapExcludeSet(BakeSet)`
+- `class LightmapBakeSet(BakeSet)`
 
 ### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
 - `class EmissiveGroups(_EmissiveGroupsInternal, pythontk.LoggingMixin, pythontk.HelpMixin)`
@@ -844,7 +879,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class OpRegistry(_OpRegistryInternal)`
   - methods: register, get, all_ops, describe
 - `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
-  - methods: is_active, run
+  - methods: is_active, post, run
 - `class RpcPlugin(object)`
   - methods: import_ops, port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
 
@@ -917,8 +952,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: header_init, cmb_effect_init, cmb_effect, stk_effects_init, ui_field, focus, unfocus, b000, btn_remove, btn_webxr_init, btn_webxr
 
 ### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
+- constants: LOBE_CHANNELS
 - `class ShaderAttributeMap(_ShaderAttributeMapInternal)`
-  - methods: logical_channels, get_attr, constant_attr, emission_weight, read_constant, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
+  - methods: texture_scale, set_thin_walled, open_lobe_gate, slot_attrs, logical_channels, get_attr, constant_attr, emission_weight, base_weight, read_constant, get_mapping, connect_channel, resolve_live_slot, map_toggle_attr, map_toggle_state, select_color_alpha, add_shader_type, update_attr, as_dict
 
 ### `mat_utils/shader_converter.py` — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - `class ShaderConverter(pythontk.LoggingMixin, _ShaderConverterInternal)`
@@ -985,7 +1021,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class OpRegistry(_OpRegistryInternal)`
   - methods: register, get, all_ops, describe
 - `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
-  - methods: is_active, run
+  - methods: is_active, post, run
 - `class RpcPlugin(object)`
   - methods: import_ops, port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
 
@@ -1028,7 +1064,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(pythontk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, get_instances, replace_with_instances, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, expand_sets, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, get_instances, replace_with_instances, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -1038,7 +1074,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/attributes/channels/_channels.py` — Channels — Maya attribute query / mutation logic.
 - `class Channels`
-  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, resolve_component_targets, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
+  - methods: is_pinned, single_object_mode, pin_targets, get_selected_nodes, resolve_component_targets, get_channel_box_selection, get_filter_kwargs, query_connected_attrs, collect_attr_names, collect_value_strings, get_attr_value, get_attr_type, get_incoming_connection, classify_connection, is_off_curve, has_key_at_current_time, build_table_data, format_value, parse_value, toggle_lock, break_connections, set_lock, reset_to_default, toggle_keyable, delete_attributes, set_attribute_value, create_attribute, copy_attr_values, paste_attr_values, rename_attribute, rename_node, get_shape_nodes, get_history_nodes, toggle_key_at_current_time, set_key_at_current_time, set_breakdown_key, mute_attrs, unmute_attrs, hide_attrs, show_attrs, lock_and_hide_attrs, select_connections, can_freeze_selection, freeze_transforms, unfreeze_transforms, has_unfreeze_info
 
 ### `node_utils/attributes/channels/channels_slots.py` — UI slots for the Channels UI.
 - `class ChannelsSlots`
@@ -1176,7 +1212,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/channel_box.py` — Programmatic access to Maya's Channel Box.
 - `class ChannelBox`
-  - methods: connect_selection_changed, disconnect_selection_changed, get_selected_attrs, get_selected_objects, get_selected_plugs, select, select_visual, clear_selection, get_all_attrs, get_attr_properties, watch_selection, unwatch_selection, get_context_menu_actions, snapshot, diff, list_mel_procs, read_mel_proc, dump_tree, dump_model, list_signals, list_item_views
+  - methods: connect_selection_changed, disconnect_selection_changed, get_selected_attrs, get_selected_objects, get_selected_plugs, select, select_visual, clear_selection, add_stand_in, remove_stand_in, stand_in_selection, get_all_attrs, get_attr_properties, watch_selection, unwatch_selection, get_context_menu_actions, snapshot, diff, list_mel_procs, read_mel_proc, dump_tree, dump_model, list_signals, list_item_views
 
 ### `ui_utils/hotkey_collisions.py` — Maya hotkey collision checker for the uitk ShortcutEditor.
 - constants: MACRO_HOTKEY_SET
@@ -1223,7 +1259,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `uv_utils/_uv_utils.py`
 - `class UvUtils(pythontk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, get_uv_bounds, get_uv_triangles, get_uv_world_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, uv_snapshot, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP
@@ -1249,7 +1285,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`
-  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix
+  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix, set_rotate_order
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - constants: SPACE_OBJECT, SPACE_WORLD

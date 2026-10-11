@@ -120,10 +120,10 @@ if fx:
     out["camera_centre"] = [px, pz]
     out["plane_corners"] = [cmds.xform(f"{plane}.vtx[{i}]", q=True, ws=True, t=True) for i in range(4)]
     out["plane_opacity"] = cmds.getAttr(f"{plane}.{ShadowRig.OPACITY_ATTR}")
-    out["plane_intensity"] = cmds.getAttr(plane + ".shadowIntensity")
     # The shot's ALPHA channel is the signal: an offscreen playblast writes
     # the background at alpha 0 and a blended surface at its own alpha, so the
-    # plane's pixels carry a * opacity * intensity exactly, whatever the
+    # plane's pixels carry a * opacity exactly (the opacity carries the
+    # intensity), whatever the
     # background looks like. The gradient is turned off only so the RGB is
     # readable when someone opens the PNG.
     cmds.displayPref(displayGradient=False)
@@ -172,7 +172,8 @@ print("DEVICE CHECK WROTE", r"__RESULT__")
 def _expected_alpha(res):
     """``(alpha, inside, scale)``: ``HeightFieldMap.alpha`` over the shot's
     pixel grid in the plane's frame, the mask of pixels the plane covers, and
-    the plane's opacity x intensity the shader multiplies the alpha by."""
+    the plane's opacity the shader multiplies the alpha by (it carries
+    the intensity: the expression multiplies shadowIntensity in)."""
     rec = res["record_before"]
     hz = rec["horizon"]
     png = np.asarray(Image.open(res["horizon_png"]).convert("RGBA"))
@@ -205,7 +206,7 @@ def _expected_alpha(res):
     a_axis, b_axis = a_axis / la, b_axis / lb
     rel = np.column_stack([xs.ravel(), zs.ravel()]) - centre
     inside = (np.abs(rel @ a_axis) <= 0.5 * la) & (np.abs(rel @ b_axis) <= 0.5 * lb)
-    scale = float(res["plane_opacity"]) * float(res["plane_intensity"])
+    scale = float(res["plane_opacity"])
     return alpha.reshape(n, n), inside.reshape(n, n), scale
 
 
@@ -364,7 +365,7 @@ def run_device(device: str) -> bool:
             "",
         )
 
-        # -- the pixels: the shot's alpha IS a * opacity * intensity ---------
+        # -- the pixels: the shot's alpha IS a * opacity --------------------
         if res.get("shot_exists"):
             got = np.asarray(Image.open(res["shot"]).convert("RGBA"))[..., 3] / 255.0
             alpha, inside, scale = _expected_alpha(res)

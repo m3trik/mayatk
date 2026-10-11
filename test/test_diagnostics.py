@@ -80,6 +80,33 @@ class TestAnimCurveDiagnostics(MayaTkTestCase):
         )
         self.assertGreaterEqual(stats["corrupted_found"], 1)
 
+    def test_repair_reports_the_keys_it_deletes_and_spares_the_clipboard(self):
+        """A corrupted key Repair cuts is named by ``on_delete`` (what the
+        shot system releases its claims on), and the cut leaves the user's
+        copied keys alone: a bare ``cutKey`` put the cut key on the clipboard."""
+        curve = self._key_curve("translateX")
+        cmds.setKeyframe(self.cube, attribute="translateZ", time=1, value=42)
+        cmds.copyKey(self.cube, attribute="translateZ", time=(1, 1))
+        cmds.keyframe(curve, edit=True, valueChange=1e9, index=(0, 0))
+        deleted = []
+
+        AnimCurveDiagnostics.repair_corrupted_curves(
+            objects=[self.cube],
+            value_threshold=1e6,
+            quiet=True,
+            on_delete=lambda c, f: deleted.append((c, f and sorted(f))),
+        )
+
+        self.assertEqual(deleted, [(curve, [1.0])])
+        self.assertEqual(cmds.keyframe(curve, query=True, timeChange=True), [10.0])
+        cmds.pasteKey(self.cube, attribute="translateY", time=(5, 5))
+        self.assertEqual(
+            cmds.keyframe(
+                self.cube, attribute="translateY", query=True, valueChange=True
+            ),
+            [42.0],
+        )
+
     def test_repair_visibility_tangents_returns_int(self):
         # No visibility curves yet — should return 0
         result = AnimCurveDiagnostics.repair_visibility_tangents(

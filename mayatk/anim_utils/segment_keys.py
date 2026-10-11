@@ -1306,19 +1306,36 @@ class SegmentKeys(SegmentKeysInfo):
         offset: float,
         time_range: Optional[Tuple[float, float]] = None,
         remove_flat_at_dest: bool = False,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Shift keys on curves by offset in a single relative move,
         optionally pre-cleaning static (flat/hold) keys at the destination
         so they can't collide with the incoming keys.
 
-        Args:
+        Parameters:
             curves: List of animation curves to shift.
             offset: Amount to shift (in frames).
             time_range: Optional (start, end) tuple to limit the shift to specific keys.
             remove_flat_at_dest: If True, remove static (flat/hold) keys at the
                 destination range before moving.  This prevents collisions with
                 keys that aren't part of active animation.
+            on_replace: ``on_replace(curve, frames)`` hears the keys the shift
+                replaced -- an unmoved key a moved one lands on, and the flat
+                keys the pre-clean cut at the destination -- what the shot
+                system releases its claims on.
+            on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames
+                of the keys moved.
+
+        A range shift moves through ``AnimUtils._shift_curves``: it travels
+        the full offset past unmoved keys and REPLACES one it lands on.  Maya's
+        default move stopped a key at an unmoved key it would pass and stacked
+        it there -- two keys on one frame, at every seam Stagger's end-to-start
+        placement lays a split curve's segment against the next one (measured
+        2026-10-05).
         """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         _log = _log_shift
 
         _log.debug(
@@ -1342,6 +1359,7 @@ class SegmentKeys(SegmentKeysInfo):
             dst_end = src_end + offset
             dst_range = (dst_start - eps, dst_end + eps)
             for curve in curves:
+                cut = []  # reported once per curve, outside the guards below
                 try:
                     dest_keys = cmds.keyframe(
                         curve, q=True, time=dst_range, timeChange=True
@@ -1384,10 +1402,13 @@ class SegmentKeys(SegmentKeysInfo):
                                     kt,
                                 )
                                 cmds.cutKey(curve, time=(kt, kt), clear=True)
+                                cut.append(kt)
                         except Exception:
                             pass
                 except Exception:
-                    continue
+                    pass
+                if cut and on_replace is not None:
+                    on_replace(curve, cut)
 
         for curve in curves:
             try:
@@ -1411,13 +1432,10 @@ class SegmentKeys(SegmentKeysInfo):
                     matched_keys,
                 )
 
-                # Single-pass: move keys directly to the destination
-                cmds.keyframe(
-                    curve,
-                    edit=True,
-                    relative=True,
-                    timeChange=offset,
-                    **kw_range,
+                # Single-pass: move keys directly to the destination, past any
+                # unmoved key and replacing one they land on.
+                AnimUtils._shift_curves(
+                    [curve], offset, kw_range.get("time"), on_replace, on_move
                 )
             except RuntimeError as e:
                 _log.error("[SHIFT] Exception for %s: %s", curve, e)
@@ -1432,6 +1450,8 @@ class SegmentKeys(SegmentKeysInfo):
         use_intervals: bool = False,
         avoid_overlap: bool = False,
         preserve_gaps: bool = False,
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
     ):
         """Calculate and execute staggering on groups of segments.
 
@@ -1442,6 +1462,11 @@ class SegmentKeys(SegmentKeysInfo):
             use_intervals: If True, use fixed intervals.
             avoid_overlap: If True (and use_intervals=True), skip intervals to avoid overlap.
             preserve_gaps: If True (and use_intervals=False), ensure we don't pull back.
+            on_replace: ``on_replace(curve, frames)`` hears the keys a shift
+                replaced -- a segment laid end-to-start against the next one
+                lands on its start key (:meth:`shift_curves`).
+            on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames of
+                the keys each shift moved (:meth:`shift_curves`).
         """
         operations = []
 
@@ -1547,8 +1572,11 @@ class SegmentKeys(SegmentKeysInfo):
         pos_ops.sort(key=get_start_time, reverse=True)
         neg_ops.sort(key=get_start_time)
 
-        for op in pos_ops:
-            cls.shift_curves(op["curves"], op["shift"], op["time"])
-
-        for op in neg_ops:
-            cls.shift_curves(op["curves"], op["shift"], op["time"])
+        for op in pos_ops + neg_ops:
+            cls.shift_curves(
+                op["curves"],
+                op["shift"],
+                op["time"],
+                on_replace=on_replace,
+                on_move=on_move,
+            )

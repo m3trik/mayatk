@@ -121,13 +121,21 @@ class RigUtils(ptk.HelpMixin):
     @staticmethod
     @DisplayUtils.add_to_isolation
     def create_locator(
-        *, scale: float = 1, parent: Optional[str] = None, **kwargs
+        *,
+        scale: float = 1,
+        size: float = 1,
+        parent: Optional[str] = None,
+        **kwargs,
     ) -> str:
         """Create a locator with the given scale.
 
         Parameters:
             * (args): Additional arguments for the spaceLocator command.
-            scale (float): The desired scale of the locator.
+            scale (float): The desired scale of the locator's TRANSFORM, which
+                everything parented under it inherits.
+            size (float): The size of the locator's display: its shape's
+                ``localScale``, which nothing under it inherits -- blendertk's
+                ``create_locator(size=)``, an Empty's display size.
             **kwargs: Additional keyword arguments for the spaceLocator command, including 'name' and 'position'.
 
         Special Handling:
@@ -155,6 +163,9 @@ class RigUtils(ptk.HelpMixin):
 
         if scale != 1:
             cmds.scale(scale, scale, scale, loc)
+        if size != 1:
+            for shape in NodeUtils.get_shapes(loc):
+                cmds.setAttr(f"{shape}.localScale", size, size, size)
         if parent:
             loc = cmds.parent(loc, parent)[0]
 
@@ -181,15 +192,17 @@ class RigUtils(ptk.HelpMixin):
         strip_digits: bool = False,
         strip_trailing_underscores: bool = True,
         strip_suffix: bool = True,
-    ) -> None:
-        """Rig object under a zeroed locator aligned to its d manip pivot.
+        rotate_order: str = "xyz",
+    ) -> List[str]:
+        """Rig object under a zeroed locator aligned to its manip pivot.
 
         Parameters:
             objects (str/obj/list): Objects to create locator rigs for.
             parent (bool): Whether to parent object under locator and locator under group.
             freeze_object (bool): Freeze object transforms after setup.
             freeze_locator (bool): Freeze locator transforms after alignment.
-            loc_scale (float): Scale of locator display.
+            loc_scale (float): Size of the locator's display (its shape's
+                ``localScale``); its channels stay the rig's.
             lock_translate (bool): Lock object's translate attributes.
             lock_rotation (bool): Lock object's rotate attributes.
             lock_scale (bool): Lock object's scale attributes.
@@ -217,8 +230,19 @@ class RigUtils(ptk.HelpMixin):
             strip_digits (bool): Whether to strip trailing digits before suffixing.
             strip_trailing_underscores (bool): Whether to strip trailing underscores before adding new suffix.
             strip_suffix (bool): Whether to strip the defined suffixes (grp/loc/obj) from the name before adding new ones.
+            rotate_order (str): The locator's rotate order. Its FIRST letter is
+                the object-space axis that spins through a single channel at any
+                pose: "xyz" (Maya's default) keeps an X spin clean, "zyx" a Z
+                spin. See :meth:`mayatk.XformUtils.set_rotate_order` to change
+                it on a rig that is already animated.
+
+        Returns:
+            list: The locators built (long names), in input order -- left
+            selected, ready to animate.
         """
         import re
+
+        rotate_order_index = XformUtils._rotate_order_index(rotate_order)
 
         # Every affix is an AffixRule -- a spelling AND the side it lands on --
         # so a convention spelled as a prefix lands as one, and the panel's
@@ -300,6 +324,7 @@ class RigUtils(ptk.HelpMixin):
             if objects
             else []
         )
+        loc_uuids: List[str] = []
         for obj in (
             cmds.ls(objects_str, long=True, type="transform", flatten=True) or []
         ):
@@ -397,7 +422,10 @@ class RigUtils(ptk.HelpMixin):
                     flat[14] = center[2]
                     matrix = om.MMatrix(flat)
 
-            loc = cls.create_locator(scale=loc_scale)
+            # Sized by its shape: the pose matrix below overwrites the transform's
+            # scale and the freeze zeroes it; neither touches the shape.
+            loc = cls.create_locator(size=loc_scale)
+            cmds.setAttr(f"{loc}.rotateOrder", rotate_order_index)
             cmds.xform(loc, matrix=list(matrix), ws=True)
 
             grp = None
@@ -460,7 +488,14 @@ class RigUtils(ptk.HelpMixin):
                 rotate=lock_rotation,
                 scale=lock_scale,
             )
-            cmds.select(loc, replace=True)
+            loc_uuids.append(loc_uuid)
+
+        # Every locator built, selected once the loop is done (selecting inside it
+        # left only the last one). One lookup per UUID keeps the input order.
+        locators = [p for u in loc_uuids for p in (cmds.ls(u, long=True) or [])[:1]]
+        if locators:
+            cmds.select(locators, replace=True)
+        return locators
 
     @classmethod
     @CoreUtils.undoable

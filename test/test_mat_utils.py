@@ -2184,6 +2184,41 @@ class TestRenameTextures(MayaTkTestCase):
         self.assertTrue(cmds.objExists("rock_MAT"), "nothing renamed")
         self.assertIn("rock_Base_Color.1001.png", self.listing())
 
+    def test_a_sync_failing_part_way_puts_back_what_it_renamed(self):
+        """A file held open by another app (WinError 32) failed the second
+        rename of a sync, leaving the first file on its new name while the
+        material, its nodes and lightmap kept the old (review, 2026-10-05). The
+        done renames are put back before the error is raised, which says so."""
+        from unittest import mock
+
+        import pythontk as ptk
+
+        before = self.listing()
+        stored = {
+            node: cmds.getAttr(f"{node}.fileTextureName")
+            for node in (self.color, self.normal)
+        }
+        real = ptk.TiledPath.rename
+        calls = []
+
+        def locked(path, new_name, dry_run=False):
+            if not dry_run:
+                calls.append(new_name)
+                if len(calls) == 2:  # the second file is held open
+                    raise PermissionError(13, "in use by another process", path)
+            return real(path, new_name, dry_run=dry_run)
+
+        with mock.patch.object(ptk.TiledPath, "rename", side_effect=locked):
+            with self.assertRaises((ValueError, OSError)) as caught:
+                MatUtils.sync_material_names(
+                    self.mat, "stone", material_affix=("", "_MAT")
+                )
+        self.assertIn("put back", str(caught.exception))
+        self.assertEqual(self.listing(), before)
+        self.assertTrue(cmds.objExists("rock_MAT"), "the material keeps its name")
+        for node, path in stored.items():
+            self.assertEqual(cmds.getAttr(f"{node}.fileTextureName"), path)
+
     def test_sync_follows_the_material_s_own_texture_set_only(self):
         """A StingrayPBS wears environment maps (``diffuse_cube.dds``) beside
         its own set; sync renamed those to the material's base too -- a file

@@ -1217,7 +1217,10 @@ class MatUtils(_MatUtilsInternal):
             "lightmaps": [(path, old map, new map)], "skipped": [reason]}``.
 
         Raises:
-            ValueError: *base* is unusable, or a rename would collide.
+            ValueError: *base* is unusable, or a rename would collide -- or a
+                file rename failed part-way (a file held open by another app),
+                after the renames done before it were put back; the message
+                says so.
         """
         return cls._sync_material_names(
             material=material,

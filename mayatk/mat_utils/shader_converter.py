@@ -321,11 +321,10 @@ class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):
             )
 
         shader = cmds.shadingNode(node_type, asShader=True, name=name)
-        if "opacity" in channels and cmds.attributeQuery(
-            "thinWalled", node=shader, exists=True
-        ):
+        if "opacity" in channels:
             # Cutout/foliage behavior, not glass — matches GameShader's setup.
-            cmds.setAttr(f"{shader}.thinWalled", True)
+            # Per type: OpenPBR spells it ``geometryThinWalled``.
+            ShaderAttributeMap.set_thin_walled(shader, node_type)
         return shader
 
     @classmethod

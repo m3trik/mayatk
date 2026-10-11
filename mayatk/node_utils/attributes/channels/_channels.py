@@ -411,6 +411,8 @@ class Channels:
         - ``"muted"`` — channel is muted (mute node)
         - ``"keyframe"`` — driven by an animCurve (no key on current frame)
         - ``"keyframe_active"`` — driven by an animCurve with a key set on the current frame
+        - ``"keyframe_changed"`` — keyed, but the value was moved off the
+          curve without a key (lost on the next time change)
         - ``"expression"`` — driven by an expression
         - ``"driven_key"`` — driven by a set-driven-key curve
         - ``"constraint"`` — driven by a constraint
@@ -433,10 +435,44 @@ class Channels:
         except Exception:
             return "none"
 
-        # Promote "keyframe" to "keyframe_active" when a key exists at current time.
-        if result == "keyframe" and cls.has_key_at_current_time(plug):
-            return "keyframe_active"
+        # A value moved off its curve outranks a key on this frame, as in
+        # Maya's Channel Box: either way it is lost on the next time change.
+        if result == "keyframe":
+            if cls.is_off_curve(plug):
+                return "keyframe_changed"
+            if cls.has_key_at_current_time(plug):
+                return "keyframe_active"
         return result
+
+    @staticmethod
+    def is_off_curve(plug, tolerance=1e-6):
+        """Return ``True`` if keyed *plug* holds a value its curve does not.
+
+        Moving a keyed object without keying it sets the plug until the next
+        time change re-evaluates the curve; Maya's Channel Box shows those
+        fields in a lighter red.  Only a plug driven directly by an animCurve
+        is judged -- through a conversion or blend node the two values are in
+        different units or mixed, so they are not comparable.
+
+        Parameters:
+            plug (str): ``node.attr``.
+            tolerance (float): Relative tolerance of the comparison.
+
+        Returns:
+            bool
+        """
+        try:
+            if not cmds.listConnections(plug, s=True, d=False, type="animCurve"):
+                return False
+            t = cmds.currentTime(q=True)
+            curve = cmds.keyframe(plug, q=True, eval=True, time=(t, t)) or []
+            value = cmds.getAttr(plug)
+        except Exception:
+            return False
+        if len(curve) != 1 or not isinstance(value, (int, float)):
+            return False
+        scale = max(1.0, abs(value), abs(curve[0]))
+        return abs(value - curve[0]) > tolerance * scale
 
     @staticmethod
     def has_key_at_current_time(plug):
@@ -515,9 +551,8 @@ class Channels:
         tuple[list[list[str]], list[tuple[bool, str]]]
             ``(rows, attr_states)`` where each row is
             ``[name, '', '', value_str, type_str]`` and each state is
-            ``(is_locked, connection_type)`` with *connection_type* being
-            ``"none"``, ``"keyframe"``, ``"expression"``, ``"driven_key"``,
-            ``"constraint"``, ``"muted"``, or ``"connected"``.
+            ``(is_locked, connection_type)`` with *connection_type* one of
+            :meth:`classify_connection`'s values.
         """
         attr_names = cls.collect_attr_names(nodes, filter_kwargs)
 

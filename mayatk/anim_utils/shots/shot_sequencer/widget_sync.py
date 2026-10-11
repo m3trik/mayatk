@@ -218,13 +218,18 @@ class WidgetSyncMixin:
             f"{n} object{'s' if n != 1 else ''}"
         )
 
-    def refresh(self) -> None:
-        """Clear cached segments and rebuild the sequencer widget."""
+    def _drop_caches(self) -> None:
+        """Forget every cached read of the scene: shot and sub-row segments,
+        the audio segments, and the membership reconcile (re-run on the next
+        rebuild)."""
         self._segment_cache.clear()
         self._sub_row_cache.clear()
         self._audio_segments_cache = None
-        self._last_visible_key = None
         self._reconcile_needed = True
+
+    def refresh(self) -> None:
+        """Clear cached segments and rebuild the sequencer widget."""
+        self._drop_caches()
         self._sync_to_widget()
 
     # ---- _sync_to_widget helpers -----------------------------------------
@@ -497,13 +502,23 @@ class WidgetSyncMixin:
 
         # Batch existence check: one `cmds.ls` round-trip instead of N
         # `cmds.objExists` calls.  Scenes with many tracks hit this on
-        # every rebuild.
+        # every rebuild.  The answer is in LONG paths, and a member is stored
+        # as it was given -- often a short name -- so a name not already a
+        # long path is resolved before it is compared: read as is, ``ctlA``
+        # was missing beside ``|ctlA`` and drew no track unless pinned.
         existing_set = set(cmds.ls(ordered, long=True) or []) if ordered else set()
+
+        def _exists(name: str) -> bool:
+            if name in existing_set:
+                return True
+            return not name.startswith("|") and any(
+                p in existing_set for p in cmds.ls(name, long=True) or []
+            )
 
         for obj_name in ordered:
             if self.sequencer.is_object_hidden(obj_name):
                 continue
-            exists = obj_name in existing_set
+            exists = _exists(obj_name)
             # Skip missing objects unless they are pinned
             if not exists and not self.sequencer.store.is_object_pinned(obj_name):
                 continue
@@ -881,10 +896,15 @@ class WidgetSyncMixin:
                 dur = e - s
                 is_hold = (s, e) in hold_ranges
 
-                # Build curve preview from the segment's own curves
+                # Build curve preview from the segment's own curves.  The
+                # shot system's claimed bound samples shape the curve but get
+                # no dot: they are not the animator's keys, and drawn they
+                # were "auto generated border keys" on every bound (2026-10-06).
                 preview = None
                 for crv in seg.get("curves", []):
-                    preview = SegmentCollector.build_curve_preview(crv, s, e)
+                    preview = SegmentCollector.build_curve_preview(
+                        crv, s, e, hidden_times=self.sequencer.ledger.key_times(crv)
+                    )
                     if preview:
                         break
                 extra = {

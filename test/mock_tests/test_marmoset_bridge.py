@@ -1149,6 +1149,35 @@ class TestMarmosetBridgeStandalone(unittest.TestCase):
             self.assertNotIn(managed, used)
 
 
+class TestStageManifestTextures(unittest.TestCase):
+    """A packed slot is retargeted at the component its unpack wrote."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="marmoset_stage_")
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_a_set_named_for_a_lobe_finds_its_roughness(self):
+        """``Hero_Coat_ORM`` unpacks to ``Hero_Coat_Roughness``: read alone a
+        coat roughness, read beside its AO and metallic the set's own."""
+        from pythontk import ImgUtils
+
+        packed = os.path.join(self.dir, "Hero_Coat_ORM.png")
+        ImgUtils.save_image(ImgUtils.create_image("RGB", (8, 8), (255, 200, 0)), packed)
+        manifest = {"materials": {"MAT_Coat": {"roughness": packed}}}
+        staging = os.path.join(self.dir, "staged")
+        os.makedirs(staging)
+
+        packing = MarmosetBridge._stage_manifest_textures(
+            manifest, staging, unittest.mock.MagicMock()
+        )
+
+        self.assertEqual(packing, {"MAT_Coat": "ORM"})
+        self.assertEqual(
+            os.path.basename(manifest["materials"]["MAT_Coat"]["roughness"]),
+            "Hero_Coat_Roughness.png",
+        )
+
+
 class _FakeMesh:
     """A Toolbag ``MeshObject`` stand-in: a name, world bounds, and a parent."""
 

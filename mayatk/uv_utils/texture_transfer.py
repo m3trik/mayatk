@@ -456,9 +456,11 @@ class _TextureTransferInternal:
         :meth:`ShaderAttributeMap.read_constant`: None where no attribute holds
         a value (a StingrayPBS sampler, an undriven normal), so a source with
         no map there gets the neutral fill rather than a black AO or a
-        (1, 1, 1) "normal"; opacity in opacity terms.
+        (1, 1, 1) "normal"; opacity in opacity terms; and in TEXTURE units, so
+        a specular weight of 1.0 fills a specular-level map at its 0.5 -- the
+        rewire doubles it back (``ShaderAttributeMap.TEXTURE_GAINS``).
         """
-        return ShaderAttributeMap.read_constant(material, channel)
+        return ShaderAttributeMap.read_constant(material, channel, texture_units=True)
 
     @staticmethod
     def pair_by_name(targets: Sequence[str], sources: Sequence[str]) -> Dict[str, str]:
@@ -804,6 +806,14 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
                     for ch in ptk.UvTransfer.CHANNEL_TOKENS
                     for const in [self.material_constant(m, ch)]
                     if const is not None
+                },
+                # A map on another scale from the one its output is read on
+                # (a weight-unit specular map, written out as a level).
+                "scales": {
+                    ch: scale
+                    for ch in ptk.UvTransfer.CHANNEL_TOKENS
+                    for scale in [ShaderAttributeMap.texture_scale(m, ch)]
+                    if scale is not None
                 },
             }
             for m in src_mat_registry

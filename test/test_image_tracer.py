@@ -1,7 +1,8 @@
 import unittest
 import os
-import sys
 import maya.cmds as cmds
+
+import pythontk as ptk
 
 try:
     import cv2
@@ -9,6 +10,14 @@ try:
 except ImportError:
     cv2 = None
     np = None
+
+#: Scratch artifacts go in the gitignored ``test/temp_tests/``, never beside this
+#: module in the tracked tree. ``None`` (exec'd without a file, as from the Script
+#: Editor) falls back to the system temp folder.
+try:
+    TEMP_TESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_tests")
+except NameError:
+    TEMP_TESTS = None
 
 try:
     import maya.cmds as cmds
@@ -47,21 +56,11 @@ except ImportError as e:
 class TestImageTracer(unittest.TestCase):
     def setUp(self):
         self.keep_scene = True
-        try:
-            base_dir = os.path.dirname(__file__)
-        except NameError:
-            import tempfile
-
-            base_dir = tempfile.gettempdir()
-        self.test_image_path = os.path.join(base_dir, "test_shape.png")
+        artifacts = ptk.TempArtifacts("image_tracer", policy="scoped", dir=TEMP_TESTS)
+        self.addCleanup(artifacts.cleanup)
+        self.scratch = artifacts.dir_path()
+        self.test_image_path = os.path.join(self.scratch, "test_shape.png")
         self.create_test_image()
-
-    def tearDown(self):
-        if os.path.exists(self.test_image_path):
-            try:
-                os.remove(self.test_image_path)
-            except OSError:
-                pass
 
     def create_test_image(self):
         if cv2 is None or np is None:
@@ -100,7 +99,25 @@ class TestImageTracer(unittest.TestCase):
         # Cleanup for this specific test if we want to be strict,
         # but we are keeping scene for now.
         if self.keep_scene:
-            grp = cmds.group(curves, name="test_trace_curves_grp")
+            cmds.group(curves, name="test_trace_curves_grp")
+
+    def test_trace_an_image_in_a_non_ascii_folder(self):
+        """``cv2.imread`` opens no path that is not ASCII on Windows: an image
+        in a folder named "Résumé ★" raised "Failed to read image" though it
+        was there. Read through ``ptk.ImgUtils.cv2_read`` now. Fixed: 2026-10-05."""
+        if ImageTracer is None:
+            self.skipTest("ImageTracer module not found")
+        if cv2 is None:
+            self.skipTest("OpenCV not found")
+        import shutil
+
+        folder = os.path.join(self.scratch, "Résumé ★")
+        os.makedirs(folder)
+        path = os.path.join(folder, "test_shape.png")
+        shutil.copy2(self.test_image_path, path)
+
+        curves = ImageTracer(path, scale=0.1).trace_curves()
+        self.assertTrue(curves, "no curves traced from the image")
 
     def test_create_mesh(self):
         if ImageTracer is None:
@@ -134,9 +151,8 @@ class TestImageTracer(unittest.TestCase):
 
         # Create a dummy zip file with a png inside
         import zipfile
-        import tempfile
         import shutil
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         # Create a test PNG
         png_path = self.test_image_path
@@ -144,8 +160,7 @@ class TestImageTracer(unittest.TestCase):
             self.create_test_image()
 
         # Create a zip file containing the PNG
-        temp_dir = tempfile.mkdtemp()
-        zip_source_path = os.path.join(temp_dir, "test_bp_export.zip")
+        zip_source_path = os.path.join(self.scratch, "test_bp_export.zip")
         with zipfile.ZipFile(zip_source_path, "w") as zf:
             zf.write(png_path, "test_stroke.png")
 
@@ -170,9 +185,6 @@ class TestImageTracer(unittest.TestCase):
                 mock_cmds.bluePencilFrame.called, "bluePencilFrame should be called"
             )
             self.assertTrue(len(curves) > 0, "Should return curves")
-
-        # Cleanup
-        shutil.rmtree(temp_dir)
 
 
 if __name__ == "__main__":

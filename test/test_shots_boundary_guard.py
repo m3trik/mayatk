@@ -42,6 +42,7 @@ REFUSING_CALLS = frozenset(
     {
         "add_shot_space",
         "apply_gap",
+        "copy_sequences_to_shot",
         "delete_shot",
         "expand_shot",
         "extend_shot_to_fit",
@@ -51,6 +52,7 @@ REFUSING_CALLS = frozenset(
         "move_sequences_to_shot",
         "move_shot",
         "move_shot_to_position",
+        "new_shot",
         "resize_object",
         "resize_shot",
         "resize_shot_bounds",
@@ -180,8 +182,11 @@ class TestSequencerAdapterHooks(unittest.TestCase):
     blendertk's twin guard is in its ``test_shots_slots.py``.
     """
 
-    #: Hooks inherited on purpose (none: the Maya adapter overrides them all).
-    INHERITED = frozenset()
+    #: Hooks inherited on purpose. ``_follow_unresolved_claims``: a Maya ledger
+    #: key is the anim curve's node name, which renaming its owner leaves as it
+    #: is (measured, 2025: ``box`` -> ``crate`` keeps ``box_translateX``), so
+    #: there is nothing to follow; blendertk's keys embed the owner's name.
+    INHERITED = frozenset({"_follow_unresolved_claims"})
 
     @staticmethod
     def _classes():
