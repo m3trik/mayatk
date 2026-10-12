@@ -52,7 +52,7 @@ class FBXImporter:
                 return {"namespace": namespace, "transforms": []}
 
             new_transforms, new_nodes = self._import_into_clean_namespace(
-                source_file, namespace
+                source_file, namespace, self.logger
             )
             if not new_transforms:
                 self.logger.warning(
@@ -78,7 +78,9 @@ class FBXImporter:
     ) -> Optional[List[Any]]:
         """Import FBX file into a fresh namespace for analysis."""
         try:
-            transforms, _ = self._import_into_clean_namespace(source_file, namespace)
+            transforms, _ = self._import_into_clean_namespace(
+                source_file, namespace, self.logger
+            )
             self.logger.debug(f"Imported {len(transforms)} FBX transforms for analysis")
             return transforms
 
@@ -87,7 +89,7 @@ class FBXImporter:
             return None
 
     @staticmethod
-    def _import_into_clean_namespace(source_file, namespace):
+    def _import_into_clean_namespace(source_file, namespace, logger=None):
         """Import *source_file* into a freshly-cleared *namespace*.
 
         Clears any pre-existing namespace first (as MayaImporter does) so a
@@ -96,11 +98,19 @@ class FBXImporter:
         active-namespace isolation puts every imported node under *namespace*,
         so the transform list is a direct namespace re-query.
 
+        Every take of the file's animation that plays lands; a take that
+        conflicts with them is left out rather than parked in Key Stash
+        (``stash=False``) -- a sandbox import is deleted after the compare and
+        must not write the user's stash -- with a warning naming it on
+        *logger*.
+
         Returns ``(transforms, all_new_nodes)``.
         """
         if cmds.namespace(exists=namespace):
             cmds.namespace(removeNamespace=namespace, deleteNamespaceContent=True)
-        new_nodes = FbxUtils.import_scene(source_file, namespace=namespace)
+        new_nodes = FbxUtils.import_scene(
+            source_file, namespace=namespace, stash=False, logger=logger
+        )
         return cmds.ls(f"{namespace}:*", type="transform") or [], new_nodes
 
 

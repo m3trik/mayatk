@@ -7,7 +7,7 @@ Changing one shot's duration or position ripples downstream shots.
 
 import bisect
 import logging
-from typing import List, Dict, Optional, Any, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
@@ -22,6 +22,7 @@ from pythontk import ShotSequencer as _ShotSequencerCore
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.anim_utils.shots._shots import Detection, ShotBlock, ShotStore
 from mayatk.anim_utils.shots._shot_plan import _INF as _PLAN_INF
+from mayatk.anim_utils._tangents import _NEIGHBOUR_DERIVED_TANGENTS
 
 # Half-width both key movers pad their envelope by, and therefore the
 # tolerance membership adoption must use: adopting on a tighter window than
@@ -37,31 +38,20 @@ _POSE_TOL = 1e-4
 # follows, so the segment's shape does not depend on any angle.
 _STEP_TANGENTS = ("step", "stepnext")
 
-# Tangent types Maya derives from the keys on BOTH sides of their own, so
-# removing a neighbouring key silently re-computes them -- in AND out alike,
-# since these are a single unbroken slope.  Everything else (fixed, linear,
-# flat, step) either is authored outright or looks only at the key on its own
-# side, and so cannot be disturbed by a cut on the far side.
-_NEIGHBOUR_DERIVED_TANGENTS = (
-    "spline",
-    "auto",
-    "clamped",
-    "plateau",
-    "autoease",
-    "automix",
-    "autocustom",
-)
-
 # A tangent this close to horizontal is flat.  Degrees: Maya reports tangent
 # angles in degrees, and an angle below this cannot bow a segment between two
 # keys of equal value by anything an animator could see.
 _FLAT_ANGLE_TOL = 1e-4
 
-# ...and a tangent that MOVED by less than this did not really move.  A
-# separate, looser constant on purpose: holding a boundary tangent converts
-# it to ``fixed``, so testing "did it change" at the flatness tolerance would
-# spend that conversion on float noise from Maya's own re-derivation.
-_TANGENT_MOVED_TOL = 0.01
+# ...and a tangent that MOVED by less than this did not really move: the one
+# threshold of the shot system's tangent hold (``_hold_half``).  Holding a
+# half converts it to ``fixed``, so it must sit above the float noise of
+# Maya's own re-derivation -- measured 2026-10-11 over every SOL_REPLACE_ASSEMBLY
+# op at gap 0 and 10, every drift the hold was asked about was 0 or under
+# 1e-12 -- and below the smallest real one: a 1-frame slide of a production
+# curve re-derived a slope by 0.003 degrees and played the shot 0.0004 off,
+# which the old 0.01 let through.
+_TANGENT_MOVED_TOL = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +357,16 @@ class ShotSequencer(_ShotSequencerCore):
             return None if matches[0] == name else matches[0]
         if matches:
             return None
+        # A doc name the scene holds only inside a namespace (a referenced
+        # asset, ``AC:door_geo`` for ``door_geo``): the store's own lookup
+        # (``ShotStore.member_nodes``), so a build and a reconcile agree.
+        # Unkeyed it had no curve to follow and was never re-pointed
+        # (BACKLOG 2026-10-10).
+        matches = ShotStore._member_nodes(name)
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return None
         leaf = CoreUtils.leaf_name(name)
         matches = cmds.ls(leaf, long=True, type="transform") or []
         if len(matches) == 1:
@@ -426,11 +426,12 @@ class ShotSequencer(_ShotSequencerCore):
 
         nodes = self._shot_nodes(shot)
         if not nodes:
-            # Shot has no (valid) objects — auto-discover animated transforms
+            # Shot has no (valid) objects — auto-discover animated transforms.
+            # The system's own fill, not a hand edit (the manifest's
+            # edited_by_hand reads past it); unresolved members stay, inert.
             discovered = self._find_keyed_transforms(shot.start, shot.end)
             if discovered:
-                shot.objects = sorted(set(discovered))
-                self.store.update_shot(shot.shot_id, objects=shot.objects)
+                self.store.add_system_members(shot.shot_id, discovered)
                 nodes = self._shot_nodes(shot)
             if not nodes:
                 return []
@@ -1385,104 +1386,124 @@ class ShotSequencer(_ShotSequencerCore):
 
         Snapshot BEFORE the landing zone is cleared: absorbing or pushing a
         key next to the run reshapes these same tangents, so a snapshot taken
-        after it would faithfully preserve the already-damaged angle.
+        after it would faithfully preserve the already-damaged angle.  Only
+        the inward half is held (:meth:`_hold_half`), and only when it
+        actually moved.
 
-        The restore BREAKS the tangent rather than pinning the whole thing:
-        the outward-facing half spans the gap to neighbouring content, which
-        genuinely did change, so it is left derived and free to re-ease.  Only
-        the inward half is held, and only when it actually moved.
-
-        Returns a zero-argument callable; it is a no-op when there is nothing
-        to hold, so the caller never branches.
+        Returns a zero-argument callable (the number of halves it held).
         """
         moving = sorted(times)
         if len(moving) < 2:
-            return lambda: None  # a lone key has no interior to protect
-
-        held = []
-        for t, half in ((moving[0], "out"), (moving[-1], "in")):
-            # Resolve the key's ACTUAL time first: *times* reaches here from a
-            # widget's drag record as readily as from a curve query, and the
-            # two agree only to rounding -- an exact-time read would come back
-            # empty and silently skip the hold.
-            src = cls._key_time_at(crv, t, eps)
-            if src is None:
-                continue
-            tt = (src, src)
-            type_flag = "outTangentType" if half == "out" else "inTangentType"
-            tan_type = (
-                cmds.keyTangent(crv, q=True, time=tt, **{type_flag: True}) or [""]
-            )[0]
-            if tan_type not in _NEIGHBOUR_DERIVED_TANGENTS:
-                continue  # authored outright, or reads only its own side
-            angle_flag = "outAngle" if half == "out" else "inAngle"
-            angle = cmds.keyTangent(crv, q=True, time=tt, **{angle_flag: True}) or []
-            if angle:
-                held.append((src + delta, half, float(angle[0])))
-        if not held:
-            return lambda: None
-
-        def _restore():
-            for dest, half, angle in held:
-                landed = cls._key_time_at(crv, dest, eps)
-                if landed is None:
-                    continue  # the key did not arrive; nothing to hold
-                tt = (landed, landed)
-                angle_flag = "outAngle" if half == "out" else "inAngle"
-                now = cmds.keyTangent(crv, q=True, time=tt, **{angle_flag: True}) or []
-                if not now or abs(float(now[0]) - angle) <= _TANGENT_MOVED_TOL:
-                    continue  # Maya left it alone, so leave the type alone too
-                # Break first: that is what keeps the OTHER half derived.
-                cls._try_key_tangent(crv, tt, {"lock": False})
-                cls._try_key_tangent(crv, tt, {angle_flag: angle})
-
-        return _restore
+            return lambda: 0  # a lone key has no interior to protect
+        held = cls._held_halves(
+            crv, ((moving[0], "out"), (moving[-1], "in")), delta, eps
+        )
+        return lambda: cls._hold_halves(held, eps=eps)
 
     @staticmethod
-    def _derived_tangents(crv: str, t: float) -> Dict[str, Tuple[float, float]]:
-        """``{"in"|"out": (angle, weight)}`` for each half of *crv*'s key at *t*
-        whose type Maya re-derives from both neighbours
-        (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`) -- the halves a split would
-        disturb.  An authored half (fixed, linear, flat, step) is left out."""
-        tt = (t, t)
-        held: Dict[str, Tuple[float, float]] = {}
-        for half in ("in", "out"):
-            kind = (
-                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}TangentType": True})
-                or [""]
-            )[0]
-            if kind not in _NEIGHBOUR_DERIVED_TANGENTS:
-                continue
-            angle = (
-                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Angle": True}) or []
-            )
-            weight = (
-                cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Weight": True}) or []
-            )
-            if angle:
-                held[half] = (float(angle[0]), float(weight[0]) if weight else 1.0)
+    def _derived_half(
+        crv: str, t: float, half: str, kinds: tuple = _NEIGHBOUR_DERIVED_TANGENTS
+    ) -> Optional[Tuple[float, float]]:
+        """``(angle, weight)`` of *half* of *crv*'s key at *t* when its type is
+        one of *kinds* -- by default the ones Maya re-derives from both
+        neighbours (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`), the halves a move or
+        a split disturbs -- else ``None``.  Read through
+        :meth:`AnimUtils._tangent_half`."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        got = AnimUtils._tangent_half(crv, t, half)
+        return (got[1], got[2]) if got and got[0] in kinds else None
+
+    @classmethod
+    def _held_halves(
+        cls,
+        crv: str,
+        halves,
+        delta: float = 0.0,
+        eps: float = _BATCH_MOVE_EPS,
+        kinds: tuple = _NEIGHBOUR_DERIVED_TANGENTS,
+    ) -> list:
+        """``[(crv, t + delta, half, (angle, weight)), ...]`` for each ``(t,
+        half)`` of *halves* whose type is one of *kinds*: what
+        :meth:`_hold_halves` puts back once the key has moved by *delta*.
+
+        The key's ACTUAL time is read first: a time can reach here from a
+        widget's drag record as readily as from a curve query, and the two
+        agree only to rounding -- an exact-time read would come back empty
+        and silently skip the hold."""
+        held = []
+        for t, half in halves:
+            src = cls._key_time_at(crv, t, eps)
+            got = None if src is None else cls._derived_half(crv, src, half, kinds)
+            if got is not None:
+                held.append((crv, src + delta, half, got))
         return held
 
     @classmethod
-    def _hold_split_tangent(
-        cls, crv: str, t: float, half: str, held: Tuple[float, float]
-    ) -> None:
-        """Hold *half* of *crv*'s key at *t* at *held* ``(angle, weight)`` when
-        Maya re-derived it away from that -- breaking the tangent first, as
-        :meth:`_hold_interior_tangents` does, so the OTHER half (which faces the
-        new gap) stays derived.  A no-op when the key is gone or the angle did
-        not really move (the type is then left alone)."""
-        landed = cls._key_time_at(crv, t, _BATCH_MOVE_EPS)
-        if landed is None:
-            return
-        tt = (landed, landed)
+    def _hold_halves(
+        cls,
+        held,
+        tol: float = _TANGENT_MOVED_TOL,
+        kinds: Optional[tuple] = None,
+        eps=_BATCH_MOVE_EPS,
+    ) -> int:
+        """:meth:`_hold_half` over :meth:`_held_halves`' list; the number held."""
+        return sum(
+            cls._hold_half(crv, t, half, angle_weight, tol, kinds, eps)
+            for crv, t, half, angle_weight in held
+        )
+
+    @classmethod
+    def _hold_half(
+        cls,
+        crv: str,
+        t: float,
+        half: str,
+        held: Tuple[float, float],
+        tol: float = _TANGENT_MOVED_TOL,
+        kinds: Optional[tuple] = None,
+        eps: float = _BATCH_MOVE_EPS,
+    ) -> int:
+        """Put *held* ``(angle, weight)`` back on *half* of *crv*'s key within
+        *eps* of *t* where it drifted past *tol* -- a negative *tol* holds it
+        whatever (a freeze) -- and return 1, else 0.
+
+        The ONE tangent hold of the shot system: the drag's interior hold, the
+        plan writer's boundary hold, a split's held halves and the respace's
+        hold freeze all end here.  It BREAKS the tangent first, so the other
+        half (facing the gap, or a new neighbour, which genuinely changed)
+        keeps its own type and stays derived; a half that did not really move
+        keeps its type too.  The weight is compared, and put back where it
+        drifted, only on a weighted curve (an unweighted one reports a fixed
+        1.0); setting the angle has never been seen to move it -- the drag
+        hold, which never set it, kept every weight of four derived types
+        exact (2026-10-11).  *kinds*: hold only while the half's current type
+        is one of them (a pin or a copy set outright since is its own now).
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        landed = cls._key_time_at(crv, t, eps)
+        now = None if landed is None else AnimUtils._tangent_half(crv, landed, half)
+        if now is None or (kinds is not None and now[0] not in kinds):
+            return 0
         angle, weight = held
-        now = cmds.keyTangent(crv, q=True, time=tt, **{f"{half}Angle": True}) or []
-        if not now or abs(float(now[0]) - angle) <= _TANGENT_MOVED_TOL:
-            return
+        weighted = bool(
+            (cmds.keyTangent(crv, q=True, weightedTangents=True) or [False])[0]
+        )
+        if (
+            tol >= 0
+            and abs(now[1] - angle) <= tol
+            and not (weighted and abs(now[2] - weight) > tol)
+        ):
+            return 0  # Maya left it alone, so leave the type alone too
+        tt = (landed, landed)
         cls._try_key_tangent(crv, tt, {"lock": False})
         cls._try_key_tangent(crv, tt, {f"{half}Angle": angle})
-        cls._try_key_tangent(crv, tt, {f"{half}Weight": weight})  # weighted only
+        if weighted:  # read after the angle is set, in case it moved the weight
+            after = AnimUtils._tangent_half(crv, landed, half)
+            if after is not None and abs(after[2] - weight) > tol:
+                cls._try_key_tangent(crv, tt, {f"{half}Weight": weight})
+        return 1
 
     @classmethod
     def _cut_carried_sample(cls, crv: str, t: float, value: float, ledger=None) -> None:
@@ -1799,6 +1820,7 @@ class ShotSequencer(_ShotSequencerCore):
         old_end: float,
         new_start: float,
         new_end: float,
+        _scaled: Optional[set] = None,
     ) -> None:
         """Scale (and optionally shift) keyframes of *obj* from
         [old_start, old_end] into [new_start, new_end].
@@ -1818,8 +1840,12 @@ class ShotSequencer(_ShotSequencerCore):
             old_end: Original last frame.
             new_start: Desired first frame.
             new_end: Desired last frame.
+            _scaled: The curves a pass over several nodes already scaled
+                (:meth:`scale_shot_keys`); this node's are added to it, and
+                a curve in it is not scaled again.
         """
         import maya.cmds as cmds
+        from mayatk.anim_utils._anim_utils import AnimUtils
         from mayatk.anim_utils.shots._shot_apply import ShotApply
 
         # Resolve to a single DAG path first — shot.objects entries may be
@@ -1832,18 +1858,28 @@ class ShotSequencer(_ShotSequencerCore):
             return
         node = self._disambiguate_matches(matches)
         ratio = (new_end - new_start) / (old_end - old_start)
+        curves = self._anim_curves_of(node, None)
+        targets = [node]
+        if _scaled is not None:
+            todo = [c for c in curves if c not in _scaled]
+            _scaled.update(curves)
+            if curves and not todo:
+                return  # a node sharing every curve with one already scaled
+            if len(todo) < len(curves):
+                targets, curves = sorted(todo), todo  # the shared ones are done
         with ShotApply._claims_follow(
             self.ledger,
-            self._anim_curves_of(node, None),
+            curves,
             (old_start, old_end),
             lambda t: new_start + (t - old_start) * ratio,
         ):
-            cmds.scaleKey(
-                node,
-                time=(old_start, old_end),
-                newStartTime=new_start,
-                newEndTime=new_end,
-            )
+            with AnimUtils._exact_scale():  # GUI Maya rounds a scaled key
+                cmds.scaleKey(
+                    targets,
+                    time=(old_start, old_end),
+                    newStartTime=new_start,
+                    newEndTime=new_end,
+                )
 
     # ---- system-authored edits (ledger-backed) ---------------------------
     #
@@ -1938,6 +1974,8 @@ class ShotSequencer(_ShotSequencerCore):
         Returns:
             The number of keys restored to their pre-hold out-tangent.
         """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         led = self.ledger
         eps = _BATCH_MOVE_EPS
         restored = 0
@@ -1964,13 +2002,57 @@ class ShotSequencer(_ShotSequencerCore):
                     continue  # re-tangented since — not ours to take back
                 itt = cmds.keyTangent(crv, q=True, time=tt, inTangentType=True)
                 value = cmds.keyframe(crv, q=True, time=tt, valueChange=True)
-                if not led.is_same_key(claim, (itt or [""])[0], (value or [0.0])[0]):
-                    continue  # written over since — the step is the new key's
-                self._try_key_tangent(crv, tt, {"outTangentType": types[1]})
-                if types[1] == "fixed":
-                    self._restore_fixed_out_tangent(crv, key_t)
+                in_now = AnimUtils._tangent_half(crv, key_t, "in")
+                if not led.is_same_key(
+                    claim,
+                    (itt or [""])[0],
+                    (value or [0.0])[0],
+                    in_half=in_now[1:] if in_now else None,
+                ):
+                    continue  # written over or re-posed since -- the animator's
+                later = [
+                    k
+                    for k in cmds.keyframe(crv, q=True, timeChange=True) or []
+                    if k > key_t + eps
+                ]
+                if self._hold_runs_through_shots(key_t, min(later) if later else None):
+                    continue  # other shots play this hold: it stays, unclaimed
+                self._try_key_tangent(
+                    crv, tt, {"outTangentType": self._own_tangent_type(types[1])}
+                )
+                if types[1] == "fixed" and claim.out_half is not None:
+                    # Exactly as it was: the step discarded angle and weight.
+                    angle, weight = claim.out_half[:2]
+                    self._try_key_tangent(crv, tt, {"lock": False})
+                    self._try_key_tangent(crv, tt, {"outWeight": weight})
+                    self._try_key_tangent(crv, tt, {"outAngle": angle})
+                elif types[1] == "fixed":
+                    self._restore_fixed_out_tangent(crv, key_t)  # format 1
+                if (
+                    claim.in_half is not None
+                    and claim[0] in _NEIGHBOUR_DERIVED_TANGENTS
+                ):
+                    # The hold froze a derived in half: no longer a seam, it
+                    # derives again (maintainer 2026-10-11).
+                    self._try_key_tangent(crv, tt, {"inTangentType": claim[0]})
                 restored += 1
         return restored
+
+    @staticmethod
+    def _own_tangent_type(recorded: Optional[str]) -> str:
+        """The out-tangent type a released hold restores, from the type its
+        claim recorded.  A claim can come from Blender: ``ShotTransfer``
+        carries the ledger verbatim, so a pushed scene's holds name Blender
+        interpolations -- which ``keyTangent`` refused, silently, and the hold
+        stayed stepped once it was no longer a seam.  Mirror of blendertk's
+        ``_own_interpolation``: a foreign type maps by kind (CONSTANT steps,
+        LINEAR stays linear, any curved segment is ``auto``)."""
+        kind = str(recorded or "")
+        if kind.islower() or not kind:
+            return kind  # Maya's own (every Maya tangent type is lowercase)
+        if kind == "CONSTANT":
+            return "step"
+        return "linear" if kind == "LINEAR" else "auto"
 
     @classmethod
     def _restore_fixed_out_tangent(cls, crv: str, t: float) -> None:
@@ -2017,6 +2099,7 @@ class ShotSequencer(_ShotSequencerCore):
 
         led = self.ledger
         step_dict: Dict[str, list] = {}
+        claims: list = []
         for crv, times in seams.items():
             for t in times:
                 tt = (t, t)
@@ -2033,10 +2116,32 @@ class ShotSequencer(_ShotSequencerCore):
                     cmds.keyTangent(crv, q=True, time=tt, inTangentType=True) or [""]
                 )[0]
                 value = cmds.keyframe(crv, q=True, time=tt, valueChange=True) or []
-                led.record_step(crv, t, itt, ott[0], value[0] if value else None)
+                # The OUT half the step discards (a weighted tangent's weight
+                # with it), and the IN half frozen where it plays: derived, it
+                # re-derived from the next shot's every move and re-shaped the
+                # held shot's last segment (ledger format 2, maintainer
+                # 2026-10-11; BACKLOG 2026-10-11, the held tail).
+                out_half = AnimUtils._tangent_half(crv, t, "out")
+                self._freeze_derived_half(crv, t, "in")
+                claims.append(
+                    (crv, t, itt, ott[0], value[0] if value else None, out_half)
+                )
                 step_dict.setdefault(crv, []).append(t)
         if step_dict:
             AnimUtils.step_keys(keys=step_dict, tangent="out")
+        for crv, t, itt, ott, value, out_half in claims:
+            # The in half as the key carries it once held: the claim knows its
+            # key by that and the value (ShotEditLedger.is_same_key).
+            in_half = AnimUtils._tangent_half(crv, t, "in")
+            led.record_step(
+                crv,
+                t,
+                itt,
+                ott,
+                value,
+                in_half=in_half[1:] if in_half else None,
+                out_half=out_half[1:] if out_half else None,
+            )
         return sum(len(v) for v in step_dict.values())
 
     def _pin_bound_keys(self, pins: Dict[str, list]) -> int:
@@ -2047,8 +2152,13 @@ class ShotSequencer(_ShotSequencerCore):
 
         The respace pin's writer (:meth:`AnimUtils.insert_keys`, Maya's own
         ``setKeyframe -insert``) under its rules: only inside the curve's key
-        range, never on a key, never inside a hold.  Returns the number of
-        keys inserted.
+        range, never on a key, never inside a hold -- and called only for a
+        frame :meth:`_pinnable_frames` says it can pin, from one read of the
+        curve.  Every pass offers every unheld seam its pin (the pass keeps
+        no memory, so no edit by another path can leave one skipped), and
+        almost all of them are already pinned or held: measured 2026-10-11 on
+        a production assembly, 190 ``insert_keys`` calls per New Shot -- 1.0 s
+        of 1.5 -- inserted nothing.  Returns the number of keys inserted.
         """
         from mayatk.anim_utils._anim_utils import AnimUtils
 
@@ -2057,11 +2167,178 @@ class ShotSequencer(_ShotSequencerCore):
             owners: dict = {}
             for frame, shot_id, edge in bounds:
                 owners.setdefault(float(frame), (shot_id, edge))
-            for _crv, t in AnimUtils.insert_keys([crv], sorted(owners), report=True):
+            frames = self._pinnable_frames(crv, sorted(owners))
+            if not frames:
+                continue
+            for _crv, t in AnimUtils.insert_keys([crv], frames, report=True):
                 shot_id, edge = owners.get(float(t), (-1, ""))
                 self.ledger.record_key(crv, t, shot_id, edge)
                 inserted += 1
         return inserted
+
+    def _pin_bound_poses(
+        self, objects, window, pins, attr=None, crossing: bool = False
+    ) -> int:
+        """Key the pose each of *objects*' (*attr*'s) curves plays on every
+        bound frame *pins* names (``[(frame, shot_id, edge), ...]``), on the
+        curves keyed inside *window* -- content about to LEAVE a shot, so the
+        shots beside it keep what it gave them (the pythontk hook behind
+        ``ShotSequencer._hold_neighbour_poses``).
+
+        Where the curve has shape on the bound, the respace pin's writer
+        (:meth:`AnimUtils.insert_keys`); where it does not, the pose the
+        leaving keys made is keyed outright, because those keys are going:
+
+        * a NEXT shot's start inside a hold -- the held value, stepping on as
+          the hold did (a flat hold: flat), the key after it held at its
+          slopes so it plays on unchanged;
+        * a next shot's start past the last key, or a previous shot's end
+          before the first one -- the value the curve's constant
+          extrapolation held there.
+
+        A previous shot's end inside a hold is left alone: that hold is its
+        own held tail (BACKLOG 2026-10-11, the held tail's derived in-half).
+        Every key put in is claimed for its bound, ``stays``.  Returns the
+        number of keys put in.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        lo, hi = window
+        eps = _BATCH_MOVE_EPS
+        curves = sorted(
+            {c for obj in objects or () for c in self._anim_curves_of(obj, attr)}
+        )
+        pinned = 0
+        for crv in curves:
+            times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+            if not any(lo <= t <= hi for t in times) and not (
+                crossing and times and times[0] < lo and times[-1] > hi
+            ):
+                continue  # nothing of this curve leaves, nor runs across
+            steps = None
+            for frame, shot_id, edge in pins:
+                frame = float(frame)
+                on = [t for t in times if abs(t - frame) <= eps]
+                if on:
+                    # Keyed: the pose is its own, but a derived slope there is
+                    # re-derived from whatever replaces the keys leaving -- the
+                    # half facing the neighbour's own content is held (a gap
+                    # hold's stepped key's IN half excepted: BACKLOG
+                    # 2026-10-11, the held tail).
+                    half = "in" if edge == "end" else "out"
+                    if half == "in":
+                        steps = self.ledger.step_times(crv) if steps is None else steps
+                        if any(abs(on[0] - s) <= eps for s in steps):
+                            continue
+                    self._freeze_derived_half(crv, on[0], half)
+                    continue
+                put = bool(
+                    self._pinnable_frames(crv, [frame])
+                    and AnimUtils.insert_keys([crv], [frame], report=True)
+                ) or self._key_held_pose(crv, frame, edge, times)
+                if put:
+                    self.ledger.record_key(crv, frame, shot_id, edge, stays=True)
+                    pinned += 1
+                    times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+        return pinned
+
+    def _freeze_left_behind(self, objects, window, attr=None) -> int:
+        """Hold the derived slope of the keys a run inside *window* leaves
+        behind, on each of *objects*' (*attr*'s) curves keyed there: the key
+        before it keeps its IN half, the key after it its OUT half, at the
+        angle each plays now (:meth:`_freeze_derived_half`; the pythontk hook
+        behind Move to Shot).  Maya derives an auto / spline / clamped
+        tangent from both neighbours, so with the run gone the key before it
+        re-derived from whatever followed it instead -- measured: a run
+        leaving its shot's tail re-shaped the 10 frames into the shot's last
+        stayed key, 0.29 off.  A gap hold's stepped key keeps its IN half
+        derived (BACKLOG 2026-10-11, the held tail).  Returns the halves held.
+        """
+        lo, hi = window
+        eps = _BATCH_MOVE_EPS
+        held = 0
+        for obj in objects or ():
+            for crv in self._anim_curves_of(obj, attr):
+                times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+                i0 = bisect.bisect_left(times, lo)
+                i1 = bisect.bisect_right(times, hi)
+                if i1 <= i0:
+                    continue  # nothing of this curve leaves
+                if i0 > 0 and not any(
+                    abs(times[i0 - 1] - s) <= eps for s in self.ledger.step_times(crv)
+                ):
+                    held += self._freeze_derived_half(crv, times[i0 - 1], "in")
+                if i1 < len(times):
+                    held += self._freeze_derived_half(crv, times[i1], "out")
+        return held
+
+    @classmethod
+    def _key_held_pose(cls, crv: str, frame: float, edge: str, times: list) -> bool:
+        """Key on *crv* at *frame* the value it holds there with no shape to
+        split -- a hold, or constant extrapolation -- for a ``"start"`` bound
+        inside or past its keys, or an ``"end"`` bound before its first
+        (:meth:`_pin_bound_poses`).  True when a key went in."""
+        if not times:
+            return False
+        if times[0] < frame < times[-1]:
+            if edge != "start":
+                return False
+        elif frame > times[-1]:
+            if edge != "start" or cmds.getAttr(f"{crv}.postInfinity") != 0:
+                return False
+        elif edge != "end" or cmds.getAttr(f"{crv}.preInfinity") != 0:
+            return False
+        value = cmds.keyframe(crv, q=True, eval=True, time=(frame, frame)) or []
+        if not value:
+            return False
+        out_type = "flat"
+        before = [t for t in times if t < frame]
+        if before:
+            kind = cmds.keyTangent(
+                crv, q=True, time=(before[-1], before[-1]), outTangentType=True
+            ) or [""]
+            if kind[0] in ("step", "stepnext"):
+                out_type = kind[0]
+        after = [t for t in times if t > frame]
+        if after:  # the next key keeps the slopes its old neighbour gave it
+            for half in ("in", "out"):
+                cls._freeze_derived_half(crv, after[0], half)
+        try:
+            cmds.setKeyframe(
+                crv,
+                time=frame,
+                value=float(value[0]),
+                inTangentType="flat",
+                outTangentType=out_type,
+            )
+        except RuntimeError:
+            return False  # locked or referenced curve -- left as it was
+        return bool(cmds.keyframe(crv, q=True, time=(frame, frame)))
+
+    @staticmethod
+    def _pinnable_frames(crv: str, frames: list, tol: float = 1e-4) -> list:
+        """The *frames* :meth:`AnimUtils.insert_keys` could key on *crv*: strictly
+        inside its key range, not on a key (within *tol*, insert_keys' own),
+        and not after a key that steps.  The cheap half of that writer's
+        rules, read from the curve as it is now (mirror of blendertk's
+        ``_pinnable``); a frame it lets through may still be a flat hold,
+        which ``insert_keys`` declines itself."""
+        times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+        if len(times) < 2:
+            return []
+        out = []
+        for t in frames:
+            if not times[0] < t < times[-1]:
+                continue
+            i = bisect.bisect_right(times, t)
+            if abs(times[i - 1] - t) <= tol or abs(times[i] - t) <= tol:
+                continue  # already keyed
+            left = (times[i - 1], times[i - 1])
+            kind = cmds.keyTangent(crv, q=True, time=left, outTangentType=True) or []
+            if kind[:1] in (["step"], ["stepnext"]):
+                continue  # inside a hold
+            out.append(t)
+        return out
 
     @classmethod
     def _sample_is_redundant(cls, crv: str, t: float, terminal: bool = True) -> bool:
@@ -2223,7 +2500,8 @@ class ShotSequencer(_ShotSequencerCore):
         following re-timed a pin's ramp (measured: 27 frames of changed
         playback for a 3-frame grow) and, dragged past a gap key, slid the
         pin over it.  Nothing moves in that gesture, so nothing can be in a
-        sample's way.
+        sample's way.  A claim made ``stays`` (a split's seam pin,
+        :meth:`_pin_keyless_seams`) takes that rule under every gesture.
 
         A sample the system created exists for ONE shot bound.  Once that
         bound has moved out from under it, it is neither the animator's pose
@@ -2285,10 +2563,43 @@ class ShotSequencer(_ShotSequencerCore):
                 occupied = (
                     bound is not None and self._key_time_at(crv, bound, eps) is not None
                 )
+                given_up = bound is not None and (
+                    (edge == "end" and key_t > bound + eps)
+                    or (edge == "start" and key_t < bound - eps)
+                )
+                if (
+                    occupied
+                    and (given_up or not led.key_stays(crv, t))
+                    and any(
+                        abs(rt - bound) <= eps and (ro, re) == (owner, edge)
+                        for rt, ro, re in led.key_records(crv)
+                    )
+                    and (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 2
+                ):
+                    # Superseded: the bound already has its own sample claimed
+                    # for this very edge -- the pose the shot plays there,
+                    # pinned before the bound moved (pythontk
+                    # ``_hold_edge_neighbours``) -- so this one is a duplicate
+                    # fencepost (a ``stays`` one too, once it sits on frames the
+                    # shot gave up).  Disowned in place it was the gap's last
+                    # key, the gap hold moved onto it, and the shot before
+                    # played its held tail 1.18 off (SOL "A01_1", a head shrink
+                    # of "A01_2" at gap 10); or the neighbour rippled onto it.
+                    try:
+                        cmds.cutKey(crv, time=(key_t - eps, key_t + eps), clear=True)
+                    except RuntimeError:
+                        pass  # locked or referenced curve — leave it as it was
+                    else:
+                        removed += 1
+                        led.release(crv, key_t)
+                        continue
                 if (
                     follow
                     and bound is not None
                     and not occupied
+                    # A seam pin is the shot's own pose: disowned in place,
+                    # as follow=False leaves every sample (_pin_keyless_seams).
+                    and not led.key_stays(crv, t)
                     and not self._sample_is_redundant(crv, key_t)
                 ):
                     # The plug is the fallback target when a cut-and-recreate
@@ -2345,8 +2656,94 @@ class ShotSequencer(_ShotSequencerCore):
         # AND as the keyed walk found it (a long path); scaling both scaled
         # the node twice.  Resolve to DAG paths first.
         nodes = sorted(set(cmds.ls(self._content_objects(), long=True) or []))
+        restore = self._hold_retimed_bounds(
+            nodes, old_start, old_end, new_start, new_end
+        )
+        # A curve two nodes share (a duplicate with input connections) is
+        # scaled once: per node, every sharer scaled it again (BACKLOG
+        # 2026-10-05: [10, 15] retimed to [10, 20] played [10, 12.5]).
+        done: set = set()
         for obj in nodes:
-            self.scale_object_keys(obj, old_start, old_end, new_start, new_end)
+            self.scale_object_keys(
+                obj, old_start, old_end, new_start, new_end, _scaled=done
+            )
+        restore()
+
+    def _hold_retimed_bounds(self, nodes, old_start, old_end, new_start, new_end):
+        """Before a retime of ``[old_start, old_end]``: what the neighbours
+        play across its bounds, to put back once it is done.  Returns the
+        restore (a zero-argument callable).
+
+        The key on each bound faces OUT of the shot with one half -- the
+        next shot's opening slope on its end, the previous shot's closing one
+        on its start -- and ``scaleKey`` scaled that half with the shot's own.
+        A seam the retime's ripple already split left the neighbour's copy
+        exactly where the shot's own sample lands: the copy (same pose) is
+        cut first and its half is the one put back, so one key holds the seam
+        (BACKLOG 2026-10-11: two keys at 60; SOL "A01_1" +8 stacked KEYS).  A
+        gap hold's stepped key is the hold's to restore (the held-tail
+        decision), and a stepped OUT half is put back by type.
+        """
+        eps = _BATCH_MOVE_EPS
+        held: list = []
+        stepped: list = []
+        led = self.ledger
+        curves = sorted({c for n in nodes for c in self._anim_curves_of(n, None)})
+        for crv in curves:
+            times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+            inside = [t for t in times if old_start - eps <= t <= old_end + eps]
+            for bound, dest, half in (
+                (old_end, new_end, "out"),
+                (old_start, new_start, "in"),
+            ):
+                own = next((t for t in inside if abs(t - bound) <= eps), None)
+                if own is None or led.owns_step(crv, own):
+                    continue
+                src = own
+                stack = next(
+                    (t for t in times if abs(t - dest) <= eps and t not in inside), None
+                )
+                if stack is not None:
+                    vals = [
+                        (
+                            cmds.keyframe(crv, q=True, time=(t, t), valueChange=True)
+                            or [None]
+                        )[0]
+                        for t in (own, stack)
+                    ]
+                    if None not in vals and abs(vals[0] - vals[1]) <= _POSE_TOL:
+                        src = stack
+                kind = (
+                    cmds.keyTangent(crv, q=True, time=(src, src), outTangentType=True)
+                    or [""]
+                )[0]
+                if half == "out" and kind in ("step", "stepnext"):
+                    stepped.append((crv, dest, kind))
+                else:
+                    held += self._held_halves(
+                        crv, [(src, half)], dest - src, kinds=self._ANY_TANGENT
+                    )
+                if (
+                    src == stack
+                    and (cmds.keyframe(crv, q=True, keyframeCount=True) or 0) > 1
+                ):
+                    try:
+                        cmds.cutKey(crv, time=(stack, stack), clear=True)
+                    except RuntimeError:
+                        continue  # locked or referenced curve -- left as it was
+                    led.release(crv, stack)
+
+        def restore() -> int:
+            done = self._hold_halves(held)
+            for crv, frame, kind in stepped:
+                landed = self._key_time_at(crv, frame, eps)
+                if landed is not None:
+                    self._try_key_tangent(
+                        crv, (landed, landed), {"outTangentType": kind}
+                    )
+            return done
+
+        return restore
 
     def _trailing_content_extent(self, shot: ShotBlock) -> float:
         """Last frame of *shot*'s content past its end (keys and audio).
@@ -2402,7 +2799,7 @@ class ShotSequencer(_ShotSequencerCore):
         env = self._shot_envelope(shot_id)
         if shot is None or env is None:
             return 0
-        lo, hi, lo_open, hi_closed = env
+        lo, hi, lo_open, _hi_closed = env
         eps = _BATCH_MOVE_EPS
         # The LAST shot's envelope runs to +INF so its trailing content (fade
         # tails past ``end``) belongs to it.  That is the right ownership for a
@@ -2411,10 +2808,13 @@ class ShotSequencer(_ShotSequencerCore):
         # reason.
         if hi >= _PLAN_INF:
             hi = lo + 1.0e7
-        window = (
-            lo + eps if lo_open else lo - eps,
-            hi + eps if hi_closed else hi - eps,
-        )
+        # A closing sample shared with a flush next shot is that shot's
+        # opening pose too, and the next shot's alone once this one is gone:
+        # it stays (the window stops short of it), where the closing rule
+        # decides how the next shot lands (maintainer 2026-10-11).  Cut, the
+        # next shot opened on whatever came before -- KEYS 80 off over all
+        # 81 frames of a production shot.
+        window = (lo + eps if lo_open else lo - eps, hi - eps)
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         names = self._shot_nodes(shot)
@@ -2472,17 +2872,24 @@ class ShotSequencer(_ShotSequencerCore):
         return keyed
 
     def _plan_curves(self, plan) -> dict:
-        """``{curve: [key time, ...]}`` for every curve *plan* will move."""
+        """``{curve: [key time, ...]}`` for every curve *plan* will move.
+
+        The writer's own set (:meth:`_content_objects`: every envelope moves
+        the whole keyed content), not the moving shots' members: a curve a
+        moving shot does not list still has its keys in that shot's window
+        moved, and a collision there went unseen -- measured 2026-10-11 on a
+        production assembly, a slide landed its shot's closing sample on the
+        copy the ripple before it had made, and pushed the copy a frame into
+        the next shot ("C04_1" SCREW_UPPER 0.375 off over 59 frames).  A
+        CONFLICT there is refused like any other: the writer would land two
+        poses on one frame of that curve all the same.
+        """
         import maya.cmds as cmds
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        names: set = set()
-        for shot_id, move in plan.moves.items():
-            if not move.moves:
-                continue
-            shot = self.shot_by_id(shot_id)
-            if shot is not None:
-                names.update(self._shot_nodes(shot))
+        if not any(move.moves for move in plan.moves.values()):
+            return {}
+        names = self._content_objects()
         if not names:
             return {}
         curves = AnimUtils.objects_to_curves(sorted(names), through_blends=False) or []
@@ -2492,6 +2899,379 @@ class ShotSequencer(_ShotSequencerCore):
             if times:
                 out[crv] = sorted(times)
         return out
+
+    def _pin_keyless_seams(self, opened) -> int:
+        """Key the preceding shot's own pose on every KEYLESS seam *opened*
+        pulls apart (``[(prev_id, shot_id, boundary, new_start), ...]``,
+        :meth:`_opened_seams`), shape-preservingly, and claim each pin as that
+        shot's end.
+
+        The one rule (maintainer 2026-10-10): an op on one shot never changes
+        what another shot plays inside its own span.  With no key on the
+        seam, the segment crossing it belongs to both shots, so the following
+        shot's move re-timed it -- the preceding shot's last key gained a
+        moved neighbour and its derived tangent re-derived from its first
+        frame on, the gap hold then stepped its tail, and the following shot
+        opened at a different value (measured 2026-10-07: keys 0/40/100 under
+        A [0,50] and B [50,100], B moved 10: A 1.21 off, B 1.10; on a
+        production assembly 1 of 16 curves over 4096 samples).  The pin is
+        ``setKeyframe -insert`` (:meth:`AnimUtils.insert_keys`: A's evaluated
+        value and slope; a hold is declined), so the seam is keyed before
+        anything moves and the split below copies it onto the following
+        shot's new start like any shared sample; the pin is A's last key, so
+        the gap hold carries its pose across the new gap.
+
+        Pinned HERE, at the chokepoint every whole-shot move passes, and not
+        where the seam was made: flush keyless seams come from an open set of
+        ops (a Split, ``define_shot``, Build over motion, an animator's keys,
+        a deleted seam key, scenes saved before any of this), the seam only
+        matters once something pulls it apart, and that is always a plan.
+
+        Claimed ``stays`` (``ShotEditLedger.key_stays``): the pin is a pose of
+        A's motion, so when A's end later moves it is disowned where it is
+        (cut only where provably redundant), as a Ctrl edge drag leaves every
+        sample -- followed, it would re-time the ramp it pins.
+
+        Every content curve is offered (:meth:`_content_objects`, what the
+        movers carry), not the two shots' members: a segment can cross the
+        seam from a key shots away, through shots that list neither its
+        object nor any key of it (2026-10-11, a production door ramp across
+        30 shots; :meth:`ShotPlanner.keyless_seam`).
+
+        Returns the number of pins inserted.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        pinned = 0
+        keyed = None
+        for prev_id, shot_id, boundary, _new_start in opened:
+            if self.shot_by_id(prev_id) is None or self.shot_by_id(shot_id) is None:
+                continue
+            if keyed is None:  # read once, only when a seam opens
+                content = self._content_objects()
+                curves = (
+                    AnimUtils.objects_to_curves(content, through_blends=False)
+                    if content
+                    else []
+                )
+                keyed = {
+                    crv: cmds.keyframe(crv, q=True, timeChange=True) or []
+                    for crv in sorted(set(curves or []))
+                }
+            want = [
+                crv
+                for crv, times in keyed.items()
+                if ShotPlanner.keyless_seam(times, boundary, _BATCH_MOVE_EPS)
+            ]
+            if not want:
+                continue
+            for crv, t in AnimUtils.insert_keys(want, [boundary], report=True):
+                self.ledger.record_key(crv, t, prev_id, "end", stays=True)
+                pinned += 1
+        return pinned
+
+    def _pin_held_bounds(self, content) -> int:
+        """Pin every shot bound a HOLD spans at its held pose: the respace's
+        pin where ``insert_keys`` declines a key.
+
+        A shot's frames after its last key HOLD its pose (the gap hold steps
+        that key), so a bound inside the hold has no shape to key -- but the
+        two keys around it still do: each derived half facing its own shot
+        (the held key's IN, the next key's OUT) is one slope Maya computes
+        from both neighbours, the other one across the gap.  The respace's
+        bound pin used to fix them as a side effect of keying the curve
+        played ON toward the next shot (``setKeyframe -insert`` fixes its
+        neighbours); held first (``ShotSequencer.respace``), the tail is a
+        hold the pin declines, and moving the next shot re-derived the held
+        shot's last segment -- 0.34 off for a 190-frame respace (2026-10-11).
+        Each such half is held at its angle instead (``fixed``, broken from
+        the other half), so the respace reshapes neither side and the tail
+        keeps holding (BACKLOG 2026-10-05; maintainer 2026-10-10).
+
+        Returns the number of halves held.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        bounds = sorted(
+            {float(b) for shot in self.store.shots for b in (shot.start, shot.end)}
+        )
+        curves = AnimUtils.objects_to_curves(content, through_blends=False) or []
+        held = 0
+        for crv in sorted(set(curves)):
+            times = cmds.keyframe(crv, q=True, timeChange=True) or []
+            if len(times) < 2:
+                continue
+            holds = None
+            for b in bounds:
+                if not times[0] < b < times[-1]:
+                    continue
+                if any(abs(b - k) <= _BATCH_MOVE_EPS for k in times):
+                    continue  # keyed: nothing spans it
+                if holds is None:
+                    holds = AnimUtils._hold_segments(crv, times)
+                i = bisect.bisect_right(times, b) - 1
+                if not holds[i]:
+                    continue  # shape: insert_keys pinned it
+                for t, half in ((times[i], "in"), (times[i + 1], "out")):
+                    held += self._freeze_derived_half(crv, t, half)
+        return held
+
+    def _hold_moved_boundary_slopes(self, plan, content) -> Callable[[], int]:
+        """Snapshot the inward boundary halves of every run *plan* moves --
+        each moving shot's first key's OUT, last key's IN -- and return the
+        restore, which holds each one that came out changed at its angle.
+
+        The plan writer's form of :meth:`_hold_interior_tangents` (the drag
+        path's): a derived tangent is one slope Maya computes from the keys
+        on both sides, so a shot moved away from a key it does not take
+        along re-derives the half facing its own content, and plays
+        differently inside its own span.  Measured 2026-10-11 on a
+        production assembly at gap 10: a pose held from frame 12 to "B06_1"
+        at 941 re-derived 941's out slope (-2.984 -> -2.996 degrees) on
+        every op that moved B06_1 and not frame 12 -- SCREWDRIVER 0.003 to
+        0.1 off over its first 46 frames.  Compared after the WHOLE plan,
+        so a neighbour that moved by the same delta (every ripple) leaves
+        nothing changed and nothing held.  The IN half of a key the gap hold
+        steps is left alone: holding it breaks the step claim's key identity
+        (BACKLOG 2026-10-11, the held tail's derived in-half).
+
+        Returns the restore; it returns the number of halves it held.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        windows = [w for w in ShotPlanner.move_windows(plan) if abs(w[4]) >= 1e-6]
+        if not windows or not content:
+            return lambda: 0
+        eps = _BATCH_MOVE_EPS
+        curves = AnimUtils.objects_to_curves(content, through_blends=False) or []
+        spans = [
+            (
+                lo + eps if lo_open else lo - eps,
+                hi + eps if hi_closed else hi - eps,
+                delta,
+            )
+            for lo, hi, lo_open, hi_closed, delta in windows
+        ]
+
+        def moves(t: float) -> bool:
+            return any(a <= t <= b for a, b, _d in spans)
+
+        held: list = []
+        for crv in sorted(set(curves)):
+            # One read per curve: every window's run is cut from it.
+            keyed = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+            if len(keyed) < 2:
+                continue
+            steps = self.ledger.step_times(crv)
+
+            def stepped(t: float, steps=steps) -> bool:  # a gap hold's IN half
+                return any(abs(t - s) <= eps for s in steps)
+
+            # The keys the runs leave behind re-derive too, facing their own
+            # shots: the closing key of a shot a run moved away from (a seam
+            # left one frame apart, 2026-10-11) and the opening one of the
+            # shot after it.  Gathered once per key: every window a sparse
+            # curve keys nothing in names the same two (a ripple of 30 shots
+            # read them 30 times).
+            still: dict = {}
+            for w_lo, w_hi, delta in spans:
+                i0 = bisect.bisect_left(keyed, w_lo)
+                i1 = bisect.bisect_right(keyed, w_hi)
+                halves = []
+                if i1 - i0 >= 2:  # a lone key has no interior to protect
+                    halves.append((keyed[i0], "out"))
+                    if not stepped(keyed[i1 - 1]):
+                        halves.append((keyed[i1 - 1], "in"))
+                held += self._held_halves(crv, halves, delta, eps)
+                if i0 > 0 and not moves(keyed[i0 - 1]) and not stepped(keyed[i0 - 1]):
+                    still[(keyed[i0 - 1], "in")] = None
+                if i1 < len(keyed) and not moves(keyed[i1]):
+                    still[(keyed[i1], "out")] = None
+            held += self._held_halves(crv, list(still), 0.0, eps)
+        # A half set outright since (a pin, a copy) is its own now.
+        return lambda: self._hold_halves(held, kinds=_NEIGHBOUR_DERIVED_TANGENTS)
+
+    @classmethod
+    def _freeze_derived_half(cls, crv: str, t: float, half: str) -> int:
+        """Hold *half* of *crv*'s key at *t* at its current angle and weight
+        when its type is derived (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`),
+        breaking the tangent so the other half keeps its own type
+        (:meth:`_hold_half`).  Returns 1 when it was held, else 0."""
+        return cls._hold_halves(cls._held_halves(crv, [(t, half)]), tol=-1.0)
+
+    def _pose_collisions(self, plan, retimes=()):
+        """``(conflicts, merges)`` of the keys *plan* lands on one frame:
+        ``conflicts`` ``[(curve, frame, values), ...]`` where two different
+        poses meet, ``merges`` ``[(curve, frame, movers, still), ...]`` where
+        they agree -- the first mover survives, the rest are cut
+        (:meth:`ShotPlanner.key_collisions` per curve the writer moves,
+        :meth:`_plan_curves`) -- the analysis behind every refusal
+        (:meth:`_reconcile_boundaries`).
+
+        Open intervals, so a shot's own bookend ON a bound is still analysed;
+        only what lives strictly between two shots (*retimes*) is deferred.
+        """
+        from mayatk.anim_utils.shots._shot_plan import ShotPlanner
+
+        windows = ShotPlanner.move_windows(plan)
+        if not windows:
+            return [], []
+        deferred = [(g.lo, g.hi) for g in retimes]
+        conflicts: list = []
+        merges: list = []
+        for crv, keyed in self._plan_curves(plan).items():
+            times = [t for t in keyed if not any(lo < t < hi for lo, hi in deferred)]
+            for dest, movers, still in ShotPlanner.key_collisions(windows, times):
+                vals = {}
+                for t in movers + still:
+                    got = (
+                        cmds.keyframe(crv, q=True, time=(t, t), valueChange=True) or []
+                    )
+                    if got:
+                        vals[t] = float(got[0])
+                if not vals:
+                    continue
+                if max(vals.values()) - min(vals.values()) > _POSE_TOL:
+                    conflicts.append((crv, float(dest), sorted(vals.values())))
+                else:  # lossless: keep one mover, clear what it lands on
+                    merges.append((crv, float(dest), list(movers), list(still)))
+        return conflicts, merges
+
+    #: Every tangent type a merged key's half can take over: what it plays,
+    #: not only what Maya would re-derive (see :meth:`_merge_halves`).
+    _ANY_TANGENT = _NEIGHBOUR_DERIVED_TANGENTS + ("fixed", "linear", "flat")
+
+    @classmethod
+    def _merge_halves(cls, merges, held_steps=None) -> tuple:
+        """``(held, stepped)``: the halves a lossless merge keeps for each
+        ``(curve, frame, movers, still)`` of *merges* -- the merged key's IN
+        half from the EARLIEST key landing on the frame, its OUT half from
+        the LATEST.  *held* as :meth:`_held_halves` reports angles; a stepped
+        OUT half is its type, not an angle, so *stepped* is ``[(curve,
+        frame, type), ...]`` (an angle set on a ``stepnext`` made it fixed,
+        and a shot's held opening ramped: SOL "C02" 69.5 off, 2026-10-11).
+        A survivor a gap hold claims (*held_steps*: ``(curve, time) ->
+        bool``) is the hold's: its release puts its own halves back, and a
+        half set here first made the release pass it by (SOL, a respace
+        0 -> 10 -> 0: "C02_2" 0.17 off).
+
+        Two shots meeting on one frame with the same pose share one key, and
+        the one that survives the merge is the first mover -- whose own
+        halves face the gap it crossed, not the shot on that side.  The key
+        it replaced closed the shot before (or opened the shot after), so
+        its slope there is what that shot plays.  Measured 2026-10-11: B
+        band-moved flush onto A, the poses agreeing, played A's last 40
+        frames 0.67 off on B's opening key's derived in half (0.37 with a
+        linear one).  The survivor's own half is read here too, before the
+        cut re-derives it against its new neighbour (B 0.59 off).
+        """
+        held: list = []
+        stepped: list = []
+        for crv, dest, movers, still in merges:
+            if held_steps is not None and held_steps(crv, movers[0]):
+                continue
+            times = movers + still
+            first, last = min(times), max(times)
+            held += cls._held_halves(
+                crv, [(first, "in")], dest - first, kinds=cls._ANY_TANGENT
+            )
+            src = cls._key_time_at(crv, last, _BATCH_MOVE_EPS)
+            kind = (
+                cmds.keyTangent(crv, q=True, time=(src, src), outTangentType=True)
+                if src is not None
+                else None
+            ) or [""]
+            if kind[0] in ("step", "stepnext"):
+                stepped.append((crv, dest, kind[0]))
+            else:
+                held += cls._held_halves(
+                    crv, [(last, "out")], dest - last, kinds=cls._ANY_TANGENT
+                )
+        return held, stepped
+
+    def _poses_differ(self, pairs, objects=None) -> List[bool]:
+        """Per ``(frame_a, frame_b)`` of *pairs*: whether any content curve --
+        or *objects*' (``[(obj, attr or None), ...]``) -- plays a different
+        value at the two frames, beyond :data:`_POSE_TOL`: the key there, or
+        the hold, interpolation or extrapolation the curve plays where it has
+        none.  The pythontk hook behind the gap-0 closing rule
+        (``ShotSequencer._close_flush_seams``); evaluated through
+        ``MFnAnimCurve``, one read per curve per frame."""
+        if cmds is None or not pairs:
+            return [False] * len(pairs)
+        import maya.api.OpenMaya as om
+        import maya.api.OpenMayaAnim as oma
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        if objects is None:
+            names = self._content_objects()
+            curves = (
+                AnimUtils.objects_to_curves(sorted(names), through_blends=False)
+                if names
+                else []
+            )
+        else:
+            curves = [
+                c for obj, attr in objects for c in self._anim_curves_of(obj, attr)
+            ]
+        fns = []
+        for crv in sorted(set(curves or [])):
+            sel = om.MSelectionList()
+            try:
+                sel.add(crv)
+                fns.append(oma.MFnAnimCurve(sel.getDependNode(0)))
+            except (RuntimeError, TypeError):
+                continue  # gone, or not a curve this API reads
+        unit = om.MTime.uiUnit()
+        out = []
+        for a, b in pairs:
+            ta, tb = om.MTime(float(a), unit), om.MTime(float(b), unit)
+            out.append(
+                any(abs(fn.evaluate(ta) - fn.evaluate(tb)) > _POSE_TOL for fn in fns)
+            )
+        return out
+
+    def _gaps_keyed(self, windows) -> List[bool]:
+        """Per ``(start, end)`` window: whether a content curve -- the curves
+        a respace retimes (``ShotApply.retime_gaps``) -- keys a frame inside
+        it that is not one of the system's bound samples (``edit_ledger``).
+        The pythontk hook behind the respace's closing rule."""
+        import bisect
+
+        out = [False] * len(windows)
+        if cmds is None or not windows:
+            return out
+        names = cmds.ls(sorted(self._content_objects()), long=True) or []
+        curves = (
+            set(cmds.listConnections(names, type="animCurve", s=True, d=False) or [])
+            if names
+            else set()
+        )
+        led = self.ledger
+        for crv in sorted(curves):
+            times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+            for i, (lo, hi) in enumerate(windows):
+                if out[i] or hi <= lo:
+                    continue
+                inside = times[
+                    bisect.bisect_left(times, lo) : bisect.bisect_right(times, hi)
+                ]
+                out[i] = any(not led.owns_key(crv, t) for t in inside)
+        return out
+
+    def _retime_closing_gaps(self, retimes) -> int:
+        """The pythontk hook behind a slide's closed gap: the shrink stage of
+        ``ShotApply.retime_gaps`` over the scene's content, before anything
+        moves, the ledger's claims with the keys."""
+        if cmds is None or not retimes:
+            return 0
+        from mayatk.anim_utils.shots._shot_apply import ShotApply
+
+        return ShotApply.retime_gaps(
+            retimes, self._content_objects(), after_move=False, ledger=self.ledger
+        )
 
     def _reconcile_boundaries(self, plan, retimes=()):
         """Keep fencepost samples whole across boundaries *plan* changes.
@@ -2516,16 +3296,16 @@ class ShotSequencer(_ShotSequencerCore):
           captured here, before anything moves, and re-keyed at that shot's
           new start once the moves are done — so both shots keep a
           fencepost and the following shot's first segment keeps its
-          timing.  Only curves the following shot actually animates past
-          the boundary get a copy; a pose that was never its own is not
-          invented for it.  A derived tangent (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`)
+          timing.  Only curves with a key after the boundary -- the segment
+          the following shot plays, keyed in it or not -- get a copy; a
+          curve that only holds the pose on needs none.  A derived tangent (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`)
           on the sample is held too: the original's IN half and the copy's
           OUT half, each at the angle it had while shared -- after the split
           each has a new neighbour, and Maya re-derives the slope from it
           (measured: a spline sample played 0.343 off in the preceding shot
-          and 0.197 off in the following one; :meth:`_hold_split_tangent`).
-          A sample the preceding shot does not animate is not copied but
-          CARRIED: re-keyed at the new start, its OUT half held the same way
+          and 0.197 off in the following one; :meth:`_hold_half`).
+          A sample with no key before it -- nothing the preceding shot
+          plays into -- is not copied but CARRIED: re-keyed at the new start, its OUT half held the same way
           (it too re-derives against a neighbour that is now further away),
           and only then cut from its old frame (:meth:`_cut_carried_sample`).
         * **Merge** (gap collapsed).  Two samples converge on one frame.
@@ -2536,11 +3316,12 @@ class ShotSequencer(_ShotSequencerCore):
           lossy no matter who wins, so the whole operation is refused
           (:class:`ShotBoundaryConflict`) before it writes anything.
 
-        Assumes membership is already complete (the back-fill runs
-        first): a collision is predicted for every key inside a moving
-        window, and that only matches what the writer does because the
-        writer moves each shot's OWN objects and every object keyed in
-        the window has just been adopted into it.
+        Every stage reads the curves the writer moves -- the whole keyed
+        content (:meth:`_content_objects`), not the moving shots' members:
+        a collision is predicted for every key inside a moving window, and
+        that only matches what the writer does over the same set.  (It once
+        read the members, back-filled with everything keyed in the window;
+        the back-fill went and the narrower read stayed, 2026-10-11.)
 
         Returns a callable to invoke after the plan has been applied.
         """
@@ -2559,36 +3340,26 @@ class ShotSequencer(_ShotSequencerCore):
             return _noop
 
         # ---- merges: detect every conflict BEFORE cutting anything -------
-        # Open intervals, so a shot's own bookend ON a bound is still analysed;
-        # only what lives strictly between two shots is deferred to the retime.
-        deferred = [(g.lo, g.hi) for g in retimes]
-
-        def retimed(t: float) -> bool:
-            return any(lo < t < hi for lo, hi in deferred)
-
-        conflicts: list = []
-        losers: list = []
-        for crv, times in self._plan_curves(plan).items():
-            times = [t for t in times if not retimed(t)]
-            for dest, movers, still in ShotPlanner.key_collisions(windows, times):
-                vals = {}
-                for t in movers + still:
-                    got = (
-                        cmds.keyframe(crv, q=True, time=(t, t), valueChange=True) or []
-                    )
-                    if got:
-                        vals[t] = float(got[0])
-                if not vals:
-                    continue
-                if max(vals.values()) - min(vals.values()) > _POSE_TOL:
-                    conflicts.append((crv, float(dest), sorted(vals.values())))
-                else:  # lossless: keep one mover, clear what it lands on
-                    losers.extend((crv, t) for t in movers[1:] + still)
+        conflicts, merges = self._pose_collisions(plan, retimes)
         if conflicts:
             raise ShotBoundaryConflict(conflicts)
+        losers = [
+            (crv, t) for crv, _d, movers, still in merges for t in movers[1:] + still
+        ]
+        merged, merged_steps = self._merge_halves(merges, self.ledger.owns_step)
+
+        # ---- keyless seams: pin the preceding shot's own pose first --------
+        # A seam the split opens with NO key on it is a segment both shots
+        # share, so the move re-timed the preceding shot from its first frame.
+        # Pinned, it is a keyed seam: the capture below copies it.
+        self._pin_keyless_seams(self._opened_seams(plan))
 
         # ---- splits: capture while the shared sample still exists ---------
+        # Over every content curve, not the following shot's members: a shot
+        # PLAYS a segment it keys nothing of (2026-10-11, a production door
+        # ramp through 30 flush shots), and the sample opening it is its pose.
         captures: list = []
+        content_curves = None
         for prev_id, shot_id, boundary, new_start in ShotPlanner.boundary_splits(
             self.store, plan
         ):
@@ -2602,13 +3373,22 @@ class ShotSequencer(_ShotSequencerCore):
             prev_delta = (
                 prev_move.delta if prev_move is not None and prev_move.moves else 0.0
             )
-            names = self._shot_nodes(shot)
-            curves = (
-                AnimUtils.objects_to_curves(names, through_blends=False)
-                if names
-                else []
-            )
-            for crv in sorted(set(curves or [])):
+            # A window the plan moves the following shot by that reaches back
+            # over the seam (a ripple carrying the gap: Move to Shot's room)
+            # takes the sample with that shot -- it is not left behind.
+            next_move = plan.moves.get(shot_id)
+            if next_move is not None and not next_move.moves:
+                next_move = None
+            if content_curves is None:
+                content = self._content_objects()
+                content_curves = sorted(
+                    set(
+                        AnimUtils.objects_to_curves(content, through_blends=False)
+                        if content
+                        else []
+                    )
+                )
+            for crv in content_curves:
                 # Find the key BY TOLERANCE, then work from its own time: a
                 # key sits where the last move left it, which is the shot
                 # bound plus float noise, so an exact-frame query would miss
@@ -2621,43 +3401,42 @@ class ShotSequencer(_ShotSequencerCore):
                 if not found:
                     continue  # this curve has no pose on the shared sample
                 key_t = float(found[0])
+                if next_move is not None and ShotPlanner.in_window(
+                    key_t,
+                    next_move.env_start,
+                    next_move.env_end,
+                    next_move.env_lo_open,
+                    next_move.env_hi_closed,
+                    _BATCH_MOVE_EPS,
+                ):
+                    continue  # it rides the following shot's own window
                 at = (
                     cmds.keyframe(crv, q=True, time=(key_t, key_t), valueChange=True)
                     or []
                 )
                 if not at:
                     continue
-                interior = (
-                    cmds.keyframe(
-                        crv,
-                        q=True,
-                        time=(key_t + _BATCH_MOVE_EPS, shot.end + _BATCH_MOVE_EPS),
-                    )
-                    or []
-                )
-                if not interior:
-                    continue  # the following shot does not animate this curve
+                # The following shot plays the segment from the sample to the
+                # next key, wherever that key is.
+                all_times = cmds.keyframe(crv, q=True, timeChange=True) or []
+                if not any(t > key_t + _BATCH_MOVE_EPS for t in all_times):
+                    continue  # nothing after: the curve holds the pose on
                 tangents = (
                     cmds.keyTangent(
                         crv, q=True, time=(key_t, key_t), itt=True, ott=True
                     )
                     or []
                 )
-                # Shared only where the PRECEDING shot animates this curve
-                # too.  Where it does not, the sample was never a shared
-                # fencepost — it is the following shot's opening pose alone,
-                # so it travels with that shot instead of being duplicated
-                # and left behind on a curve its neighbour has no stake in.
-                shared = bool(
-                    cmds.keyframe(
-                        crv,
-                        q=True,
-                        time=(
-                            prev_shot.start - _BATCH_MOVE_EPS,
-                            key_t - _BATCH_MOVE_EPS,
-                        ),
-                    )
-                )
+                # Shared wherever the PRECEDING shot plays into it: a key
+                # before it, however far back -- the ramp from there is that
+                # shot's motion (the one rule; the old test, a key inside the
+                # preceding shot, carried the sample off a ramp it closed:
+                # 0.2 to 0.6 off, 2026-10-11).  With nothing before it the
+                # sample was never shared -- it is the following shot's
+                # opening pose alone, the curve holds it before, so it
+                # travels with that shot instead of being duplicated and left
+                # behind on a curve its neighbour has no stake in.
+                shared = any(t < key_t - _BATCH_MOVE_EPS for t in all_times)
                 if shared and self.ledger.owns_key(crv, key_t):
                     # The sample stays the preceding shot's closing pose, so a
                     # claim on it serves THAT shot's end from here, whoever it
@@ -2665,8 +3444,9 @@ class ShotSequencer(_ShotSequencerCore):
                     # copy an earlier split made), deleting the preceding shot
                     # never found it, and the ripple landed the following
                     # shot over it: 0.0 held mid-ramp (measured 2026-09-23).
+                    stays = self.ledger.key_stays(crv, key_t)
                     self.ledger.release_key(crv, key_t)
-                    self.ledger.record_key(crv, key_t, prev_id, "end")
+                    self.ledger.record_key(crv, key_t, prev_id, "end", stays=stays)
                 captures.append(
                     (
                         crv,
@@ -2675,7 +3455,23 @@ class ShotSequencer(_ShotSequencerCore):
                         tuple(tangents),
                         shared,
                         key_t + prev_delta,
-                        self._derived_tangents(crv, key_t),
+                        # The halves a split disturbs, FIXED ones too: re-keyed
+                        # with setKeyframe and set fixed, a copy freezes the slope
+                        # Maya derives at its new frame, not the original's (a
+                        # keyless seam's pin is all fixed, and its copy opened
+                        # the next shot ~1.0 off until angle and weight came).
+                        {
+                            half: got
+                            for half in ("in", "out")
+                            if (
+                                got := self._derived_half(
+                                    crv,
+                                    key_t,
+                                    half,
+                                    _NEIGHBOUR_DERIVED_TANGENTS + ("fixed",),
+                                )
+                            )
+                        },
                         # A copy is the system's; a carried sample stays whose
                         # it was -- claimed, an animator's opening pose would be
                         # skipped by content scans and moved or cut with the bound.
@@ -2697,7 +3493,7 @@ class ShotSequencer(_ShotSequencerCore):
                     continue  # locked or referenced curve — leave it as it was
                 self.ledger.release(crv, t)
 
-        if not captures:
+        if not captures and not merged and not merged_steps:
             return _noop
 
         # Which shot each capture is opening, so the sample it creates can be
@@ -2711,6 +3507,14 @@ class ShotSequencer(_ShotSequencerCore):
         led = self.ledger
 
         def _finish():
+            # A merged key closes the earlier side and opens the later one.
+            self._hold_halves(merged)
+            for crv, frame, kind in merged_steps:
+                landed = self._key_time_at(crv, frame, _BATCH_MOVE_EPS)
+                if landed is not None:
+                    self._try_key_tangent(
+                        crv, (landed, landed), {"outTangentType": kind}
+                    )
             for crv, frame, value, tangents, shared, original, held, claim in captures:
                 if not cmds.objExists(crv):
                     continue
@@ -2743,9 +3547,17 @@ class ShotSequencer(_ShotSequencerCore):
                         # carried sample itself) and, where it stays, the
                         # preceding shot's closing one.
                         if shared and "in" in held:
-                            self._hold_split_tangent(crv, original, "in", held["in"])
+                            self._hold_half(crv, original, "in", held["in"])
                         if "out" in held:
-                            self._hold_split_tangent(crv, frame, "out", held["out"])
+                            self._hold_half(crv, frame, "out", held["out"])
+                        # A FIXED in half (a seam pin's) goes onto the copy as
+                        # well: it faces the held gap, so it plays nothing
+                        # while the gap is open -- and when the gap closes
+                        # again the merge keeps the copy, which then closes
+                        # the preceding shot exactly as the pin did
+                        # (measured: 0.20 off when it kept its own slope).
+                        if shared and tangents[:1] == ("fixed",) and "in" in held:
+                            self._hold_half(crv, frame, "in", held["in"])
                 if not shared and keyed:
                     # Only now does a carried sample leave its old frame, and
                     # only once the new start holds a pose. Cut before the
@@ -2824,6 +3636,9 @@ class ShotSequencer(_ShotSequencerCore):
             for crv, frame in pinned:
                 owner, edge = bound_owner.get(float(frame), (-1, ""))
                 self.ledger.record_key(crv, frame, owner, edge)
+            # A bound a HOLD spans gets no key (insert_keys declines one): it
+            # is pinned at its held pose instead (_pin_held_bounds).
+            self._pin_held_bounds(content)
             if pinned:
                 logging.getLogger(__name__).debug(
                     "Respace: pinned %d shot-boundary key(s) so each shot's "
@@ -2831,6 +3646,11 @@ class ShotSequencer(_ShotSequencerCore):
                     len(pinned),
                 )
 
+        hold_slopes = (
+            self._hold_moved_boundary_slopes(plan, content)
+            if cmds is not None
+            else (lambda: 0)
+        )
         finish = self._reconcile_boundaries(plan, retimes) if cmds is not None else None
         if retimes:
             ShotApply.retime_gaps(
@@ -2847,3 +3667,4 @@ class ShotSequencer(_ShotSequencerCore):
 
         if retimes:
             ShotApply.retime_gaps(retimes, content, after_move=True, ledger=self.ledger)
+        hold_slopes()

@@ -145,7 +145,7 @@ class MappingPickerMixin:
         import json
         from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
-        options = {**self._option_values(replacement), **values}
+        options = {**self._user_option_values(replacement), **values}
         self._settings.setValue(f"mapping_options/{replacement}", json.dumps(options))
         try:
             Mapping.templates().active = replacement
@@ -175,6 +175,15 @@ class MappingPickerMixin:
             name = None if (not arg or arg == "(none)") else arg
         else:
             name = self._cmb_mapping.currentData()
+        path, store = self._loaded_sheet(), self._active_store()
+        if path and store is not None:
+            # The user's pick for the sheet loaded is the scene's from now on
+            # (its options seeded from theirs); else the reload below would
+            # read it with the template the scene kept.
+            self._sheet_values = None
+            ptk.ManifestEdits.set_sheet_options(
+                store, path, name, self._user_option_values(name) if name else {}
+            )
         self._apply_mapping(name, persist=True)
 
     def _apply_mapping(self, name, persist: bool) -> None:
@@ -186,6 +195,9 @@ class MappingPickerMixin:
         from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
 
         self._mapping_name = name or None
+        # The user's own pick: what a sheet the scene never read is read with
+        # (_adopt_sheet_options), whichever template a record switched in.
+        self._user_template = self._mapping_name
         self._mapping_template = None
         if name:
             try:
@@ -209,8 +221,19 @@ class MappingPickerMixin:
         self._reapply_mapping()
 
     def _option_values(self, name: Optional[str] = None) -> Dict[str, object]:
-        """The saved option values of template *name*, the current one by
-        default (``{}`` if none)."""
+        """The option values template *name* (the current one by default)
+        reads with: the scene's for the sheet loaded (``_sheet_values``,
+        :meth:`_adopt_sheet_options`), else the user's own (``{}`` if none)."""
+        name = name or self._mapping_name
+        sheet = getattr(self, "_sheet_values", None)
+        if name and sheet is not None and name == self._mapping_name:
+            return dict(sheet)
+        return self._user_option_values(name)
+
+    def _user_option_values(self, name: Optional[str] = None) -> Dict[str, object]:
+        """The user's saved option values of template *name* (the current one
+        by default; ``{}`` if none) -- what seeds a sheet the scene has never
+        read (maintainer 2026-10-12)."""
         import json
 
         name = name or self._mapping_name
@@ -232,20 +255,200 @@ class MappingPickerMixin:
             if self._mapping_template is not None
             else None
         )
-        path = self._csv_path or self.ui.txt_csv_path.text().strip()
+        # The sheet in the field: one that just failed to load is the one an
+        # option is set for (its field says to set its Step IDs), not the
+        # sheet still shown.
+        path = self.ui.txt_csv_path.text().strip() or self._csv_path
         if path:
             self._load_csv(path)
 
     def _on_option_changed(self, key: str, value) -> None:
-        """Save one option of the current template and re-apply it."""
+        """Save one option of the current template and re-apply it: on the
+        scene for the sheet loaded (how the scene reads it,
+        :meth:`_record_sheet_options`), and as the user's own, which seed the
+        next sheet the scene has never read.  A sheet in the field that did
+        not load is read again with it (:meth:`_reapply_mapping`), and the
+        sheet still shown keeps its record."""
         import json
 
-        values = self._option_values()
-        values[key] = value
+        user = self._user_option_values()
+        user[key] = value
         self._settings.setValue(
-            f"mapping_options/{self._mapping_name}", json.dumps(values)
+            f"mapping_options/{self._mapping_name}", json.dumps(user)
         )
+        field = self.ui.txt_csv_path.text().strip()
+        if self._loaded_sheet() and field in ("", self._loaded_sheet()):
+            values = self._option_values()
+            values[key] = value
+            self._sheet_values = values
+            self._record_sheet_options()
         self._reapply_mapping()
+
+    # ---- the scene's options for its sheet (maintainer 2026-10-12) ---------------
+
+    def _loaded_sheet(self) -> str:
+        """The sheet the table shows, or ``""`` (the scene's own shots)."""
+        return (self._csv_path or "") if self._source == "csv" else ""
+
+    def _record_sheet_options(self, store=None) -> bool:
+        """Keep the template and options the loaded sheet is read with on the
+        scene, beside its Local Edits (``ManifestEdits.set_sheet_options``):
+        what a Build, an option change and a saved edit record, so a reopen
+        reads the sheet the way it was built whatever the user's own options
+        are by then.  ``False`` with no sheet loaded or nothing changed."""
+        path = self._loaded_sheet()
+        store = store if store is not None else self._active_store()
+        if not path or store is None:
+            return False
+        values = self._option_values() if self._mapping_name else {}
+        self._sheet_values = dict(values)
+        return ptk.ManifestEdits.set_sheet_options(
+            store, path, self._mapping_name, values
+        )
+
+    def _adopt_sheet_options(self, path: str) -> None:
+        """Read sheet *path* the way the scene reads it, before it is parsed:
+        the template and options the scene keeps for it
+        (``ManifestEdits.sheet_options``); else -- a scene built from it before
+        they were kept -- the options its build reads back as
+        (:meth:`_inferred_sheet_options`); else the user's own: a sheet the
+        scene has never read.  Nothing is written: a record is made by a
+        Build, an option change or a saved edit."""
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        store = self._active_store()
+        record = ptk.ManifestEdits.sheet_options(store, path)
+        if record is None:
+            record = self._inferred_sheet_options(store, path)
+        if record is None:
+            user = getattr(self, "_user_template", self._mapping_name)
+            if user != self._mapping_name:
+                self._switch_template(user)  # a record's, switched in before
+            elif getattr(self, "_sheet_values", None) is None:
+                return  # already the user's own
+            self._sheet_values = None
+        else:
+            values = dict(record.get("values") or {})
+            if (record.get("template"), values) == (
+                self._mapping_name,
+                getattr(self, "_sheet_values", None),
+            ):
+                # Read this way already (an option just changed for it): the
+                # option rows -- the changed one's among them -- stay.
+                return
+            if record.get("template") != self._mapping_name:
+                self._switch_template(record.get("template"))
+            self._sheet_values = values
+        self._active_mapping = (
+            Mapping.apply_options(self._mapping_template, self._option_values())
+            if self._mapping_template is not None
+            else None
+        )
+        self._build_option_rows()
+
+    def _switch_template(self, name: Optional[str]) -> bool:
+        """Read with template *name* (``None``: no template) for the sheet
+        loaded -- shown on the picker, never saved as the user's last-used.
+        ``False`` (the current one kept) when this machine has no such
+        template; the footer says so."""
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        template = None
+        if name:
+            try:
+                template = Mapping.load_mapping(name, self._mapping_dir or None)
+            except Exception as exc:
+                self.logger.warning("Sheet template %r not loaded: %s", name, exc)
+                self._set_footer(
+                    f"This scene reads its sheet with template '{name}', which "
+                    "is not installed here: read with the current one.",
+                    color=ERROR_COLOR,
+                )
+                return False
+        self._show_template(name, template)
+        return True
+
+    def _show_template(self, name: Optional[str], template) -> None:
+        """Make *name* (its loaded *template*) the current template and show
+        it on the picker, without its change signal."""
+        self._mapping_name, self._mapping_template = name or None, template
+        cmb = getattr(self, "_cmb_mapping", None)
+        if cmb is not None:
+            idx = self._combo_data_index(name) if name else 0
+            cmb.blockSignals(True)
+            cmb.setCurrentIndex(max(idx, 0))
+            cmb.blockSignals(False)
+
+    def _sheet_read_state(self) -> tuple:
+        """What :meth:`_adopt_sheet_options` changes -- the template, the
+        sheet's option values and the effective mapping -- for
+        :meth:`_restore_sheet_read_state`."""
+        return (
+            self._mapping_name,
+            self._mapping_template,
+            getattr(self, "_sheet_values", None),
+            self._active_mapping,
+        )
+
+    def _restore_sheet_read_state(self, state: tuple) -> None:
+        """Read the sheet shown as it was read before another sheet failed to
+        load (:meth:`_load_csv`): a Build and an option change record on the
+        sheet shown, so the failed sheet's template and options must not
+        stay current."""
+        if state == self._sheet_read_state():
+            return
+        name, template, values, active = state
+        self._show_template(name, template)
+        self._sheet_values, self._active_mapping = values, active
+        self._build_option_rows()
+
+    def _inferred_sheet_options(self, store, path: str) -> Optional[dict]:
+        """``{"template", "values"}`` for a scene built from sheet *path*
+        before its options were kept with it: the values its shots' recorded
+        objects read back as (``Mapping.infer_options``, from the user's own),
+        with the current template.  ``None`` when the scene was not built
+        from *path*, records no objects, or the sheet is a URL (each trial
+        would fetch it).  The last read is kept, keyed by its sheet,
+        template and build record."""
+        import os
+        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
+
+        if (
+            store is None
+            or self._mapping_template is None
+            or ptk.RemoteFile.is_url(path)
+            or not ptk.ManifestEdits.same_sheet(store.source_csv, path)
+        ):
+            return None
+        built = {}
+        for shot in store.shots:
+            meta = shot.metadata or {}
+            names = [
+                o.get("name")
+                for o in meta.get("csv_objects") or ()
+                if isinstance(o, dict) and o.get("name")
+            ]
+            if meta.get("step") and names:
+                built[str(meta["step"])] = names
+        if not built:
+            return None
+        user = self._user_option_values()
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            stamp = None
+        key = (
+            path,
+            stamp,
+            self._mapping_name,
+            repr(sorted(built.items())),
+            repr(sorted(user.items())),
+        )
+        cached = getattr(self, "_inferred_options", None)
+        if cached is None or cached[0] != key:
+            values = Mapping.infer_options(path, self._mapping_template, built, user)
+            cached = self._inferred_options = (key, values)
+        return {"template": self._mapping_name, "values": dict(cached[1])}
 
     def _build_option_rows(self) -> None:
         """Show the current template's options under its picker in the header menu.

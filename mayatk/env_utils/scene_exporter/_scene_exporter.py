@@ -422,6 +422,10 @@ class SceneExporter(ptk.SceneExporterBase):
         run_scope.enter_context(CoreUtils.undo_disabled())
         run_scope.enter_context(CoreUtils.suspended_refresh())
         run_scope.enter_context(CoreUtils.preserved_selection())
+        # The run's bake, snap, tie and optimize are put back: a transient
+        # edit, so the Shot Sequencer credits none of their keys to the active
+        # shot (``ShotStore.transient_edit``; restores included).
+        run_scope.enter_context(ptk.ShotStore.transient_edit())
         try:
             # Inside the try, so the finally below closes the run's .log on these
             # exits too: an empty export set used to return, and a preset that

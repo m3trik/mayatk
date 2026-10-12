@@ -9,7 +9,6 @@ passing in only the data they need.
 from __future__ import annotations
 
 import logging
-import math
 
 try:
     import maya.cmds as cmds
@@ -198,11 +197,67 @@ class SegmentCollector:
         return sorted(attrs)
 
     @staticmethod
-    def build_curve_preview(crv, t_start, t_end, hidden_times=()):
-        """Extract Bézier curve shape data for a single anim curve.
+    def summary_times(segments, claimed_times) -> list:
+        """Every key time an object row ticks in the flat key style.
 
-        Returns a DCC-agnostic dict that the widget painter can render
-        directly using ``QPainterPath.cubicTo`` / ``lineTo``.
+        The segments' own ``keyframes`` (already collected upstream), minus
+        the shot system's claimed bound samples: a time drops only when every
+        curve of its segment that is keyed there holds it as a claimed sample.
+        A claim on one channel beside an animator key on another keeps the
+        tick -- the object has a real key there.
+
+        Parameters:
+            segments: Segment dicts of one object (``curves``, ``keyframes``).
+            claimed_times: ``curve -> [time, ...]``, the samples the shot
+                system created on that curve (the ledger).
+
+        Returns:
+            Ascending, de-duplicated times.
+        """
+        out: set = set()
+        for seg in segments:
+            curves = list(seg.get("curves") or [])
+            claims = {id(c): list(claimed_times(c) or ()) for c in curves}
+            for t in seg.get("keyframes") or ():
+                claimers = [
+                    c for c in curves if any(abs(t - h) <= 1e-3 for h in claims[id(c)])
+                ]
+                if not claimers or any(
+                    SegmentCollector._has_key_at(c, t)
+                    for c in curves
+                    if all(c is not k for k in claimers)
+                ):
+                    out.add(float(t))
+        return sorted(out)
+
+    @staticmethod
+    def _has_key_at(curve, t: float) -> bool:
+        """Whether *curve* carries a key at *t* (within 1e-3 frames)."""
+        try:
+            return bool(
+                cmds.keyframe(
+                    str(curve),
+                    query=True,
+                    keyframeCount=True,
+                    time=(t - 1e-3, t + 1e-3),
+                )
+            )
+        except RuntimeError:  # the curve went away under the query
+            return False
+
+    @staticmethod
+    def build_curve_preview(crv, t_start, t_end, hidden_times=()):
+        """Bezier shape data for one anim curve, clipped to ``[t_start, t_end]``.
+
+        The curve read as a host-free ``pythontk.KeyCurve``
+        (:meth:`AnimUtils.get_key_curves`) and windowed by
+        ``KeyCurve.to_preview``: the keys in range plus one bounding key each
+        side, ``{keys, segments, broken, hidden, weighted, val_min, val_max}``
+        -- the DCC-agnostic dict the widget painter draws with
+        ``QPainterPath.cubicTo`` / ``lineTo``.  Every span but a ``step`` /
+        ``stepnext`` one is the cubic Maya evaluates (a ``linear`` tangent is
+        an angle like any other), its control points from the tangent angles
+        and weights.
 
         Parameters
         ----------
@@ -217,155 +272,17 @@ class SegmentCollector:
 
         Returns
         -------
-        dict
-            ``{keys, segments, val_min, val_max}`` or *None* if the
-            curve has no usable data in the range.
-
-            *keys*: ``[(t, v), ...]`` — keyframe dot positions.
-
-            *broken*: ``[bool, ...]`` per key — tangents unlocked (the
-            widget draws those handles dotted).
-
-            *hidden*: ``[bool, ...]`` per key — on *hidden_times*.
-
-            *segments*: list of dicts, one per consecutive key pair::
-
-                {t0, v0, t1, v1, out_type,
-                 cp1: (x, y) | None, cp2: (x, y) | None}
-
-            *val_min*, *val_max*: value range for Y normalisation.
+        dict or None
+            *None* when the curve has no usable data in the range.
         """
         if cmds is None:
             return None
+        from mayatk.anim_utils._anim_utils import AnimUtils
 
         try:
-            crv = str(crv)
-            times = cmds.keyframe(crv, q=True, timeChange=True) or []
-            values = cmds.keyframe(crv, q=True, valueChange=True) or []
-            if not times or len(times) != len(values):
-                return None
-
-            out_angles = cmds.keyTangent(crv, q=True, outAngle=True) or []
-            in_angles = cmds.keyTangent(crv, q=True, inAngle=True) or []
-            out_types = cmds.keyTangent(crv, q=True, outTangentType=True) or []
-            # Unlocked = broken: the sides move independently and the widget
-            # draws such a key's handles dotted.
-            locks = cmds.keyTangent(crv, q=True, lock=True) or []
-
-            # Weighted tangents: outWeight is the real Bézier handle distance.
-            # Non-weighted (default): outWeight ≈ 1.0 — use 1/3-span rule instead.
-            is_weighted = bool(cmds.getAttr(crv + ".weightedTangents"))
-            if is_weighted:
-                out_weights = cmds.keyTangent(crv, q=True, outWeight=True) or []
-                in_weights = cmds.keyTangent(crv, q=True, inWeight=True) or []
-            else:
-                out_weights = in_weights = None
-        except Exception:
+            curves = AnimUtils.get_key_curves([str(crv)])
+        except RuntimeError:  # the curve went away under the query
             return None
-
-        n = len(times)
-        check_lists = [values, out_angles, in_angles, out_types, locks]
-        if is_weighted:
-            check_lists.extend([out_weights, in_weights])
-        if any(len(lst) != n for lst in check_lists):
+        if not curves:
             return None
-
-        # --- Determine visible key indices (plus one bounding key each side) ---
-        first_vis = None
-        last_vis = None
-        for i, t in enumerate(times):
-            if t_start - 0.001 <= t <= t_end + 0.001:
-                if first_vis is None:
-                    first_vis = i
-                last_vis = i
-
-        if first_vis is None:
-            # No keys in range — check if curve interpolates through the range
-            before = [i for i, t in enumerate(times) if t < t_start]
-            after = [i for i, t in enumerate(times) if t > t_end]
-            if not before or not after:
-                return None
-            # Include bounding keys so we get one segment spanning the view
-            first_vis = before[-1]
-            last_vis = after[0]
-        else:
-            # Extend to include one bounding key on each side for edge segments
-            if first_vis > 0:
-                first_vis -= 1
-            if last_vis < n - 1:
-                last_vis += 1
-
-        # --- Build keys and segments for the visible range ---
-        vis_keys = []  # (t, v) for dot drawing
-        vis_segs = []  # per-span segment data
-        all_vals = []  # for min/max
-        broken = []  # per visible key: tangents unlocked
-
-        for i in range(first_vis, last_vis + 1):
-            t, v = times[i], values[i]
-            vis_keys.append((t, v))
-            all_vals.append(v)
-            broken.append(not locks[i])
-
-        for i in range(first_vis, last_vis):
-            t0, v0 = times[i], values[i]
-            t1, v1 = times[i + 1], values[i + 1]
-            ot = out_types[i]
-
-            cp1 = None
-            cp2 = None
-            if ot not in ("step", "stepnext", "linear"):
-                oa_rad = math.radians(out_angles[i])
-                ia_rad = math.radians(in_angles[i + 1])
-
-                if is_weighted:
-                    # Weighted tangents: weight IS the Bézier handle distance
-                    ow = out_weights[i]
-                    cp1 = (t0 + ow * math.cos(oa_rad), v0 + ow * math.sin(oa_rad))
-                    iw = in_weights[i + 1]
-                    cp2 = (t1 - iw * math.cos(ia_rad), v1 - iw * math.sin(ia_rad))
-                else:
-                    # Non-weighted: CP x-offset is always 1/3 of the span,
-                    # y-offset follows from the tangent angle.
-                    third = (t1 - t0) / 3.0
-                    cp1 = (t0 + third, v0 + third * math.tan(oa_rad))
-                    cp2 = (t1 - third, v1 - third * math.tan(ia_rad))
-
-                # Track CP values for accurate normalization
-                all_vals.extend([cp1[1], cp2[1]])
-
-            vis_segs.append(
-                {
-                    "t0": t0,
-                    "v0": v0,
-                    "t1": t1,
-                    "v1": v1,
-                    "out_type": ot,
-                    "cp1": cp1,
-                    "cp2": cp2,
-                }
-            )
-
-        if not vis_keys:
-            return None
-
-        val_min = min(all_vals)
-        val_max = max(all_vals)
-
-        hidden_times = list(hidden_times)
-        return {
-            "keys": vis_keys,
-            "segments": vis_segs,
-            "broken": broken,
-            "hidden": [
-                any(abs(t - h) <= 1e-3 for h in hidden_times) for t, _v in vis_keys
-            ],
-            # Whether a handle's LENGTH means anything, which is what the
-            # widget needs to swing a unified key's other side where the
-            # rebuild will put it: on an unweighted curve the control point
-            # is pinned a third of the span out and only its angle is the
-            # drag's to set (see the cp1/cp2 placement above).
-            "weighted": is_weighted,
-            "val_min": val_min,
-            "val_max": val_max,
-        }
+        return curves[0].to_preview(t_start, t_end, hidden_times)

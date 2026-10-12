@@ -1463,10 +1463,17 @@ class SegmentKeys(SegmentKeysInfo):
             avoid_overlap: If True (and use_intervals=True), skip intervals to avoid overlap.
             preserve_gaps: If True (and use_intervals=False), ensure we don't pull back.
             on_replace: ``on_replace(curve, frames)`` hears the keys a shift
-                replaced -- a segment laid end-to-start against the next one
-                lands on its start key (:meth:`shift_curves`).
+                replaced -- where two moved segments of one curve meet end to
+                start, the LATER-placed one's start key replaces the earlier
+                one's end key; a segment landing on a key that does not move
+                replaces that key.
             on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames of
-                the keys each shift moved (:meth:`shift_curves`).
+                the keys each shift moved, hop by hop: a curve whose segments
+                trade places parks them first (``AnimUtils._shift_ranges``).
+
+        The groups are laid down in list order, and a layout may reverse a
+        curve's own segments (Invert, an overlap longer than a segment): each
+        still moves once, to where the layout puts it.
         """
         operations = []
 
@@ -1556,27 +1563,28 @@ class SegmentKeys(SegmentKeysInfo):
                         }
                     )
 
-        # Execute operations in safe order to prevent collisions
-        # Positive shifts (moving right): Process Reverse (End to Start)
-        # Negative shifts (moving left): Process Forward (Start to End)
+        cls._shift_layout(operations, on_replace=on_replace, on_move=on_move)
 
-        pos_ops = [op for op in operations if op["shift"] > 0]
-        neg_ops = [op for op in operations if op["shift"] < 0]
+    @staticmethod
+    def _shift_layout(
+        operations: List[dict],
+        on_replace: Optional[Callable[[str, List[float]], Any]] = None,
+        on_move: Optional[Callable[[str, List[Tuple[float, float]]], Any]] = None,
+    ) -> None:
+        """Run a stagger layout's shift *operations* -- ``{"curves", "shift",
+        "time"}`` dicts in PLACEMENT order -- as one edit
+        (``AnimUtils._shift_ranges``), so a layout that reverses a curve's own
+        segments still moves each one once.  Each range is padded by 1e-3, as
+        :meth:`shift_curves` pads one: a key a hair off a segment bound still
+        moves with it.  Shared by :meth:`execute_stagger` and
+        ``ScaleKeys._stagger_scaled_segments``.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
 
-        # Sort by start time
-        # Handle None time range (treat as -inf)
-        def get_start_time(op):
+        eps = 1e-3
+        moves = []
+        for op in operations:
             t = op.get("time")
-            return t[0] if t else float("-inf")
-
-        pos_ops.sort(key=get_start_time, reverse=True)
-        neg_ops.sort(key=get_start_time)
-
-        for op in pos_ops + neg_ops:
-            cls.shift_curves(
-                op["curves"],
-                op["shift"],
-                op["time"],
-                on_replace=on_replace,
-                on_move=on_move,
-            )
+            span = (float(t[0]) - eps, float(t[1]) + eps) if t else None
+            moves.append((op["curves"], op["shift"], span))
+        AnimUtils._shift_ranges(moves, on_replace=on_replace, on_move=on_move)

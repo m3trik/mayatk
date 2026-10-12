@@ -22,6 +22,9 @@
   <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
+  <property name="accessibleDescription">
+   <string>Duplicate selected objects into a 3D grid with per-axis counts and spacing.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

@@ -493,6 +493,9 @@ class TestResolveRanges(unittest.TestCase, _ControllerHarness):
         """Setting a user pin clears subsequent user ranges so they re-flow."""
         mock_dur.return_value = 30.0
         mock_regions.return_value = []
+        # Contiguous, whatever a new store's gap defaults to (10 since
+        # 2026-10-11): the cascade is under test, not the spacing.
+        ShotStore.active().gap = 0.0
 
         # Pin all three steps
         self.ctrl._user_ranges["A01"] = (1.0, 30.0)
@@ -987,6 +990,35 @@ class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
             self.assertIsNone(self.ctrl._editor._pending, "no editor opened")
         self.assertIn("View Original Sheet", self.ui.footer.setText.call_args[0][0])
 
+    def test_an_edit_runs_the_assessment_again_and_a_rename_wants_a_build(self):
+        """Bug: a Local Edit left the last Assess up and marked Build due
+        whatever it said, so every hide meant pressing Assess again ("once I
+        hide shots, I have to re-assess every time"); and an Assess after a
+        built step's rename turned Build off -- Assess never saw a rename, so
+        it was never built.
+        Fixed: 2026-10-11"""
+        import pythontk as ptk
+
+        self._load()
+        ptk.ShotManifest(self.store).update(self.ctrl._steps, initial_shot_length=50)
+        self.ctrl._redraw()
+        self.ctrl.assess(skip_key_check=True)
+        # Built; their missing objects are an artist's to add, not Build's.
+        self.ui.b003.setEnabled.assert_called_with(False)
+
+        def soon(note=""):  # the timer's work, now
+            self.ctrl._reassess_note = note
+            self.ctrl._reassess()
+
+        with patch.object(self.ctrl, "_reassess_soon", side_effect=soon) as reassess:
+            self._commit(self.tree.topLevelItem(0), COL_STEP, "Renamed")
+        reassess.assert_called_once()
+        footer = self.ui.footer.setText.call_args[0][0]
+        self.assertTrue(footer.startswith("Renamed 'A01' to 'Renamed'"), footer)
+        self.assertIn("Assessment:", footer)
+        self.assertEqual(self.ctrl._last_results[0].updates, ["name"])
+        self.ui.b003.setEnabled.assert_called_with(True)
+
     def test_the_original_view_shows_the_sheet_turns_build_off_and_loses_nothing(self):
         self._load()
         self._commit(self.tree.topLevelItem(0), COL_STEP, "Renamed")
@@ -1000,6 +1032,26 @@ class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "Renamed")
         self.assertEqual(
             self.store.manifest_edits[self.SHEET]["steps"]["A01"], {"name": "Renamed"}
+        )
+
+    def test_a_moved_sheet_keeps_its_edits_and_the_next_edit_re_keys_them(self):
+        """Bug: the edit layer was found by the sheet's exact path, so a sheet
+        moved or opened through another mount silently lost its edits
+        (SOL_REPLACE_ASSEMBLY keeps its 5 name fixes under a personal Dropbox
+        folder's path).
+        Fixed: 2026-10-11 -- the path, else the one layer of that file name
+        (``ManifestEdits.layer_key``); a save re-keys it to the new path."""
+        self._load()
+        self._commit(self.tree.topLevelItem(0), COL_STEP, "Renamed")
+        moved = "D:/moved/elsewhere/file.csv"
+        self.ctrl._load_data(_make_steps("A01", "A02", "A03"), csv_path=moved)
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "Renamed")
+        self._commit(self.tree.topLevelItem(1), COL_DESC, "Moved on")
+        self.assertEqual(list(self.store.manifest_edits), [moved])
+        self.assertEqual(
+            self.store.manifest_edits[moved]["steps"]["A01"], {"name": "Renamed"}
         )
 
     def test_description_edit_is_a_local_edit(self):
@@ -1049,6 +1101,144 @@ class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
             menus[0].hide()
             QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         self.assertEqual(label.findChildren(Menu), [])
+
+
+class TestTheSheetsOptionsLiveOnTheScene(unittest.TestCase, _ControllerHarness):
+    """Bug: a sheet's mapping-template options were kept per user, so a scene
+    reopened on its sheet read it another way than it was built
+    (SOL_REPLACE_ASSEMBLY, built with Object Case = upper, read As written:
+    every built object missing, all 5 Local Edits stale).
+    Fixed: 2026-10-12 (maintainer) -- per sheet, on the scene, beside its
+    Local Edits; the user's own options only seed a sheet the scene never read."""
+
+    CSV = "Step,Step Contents,Asset Names\nA01.),Red Door fades in,\n"
+
+    def setUp(self):
+        import json
+        import maya.cmds as cmds
+        import pythontk as ptk
+
+        cmds.file(new=True, force=True)
+        cmds.polyCube(name="RED_DOOR")
+        self.setup_controller()
+        self.store = _fresh_store()
+        p = patch(
+            "mayatk.anim_utils.shots._shots.ShotStore.active", return_value=self.store
+        )
+        p.start()
+        self.addCleanup(p.stop)
+        tmp = ptk.TempArtifacts("mtk_manifest_sheet_options", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.csv = os.path.join(tmp.dir_path(), "sheet.csv")
+        with open(self.csv, "w", encoding="utf-8", newline="") as fh:
+            fh.write(self.CSV)
+        key = "mapping_options/default"
+        self.addCleanup(self.ctrl._settings.setValue, key, "")
+        self._user = lambda values: self.ctrl._settings.setValue(
+            key, json.dumps(values)
+        )
+        _mock_undo_info(self)
+
+    def _open(self):
+        """A panel opening on the scene: a fresh controller, the default
+        template, the scene's sheet loaded as ``_open_scene_source`` loads it."""
+        self.setup_controller()
+        self.ctrl._apply_mapping("default", persist=False)
+        self.assertTrue(self.ctrl._load_csv(self.store.source_csv or self.csv))
+        return [o.name for o in self.ctrl._steps[0].objects]
+
+    def test_a_reopened_scene_reads_its_sheet_as_it_was_built(self):
+        self._user({"object_case": "upper"})
+        self.assertEqual(self._open(), ["RED_DOOR"])
+        self.ctrl.build()
+        self.assertEqual(
+            self.store.manifest_options[self.csv]["values"]["object_case"], "upper"
+        )
+        self._user({})  # the user's own options since: As written
+        self.assertEqual(self._open(), ["RED_DOOR"], "read as it was built")
+        self.ctrl.assess(skip_key_check=True)
+        found = {o.name: o.exists for r in self.ctrl._last_results for o in r.objects}
+        self.assertEqual(found, {"RED_DOOR": True})
+
+    def test_a_sheet_the_scene_never_read_takes_the_users_options(self):
+        self._user({"object_case": "upper"})
+        self.assertEqual(self._open(), ["RED_DOOR"])
+        self.assertEqual(self.store.manifest_options, {}, "reading writes nothing")
+        self._user({})
+        self.assertEqual(self._open(), ["Red_Door"])
+
+    def test_an_option_changed_for_the_sheet_is_the_scenes(self):
+        self._open()
+        self.ctrl._on_option_changed("object_case", "upper")
+        self.assertEqual(
+            self.store.manifest_options[self.csv]["values"]["object_case"], "upper"
+        )
+        self._user({})
+        self.assertEqual(self._open(), ["RED_DOOR"])
+
+    def _other_sheet(self, text):
+        """A second sheet beside the first, browsed to as the user would."""
+        path = os.path.join(os.path.dirname(self.csv), "other.csv")
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
+        self.ctrl.ui.txt_csv_path.text.return_value = path  # the field holds it
+        return path
+
+    def test_a_sheet_the_scene_never_read_takes_the_users_template(self):
+        """Bug: a template switched in for one sheet's record stayed current,
+        so the next sheet -- one the scene had never read -- was read with it,
+        not with the user's own.
+        Fixed: 2026-10-12"""
+        import shutil
+        import pythontk as ptk
+        from pythontk.core_utils.engines.shots.manifest import mapping
+
+        tmp = ptk.TempArtifacts("mtk_manifest_templates", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        folder = tmp.dir_path()
+        default = os.path.join(os.path.dirname(mapping.__file__), "default.json")
+        for name in ("mine", "theirs"):
+            shutil.copy(default, os.path.join(folder, f"{name}.json"))
+        self.ctrl._mapping_dir = folder
+        self.ctrl._apply_mapping("mine", persist=False)
+        ptk.ManifestEdits.set_sheet_options(self.store, self.csv, "theirs", {})
+        self.assertTrue(self.ctrl._load_csv(self.csv))
+        self.assertEqual(self.ctrl._mapping_name, "theirs", "precondition: its record")
+
+        self.assertTrue(self.ctrl._load_csv(self._other_sheet(self.CSV)))
+        self.assertEqual(self.ctrl._mapping_name, "mine")
+
+    def test_a_sheet_that_fails_to_load_leaves_the_shown_sheets_record(self):
+        """Bug: a sheet that read no step was refused, but its own options
+        stayed adopted, so a Build then recorded them on the sheet still
+        shown (Object Case upper -> As written).
+        Fixed: 2026-10-12"""
+        self._user({"object_case": "upper"})
+        self._open()
+        self.ctrl.build()
+        self._user({})  # the user's own since: As written
+        other = self._other_sheet("Step,Step Contents,Asset Names\n")
+        self.assertFalse(self.ctrl._load_csv(other), "precondition: no step read")
+        self.ctrl.build()
+        self.assertEqual(
+            self.store.manifest_options[self.csv]["values"].get("object_case"),
+            "upper",
+        )
+
+    def test_an_option_set_after_a_sheet_read_no_step_reads_that_sheet(self):
+        """Bug: the field said to set the sheet's Step IDs, but the option
+        change read the sheet shown before again and recorded it there.
+        Fixed: 2026-10-12"""
+        self._user({"step_ids": "classic"})  # reads the A01.) sheet shown
+        self._open()
+        other = self._other_sheet(
+            "Step,Step Contents,Asset Names\nIN_01,Red Door fades in,\n"
+        )
+        self.assertFalse(self.ctrl._load_csv(other), "precondition: no step read")
+        self.ctrl._on_option_changed("step_ids", "numbered")
+        self.assertEqual(self.ctrl._csv_path, other)
+        self.assertEqual([s.step_id for s in self.ctrl._steps], ["IN_01"])
+        self.assertNotIn(self.csv, self.store.manifest_options, "not that sheet's")
 
 
 class TestRowTags(unittest.TestCase, _ControllerHarness):
@@ -2578,20 +2768,22 @@ class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
             assess.assert_not_called()
             self.ctrl.ui.isVisible.return_value = True
             self.ctrl._on_show()
-            assess.assert_called_once_with(skip_key_check=True)
+            assess.assert_called_once_with(skip_key_check=True, note="")
             self.ctrl._on_show()
-            assess.assert_called_once_with(skip_key_check=True)
+            assess.assert_called_once_with(skip_key_check=True, note="")
 
 
 class TestBuildOptions(unittest.TestCase, _ControllerHarness):
     """The header menu's Build options reach the engine: Rebuild Edited Shots
-    (off by default) and one toggle per behavior type, both kept per user."""
+    (off by default) and a Key / Marker / Off choice per behavior type, both
+    kept per user."""
 
     def setUp(self):
         self.store = _fresh_store()
         self.setup_controller()
         self.addCleanup(self.ctrl._settings.clear, "rebuild_edited")
         self.addCleanup(self.ctrl._settings.clear, "disabled_behaviors")
+        self.addCleanup(self.ctrl._settings.clear, "marked_behaviors")
 
     def test_edited_shots_are_kept_by_default(self):
         self.assertFalse(self.ctrl._rebuild_edited)
@@ -2599,14 +2791,40 @@ class TestBuildOptions(unittest.TestCase, _ControllerHarness):
 
     def test_the_options_reach_the_engine(self):
         self.ctrl._on_rebuild_edited_toggled(True)
-        self.ctrl._set_behavior_enabled("highlight", False)
+        self.ctrl._set_behavior_mode("highlight", "off")
+        self.ctrl._set_behavior_mode("fade_in", "marker")
         mani = self.ctrl._manifest(self.store)
         self.assertTrue(mani.rebuild_edited)
         self.assertEqual(mani.disabled_behaviors, frozenset({"highlight"}))
-        self.ctrl._set_behavior_enabled("highlight", True)
+        self.assertEqual(mani.marked_behaviors, frozenset({"fade_in"}))
+        self.ctrl._set_behavior_mode("highlight", "key")
+        self.ctrl._set_behavior_mode("fade_in", "off")
+        mani = self.ctrl._manifest(self.store)
+        self.assertEqual(mani.disabled_behaviors, frozenset({"fade_in"}))
+        self.assertEqual(mani.marked_behaviors, frozenset())
+
+    def test_each_behavior_picks_key_marker_or_off_in_the_header_menu(self):
+        """Acting on the menu's choice: it opens on the kept mode, and a pick
+        is kept per user (2026-10-11: "a third option (maybe using a
+        combobox) of adding a marker in the sequencer instead of keying")."""
+        from uitk.widgets.menu import Menu
+
+        self.ctrl._set_behavior_mode("highlight", "marker")
+        menu = Menu()
+        self.addCleanup(menu.deleteLater)
+        self.ctrl._add_build_options(menu)
+        modes = self.ctrl._behavior_modes
+        self.assertEqual(sorted(modes), sorted(Behaviors.list_behaviors()))
+        cmb = modes["highlight"]
         self.assertEqual(
-            self.ctrl._manifest(self.store).disabled_behaviors, frozenset()
+            [cmb.itemText(i) for i in range(cmb.count())], ["Key", "Marker", "Off"]
         )
+        self.assertEqual(cmb.currentData(), "marker")
+        self.assertEqual(modes["fade_in"].currentData(), "key")
+        cmb.setCurrentIndex(cmb.findData("off"))
+        self.ctrl._behavior_sets.clear()  # read back from the settings
+        self.assertEqual(self.ctrl._behavior_mode("highlight"), "off")
+        self.assertEqual(self.ctrl._marked_behaviors(), frozenset())
 
     def test_a_typed_range_never_moves_a_built_shot(self):
         """A built row cannot be typed in, so a range for it was typed before
@@ -3434,6 +3652,20 @@ class TestSceneChangeCallback(unittest.TestCase, _ControllerHarness):
         # detect should NOT have run (CSV takes priority)
         mock_detect.assert_not_called()
 
+    def test_a_reassessment_owed_to_the_old_scene_is_dropped(self):
+        """Bug: a re-assessment pending (or owed to a hidden panel) when the
+        scene changed ran on the next scene, which opens unassessed.
+        Fixed: 2026-10-12"""
+        self.ctrl._first_shown = False  # no repopulate: only the drop is under test
+        self.ctrl._reassess_soon(note="Hid 2 step(s).")
+        self.ctrl._reassess_on_show = True
+
+        self.ctrl._on_scene_changed()
+
+        self.assertFalse(self.ctrl._reassess_timer.isActive(), "timer still pending")
+        self.assertFalse(self.ctrl._reassess_on_show)
+        self.assertEqual(self.ctrl._reassess_note, "")
+
     @patch(
         "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
@@ -3662,6 +3894,49 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
         load.assert_called_once_with("X:/sheets/build_sheet.csv")
 
 
+class _MemoryClipboard:
+    """``QApplication.clipboard()`` for a test: the copy stays in this process.
+
+    In a GUI Maya the real one is the Windows clipboard, shared with every
+    program on the machine: one holding it made every read come back empty,
+    the test's own "before" text included (2026-10-12, 7 Export tests red
+    with nothing wrong).  Python owns the QMimeData here, so nothing is left
+    in Qt's global for libc exit to tear down either (exit 139 after a green
+    summary under the offscreen platform, the reason the real one was
+    cleared in teardown).
+    """
+
+    def __init__(self):
+        self._mime = QtCore.QMimeData()
+
+    def setText(self, text):
+        mime = QtCore.QMimeData()
+        mime.setText(text)
+        self._mime = mime
+
+    def setMimeData(self, mime):
+        self._mime = mime
+
+    def mimeData(self):
+        return self._mime
+
+    def text(self):
+        return self._mime.text()
+
+    def clear(self):
+        self._mime = QtCore.QMimeData()
+
+
+def _use_memory_clipboard(case):
+    """Give *case* a :class:`_MemoryClipboard` for every
+    ``QApplication.clipboard()`` call -- the panel's and the test's."""
+    board = _MemoryClipboard()
+    p = patch.object(QtWidgets.QApplication, "clipboard", return_value=board)
+    p.start()
+    case.addCleanup(p.stop)
+    return board
+
+
 # ---------------------------------------------------------------------------
 # Tests: Auto-fill Missing Assets
 # ---------------------------------------------------------------------------
@@ -3716,12 +3991,7 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
             fh.write(self.CSV)
         self.ctrl._steps = []
         self.addCleanup(self.ctrl._settings.setValue, "export_options", "")
-        # Export hands the clipboard a Python-built QMimeData. Under the offscreen
-        # platform the clipboard keeps it in a Qt global that dies at libc exit,
-        # after Python: its wrapper's teardown then faulted the run there (exit
-        # 139 after a green summary). Clearing it frees the data while Python
-        # still runs.
-        self.addCleanup(QtWidgets.QApplication.clipboard().clear)
+        _use_memory_clipboard(self)
 
     def _load(self, enabled):
         # The template's option, applied: what its Auto-fill row sets.
@@ -3748,10 +4018,9 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
 
     def test_the_filled_names_export_with_their_steps(self):
         self._load(True)
-        self.ctrl._set_export_option("to", "clipboard")
         self.ctrl._set_export_option("objects", "cell")
         self.ctrl._set_export_option("columns", ["step", "objects"])
-        self.ctrl.export()
+        self.ctrl._export_copy()  # the Export preview's Copy
         mime = QtWidgets.QApplication.clipboard().mimeData()
         self.assertEqual(
             mime.text(), 'Step\tObjects\nA01\t"door_geo\nhandle"\nA02\tlid_geo'
@@ -3760,19 +4029,22 @@ class TestAutoFillAssetsController(unittest.TestCase, _ControllerHarness):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Export (the button beside Assess, and its option menu)
+# Tests: Export (the button beside Assess, and its live preview)
 # ---------------------------------------------------------------------------
 
 
 class TestExportButton(unittest.TestCase, _ControllerHarness):
     """Export hands the manifest on as the table has it -- its rows in its
     order, Local Edits applied, the scene's shot names and the status -- as
-    CSV, JSON or Markdown, to a file or the clipboard, the way its option menu
-    says; it never writes the loaded sheet.
+    CSV, JSON or Markdown, copied or saved to a file, the way its preview's
+    options say; it never writes the loaded sheet.
 
     2026-10-10 (user: "the copy asset names action ... doesn't seem very
     useful ... Let's just have an export button with option menu that gives
-    options for format, etc").
+    options for format, etc"); 2026-10-11 the option menu became a live
+    preview (user: "remove the options altogether from the export button and
+    just launch a real-time popup preview of the output where the user can
+    adjust the output params with real time feedback before exporting").
     """
 
     def setUp(self):
@@ -3803,9 +4075,7 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
         self.sheet = os.path.join(self.dir, "sheet.csv")
         with open(self.sheet, "w", encoding="utf-8", newline="") as fh:
             fh.write("Step,Step Contents,Asset Names\n")
-        # The clipboard's QMimeData must die while Python runs (see
-        # TestAutoFillAssetsController).
-        self.addCleanup(QtWidgets.QApplication.clipboard().clear)
+        _use_memory_clipboard(self)
 
     def _load(self):
         self.ctrl._load_data(_make_steps("A01", "A02", "A03"), csv_path=self.sheet)
@@ -3824,11 +4094,11 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
         return self.ui.footer.setText.call_args.args[0]
 
     def _copy(self, **options):
-        """Export to the clipboard with *options*; the copied text."""
-        self.ctrl._set_export_option("to", "clipboard")
+        """Copy the export with *options* (the preview's Copy); the copied
+        text."""
         for key, value in options.items():
             self.ctrl._set_export_option(key, value)
-        self.ctrl.export()
+        self.ctrl._export_copy()
         return QtWidgets.QApplication.clipboard().text()
 
     def test_the_rows_go_as_the_table_has_them(self):
@@ -3892,7 +4162,7 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
         self._load()
         self.ctrl._set_export_option("format", "json")
         self.sb.save_file_dialog.return_value = os.path.join(self.dir, "out")
-        self.ctrl.export()
+        self.ctrl._export_save()
         kwargs = self.sb.save_file_dialog.call_args.kwargs
         self.assertEqual(
             kwargs["start_dir"], os.path.join(self.dir, "sheet_manifest.json")
@@ -3905,7 +4175,7 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
     def test_the_loaded_sheet_is_never_written(self):
         self._load()
         self.sb.save_file_dialog.return_value = self.sheet
-        self.ctrl.export()
+        self.ctrl._export_save()
         with open(self.sheet, encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "Step,Step Contents,Asset Names\n")
         self.assertIn("never writes it", self._footer())
@@ -3920,27 +4190,87 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
         self.assertEqual(options["rows"], "selected")
         self.assertEqual(options["columns"], ["step", "end"])
 
-    def test_the_option_menu_sets_the_options_and_names_them_on_the_button(self):
-        """The menu acted on, as a user does: pick JSON, untick a column."""
+    def _open_preview(self):
+        """Click Export, as a user does: a real preview window opens."""
+        from uitk import Switchboard
+
+        real = Switchboard()
+        self.sb.preview_dialog = lambda *a, **k: real.preview_dialog(
+            *a, **dict(k, parent=None)
+        )
+        self.ctrl.export()
+        preview = self.ctrl._export_preview
+        self.addCleanup(preview.close)
+        return preview
+
+    def test_export_opens_a_preview_that_renders_as_options_are_set(self):
+        """The preview acted on, as a user does: pick JSON, untick a column --
+        the text follows each at once, and each is kept."""
+        self._load()
+        preview = self._open_preview()
+        self.assertTrue(preview.isVisible())
+        self.assertTrue(preview.text_edit.toPlainText().startswith("Step,Name,Shot"))
+        self.assertEqual(preview.footer.text(), "4 rows as CSV.")
+        fmt = preview.preview_widgets["format"]
+        fmt.setCurrentIndex(fmt.findData("json"))
+        self.assertEqual(json.loads(preview.text_edit.toPlainText())[0]["step"], "A01")
+        self.assertEqual(self.ctrl._export_options()["format"], "json")
+        self.assertFalse(preview.preview_widgets["objects"].isEnabled())
+        columns = preview.preview_widgets["columns"]
+        columns.item(0).setCheckState(QtCore.Qt.Unchecked)  # Step
+        self.assertNotIn('"step"', preview.text_edit.toPlainText())
+        self.assertNotIn("step", self.ctrl._export_options()["columns"])
+
+    def test_the_preview_follows_the_tables_selection(self):
+        self._load()
+        self.ctrl._set_export_option("rows", "selected")
+        self.ctrl._set_export_option("columns", ["step"])
+        preview = self._open_preview()
+        self.assertIn("select the rows", preview.text_edit.toPlainText())
+        self._row("A02").setSelected(True)
+        self.assertEqual(preview.text_edit.toPlainText().splitlines(), ["Step", "A02"])
+
+    def test_the_preview_follows_a_shot_moved_in_the_sequencer(self):
+        """Bug: an open preview kept the frames it opened with when a shot
+        moved (``_refresh_timing``) or a range was typed (``_refresh_ranges``).
+        Fixed: 2026-10-12"""
+        self._load()
+        self.ctrl._set_export_option("columns", ["step", "start"])
+        preview = self._open_preview()
+        self.assertIn("A02,241", preview.text_edit.toPlainText())
+        shot = next(s for s in self.store.shots if s.name == "A02")
+        self.store.update_shot(shot.shot_id, start=251, end=331)
+        self.ctrl._refresh_timing()
+        self.assertIn("A02,251", preview.text_edit.toPlainText())
+
+    def test_the_previews_copy_copies_and_leaves_it_open(self):
+        self._load()
+        self.ctrl._set_export_option("columns", ["step"])
+        preview = self._open_preview()
+        copy = next(b for b in preview.button_box.buttons() if b.text() == "Copy")
+        copy.click()
+        self.assertEqual(
+            QtWidgets.QApplication.clipboard().text().splitlines()[:2], ["Step", "A01"]
+        )
+        self.assertTrue(preview.isVisible())
+        self.assertIn("Copied 4 rows as CSV", preview.footer.text())
+
+    def test_a_second_click_brings_up_the_open_preview(self):
+        self._load()
+        preview = self._open_preview()
+        self.ctrl.export()
+        self.assertIs(self.ctrl._export_preview, preview)
+
+    def test_the_button_has_no_option_menu(self):
         from uitk.widgets.pushButton import PushButton
 
         host = QtWidgets.QWidget()
         self.addCleanup(host.deleteLater)
         btn = PushButton(host, setText="Export")
-        QtWidgets.QHBoxLayout(host).addWidget(btn)
         self.ui.b004 = btn
-        self.ctrl._setup_export_menu()
-        fmt = self.ctrl._export_widgets["format"]
-        fmt.setCurrentIndex(fmt.findData("json"))
-        self.assertEqual(self.ctrl._export_options()["format"], "json")
-        self.assertFalse(self.ctrl._export_widgets["objects"].isEnabled())
-        self.assertIn("as JSON to a file", btn.toolTip())
-        columns = self.ctrl._export_widgets["columns"]
-        columns.item(0).setCheckState(QtCore.Qt.Unchecked)  # Step
-        self.assertNotIn("step", self.ctrl._export_options()["columns"])
-        self.assertIn(
-            columns.parentWidget(), btn.option_box.menu.findChildren(QtWidgets.QWidget)
-        )
+        self.ctrl._setup_export_button()
+        self.assertIsNone(getattr(btn, "_option_box_manager", None))
+        self.assertIn("Preview the export", btn.toolTip())
 
 
 # ---------------------------------------------------------------------------
@@ -4014,7 +4344,14 @@ class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
         self.ctrl._steps = _make_steps("A01")
         self.ctrl._user_ranges = {"A01": (1.0, 40.0)}
         builder = MagicMock()
-        builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+
+        def _sync(*_args, **_kwargs):
+            # What a build writes.  One that changes nothing records no
+            # restore point (``ShotStore.scene_edit``, 2026-10-11).
+            self.store.define_shot("A01", 1, 40)
+            return {}, {"applied": [], "skipped": []}, []
+
+        builder.sync.side_effect = _sync
         mock_cls.return_value = builder
         _mock_undo_info(self)
         before = len(self.store._boundary_undo)
@@ -4176,6 +4513,23 @@ class TestShotsTheDocDoesNotList(unittest.TestCase, _ControllerHarness):
         # A step's shot shows its members the step does not list, too.
         self.assertEqual(self._children(self._row("A01")), ["obj_A01", "KEYS", "LOCK"])
         self.assertEqual(self._children(self._row("A02")), ["obj_A02"])
+
+    def test_a_split_shot_shows_the_section_of_the_step_it_was_split_from(self):
+        """Bug: a split-off shot had no relation to its step, so its row (and
+        its export) had no section.  The pairing links it
+        (``ShotPairing.links``: here by its ``A01_2`` name) and its row shows
+        the step's section; it stays a shot the doc does not list.
+        Fixed: 2026-10-11"""
+        import pythontk as ptk
+        from qtpy.QtCore import Qt
+        from mayatk.anim_utils.shots.shot_manifest.manifest_data import COL_SECTION
+
+        self._load()
+        self.assertEqual(self._row("A01_2").text(COL_SECTION), "A: Section A")
+        self.assertNotIsInstance(
+            self._row("A01_2").data(0, Qt.UserRole), ptk.BuilderStep
+        )
+        self.assertEqual(self._row("A02").text(COL_SECTION), "A: Section A")
 
     def test_a_shot_not_in_the_doc_has_the_menu_a_shot_needs(self):
         self._load()

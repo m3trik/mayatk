@@ -81,11 +81,39 @@ def _engine():
         return None
 
 
+def covering_take(mel, path):
+    """``(index, names)``: the 1-based index of the take whose span covers every
+    other take's span, else ``-1`` (the importer's own pick: the last take).
+
+    Dependency-free copy of mayatk ``FbxUtils._covering_take`` (token-identical
+    body, held so by ``test_scene_import.py::test_the_covering_rule_is_one_copy``):
+    without mayatk the takes cannot be merged, but a whole-timeline take beside its
+    shot slices -- Maya's ``Take 001``, a Blender push's scene stack -- still
+    imports whole instead of the last slice.
+    """
+    mel.eval('FBXRead -f "{}"'.format(path.replace("\\", "/")))
+    try:
+        count = int(mel.eval("FBXGetTakeCount") or 0)
+        names = [mel.eval("FBXGetTakeName {}".format(i)) for i in range(1, count + 1)]
+        spans = [
+            mel.eval("FBXGetTakeLocalTimeSpan {}".format(i))
+            for i in range(1, count + 1)
+        ]
+    finally:
+        mel.eval("FBXClose")
+    for index, (start, end) in enumerate(spans, 1):
+        if count > 1 and all(start <= s and e <= end for s, e in spans):
+            return index, names
+    return -1, names
+
+
 def import_source(cmds):
     """Import *SRC_FILE* into the empty standalone scene without mayatk; return ALL
     new nodes (the fallback when the engine is not importable in this child).
     Dispatched on extension: ``.usd*`` -> the native mayaUsd translator; ``.fbx``
-    -> the plain FBX import.
+    -> the plain FBX import, of the take covering every other one when there is
+    one (:func:`covering_take`) -- else the importer's own pick, the last take,
+    with a warning naming what is left out: only mayatk merges a file's takes.
     """
     if SRC_FILE.lower().endswith(USD_EXTENSIONS):
         if not cmds.pluginInfo("mayaUsdPlugin", query=True, loaded=True):
@@ -103,10 +131,32 @@ def import_source(cmds):
         )
     if not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
         cmds.loadPlugin("fbxmaya")
-    return (
-        cmds.file(SRC_FILE, i=True, type="FBX", ignoreVersion=True, returnNewNodes=True)
-        or []
-    )
+    import maya.mel as mel
+
+    try:
+        index, names = covering_take(mel, SRC_FILE)
+    except Exception as error:  # the spans only refine the import, as in mayatk
+        print(
+            "WARNING: FBX takes unreadable ({}); the importer picks one.".format(error)
+        )
+        index, names = -1, []
+    if index == -1 and len(names) > 1:
+        print(
+            "WARNING: mayatk unavailable, so the FBX's {} takes cannot be merged: "
+            "imported '{}' only; left out: {}".format(
+                len(names), names[-1], ", ".join(names[:-1])
+            )
+        )
+    mel.eval("FBXImportSetTake -ti {}".format(index))
+    try:
+        return (
+            cmds.file(
+                SRC_FILE, i=True, type="FBX", ignoreVersion=True, returnNewNodes=True
+            )
+            or []
+        )
+    finally:
+        mel.eval("FBXImportSetTake -ti -1")
 
 
 def restore_usd_locators(cmds, new_nodes):

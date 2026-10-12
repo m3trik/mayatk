@@ -13,6 +13,9 @@
   <property name="windowTitle">
    <string>Telescope Rig</string>
   </property>
+  <property name="accessibleDescription">
+   <string>Rig nested segments to extend and retract between a base and an end handle.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout_main">
     <property name="spacing">

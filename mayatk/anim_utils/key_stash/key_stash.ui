@@ -10,6 +10,9 @@
     <height>360</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Park keys out of the working animation as clips, then preview or retrieve them.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <property name="minimumSize">
     <size>

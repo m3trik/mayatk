@@ -10,6 +10,9 @@
     <height>130</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Key audio tracks as events on the timeline, mixed into one WAV for scrubbing.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

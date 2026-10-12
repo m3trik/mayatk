@@ -296,12 +296,7 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
                 if not block:
                     continue
 
-                # Anchor: use override if provided, else the template's, else
-                # phase-based default for backward compatibility.
-                if anchor_override is not None:
-                    block = dict(block, anchor=anchor_override)
-                elif "anchor" not in block:
-                    block = dict(block, anchor="start" if phase == "in" else "end")
+                block = Behaviors.anchored(block, phase, anchor_override)
 
                 keys = Behaviors.resolve_keys(block, start, end)
                 for k in keys:
@@ -442,12 +437,8 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
                     ):
                         return False
                 else:
-                    # Mirror apply_behavior's anchor precedence exactly:
-                    # override > template > phase-based default.
-                    if anchor_override is not None:
-                        block = dict(block, anchor=anchor_override)
-                    elif "anchor" not in block:
-                        block = dict(block, anchor="start" if phase == "in" else "end")
+                    # apply_behavior's anchor precedence: the one rule.
+                    block = Behaviors.anchored(block, phase, anchor_override)
                     keys = Behaviors.resolve_keys(block, start, end)
                     for k in keys:
                         result = keyframe_fn(obj, check_attr, k["time"])
@@ -599,8 +590,7 @@ class Behaviors(_PyBehaviors, _BehaviorsInternal):
         """
         from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 
-        def _is_audio(entry):
-            return (entry.get("kind") == "audio") or bool(entry.get("source_path"))
+        _is_audio = Behaviors.is_audio_entry
 
         def _default_exists(obj_name, entry=None):
             if entry is not None and _is_audio(entry):

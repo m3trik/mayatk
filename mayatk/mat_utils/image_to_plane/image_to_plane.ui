@@ -10,6 +10,9 @@
     <height>316</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Create textured planes from image files, each sized to its image's aspect ratio.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

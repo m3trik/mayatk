@@ -220,7 +220,11 @@ class _TextureTasksMixin(_TaskDataMixin):
         - A USD layer references the staged files on disk, so they ARE part
           of the deliverable: staged durably into ``textures/`` beside the
           export (relative to the layer, so the pair ships together) and
-          kept. ``check_existing=True`` makes re-exports incremental.
+          kept.
+
+        Either way a repeat export encodes nothing it encoded before:
+        ``stage_maps`` caches each encode on the source file and the settings,
+        and only a map whose source or settings changed is encoded again.
 
         **Write-back mode** (Texture Output at "Scene Files (In Place)"): the
         optimization is written over the scene's own texture files (originals

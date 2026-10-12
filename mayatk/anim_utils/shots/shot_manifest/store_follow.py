@@ -13,6 +13,7 @@ import pythontk as ptk
 from pythontk import (
     BatchComplete,
     BuilderStep,
+    MarkersChanged,
     SettingsChanged,
     ShotDefined,
     ShotRemoved,
@@ -98,6 +99,14 @@ class StoreFollowMixin:
         self._unbind_store_listener()
         self._store = None
         self._bind_store_listener()
+        # Another scene: its manifest opens unassessed (_load_data runs a
+        # showing assessment again, and this one judged the old scene) -- a
+        # re-assessment the old one was owed is dropped with it.
+        self._last_results = []
+        self._reassess_on_show = False
+        self._reassess_note = ""
+        if self._reassess_timer is not None:
+            self._reassess_timer.stop()
 
         if not self._first_shown:
             return
@@ -140,6 +149,12 @@ class StoreFollowMixin:
                 elif self._source != "scene":
                     # The scene's own shots don't depend on detection settings.
                     self.detect()
+            return
+        if isinstance(event, MarkersChanged):
+            # The rows stand, but a marked behavior is judged by its marker
+            # (an undo takes a build's out): a showing Assess is run again.
+            if self._first_shown and self._last_results:
+                self._reassess_soon()
             return
         if isinstance(event, self._SHOT_EVENTS):
             self._follow_store()
@@ -220,9 +235,12 @@ class StoreFollowMixin:
             tuple((s.shot_id, tuple(s.objects), s.locked) for s in pairing.timeline),
         )
 
-    def _reassess_soon(self) -> None:
+    def _reassess_soon(self, note: str = "") -> None:
         """Re-run Assess once a burst of edits settles: one timer, restarted
-        by every edit.  A hidden panel re-assesses when it is next shown."""
+        by every edit.  A hidden panel re-assesses when it is next shown.
+        *note* (the edit's own word, e.g. ``"Hid 2 step(s)."``) leads the
+        footer the assessment writes; the last edit's wins."""
+        self._reassess_note = note
         timer = self._reassess_timer
         if timer is None:
             from qtpy import QtCore
@@ -241,7 +259,8 @@ class StoreFollowMixin:
             self._reassess_on_show = True
             return
         self._reassess_on_show = False
-        self.assess(skip_key_check=True)
+        note, self._reassess_note = self._reassess_note, ""
+        self.assess(skip_key_check=True, note=note)
 
     def _on_show(self) -> None:
         """A re-assessment owed while the panel was hidden runs now."""
@@ -277,3 +296,4 @@ class StoreFollowMixin:
                 parent.setToolTip(COL_END, f"{shot.end - shot.start:.0f}f")
         finally:
             tree.blockSignals(False)
+        self._refresh_export_preview()  # an open one shows these frames

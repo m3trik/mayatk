@@ -41,8 +41,42 @@ accepts "fixed"; only the out-tangent-only "step" needs its in-side form.
 """
 
 
+_NEIGHBOUR_DERIVED_TANGENTS = (
+    "spline",
+    "auto",
+    "clamped",
+    "plateau",
+    "autoease",
+    "automix",
+    "autocustom",
+)
+"""Tangent types Maya derives from the keys on BOTH sides of their own, so a
+neighbouring key moved, cut or re-valued silently re-computes them -- in AND
+out alike, one unbroken slope.  Everything else is authored outright (fixed,
+flat, fast, slow, step, stepnext) or looks only at the key on its own side
+(linear), so a change on the far side leaves it be (measured 2026-10-11: a
+neighbour re-valued moved spline, auto and plateau; fast, slow, flat and
+fixed held; linear moved only the half facing it).
+"""
+
+
 class _TangentInternal:
     """Private helpers and ``AnimUtils`` method bodies; see the module docstring."""
+
+    @staticmethod
+    def _tangent_half(crv: str, t: Optional[float], side: str):
+        """``(type, angle, weight)`` of the *side* (``"in"``/``"out"``) half of
+        *crv*'s key at *t*; ``None`` for no *t*, or no key exactly there."""
+        if t is None:
+            return None
+        q = {"query": True, "time": (t, t)}
+        got = [
+            cmds.keyTangent(crv, **q, **{f"{side}{field}": True})
+            for field in ("TangentType", "Angle", "Weight")
+        ]
+        if not all(got):
+            return None
+        return got[0][0], float(got[1][0]), float(got[2][0])
 
     @staticmethod
     def _set_smart_tangents(

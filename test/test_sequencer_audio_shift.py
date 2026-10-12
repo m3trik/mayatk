@@ -50,6 +50,8 @@ class TestSequencerAudioShift(MayaTkTestCase):
         super().setUp()
         ShotStore._active = None
         self.store = ShotStore()
+        # The layouts below are laid out flush (a new store's gap is 10).
+        self.store.gap = 0.0
         self.sequencer = ShotSequencer(store=self.store)
 
     def tearDown(self):

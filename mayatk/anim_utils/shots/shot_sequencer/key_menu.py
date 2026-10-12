@@ -16,6 +16,8 @@ try:
 except ImportError:
     cmds = None
 
+import pythontk as ptk
+
 from mayatk.core_utils._core_utils import CoreUtils
 
 
@@ -118,6 +120,12 @@ class KeyMenuMixin:
         act_unify = menu.addAction(f"Unify Tangents{suffix}")
         act_unify.triggered.connect(lambda: self._lock_key_tangents(targets, True))
 
+        self._add_selection_key_actions(menu, targets, suffix)
+
+    def _add_selection_key_actions(self, menu, targets: list, suffix: str = "") -> None:
+        """The key menu's rows past the tangents -- the key edits
+        (:meth:`_add_key_edit_actions`) and Move / Copy to Shot -- for a
+        selection from any view: the graph's menu offers them too."""
         self._add_key_edit_actions(menu, targets, suffix)
 
         if self.sequencer:
@@ -293,6 +301,7 @@ class KeyMenuMixin:
         ("Snap Fractional Keys", "_snap_selected_keys"),
         ("Invert Keys", "_invert_selected_keys"),
         ("Align Keys", "_align_selected_keys"),
+        ("Euler Filter", "_euler_filter_selected_keys"),
     )
 
     def _add_key_edit_actions(self, menu, targets, suffix) -> None:
@@ -510,6 +519,29 @@ class KeyMenuMixin:
                 f"Snapped {n or 0} key{'s' if n != 1 else ''} to whole frames"
             )
 
+    def _euler_filter_selected_keys(self, targets) -> None:
+        """Unflip the selected channels' rotation curves (``AnimUtils.euler_filter``).
+
+        Whole curves, as the Graph Editor's Curves > Euler Filter filters
+        them: unwrapping a span alone would leave a new jump at its edge.
+        Values only -- no key moves, so no claim changes hands.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        curves = self._target_curves(targets)
+        ran, done = self._key_selection_edit(
+            targets,
+            "eulerfilter",
+            lambda _objects, _span: AnimUtils.euler_filter(curves),
+        )
+        if ran:
+            n = len(done or ())
+            self._set_footer(
+                f"Euler filter: {n} rotation curve{'s' if n != 1 else ''}"
+                if n
+                else "Euler filter: no rotation curve among the selected keys"
+            )
+
     def _claims_follow(self, objects) -> dict:
         """The ``on_replace`` / ``on_move`` a key edit over *objects* takes: a
         key it REPLACES takes its claims with it (``ShotStore.release_replaced``,
@@ -552,6 +584,28 @@ class KeyMenuMixin:
         if ran:
             self._set_footer("Aligned the selected keys" if ok else "Nothing to align")
 
+    #: ``{editor name: callable() -> targets}`` -- how a key shortcut finds
+    #: the selection while a view other than the track rows shows
+    #: (:meth:`register_key_targets`).  Replaced, never mutated in place:
+    #: the class default is shared.
+    _key_target_sources: dict = {}
+
+    def register_key_targets(self, editor_name: str, source) -> None:
+        """Resolve the key shortcuts' targets through *source* while the
+        editor *editor_name* shows (``None`` drops it).
+
+        *source* returns ``[(obj, attr, [times], shot_id), ...]``, the shape
+        :meth:`_key_targets` reads from the track rows: the graph's
+        ``GraphSync`` registers its curve-keyed selection here, so Ctrl+C /
+        Ctrl+V act on what the graph has selected.
+        """
+        sources = dict(self._key_target_sources)
+        if source is None:
+            sources.pop(editor_name, None)
+        else:
+            sources[editor_name] = source
+        self._key_target_sources = sources
+
     def _selected_key_targets(self) -> list:
         """The key menu's ``targets`` for whatever is selected right now.
 
@@ -561,6 +615,10 @@ class KeyMenuMixin:
         widget = self._get_sequencer_widget()
         if widget is None:
             return []
+        editor = getattr(widget, "active_editor", None)
+        source = self._key_target_sources.get(getattr(editor, "name", None))
+        if source is not None:
+            return source()
         return self._key_targets(widget, widget.selected_keys())
 
     def _copy_keys_shortcut(self) -> None:
@@ -633,13 +691,19 @@ class KeyMenuMixin:
                     continue
                 kd = {"time": float(t), "value": float(value[0]), **info}
                 claim = ledger.claimed_step(crv, t)
-                # A key written over the held one since (a Graph Editor paste)
-                # is the animator's, its step with it -- as the release reads
-                # it (``_release_gap_holds``).
+                # A key written over the held one since (a Graph Editor paste,
+                # the held value with another in slope included) is the
+                # animator's, its step with it -- as the release reads it
+                # (``_release_gap_holds``: by value and in half).
                 if (
                     claim is not None
                     and kd["outTangentType"] == "step"
-                    and ledger.is_same_key(claim, kd["inTangentType"], kd["value"])
+                    and ledger.is_same_key(
+                        claim,
+                        kd["inTangentType"],
+                        kd["value"],
+                        in_half=(kd["inAngle"], kd["inWeight"]),
+                    )
                 ):
                     kd["outTangentType"] = claim[1] or "auto"
                     if claim[1] == "fixed" and kd["inTangentType"] == "fixed":
@@ -653,35 +717,12 @@ class KeyMenuMixin:
     @staticmethod
     def _paste_pairs(rows: list, destinations: list) -> list:
         """``[(dest_obj, dest_attr, keys), ...]``: which copied row each
-        destination ``(obj, attr)`` row receives.
-
-        A lone copied row goes on every destination, as the Graph Editor
-        pastes one curve onto each selected one.  Otherwise a row lands on
-        the destination of its own attribute: on the same object when that
-        is among them, else the n-th destination object of an attribute
-        takes the n-th copied object of it (cycling), so copying two objects
-        and pasting onto two others pairs them in order.  A destination whose
-        attribute was not copied gets nothing.
-        """
-        if len(rows) == 1:
-            return [(obj, attr, rows[0][2]) for obj, attr in destinations]
-        leaf = CoreUtils.leaf_name
-        by_attr = {}
-        for obj, attr, keys in rows:
-            by_attr.setdefault(attr, []).append((obj, keys))
-        seen = {}
-        pairs = []
-        for obj, attr in destinations:
-            sources = by_attr.get(attr)
-            if not sources:
-                continue
-            same = next((k for o, k in sources if leaf(o) == leaf(obj)), None)
-            if same is None:
-                i = seen.get(attr, 0)
-                same = sources[i % len(sources)][1]
-                seen[attr] = i + 1
-            pairs.append((obj, attr, same))
-        return pairs
+        destination ``(obj, attr)`` row receives -- ``ptk.ShotSequencer.
+        paste_pairs`` (shared with blendertk's panel), objects compared by
+        their DAG leaf."""
+        return ptk.ShotSequencer.paste_pairs(
+            rows, destinations, leaf=CoreUtils.leaf_name
+        )
 
     def _paste_selected_keys(self, targets) -> None:
         """Paste the panel's clipboard at the playhead (:meth:`_copy_selected_keys`).

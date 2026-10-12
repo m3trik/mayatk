@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import shutil
 import logging
 import contextlib
 from typing import Optional, Dict, Any, List, Iterable, Callable, Tuple, Set
@@ -92,6 +93,18 @@ class FbxUtils(ptk.HelpMixin):
         "FBXImportGenerateLog": False,
         "FBXImportUpAxis": "y",
     }
+
+    #: Where :meth:`import_scene` parks a take that disagrees with the takes it
+    #: plays: ``(module, class, classmethod)`` naming the store whose
+    #: ``stash(targets=, label=, metadata=)`` keeps it -- Key Stash. Resolved
+    #: lazily (:meth:`_resolve_row`), as :attr:`PRODUCERS` are: the store sits
+    #: in a layer above this one, and a store that cannot be imported leaves the
+    #: take out with a warning instead of failing the import.
+    TAKE_STASH: Tuple[str, str, str] = (
+        "mayatk.anim_utils.key_stash._key_stash",
+        "KeyStash",
+        "active",
+    )
 
     @staticmethod
     def load_plugin():
@@ -463,8 +476,12 @@ class FbxUtils(ptk.HelpMixin):
         namespace: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
         return_new_nodes: bool = True,
+        *,
+        stash: bool = True,
+        file_options: Optional[Dict[str, Any]] = None,
+        logger: Optional[logging.Logger] = None,
     ) -> List[str]:
-        """Import an FBX file, optionally isolated into a namespace.
+        """Import an FBX file -- ALL of its animation -- optionally into a namespace.
 
         Maya's FBX translator **ignores** the ``cmds.file(namespace=...)``
         flag, but it honors the *active* namespace: setting it before the
@@ -473,6 +490,36 @@ class FbxUtils(ptk.HelpMixin):
         Maya 2025). This is the same native isolation ``.ma/.mb`` imports get
         for free, so no manual per-node namespace moves are needed. The active
         namespace is always restored afterward, even on failure.
+
+        **Every take.** The importer plays the ONE take ``FBXImportSetTake``
+        names and no flag merges takes, so a file whose animation is split
+        across takes lost all but one: a Shots Only export imported its last
+        shot, a Blender push (its scene stack beside a stack per shot) its last
+        shot window, a file of per-object stacks only what the last stack
+        moves. :meth:`pythontk.FbxFile.take_layout` sorts the takes and the
+        import follows it:
+
+        - ``none`` / ``single``: the file as it is.
+        - ``covered``: the one take covering the others (they are its slices),
+          picked by index.
+        - ``merged``: the takes that agree, made ONE take
+          (:meth:`pythontk.FbxMedia.merge_takes`) in a scoped copy that is
+          imported and deleted. The importer extracts embedded media beside the
+          file it reads and finds a texture whose recorded path is gone from
+          that file's folder, so both are pointed where an import of
+          *file_path* itself puts them (:meth:`_rehome_files`).
+        - ``conflicted``: the takes that agree play as above, and each take
+          that disagrees with them -- same channel, overlapping frames,
+          different motion: a clip library's alternatives -- is parked WHOLE
+          in Key Stash (:attr:`TAKE_STASH`) as a clip named after it:
+          export-inert, previewable, retrievable onto the imported objects.
+          Parking is not undoable, as the import itself is not.
+
+        A file pythontk cannot read (ASCII) imports the take whose span covers
+        every other take's (:meth:`_covering_take`), else its last take with a
+        warning naming the rest. One INFO line says what was imported. The
+        take selector is sticky, so it is left at :meth:`reset_import`'s
+        per-file ``-1``.
 
         Parameters:
             file_path: Source ``.fbx`` path (``$VAR``/``~`` expanded).
@@ -484,7 +531,15 @@ class FbxUtils(ptk.HelpMixin):
                 :attr:`_DEFAULT_IMPORT_OPTIONS`. Applied best-effort — a
                 version-specific option that is unavailable never blocks the
                 import.
-            return_new_nodes: Passed to ``cmds.file(returnNewNodes=...)``.
+            return_new_nodes: Return the new nodes; ``False`` returns ``[]``.
+            stash: Park conflicting takes in Key Stash. ``False`` for an import
+                that is thrown away afterwards (a sandbox compare): they are
+                left out, with a warning naming them, and the scene's Key Stash
+                is not written.
+            file_options: ``cmds.file`` flags overriding this method's own
+                (``i``, ``type``, ``ignoreVersion``, ``returnNewNodes`` ...).
+            logger: Where the take report and its warnings go; defaults to
+                this module's.
 
         Returns:
             The newly created node names (namespace-prefixed when *namespace*
@@ -494,6 +549,7 @@ class FbxUtils(ptk.HelpMixin):
             FileNotFoundError: If *file_path* does not exist.
             RuntimeError: On import failure.
         """
+        log = logger or logging.getLogger(__name__)
         file_path = os.path.abspath(
             os.path.expandvars(os.path.expanduser(str(file_path)))
         )
@@ -506,12 +562,27 @@ class FbxUtils(ptk.HelpMixin):
         try:
             cls.reset_import()
         except RuntimeError:
-            logger.debug("FBXResetImport unavailable (OK).")
+            log.debug("FBXResetImport unavailable (OK).")
         cls._apply_import_options(
             options if options is not None else cls._DEFAULT_IMPORT_OPTIONS
         )
 
-        fbx_path = file_path.replace("\\", "/")
+        flags: Dict[str, Any] = {
+            "i": True,
+            "type": "FBX",
+            "ignoreVersion": True,
+            "returnNewNodes": True,  # the take steps need them, whatever is returned
+            "mergeNamespacesOnClash": False,
+            "preserveReferences": False,
+        }
+        flags.update(file_options or {})
+
+        def load(path: str) -> List[str]:
+            nodes = cmds.file(path.replace("\\", "/"), **flags)
+            # cmds.file returns the new-node list only with returnNewNodes;
+            # without it the return is the filename string.
+            return nodes if isinstance(nodes, list) else []
+
         restore_ns = None
         if namespace:
             if not cmds.namespace(exists=namespace):
@@ -519,25 +590,498 @@ class FbxUtils(ptk.HelpMixin):
             restore_ns = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
             cmds.namespace(setNamespace=namespace)
         try:
-            new_nodes = cmds.file(
-                fbx_path,
-                i=True,
-                type="FBX",
-                returnNewNodes=return_new_nodes,
-                mergeNamespacesOnClash=False,
-                preserveReferences=False,
-            )
+            new_nodes, report = cls._import_takes(file_path, load, stash, log)
         finally:
             if restore_ns is not None:
                 cmds.namespace(setNamespace=restore_ns)
 
-        logger.info(
-            f"Imported FBX: {fbx_path}"
+        log.info(
+            f"Imported FBX: {file_path.replace(os.sep, '/')}"
             + (f" into namespace '{namespace}'" if namespace else "")
+            + f" -- takes: {report}."
         )
-        # cmds.file returns the new-node list only with returnNewNodes; without
-        # it the return is the filename string — honor the List[str] contract.
-        return new_nodes if isinstance(new_nodes, list) else []
+        return new_nodes if return_new_nodes else []
+
+    @classmethod
+    def _import_takes(
+        cls,
+        file_path: str,
+        load: Callable[[str], List[str]],
+        stash: bool,
+        log: logging.Logger,
+    ) -> Tuple[List[str], str]:
+        """Run *load* so the scene gets every take of *file_path*.
+
+        :meth:`import_scene`'s take rules. *load* imports the path it is
+        handed with the caller's flags, under the take selector this pins,
+        and returns the new nodes.
+
+        Returns:
+            ``(new nodes, report)`` -- *report* the clause the INFO line ends
+            with.
+        """
+        fbx, layout = cls._take_layout(file_path, log)
+        index, path = -1, file_path
+        with ptk.TempArtifacts("fbx_takes", policy="scoped") as scratch:
+            if layout is None:
+                index, report = cls._unread_take(file_path, log)
+            else:
+                report = cls._take_report(layout)
+                live = layout["live"]
+                if len(live) > 1:
+                    # Named as the source: a clash on import prefixes the new
+                    # nodes with the file's name.
+                    copy = os.path.join(scratch.dir_path(), os.path.basename(file_path))
+                    try:
+                        ptk.FbxMedia.merge_takes(file_path, copy, takes=live)
+                        path = ptk.AppLauncher.ansi_safe_path(copy)
+                    except (OSError, ValueError) as error:
+                        # One live take, by index: the importer's own pick is
+                        # the file's LAST take, which can be one parked below.
+                        first = live[0]
+                        index = next(
+                            t["index"] for t in layout["takes"] if t["name"] == first
+                        )
+                        log.warning(
+                            f"FBX takes could not be merged ({error}): imported "
+                            f"{first!r} only; left out: "
+                            + ", ".join(repr(t) for t in live[1:])
+                        )
+                        report = f"merge failed, {first!r} imported"
+                elif live and len(layout["takes"]) > 1:
+                    index = next(
+                        t["index"] for t in layout["takes"] if t["name"] == live[0]
+                    )
+            mel.eval(f"FBXImportSetTake -ti {index}")
+            try:
+                nodes = load(path)
+            finally:
+                # Sticky: a pinned take would shape every later raw import.
+                mel.eval("FBXImportSetTake -ti -1")
+            if path != file_path:
+                cls._rehome_files(nodes, path, file_path, fbx, log)
+        if layout and layout["stash"]:
+            reasons = "; ".join(layout["conflicts"].get(t, t) for t in layout["stash"])
+            names = ", ".join(repr(t) for t in layout["stash"])
+            if not stash:
+                log.warning(
+                    f"FBX {os.path.basename(file_path)}: {names} left out of this "
+                    "import, which parks nothing in Key Stash -- they disagree "
+                    f"with the takes it plays: {reasons}"
+                )
+                report += f"; left out: {names}"
+            else:
+                parked = cls._park_takes(file_path, layout, nodes, log)
+                if parked:
+                    report += (
+                        "; parked in Key Stash: "
+                        + ", ".join(repr(t) for t in parked)
+                        + f" ({reasons})"
+                    )
+                missed = [t for t in layout["stash"] if t not in parked]
+                if missed:  # each already warned about
+                    report += "; NOT parked: " + ", ".join(repr(t) for t in missed)
+        return nodes, report
+
+    @staticmethod
+    def _take_layout(file_path: str, log: logging.Logger) -> Tuple[Any, Any]:
+        """``(FbxFile, take_layout())`` of a binary FBX, its curve arrays read
+        once; ``(None, None)`` for a file pythontk cannot read (ASCII, damaged).
+        """
+        if not ptk.FbxFile.is_fbx(file_path):
+            return None, None
+        try:
+            fbx = ptk.FbxFile.load(
+                file_path, decode_arrays=ptk.FbxFile.CURVE_ARRAYS, raw_payloads=False
+            )
+            return fbx, fbx.take_layout()
+        except Exception as error:  # noqa: BLE001 - only refines the import
+            # A file the parser trips on still imports as it did before the
+            # layout was read: the importer's own take rules (_unread_take).
+            log.warning(
+                f"FBX takes not read ({error}); the importer picks one.",
+                exc_info=not isinstance(error, ValueError),
+            )
+            return None, None
+
+    @staticmethod
+    def _take_report(layout: Dict[str, Any]) -> str:
+        """What a :meth:`pythontk.FbxFile.take_layout` imports, in a clause."""
+        live, redundant = layout["live"], layout["redundant"]
+        kind = layout["kind"]
+        if not live:
+            return f"{kind}, nothing animated"
+        if len(live) > 1:
+            text = f"{len(live)} takes merged into one (" + ", ".join(live) + ")"
+        else:
+            text = f"{live[0]!r} imported"
+        if redundant:
+            text += ", covering " + ", ".join(repr(t) for t in redundant)
+        return f"{kind}: {text}"
+
+    @classmethod
+    def _unread_take(cls, file_path: str, log: logging.Logger) -> Tuple[int, str]:
+        """``(take index, report)`` for a file pythontk cannot read, by the
+        importer's own take spans (:meth:`_covering_take`)."""
+        try:
+            index, names = cls._covering_take(mel, file_path)
+        except Exception as error:  # noqa: BLE001 - the import itself still runs
+            log.debug(f"FBX take spans unreadable ({error}).")
+            return -1, "not read"
+        if len(names) < 2:
+            return -1, f"unread, {len(names)} take(s)"
+        if index != -1:
+            others = [n for i, n in enumerate(names, 1) if i != index]
+            return index, f"unread: {names[index - 1]!r} imported, covering " + (
+                ", ".join(repr(n) for n in others)
+            )
+        log.warning(
+            f"FBX {os.path.basename(file_path)} cannot be read by pythontk "
+            f"(ASCII?), so its {len(names)} takes cannot be merged and none "
+            f"covers the rest: imported {names[-1]!r} only; left out: "
+            + ", ".join(repr(n) for n in names[:-1])
+        )
+        return -1, f"unread: {names[-1]!r} imported, {len(names) - 1} left out"
+
+    @staticmethod
+    def _covering_take(mel, path):
+        """``(index, names)``: the 1-based index of the take whose span covers
+        every other take's span, else ``-1`` (the importer's own pick: the last
+        take); *names* are the file's takes, in file order.
+
+        The rule for a file pythontk cannot read (ASCII): the spans are the
+        ones the importer itself reports (``FBXGetTakeLocalTimeSpan``), and a
+        whole-timeline take beside its shot slices -- Maya's ``Take 001``, a
+        Blender push's scene stack -- covers them. ``FBXRead`` parses the file
+        once more to say so. The bake template
+        (``blender_bridge/templates/_bake_scene.py``) carries this body
+        token-for-token as ``covering_take``, for a child without mayatk; a
+        test holds the two equal. blendertk's Maya-bridge templates vendor it
+        too, held to this body by blendertk's ``test_maya_bridge``.
+        """
+        mel.eval('FBXRead -f "{}"'.format(path.replace("\\", "/")))
+        try:
+            count = int(mel.eval("FBXGetTakeCount") or 0)
+            names = [
+                mel.eval("FBXGetTakeName {}".format(i)) for i in range(1, count + 1)
+            ]
+            spans = [
+                mel.eval("FBXGetTakeLocalTimeSpan {}".format(i))
+                for i in range(1, count + 1)
+            ]
+        finally:
+            mel.eval("FBXClose")
+        for index, (start, end) in enumerate(spans, 1):
+            if count > 1 and all(start <= s and e <= end for s, e in spans):
+                return index, names
+        return -1, names
+
+    @staticmethod
+    def _rehome_files(
+        nodes: List[str], copy: str, source: str, fbx: Any, log: logging.Logger
+    ) -> None:
+        """Point what an import of the scoped *copy* placed or found relative
+        to itself where an import of *source* places or finds it.
+
+        The importer extracts embedded media to ``<file>.fbm`` beside the file
+        it reads, and finds a texture whose recorded path is gone at its
+        recorded RELATIVE path from that file's folder (measured, Maya 2025:
+        imported from a copy elsewhere, the nodes kept the copy's ``.fbm`` --
+        deleted with it -- or the stale absolute path). So the extracted files
+        are copied to ``<source>.fbm`` and every filename attribute of the new
+        nodes follows them, and a path that is gone is resolved as the import
+        of *source* resolves it, from *fbx*'s ``RelativeFilename`` records.
+        When ``<source>.fbm`` cannot be written the media goes to a temp
+        folder that outlives this import, with a warning.
+        """
+
+        def key(path: str) -> str:
+            return os.path.normcase(os.path.normpath(path))
+
+        copy_fbm = os.path.splitext(copy)[0] + ".fbm"
+        media = os.path.splitext(source)[0] + ".fbm"
+        if os.path.isdir(copy_fbm):
+            try:
+                shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
+            except OSError as error:
+                media = ptk.TempArtifacts("fbx_media", policy="detached").dir_path()
+                shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
+                log.warning(
+                    f"Embedded media could not be extracted beside {source} "
+                    f"({error}); it is in {media}, which is cleaned up within "
+                    "days -- copy it somewhere permanent."
+                )
+        relative: Dict[str, str] = {}
+        for record in fbx.iter_objects() if fbx is not None else ():
+            if record["name"] not in ("Texture", "Video"):
+                continue
+            found = {}
+            for child in record["children"]:
+                if child["name"] in ("FileName", "Filename", "RelativeFilename"):
+                    value = child["props"][0] if child["props"] else None
+                    if isinstance(value, (bytes, bytearray)):
+                        value = bytes(value).decode("utf-8", "replace")
+                    found[child["name"]] = value
+            absolute = found.get("FileName") or found.get("Filename")
+            if absolute and found.get("RelativeFilename"):
+                relative[key(absolute)] = found["RelativeFilename"]
+        inside = key(copy_fbm) + os.sep
+        for node in cmds.ls(nodes) or []:
+            for attr in cmds.listAttr(node, usedAsFilename=True) or []:
+                plug = f"{node}.{attr}"
+                try:
+                    value = cmds.getAttr(plug)
+                except (RuntimeError, ValueError):
+                    continue
+                if not isinstance(value, str) or not value:
+                    continue
+                new = None
+                if key(value).startswith(inside):
+                    new = os.path.join(media, os.path.relpath(value, copy_fbm))
+                elif not os.path.exists(value) and key(value) in relative:
+                    found_path = os.path.normpath(
+                        os.path.join(os.path.dirname(source), relative[key(value)])
+                    )
+                    new = found_path if os.path.exists(found_path) else None
+                if new:
+                    try:
+                        cmds.setAttr(plug, new, type="string")
+                    except RuntimeError as error:
+                        log.debug(f"{plug} not repointed to {new}: {error}")
+
+    @classmethod
+    def _park_takes(
+        cls, file_path: str, layout: Dict[str, Any], nodes: List[str], log
+    ) -> List[str]:
+        """Park each of *layout*'s ``stash`` takes WHOLE in Key Stash, as a
+        clip on the just-imported *nodes*; return the takes parked.
+
+        Each take is imported on its own into a throwaway namespace, its
+        curves are paired with the imported nodes (:meth:`_take_counterparts`)
+        and stand in for the live ones while :attr:`TAKE_STASH`'s ``stash``
+        copies them (copy-before-cut) -- the live curves are back right after.
+        Unrecorded, as the import is. A take that cannot be parked is named in
+        a warning; the import never fails for it.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        names = ", ".join(repr(t) for t in layout["stash"])
+        row = cls._resolve_row("Take stash", *cls.TAKE_STASH)
+        if not row or row[0] is None:
+            log.warning(f"Key Stash is unavailable: {names} left out of the import.")
+            return []
+        store = row[0]()
+        index = {take["name"]: take["index"] for take in layout["takes"]}
+        parked = []
+        with CoreUtils.undo_disabled():
+            for take in layout["stash"]:
+                try:
+                    if cls._park_take(store, file_path, take, index[take], nodes, log):
+                        parked.append(take)
+                except Exception as error:  # noqa: BLE001 - the import already landed
+                    log.warning(
+                        f"FBX take {take!r} could not be parked in Key Stash "
+                        f"({error}); it is not in the scene.",
+                        exc_info=True,
+                    )
+        return parked
+
+    @classmethod
+    def _park_take(
+        cls,
+        store: Any,
+        file_path: str,
+        take: str,
+        index: int,
+        nodes: List[str],
+        log,
+    ) -> bool:
+        """:meth:`_park_takes` for one take; True when its clip was stored."""
+        sandbox, n = "_fbx_take", 1
+        while cmds.namespace(exists=f":{sandbox}"):
+            sandbox, n = f"_fbx_take{n}", n + 1
+        prior_ns = cmds.namespaceInfo(currentNamespace=True, absoluteName=True)
+        prior_mode = mel.eval("FBXImportMode -q")
+        cmds.namespace(add=sandbox, parent=":")
+        try:
+            cmds.namespace(setNamespace=f":{sandbox}")
+            # "add": a merge would update the same-named imported nodes.
+            mel.eval("FBXImportMode -v add")
+            mel.eval(f"FBXImportSetTake -ti {index}")
+            try:
+                take_nodes = (
+                    cmds.file(
+                        file_path.replace("\\", "/"),
+                        i=True,
+                        type="FBX",
+                        ignoreVersion=True,
+                        returnNewNodes=True,
+                    )
+                    or []
+                )
+            finally:
+                # The namespace first: the outer finally removes the sandbox,
+                # which must not be current if a restore below raises.
+                cmds.namespace(setNamespace=prior_ns)
+                mel.eval("FBXImportSetTake -ti -1")
+                mel.eval(f"FBXImportMode -v {prior_mode}")
+            pairs = cls._take_counterparts(nodes, take_nodes)
+            plan, unplaced = [], []
+            for curve in cmds.ls(take_nodes, type="animCurve") or []:
+                for dst in (
+                    cmds.listConnections(
+                        f"{curve}.output",
+                        source=False,
+                        destination=True,
+                        plugs=True,
+                        skipConversionNodes=True,
+                    )
+                    or []
+                ):
+                    node, _, attr = dst.partition(".")
+                    mine = pairs.get((cmds.ls(node, long=True) or [node])[0])
+                    if mine:
+                        plan.append((curve, mine, attr))
+                    else:
+                        unplaced.append(dst.split(":", 1)[-1])
+            if unplaced:
+                log.warning(
+                    f"FBX take {take!r}: no imported node to park "
+                    + ", ".join(sorted(set(unplaced)))
+                    + " on; those curves are not in the scene."
+                )
+            if not plan:
+                return False
+            return cls._stash_take_curves(store, file_path, take, plan)
+        finally:
+            if cmds.namespace(exists=f":{sandbox}"):
+                cmds.namespace(
+                    removeNamespace=f":{sandbox}", deleteNamespaceContent=True
+                )
+
+    @staticmethod
+    def _stash_take_curves(
+        store: Any, file_path: str, take: str, plan: List[Tuple[str, str, str]]
+    ) -> bool:
+        """Store a take's curves as ONE Key Stash clip on the imported nodes.
+
+        Each ``(curve, node, attr)`` of *plan* drives ``node.attr`` for the
+        stash, under the name of the live curve it stands in for -- so the
+        clip's record names that curve, as a stash of the live animation
+        would, and a retrieve pastes back onto it. The live wiring, names and
+        static values are restored afterwards, whatever the stash did.
+        """
+        swaps: List[Dict[str, Any]] = []
+        targets: Dict[str, Tuple[List[str], Any, Any]] = {}
+        clip = None
+        try:
+            for curve, node, attr in plan:
+                plug = f"{node}.{attr}"
+                source = (
+                    cmds.listConnections(
+                        plug,
+                        source=True,
+                        destination=False,
+                        plugs=True,
+                        skipConversionNodes=True,
+                    )
+                    or [None]
+                )[0]
+                live = source.partition(".")[0] if source else None
+                if live and not cmds.nodeType(live).startswith("animCurve"):
+                    live = None
+                swap: Dict[str, Any] = {
+                    "plug": plug,
+                    "source": source,
+                    "value": None if source else cmds.getAttr(plug),
+                    "live": cmds.ls(live, uuid=True)[0] if live else None,
+                    "name": live,
+                    "curve": None,
+                }
+                swaps.append(swap)
+                if live:
+                    cmds.rename(live, f"{live}_fbxTakeLive")
+                    curve = cmds.rename(curve, live)
+                else:
+                    space = node.rsplit("|", 1)[-1].rpartition(":")[0]
+                    curve = cmds.rename(curve, f"{space}:{curve.rpartition(':')[2]}")
+                swap["curve"] = cmds.ls(curve, uuid=True)[0]
+                cmds.connectAttr(f"{curve}.output", plug, force=True)
+                times = cmds.keyframe(curve, query=True, timeChange=True) or []
+                attrs, start, end = targets.get(node, ([], None, None))
+                attrs.append(attr)
+                if times:
+                    start = min(times) if start is None else min(start, min(times))
+                    end = max(times) if end is None else max(end, max(times))
+                targets[node] = (attrs, start, end)
+            clip = store.stash(
+                targets=[
+                    (node, attrs, start, end)
+                    for node, (attrs, start, end) in targets.items()
+                    if start is not None
+                ],
+                label=take,
+                metadata={
+                    "source": "fbx",
+                    "path": os.path.basename(file_path),
+                    "take": take,
+                },
+            )
+        finally:
+            for swap in reversed(swaps):
+                left = cmds.ls(swap["curve"]) if swap["curve"] else []
+                if left:  # a curve the stash did not empty
+                    cmds.delete(left)
+                live = cmds.ls(swap["live"]) if swap["live"] else []
+                if live and live[0] != swap["name"]:
+                    cmds.rename(live[0], swap["name"])
+                if swap["source"]:
+                    if not cmds.isConnected(swap["source"], swap["plug"]):
+                        cmds.connectAttr(swap["source"], swap["plug"], force=True)
+                elif swap["value"] is not None:
+                    try:
+                        cmds.setAttr(swap["plug"], swap["value"])
+                    except RuntimeError:
+                        pass
+        return clip is not None
+
+    @staticmethod
+    def _take_counterparts(nodes: List[str], take_nodes: List[str]) -> Dict[str, str]:
+        """``{take-import node: imported node}`` for two imports of one file.
+
+        Paired by node type in import order -- the importer creates a file's
+        nodes in one order whichever take it plays, and only the animation
+        curves differ between takes -- and kept where the leaf names agree
+        once namespaces, Maya's clash prefix (``<file name>_``) and trailing
+        numbers are set aside: a pair that disagrees means the two orders did
+        not line up, and its curves are reported rather than parked on the
+        wrong node. Both sides are long names (DAG) as ``cmds.ls`` spells them.
+        """
+
+        def typed(names: List[str]) -> Dict[str, List[str]]:
+            out: Dict[str, List[str]] = {}
+            for name in names or []:
+                if cmds.objExists(name):
+                    kind = cmds.nodeType(name)
+                    if not kind.startswith("animCurve"):
+                        out.setdefault(kind, []).append(name)
+            return out
+
+        def leaf(name: str) -> str:
+            return name.rsplit("|", 1)[-1].rpartition(":")[2].rstrip("0123456789")
+
+        ours, theirs = typed(nodes), typed(take_nodes)
+        pairs: Dict[str, str] = {}
+        for kind, names in theirs.items():
+            mine = ours.get(kind, [])
+            if len(mine) != len(names):
+                continue
+            for take_node, node in zip(names, mine):
+                a, b = leaf(take_node), leaf(node)
+                if a == b or b.endswith("_" + a):
+                    long = (cmds.ls(take_node, long=True) or [take_node])[0]
+                    pairs[long] = (cmds.ls(node, long=True) or [node])[0]
+        return pairs
 
     @classmethod
     def _apply_import_options(cls, options: Dict[str, Any]) -> None:

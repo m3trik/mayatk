@@ -1338,6 +1338,10 @@ class _ControllerCase(unittest.TestCase):
         self.store = ShotStore()
         self.store.define_shot("S0", 0, 50, [str(self.a)])
         self.store.define_shot("S1", 60, 120, [str(self.b)])
+        # The panel's store is the scene's active one, which follows Maya's
+        # undo itself (ShotStore.follow_native_step) -- as in production.
+        ShotStore.clear_active()
+        ShotStore.set_active(self.store)
         self.widget = SequencerWidget()
         self.widget.resize(900, 400)
         self.widget.show()
@@ -1351,6 +1355,7 @@ class _ControllerCase(unittest.TestCase):
             self.ctrl.remove_callbacks()
         except Exception:
             pass
+        ShotStore.clear_active()
         self.widget.close()
         self.widget.deleteLater()
         _process_events()
@@ -1360,6 +1365,142 @@ class _ControllerCase(unittest.TestCase):
 
     def _keys(self, cube):
         return sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
+
+
+class TestCallbackIdempotency(_ControllerCase):
+    """Each scene hook registers once and comes off whole, against Maya's own
+    callbacks (2026-04-13: the registrations had no guard and appended
+    duplicate ids; a failed removal blocked re-registration).  Moved here from
+    the retired ``mock_tests/test_sequencer_controller.py``, whose module-wide
+    skip meant none of it ran."""
+
+    def _undo_followers(self):
+        """How often the controller listens for the store's native undo."""
+        return ShotStore._native_step_listeners.count(self.ctrl._on_native_step)
+
+    def test_each_registration_is_idempotent(self):
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+        ids = (self.ctrl._keyframe_cb, self.ctrl._time_change_cb)
+
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+
+        self.assertEqual(self._undo_followers(), 1)
+        self.assertIsNotNone(ids[0])
+        self.assertIsNotNone(ids[1])
+        self.assertEqual((self.ctrl._keyframe_cb, self.ctrl._time_change_cb), ids)
+
+    def test_remove_clears_every_hook_and_registration_works_again(self):
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+
+        self.ctrl.remove_callbacks()
+        self.assertEqual(self._undo_followers(), 0)
+        self.assertFalse(self.ctrl._native_step_bound)
+        self.assertIsNone(self.ctrl._keyframe_cb)
+        self.assertIsNone(self.ctrl._time_change_cb)
+
+        self.ctrl._register_maya_undo_callbacks()
+        self.ctrl._register_keyframe_callback()
+        self.ctrl._register_time_change_callback()
+        self.assertEqual(self._undo_followers(), 1)
+        self.assertIsNotNone(self.ctrl._keyframe_cb)
+        self.assertIsNotNone(self.ctrl._time_change_cb)
+
+    def test_remove_stops_the_keyframe_debounce(self):
+        from unittest.mock import MagicMock
+
+        timer = MagicMock()
+        self.ctrl._keyframe_debounce = timer
+
+        self.ctrl.remove_callbacks()
+
+        timer.stop.assert_called_once()
+        self.assertIsNone(self.ctrl._keyframe_debounce)
+
+    def test_the_panel_redraws_once_after_its_store_followed_an_undo(self):
+        """Only for a step that put this panel's store's restore point back:
+        an unrelated undo's keys reach the panel through the keyframe
+        callback, and another scene's store is not this panel's."""
+        from unittest.mock import patch
+        from pythontk import NativeStepFollowed
+
+        self.ctrl._register_maya_undo_callbacks()
+        with patch.object(self.ctrl, "_after_shot_change") as redraw:
+            ShotStore._on_native_step()  # nothing to put back
+            redraw.assert_not_called()
+            self.ctrl._on_native_step(NativeStepFollowed(applied=1, store=ShotStore()))
+            redraw.assert_not_called()
+            self.ctrl._on_native_step(NativeStepFollowed(applied=0, store=self.store))
+            redraw.assert_not_called()
+            self.ctrl._on_native_step(NativeStepFollowed(applied=1, store=self.store))
+            redraw.assert_called_once_with()
+
+
+class TestToolMarkersOnTheTimeline(_ControllerCase):
+    """A Build's markers (the Shot Manifest's Marker mode) reach the timeline
+    when they are written, and keep the owner tag a Build finds them by
+    through the sequencer's own marker edits -- each of which rewrites EVERY
+    marker from the widget (2026-10-11: "adding a marker in the sequencer
+    instead of keying")."""
+
+    TAG = {
+        "owner": "shot_manifest",
+        "shot_id": 0,
+        "behavior": "fade_in",
+        "objects": ["ctlA"],
+    }
+
+    def setUp(self):
+        super().setUp()
+        # The panel binds the ACTIVE store; this one is the fixture's.
+        self.store.add_listener(self.ctrl._on_store_event)
+        self.addCleanup(self.store.remove_listener, self.ctrl._on_store_event)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        _process_events()
+
+    def test_a_written_marker_shows_and_keeps_its_tag(self):
+        self.store.set_markers(
+            [
+                {
+                    "time": 0.0,
+                    "note": "Fade In: ctlA",
+                    "draggable": False,
+                    "style": "diamond",
+                    "data": dict(self.TAG),
+                }
+            ]
+        )
+        _process_events()
+        (md,) = self.widget.markers()
+        self.assertEqual(
+            (md.time, md.note, md.style), (0.0, "Fade In: ctlA", "diamond")
+        )
+        self.assertEqual(md.data, self.TAG)
+        # A hand's marker, added then moved: the store is rewritten from the
+        # widget, the Build's marker with it.
+        hand = self.widget.add_marker(time=30.0, note="mine")
+        self.ctrl.on_marker_added(hand, 30.0)
+        self.widget.get_marker(hand).time = 35.0
+        self.ctrl.on_marker_moved(hand, 35.0)
+        self.assertEqual([m.get("data") for m in self.store.markers], [self.TAG, None])
+        self.assertEqual(self.store.markers[1]["time"], 35.0)
+
+    def test_a_legacy_marker_reads_with_the_defaults(self):
+        """A marker saved before style, line, opacity, drag or payload
+        existed draws as the defaults say."""
+        self.store.set_markers([{"time": 5.0, "note": "", "color": "#E8A84A"}])
+        _process_events()
+        (md,) = self.widget.markers()
+        self.assertEqual(
+            (md.draggable, md.style, md.line_style, md.opacity, md.data),
+            (True, "triangle", "dashed", 1.0, {}),
+        )
 
 
 class TestActiveShotAtPlayhead(_ControllerCase):
@@ -1545,6 +1686,86 @@ class TestAnEditDrawsOnce(_ControllerCase):
         with patch.object(self.ctrl, "_sync_to_widget") as draw:
             self.ctrl._on_store_event(ShotsEdited(label="trim"))
         draw.assert_not_called()
+
+
+class TestAnExportCreditsNoKeyToTheActiveShot(_ControllerCase):
+    """Bug: with the Shot Sequencer open, an export's own key edits -- its
+    tie and snap, put back after the write -- were banked as the user's
+    keying, and the keying refresh added an object keyed in the active
+    shot's frames to its members (blendertk measured it on a Unity send,
+    2026-10-05).
+    Fixed: 2026-10-11 -- the export is a transient edit
+    (``ShotStore.transient_edit``) and the listeners bank nothing inside it.
+    Maya reports the edits' keyframe callback at the next idle, after the
+    bracket closed: armed then, the refresh fell back to the SELECTION and
+    took a selected keyed non-member in (fresh GUI Maya, 2026-10-11), so
+    that echo arms nothing.  The harness never idles: the echo is delivered
+    by hand, as Maya's idle would."""
+
+    def setUp(self):
+        super().setUp()
+        # Keyed inside S0 and not one of its members; the tie keys it out to
+        # the export set's range.  Selected: what the refresh's fallback reads.
+        self.c = _make_cube("ctlC", {10: 0, 30: 5})
+        self.store.set_active_shot(self._shot("S0").shot_id)
+        self.ctrl._extend_to_keys = True
+        self.ctrl._edited_curves.clear()
+        self.ctrl._transient_echo = False
+        cmds.select(str(self.c), replace=True)
+        _process_events()
+
+    def _idle(self):
+        """Maya's idle after an edit: the batched keyframe callback, then the
+        debounce's refresh if it armed."""
+        self.ctrl._on_keyframe_edited()
+        timer = self.ctrl._keyframe_debounce
+        armed = timer is not None and timer.isActive()
+        if armed:
+            timer.stop()
+            self.ctrl._on_keyframe_debounce_fire()
+        return armed
+
+    def _export(self):
+        import pythontk as ptk
+        from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
+
+        with ptk.TempArtifacts(prefix="mtk_transient_export_") as tmp:
+            return SceneExporter(log_level="ERROR").perform_export(
+                export_dir=str(tmp.dir_path()),
+                objects=[str(self.a), str(self.c)],
+                output_name="transient",
+                export_visible=False,
+                tasks={"tie_all_keyframes": True, "snap_keys_to_frame": True},
+            )
+
+    def _state(self):
+        shot = self._shot("S0")
+        return sorted(o.split("|")[-1] for o in shot.objects), shot.start, shot.end
+
+    def test_an_exports_key_edits_join_and_grow_no_shot(self):
+        before = self._state()
+        c_keys = sorted(cmds.keyframe(str(self.c), q=True, tc=True) or [])
+        self.assertTrue(self._export())
+        self.assertEqual(
+            sorted(cmds.keyframe(str(self.c), q=True, tc=True) or []),
+            c_keys,
+            "the export put its tie back",
+        )
+        banked = set(self.ctrl._edited_curves)
+        _process_events()
+        armed = self._idle()
+        self.assertEqual(self._state(), before)
+        self.assertEqual(banked, set(), "nothing banked")
+        self.assertFalse(armed, "the edits' idle echo armed the refresh")
+
+    def test_the_animators_next_key_still_joins_the_shot(self):
+        """The echo is consumed once: a key set after the export arms the
+        refresh, and the keyed object joins the active shot."""
+        self.assertTrue(self._export())
+        self._idle()
+        cmds.setKeyframe(str(self.c), attribute="translateY", t=20, v=2.0)
+        self.assertTrue(self._idle(), "the animator's key armed nothing")
+        self.assertIn("ctlC", self._state()[0])
 
 
 class TestCopyToShotFromThePanel(_ControllerCase):
@@ -1902,6 +2123,37 @@ class TestShotLaneMenu(_ControllerCase):
 
 
 @unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
+class TestPanelHeader(unittest.TestCase):
+    """The panel's chrome: one dismissal button (a tool panel is sticky: hide),
+    and help kept short with the full guide linked.
+    Added: 2026-10-11 (pin AND hide both showed)
+    """
+
+    def test_sticky_chrome_and_the_guide_link(self):
+        from unittest.mock import MagicMock
+
+        from uitk.widgets.header import Header
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerSlots,
+        )
+
+        slots = ShotSequencerSlots.__new__(ShotSequencerSlots)
+        slots.controller = MagicMock()
+        slots.sb = MagicMock()
+        widget = MagicMock()
+        slots.header_init(widget)
+        widget.config_buttons.assert_called_with("refresh", "menu", "collapse", "hide")
+        self.assertEqual(
+            widget.set_help_text.call_args.kwargs["url"], ShotSequencerSlots.HELP_URL
+        )
+        self.assertTrue(ShotSequencerSlots.HELP_URL.endswith("docs/shot_sequencer.md"))
+        header = Header()  # and a header asked for both keeps one
+        self.addCleanup(header.deleteLater)
+        header.config_buttons("refresh", "menu", "collapse", "pin", "hide")
+        self.assertEqual(len({"pin", "hide"} & set(header.buttons)), 1)
+
+
+@unittest.skipUnless(HAS_MAYA and HAS_QT, _SKIP_MSG)
 class TestMoveToFlyout(unittest.TestCase):
     """Picking a shot lands the moved one in FRONT of it, both directions.
 
@@ -1921,6 +2173,10 @@ class TestMoveToFlyout(unittest.TestCase):
             cube = _make_cube(f"mv{name}", {start: 0, end: 5})
             self.cubes[name] = cube
             self.store.define_shot(name, start, end, [str(cube)])
+        # The scene's active store follows Maya's undo (as _ControllerCase).
+        ShotStore.clear_active()
+        ShotStore.set_active(self.store)
+        self.addCleanup(ShotStore.clear_active)
         self.widget = SequencerWidget()
         self.widget.resize(900, 400)
         self.widget.show()
@@ -2178,6 +2434,7 @@ class TestKeySelectionEdits(_ControllerCase):
                 "Snap Fractional Keys",
                 "Invert Keys",
                 "Align Keys",
+                "Euler Filter",
             ],
         )
 
@@ -2419,6 +2676,29 @@ class TestKeySelectionEdits(_ControllerCase):
         self.ctrl._paste_selected_keys(self._b_row([60.0]))
 
         self.assertEqual(self._value(self.b, 70), [7.0])
+        self.assertEqual(self._ott(self.b, 70), "step")
+
+    def test_the_held_value_pasted_with_another_slope_is_copied_as_a_step(self):
+        """Bug: the copy knew the held key by its value alone, so the held
+        value pasted back over the seam with another in slope read as the
+        hold's -- ledger format 2 records the in half the hold froze, and
+        the release already asks it.  Fixed: 2026-10-12"""
+        self.ctrl._sync_combobox()
+        self.ctrl.sequencer.reconcile_system_edits()  # holds A@40, before S1
+        crv = cmds.keyframe(self.a, at="translateX", q=True, name=True)[0]
+        claim = self.ctrl.sequencer.ledger.claimed_step(crv, 40.0)
+        self.assertIsNotNone(claim, "the fixture's seam is not held")
+        self.assertIsNotNone(claim.in_half, "the hold recorded no in half")
+        angle = -35.0 if claim.in_half[0] > 0 else 35.0
+        cmds.keyTangent(crv, time=(40, 40), lock=False)
+        cmds.keyTangent(crv, time=(40, 40), itt="fixed", ott="step")
+        cmds.keyTangent(crv, time=(40, 40), inAngle=angle)
+
+        self.ctrl._copy_selected_keys(self._targets([40.0]))
+        cmds.currentTime(70)
+        self.ctrl._paste_selected_keys(self._b_row([60.0]))
+
+        self.assertEqual(self._value(self.b, 70), self._value(self.a, 40))
         self.assertEqual(self._ott(self.b, 70), "step")
 
     def test_an_animators_step_is_copied_as_a_step(self):
@@ -2943,6 +3223,365 @@ class TestShotComboboxCells(_ControllerCase):
     def test_a_blank_name_is_ignored(self):
         self.cmb.on_cells_edited.emit(0, {"name": "   "})
         self.assertIsNotNone(self._shot("S0"))
+
+
+class TestGraphSync(_ControllerCase):
+    """The graph editor over a real controller and a real scene.
+
+    Every edit is checked in MAYA: the keys, the tangents, the curve
+    attributes, the shot bounds -- and Ctrl+Z puts keys and bounds back.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.anim_utils.shots.shot_sequencer.graph_sync import GraphSync
+
+        cmds.currentTime(0)
+        self.ctrl._sync_combobox()
+        self.ctrl._sync_to_widget()
+        self.sync = GraphSync(self.ctrl, self.widget)
+        self.widget.set_editor("graph")
+        _process_events()
+        self.g = self.widget.editor("graph")
+        self.crv = cmds.listConnections(f"{self.a}.translateX", type="animCurve")[0]
+
+    def tearDown(self):
+        self.sync.detach()
+        super().tearDown()
+
+    def _times(self):
+        return cmds.keyframe(self.crv, q=True, timeChange=True)
+
+    def _values(self):
+        return cmds.keyframe(self.crv, q=True, valueChange=True)
+
+    def test_the_outline_is_the_shots_objects_and_their_curves(self):
+        entry = next(e for e in self.g._outline if e["label"] == "ctlA")
+        self.assertEqual(
+            [(c["curve_id"], c["label"]) for c in entry["children"]],
+            [(self.crv, "translateX")],
+        )
+        self.assertIn(self.crv, self.g.displayed_curve_ids())
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 40.0])
+
+    def test_a_claimed_sample_draws_no_key(self):
+        cmds.setKeyframe(self.a, attribute="translateX", time=50, insert=True)
+        self.ctrl.sequencer.ledger.record_key(self.crv, 50.0, 0, "end")
+        self.sync.sync()
+        keys = {k.time: k.hidden for k in self.g.curve(self.crv).keys}
+        self.assertEqual(keys, {0.0: False, 40.0: False, 50.0: True})
+
+    def test_a_move_lands_time_and_value_in_maya(self):
+        self.g.keys_edited.emit([(self.crv, [(40.0, -5.0, 2.5)])])
+        self.assertEqual(self._times(), [0.0, 35.0])
+        self.assertAlmostEqual(self._values()[1], 7.5, places=6)
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 35.0], "graph re-read")
+
+    def test_a_value_only_move_keeps_the_times(self):
+        self.g.keys_edited.emit([(self.crv, [(0.0, 0.0, -1.0), (40.0, 0.0, -1.0)])])
+        self.assertEqual(self._times(), [0.0, 40.0])
+        self.assertEqual(self._values(), [-1.0, 4.0])
+
+    def test_a_move_past_the_shot_end_grows_the_shot_and_undo_restores_both(self):
+        s0 = self._shot("S0")
+        self.g.keys_edited.emit([(self.crv, [(40.0, 15.0, 0.0)])])
+        self.assertEqual(self._times(), [0.0, 55.0])
+        self.assertGreaterEqual(self._shot("S0").end, 55.0)
+        self.ctrl.on_undo()
+        self.assertEqual(self._times(), [0.0, 40.0])
+        self.assertEqual((self._shot("S0").start, self._shot("S0").end), (0.0, 50.0))
+        self.assertEqual(s0.shot_id, self._shot("S0").shot_id)
+
+    def test_a_move_past_the_shot_end_grows_the_shot_after_a_shift_gesture(self):
+        """Bug: the graph read the press modifiers the TRACKS record (the
+        graph records none), so after a Shift gesture there -- Shift: free
+        across bounds -- a key moved past its shot's end left it outside.
+        Fixed: 2026-10-12"""
+        self.widget.shift_held_at_press = True  # a tracks gesture's leftover
+        self.g.keys_edited.emit([(self.crv, [(40.0, 15.0, 0.0)])])
+        self.assertEqual(self._times(), [0.0, 55.0])
+        self.assertGreaterEqual(self._shot("S0").end, 55.0)
+
+    def test_a_seam_key_moved_into_the_later_shot_grows_nothing(self):
+        """Bug: a key on a seam two flush shots share was edited as the
+        EARLIER shot's, so moving it into the later one grew the earlier
+        shot over it and rippled the later one away.
+        Fixed: 2026-10-12"""
+        self.store.update_shot(self._shot("S1").shot_id, start=50.0)
+        cmds.setKeyframe(self.b, attribute="translateX", time=50, value=-1.0)
+        crv_b = cmds.listConnections(f"{self.b}.translateX", type="animCurve")[0]
+        self.sync.sync()
+        self.g.keys_edited.emit([(crv_b, [(50.0, 5.0, 0.0)])])
+        self.assertIn(55.0, cmds.keyframe(crv_b, q=True, timeChange=True))
+        self.assertEqual((self._shot("S0").end, self._shot("S1").start), (50.0, 50.0))
+
+    def test_a_graph_edit_drops_every_shots_cached_segments(self):
+        """Bug: a graph edit dropped the cached segments only when a key
+        moved inside a shot, so a neighbour keyed or cleared from the graph
+        drew its old clips on the way back to the tracks (Adjacent / All).
+        Fixed: 2026-10-12"""
+        s1 = self._shot("S1").shot_id
+        self.ctrl._segment_cache[s1] = ["stale"]
+        crv_b = cmds.listConnections(f"{self.b}.translateX", type="animCurve")[0]
+        self.g.keys_inserted.emit([(crv_b, 80.0)])
+        self.assertNotEqual(self.ctrl._segment_cache.get(s1), ["stale"])
+
+    def test_a_destroyed_widget_takes_the_syncs_maya_subscriptions(self):
+        """Bug: a closed panel's GraphSync kept its scriptJobs and its
+        anim-curve callback (only a slots re-init over the same widget
+        detached it), and they held the dead panel.
+        Fixed: 2026-10-12"""
+        from qtpy import QtCore
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+        from mayatk.anim_utils.shots.shot_sequencer.graph_sync import GraphSync
+
+        mgr = ScriptJobManager.instance()
+
+        def owned(owner):
+            subs = list(mgr._subs.values()) + list(mgr._om_subs.values())
+            return [s for s in subs if s.owner is owner]
+
+        other = SequencerWidget()
+        sync = GraphSync(self.ctrl, other)
+        self.assertTrue(owned(sync), "precondition: subscribed")
+        other.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+        self.assertEqual(owned(sync), [])
+
+    def test_a_real_drag_on_the_canvas_moves_the_key(self):
+        from qtpy import QtCore, QtGui
+
+        self.g.frame_all()
+        _process_events()
+        view = self.widget._timeline
+        vp = view.viewport()
+        start = view.mapFromScene(self.g._point(self.crv, 40.0, 5.0))
+        end = view.mapFromScene(self.g._point(self.crv, 30.0, 3.0))
+
+        def send(kind, pos, buttons):
+            ev = QtGui.QMouseEvent(
+                kind,
+                QtCore.QPointF(pos),
+                QtCore.QPointF(vp.mapToGlobal(pos)),
+                QtCore.Qt.LeftButton,
+                buttons,
+                QtCore.Qt.NoModifier,
+            )
+            QtWidgets.QApplication.sendEvent(vp, ev)
+
+        send(QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton)
+        for i in range(1, 7):
+            pt = start + (end - start) * (i / 6)
+            send(QtCore.QEvent.MouseMove, pt, QtCore.Qt.LeftButton)
+        send(QtCore.QEvent.MouseButtonRelease, end, QtCore.Qt.NoButton)
+        _process_events()
+        self.assertEqual(self._times(), [0.0, 30.0])
+        self.assertAlmostEqual(self._values()[1], 3.0, delta=0.15)
+
+    def test_tangent_handles_write_angles(self):
+        self.g.tangents_edited.emit([(self.crv, [(0.0, "out", 1.0, 1.0, False)])])
+        out = cmds.keyTangent(self.crv, q=True, time=(0, 0), outAngle=True)[0]
+        self.assertAlmostEqual(out, 45.0, places=3)
+        self.g.tangents_edited.emit([(self.crv, [(40.0, "in", -1.0, 0.5, True)])])
+        self.assertFalse(cmds.keyTangent(self.crv, q=True, time=(40, 40), lock=True)[0])
+
+    def _drag_handle(self, side, scale):
+        """A real drag of key 0's *side* handle to *scale* times its length."""
+        from qtpy import QtCore, QtGui
+
+        self.g.select_keys([(self.crv, 0.0)])
+        self.g.frame_all()
+        _process_events()
+        curve = self.g.curve(self.crv)
+        key = curve.keys[0]
+        view = self.widget._timeline
+        vp = view.viewport()
+        p_key = self.g._point(self.crv, key.time, key.value)
+        p_h = self.g._handle_point(self.crv, curve, key, side)
+        start = view.mapFromScene(p_h)
+        end = view.mapFromScene(p_key + (p_h - p_key) * scale)
+
+        def send(kind, pos, buttons):
+            ev = QtGui.QMouseEvent(
+                kind,
+                QtCore.QPointF(pos),
+                QtCore.QPointF(vp.mapToGlobal(pos)),
+                QtCore.Qt.LeftButton,
+                buttons,
+                QtCore.Qt.NoModifier,
+            )
+            QtWidgets.QApplication.sendEvent(vp, ev)
+
+        send(QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton)
+        for i in range(1, 7):
+            send(
+                QtCore.QEvent.MouseMove,
+                start + (end - start) * (i / 6),
+                QtCore.Qt.LeftButton,
+            )
+        send(QtCore.QEvent.MouseButtonRelease, end, QtCore.Qt.NoButton)
+        _process_events()
+
+    def test_a_weighted_handle_dragged_longer_or_shorter_changes_the_weight(self):
+        self.g.select_keys([(self.crv, 0.0)])
+        self.g.weighted_requested.emit(True, [self.crv])
+        _process_events()
+        self.assertTrue(self.g.curve(self.crv).weighted)
+        w0 = cmds.keyTangent(self.crv, q=True, time=(0, 0), outWeight=True)[0]
+        self._drag_handle("out", 1.6)
+        w1 = cmds.keyTangent(self.crv, q=True, time=(0, 0), outWeight=True)[0]
+        self.assertGreater(w1, w0 * 1.2, "dragged farther")
+        self._drag_handle("out", 0.5)
+        w2 = cmds.keyTangent(self.crv, q=True, time=(0, 0), outWeight=True)[0]
+        self.assertLess(w2, w1 * 0.8, "dragged nearer")
+
+    def test_delete_and_insert(self):
+        self.g.keys_inserted.emit([(self.crv, 20.0)])
+        self.assertEqual(self._times(), [0.0, 20.0, 40.0])
+        self.g.keys_deleted.emit([(self.crv, [20.0])])
+        self.assertEqual(self._times(), [0.0, 40.0])
+
+    def test_types_weighting_and_infinity(self):
+        self.g.tangent_type_requested.emit("linear", [(self.crv, [0.0, 40.0])])
+        self.assertEqual(
+            cmds.keyTangent(self.crv, q=True, outTangentType=True), ["linear", "linear"]
+        )
+        self.g.tangent_type_requested.emit("step", [(self.crv, [0.0])])
+        self.assertEqual(
+            cmds.keyTangent(self.crv, q=True, time=(0, 0), outTangentType=True),
+            ["step"],
+        )
+        self.g.weighted_requested.emit(True, [self.crv])
+        self.assertTrue(cmds.getAttr(f"{self.crv}.weightedTangents"))
+        self.g.infinity_requested.emit("post", "cycle_offset", [self.crv])
+        self.assertEqual(cmds.getAttr(f"{self.crv}.postInfinity"), 4)
+        self.assertEqual(cmds.getAttr(f"{self.crv}.preInfinity"), 0)
+        self.assertEqual(self.g.curve(self.crv).post_infinity, "cycle_offset")
+
+    def test_the_graph_selection_reaches_maya(self):
+        self.g.select_keys([(self.crv, 40.0)])
+        self.assertEqual(cmds.keyframe(self.crv, q=True, selected=True), [40.0])
+        self.g.select_keys([(self.crv, 0.0), (self.crv, 40.0)])
+        self.assertEqual(cmds.keyframe(self.crv, q=True, selected=True), [0.0, 40.0])
+
+    def test_copy_and_paste_act_on_the_graph_selection(self):
+        self.g.select_keys([(self.crv, 40.0)])
+        self.ctrl._copy_keys_shortcut()
+        cmds.currentTime(20)
+        self.g.select_keys([])
+        self.ctrl._paste_keys_shortcut()  # back onto the row it came from
+        self.assertEqual(self._times(), [0.0, 20.0, 40.0])
+        self.assertAlmostEqual(self._values()[1], 5.0, places=6)
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 20.0, 40.0])
+
+    def test_euler_filter_from_the_graph_menu(self):
+        node = cmds.polyCube(name="spinner")[0]
+        for t, rx in ((0, 170.0), (10, -170.0)):
+            cmds.setKeyframe(node, attribute="rotateX", time=t, value=rx)
+        self._shot("S0").objects.append(node)
+        self.sync.sync()
+        rot = cmds.listConnections(f"{node}.rotateX", type="animCurve")[0]
+        self.g.select_keys([(rot, 0.0), (rot, 10.0)])
+        menu = self.g.build_context_menu()
+        edit = next(a.menu() for a in menu.actions() if a.text() == "Edit")
+        next(a for a in edit.actions() if a.text() == "Euler Filter").trigger()
+        self.assertEqual(cmds.keyframe(rot, q=True, valueChange=True), [170.0, 190.0])
+        self.assertEqual(
+            [k.value for k in self.g.curve(rot).keys], [170.0, 190.0], "re-read"
+        )
+        self.ctrl.on_undo()
+        self.assertEqual(cmds.keyframe(rot, q=True, valueChange=True), [170.0, -170.0])
+
+    def test_the_graph_menu_carries_the_key_edits(self):
+        self.g.select_keys([(self.crv, 0.0), (self.crv, 40.0)])
+        menu = self.g.build_context_menu()
+        titles = [a.text() for a in menu.actions()]
+        self.assertIn("Store Keys (2)", titles)
+        edit = next(a.menu() for a in menu.actions() if a.text() == "Edit")
+        self.assertEqual(
+            [a.text() for a in edit.actions()],
+            [label for label, _m in self.ctrl._KEY_EDITS],
+        )
+
+    def test_live_update_shows_the_drag_in_the_scene_and_a_cancel_restores(self):
+        cmds.currentTime(0)
+        preview = self.g.curve(self.crv).copy()
+        preview.keys[0].value = 3.0
+        self.g.curves_previewed.emit([(self.crv, preview)])
+        self.assertAlmostEqual(cmds.getAttr(f"{self.a}.translateX"), 3.0, places=4)
+        self.assertEqual(self._values(), [0.0, 5.0], "no key changed")
+        self.g.preview_cancelled.emit()
+        self.assertAlmostEqual(cmds.getAttr(f"{self.a}.translateX"), 0.0, places=4)
+
+    def test_the_scopes_window_is_the_graphs_focus_range(self):
+        self.sync.sync()
+        self.assertEqual(self.g.focus_range, (0.0, 50.0))
+        self.ctrl._shot_display_mode = "all"
+        self.sync.sync()
+        self.assertEqual(self.g.focus_range, (0.0, 120.0))
+
+    def test_undo_puts_the_graph_back_too(self):
+        self.g.keys_edited.emit([(self.crv, [(40.0, -5.0, 2.5)])])
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 35.0])
+        self.ctrl.on_undo()
+        _process_events()
+        self.assertEqual(self._times(), [0.0, 40.0])
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 40.0], "graph re-read")
+
+    def test_an_edit_made_in_maya_reaches_the_graph(self):
+        cmds.setKeyframe(self.a, attribute="translateX", time=20, value=9.0)
+        self.ctrl._sync_to_widget()  # what the keyframe debounce runs
+        self.assertEqual(self.g.curve(self.crv).times(), [0.0, 20.0, 40.0])
+
+    def _show_both_shots(self):
+        self.ctrl._shot_display_mode = "all"
+        self.sync.sync()
+        ids = [e["label"] for e in self.g._outline]
+        self.assertEqual(ids, ["ctlA", "ctlB"])
+        return next(e["id"] for e in self.g._outline if e["label"] == "ctlB")
+
+    def test_a_curve_edited_while_hidden_is_read_when_shown(self):
+        b_id = self._show_both_shots()
+        self.assertIn(self.crv, self.g._curves, "shown, so cached")
+        self.assertTrue(self.g.focus_objects([b_id]))
+        cmds.keyframe(self.crv, edit=True, relative=True, valueChange=3.0)
+        self.sync.sync()
+        a_id = next(e["id"] for e in self.g._outline if e["label"] == "ctlA")
+        self.g.focus_objects([a_id])
+        self.assertEqual([k.value for k in self.g.curve(self.crv).keys], [3.0, 8.0])
+
+    def test_the_graph_follows_maya_selection(self):
+        self._show_both_shots()
+        cmds.select(self.b)
+        self.sync._on_maya_selection()
+        _process_events()
+        b_curve = cmds.listConnections(f"{self.b}.translateX", type="animCurve")[0]
+        self.assertEqual(self.g.displayed_curve_ids(), [b_curve])
+        cmds.select(clear=True)
+        self.sync._follow_selection()
+        self.assertEqual(self.g.displayed_curve_ids(), [b_curve], "kept on clear")
+        self.g.auto_load = False  # pinned
+        cmds.select(self.a)
+        self.sync._follow_selection()
+        self.assertEqual(self.g.displayed_curve_ids(), [b_curve], "pinned")
+
+    def test_a_member_keyed_only_on_one_side_of_the_shots_shown_stays_out(self):
+        far = _make_cube("ctlFar", {300: 0, 340: 5})
+        through = _make_cube("ctlThrough", {-100: 0, 200: 5})
+        self._shot("S0").objects.extend([str(far), str(through)])
+        self.sync.sync()
+        self.assertEqual(
+            [e["label"] for e in self.g._outline],
+            ["ctlA", "ctlThrough"],
+            "keyed across the shot, no key inside: it animates there",
+        )
+
+    def test_a_queued_follow_after_detach_does_nothing(self):
+        self.sync._on_maya_selection()
+        self.sync.detach()
+        cmds.select(self.a)
+        _process_events()  # the queued follow fires on a detached sync
+        self.assertFalse(self.sync._follow_queued)
 
 
 if __name__ == "__main__":

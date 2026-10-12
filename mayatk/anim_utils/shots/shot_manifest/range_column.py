@@ -153,6 +153,7 @@ class RangeColumnMixin:
             resolved=self._resolve_ranges(from_step_idx=from_step_idx)
         )
         self._validate_range_collisions(resolved)
+        self._refresh_export_preview()  # an open one shows these frames
         return resolved
 
     def _cascade_from(self, step_idx: int) -> None:

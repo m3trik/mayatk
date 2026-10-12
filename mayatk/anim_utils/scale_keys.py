@@ -378,7 +378,10 @@ class ScaleKeys:
             for t in replaced:
                 cmds.cutKey(curve, time=(t, t), clear=True)
 
-            cmds.scaleKey(curve, **kwargs)
+            # Exactly where *pairs* says: GUI Maya rounds a scaled key to a
+            # whole frame otherwise (AnimUtils._exact_scale).
+            with AnimUtils._exact_scale():
+                cmds.scaleKey(curve, **kwargs)
             if replaced and on_replace is not None:
                 on_replace(curve, replaced)
             if pairs and on_move is not None:
@@ -1073,26 +1076,11 @@ class ScaleKeys:
             previous_end = target_start + data["duration"]
             previous_original_end = data["original_end"]
 
-        # Execute operations in safe order
-        pos_ops = [op for op in operations if op["shift"] > 0]
-        neg_ops = [op for op in operations if op["shift"] < 0]
-
-        # Sort by start time
-        def get_start_time(op):
-            t = op.get("time")
-            return t[0] if t else float("-inf")
-
-        pos_ops.sort(key=get_start_time, reverse=True)
-        neg_ops.sort(key=get_start_time)
-
-        for op in pos_ops + neg_ops:
-            SegmentKeys.shift_curves(
-                op["curves"],
-                op["shift"],
-                op["time"],
-                on_replace=self.on_replace,
-                on_move=self.on_move,
-            )
+        # One layout, laid down in group order: each segment moves once, and
+        # where two meet the later one's start key wins -- as Stagger's.
+        SegmentKeys._shift_layout(
+            operations, on_replace=self.on_replace, on_move=self.on_move
+        )
 
     def _report_speed(
         self,

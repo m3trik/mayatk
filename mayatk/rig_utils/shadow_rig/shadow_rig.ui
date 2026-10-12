@@ -13,6 +13,9 @@
   <property name="windowTitle">
    <string>Shadow Rig</string>
   </property>
+  <property name="accessibleDescription">
+   <string>Build a ground plane carrying an object's projected shadow, for engine export.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

@@ -162,7 +162,7 @@ class SceneSelectionMixin:
         widget = self._get_sequencer_widget()
         if widget is None or self.sequencer is None:
             return
-        clip = widget._clips.get(clip_id)
+        clip = widget.get_clip(clip_id)
         if clip is None:
             return
         obj_name = clip.data.get("obj")
@@ -179,9 +179,9 @@ class SceneSelectionMixin:
         # Propagate to every clip (main + sub-row) for the same object.
         # The originating clip is included — contextMenuEvent routes
         # through set_clip_locked, and a redundant call is harmless.
-        for cid, cd in widget._clips.items():
+        for cd in widget.clips():
             if cd.data.get("obj") == obj_name:
-                widget.set_clip_locked(cid, locked)
+                widget.set_clip_locked(cd.clip_id, locked)
         self._sub_row_cache.clear()
 
     def on_track_menu(self, menu, track_names) -> None:
@@ -460,11 +460,17 @@ class SceneSelectionMixin:
             short_name = short_name[2:]
         if self.sequencer is None:
             return short_name
-        # Check shot objects
-        for shot in self.sequencer.shots:
-            for obj in shot.objects:
-                if CoreUtils.leaf_name(obj) == short_name:
-                    return obj
+        # Check shot objects: a name they hold is its own answer (the graph
+        # outline names objects so, and so does a track whose leaf another
+        # held object shares -- ``_build_tracks``), before a leaf match; a
+        # track is labelled by a bare leaf only where no other held object
+        # shares it, so that match is unique.
+        objects = [obj for shot in self.sequencer.shots for obj in shot.objects]
+        if short_name in objects:
+            return short_name
+        for obj in objects:
+            if CoreUtils.leaf_name(obj) == short_name:
+                return obj
         # Check audio source nodes
         if cmds is not None:
             try:

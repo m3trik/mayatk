@@ -10,6 +10,9 @@
     <height>500</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Check scene shots against a CSV build sheet, then build or export them.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
@@ -135,8 +138,9 @@
          </size>
         </property>
         <property name="toolTip">
-         <string>Export the manifest's rows as CSV, JSON or Markdown,
-to a file or the clipboard. Its menu button sets how.</string>
+         <string>Preview the export: set its format, rows, object layout and
+columns beside the text it gives, then Copy it or Save it As
+a file.</string>
         </property>
         <property name="text">
          <string>Export</string>

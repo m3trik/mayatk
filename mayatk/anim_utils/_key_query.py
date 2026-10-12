@@ -8,6 +8,7 @@ channel-box / ignore-pattern filters every key operation scopes by. Reached
 through :class:`mayatk.AnimUtils`; nothing here is called directly.
 """
 
+import math
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 try:
@@ -522,6 +523,149 @@ class _KeyQueryInternal:
             oma2.MFnAnimCurve(selection.getDependNode(i))
             for i in range(selection.length())
         ]
+
+    #: An animCurve's ``preInfinity`` / ``postInfinity`` enum -> the
+    #: :data:`pythontk.KeyCurve` infinity mode (2 is unused by Maya).
+    _KEY_CURVE_INFINITY = {
+        0: "constant",
+        1: "linear",
+        3: "cycle",
+        4: "cycle_offset",
+        5: "oscillate",
+    }
+
+    #: A vertical tangent's slope, clamped: ``tan(90)`` is no number to draw.
+    _MAX_TANGENT_SLOPE = 1e6
+
+    @staticmethod
+    def _maya_span_shape(out_type: str, next_in_type: str) -> str:
+        """The :data:`pythontk.KeyCurve` interpolation of a Maya span.
+
+        Measured against ``keyframe -q -eval`` over every out x in tangent
+        pair: a ``step`` out-tangent holds, a ``stepnext`` one jumps, a
+        ``linear`` one into a ``linear`` or ``stepnext`` in-tangent is a
+        straight line; every other pair is the cubic of the two angles.
+        """
+        if out_type in ("step", "stepnext"):
+            return out_type
+        if out_type == "linear" and next_in_type in ("linear", "stepnext"):
+            return "linear"
+        return "bezier"
+
+    #: Samples per frame drawn through a weighted span Maya evaluates by its
+    #: own rule, and the count's floor and ceiling: such a span is steep near
+    #: the overreaching key, so the samples follow the span's length.
+    _OVERREACH_SAMPLES = (16, 24, 400)
+
+    @classmethod
+    def _sample_overreaching_spans(cls, curve: str, keys: list) -> None:
+        """Give each weighted span with a handle longer than the span the
+        curve's own ``keyframe -q -eval`` samples.
+
+        ``pythontk.KeyCurve`` pulls such a handle back along itself to the
+        span (Blender's correction); Maya does something else there, so the
+        span is drawn and evaluated through Maya's own values instead.
+        """
+        for k0, k1 in zip(keys, keys[1:]):
+            span = k1.time - k0.time
+            if k0.interpolation != "bezier" or span <= 0:
+                continue
+            if k0.out_handle[0] <= span and -k1.in_handle[0] <= span:
+                continue
+            per_frame, lo, hi = cls._OVERREACH_SAMPLES
+            n = max(lo, min(hi, int(span * per_frame)))
+            times = [k0.time + span * j / (n + 1) for j in range(1, n + 1)]
+            # One query for the span: ``-time`` is multi-use under -q -eval,
+            # one value per range in order (verified 2026-10-12).
+            values = cmds.keyframe(
+                curve, query=True, eval=True, time=[(t, t) for t in times]
+            )
+            k0.samples = list(zip(times, values or ()))
+
+    @classmethod
+    def _get_key_curves(cls, curves):
+        """Body of :meth:`AnimUtils.get_key_curves`."""
+        CurveKey = ptk.CurveKey
+        radians, cos, sin, tan = math.radians, math.cos, math.sin, math.tan
+        cap, span_shape = cls._MAX_TANGENT_SLOPE, cls._maya_span_shape
+        out = []
+        for curve in dict.fromkeys(str(c) for c in curves):
+            if not cmds.objExists(curve):
+                continue
+            if cmds.listConnections(f"{curve}.input", source=True, destination=False):
+                continue  # set-driven: its keys sit on driver values, not frames
+            # Time and value in one query, interleaved per key.  A query costs
+            # by the values it returns (~1 us each), not by the call.
+            pairs = (
+                cmds.keyframe(curve, query=True, timeChange=True, valueChange=True)
+                or []
+            )
+            times, values = pairs[0::2], pairs[1::2]
+            if not times:
+                continue
+
+            def q(**flag):
+                return cmds.keyTangent(curve, query=True, **flag) or []
+
+            weighted = bool(cmds.getAttr(f"{curve}.weightedTangents"))
+            in_a, out_a = q(inAngle=True), q(outAngle=True)
+            # Weights mean nothing on an unweighted curve: not read there.
+            in_w, out_w = (
+                (q(inWeight=True), q(outWeight=True)) if weighted else ((), ())
+            )
+            in_t, out_t = q(inTangentType=True), q(outTangentType=True)
+            locks = q(lock=True)
+            breakdowns = cmds.keyframe(curve, query=True, breakdown=True) or []
+            # Per key below, so bound once: a production bake reads 130k keys
+            # here, and the lazy ``ptk.CurveKey`` lookup alone was 0.24 s.
+            breakdown_at = {round(b, 6) for b in breakdowns}
+            next_in = in_t[1:] + [""]
+            keys = []
+            for i, t in enumerate(times):
+                ai, ao = radians(in_a[i]), radians(out_a[i])
+                if weighted:
+                    in_h = (-in_w[i] * cos(ai), -in_w[i] * sin(ai))
+                    out_h = (out_w[i] * cos(ao), out_w[i] * sin(ao))
+                else:  # only the slope is stored: value per frame
+                    in_h = (-1.0, -max(-cap, min(cap, tan(ai))))
+                    out_h = (1.0, max(-cap, min(cap, tan(ao))))
+                keys.append(
+                    CurveKey(
+                        time=t,
+                        value=values[i],
+                        in_handle=in_h,
+                        out_handle=out_h,
+                        interpolation=span_shape(out_t[i], next_in[i]),
+                        in_type=in_t[i],
+                        out_type=out_t[i],
+                        broken=not locks[i],
+                        breakdown=bool(breakdown_at) and round(t, 6) in breakdown_at,
+                    )
+                )
+            if weighted:
+                cls._sample_overreaching_spans(curve, keys)
+            plugs = (
+                cmds.listConnections(
+                    f"{curve}.output", plugs=True, source=False, destination=True
+                )
+                or []
+            )
+            # The curve's own enum: ``setInfinity`` given a curve node (not a
+            # plug) answers None.
+            pre = cmds.getAttr(f"{curve}.preInfinity")
+            post = cmds.getAttr(f"{curve}.postInfinity")
+            infinity = cls._KEY_CURVE_INFINITY
+            out.append(
+                ptk.KeyCurve(
+                    keys,
+                    curve_id=curve,
+                    label=plugs[0] if plugs else curve,
+                    weighted=weighted,
+                    pre_infinity=infinity.get(pre, "constant"),
+                    post_infinity=infinity.get(post, "constant"),
+                )
+            )
+        return out
 
     @classmethod
     def _has_keyframes(cls, sources):

@@ -246,8 +246,13 @@ class MayaExportMixin:
         The ONE dispatch, keyed on the extension (:meth:`pythontk.HandoffBridge.carrier_of`)
         rather than the params, so a bridge that builds its own payload path (a
         bake staged under a name its target expects) only has to name it right.
+
+        A transient edit (``ShotStore.transient_edit``): the write stages,
+        bakes and puts the scene back, so the Shot Sequencer credits none of
+        its key edits to a shot (mirror of blendertk's).
         """
-        self._payload_writers()[self.carrier_of(path)](transforms, path, params)
+        with ptk.ShotStore.transient_edit():
+            self._payload_writers()[self.carrier_of(path)](transforms, path, params)
 
     def _data_export_carrier(self) -> List[str]:
         """Every ``data_export`` carrier this bridge ships, else ``[]``.
@@ -659,4 +664,122 @@ class MayaExportMixin:
                     continue
                 seen.add(key)
                 out[shape] = parents
+        return out
+
+    #: A transform channel's family: the far side's axis conversion may mix the
+    #: channels of one family, never two, so a step frame is carried per family.
+    _STEP_FAMILIES = {
+        family + axis: family
+        for family in ("translate", "rotate", "scale")
+        for axis in "XYZ"
+    }
+
+    @staticmethod
+    def stepped_keys(
+        nodes: Optional[List[str]] = None, spell: Optional[Callable] = None
+    ) -> Dict[str, Dict[str, List[float]]]:
+        """The hand-off manifest's ``stepped_keys`` (``ptk.HandoffManifest.
+        STEPPED_KEYS``): ``{node: {channel: [frames]}}``, the keys whose out
+        tangent is ``step``.
+
+        FBX carries the key, but Blender's importer makes every key LINEAR, so a
+        Maya hold arrived as a ramp to the next key (SOL_REPLACE_ASSEMBLY's
+        SCREWDRIVER steps at 12 and holds to 731; pulled, it moved the whole
+        way).  blendertk's ``MayaSceneImport`` makes the listed keys CONSTANT
+        again.  *channel* is a transform family (``translate`` / ``rotate`` /
+        ``scale``) -- a frame listed only where every animated channel of the
+        family keys it with a step -- or a custom attribute's name.  Shared by the
+        Blender bridge's send and the pull's conversion template.
+
+        Parameters:
+            nodes: The transforms to read (long names); ``None`` -- every one
+                in the scene.
+            spell: How the far side names a node (default: its leaf).
+
+        Returns:
+            The section, ``{}`` when no listed curve steps.
+        """
+        spell = spell or (lambda name: str(name).split("|")[-1])
+        kinds = ("animCurveTL", "animCurveTA", "animCurveTU")
+        if nodes is None:
+            wanted, curves = None, cmds.ls(type=kinds) or []
+        else:
+            # The nodes' own curves, not every curve in the scene.
+            wanted = set(cmds.ls(nodes, long=True) or [])
+            if not wanted:
+                return {}
+            driving = cmds.listConnections(
+                sorted(wanted),
+                source=True,
+                destination=False,
+                type="animCurve",
+                skipConversionNodes=True,
+            )
+            curves = cmds.ls(sorted(set(driving or [])), type=kinds) if driving else []
+        # node -> channel -> {attr: (keyed frames, stepped frames)}
+        found: Dict[str, Dict[str, Dict[str, tuple]]] = {}
+        for crv in curves or []:
+            tangents = cmds.keyTangent(crv, query=True, outTangentType=True) or []
+            if "step" not in tangents:
+                continue
+            times = cmds.keyframe(crv, query=True, timeChange=True) or []
+            steps = {t for t, tan in zip(times, tangents) if tan == "step"}
+            plugs = (
+                cmds.listConnections(
+                    crv + ".output",
+                    source=False,
+                    destination=True,
+                    plugs=True,
+                    skipConversionNodes=True,
+                )
+                or []
+            )
+            for plug in plugs:
+                node = plug.split(".", 1)[0]
+                if not cmds.objectType(node, isAType="transform"):
+                    continue
+                if wanted is not None and not (
+                    set(cmds.ls(node, long=True) or []) & wanted
+                ):
+                    continue
+                try:
+                    attr = cmds.attributeName(plug, long=True)
+                except Exception:  # an element plug: not a channel
+                    continue
+                channel = MayaExportMixin._STEP_FAMILIES.get(attr, attr)
+                found.setdefault(node, {}).setdefault(channel, {})[attr] = (
+                    set(times),
+                    steps,
+                )
+        out: Dict[str, Dict[str, List[float]]] = {}
+        for node, channels in found.items():
+            for channel, curves in channels.items():
+                # The family's channels that step nowhere still veto a frame
+                # they key without a step: Blender steps the whole family.
+                for attr, family in MayaExportMixin._STEP_FAMILIES.items():
+                    if family != channel or attr in curves:
+                        continue
+                    for crv in (
+                        cmds.listConnections(
+                            f"{node}.{attr}",
+                            source=True,
+                            destination=False,
+                            type="animCurve",
+                            skipConversionNodes=True,
+                        )
+                        or []
+                    ):
+                        keyed = cmds.keyframe(crv, query=True, timeChange=True)
+                        curves[attr] = (set(keyed or []), set())
+                # Blender's importer keys every transform curve of an object
+                # at the union of their times, so a family frame is listed
+                # only where EVERY animated channel of it (more than one key)
+                # keys it with a step: a sibling moving through it unkeyed
+                # would get a key there, made CONSTANT, and hold where Maya
+                # ramps.  Not listed, a step plays as the ramp it was before
+                # the manifest carried steps (BACKLOG 2026-10-12).
+                animated = [steps for keyed, steps in curves.values() if len(keyed) > 1]
+                frames = sorted(set.intersection(*animated)) if animated else []
+                if frames:
+                    out.setdefault(spell(node), {})[channel] = frames
         return out

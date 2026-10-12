@@ -2560,6 +2560,71 @@ class TestAnimUtils(MayaTkTestCase):
         )
         self.assertEqual(log, [("move", crv, [(10.0, 20.001)])])
 
+    def test_shift_ranges_trades_two_ranges_of_one_curve(self):
+        """Two ranges of one curve that trade places each land where their own
+        offset sends them.  One range move after the other cut the key the
+        first landed on, and the second then moved the first's keys again.
+        Every hop is reported as it happens, so composing the reports takes
+        each source frame to its own key's destination."""
+        _obj, crv = self._keyed_tx("sr_trade", [(0, 0), (10, 10), (20, 20), (30, 30)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._shift_ranges(
+            [([crv], 20.0, (0, 10)), ([crv], -20.0, (20, 30))], **hooks
+        )
+
+        self.assertEqual(
+            self._curve_pairs(crv),
+            [(0.0, 20.0), (10.0, 30.0), (20.0, 0.0), (30.0, 10.0)],
+        )
+        where = {t: t for t in (0.0, 10.0, 20.0, 30.0)}  # source -> frame now
+        for kind, c, pairs in log:
+            self.assertEqual((kind, c), ("move", crv))
+            step = dict(pairs)
+            where = {src: step.get(now, now) for src, now in where.items()}
+        self.assertEqual(where, {0.0: 20.0, 10.0: 30.0, 20.0: 0.0, 30.0: 10.0})
+
+    def test_shift_ranges_lands_in_placement_order(self):
+        """Where two ranges of one curve meet on a frame, the later-PLACED
+        one's key replaces the earlier one's -- reported by ``on_replace``."""
+        _obj, crv = self._keyed_tx("sr_seam", [(0, 0), (10, 10), (20, 5), (30, 15)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        # 20..30 placed first, on 0..10; 0..10 after it, on 10..20.
+        AnimUtils._shift_ranges(
+            [([crv], -20.0, (20, 30)), ([crv], 10.0, (0, 10))], **hooks
+        )
+
+        self.assertEqual(
+            self._curve_pairs(crv), [(0.0, 5.0), (10.0, 0.0), (20.0, 10.0)]
+        )
+        self.assertEqual(
+            [entry for entry in log if entry[0] == "replace"],
+            [("replace", crv, [10.0])],
+        )
+
+    def test_shift_ranges_moves_a_curve_one_range_touches_straight(self):
+        """A curve only one move touches is shifted in one hop, as
+        ``_shift_curves`` shifts it -- a ``None`` range is every key."""
+        _a, crv_a = self._keyed_tx("sr_one_a", [(0, 0), (10, 10)])
+        _b, crv_b = self._keyed_tx("sr_one_b", [(0, 0), (10, 10)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._shift_ranges(
+            [([crv_a], 5.0, (0, 10)), ([crv_b], -5.0, None)], **hooks
+        )
+
+        self.assertEqual(
+            log,
+            [
+                ("move", crv_a, [(0.0, 5.0), (10.0, 15.0)]),
+                ("move", crv_b, [(0.0, -5.0), (10.0, 5.0)]),
+            ],
+        )
+
     def test_delete_keys_reports_the_keys_it_deletes(self):
         """``on_delete(curve, frames)`` names every key a delete removed:
         what a caller holding something on them (the shot system's claims)
@@ -6971,6 +7036,135 @@ class TestKeyedNodes(MayaTkTestCase):
         self.assertEqual(
             mtk.AnimUtils.get_keyframe_times([obj, "unkeyed"], as_range=True),
             (1.0, 1.0),
+        )
+
+
+class TestGetKeyCurves(MayaTkTestCase):
+    """``get_key_curves`` reads what Maya evaluates: the graph editor's model.
+
+    Every case compares ``KeyCurve.evaluate`` with Maya's own
+    ``keyframe -q -eval`` -- inside the keys, across mixed tangent types and
+    weighted curves, and out past both ends under every infinity mode.
+    """
+
+    TYPES = ("spline", "linear", "flat", "clamped", "plateau", "auto")
+    OUT_TYPES = TYPES + ("step", "stepnext")
+    IN_TYPES = TYPES + ("stepnext",)  # Maya refuses an in-tangent "step"
+
+    def _curve(
+        self, attr="translateX", keys=((0, 0.0), (8, 6.0), (15, -2.0), (24, 3.0))
+    ):
+        node = cmds.polyCube()[0]
+        for t, v in keys:
+            cmds.setKeyframe(node, attribute=attr, time=t, value=v)
+        return cmds.listConnections(f"{node}.{attr}", type="animCurve")[0]
+
+    def _assert_matches_maya(self, crv, lo=-30.0, hi=60.0, step=0.37):
+        curve = mtk.AnimUtils.get_key_curves([crv])[0]
+        t = lo
+        while t <= hi:
+            want = cmds.keyframe(crv, query=True, eval=True, time=(t, t))[0]
+            self.assertAlmostEqual(
+                curve.evaluate(t), want, places=4, msg=f"{crv} at {t}"
+            )
+            t += step
+        return curve
+
+    def test_every_tangent_type_pair_evaluates_as_maya_does(self):
+        for out_type in self.OUT_TYPES:
+            for in_type in self.IN_TYPES:
+                crv = self._curve()
+                cmds.keyTangent(crv, edit=True, time=(8, 8), outTangentType=out_type)
+                cmds.keyTangent(crv, edit=True, time=(15, 15), inTangentType=in_type)
+                self._assert_matches_maya(crv, 0, 24, 0.25)
+
+    def test_weighted_and_broken_handles(self):
+        crv = self._curve(attr="rotateY")
+        cmds.keyTangent(crv, edit=True, weightedTangents=True)
+        cmds.keyTangent(crv, edit=True, weightLock=False, lock=False)
+        cmds.keyTangent(crv, edit=True, time=(8, 8), outAngle=40, outWeight=6)
+        cmds.keyTangent(crv, edit=True, time=(15, 15), inAngle=-25, inWeight=2.5)
+        curve = self._assert_matches_maya(crv, 0, 24, 0.25)
+        self.assertTrue(curve.weighted)
+        self.assertTrue(curve.keys[1].broken)
+
+    def test_a_handle_longer_than_its_span_follows_maya(self):
+        """Maya evaluates an overreaching weighted handle by its own rule; the
+        span carries Maya's samples, so the model still matches it."""
+        crv = self._curve()
+        cmds.keyTangent(crv, edit=True, weightedTangents=True)
+        cmds.keyTangent(crv, edit=True, weightLock=False, lock=False)
+        cmds.keyTangent(crv, edit=True, time=(8, 8), outAngle=30, outWeight=20)
+        curve = mtk.AnimUtils.get_key_curves([crv])[0]
+        samples = curve.keys[1].samples
+        self.assertTrue(samples, "the overreaching span is sampled")
+        self.assertIsNone(curve.keys[0].samples, "the others are cubics")
+        for t, _v in samples:  # Maya's own values, wherever the model holds one
+            want = cmds.keyframe(crv, query=True, eval=True, time=(t, t))[0]
+            self.assertAlmostEqual(curve.evaluate(t), want, places=6)
+        # Between samples it is a line: close where the span is smooth (a
+        # 20-frame handle on a 7-frame span drops near-vertically before 15).
+        for t in (8.4, 9.7, 11.3, 12.6, 13.4):
+            want = cmds.keyframe(crv, query=True, eval=True, time=(t, t))[0]
+            self.assertAlmostEqual(curve.evaluate(t), want, delta=0.01)
+
+    def test_every_infinity_mode_on_both_sides(self):
+        for mode in ("constant", "linear", "cycle", "cycleRelative", "oscillate"):
+            crv = self._curve()
+            # Sloped ends, so a linear infinity that read as constant shows.
+            cmds.keyTangent(crv, edit=True, time=(0, 0), inAngle=30, outAngle=30)
+            cmds.keyTangent(crv, edit=True, time=(24, 24), inAngle=-20, outAngle=-20)
+            plug = cmds.listConnections(f"{crv}.output", plugs=True)[0]
+            cmds.setInfinity(plug, preInfinite=mode, postInfinite=mode)
+            curve = self._assert_matches_maya(crv)
+            self.assertEqual(
+                curve.pre_infinity, {"cycleRelative": "cycle_offset"}.get(mode, mode)
+            )
+
+    def test_an_ntsc_scene_reads_the_same_way(self):
+        cmds.currentUnit(time="ntsc")
+        try:
+            self._assert_matches_maya(self._curve(), 0, 24, 0.5)
+        finally:
+            cmds.currentUnit(time="film")
+
+    def test_ids_labels_and_flags(self):
+        crv = self._curve()
+        cmds.keyframe(crv, edit=True, time=(8, 8), breakdown=True)
+        curve = mtk.AnimUtils.get_key_curves([crv, "noSuchCurve"])[0]
+        self.assertEqual(curve.curve_id, crv)
+        self.assertTrue(curve.label.endswith(".translateX"))
+        self.assertEqual([k.breakdown for k in curve.keys], [False, True, False, False])
+        self.assertEqual(mtk.AnimUtils.get_key_curves(["noSuchCurve"]), [])
+
+    def test_euler_filter_unwraps_rotation_curves_only(self):
+        node = cmds.polyCube()[0]
+        for t, rx, tx in (
+            (0, 170.0, 170.0),
+            (10, -170.0, -170.0),
+            (20, -150.0, -150.0),
+        ):
+            cmds.setKeyframe(node, attribute="rotateX", time=t, value=rx)
+            cmds.setKeyframe(node, attribute="translateX", time=t, value=tx)
+        done = mtk.AnimUtils.euler_filter([node])
+        rot = cmds.listConnections(f"{node}.rotateX", type="animCurve")[0]
+        self.assertEqual(done, [rot])
+        self.assertEqual(
+            [round(v, 6) for v in cmds.keyframe(rot, query=True, valueChange=True)],
+            [170.0, 190.0, 210.0],
+        )
+        self.assertEqual(
+            cmds.getAttr(f"{node}.translateX", time=10), -170.0, "not a rotation"
+        )
+
+    def test_shift_key_values_offsets_only_the_named_keys(self):
+        crv = self._curve()
+        n = mtk.AnimUtils.shift_key_values(
+            {crv: [(8.0, 1.5), (15.0, 1.5), (24.0, -1.0)]}
+        )
+        self.assertEqual(n, 3)
+        self.assertEqual(
+            cmds.keyframe(crv, query=True, valueChange=True), [0.0, 7.5, -0.5, 2.0]
         )
 
 

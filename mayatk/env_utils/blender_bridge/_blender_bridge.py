@@ -335,6 +335,12 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 spell=self._manifest_spelling(self.carrier(request)),
                 # The scene's Exclude set and map claims: the bake's alone.
                 include_lightmap=request.template == self._LIGHTMAP_TEMPLATE,
+                # The authored steps ride beside the animation they belong to.
+                include_animation=bool(
+                    request.params.get(
+                        "INCLUDE_ANIMATION", DEFAULTS["INCLUDE_ANIMATION"]
+                    )
+                ),
             )
         except Exception as error:  # noqa: BLE001
             if request.template == self._LIGHTMAP_TEMPLATE:
@@ -376,6 +382,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         include_scene_data: bool = True,
         spell=None,
         include_lightmap: bool = False,
+        include_animation: bool = False,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
 
@@ -417,6 +424,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         *include_lightmap* adds :attr:`LIGHTMAP_SECTION` -- the scene's lightmap
         Exclude set and map claims (:meth:`_manifest_lightmap`); only the bake
         asks for it.
+
+        *include_animation* adds ``stepped_keys`` -- the sent subtree's keys
+        whose out tangent is ``step`` (:meth:`MayaExportMixin.stepped_keys`).
+        The FBX carries the key, but Blender's importer makes it LINEAR, so a
+        hold arrived as a ramp; blendertk's ``MayaSceneImport`` steps it again.
         """
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.mat_manifest import MatManifest
@@ -439,9 +451,18 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         lightmap = (
             self._manifest_lightmap(transforms, _leaf) if include_lightmap else None
         )
+        stepped = self.stepped_keys(transforms, _leaf) if include_animation else {}
         if not include_materials:
             self._dump_manifest(
-                fbx_path, [], [], node_types, lights, world, scene_data, lightmap
+                fbx_path,
+                [],
+                [],
+                node_types,
+                lights,
+                world,
+                scene_data,
+                lightmap,
+                stepped,
             )
             return
 
@@ -490,6 +511,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             world,
             scene_data,
             lightmap,
+            stepped,
         )
 
     #: The manifest section only this bridge's bake template reads: the scene's
@@ -990,17 +1012,27 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         world: Optional[Dict[str, Any]] = None,
         scene_data: Optional[Dict[str, Any]] = None,
         lightmap: Optional[Dict[str, Any]] = None,
+        stepped: Optional[Dict[str, Dict[str, List[float]]]] = None,
     ) -> None:
         """Write the sidecar (shared by the materials-on and materials-off
         paths) -- atomically, through ``ptk.HandoffManifest``: a send that died
         mid-write must not leave a truncated sidecar the consumer would read
         as a producer with nothing to say.  *scene_data* is
         ``DataNodes.transfer_sections``' sections, merged in whole; *lightmap* is
-        the bake's :attr:`LIGHTMAP_SECTION`."""
+        the bake's :attr:`LIGHTMAP_SECTION`; *stepped* is the ``stepped_keys``
+        section."""
         manifest_cls = ptk.HandoffManifest
         lights = lights or []
         scene_data = scene_data or {}
-        if not (entries or node_types or lights or world or scene_data or lightmap):
+        if not (
+            entries
+            or node_types
+            or lights
+            or world
+            or scene_data
+            or lightmap
+            or stepped
+        ):
             return
         manifest_cls.build(
             **{
@@ -1011,6 +1043,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 manifest_cls.LIGHTS: lights,
                 manifest_cls.WORLD: world or None,
                 self.LIGHTMAP_SECTION: lightmap,
+                manifest_cls.STEPPED_KEYS: stepped or None,
                 **scene_data,
             }
         ).write(fbx_path)
@@ -1023,6 +1056,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             f"{len(lights)} light(s)"
             + (f", sky dome {world['name']} as the world" if world else "")
             + (f", scene data ({', '.join(carried)})" if carried else "")
+            + (f", stepped keys on {len(stepped)} object(s)" if stepped else "")
             + (
                 f", {len(lightmap['exclude'])} excluded mesh(es) and "
                 f"{len(lightmap['claims'])} claimed map name(s)"

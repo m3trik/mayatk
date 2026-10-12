@@ -444,6 +444,14 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
           changed by the time undo runs, something else happened since, so
           the native undo belongs to THAT and this restore point stays put.
 
+        An edit that changed NOTHING -- no step reached the queue, the store
+        holds what it held -- leaves no restore point either (a no-op Snap, a
+        Simplify that removed nothing).  Left, the unpaired point sat on top of
+        the ledger, and the native undo of the edit before it found it in the
+        way and restored nothing (BACKLOG 2026-10-05).  The caller's own
+        no-op discard after it then drops nothing: one discard per push
+        (``discard_boundary_snapshot``).
+
         Pass ``snapshot=False`` for an edit that must not record a restore
         point (it then only supplies the named chunk).  An edit that changed
         the shot records ends by saying so (:class:`ShotsEdited`), as every
@@ -467,7 +475,10 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             cmds.undoInfo(closeChunk=True)
             if snapshot:
                 top = self.undo_queue_top()
-                self.tag_boundary_snapshot((top == name, top))
+                if top != name and not self.changed_since_snapshot():
+                    self.discard_boundary_snapshot()
+                else:
+                    self.tag_boundary_snapshot((top == name, top))
         if changed:
             self._notify(ShotsEdited(label=label))
 
@@ -481,8 +492,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         own, so Maya's Ctrl+Z went to the operation before it and the shot
         stayed (2026-10-07: "new shot creation is not undoable" -- the first
         shot of a scene, every time).  With a step on the queue, Maya's own
-        undo and redo reach the edit wherever the focus is, and the panel's
-        Undo/Redo event handler applies its restore point.
+        undo and redo reach the edit wherever the focus is, and the store's
+        Undo/Redo listener applies its restore point
+        (:meth:`_native_step_crossed`).
 
         The step re-sets the lock of the private data node's ``caching`` plug
         to what it already is: no value changes, nothing re-evaluates, and the
@@ -495,6 +507,85 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
 
         plug = f"{DataNodes.ensure_internal()}.caching"
         cmds.setAttr(plug, lock=cmds.getAttr(plug, lock=True))
+
+    # ---- following Maya's own undo (``ptk.ShotStore.follow_native_step``) ----
+
+    def _native_step_crossed(self, redo: bool = False, first: bool = True) -> bool:
+        """Whether the undo (or redo) Maya JUST performed is the edit of the
+        restore point next in that direction.
+
+        Maya fires its Undo/Redo events for every undo in the session, so the
+        event alone says nothing about whose edit it was.  The entry Maya just
+        moved is named by the OPPOSITE queue (verified: after ``cmds.undo()``,
+        ``undoInfo -q -redoName`` returns the chunk that was undone), and the
+        restore point records the marker its edit landed under
+        (:meth:`scene_edit`) -- so the two match only when the step is that
+        edit.  Without the test, undoing an unrelated scene edit consumed a
+        restore point and reverted shot bounds whose keys Maya had left
+        exactly where they were.
+
+        An UNPAIRED restore point never matches: its edit put nothing on the
+        queue, so whatever Maya just undid was somebody else's.  An untagged
+        one (a legacy push) counts for the *first* point of a step.
+        """
+        if not self.has_boundary_snapshot(redo=redo):
+            return False
+        tag = self.peek_boundary_tag(redo=redo)
+        if not isinstance(tag, tuple):
+            return first
+        paired, marker = tag
+        return bool(paired) and marker == self.undo_queue_top(redo=not redo)
+
+    @classmethod
+    def _install_native_undo_sync(cls) -> None:
+        """Subscribe this class to Maya's Undo / Redo events: each runs
+        :meth:`_on_native_step` (``MEventMessage``, through
+        :class:`ScriptJobManager`, which tears them down with its own reset).
+        Once per class and manager -- a manager reset re-arms it."""
+        if cmds is None:
+            return
+        try:
+            import maya.api.OpenMaya as om
+            from mayatk.core_utils.script_job_manager import ScriptJobManager
+        except Exception:
+            return
+        mgr = ScriptJobManager.instance()
+        held = cls.__dict__.get("_native_undo_subs")
+        if held is not None and held[0] is mgr:
+            return
+        tokens = []
+        for event, handler in (
+            ("Undo", cls._on_maya_undo),
+            ("Redo", cls._on_maya_redo),
+        ):
+            token = mgr.add_om_callback(
+                om.MEventMessage.addEventCallback, event, handler, owner=cls
+            )
+            if token is not None:
+                tokens.append(token)
+        cls._native_undo_subs = (mgr, tokens)
+
+    @classmethod
+    def _remove_native_undo_sync(cls) -> None:
+        """Drop the Undo / Redo subscriptions :meth:`_install_native_undo_sync`
+        made."""
+        held = cls.__dict__.get("_native_undo_subs")
+        if held is None:
+            return
+        mgr, tokens = held
+        for token in tokens:
+            mgr.unsubscribe(token)
+        cls._native_undo_subs = None
+
+    @classmethod
+    def _on_maya_undo(cls, *_args) -> None:
+        """Maya's Undo event: the active store follows it."""
+        cls._on_native_step(redo=False)
+
+    @classmethod
+    def _on_maya_redo(cls, *_args) -> None:
+        """Maya's Redo event: the active store follows it."""
+        cls._on_native_step(redo=True)
 
     # ---- scene hooks -------------------------------------------------------
 
@@ -590,7 +681,11 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         by its leaf -- so a path that no longer resolves is looked up by its
         leaf, among transforms (a member is one; a material of that name is
         not it), before it counts as gone.  Two batched ``ls`` calls, whatever
-        the member count.
+        the member count, and a lookup per member neither finds.  A member
+        whose leaf was renamed too is found by its saved node UUID
+        (:meth:`_current_names`): a HOLD shot keys
+        nothing in its frames, so without it the rename made the shot stale
+        and its take left the export.
         """
         names = [str(n) for n in names]
         if cmds is None or not names:
@@ -602,7 +697,76 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             leaves = sorted({self.leaf_name(n) for n in rest})
             held = {self.leaf_name(h) for h in cmds.ls(leaves, type="transform") or []}
             present.update(n for n in rest if self.leaf_name(n) in held)
+            present.update(self._current_names(n for n in rest if n not in present))
         return present
+
+    def _member_ids(self, names) -> Dict[str, str]:
+        """``{name: node UUID}`` for each of *names* that answers to ONE node
+        (``ptk.ShotStore._capture_member_ids``): saved with the store, so a
+        member renamed behind its back is found again (:meth:`_current_names`)."""
+        if cmds is None:
+            return {}
+        out = {}
+        for name in names:
+            try:
+                found = cmds.ls(str(name), uuid=True) or []
+            except Exception:  # an unparseable stored name: no id, no raise
+                continue
+            if len(found) == 1:
+                out[str(name)] = found[0]
+        return out
+
+    def _current_names(self, names) -> Dict[str, str]:
+        """``{name: long name now}`` for each of *names* no node answers to --
+        by its path or by its leaf -- whose saved UUID (``member_ids``) names
+        exactly one node: a member renamed with the store not told (a rename
+        in the Outliner, panel closed).  Read-only.  A UUID that names no
+        node -- deleted, or another scene's -- leaves the name as it was."""
+        ids = self.member_ids
+        if cmds is None or not ids:
+            return {}
+        out = {}
+        for name in names:
+            name = str(name)
+            uid = ids.get(name)
+            if not uid:
+                continue
+            try:
+                if cmds.ls(name) or cmds.ls(self.leaf_name(name), type="transform"):
+                    continue  # it answers by name: nothing to follow
+                found = cmds.ls(uid, long=True) or []
+            except Exception:  # an unparseable name or id: today's behaviour
+                continue
+            if len(found) == 1 and found[0] != name:
+                out[name] = found[0]
+        return out
+
+    def _export_set_members(self, names, scope) -> set:
+        """Which member *names* an export of *scope* carries
+        (``ptk.ShotStore.export_records``): the node is an export root or
+        sits under one, both sides resolved to long DAG paths -- a short
+        name, a member whose parent was renamed (looked up by its leaf, as
+        :meth:`_existing_objects` does) and one renamed outright (its saved
+        UUID, :meth:`_current_names`) included."""
+        names = [str(n) for n in names]
+        if cmds is None or not names:
+            return super()._export_set_members(names, scope)
+        roots = cmds.ls([str(r) for r in scope], long=True) or []
+        renamed = self._current_names(names)
+
+        def carried(path: str) -> bool:
+            return any(path == r or path.startswith(r + "|") for r in roots)
+
+        kept = set()
+        for name in names:
+            paths = (
+                cmds.ls(name, long=True)
+                or cmds.ls(self.leaf_name(name), long=True, type="transform")
+                or ([renamed[name]] if name in renamed else [])
+            )
+            if any(carried(p) for p in paths):
+                kept.add(name)
+        return kept
 
     def _keyed_windows(self, windows) -> List[bool]:
         """Per ``(start, end)`` window, whether any animation curve in the

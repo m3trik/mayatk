@@ -63,29 +63,11 @@ class UndoLedgerMixin:
         if self.sequencer is not None:
             self.sequencer.store.redo_boundary_snapshot()
 
-    def _native_event_is_ours(self, redo: bool = False) -> bool:
-        """True when the undo/redo Maya JUST performed is our newest one.
-
-        Maya fires its Undo/Redo events for every undo in the session, so the
-        event alone says nothing about whose edit it was.  The entry Maya just
-        moved is named by the OPPOSITE queue (verified: after ``cmds.undo()``,
-        ``undoInfo -q -redoName`` returns the chunk that was undone), and our
-        restore point records the marker its edit landed under — so the two
-        match only when this event is that edit.  Without the test, undoing an
-        unrelated scene edit consumed a restore point and reverted shot bounds
-        whose keys Maya had left exactly where they were.
-
-        An UNPAIRED restore point can never match: its edit put nothing on the
-        queue, so whatever Maya just undid was somebody else's.
-        """
-        store = self.sequencer.store if self.sequencer is not None else None
-        if store is None or not store.has_boundary_snapshot(redo=redo):
-            return False
-        tag = store.peek_boundary_tag(redo=redo)
-        if not isinstance(tag, tuple):
-            return True  # untagged (legacy push) — pre-pairing behaviour
-        paired, marker = tag
-        return bool(paired) and marker == store.undo_queue_top(redo=not redo)
+    # Maya's own undo and redo (Ctrl+Z in a viewport, Edit > Undo) are the
+    # STORE's to follow -- ``ShotStore.follow_native_step``, which tells an
+    # undo of our edit from anybody else's -- with this panel open or not.
+    # The panel's Undo / Redo buttons below step Maya's queue themselves and
+    # hold that sync while they do (``ShotStore.native_undo_sync_held``).
 
     #: Undo entries that are BOOKKEEPING, not scene edits.
     #: Maya defers its selection-mask reset to idle, so the selection a panel
@@ -131,7 +113,7 @@ class UndoLedgerMixin:
         back = cmds.undo if redo else cmds.redo
         taken = 0
         was_syncing = self._syncing
-        self._syncing = True  # our own walk must not re-enter _on_maya_undo
+        self._syncing = True  # our own walk must not re-enter the panel
         try:
             while taken < limit:
                 top = store.undo_queue_top(redo=redo)
@@ -192,43 +174,57 @@ class UndoLedgerMixin:
         return True, bool(paired)
 
     def on_undo(self) -> None:
-        """Handle undo_requested from the widget — delegate to Maya undo."""
+        """Handle undo_requested from the widget — delegate to Maya undo.
+
+        The panel decides the split itself (:meth:`_undo_plan`: an unpaired
+        point is applied with no Maya step), so the store's own sync is held
+        for the walk -- it would follow the same step a second time.
+        """
         if cmds is None:
             return
-        self._step_past_queue_noise()
-        apply_ledger, call_maya = self._undo_plan()
-        self._syncing = True
-        try:
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        with ShotStore.native_undo_sync_held():
+            self._step_past_queue_noise()
+            apply_ledger, call_maya = self._undo_plan()
+            self._syncing = True
             try:
-                if apply_ledger:
-                    self._restore_shot_state()
-            except Exception:
-                self.logger.debug("on_undo: _restore_shot_state failed", exc_info=True)
-            if call_maya:
-                cmds.undo()
-        except RuntimeError:
-            pass
-        finally:
-            self._syncing = False
+                try:
+                    if apply_ledger:
+                        self._restore_shot_state()
+                except Exception:
+                    self.logger.debug(
+                        "on_undo: _restore_shot_state failed", exc_info=True
+                    )
+                if call_maya:
+                    cmds.undo()
+            except RuntimeError:
+                pass
+            finally:
+                self._syncing = False
         self._after_shot_change()
 
     def on_redo(self) -> None:
-        """Handle redo_requested from the widget — delegate to Maya redo."""
+        """Handle redo_requested from the widget — delegate to Maya redo
+        (the store's sync held, as :meth:`on_undo` does)."""
         if cmds is None:
             return
-        self._step_past_queue_noise(redo=True)
-        apply_ledger, call_maya = self._undo_plan(redo=True)
-        self._syncing = True
-        try:
+        from mayatk.anim_utils.shots._shots import ShotStore
+
+        with ShotStore.native_undo_sync_held():
+            self._step_past_queue_noise(redo=True)
+            apply_ledger, call_maya = self._undo_plan(redo=True)
+            self._syncing = True
             try:
-                if apply_ledger:
-                    self._redo_shot_state()
-            except Exception:
-                self.logger.debug("on_redo: _redo_shot_state failed", exc_info=True)
-            if call_maya:
-                cmds.redo()
-        except RuntimeError:
-            pass
-        finally:
-            self._syncing = False
+                try:
+                    if apply_ledger:
+                        self._redo_shot_state()
+                except Exception:
+                    self.logger.debug("on_redo: _redo_shot_state failed", exc_info=True)
+                if call_maya:
+                    cmds.redo()
+            except RuntimeError:
+                pass
+            finally:
+                self._syncing = False
         self._after_shot_change()

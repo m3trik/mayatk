@@ -10,6 +10,9 @@
     <height>350</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Evaluate math expressions, convert length units and turn frames into seconds.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

@@ -51,6 +51,12 @@ def _make_stub_controller():
     ctrl._refresh_ranges = MagicMock()
     ctrl._fill_missing_assets = MagicMock()
     ctrl._recent_csv_option = MagicMock()
+    # The controller's MappingPickerMixin hook: the scene's template and
+    # options for this sheet, applied before the parse.
+    ctrl._adopt_sheet_options = MagicMock()
+    # ...and its undo when the sheet does not load.
+    ctrl._sheet_read_state = MagicMock(return_value=())
+    ctrl._restore_sheet_read_state = MagicMock()
     ctrl._active_mapping = None
     ctrl._column_map = ColumnMap()
     ctrl._csv_path = ""
@@ -119,6 +125,81 @@ class LoadCsvFailureTest(unittest.TestCase):
         ctrl._load_data.assert_not_called()
 
 
+class LoadCsvNoStepsTest(unittest.TestCase):
+    """A sheet the template reads no step of is not loaded: it says why on
+    the field, and nothing stands in for it (2026-10-11: a production sheet read
+    as 0 steps under a ``classic`` Step IDs choice, and Assess detected the
+    scene's animation over it)."""
+
+    def test_a_sheet_reading_no_steps_is_reported_not_loaded(self):
+        ctrl = _make_stub_controller()
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch(f"{_SOURCE}.ManifestModel.parse_csv", return_value=[]),
+        ):
+            ok = ShotManifestController._load_csv(ctrl, "X:/docs/sheet.csv")
+
+        self.assertFalse(ok)
+        ctrl._load_data.assert_not_called()
+        ctrl.ui.txt_csv_path.set_action_color.assert_called_with("invalid")
+        self.assertIn("Step IDs", ctrl._set_footer.call_args.args[0])
+
+    def test_a_sheet_whose_steps_are_all_excluded_still_loads(self):
+        """The context menu's exclusions are the user's, not a misread sheet:
+        such a sheet loads (empty), its field never blamed on Step IDs."""
+        ctrl = _make_stub_controller()
+        ctrl._column_map = ColumnMap(exclude_steps=("A01",))
+        steps = [ptk.BuilderStep("A01", "A", "Doors", "d")]
+        with (
+            patch("os.path.isfile", return_value=True),
+            patch(f"{_SOURCE}.ManifestModel.parse_csv", return_value=steps),
+        ):
+            ok = ShotManifestController._load_csv(ctrl, "X:/docs/sheet.csv")
+
+        self.assertTrue(ok)
+        self.assertEqual(ctrl._load_data.call_args.args[0], [])
+        ctrl.ui.txt_csv_path.set_action_color.assert_not_called()
+
+    @staticmethod
+    def _ensure_ctrl(field_text, source=""):
+        ctrl = types.SimpleNamespace()
+        ctrl._steps = []
+        ctrl._populate_from_source = MagicMock()  # loads nothing
+        ctrl.detect = MagicMock()
+        ctrl._set_footer = MagicMock()
+        ctrl.logger = MagicMock()
+        ctrl.ui = MagicMock()
+        ctrl.ui.txt_csv_path.text.return_value = field_text
+        ctrl._source = source
+        ctrl._sheet_steps = []  # the sheet's own steps, before Local Edits
+        return ctrl
+
+    def test_assess_never_detects_over_a_named_sheet(self):
+        ctrl = self._ensure_ctrl("X:/docs/sheet.csv")
+        self.assertFalse(ShotManifestController._ensure_steps(ctrl))
+        ctrl.detect.assert_not_called()
+        self.assertIn("did not load", ctrl._set_footer.call_args.args[0])
+
+    def test_a_loaded_sheet_with_every_step_excluded_says_so(self):
+        ctrl = self._ensure_ctrl("X:/docs/sheet.csv", source="csv")
+        self.assertFalse(ShotManifestController._ensure_steps(ctrl))
+        ctrl.detect.assert_not_called()
+        self.assertIn("excluded", ctrl._set_footer.call_args.args[0])
+
+    def test_a_loaded_sheet_with_every_step_hidden_says_so(self):
+        """Local Edits hid every step the sheet has: "excluded" sent the user
+        to the context menu's exclusions, which hold none of them."""
+        ctrl = self._ensure_ctrl("X:/docs/sheet.csv", source="csv")
+        ctrl._sheet_steps = [ptk.BuilderStep("A01", "A", "Doors", "d")]
+        self.assertFalse(ShotManifestController._ensure_steps(ctrl))
+        self.assertIn("hidden", ctrl._set_footer.call_args.args[0])
+
+    def test_an_empty_field_still_detects(self):
+        ctrl = self._ensure_ctrl("")
+        ShotManifestController._ensure_steps(ctrl)
+        ctrl.detect.assert_called_once()
+
+
 class LoadCsvUrlSourceTest(unittest.TestCase):
     """A URL is a CSV source: it skips the file gate, and a fetch failure is
     reported as a fetch failure, never as the local disk/sync diagnosis."""
@@ -127,7 +208,8 @@ class LoadCsvUrlSourceTest(unittest.TestCase):
 
     def test_url_skips_the_file_gate_and_loads(self):
         ctrl = _make_stub_controller()
-        with patch(f"{_SOURCE}.ManifestModel.parse_csv", return_value=[]) as parse:
+        steps = [ptk.BuilderStep("A01", "A", "Doors", "d")]
+        with patch(f"{_SOURCE}.ManifestModel.parse_csv", return_value=steps) as parse:
             ShotManifestController._load_csv(ctrl, self._URL)
 
         self.assertEqual(parse.call_args.args[0], self._URL)

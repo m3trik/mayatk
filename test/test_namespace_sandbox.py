@@ -61,6 +61,28 @@ class TestImporterFileTypeDispatch(QuickTestCase):
         self.assertFalse(self.maya.is_supported_file("scene.fbx"))
 
 
+class TestFbxImporterLeavesTheKeyStashAlone(QuickTestCase):
+    """A sandbox import is deleted after the compare, so it must not park a
+    file's conflicting takes in the user's Key Stash: it asks
+    ``FbxUtils.import_scene`` for the playing takes only (``stash=False``) and
+    hands over its own logger, so the warning naming the takes it left out
+    reaches the hierarchy-sync log (``test_fbx_utils`` pins that warning)."""
+
+    def test_both_imports_opt_out_through_the_sandbox_logger(self):
+        from unittest import mock
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        importer = FBXImporter(_LOG, dry_run=False)
+        with mock.patch.object(FbxUtils, "import_scene", return_value=[]) as imp:
+            importer.import_with_namespace(Path("C:/x/clips.fbx"), "ns_opt", "temp_")
+            importer.import_for_analysis(Path("C:/x/clips.fbx"), "ns_opt")
+        self.assertEqual(imp.call_count, 2)
+        for call in imp.call_args_list:
+            self.assertIs(call.kwargs.get("stash"), False)
+            self.assertIs(call.kwargs.get("logger"), _LOG)
+
+
 class TestCameraTracker(MayaTkTestCase):
     """CameraTracker — diffs camera state across import boundaries."""
 

@@ -23,7 +23,7 @@ The panel's Switchboard slots (:class:`ShotSequencerSlots`) stay in
 ``shot_sequencer_slots``, which re-imports this class.
 """
 
-from typing import List, Optional
+from typing import Optional
 
 from qtpy import QtCore
 
@@ -103,7 +103,8 @@ class ShotSequencerController(
         self.sb = slots_instance.sb
         self.ui = slots_instance.ui
         self._sequencer: Optional[ShotSequencer] = None
-        self._undo_callback_ids: List[int] = []
+        # Listening for the store's native undo / redo (_on_native_step).
+        self._native_step_bound: bool = False
         self._time_change_cb: Optional[int] = None
         self._keyframe_cb: Optional[int] = None
         self._anim_curve_cb: Optional[int] = None
@@ -142,7 +143,6 @@ class ShotSequencerController(
         self._next_action = None  # OptionBox action for next shot
         self._view_mode_action = None  # OptionBox action for view mode cycle
         self._cmb_mode_widget = None  # mode selector combobox (Shots/Markers)
-        self._holds_action = None  # OptionBox action for internal holds toggle
         self._playback_range_mode: str = (
             "follows_view"  # "off" | "follows_view" | "locked"
         )
@@ -308,6 +308,10 @@ class ShotSequencerController(
             # did not make it.  This one redraws after each of its own edits,
             # and another panel's reaches it through the events that edit
             # raises: rebuilding here too drew every sequencer edit twice.
+            return
+        if getattr(self.sequencer.store, "following_native_step", False) is True:
+            # The store putting back a restore point for Maya's own undo:
+            # _on_native_step redraws once when it is done.
             return
         self._drop_caches()
         if (

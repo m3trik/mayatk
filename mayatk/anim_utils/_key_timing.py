@@ -10,6 +10,7 @@ shot engine and the key-timing siblings build on. Reached through
 
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 import bisect
+import contextlib
 import math
 
 try:
@@ -19,9 +20,43 @@ except Exception:
 
 import pythontk as ptk
 
+from mayatk.anim_utils._tangents import _NEIGHBOUR_DERIVED_TANGENTS
+
 
 class _KeyTimingInternal:
     """Private helpers and ``AnimUtils`` method bodies; see the module docstring."""
+
+    #: GUI Maya's preference that rounds every ``scaleKey`` result to a whole
+    #: frame -- on by default; mayapy has none.
+    _SCALE_SNAP_PREF = "scaleKeyAutoSnap"
+
+    @classmethod
+    @contextlib.contextmanager
+    def _exact_scale(cls):
+        """``scaleKey`` lands every key where it computes it, inside the block.
+
+        GUI Maya's ``scaleKeyAutoSnap`` preference rounds each scaled key to
+        a whole frame, where mayapy, with no such preference, does not.  A
+        retime that computes where its keys land -- a shot's, a gap's, with
+        the shot ledger's claims following those frames -- was then
+        off by the rounding.  It merged keys that rounded alike, and it
+        stacked a gap compressed into one frame onto that frame's bound
+        (measured 2026-10-12: a key scaled to 40.7 landed on 41).  The
+        preference is switched off for the block and put back after.
+        """
+        name = cls._SCALE_SNAP_PREF
+        was = (
+            cmds.optionVar(q=name)
+            if cmds is not None and cmds.optionVar(exists=name)
+            else 0
+        )
+        if was:
+            cmds.optionVar(intValue=(name, 0))
+        try:
+            yield
+        finally:
+            if was:
+                cmds.optionVar(intValue=(name, was))
 
     @classmethod
     def _compute_motion_progress(
@@ -985,6 +1020,8 @@ class _KeyTimingInternal:
             for t in replaced:
                 cmds.cutKey(crv, time=(t, t), clear=True)
             plan.append((crv, replaced, pairs))
+        if not plan:  # no key to move: no edit
+            return
         if time_range:
             # option="over" lets a range move travel past unmoved out-of-range
             # neighbors -- the default move CLAMPS at the adjacent key.
@@ -1003,6 +1040,258 @@ class _KeyTimingInternal:
                 on_replace(crv, replaced)
             if on_move is not None:
                 on_move(crv, pairs)
+
+    @classmethod
+    def _shift_ranges(cls, moves, on_replace=None, on_move=None) -> None:
+        """Shift several key ranges, each by its own offset, as ONE layout:
+        every key lands where its own range's offset sends it, whatever order
+        the ranges trade places in.
+
+        Parameters:
+            moves: ``(curves, offset, time_range)`` per range, in PLACEMENT
+                order -- the order the layout lays them down. ``time_range``
+                ``None`` is every key of *curves*.
+            on_replace: ``on_replace(curve, frames)``, as :meth:`_shift_curves`
+                reports it, once per hop.
+            on_move: ``on_move(curve, pairs)``, likewise.
+
+        One range move after another picks its keys by time from the curve as
+        it stands, so when a layout reverses two ranges of one curve an
+        earlier move lands on a later one's source range -- cutting the key
+        there -- and the later move then carries the earlier one's keys
+        again; no execution order avoids it.  On a curve two or more moves
+        share, every one of them is therefore LIFTED to a park slot of its
+        own above every key and every destination on that curve (a lift
+        never lands in another range, and each park slot holds only its own
+        keys), then LANDED in placement order: where two meet on one frame,
+        the later-placed range's key replaces the earlier one's.  A curve
+        only one move touches is shifted straight, as :meth:`_shift_curves`
+        shifts it.  Every hop is a bulk ``keyframe -edit`` move (tangents and
+        key flags travel with the keys) and is reported as it happens --
+        source to park, park to destination -- so a claim follower matching
+        each call against the claims as they stand carries every claim with
+        its own key; one net pair per key would hand a claim another range
+        just landed on a frame to the key that moves on from it.  A curve
+        that refuses the edit (a locked node) is warned about and skipped.
+
+        Each range moves RIGIDLY, the tangent halves on its boundary keys
+        included (:meth:`_layout_boundaries`): a derived half (auto, spline,
+        clamped...) takes its slope from neighbours the layout replaces, so
+        one the layout re-derives is frozen back at its old angle (broken
+        where its two halves now differ).  Where two ranges meet on one frame
+        that key stands for both: in-half from the range arriving, value and
+        out-half from the range leaving (maintainer 2026-10-11).
+        """
+        by_curve: Dict[str, List[Tuple[float, Any]]] = {}
+        for curves, offset, time_range in moves:
+            if abs(offset) < 1e-9:
+                continue
+            for crv in dict.fromkeys(str(c) for c in curves or ()):
+                by_curve.setdefault(crv, []).append((float(offset), time_range))
+
+        for crv, entries in by_curve.items():
+            try:
+                boundaries = cls._boundary_halves(crv, entries)
+                if len(entries) == 1:
+                    offset, time_range = entries[0]
+                    cls._shift_curves([crv], offset, time_range, on_replace, on_move)
+                else:
+                    cls._lift_and_land(crv, entries, on_replace, on_move)
+                cls._restore_boundary_halves(crv, boundaries)
+            except RuntimeError as error:
+                cmds.warning(f"Failed to move keys on {crv}: {error}")
+
+    @staticmethod
+    def _layout_boundaries(times, entries, eps: float = 1e-4) -> list:
+        """The keys whose derived slopes a layout can change, and which
+        original key each one's tangent halves and value belong to.
+
+        Each key moves by the first of *entries* whose range holds it (none:
+        it stays put); destinations within *eps* are ONE key, the
+        latest-placed source's (:meth:`_lift_and_land`; a stationary key is
+        replaced by anything landing on it).  A final key's in-half keeps the
+        source whose ORIGINAL left neighbour is still its left neighbour --
+        the span between them is one the layout carried whole -- and its
+        out-half likewise on the right; a side facing a junction the layout
+        made is left to re-derive.  The value is the out-half's source's (the
+        later range's start), else the in-half's.  Listed: every merged key,
+        every key with a new neighbour, and every key beside a merged one
+        (whose value may now be the other side's, which re-derives both of
+        its neighbour's halves).
+
+        Parameters:
+            times: The curve's key times before the layout.
+            entries: ``(offset, time_range)`` per range, in placement order
+                (``time_range`` ``None``: every key).
+            eps: Frames within which two destinations are one key
+                (:meth:`_landed_on`'s).
+
+        Returns:
+            ``[(frame, in_src, out_src, value_src), ...]`` -- *frame* the
+            key's time after the layout, the rest original key times
+            (``None``: no half kept on that side).
+        """
+        ts = sorted(times)
+        dest, rank = [], []
+        for t in ts:
+            for i, (offset, time_range) in enumerate(entries):
+                lo, hi = time_range if time_range else (-math.inf, math.inf)
+                if lo <= t <= hi:
+                    dest.append(t + offset)
+                    rank.append(i)
+                    break
+            else:
+                dest.append(t)
+                rank.append(-1)
+        frames: List[List[int]] = []
+        for s in sorted(range(len(ts)), key=lambda s: dest[s]):
+            if frames and dest[s] - dest[frames[-1][0]] <= eps:
+                frames[-1].append(s)
+            else:
+                frames.append([s])
+
+        out = []
+        last = len(ts) - 1
+        for k, group in enumerate(frames):
+            prev = set(frames[k - 1]) if k else set()
+            nxt = set(frames[k + 1]) if k + 1 < len(frames) else set()
+            if len(group) == 1 and len(prev) < 2 and len(nxt) < 2:
+                s = group[0]
+                left_kept = s - 1 in prev if s else not prev
+                right_kept = s + 1 in nxt if s < last else not nxt
+                if left_kept and right_kept:
+                    # Both neighbours its own and neither a merged key (whose
+                    # value may be the other side's): nothing re-derives.
+                    continue
+            # Latest-placed first: the key that stays, then the ones it replaced.
+            ranked = sorted(group, key=lambda s: rank[s], reverse=True)
+            in_src = next((s for s in ranked if s - 1 in prev), None)
+            out_src = next((s for s in ranked if s + 1 in nxt), None)
+            if in_src is None and out_src is None:
+                continue  # an island: no span of its own to keep
+            value_src = out_src if out_src is not None else in_src
+            out.append(
+                (
+                    dest[ranked[0]],
+                    None if in_src is None else ts[in_src],
+                    None if out_src is None else ts[out_src],
+                    ts[value_src],
+                )
+            )
+        return out
+
+    @classmethod
+    def _boundary_halves(cls, crv: str, entries) -> list:
+        """:meth:`_layout_boundaries` for *crv*, read off the curve before the
+        layout moves it: ``[(frame, value, in_half, out_half), ...]``, each
+        half ``(type, angle, weight)`` or ``None``."""
+        times = cmds.keyframe(crv, query=True, timeChange=True) or []
+        return [
+            (
+                frame,
+                cmds.keyframe(crv, query=True, time=(v_src,) * 2, valueChange=True)[0],
+                cls._tangent_half(crv, in_src, "in"),
+                cls._tangent_half(crv, out_src, "out"),
+            )
+            for frame, in_src, out_src, v_src in cls._layout_boundaries(times, entries)
+        ]
+
+    @classmethod
+    def _restore_boundary_halves(cls, crv: str, boundaries, tol: float = 1e-3):
+        """Give each key :meth:`_boundary_halves` read its value back, then
+        every half the layout made play differently.  Values first: a value
+        re-derives its neighbours' derived halves, never a fixed one."""
+        if not boundaries:
+            return
+        weighted = bool(
+            (cmds.keyTangent(crv, query=True, weightedTangents=True) or [False])[0]
+        )
+        keys = []
+        for frame, value, in_half, out_half in boundaries:
+            hit = cmds.keyframe(
+                crv, query=True, time=(frame - 1e-3, frame + 1e-3), timeChange=True
+            )
+            if not hit:
+                continue
+            t = hit[0]
+            now = cmds.keyframe(crv, query=True, time=(t, t), valueChange=True)[0]
+            if abs(now - value) > 1e-9:
+                cmds.keyframe(
+                    crv, edit=True, time=(t, t), absolute=True, valueChange=value
+                )
+            keys.append((t, in_half, out_half))
+
+        for t, *halves in keys:
+            edits = {}
+            for side, want in zip(("in", "out"), halves):
+                if want is None:
+                    continue
+                kind, angle, weight = want
+                now = cls._tangent_half(crv, t, side)
+                if now is None:
+                    continue
+                now_kind, now_angle, now_weight = now
+                drift = abs(now_angle - angle) > tol or (
+                    weighted and abs(now_weight - weight) > tol
+                )
+                if kind in _NEIGHBOUR_DERIVED_TANGENTS:
+                    if not drift:
+                        continue  # re-derived to the slope it had: leave its type
+                    edits[f"{side}TangentType"] = "fixed"
+                else:  # its own slope: the type alone brings it back
+                    if now_kind == kind and not (kind == "fixed" and drift):
+                        continue
+                    edits[f"{side}TangentType"] = kind
+                    if kind != "fixed":
+                        continue
+                edits[f"{side}Angle"] = angle
+                if weighted:
+                    edits[f"{side}Weight"] = weight
+            if not edits:
+                continue
+            # Broken only where its halves now differ: a key kept whole on
+            # both sides stays unified.
+            if edits.get("inAngle") is None or edits.get("inAngle") != edits.get(
+                "outAngle"
+            ):
+                edits["lock"] = False
+            cls._set_tangent_info(crv, t, edits)
+
+    @classmethod
+    def _lift_and_land(cls, crv: str, entries, on_replace=None, on_move=None):
+        """:meth:`_shift_ranges` on a curve several ``(offset, time_range)``
+        *entries* (in placement order) share: lift each to a park slot, then
+        land each in order."""
+        times = cmds.keyframe(crv, query=True, timeChange=True) or []
+        plans = []  # (offset, range, first key, last key) of each holding keys
+        for offset, time_range in entries:
+            lo, hi = time_range if time_range else (-math.inf, math.inf)
+            held = [t for t in times if lo <= t <= hi]
+            if held:
+                plans.append((offset, time_range, min(held), max(held)))
+        if len(plans) < 2:  # only one of them holds keys here: nothing to trade
+            for offset, time_range, _first, _last in plans:
+                cls._shift_curves([crv], offset, time_range, on_replace, on_move)
+            return
+
+        pad = 1e-6  # the keys' own times: no neighbour lies this close
+        gap = 1.0
+        top = max([max(times)] + [last + offset for offset, _r, _f, last in plans])
+        free = top + gap
+        parked = []
+        for offset, _range, first, last in plans:
+            # A whole-frame lift: the round trip adds no float noise to a
+            # whole-frame key.
+            lift = float(math.ceil(free - first))
+            cls._shift_curves(
+                [crv], lift, (first - pad, last + pad), on_replace, on_move
+            )
+            parked.append((offset - lift, first + lift, last + lift))
+            free = last + lift + gap
+        for land, first, last in parked:
+            cls._shift_curves(
+                [crv], land, (first - pad, last + pad), on_replace, on_move
+            )
 
     @classmethod
     def _align_selected_keyframes(

@@ -24,7 +24,8 @@ Host protocol (the panel controller): ``ui.tbl_steps``, ``sb``, ``logger``,
 ``_populate_table()``,
 ``_save_tree_state()`` / ``_restore_tree_state()``, ``_refresh_ranges()``,
 ``_apply_assessment()``, ``_last_results``, ``_reassess_soon()``,
-``_update_build_button()`` and ``_set_footer()``.
+``_hide_missing`` / ``_set_hide_missing()``, ``_update_build_button()``,
+``_record_sheet_options()`` and ``_set_footer()``.
 
 A locked step (its shot locked: final) takes no edit until it is unlocked; a
 shot's member shown under its step (origin ``"member"``) is the scene's, never
@@ -171,28 +172,27 @@ class ManifestEditor:
 
     @property
     def source_key(self) -> str:
-        """The key this source's edits are saved under: the sheet's path, or
-        ``""`` for the scene's own shots and detected steps."""
-        return self.host._csv_path if self.host._source == "csv" else ""
+        """The source the edits belong to: the sheet's path, or ``""`` for
+        the scene's own shots and detected steps.  Its layer is found by
+        ``ManifestEdits.layer_key`` (the path, else the file name)."""
+        return self.host._loaded_sheet()
 
     def load(self) -> None:
-        """Read the current source's edits from the scene."""
-        store = self.host._active_store()
-        data = store.manifest_edits.get(self.source_key) if store is not None else None
-        self.edits = ptk.ManifestEdits.from_dict(data)
+        """Read the current source's edits from the scene -- a sheet moved
+        or opened through another mount finds its layer by file name."""
+        self.edits = ptk.ManifestEdits.read(self.host._active_store(), self.source_key)
         self._sync_header()
 
     def save(self) -> None:
-        """Write the current source's edits to the scene."""
+        """Write the current source's edits to the scene, under the sheet's
+        path as it is now (``ManifestEdits.write`` re-keys a moved one), and
+        how the sheet was read with them: their keys are its object names as
+        that read spells them (``_record_sheet_options``)."""
         store = self.host._active_store()
         if store is None:
             return
-        key = self.source_key
-        if self.edits.has_edits:
-            store.manifest_edits[key] = self.edits.to_dict()
-        elif store.manifest_edits.pop(key, None) is None:
-            return  # nothing saved, nothing to drop
-        store.mark_dirty()
+        if self.edits.write(store, self.source_key) and self.source_key:
+            self.host._record_sheet_options(store)
 
     def apply(self, steps: List[ptk.BuilderStep]) -> List[ptk.BuilderStep]:
         """*steps* with the edits applied -- as delivered while the original
@@ -218,26 +218,26 @@ class ManifestEditor:
 
     def _commit(self, footer: str = "", then: Optional[Callable] = None) -> None:
         """Save the edits; redraw on the next event-loop turn (an edit commits
-        from inside the tree's own signal), then run *then*."""
+        from inside the tree's own signal), then run *then*.  A showing
+        assessment is run again once the edits settle -- it judged the steps
+        before the edit, and is what says whether Build has work -- with
+        *footer* leading its summary."""
         from qtpy.QtCore import QTimer
 
         self.save()
         self._sync_header()
 
         def _redraw():
+            host = self.host
             self.refresh()
-            self._mark_edited()
             if footer:
-                self.host._set_footer(footer)
+                host._set_footer(footer)
+            if host._last_results:
+                host._reassess_soon(note=footer)
             if then is not None:
                 then()
 
         QTimer.singleShot(0, _redraw)
-
-    def _mark_edited(self) -> None:
-        """A Build would now change something the last Assess did not see."""
-        self.host._edited_since_assess = True
-        self.host._update_build_button()
 
     def _refuse(self, problem: str) -> None:
         """Say why an edit was not taken, and redraw the cell as it was."""
@@ -468,17 +468,7 @@ class ManifestEditor:
 
     def _step_actions(self, menu, step, selected: List[str]) -> None:
         name = step.shot_name
-        built = self.host._pairing().shots
-        hideable = [s for s in selected if s not in built]
-        if len(selected) > 1:
-            act = menu.addAction(
-                f"Hide {len(hideable)} Steps", lambda: self.hide_steps(hideable)
-            )
-        else:
-            act = menu.addAction(f"Hide '{name}'", lambda: self.hide_steps(hideable))
-        if not hideable:
-            act.setEnabled(False)
-            act.setToolTip("A built step stays: Build never removes a shot.")
+        self._hide_flyout(menu, step, selected)
         if self.edits.is_added(step.step_id):
             menu.addAction(f"Remove '{name}'", lambda: self.remove_step(step))
         if self.edits.step_record(step.step_id):
@@ -494,6 +484,53 @@ class ManifestEditor:
                     label,
                     lambda h=home, n=sheet_name: self.hide_object(h, n, False),
                 )
+
+    def _hide_flyout(self, menu, step, selected: List[str]) -> None:
+        """A step row's Hide flyout: the step, the selected steps, the steps
+        of its section -- Local Edits, the built ones left out (Build never
+        removes a shot) -- and the view's Steps Without a Shot (the header
+        menu's Hide Missing Shots)."""
+        host = self.host
+        built = host._pairing().shots
+        sub = menu.addMenu("Hide")
+        sub.setToolTipsVisible(True)
+
+        def add(label: str, step_ids: List[str], tip: str) -> None:
+            hideable = [s for s in step_ids if s not in built]
+            if len(step_ids) > 1 and len(hideable) < len(step_ids):
+                label = f"{label} ({len(hideable)} not built)"
+            act = sub.addAction(label, lambda: self.hide_steps(hideable))
+            act.setEnabled(bool(hideable))
+            act.setToolTip(
+                tip if hideable else "A built step stays: Build never removes a shot."
+            )
+
+        add(f"'{step.shot_name}'", [step.step_id], "Leave this step out.")
+        if len(selected) > 1:
+            add(
+                f"{len(selected)} Selected Steps",
+                selected,
+                "Leave the selected steps out.",
+            )
+        if step.section:
+            section = [s.step_id for s in host._steps if s.section == step.section]
+            if len(section) > 1:
+                title = f"{step.section}: {step.section_title}".rstrip(": ")
+                add(
+                    f"Section '{title}'",
+                    section,
+                    f"Leave out the {len(section)} steps of section {step.section}.",
+                )
+        sub.addSeparator()
+        act = sub.addAction("Steps Without a Shot")
+        act.setCheckable(True)
+        act.setChecked(host._hide_missing)
+        act.setToolTip(
+            "Hide Missing Shots (header menu): leave out every step that has\n"
+            "no shot, once any step has one. A view, not an edit: Assess and\n"
+            "Build skip them, and turning it off shows them again."
+        )
+        act.toggled.connect(host._set_hide_missing)
 
     def _object_actions(self, menu, step, obj) -> None:
         name = obj.name

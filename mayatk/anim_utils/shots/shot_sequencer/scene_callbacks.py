@@ -3,10 +3,11 @@
 """Maya scene callbacks for the shot sequencer.
 
 Provides :class:`SceneCallbacksMixin` -- mixed into
-:class:`~.shot_sequencer_controller.ShotSequencerController`. OpenMaya
-undo/redo, anim-curve-edited and DG time-change callbacks: new keys join the
-active shot (and grow it, when that option is on) through a debounced refresh,
-and the playhead follows Maya's time.
+:class:`~.shot_sequencer_controller.ShotSequencerController`. A redraw after
+the shot store followed Maya's undo/redo, and OpenMaya anim-curve-edited and DG
+time-change callbacks: new keys join the active shot (and grow it, when that
+option is on) through a debounced refresh, and the playhead follows Maya's
+time.
 """
 
 from qtpy import QtCore
@@ -24,31 +25,25 @@ except ImportError:
 class SceneCallbacksMixin:
     """Scene event hooks: undo/redo, key edits and time changes refresh the widget."""
 
-    # ---- Maya undo/redo event callbacks ----------------------------------
+    # ---- Maya undo/redo: the store follows, the panel redraws ------------
 
     def _register_maya_undo_callbacks(self) -> None:
-        """Listen for Maya Undo/Redo events to refresh the widget.
+        """Redraw after Maya's own undo / redo (:meth:`_on_native_step`).
 
-        Registered through ``ScriptJobManager`` so all callbacks tear down
-        through a single ``unsubscribe_all(owner=self)`` path.
+        The STORE follows every native undo and redo -- applying the restore
+        point of the shot edit it took back -- with this panel open or not
+        (``ShotStore.follow_native_step``, subscribed by
+        ``ShotStore.active()``).  When this listener applied it, an edit made
+        with no Sequencer this session was undone in its keys and kept in its
+        shots.  The panel only hears that the store did
+        (``ShotStore.add_native_step_listener``); idempotent.
         """
-        if om2 is None or self._undo_callback_ids:
+        if self._native_step_bound:
             return
-        from mayatk.core_utils.script_job_manager import ScriptJobManager
+        from mayatk.anim_utils.shots._shots import ShotStore
 
-        mgr = ScriptJobManager.instance()
-        for event_name, handler in (
-            ("Undo", self._on_maya_undo),
-            ("Redo", self._on_maya_redo),
-        ):
-            token = mgr.add_om_callback(
-                om2.MEventMessage.addEventCallback,
-                event_name,
-                handler,
-                owner=self,
-            )
-            if token is not None:
-                self._undo_callback_ids.append(token)
+        ShotStore.add_native_step_listener(self._on_native_step)
+        self._native_step_bound = True
 
     def remove_callbacks(self) -> None:
         """Remove Maya event callbacks and ShotStore listener (call on teardown).
@@ -60,10 +55,11 @@ class SceneCallbacksMixin:
         from mayatk.anim_utils.shots._shots import ShotStore
 
         ShotStore.remove_invalidation_listener(self._on_store_invalidated)
+        ShotStore.remove_native_step_listener(self._on_native_step)
+        self._native_step_bound = False
         from mayatk.core_utils.script_job_manager import ScriptJobManager
 
         ScriptJobManager.instance().unsubscribe_all(self)
-        self._undo_callback_ids.clear()
         self._time_change_cb = None
         self._keyframe_cb = None
         self._anim_curve_cb = None
@@ -75,53 +71,23 @@ class SceneCallbacksMixin:
                 pass  # timer's C++ object died with the closing panel
             self._keyframe_debounce = None
 
-    def _on_maya_undo(self, *_args) -> None:
-        """Restore the last shot-state snapshot when Maya's undo fires.
+    def _on_native_step(self, event) -> None:
+        """The store followed a Maya undo or redo: redraw once, if it put a
+        shot edit's restore point back (``event.applied``).
 
-        Only when that undo was OURS: Maya fires this for every undo in the
-        session, and consuming a restore point for someone else's edit would
-        silently revert a boundary change the user never undid.  Maya has
-        already popped the entry by the time this runs, so the pairing is
-        read from the state the edit recorded (see :meth:`_undo_plan`).
+        Only then: Maya fires its Undo/Redo for every undo in the session,
+        and an unrelated one's keys reach the panel through the keyframe
+        callback.  The store's own events during the restore are skipped
+        (:meth:`_on_store_event`), so a Ctrl+Z is one rebuild -- and this one
+        also refreshes the dropdown, which lists the shots in order and paints
+        their bounds: an undone reorder left it showing the order that had
+        just been undone.  Only for the store this panel shows: a panel left
+        behind by a scene swap or a module reload must not redraw for it.
         """
-        if self._syncing:
+        if self._syncing or not event.applied:
             return
-        if not self._native_event_is_ours():
-            return  # the user undid something else — leave our ledger alone
-        # Guard the restore: its batch_update exit fires BatchComplete,
-        # and an unguarded _on_store_event would do a full rebuild on
-        # top of the explicit sync below (two rebuilds per Ctrl+Z).
-        self._syncing = True
-        try:
-            self._restore_shot_state()
-        finally:
-            self._syncing = False
-        # The dropdown lists the shots in order and paints their bounds, so
-        # it goes as stale as the timeline does -- an undone reorder left it
-        # showing the order that had just been undone.
-        self._after_shot_change()
-
-    def _on_maya_redo(self, *_args) -> None:
-        """Re-apply the redo-side boundary snapshot when Maya's redo fires.
-
-        The undo side must NOT be popped here — that would consume a
-        restore point for an operation that was just RE-applied.  The
-        ledger's redo direction re-applies the bounds the matching undo
-        stepped back from, so keys and bounds stay paired through
-        undo→redo cycles.
-        """
-        if self._syncing:
+        if event.store is not getattr(self._sequencer, "store", None):
             return
-        if not self._native_event_is_ours(redo=True):
-            return  # the user redid something else — leave our ledger alone
-        self._syncing = True
-        try:
-            self._redo_shot_state()
-        finally:
-            self._syncing = False
-        # The dropdown lists the shots in order and paints their bounds, so
-        # it goes as stale as the timeline does -- an undone reorder left it
-        # showing the order that had just been undone.
         self._after_shot_change()
 
     # ---- Maya keyframe-edited callback ------------------------------------
@@ -163,9 +129,21 @@ class SceneCallbacksMixin:
         *curves* is an ``MObjectArray`` of the edited animCurve nodes.  The
         names are banked for :meth:`_on_keyframe_debounce_fire`; the actual
         refresh stays on the keyframe callback's debounce so a burst of
-        edits still costs one rebuild.
+        edits still costs one rebuild.  Nothing is banked inside a transient
+        edit (``ShotStore.transient_edit``: an export or a bridge send, which
+        puts the scene back) -- its keys are no shot's -- and the keyframe
+        callback Maya batches to the next idle, after the edit has closed,
+        is marked as its echo (``_transient_echo``, read there).
         """
+        import pythontk as ptk
+
         if self._syncing or om2 is None:
+            return
+        transient = ptk.ShotStore.in_transient_edit()
+        # This callback fires on the edit itself, so the latest one says whose
+        # keys the next idle's keyframe callback reports.
+        self._transient_echo = transient
+        if transient:
             return
         if len(self._edited_curves) > self._EDITED_CURVE_CAP:
             return  # already over the cap — the refresh will scan instead
@@ -179,9 +157,21 @@ class SceneCallbacksMixin:
         """Schedule a debounced refresh when keyframes change.
 
         Skipped during playback (keys aren't meaningfully added during
-        playback) and when the controller is already syncing.
+        playback), when the controller is already syncing, and for a
+        transient edit's keys (``ShotStore.transient_edit``: an export's own
+        key edits, put back after its write, join and grow no shot).  Maya
+        reports those at the next idle, after the edit has closed: armed then,
+        with nothing banked the refresh fell back to the SELECTION and took a
+        selected keyed non-member in (measured in a fresh GUI Maya,
+        2026-10-11) -- so the echo :meth:`_on_anim_curve_edited` marked arms
+        nothing, once.
         """
-        if self._syncing:
+        import pythontk as ptk
+
+        if self._syncing or ptk.ShotStore.in_transient_edit():
+            return
+        if getattr(self, "_transient_echo", False):
+            self._transient_echo = False
             return
         # Skip during playback — avoid stalling the viewport
         try:
@@ -319,8 +309,9 @@ class SceneCallbacksMixin:
         ]
         if not new_objects:
             return False
-        merged = sorted(existing | set(new_objects))
-        self.sequencer.store.update_shot(shot_id, objects=merged)
+        # The system's own addition, not a hand edit: the manifest's
+        # edited_by_hand reads past it (ShotStore.SYSTEM_MEMBERS).
+        self.sequencer.store.add_system_members(shot_id, new_objects)
         return True
 
     # ---- Maya time-change callback ----------------------------------------

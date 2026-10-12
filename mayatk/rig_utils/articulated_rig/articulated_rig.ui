@@ -13,6 +13,9 @@
   <property name="windowTitle">
    <string>Articulated Rig</string>
   </property>
+  <property name="accessibleDescription">
+   <string>Rig rigid-part props on hinge, swivel, ball and slide joints, like a desk lamp.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <layout class="QVBoxLayout" name="verticalLayout_main">
     <property name="spacing">

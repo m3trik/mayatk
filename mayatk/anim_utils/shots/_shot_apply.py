@@ -258,21 +258,26 @@ class _ShotApplyInternal(object):
         window = (lo + _ENVELOPE_SLOP, hi - _ENVELOPE_SLOP)
         if window[1] <= window[0]:
             return 0, 0
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
         moved = declined = 0
-        for crv in curves:
-            if not cmds.keyframe(crv, q=True, time=window):
-                continue
-            if scale <= 0.0:
-                declined += 1
-                continue
-            try:
-                with _ShotApplyInternal._claims_follow(
-                    ledger, [crv], window, lambda t: lo + (t - lo) * scale
-                ):
-                    cmds.scaleKey(crv, time=window, timePivot=lo, timeScale=scale)
-            except RuntimeError:
-                continue  # locked or referenced curve — leave it as it was
-            moved += 1
+        # Where the claims say: GUI Maya rounds a scaled key to a whole frame,
+        # a gap's keys onto its bounds (AnimUtils._exact_scale).
+        with AnimUtils._exact_scale():
+            for crv in curves:
+                if not cmds.keyframe(crv, q=True, time=window):
+                    continue
+                if scale <= 0.0:
+                    declined += 1
+                    continue
+                try:
+                    with _ShotApplyInternal._claims_follow(
+                        ledger, [crv], window, lambda t: lo + (t - lo) * scale
+                    ):
+                        cmds.scaleKey(crv, time=window, timePivot=lo, timeScale=scale)
+                except RuntimeError:
+                    continue  # locked or referenced curve — leave it as it was
+                moved += 1
         return moved, declined
 
     @staticmethod

@@ -10,6 +10,9 @@
     <height>370</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Generate shots from animation and edit their names, ranges and gaps.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">
