@@ -26,7 +26,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/_shots.py`](#anim_utils--shots--_shots) — Maya shot-store adapter — the DCC layer over ``pythontk``'s shots engine.
 - [`anim_utils/shots/shot_manifest/_shot_manifest.py`](#anim_utils--shots--shot_manifest--_shot_manifest) — Maya Shot Manifest adapter — the DCC layer over pythontk's manifest engine.
 - [`anim_utils/shots/shot_manifest/behaviors/_behaviors.py`](#anim_utils--shots--shot_manifest--behaviors--_behaviors) — Behaviors — Maya appliers over the engine's pure keying-recipe core.
-- [`anim_utils/shots/shot_manifest/export_menu.py`](#anim_utils--shots--shot_manifest--export_menu) — The Shot Manifest's Export button (beside Assess) and its option menu: the
+- [`anim_utils/shots/shot_manifest/export_preview.py`](#anim_utils--shots--shot_manifest--export_preview) — The Shot Manifest's Export button (beside Assess): a live preview of the
 - [`anim_utils/shots/shot_manifest/header_menu.py`](#anim_utils--shots--shot_manifest--header_menu) — The Shot Manifest's header menu: display options (Long Names, Hide Missing
 - [`anim_utils/shots/shot_manifest/manifest_data.py`](#anim_utils--shots--shot_manifest--manifest_data) — Constants, column layout, and pure helper functions for the Shot Manifest UI.
 - [`anim_utils/shots/shot_manifest/manifest_editor.py`](#anim_utils--shots--shot_manifest--manifest_editor) — Local Edits for the Shot Manifest panel: change the table, never the sheet.
@@ -44,6 +44,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/shot_sequencer/clip_menu.py`](#anim_utils--shots--shot_sequencer--clip_menu) — Clip context menus and clip-level key operations.
 - [`anim_utils/shots/shot_sequencer/clip_motion.py`](#anim_utils--shots--shot_sequencer--clip_motion) — Clip motion, resize, and key-scaling logic for the shot sequencer.
 - [`anim_utils/shots/shot_sequencer/gap_manager.py`](#anim_utils--shots--shot_sequencer--gap_manager) — Gap and range-highlight handlers for the shot sequencer controller.
+- [`anim_utils/shots/shot_sequencer/graph_sync.py`](#anim_utils--shots--shot_sequencer--graph_sync) — Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
 - [`anim_utils/shots/shot_sequencer/key_menu.py`](#anim_utils--shots--shot_sequencer--key_menu) — Key context menus and key-selection edits.
 - [`anim_utils/shots/shot_sequencer/marker_manager.py`](#anim_utils--shots--shot_sequencer--marker_manager) — Marker persistence for the shot sequencer controller.
 - [`anim_utils/shots/shot_sequencer/scene_callbacks.py`](#anim_utils--shots--shot_sequencer--scene_callbacks) — Maya scene callbacks for the shot sequencer.
@@ -294,6 +295,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
   - `AnimUtils.has_keyframes(sources: Union[str, List[str]]) -> bool` *(static)* — Whether *sources* (objects or curves) carry any key at all.
   - `AnimUtils.keyframe_range(sources: Union[str, List[str]]) -> Optional[Tuple[float, float]]` *(static)* — ``(first, last)`` key time over *sources*, or ``None`` with no keys.
   - `AnimUtils.curve_key_spans(curves: List[str], windows: Sequence[Tuple[Optional[float], Optional[float]]]) -> List[Optional[Tuple[float, float]]]` *(static)* — Per window, the first and last key time over *curves* inside it.
+  - `AnimUtils.get_key_curves(curves: List[str]) -> List['ptk.KeyCurve']` *(static)* — Read animation curves as host-free :class:`pythontk.KeyCurve` s.
   - `AnimUtils.get_keyframe_times(sources: Union[str, List[str]], mode: str = 'all', from_curves: Optional[bool] = None, as_range: bool = False, time_range: Optional[Tuple[float, float]] = None) -> Union[List[float], Tuple[float, float], None]` *(static)* — Get keyframe times from objects or curves with flexible filtering options.
   - `AnimUtils.get_driver_animation_range(node: str, driver_type: str = 'auto') -> List[float]` *(static)* — Get keyframe times from a driver node's animation or its targets.
   - `AnimUtils.get_tangent_info(attr_name: str, time: float) -> Dict[str, Any]` *(static)* — Get tangent information (types, angles, weights and lock) for a given attribute at a specific time.
@@ -326,6 +328,8 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
   - `AnimUtils.paste_keys(objects=None, copied_data: Optional[Dict[str, Dict[str, Any]]] = None, target_time=None, match_source: bool = True, refresh_channel_box: bool = True, on_replace: Optional[Callable[[str, List[float]], Any]] = None, **kwargs) -> int` *(static)* — Paste previously copied attribute values as keyframes.
   - `AnimUtils.delete_animation_layer(layer: str, merge_to_base: bool = False) -> bool` *(static)* — Delete an animation layer.
   - `AnimUtils.fit_playback_range(objects=None, padding: float = 0) -> bool` *(static)* — Set the playback range to encompass keyframes on all (or given) scene objects.
+  - `AnimUtils.euler_filter(objects: Union[str, List[str]]) -> List[str]` *(static)* — Unflip rotation curves: Maya's Euler filter, as the Graph Editor's
+  - `AnimUtils.shift_key_values(edits: Dict[str, List[Tuple[float, float]]]) -> int` *(static)* — Offset key VALUES in place: ``{curve: [(time, delta), ...]}``.
   - `AnimUtils.clear_key_selection() -> None` *(static)* — Deselect every key, whatever is or is not selected.
   - `AnimUtils.get_selected_key_times(curves: Optional[List[str]] = None) -> Dict[str, List[float]]` *(static)* — Graph Editor key selection as ``{curve: [times]}``.
   - `AnimUtils.get_timeline_selection() -> Optional[Tuple[float, float]]` *(static)* — The time slider's drag-selected range, or ``None`` when nothing is selected.
@@ -560,7 +564,7 @@ Shot-region detection — Maya scene acquisition over the pure engine math.
 
 Commit resolved :class:`MovePlan`\ s to the Maya scene.
 
-- **[`class ShotApply(_ShotApplyInternal)`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L324)** — ShotApply — module namespace.
+- **[`class ShotApply(_ShotApplyInternal)`](mayatk/mayatk/anim_utils/shots/_shot_apply.py#L329)** — ShotApply — module namespace.
   - `ShotApply.pin_shot_bounds(store: ShotStore, objects: Iterable[str], report: bool = False)` *(static)* — Give every shot a key on both of its bounds, changing nothing.
   - `ShotApply.retime_gaps(retimes: Iterable[Any], objects: Iterable[str], after_move: bool, ledger: Optional[Any] = None) -> int` *(static)* — Scale each gap's content into the width the plan gives that gap.
   - `ShotApply.apply(store: ShotStore, plan: MovePlan, progress_callback: Optional[Callable[[int, int, str], None]] = None, objects: Optional[Iterable[str]] = None) -> None` *(static)* — Execute ``plan`` against the scene and ``store``.
@@ -614,13 +618,13 @@ Behaviors — Maya appliers over the engine's pure keying-recipe core.
   - `Behaviors.compute_duration(behavior_entries: List[Dict[str, str]], fallback: float = 30, fps: Optional[float] = None) -> float` *(static)* — Derive duration from the behavior templates in *behavior_entries*.
   - `Behaviors.apply_to_shots(shots: list, apply_fn, exists_fn=None, has_keys_fn=None, store=None, resolve_fn=None, conflict_fn=None, release_fn=None, skip_behaviors=()) -> Dict[str, list]` *(static)* — Apply declared behaviors from shot metadata to Maya objects.
 
-<a id="anim_utils--shots--shot_manifest--export_menu"></a>
-### `anim_utils/shots/shot_manifest/export_menu.py`
+<a id="anim_utils--shots--shot_manifest--export_preview"></a>
+### `anim_utils/shots/shot_manifest/export_preview.py`
 
-The Shot Manifest's Export button (beside Assess) and its option menu: the
+The Shot Manifest's Export button (beside Assess): a live preview of the
 
-- **[`class ExportMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/export_menu.py#L24)** — The Export button, mixed into ``ShotManifestController``.
-  - `ExportMenuMixin.export(self) -> None` — Export the manifest's rows the way the option menu says.
+- **[`class ExportPreviewMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/export_preview.py#L25)** — The Export button's preview, mixed into ``ShotManifestController``.
+  - `ExportPreviewMixin.export(self) -> None` — Open the preview of the export (or bring the open one up): its
 
 <a id="anim_utils--shots--shot_manifest--header_menu"></a>
 ### `anim_utils/shots/shot_manifest/header_menu.py`
@@ -634,36 +638,36 @@ The Shot Manifest's header menu: display options (Long Names, Hide Missing
 
 Constants, column layout, and pure helper functions for the Shot Manifest UI.
 
-- [`SETTINGS_NS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L20) — constant
-- [`HEADERS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L23) — constant
-- [`COL_STEP`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L26) — constant
-- [`COL_SECTION`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L27) — constant
-- [`COL_DESC`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L28) — constant
-- [`COL_BEHAVIORS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L29) — constant
-- [`COL_START`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L30) — constant
-- [`COL_END`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L31) — constant
-- [`STEP_ICON_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L33) — constant
-- [`PASTEL_STATUS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L36) — constant
-- [`BEHAVIOR_STATUS_COLORS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L40) — constant
-- [`ERROR_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L47) — constant
-- **[`class ManifestData`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L50)** — ManifestData — module namespace.
-  - `ManifestData.fmt_behavior(name: str) -> str` *(static)* — ``'fade_in'`` → ``'Fade In'``.
-  - `ManifestData.format_behavior_html(behaviors, broken=(), status_color=None, stale=(), disabled=()) -> str` *(static)* — Return rich-text HTML for a list of behavior names.
+- [`SETTINGS_NS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L23) — constant
+- [`HEADERS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L26) — constant
+- [`COL_STEP`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L29) — constant
+- [`COL_SECTION`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L30) — constant
+- [`COL_DESC`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L31) — constant
+- [`COL_BEHAVIORS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L32) — constant
+- [`COL_START`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L33) — constant
+- [`COL_END`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L34) — constant
+- [`STEP_ICON_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L36) — constant
+- [`PASTEL_STATUS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L39) — constant
+- [`BEHAVIOR_STATUS_COLORS`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L43) — constant
+- [`ERROR_COLOR`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L50) — constant
+- **[`class ManifestData`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_data.py#L53)** — ManifestData — module namespace.
+  - `ManifestData.fmt_behavior(name: str) -> str` *(static)* — ``'fade_in'`` → ``'Fade In'`` (``Behaviors.label``: the marker
+  - `ManifestData.format_behavior_html(behaviors, broken=(), status_color=None, stale=(), disabled=(), marked=()) -> str` *(static)* — Return rich-text HTML for a list of behavior names.
 
 <a id="anim_utils--shots--shot_manifest--manifest_editor"></a>
 ### `anim_utils/shots/shot_manifest/manifest_editor.py`
 
 Local Edits for the Shot Manifest panel: change the table, never the sheet.
 
-- **[`class ManifestEditor`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_editor.py#L41)** — One panel's Local Edits: its edit layer, its cell editors, and the
+- **[`class ManifestEditor`](mayatk/mayatk/anim_utils/shots/shot_manifest/manifest_editor.py#L42)** — One panel's Local Edits: its edit layer, its cell editors, and the
   - `ManifestEditor.enabled(self) -> bool` *(property)* — Whether the edits are in force -- applied and editable: always,
   - `ManifestEditor.add_header_options(self, menu) -> None` — Add View Original Sheet and Reset Local Edits to *menu*.
   - `ManifestEditor.view_original(self, on: bool = True) -> None` — Show the sheet as delivered (*on*), or the manifest with its edits.
   - `ManifestEditor.refuse_viewing(self, to: str = 'edit') -> bool` — Say so and return ``True`` while the original sheet is viewed:
   - `ManifestEditor.reset(self, confirm: bool = True) -> None` — Drop every edit of the current source, after asking.
-  - `ManifestEditor.source_key(self) -> str` *(property)* — The key this source's edits are saved under: the sheet's path, or
-  - `ManifestEditor.load(self) -> None` — Read the current source's edits from the scene.
-  - `ManifestEditor.save(self) -> None` — Write the current source's edits to the scene.
+  - `ManifestEditor.source_key(self) -> str` *(property)* — The source the edits belong to: the sheet's path, or ``""`` for
+  - `ManifestEditor.load(self) -> None` — Read the current source's edits from the scene -- a sheet moved
+  - `ManifestEditor.save(self) -> None` — Write the current source's edits to the scene, under the sheet's
   - `ManifestEditor.apply(self, steps: List[ptk.BuilderStep]) -> List[ptk.BuilderStep]` — *steps* with the edits applied -- as delivered while the original
   - `ManifestEditor.stale(self) -> List[str]` — The edits the loaded sheet gives no place to (``ManifestEdits.stale``).
   - `ManifestEditor.refresh(self) -> None` — Re-apply the edits to the loaded steps and redraw the table.
@@ -741,9 +745,9 @@ The Shot Manifest rows' context menus and what they do: a step row's (colour
 
 The Shot Manifest panel's controller: its state, the steps the table shows,
 
-- **[`class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportMenuMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_controller.py#L39)** — Business logic for the Shot Manifest UI (see the module docstring).
+- **[`class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportPreviewMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_manifest/shot_manifest_controller.py#L40)** — Business logic for the Shot Manifest UI (see the module docstring).
   - `ShotManifestController.build(self) -> None` — Build or update shots in the store from loaded steps.
-  - `ShotManifestController.assess(self, skip_key_check: bool = False) -> None` — Compare the steps against the scene's shots and colour the tree.
+  - `ShotManifestController.assess(self, skip_key_check: bool = False, note: str = '') -> None` — Compare the steps against the scene's shots and colour the tree.
 
 <a id="anim_utils--shots--shot_manifest--shot_manifest_slots"></a>
 ### `anim_utils/shots/shot_manifest/shot_manifest_slots.py`
@@ -764,7 +768,7 @@ Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
 
 The Shot Manifest panel following the scene's store: its events (a shot
 
-- **[`class StoreFollowMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/store_follow.py#L27)** — Store events and scene swaps, mixed into ``ShotManifestController``.
+- **[`class StoreFollowMixin`](mayatk/mayatk/anim_utils/shots/shot_manifest/store_follow.py#L28)** — Store events and scene swaps, mixed into ``ShotManifestController``.
   - `StoreFollowMixin.remove_callbacks(self) -> None` — Remove the ShotStore listener and the invalidation subscription,
 
 <a id="anim_utils--shots--shot_manifest--table_presenter"></a>
@@ -781,7 +785,7 @@ The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
 
 Shot Sequencer — manages per-shot animation with ripple editing.
 
-- **[`class ShotSequencer(pythontk.ShotSequencer)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L72)** — Manages a :class:`ShotStore` and provides ripple editing and
+- **[`class ShotSequencer(pythontk.ShotSequencer)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/_shot_sequencer.py#L62)** — Manages a :class:`ShotStore` and provides ripple editing and
   - `ShotSequencer.reconcile_all_shots(self) -> bool` — Point every name the store holds an object by at the node it is now.
   - `ShotSequencer.collect_object_segments(self, shot_id: int, ignore: Optional[str] = None, motion_rate: float = 0.001, ignore_holds: bool = True) -> List[Dict[str, Any]]` — Collect per-object animation segments within a shot's range.
   - `ShotSequencer.detect_shots(self, objects: Optional[List[str]] = None, gap_threshold: float = 5.0, ignore: Optional[str] = None, motion_rate: float = 0.001, min_duration: float = 2.0) -> List[Dict[str, Any]]` — Detect shot boundaries from existing animation on *objects*.
@@ -789,7 +793,7 @@ Shot Sequencer — manages per-shot animation with ripple editing.
   - `ShotSequencer.copy_attribute_keys(self, obj: str, attr: Optional[str], delta: float, times: Optional[List[float]] = None, window: Optional[tuple] = None) -> int` — Copy keys of *obj* *delta* frames on -- one attribute's, or all --
   - `ShotSequencer.move_curve_keys(cls, crv: str, times: list, delta: float, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None` *(class)* — Shift the keys of *crv* at *times* by *delta*, tangents intact.
   - `ShotSequencer.recreate_curve_keys(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None` *(class)* — Cut the keys named by *pairs* and rebuild them at their new times.
-  - `ShotSequencer.scale_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Scale (and optionally shift) keyframes of *obj* from
+  - `ShotSequencer.scale_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float, _scaled: Optional[set] = None) -> None` — Scale (and optionally shift) keyframes of *obj* from
   - `ShotSequencer.scale_shot_keys(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Retime every key inside ``[old_start, old_end]`` into the new span.
 
 <a id="anim_utils--shots--shot_sequencer--clip_menu"></a>
@@ -809,7 +813,7 @@ Clip motion, resize, and key-scaling logic for the shot sequencer.
 - [`curves_for_attr(obj_name: str, attr_name: str) -> list`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L38) — Return anim curves connected to a specific attribute on an object.
 - [`scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L49) — Scale only the curves driving *attr_name* on *obj_name*.
 - [`FLOAT_ZERO_EPS`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L28) — constant
-- **[`class ClipMotionMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L101)** — Mixin supplying clip move, resize, and batch-move handlers.
+- **[`class ClipMotionMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L103)** — Mixin supplying clip move, resize, and batch-move handlers.
   - `ClipMotionMixin.on_clip_resized(self, clip_id: int, new_start: float, new_duration: float) -> None` — Handle one clip's edge drag — see :meth:`_commit_clip_resizes`.
   - `ClipMotionMixin.on_clips_batch_resized(self, resizes) -> None` — Handle an edge drag that scaled a SELECTION of clips as one unit.
   - `ClipMotionMixin.on_clip_moved(self, clip_id: int, new_start: float) -> None` — Handle clip move — routes to audio or shot-level logic.
@@ -833,22 +837,44 @@ Gap and range-highlight handlers for the shot sequencer controller.
   - `GapManagerMixin.on_gap_lock_all(self) -> None` — Lock all gaps so they are preserved during respace.
   - `GapManagerMixin.on_gap_unlock_all(self) -> None` — Unlock all gaps so they follow the global gap value.
 
+<a id="anim_utils--shots--shot_sequencer--graph_sync"></a>
+### `anim_utils/shots/shot_sequencer/graph_sync.py`
+
+Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
+
+- **[`class GraphSync`](mayatk/mayatk/anim_utils/shots/shot_sequencer/graph_sync.py#L39)** — Feeds the sequencer's graph editor and commits its edits (module docstring).
+  - `GraphSync.detach(self) -> None` — Disconnect everything (a panel re-init builds a new one).
+  - `GraphSync.sync(self, full: bool = False) -> None` — Bring the graph in line with the scene.
+  - `GraphSync.outline(self) -> List[dict]` — The visible shots' objects keyed inside their window, and their curves.
+  - `GraphSync.on_keys_edited(self, edits) -> None` — Commit a move / scale / typed stat: ``[(curve, [(t, dt, dv), ...])]``.
+  - `GraphSync.on_tangents_edited(self, rows) -> None` — Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``.
+  - `GraphSync.on_keys_deleted(self, groups) -> None` — Cut keys: ``[(curve, [time, ...])]``;
+  - `GraphSync.on_keys_inserted(self, items) -> None` — Key ``[(curve, time), ...]`` without changing the curves' shape.
+  - `GraphSync.on_tangent_type(self, type_id: str, groups) -> None` — Set tangent type *type_id* on ``[(curve, [times])]`` *groups* (an
+  - `GraphSync.on_tangents_broken(self, broken: bool, groups) -> None` — Break (or unify) the tangents of ``[(curve, [times])]`` *groups*.
+  - `GraphSync.on_weighted(self, weighted: bool, curves) -> None` — Make *curves* weighted-tangent curves, or not.
+  - `GraphSync.on_infinity(self, side: str, mode: str, curves) -> None` — Set *curves*' ``pre`` / ``post`` (else both) infinity to *mode*,
+  - `GraphSync.key_targets(self, groups=None) -> list` — ``[(obj, attr, [times], shot_id), ...]`` for the graph's key
+  - `GraphSync.on_key_menu(self, menu, groups) -> None` — The track view's key edits and Move / Copy to Shot, on the graph's
+  - `GraphSync.on_key_selection(self, groups) -> None` — Mirror the graph's key selection into Maya's (not an undo step).
+
 <a id="anim_utils--shots--shot_sequencer--key_menu"></a>
 ### `anim_utils/shots/shot_sequencer/key_menu.py`
 
 Key context menus and key-selection edits.
 
-- **[`class KeyMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/key_menu.py#L22)** — Key context menus, tangent edits and drags, and the key-selection edits.
+- **[`class KeyMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/key_menu.py#L24)** — Key context menus, tangent edits and drags, and the key-selection edits.
   - `KeyMenuMixin.on_key_menu(self, menu, key_groups: list) -> None` — Add the key actions to a key's context menu.
   - `KeyMenuMixin.tangent_from_handle(side: str, dt: float, dv: float) -> tuple` *(static)* — ``(angle_degrees, weight)`` of the tangent a dragged handle stands for.
   - `KeyMenuMixin.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None` — Write the tangents a dragged handle asks for on the keys' curves.
+  - `KeyMenuMixin.register_key_targets(self, editor_name: str, source) -> None` — Resolve the key shortcuts' targets through *source* while the
 
 <a id="anim_utils--shots--shot_sequencer--marker_manager"></a>
 ### `anim_utils/shots/shot_sequencer/marker_manager.py`
 
 Marker persistence for the shot sequencer controller.
 
-- **[`class MarkerManagerMixin(_MarkerManagerMixinInternal)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/marker_manager.py#L33)** — Mixin supplying marker CRUD persistence.
+- **[`class MarkerManagerMixin(_MarkerManagerMixinInternal)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/marker_manager.py#L40)** — Mixin supplying marker CRUD persistence.
   - `MarkerManagerMixin.on_marker_added(self, marker_id: int, time: float) -> None` — Persist a newly added marker.
   - `MarkerManagerMixin.on_marker_moved(self, marker_id: int, new_time: float) -> None` — Update persisted marker time.
   - `MarkerManagerMixin.on_marker_changed(self, marker_id: int) -> None` — Update persisted marker note/color.
@@ -859,7 +885,7 @@ Marker persistence for the shot sequencer controller.
 
 Maya scene callbacks for the shot sequencer.
 
-- **[`class SceneCallbacksMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_callbacks.py#L24)** — Scene event hooks: undo/redo, key edits and time changes refresh the widget.
+- **[`class SceneCallbacksMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_callbacks.py#L25)** — Scene event hooks: undo/redo, key edits and time changes refresh the widget.
   - `SceneCallbacksMixin.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
 
 <a id="anim_utils--shots--shot_sequencer--scene_selection"></a>
@@ -885,12 +911,13 @@ Tracks and the Maya selection.
 
 Segment collection and attribute extraction for the shot sequencer.
 
-- [`KEY_PROXIMITY_EPS`](mayatk/mayatk/anim_utils/shots/shot_sequencer/segment_collector.py#L20) — constant
-- **[`class SegmentCollector`](mayatk/mayatk/anim_utils/shots/shot_sequencer/segment_collector.py#L27)** — SegmentCollector — module namespace.
+- [`KEY_PROXIMITY_EPS`](mayatk/mayatk/anim_utils/shots/shot_sequencer/segment_collector.py#L19) — constant
+- **[`class SegmentCollector`](mayatk/mayatk/anim_utils/shots/shot_sequencer/segment_collector.py#L26)** — SegmentCollector — module namespace.
   - `SegmentCollector.collect_segments(sequencer, shot, visible_shots, segment_cache, shifted_out_keys, logger)` *(static)* — Collect animation segments for visible shots.
   - `SegmentCollector.active_object_set(shot, segments_by_shot) -> set` *(static)* — Return the set of objects that belong to the active shot.
   - `SegmentCollector.extract_attributes(segments) -> list` *(static)* — Extract attribute names from animation curves in the given segments.
-  - `SegmentCollector.build_curve_preview(crv, t_start, t_end, hidden_times=())` *(static)* — Extract Bézier curve shape data for a single anim curve.
+  - `SegmentCollector.summary_times(segments, claimed_times) -> list` *(static)* — Every key time an object row ticks in the flat key style.
+  - `SegmentCollector.build_curve_preview(crv, t_start, t_end, hidden_times=())` *(static)* — Bezier shape data for one anim curve, clipped to ``[t_start, t_end]``.
 
 <a id="anim_utils--shots--shot_sequencer--shot_lane"></a>
 ### `anim_utils/shots/shot_sequencer/shot_lane.py`
@@ -954,7 +981,7 @@ The shot sequencer's undo ledger.
 
 - **[`class UndoLedgerMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/undo_ledger.py#L17)** — Shot-boundary restore points, and how one undo/redo splits between them and the DCC.
   - `UndoLedgerMixin.on_undo(self) -> None` — Handle undo_requested from the widget — delegate to Maya undo.
-  - `UndoLedgerMixin.on_redo(self) -> None` — Handle redo_requested from the widget — delegate to Maya redo.
+  - `UndoLedgerMixin.on_redo(self) -> None` — Handle redo_requested from the widget — delegate to Maya redo
 
 <a id="anim_utils--shots--shot_sequencer--widget_sync"></a>
 ### `anim_utils/shots/shot_sequencer/widget_sync.py`
@@ -2095,13 +2122,13 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
 
 Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 
-- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L77) — constant
-- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L88) — constant
-- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L91) — constant
-- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L101) — constant
-- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L107) — constant
-- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L111) — constant
-- **[`class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L408)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L80) — constant
+- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L91) — constant
+- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L94) — constant
+- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L104) — constant
+- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L110) — constant
+- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L114) — constant
+- **[`class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L411)** — Engine: convert a .blend to FBX via headless Blender, then import it.
   - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
   - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
   - `BlenderSceneImport.find_scenes(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]` *(static)* — Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.
@@ -2145,10 +2172,11 @@ Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
 Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
 
-- [`import_source(cmds)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L84) — Import *SRC_FILE* into the empty standalone scene without mayatk;
-- [`restore_usd_locators(cmds, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L112) — Give point-marker Empties their locator shapes back (USD source): every
-- [`apply_instances()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L133) — Refuse a USD sidecar the child cannot replay (no mayatk): GUARANTEED-OR-FAIL.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L162)
+- [`covering_take(mel, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L84) — ``(index, names)``: the 1-based index of the take whose span covers every
+- [`import_source(cmds)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L110) — Import *SRC_FILE* into the empty standalone scene without mayatk;
+- [`restore_usd_locators(cmds, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L162) — Give point-marker Empties their locator shapes back (USD source): every
+- [`apply_instances()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L183) — Refuse a USD sidecar the child cannot replay (no mayatk): GUARANTEED-OR-FAIL.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L212)
 - [`SRC_FILE`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L46) — constant
 - [`OUT_MA`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L47) — constant
 - [`EXTRA_SYS_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L48) — constant
@@ -2330,7 +2358,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 <a id="env_utils--fbx_utils"></a>
 ### `env_utils/fbx_utils.py`
 
-- **[`class FbxUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L55)** — Low-level utilities for FBX import/export operations in Maya.
+- **[`class FbxUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L56)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
   - `FbxUtils.embed_media_write_cwd()` *(static)* — Yield with the process CWD at the workspace root when the live FBX
   - `FbxUtils.reset_import()` *(static)* — Reset the FBX plugin's global IMPORT options to factory defaults.
@@ -2340,7 +2368,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
   - `FbxUtils.export(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str` *(class)* — Export geometry to an FBX file.
   - `FbxUtils.drop_rig_apparatus(file_path: str, scope: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]` *(static)* — Remove the apparatus of the rigs a written FBX baked, in place.
   - `FbxUtils.embed_dependencies(file_path: str, search_dirs: Optional[Iterable[str]] = None, files: Optional[Iterable[Any]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]` *(static)* — Embed every file a written FBX's scene records name, in place.
-  - `FbxUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True) -> List[str]` *(class)* — Import an FBX file, optionally isolated into a namespace.
+  - `FbxUtils.import_scene(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, *, stash: bool = True, file_options: Optional[Dict[str, Any]] = None, logger: Optional[logging.Logger] = None) -> List[str]` *(class)* — Import an FBX file -- ALL of its animation -- optionally into a namespace.
   - `FbxUtils.set_bake_range_from_scene() -> Tuple[float, float]` *(static)* — Point the bake range at the scene's ANIMATION range.
   - `FbxUtils.baking_enabled() -> bool` *(static)* — Whether the next write will BAKE complex animation.
   - `FbxUtils.export_flag(command: str) -> bool` *(static)* — An ``FBXExport*`` switch's current value, read the one safe way.
@@ -2376,6 +2404,7 @@ Maya-side selection + export hooks shared by the hand-off bridge engines.
 
 - **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L36)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
   - `MayaExportMixin.lightmap_search_dirs(self) -> List[str]` — Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
+  - `MayaExportMixin.stepped_keys(nodes: Optional[List[str]] = None, spell: Optional[Callable] = None) -> Dict[str, Dict[str, List[float]]]` *(static)* — The hand-off manifest's ``stepped_keys`` (``ptk.HandoffManifest.
 
 <a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
@@ -2532,17 +2561,17 @@ Maya Connection Module
   - `FBXImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is an FBX file.
   - `FBXImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import an FBX file isolated into *namespace*.
   - `FBXImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import FBX file into a fresh namespace for analysis.
-- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L107)** — Handles Maya-specific import operations (.ma/.mb files).
+- **[`class MayaImporter`](mayatk/mayatk/env_utils/namespace_sandbox.py#L117)** — Handles Maya-specific import operations (.ma/.mb files).
   - `MayaImporter.is_supported_file(self, file_path: Union[str, Path]) -> bool` — Check if the file is a Maya file (.ma or .mb).
   - `MayaImporter.import_with_namespace(self, source_file: Path, namespace: str, temp_namespace_prefix: str, force_complete_import: bool = False) -> Optional[Dict]` — Import Maya file with namespace - original logic.
   - `MayaImporter.import_for_analysis(self, source_file: Path, namespace: str) -> Optional[List[Any]]` — Import Maya file for analysis purposes.
-- **[`class CameraTracker(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L290)** — Tracks cameras before and after import operations for proper cleanup.
+- **[`class CameraTracker(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L300)** — Tracks cameras before and after import operations for proper cleanup.
   - `CameraTracker.capture_pre_import_state(self)` — Capture camera state before import.
   - `CameraTracker.capture_post_import_state(self)` — Capture camera state after import.
   - `CameraTracker.get_imported_cameras(self, namespace_filter=None)` — Get cameras that were imported (optionally filtered by namespace).
   - `CameraTracker.cleanup_imported_cameras(self, namespace_filter=None, preserve_user_cameras=True)` — Clean up imported cameras with optional preservation of user cameras.
   - `CameraTracker.reset(self)` — Reset tracking state.
-- **[`class NamespaceSandbox(pythontk.LoggingMixin, _NamespaceSandboxInternal)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L452)** — Handles temporary importing and namespace management for Maya scenes.
+- **[`class NamespaceSandbox(pythontk.LoggingMixin, _NamespaceSandboxInternal)`](mayatk/mayatk/env_utils/namespace_sandbox.py#L462)** — Handles temporary importing and namespace management for Maya scenes.
   - `NamespaceSandbox.import_with_namespace(self, source_file: Union[str, Path], namespace_prefix: str = None, force_complete_import: bool = False) -> Optional[Dict]` — Import file and return import information.
   - `NamespaceSandbox.import_for_analysis(self, source_file: Union[str, Path], namespace: str = None) -> Optional[List[Any]]` — Import file into temporary namespace for analysis (dry-run mode).
   - `NamespaceSandbox.get_supported_formats(cls) -> List[str]` *(class)* — Extensions (``.ma``, ``.mb``, ``.fbx``) the importers accept.

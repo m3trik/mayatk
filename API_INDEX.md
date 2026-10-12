@@ -8,7 +8,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/_anim_utils.py` — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
 - constants: STANDARD_TRANSFORM_ATTRS
 - `class AnimUtils(_AnimUtilsInternal, pythontk.HelpMixin)`
-  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
+  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_key_curves, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, euler_filter, shift_key_values, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
 
 ### `anim_utils/_tied_keys.py` — Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
 - constants: TIED_KEYS_ATTR
@@ -98,8 +98,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class Behaviors(pythontk.core_utils.engines.shots.manifest.behaviors.Behaviors, _BehaviorsInternal)`
   - methods: apply_behavior, verify_behavior, apply_audio_clip, compute_duration, apply_to_shots
 
-### `anim_utils/shots/shot_manifest/export_menu.py` — The Shot Manifest's Export button (beside Assess) and its option menu: the
-- `class ExportMenuMixin`
+### `anim_utils/shots/shot_manifest/export_preview.py` — The Shot Manifest's Export button (beside Assess): a live preview of the
+- `class ExportPreviewMixin`
   - methods: export
 
 ### `anim_utils/shots/shot_manifest/header_menu.py` — The Shot Manifest's header menu: display options (Long Names, Hide Missing
@@ -136,7 +136,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class RowMenusMixin`
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_controller.py` — The Shot Manifest panel's controller: its state, the steps the table shows,
-- `class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportMenuMixin, pythontk.LoggingMixin)`
+- `class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportPreviewMixin, pythontk.LoggingMixin)`
   - methods: build, assess
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
@@ -171,9 +171,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GapManagerMixin`
   - methods: on_range_highlight_changed, on_gap_resized, on_gap_left_resized, on_gap_moved, on_gap_lock_changed, on_gap_lock_all, on_gap_unlock_all
 
+### `anim_utils/shots/shot_sequencer/graph_sync.py` — Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
+- `class GraphSync`
+  - methods: detach, sync, outline, on_keys_edited, on_tangents_edited, on_keys_deleted, on_keys_inserted, on_tangent_type, on_tangents_broken, on_weighted, on_infinity, key_targets, on_key_menu, on_key_selection
+
 ### `anim_utils/shots/shot_sequencer/key_menu.py` — Key context menus and key-selection edits.
 - `class KeyMenuMixin`
-  - methods: on_key_menu, tangent_from_handle, on_keys_tangent_dragged
+  - methods: on_key_menu, tangent_from_handle, on_keys_tangent_dragged, register_key_targets
 
 ### `anim_utils/shots/shot_sequencer/marker_manager.py` — Marker persistence for the shot sequencer controller.
 - `class MarkerManagerMixin(_MarkerManagerMixinInternal)`
@@ -190,7 +194,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/shots/shot_sequencer/segment_collector.py` — Segment collection and attribute extraction for the shot sequencer.
 - constants: KEY_PROXIMITY_EPS
 - `class SegmentCollector`
-  - methods: collect_segments, active_object_set, extract_attributes, build_curve_preview
+  - methods: collect_segments, active_object_set, extract_attributes, summary_times, build_curve_preview
 
 ### `anim_utils/shots/shot_sequencer/shot_lane.py` — The shot lane: its context menu and the shot structure edits.
 - `class ShotLaneMixin`
@@ -568,6 +572,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: affix_parts, render_context
 
 ### `env_utils/blender_bridge/templates/_bake_scene.py` — Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
+- `covering_take(mel, path)`
 - `import_source(cmds)`
 - `restore_usd_locators(cmds, new_nodes)`
 - `apply_instances()`
@@ -648,7 +653,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
-  - methods: lightmap_search_dirs
+  - methods: lightmap_search_dirs, stepped_keys
 
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 - constants: MAYA_DEFAULT_CAMERAS

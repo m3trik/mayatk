@@ -290,7 +290,10 @@ class TestApplyTransfer(_TransferCase):
 
     def test_merges_after_existing_shots_unless_told_to_replace(self):
         cube = self._keyed_cube("landed")
-        own = ShotStore.active().define_shot("Own", 30, 60, objects=[cube])
+        scene = ShotStore.active()
+        # The scene's own gap, apart from the section's 4 (and the default).
+        scene.gap = 0.0
+        own = scene.define_shot("Own", 30, 60, objects=[cube])
         section = _section(["landed"])
 
         merged = ShotStore.apply_transfer(section)

@@ -1,9 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
 """The Shot Manifest's header menu: display options (Long Names, Hide Missing
-Shots), Local Edits' View Original Sheet and Reset, the Build options (Rebuild Edited Shots, one
-toggle per behavior), the actions (Expand, Colors, the sibling panels)
-and the panel's help.
+Shots), Local Edits' View Original Sheet and Reset, the Build options (Rebuild
+Edited Shots, a Key / Marker / Off choice per behavior), the actions (Expand,
+Colors, the sibling panels) and the panel's help.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
@@ -24,6 +24,9 @@ class HeaderMenuMixin:
     """
 
     _COLOR_SETTINGS_NS = "ShotManifest/colors"
+    #: What Build does with a behavior type (the header menu's choice per
+    #: type): key it, mark it on the timeline instead, or leave it alone.
+    BEHAVIOR_MODES = (("Key", "key"), ("Marker", "marker"), ("Off", "off"))
 
     def _setup_header_menu(self) -> None:
         """Configure the header option menu.
@@ -41,7 +44,7 @@ class HeaderMenuMixin:
             setToolTip="Show full DAG paths instead of leaf node names.",
         )
         chk_long.toggled.connect(self._on_long_names_toggled)
-        chk_hide = menu.add(
+        self._chk_hide_missing = chk_hide = menu.add(
             "QCheckBox",
             setText="Hide Missing Shots",
             setObjectName="chk_hide_missing",
@@ -111,7 +114,9 @@ class HeaderMenuMixin:
                             "Click <b>Build</b> to create shots with behaviors applied.",
                             "Click <b>Assess</b> to verify completeness.",
                             "The template's options (under its picker in the header "
-                            "menu) adapt it to the sheet: step-ID style, audio, and "
+                            "menu) adapt it to the sheet: step-ID style (Auto reads "
+                            "<code>A01.)</code> and <code>A01</code> / "
+                            "<code>IN_01</code> sheets alike), audio, and "
                             "<b>Auto-fill Missing Assets</b> -- then <b>Export</b> "
                             "hands them, with the rest, to the sheet's owner.",
                         ],
@@ -142,20 +147,22 @@ class HeaderMenuMixin:
                         [
                             "Double-click Start or End to type a frame. Downstream steps re-flow.",
                             "Right-click a range cell: Set Start to Current Frame, Auto-fill from Gaps, Clear Range.",
-                            "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked or edited, normal = valid. While it shows, a shot edit made anywhere runs it again.",
+                            "<b>Assess</b> \u2014 Read-only comparison; red tint = missing, grey = locked or edited, normal = valid. While it shows it stays current: a shot edit made anywhere, a Local Edit, a hide or a sheet read again runs it again.",
                             "<b>Build</b> \u2014 Create or update shots from loaded steps. Locked shots are never modified, "
                             "and neither is a shot edited by hand since its last Build (renamed, resized, its members "
                             "or description changed) unless <b>Rebuild Edited Shots</b> is on in the header menu; "
                             "Assess shows such a step as edited. "
                             "Fades and highlights are keyed from the scene's effect recipe (Render Effects); "
                             "Build re-keys those an older recipe made and removes the keys of behaviors the "
-                            "doc dropped, so it stays enabled while either is pending.",
-                            "<b>Export</b> \u2014 the rows the table shows, or the "
-                            "selected ones, as CSV, JSON or Markdown, to a file or the "
-                            "clipboard: what the table says, Local Edits, frames and "
-                            "status included. Its menu button sets the format, "
-                            "where it goes, the rows, how objects are laid out and the "
-                            "columns. It never writes the loaded sheet.",
+                            "doc dropped, so it stays enabled while either is pending. A behavior type set "
+                            "to <b>Marker</b> is marked on the Shot Sequencer's timeline instead.",
+                            "<b>Export</b> \u2014 a live preview of the export: "
+                            "the rows the table shows, or the selected ones, as CSV, "
+                            "JSON or Markdown -- what the table says, Local Edits, "
+                            "frames and status included. Set the format, rows, object "
+                            "layout and columns beside the text and it updates as you "
+                            "go; then <b>Copy</b> it or <b>Save As</b> a file. It never "
+                            "writes the loaded sheet.",
                             "Right-click a step row: Open in Shot Sequencer or Shots (once built). "
                             "An object row adds Show in "
                             "Outliner, Copy, Apply its behaviors, and Fade / Highlight '...' -- Render "
@@ -188,10 +195,14 @@ class HeaderMenuMixin:
                             "<b>Rebuild Edited Shots</b> \u2014 off: a shot edited by hand "
                             "since its last Build is kept as it is, its behaviors not re-keyed. "
                             "On: Build rebuilds it from the doc like any other.",
-                            "<b>Behaviors</b> \u2014 one toggle per behavior type. A type "
-                            "turned off is neither keyed nor removed by Build and is not "
-                            "reported by Assess; the keys it has stay. Its labels show it struck "
-                            "through.",
+                            "<b>Behaviors</b> \u2014 a Key / Marker / Off choice per "
+                            "behavior type. <b>Key</b>: Build keys it. <b>Marker</b>: Build "
+                            "keys nothing -- it puts a marker on the Shot Sequencer's timeline "
+                            "where the keys would go, naming the objects, for keying by hand; "
+                            "Assess checks the marker is there, and its labels show "
+                            f"{ManifestData.MARKED_GLYPH}. <b>Off</b>: neither keyed nor "
+                            "marked, and not reported by Assess; its labels show it struck "
+                            "through. Marker and Off leave the keys a type already has.",
                             "Both are kept per user, for every scene.",
                         ],
                     ),
@@ -208,10 +219,11 @@ class HeaderMenuMixin:
                             "Double-click a step's name or description, or an object's "
                             "name, to edit it.  An object's name says which scene object "
                             "the step means -- the object itself is never renamed.",
-                            "Right-click: Add Step, Hide / Show Hidden (a built step "
-                            "stays: Build never removes a shot), Move an object to another "
-                            "step, Rename All of one object, Revert.  Behavior ticks are "
-                            "edits too.",
+                            "Right-click: Add Step, Hide (a flyout: the step, the "
+                            "selected steps, its section, or every step without a shot) "
+                            "/ Show Hidden (a built step stays: Build never removes a "
+                            "shot), Move an object to another step, Rename All of one "
+                            "object, Revert.  Behavior ticks are edits too.",
                             "Renaming a built step renames its shot on the next Build -- "
                             "and the clip it exports as.  Edited cells are italic; their "
                             "tooltip shows the sheet's value.  <b>Reset Local Edits</b> "
@@ -229,26 +241,45 @@ class HeaderMenuMixin:
         (``ShotManifest.edited_by_hand``) instead of keeping it."""
         return bool(self._settings.value("rebuild_edited", False))
 
-    def _disabled_behaviors(self) -> frozenset:
-        """The behavior types turned off in the header menu (kept per user).
+    def _behavior_set(self, key: str) -> frozenset:
+        """A behavior-type list the header menu keeps per user
+        (``disabled_behaviors``, ``marked_behaviors``).
 
-        Read once and kept in step by the toggles (:meth:`_set_behavior_enabled`):
-        every behavior label asks, on every table rebuild.
+        Read once and kept in step by :meth:`_set_behavior_mode`: every
+        behavior label asks, on every table rebuild.
         """
-        if self._behaviors_off is None:
-            raw = self._settings.value("disabled_behaviors", [])
-            self._behaviors_off = frozenset(raw if isinstance(raw, list) else ())
-        return self._behaviors_off
+        names = self._behavior_sets.get(key)
+        if names is None:
+            raw = self._settings.value(key, [])
+            names = frozenset(raw if isinstance(raw, list) else ())
+            self._behavior_sets[key] = names
+        return names
+
+    def _disabled_behaviors(self) -> frozenset:
+        """The behavior types set to Off in the header menu."""
+        return self._behavior_set("disabled_behaviors")
+
+    def _marked_behaviors(self) -> frozenset:
+        """The behavior types set to Marker in the header menu: Build marks
+        them on the timeline instead of keying them."""
+        return self._behavior_set("marked_behaviors") - self._disabled_behaviors()
+
+    def _behavior_mode(self, name: str) -> str:
+        """``"key"``, ``"marker"`` or ``"off"``: what Build does with *name*."""
+        if name in self._disabled_behaviors():
+            return "off"
+        return "marker" if name in self._marked_behaviors() else "key"
 
     def _add_build_options(self, menu) -> None:
-        """The header menu's Build options: Rebuild Edited Shots, then one
-        toggle per behavior template.
+        """The header menu's Build options: Rebuild Edited Shots, then a
+        Key / Marker / Off choice per behavior template.
 
-        Global, not per scene: how a build treats a hand's edits and which
-        behaviors it keys are how this user works (2026-10-07: "make sure that
-        the manifest does not override edited shots on re-build by default.
-        this can be a separate global option"; "ability to disable/enable
-        certain behaviors").
+        Global, not per scene: how a build treats a hand's edits and what it
+        does with each behavior are how this user works (2026-10-07: "make
+        sure that the manifest does not override edited shots on re-build by
+        default. this can be a separate global option"; "ability to
+        disable/enable certain behaviors"; 2026-10-11: "a third option ... of
+        adding a marker in the sequencer instead of keying").
         """
         menu.add("Separator", setTitle="Build")
         self._chk_rebuild_edited = menu.add(
@@ -264,37 +295,49 @@ class HeaderMenuMixin:
         )
         self._chk_rebuild_edited.toggled.connect(self._on_rebuild_edited_toggled)
         menu.add("Separator", setTitle="Behaviors")
-        off = self._disabled_behaviors()
-        self._behavior_checks = {}
+        self._behavior_modes = {}
         for name in Behaviors.list_behaviors():
             label = ManifestData.fmt_behavior(name)
-            chk = menu.add(
-                "QCheckBox",
-                setText=label,
-                setChecked=name not in off,
+            cmb = menu.add(
+                "QComboBox",
+                setCurrentTextPrefix=f"{label}:  ",
                 setToolTip=(
-                    f"On: Build keys {label} wherever the doc asks for it.\n"
-                    f"Off: Build neither keys nor removes it, and Assess does not\n"
-                    "report it; the keys it already has stay."
+                    f"Key: Build keys {label} wherever the doc asks for it.\n"
+                    "Marker: Build keys nothing -- it puts a marker on the Shot\n"
+                    "Sequencer's timeline where the keys would go, naming the\n"
+                    "objects, and Assess checks the marker is there.\n"
+                    "Off: Build neither keys nor marks it, and Assess does not\n"
+                    "report it.\n"
+                    "Marker and Off leave the keys it already has."
                 ),
             )
-            chk.toggled.connect(lambda on, n=name: self._set_behavior_enabled(n, on))
-            self._behavior_checks[name] = chk
+            for text, mode in self.BEHAVIOR_MODES:
+                cmb.addItem(text, mode)
+            cmb.setCurrentIndex(cmb.findData(self._behavior_mode(name)))
+            cmb.currentIndexChanged.connect(
+                lambda _i, n=name, c=cmb: self._set_behavior_mode(n, c.currentData())
+            )
+            self._behavior_modes[name] = cmb
 
     def _on_rebuild_edited_toggled(self, checked: bool) -> None:
         """Persist Rebuild Edited Shots; what Build would do changed."""
         self._settings.setValue("rebuild_edited", bool(checked))
         self._build_options_changed()
 
-    def _set_behavior_enabled(self, name: str, enabled: bool) -> None:
-        """Turn the behavior type *name* on or off for Build and Assess."""
-        off = set(self._disabled_behaviors())
-        if enabled:
-            off.discard(name)
-        else:
-            off.add(name)
-        self._settings.setValue("disabled_behaviors", sorted(off))
-        self._behaviors_off = frozenset(off)
+    def _set_behavior_mode(self, name: str, mode: str) -> None:
+        """Set what Build does with the behavior type *name*: ``"key"``,
+        ``"marker"`` or ``"off"`` (Assess follows)."""
+        for key, member in (
+            ("disabled_behaviors", mode == "off"),
+            ("marked_behaviors", mode == "marker"),
+        ):
+            names = set(self._behavior_set(key))
+            if member:
+                names.add(name)
+            else:
+                names.discard(name)
+            self._settings.setValue(key, sorted(names))
+            self._behavior_sets[key] = frozenset(names)
         self._build_options_changed()
 
     def _build_options_changed(self) -> None:
@@ -312,6 +355,15 @@ class HeaderMenuMixin:
         """Persist and apply the long-names display preference."""
         self._settings.setValue("long_names", checked)
         self._redraw()
+
+    def _set_hide_missing(self, on: bool) -> None:
+        """Turn Hide Missing Shots on or off from elsewhere (a step row's Hide
+        flyout): through the header menu's box, which then says so too."""
+        chk = getattr(self, "_chk_hide_missing", None)
+        if chk is None:
+            self._on_hide_missing_toggled(on)
+        elif chk.isChecked() != bool(on):
+            chk.setChecked(bool(on))
 
     def _on_hide_missing_toggled(self, checked: bool) -> None:
         """Persist Hide Missing Shots; a showing assessment is judged again

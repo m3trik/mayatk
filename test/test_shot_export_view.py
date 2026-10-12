@@ -506,6 +506,63 @@ class TestExportRoundTrip(MayaTkTestCase):
         # Kept for its keys; the name it held is no object of this scene's.
         self.assertEqual(meta["shots"][0]["objects"], [])
 
+    def test_a_renamed_hold_member_keeps_its_shot_declared(self):
+        """Bug: a HOLD shot keys nothing in its frames, so only its members
+        say it is live -- and members are stored by name: a rename the store
+        was not told of (the Outliner, panel closed) made it stale and the
+        export left its take out.
+        Fixed: 2026-10-11 -- the store saves each member's node UUID
+        (``member_ids``, additive) and the export finds a renamed member by
+        it, naming it as it is now; the store is not changed.  A UUID that
+        names no node keeps the old behaviour."""
+        keyed = cmds.ls(self.create_test_cube("keyedCube"), long=True)[0]
+        for t, v in ((20, 0), (30, 5)):
+            cmds.setKeyframe(keyed, attribute="translateX", t=t, v=v)
+        hold = cmds.ls(self.create_test_cube("holdCube"), long=True)[0]  # no key
+        store = ShotStore()
+        ShotStore.set_active(store)
+        store.define_shot("Hold", 0, 10, objects=[hold])
+        store.define_shot("Move", 20, 30, objects=[keyed])
+        saved = store.to_dict()  # what a save writes
+        self.assertEqual(saved["member_ids"][hold], cmds.ls(hold, uuid=True)[0])
+
+        cmds.rename(hold, "renamedHold")
+        (record,) = store.export_records()
+        shots = record.payload["shots"]
+        self.assertEqual([s["clip"] for s in shots], ["Hold", "Move"])
+        self.assertEqual(shots[0]["objects"], ["renamedHold"])
+        self.assertEqual(store.shot_by_name("Hold").objects, [hold], "not changed")
+        reopened = ShotStore.from_dict(saved)
+        self.assertEqual(reopened.stale_shots(), [], "found by the saved UUID")
+
+        cmds.delete("renamedHold")  # its UUID names nothing now
+        self.assertEqual([s.name for s in store.stale_shots()], ["Hold"])
+
+    def test_a_scoped_export_lists_only_the_members_it_carries(self):
+        """Bug: the shot record ignored the export set, so a selected or
+        visible-only export listed shot members its file did not carry.
+        Fixed: 2026-10-11 -- ``SceneRecords.SHOTS`` is export-scoped: each
+        clip names the members under the export roots (a short name and a
+        member whose parent was renamed resolved in the scene); every take
+        still ships, and the scene keeps its whole record."""
+        cube, store = self._keyed_shots("inCube")
+        out = cmds.ls(self.create_test_cube("outCube"), long=True)[0]
+        store.update_shot(store.shot_by_name("Intro").shot_id, objects=[cube, out])
+        root = cmds.group(cube, name="exportRoot")
+        cmds.rename(root, "exportRootRenamed")  # the stored path now dangles
+        ctx = ptk.ExportContext(scope=("exportRootRenamed",))
+
+        (record,) = store.export_records(ctx)
+        shots = record.payload["shots"]
+        self.assertEqual([s["clip"] for s in shots], ["Intro", "Outro"])
+        self.assertEqual(shots[0]["objects"], ["inCube"])
+        (whole,) = store.export_records()
+        self.assertEqual(sorted(whole.payload["shots"][0]["objects"]), ["inCube", "outCube"])
+        snap = ptk.ExportSnapshot.assemble(
+            {ptk.SceneRecords.SHOTS: store.export_records}, ctx
+        )
+        self.assertEqual(list(snap.scene_wide), ["shot_metadata"], "kept to restore")
+
     def test_removing_stale_shots_moves_no_key(self):
         """The shot list's Remove Stale Shots drops RECORDS: a Sequencer delete
         closes the gap behind a shot, which would retime the live one after."""

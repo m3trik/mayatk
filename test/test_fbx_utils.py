@@ -7,6 +7,9 @@ and the ``export`` driver.
 """
 
 import os
+import logging
+import shutil
+import struct
 import unittest
 import tempfile
 
@@ -850,6 +853,429 @@ class TestSessionHookWarnsOfAnAsciiCarrier(MayaTkTestCase):
         self.data_nodes.get_export_node(create=True)
         with self.assertNoLogs(self.LOGGER, "WARNING"):
             self._before_export(ascii_=False)
+
+
+class _TakeFilesCase(MayaTkTestCase):
+    """FBX files whose animation Maya's own exporter splits across takes.
+
+    Each is written as the Scene Exporter writes one -- ``FbxUtils.apply_takes``
+    then ``FbxUtils.export`` -- and a Shots Only file is that file less its
+    whole-timeline take (``ptk.FbxMedia.drop_takes``, what the exporter's
+    ``ship_declared_takes`` does to it).
+    """
+
+    #: A cube's translateX keys; Maya's default (spline) tangents.
+    KEYS = ((1, 0.0), (10, 5.0), (40, -3.0), (60, 8.0), (90, 2.0), (100, 10.0))
+    EARLY_LATE = (
+        {"name": "early", "start": 1, "end": 30},
+        {"name": "late", "start": 50, "end": 70},
+    )
+    TEXTURE = os.path.join(
+        os.path.dirname(__file__), "test_assets", "model_BaseColor.png"
+    )
+    LOGGER = "mayatk.env_utils.fbx_utils"
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.load_plugin()
+        ascii_ = FbxUtils.export_flag("FBXExportInAscii")
+        self.addCleanup(
+            mel.eval, f"FBXExportInAscii -v {'true' if ascii_ else 'false'}"
+        )
+        mel.eval("FBXExportInAscii -v false")
+        embed = FbxUtils.export_flag("FBXExportEmbeddedTextures")  # sticky
+        self.addCleanup(
+            mel.eval, f"FBXExportEmbeddedTextures -v {'true' if embed else 'false'}"
+        )
+        self.artifacts = ptk.TempArtifacts("fbx_import_takes", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+        self.folder = self.artifacts.dir_path()
+
+    def tearDown(self):
+        FbxUtils.reset_takes()
+        super().tearDown()
+
+    def _cube(self, name="CUBE", keys=KEYS):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in keys:
+            cmds.setKeyframe(f"{cube}.translateX", t=t, v=v)
+        return cube
+
+    def _write(
+        self,
+        name,
+        nodes,
+        takes,
+        resample=True,
+        drop=("Take 001",),
+        folder=None,
+        **options,
+    ):
+        path = os.path.join(folder or self.folder, f"{name}.fbx")
+        FbxUtils.apply_takes(takes, resample=resample)
+        try:
+            FbxUtils.export(path, objects=nodes, options=options or None)
+        finally:
+            FbxUtils.reset_takes()
+        if drop:
+            ptk.FbxMedia.drop_takes(path, names=list(drop))
+        return path
+
+    @staticmethod
+    def _sample(plug, frames):
+        return {f: cmds.getAttr(plug, time=f) for f in frames}
+
+    @staticmethod
+    def _keys(plug):
+        return cmds.keyframe(plug, query=True, timeChange=True) or []
+
+    @staticmethod
+    def _curve_keys(curve_or_plug):
+        times = cmds.keyframe(curve_or_plug, query=True, timeChange=True) or []
+        values = cmds.keyframe(curve_or_plug, query=True, valueChange=True) or []
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times, values)]
+
+    def _assert_plays(self, plug, expected, tolerance=1e-3):
+        self.assertTrue(expected, "nothing sampled is no pass")
+        wrong = {}
+        for frame, value in expected.items():
+            got = cmds.getAttr(plug, time=frame)
+            if abs(got - value) > tolerance:
+                wrong[frame] = (value, got)
+        self.assertEqual(
+            wrong, {}, f"{plug}: {len(wrong)} of {len(expected)} frames off the source"
+        )
+
+    @staticmethod
+    def _textured_cube(texture, name="TEX_CUBE"):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in ((1, 0.0), (10, 5.0), (40, -3.0), (60, 8.0)):
+            cmds.setKeyframe(f"{cube}.translateX", t=t, v=v)
+        shader = cmds.shadingNode("lambert", asShader=True, name="texMat")
+        tex = cmds.shadingNode("file", asTexture=True, name="texFile")
+        cmds.setAttr(f"{tex}.fileTextureName", texture, type="string")
+        cmds.connectAttr(f"{tex}.outColor", f"{shader}.color")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="texSG")
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(cube, edit=True, forceElement=sg)
+        return cube
+
+    @staticmethod
+    def _texture_paths():
+        return [
+            os.path.normcase(os.path.normpath(cmds.getAttr(f"{n}.fileTextureName")))
+            for n in cmds.ls(type="file")
+        ]
+
+
+class TestImportSceneImportsEveryTake(_TakeFilesCase):
+    """``import_scene`` lands ALL of a multi-take file's animation.
+
+    Maya plays the one take ``FBXImportSetTake`` names (``reset_import``'s
+    ``-1``: the LAST), so a Shots Only file imported its last shot alone -- a
+    cube keyed 1-100 and split 1-30 / 50-70 came back as 21 keys, 50-70 -- and
+    a file whose whole timeline is its FIRST take (Maya's ``Take 001``, a
+    Blender push's scene stack) imported one slice of it. No importer flag
+    merges takes. ``ptk.FbxFile.take_layout`` sorts them: a covering take is
+    imported alone, takes that agree are merged into one
+    (``ptk.FbxMedia.merge_takes``, written to a scoped copy), and a take that
+    disagrees is parked in Key Stash (:class:`TestImportSceneParksAConflictingTake`).
+    """
+
+    def test_a_shots_only_file_imports_every_shot(self):
+        cube = self._cube()
+        expected = self._sample(f"{cube}.translateX", [*range(1, 31), *range(50, 71)])
+        path = self._write("shots", [cube], self.EARLY_LATE)
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        self._assert_plays("CUBE.translateX", expected)
+        self.assertEqual(len(self._keys("CUBE.translateX")), 51)
+
+    def test_a_seam_two_shots_share_is_imported_once(self):
+        cube = self._cube()
+        expected = self._sample(f"{cube}.translateX", range(1, 61))
+        takes = (
+            {"name": "early", "start": 1, "end": 30},
+            {"name": "late", "start": 30, "end": 60},
+        )
+        path = self._write("seam", [cube], takes)
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        self._assert_plays("CUBE.translateX", expected)
+        self.assertEqual(len(self._keys("CUBE.translateX")), 60)
+
+    def test_a_whole_timeline_take_is_imported_whole(self):
+        """Maya writes ``Take 001`` first and its shot slices after it; the
+        last take -- what a plain import plays -- is one slice. The authored
+        keys past the shots (90, 100) are only in ``Take 001``."""
+        cube = self._cube()
+        expected = self._sample(f"{cube}.translateX", [*range(1, 71), 90, 100])
+        path = self._write("both", [cube], self.EARLY_LATE, drop=())
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        self._assert_plays("CUBE.translateX", expected)
+        self.assertIn(100.0, self._keys("CUBE.translateX"))
+
+    def test_a_node_only_a_later_take_animates_keeps_its_keys(self):
+        """Without Resample All a take carries only the curves keyed inside
+        it, so each cube here is animated in ONE take: the merge re-wires the
+        later take's curve onto the take it keeps."""
+        early = self._cube("EARLY_CUBE", ((1, 0.0), (10, 5.0)))
+        late = self._cube("LATE_CUBE", ((55, 0.0), (65, 4.0)))
+        path = self._write("split", [early, late], self.EARLY_LATE, resample=False)
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        self.assertEqual(self._curve_keys("EARLY_CUBE.translateX"), [(1, 0), (10, 5)])
+        self.assertEqual(self._curve_keys("LATE_CUBE.translateX"), [(55, 0), (65, 4)])
+
+    def test_an_ascii_file_imports_its_covering_take(self):
+        """pythontk reads binary FBX only, so an ASCII file is judged by the
+        spans the importer itself reports: the take covering every other is
+        imported, not the last slice."""
+        cube = self._cube()
+        expected = self._sample(f"{cube}.translateX", [*range(1, 71), 90, 100])
+        mel.eval("FBXExportInAscii -v true")
+        try:
+            path = self._write("both_ascii", [cube], self.EARLY_LATE, drop=())
+        finally:
+            mel.eval("FBXExportInAscii -v false")
+        self.assertFalse(ptk.FbxFile.is_fbx(path), "the fixture must be ASCII")
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        self._assert_plays("CUBE.translateX", expected)
+
+    def test_the_take_selector_is_left_per_file(self):
+        """The importer's take selector is sticky: the take an import pins
+        would shape every later raw import. ``reset_import``'s per-file ``-1``
+        must be back afterwards (pin: a raw import of a two-take file plays
+        its last take, as a fresh session does)."""
+        cube = self._cube()
+        both = self._write("both", [cube], self.EARLY_LATE, drop=())
+        shots = self._write("shots", [cube], self.EARLY_LATE)
+        cmds.file(new=True, force=True)
+        FbxUtils.import_scene(both)  # covered: its FIRST take is pinned
+        cmds.file(new=True, force=True)
+
+        cmds.file(shots, i=True, type="FBX", ignoreVersion=True)
+
+        times = self._keys("CUBE.translateX")
+        self.assertEqual((min(times), max(times)), (50.0, 70.0), times)
+
+
+class TestImportSceneKeepsAMergedImportsFiles(_TakeFilesCase):
+    """A merged file is imported from a scoped COPY, and Maya's FBX importer
+    places and finds files relative to the file it reads: embedded media is
+    extracted to ``<fbx folder>/<fbx name>.fbm`` and a texture whose recorded
+    path is gone resolves its relative path against the FBX's folder
+    (measured, Maya 2025: a copy elsewhere left the texture nodes on a folder
+    that is deleted, or on the stale absolute path). The import of the copy
+    must leave the scene as an import of the file itself does."""
+
+    def test_embedded_media_lands_beside_the_source(self):
+        cube = self._textured_cube(self.TEXTURE)
+        src = os.path.join(self.folder, "src")
+        os.makedirs(src)
+        path = self._write(
+            "textured",
+            [cube],
+            self.EARLY_LATE,
+            folder=src,
+            FBXExportEmbeddedTextures=True,
+        )
+        self.assertTrue(ptk.FbxMedia.embedded(path), "the fixture must embed")
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(path)
+
+        expected = os.path.join(src, "textured.fbm", os.path.basename(self.TEXTURE))
+        self.assertEqual(self._texture_paths(), [os.path.normcase(expected)])
+        self.assertTrue(os.path.isfile(expected))
+
+    def test_a_relative_texture_resolves_against_the_source_folder(self):
+        src = os.path.join(self.folder, "src")
+        os.makedirs(os.path.join(src, "textures"))
+        texture = os.path.join(src, "textures", "a.png")
+        shutil.copy(self.TEXTURE, texture)
+        cube = self._textured_cube(texture)
+        self._write(
+            "relative",
+            [cube],
+            self.EARLY_LATE,
+            folder=src,
+            FBXExportEmbeddedTextures=False,
+        )
+        moved = os.path.join(self.folder, "moved")
+        # The recorded absolute path is gone; the relative one is not.
+        shutil.move(src, moved)
+        cmds.file(new=True, force=True)
+
+        FbxUtils.import_scene(os.path.join(moved, "relative.fbx"))
+
+        expected = os.path.join(moved, "textures", "a.png")
+        self.assertEqual(self._texture_paths(), [os.path.normcase(expected)])
+
+
+def _reset_key_stash():
+    """Forget the active Key Stash AND its backend (``test_key_stash``'s reset)."""
+    from mayatk.anim_utils.key_stash._key_stash import KeyStash
+
+    backend = KeyStash._persistence
+    if backend is not None and hasattr(backend, "remove_callbacks"):
+        backend.remove_callbacks()
+    KeyStash._active = None
+    KeyStash.set_persistence(None)
+
+
+class TestImportSceneParksAConflictingTake(_TakeFilesCase):
+    """Takes that key the same channel over the same frames differently are
+    alternatives -- a clip library -- and no single curve holds both. The
+    file's current take plays; every other is parked WHOLE as a Key Stash
+    clip named after it: export-inert, previewable, retrievable onto the
+    imported objects.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _reset_key_stash()
+        self.addCleanup(_reset_key_stash)
+
+    def _clip_library(self):
+        """``walk`` and ``run`` keying CLIP.translateX over frames 1-30.
+
+        Maya's exporter cannot write one -- every take it writes is a window
+        of one timeline -- so ``run`` is keyed at 101-130, written without
+        Resample All (two keys a take, stored uncompressed) and its times are
+        moved onto 1-30 in place: same-size int64 swaps, every offset kept.
+        """
+        clip = cmds.polyCube(name="CLIP")[0]
+        for t, v in ((1, 0.0), (30, 10.0), (101, 5.0), (130, -5.0)):
+            cmds.setKeyframe(f"{clip}.translateX", t=t, v=v)
+        cmds.keyTangent(
+            f"{clip}.translateX", inTangentType="linear", outTangentType="linear"
+        )
+        takes = (
+            {"name": "walk", "start": 1, "end": 30},
+            {"name": "run", "start": 101, "end": 130},
+        )
+        path = self._write("clips", [clip], takes, resample=False)
+        tick = ptk.FbxFile.TICKS_PER_SECOND // 24
+        with open(path, "rb") as fh:
+            data = fh.read()
+        for old, new in ((101, 1), (130, 30)):
+            old, new = struct.pack("<q", old * tick), struct.pack("<q", new * tick)
+            self.assertTrue(data.count(old), "no key time to move")
+            data = data.replace(old, new)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        layout = ptk.FbxFile.load(
+            path, decode_arrays=ptk.FbxFile.CURVE_ARRAYS, raw_payloads=False
+        ).take_layout()
+        self.assertEqual(
+            (layout["kind"], layout["live"], layout["stash"]),
+            ("conflicted", ["walk"], ["run"]),
+        )
+        return path
+
+    def _take_alone(self, path, index):
+        """What the importer makes of take *index* on its own (the oracle)."""
+        cmds.file(new=True, force=True)
+        FbxUtils.reset_import()
+        mel.eval("FBXImportMode -v add")
+        mel.eval(f"FBXImportSetTake -ti {index}")
+        try:
+            cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+        finally:
+            mel.eval("FBXImportSetTake -ti -1")
+        keys = self._curve_keys("CLIP.translateX")
+        cmds.file(new=True, force=True)
+        _reset_key_stash()
+        return keys
+
+    def test_the_current_take_plays_and_the_other_is_parked_whole(self):
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        path = self._clip_library()
+        walk, run = self._take_alone(path, 1), self._take_alone(path, 2)
+        self.assertEqual(len(run), 2)
+        self.assertNotEqual(walk, run)
+
+        FbxUtils.import_scene(path)
+
+        self.assertEqual(self._curve_keys("CLIP.translateX"), walk)
+        store = KeyStash.active()
+        self.assertEqual([c.label for c in store.clips], ["run"])
+        clip = store.clips[0]
+        self.assertEqual(
+            clip.metadata, {"source": "fbx", "path": "clips.fbx", "take": "run"}
+        )
+        parked = [BakeSessionStore.resolve_ref(rec["stash"]) for rec in clip.curves]
+        self.assertEqual([self._curve_keys(n) for n in parked], [run])
+        # The take's own import is gone: no namespace, no second cube.
+        self.assertEqual(cmds.ls("CLIP*", type="transform"), ["CLIP"])
+        self.assertEqual(
+            [
+                n
+                for n in cmds.namespaceInfo(":", listOnlyNamespaces=True) or []
+                if "take" in n.lower()
+            ],
+            [],
+        )
+        # The record names the live curve, as a stash of the live animation
+        # would: the retrieve pastes onto it and leaves its name alone.
+        live = cmds.listConnections("CLIP.translateX", source=True, type="animCurve")
+        store.retrieve(clip.clip_id, mode="replace")
+        self.assertEqual(self._curve_keys("CLIP.translateX"), run)
+        self.assertEqual(
+            cmds.listConnections("CLIP.translateX", source=True, type="animCurve"),
+            live,
+        )
+
+    def test_a_failed_merge_plays_a_live_take_never_a_parked_one(self):
+        """Bug: when the live takes could not be merged the import fell back
+        to the importer's own pick, the file's LAST take -- here the one the
+        layout parks -- so the alternative played live and was parked too.
+        Fixed: 2026-10-12"""
+        from unittest.mock import patch
+
+        path = self._clip_library()
+        walk = self._take_alone(path, 1)
+        fbx, layout = FbxUtils._take_layout(path, logging.getLogger(__name__))
+        layout = dict(layout, live=["walk", "walk_too"])  # two takes to merge
+        with (
+            patch.object(FbxUtils, "_take_layout", return_value=(fbx, layout)),
+            patch.object(ptk.FbxMedia, "merge_takes", side_effect=ValueError("no")),
+        ):
+            FbxUtils.import_scene(path)
+
+        self.assertEqual(self._curve_keys("CLIP.translateX"), walk)
+
+    def test_an_import_that_opts_out_names_the_takes_it_left_out(self):
+        """A sandbox import that is deleted afterwards (hierarchy sync's
+        compare) must not write Key Stash records into the user's scene: it
+        passes ``stash=False`` and is told what it did not get."""
+        from mayatk.anim_utils.key_stash._key_stash import KeyStash
+
+        path = self._clip_library()
+        walk = self._take_alone(path, 1)
+
+        logger = logging.getLogger("fbx_take_opt_out")  # the caller's own log
+        with self.assertLogs(logger, "WARNING") as logs:
+            FbxUtils.import_scene(path, stash=False, logger=logger)
+
+        self.assertIn("'run'", " ".join(logs.output))
+        self.assertEqual(self._curve_keys("CLIP.translateX"), walk)
+        self.assertTrue(KeyStash.active().is_empty())
 
 
 if __name__ == "__main__":

@@ -10,6 +10,9 @@
     <height>196</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Trace an image's contours into curves, then fill them into meshes.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

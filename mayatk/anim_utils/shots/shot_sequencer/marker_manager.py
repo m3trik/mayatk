@@ -18,8 +18,12 @@ class _MarkerManagerMixinInternal(object):
 
     @staticmethod
     def _marker_to_dict(md) -> dict:
-        """Serialize a widget marker into the store's marker dict shape."""
-        return {
+        """Serialize a widget marker into the store's marker dict shape.
+
+        A tool's payload (``data``: the Shot Manifest's owner tag) rides
+        along, so a marker edit made here never orphans a tool's marker.
+        """
+        out = {
             "time": md.time,
             "note": md.note,
             "color": md.color,
@@ -28,6 +32,9 @@ class _MarkerManagerMixinInternal(object):
             "line_style": md.line_style,
             "opacity": md.opacity,
         }
+        if md.data:
+            out["data"] = dict(md.data)
+        return out
 
 
 class MarkerManagerMixin(_MarkerManagerMixinInternal):

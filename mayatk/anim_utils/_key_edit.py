@@ -613,6 +613,41 @@ class _KeyEditInternal:
             _cut(objects)
 
     @staticmethod
+    def _euler_filter(objects):
+        """Body of :meth:`AnimUtils.euler_filter`."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        curves = [
+            c
+            for c in AnimUtils.objects_to_curves(objects)
+            if cmds.nodeType(c) == "animCurveTA"  # time -> angle: a rotation
+        ]
+        if curves:
+            cmds.filterCurve(curves, filter="euler")
+        return curves
+
+    @staticmethod
+    def _shift_key_values(edits):
+        """Body of :meth:`AnimUtils.shift_key_values`."""
+        changed = 0
+        for curve, pairs in edits.items():
+            for t, dv in pairs:
+                if abs(dv) <= 1e-12:
+                    continue
+                # One key per call: ``keyframe -e`` takes a single -time range.
+                changed += (
+                    cmds.keyframe(
+                        str(curve),
+                        edit=True,
+                        relative=True,
+                        time=(t - 1e-3, t + 1e-3),
+                        valueChange=dv,
+                    )
+                    or 0
+                )
+        return changed
+
+    @staticmethod
     def _clear_key_selection() -> None:
         """Body of :meth:`AnimUtils.clear_key_selection`."""
         if cmds.keyframe(query=True, selected=True, name=True):

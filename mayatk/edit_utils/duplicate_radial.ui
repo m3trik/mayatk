@@ -22,6 +22,9 @@
   <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
+  <property name="accessibleDescription">
+   <string>Duplicate objects in a circle or arc around the object pivot or world origin.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

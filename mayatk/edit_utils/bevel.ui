@@ -22,6 +22,9 @@
   <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
+  <property name="accessibleDescription">
+   <string>Chamfer selected edges with a live preview of width and segments.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

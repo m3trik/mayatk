@@ -13,6 +13,9 @@
   <property name="windowTitle">
    <string>Workspace Map</string>
   </property>
+  <property name="accessibleDescription">
+   <string>Browse a folder tree of project workspaces and set the current one.</string>
+  </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="Header" name="header" native="true">

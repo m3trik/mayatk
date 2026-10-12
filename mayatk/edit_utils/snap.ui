@@ -10,6 +10,9 @@
     <height>119</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Snap objects or vertices to a target surface, the closest vertices or the grid.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

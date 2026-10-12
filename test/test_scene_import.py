@@ -730,6 +730,40 @@ class TestSceneImportProgress(unittest.TestCase):
                 self.src, use_cache=False, progress=lambda c, t, m: False
             )
 
+    def test_the_cached_bake_is_keyed_on_its_manifest_and_engine(self):
+        """A payload can land before its sidecar (a synced drive), and a bake cached
+        in that window replayed the sidecar-less scene after the sidecar arrived; an
+        engine fix left a cached bake replaying the old bug."""
+        from unittest import mock
+
+        import pythontk as ptk
+
+        src = os.path.join(self.dir, "payload.fbx")
+        with open(src, "wb") as fh:
+            fh.write(b"fbx")
+        engine = os.path.join(self.dir, "engine.py")
+        with open(engine, "w") as fh:
+            fh.write("# v1\n")
+        stub, runs = self._stub(), []
+        run_bake = stub._run_bake_script
+        stub._run_bake_script = lambda *a, **k: runs.append(1) or run_bake(*a, **k)
+        sidecar = ptk.HandoffManifest.path_for(src)
+        # (step, (path, text) appended before its bake, child bakes so far)
+        steps = (
+            ("first bake", None, 1),
+            ("nothing changed", None, 1),
+            ("the sidecar arrived", (sidecar, "{}\n"), 2),
+            ("the engine changed", (engine, "# v2\n"), 3),
+        )
+        with mock.patch.object(si, "_BAKE_ENGINE", engine):
+            for step, write, expected in steps:
+                if write:
+                    with open(write[0], "a") as fh:
+                        fh.write(write[1])
+                self.baked.append(stub.bake_scene(src, use_cache=True))
+                with self.subTest(step=step):
+                    self.assertEqual(len(runs), expected)
+
     def test_no_default_timeout(self):
         # A production scene converts for minutes; a fixed budget killed one that was
         # still working. A caller with a UI stops a run through progress instead.
@@ -1452,7 +1486,9 @@ class TestFbxNameMatching(unittest.TestCase):
         )
         objects = [SimpleNamespace(name=n) for n in ("Crate.001", "Crate_001")]
         materials = [SimpleNamespace(name="Crate.001")]
-        bpy = SimpleNamespace(data=SimpleNamespace(objects=objects, materials=materials))
+        bpy = SimpleNamespace(
+            data=SimpleNamespace(objects=objects, materials=materials)
+        )
 
         renamed = sanitize(bpy)
 
@@ -3615,6 +3651,122 @@ class TestSceneImportOrchestration(MayaTkTestCase):
             self.assertTrue(new_nodes, "the import must ADD nodes")
         finally:
             os.remove(fbx)
+
+
+class TestImportFbxImportsEveryTake(MayaTkTestCase):
+    """The bridge's FBX import lands the WHOLE timeline of a pushed scene.
+
+    A Blender push carries the scene's whole timeline as one stack and a
+    windowed stack per shot after it (blendertk ``_split_animation_takes``,
+    Maya's ``Take 001`` layout), and Maya plays the LAST take: a cube keyed
+    1-100 with shots 1-30 / 50-70 reached the saved .ma as 21 keys, 50-70
+    (measured 2026-10-10, real push). ``_import_fbx`` -- the direct pull, the
+    bake template, blendertk's save template -- now imports through
+    ``FbxUtils.import_scene``, which picks the covering take. The layout is
+    written here by Maya's own exporter.
+    """
+
+    KEYS = ((1, 0.0), (10, 5.0), (40, -3.0), (60, 8.0), (90, 2.0), (100, 10.0))
+    SHOTS = (
+        {"name": "early", "start": 1, "end": 30},
+        {"name": "late", "start": 50, "end": 70},
+    )
+
+    def setUp(self):
+        super().setUp()
+        import maya.mel as mel
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.fbx = FbxUtils
+        FbxUtils.load_plugin()
+        ascii_ = FbxUtils.export_flag("FBXExportInAscii")
+        self.addCleanup(
+            mel.eval, f"FBXExportInAscii -v {'true' if ascii_ else 'false'}"
+        )
+        mel.eval("FBXExportInAscii -v false")
+        self.addCleanup(mel.eval, "FBXImportSetTake -ti -1")
+        self.artifacts = ptk.TempArtifacts("scene_import_takes", policy="scoped")
+        self.addCleanup(self.artifacts.cleanup)
+
+    def _pushed(self):
+        """``(path, {frame: source value})`` of a pushed-layout file."""
+        cube = cmds.polyCube(name="PUSHED")[0]
+        for t, v in self.KEYS:
+            cmds.setKeyframe(f"{cube}.translateX", t=t, v=v)
+        frames = [*range(1, 71), 90, 100]
+        expected = {f: cmds.getAttr(f"{cube}.translateX", time=f) for f in frames}
+        path = os.path.join(self.artifacts.dir_path(), "pushed.fbx")
+        self.fbx.apply_takes(self.SHOTS)
+        try:
+            self.fbx.export(path, objects=[cube])
+        finally:
+            self.fbx.reset_takes()
+        cmds.file(new=True, force=True)
+        return path, expected
+
+    def _assert_plays(self, expected):
+        self.assertTrue(expected, "nothing sampled is no pass")
+        wrong = {
+            f: (v, cmds.getAttr("PUSHED.translateX", time=f))
+            for f, v in expected.items()
+            if abs(cmds.getAttr("PUSHED.translateX", time=f) - v) > 1e-3
+        }
+        self.assertEqual(wrong, {}, f"{len(wrong)} of {len(expected)} frames off")
+
+    def test_a_pushed_scene_imports_its_whole_timeline(self):
+        path, expected = self._pushed()
+
+        BlenderSceneImport()._import_fbx(path)
+
+        self._assert_plays(expected)
+
+    def test_the_bake_templates_fallback_imports_the_covering_take(self):
+        """Without mayatk in the bake child the template imports the file
+        itself, by the importer's own take spans: the take covering every
+        other one, not the last slice (a fresh session's choice)."""
+        import maya.mel as mel
+
+        path, expected = self._pushed()
+        import_source = _template_function(
+            si._TEMPLATE_DIR / "_bake_scene.py",
+            "import_source",
+            deps=("covering_take", "SRC_FILE", "USD_EXTENSIONS", "USD_IMPORT_OPTIONS"),
+        )
+        import_source.__globals__["SRC_FILE"] = path
+        mel.eval("FBXImportSetTake -ti -1")  # a fresh session's selector
+
+        import_source(cmds)
+
+        self._assert_plays(expected)
+
+    def test_the_covering_rule_is_one_copy(self):
+        """The bake template cannot import mayatk, so it carries the covering
+        rule ``FbxUtils`` applies to a file pythontk cannot read (ASCII):
+        token-identical bodies, docstrings aside (CODE_STANDARD section 6)."""
+        import inspect
+
+        from mayatk.env_utils import fbx_utils
+
+        def body(text, name):
+            fn = next(
+                n
+                for n in ast.walk(ast.parse(text))
+                if isinstance(n, ast.FunctionDef) and n.name == name
+            )
+            stmts = [
+                s
+                for s in fn.body
+                if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+            ]
+            return ast.dump(ast.Module(body=stmts, type_ignores=[])), ast.dump(fn.args)
+
+        template = (si._TEMPLATE_DIR / "_bake_scene.py").read_text(encoding="utf-8")
+        self.assertEqual(
+            body(template, "covering_take"),
+            body(inspect.getsource(fbx_utils), "_covering_take"),
+            "the template's covering_take drifted from FbxUtils._covering_take",
+        )
 
 
 class TestConversionRoutes(unittest.TestCase):

@@ -1,9 +1,8 @@
 # !/usr/bin/python
 # coding=utf-8
-import unittest
 import time
 from unittest import mock
-from qtpy import QtWidgets, QtCore, QtGui
+from qtpy import QtWidgets, QtCore
 
 try:
     from base_test import MayaTkTestCase
@@ -15,15 +14,14 @@ from mayatk.ui_utils.maya_native_menus import (
     EmbeddedMenuWidget,
 )
 from uitk.widgets.mainWindow import MainWindow
-import maya.cmds as cmds
 
 
 class TestNativeMenuFailFast(MayaTkTestCase):
     """A native-menu mapping that's stale for this Maya version must fail fast.
 
-    Several MENU_MAPPING entries are version-specific and raise on newer Maya
-    (e.g. ``buildToonMenu`` removed, ``buildHelpMenu`` arity changed,
-    ``mainCacheMenu`` shell gone). When the init command raises, ``get_menu``
+    MENU_MAPPING entries are version-specific: a Maya release can rename a
+    build proc, change its arity or rename the menu shell (five had drifted by
+    Maya 2025). When the init command raises, ``get_menu``
     must bail immediately and return ``None`` — NOT build a placeholder and spin
     the (now 6-attempt) ``processEvents`` populate loop, which was the bulk of
     the multi-second launch stall a broken menu caused.
@@ -234,10 +232,10 @@ class TestPopulateMenuReturn(MayaTkTestCase):
             ),
             mock.patch(
                 "mayatk.ui_utils.maya_native_menus.QtWidgets.QApplication.processEvents"
-            ),
+            ) as pump,
         ):
             result = self.handler._populate_menu("edit", "Edit", placeholder)
-        return result, placeholder
+        return result, placeholder, pump
 
     def test_returns_true_and_copies_actions_on_success(self):
         item_a, item_b = mock.MagicMock(), mock.MagicMock()
@@ -245,13 +243,28 @@ class TestPopulateMenuReturn(MayaTkTestCase):
         source_action.text.return_value = "Edit"
         source_action.menu.return_value.actions.return_value = [item_a, item_b]
 
-        result, placeholder = self._populate([source_action])
+        result, placeholder, _ = self._populate([source_action])
 
         self.assertTrue(result, "_populate_menu must return True on success")
         self.assertEqual(placeholder.menu.addAction.call_count, 2)
 
+    def test_pumps_without_handling_user_input(self):
+        """The build pumps the event loop while Maya fills the menu; user input
+        must wait for the outer loop. A key_show press handled in here ran the
+        marking menu's activation inside its preload warm-up, which showed
+        nothing (live: the first presses "don't launch well")."""
+        source_action = mock.MagicMock()
+        source_action.text.return_value = "Edit"
+        source_action.menu.return_value.actions.return_value = [mock.MagicMock()]
+
+        _, _, pump = self._populate([source_action])
+
+        self.assertTrue(pump.called, "precondition: the build pumps")
+        for call in pump.call_args_list:
+            self.assertEqual(call.args, (QtCore.QEventLoop.ExcludeUserInputEvents,))
+
     def test_returns_false_when_menu_absent(self):
-        result, placeholder = self._populate([])
+        result, placeholder, _ = self._populate([])
 
         self.assertFalse(result, "_populate_menu must return False when empty")
         placeholder.menu.addAction.assert_not_called()
@@ -263,6 +276,25 @@ class TestPopulateMenuReturn(MayaTkTestCase):
         ):
             result = self.handler._populate_menu("edit", "Edit", mock.MagicMock())
         self.assertFalse(result)
+
+
+class TestNativeMenuMappingsBuild(MayaTkTestCase):
+    """The mappings that had drifted by Maya 2025 build their native menus.
+
+    Live report: the marking menu printed ``setParent: Object
+    'MayaWindow|mainCacheMenu' not found`` (``NucleusCacheMenu.mel``): Maya
+    2025's nCache menu is ``mainNCacheMenu``. Create (``ModCreateMenu``), File
+    and Help (build procs now take no argument) and Toon (``buildCartoonMenu``)
+    had drifted the same way, so each one failed whenever it was opened.
+    """
+
+    def test_previously_stale_mappings_build(self):
+        handler = MayaMenuHandler()
+        for key in ("cache", "create", "file", "help", "toon"):
+            with self.subTest(key=key):
+                widget = handler.get_menu(key)
+                self.assertIsNotNone(widget, f"{key!r} does not build in this Maya")
+                self.assertTrue(widget.menu.actions(), f"{key!r} built empty")
 
 
 class TestMayaMenuHandlerExtended(MayaTkTestCase):
@@ -523,7 +555,6 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         for i in range(item_count):
             menu.addAction(f"Item {i}")
 
-        initial_height = window.height()
         # Per-row varies by env (real Maya ~26, offscreen ~20), so just
         # ensure the size is stable across rapid updates.
         for _ in range(5):
@@ -625,8 +656,6 @@ class TestMayaMenuHandlerExtended(MayaTkTestCase):
         window.resize(300, 400)
         window.show()
         QtWidgets.QApplication.processEvents()
-
-        initial_width = window.width()
 
         # 1. Expand
         window.resize(800, 400)

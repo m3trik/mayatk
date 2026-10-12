@@ -15,6 +15,9 @@ from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa:
 prune_to_top_boundaries = _PyRangeResolver.prune_to_top_boundaries  # noqa: F401
 
 from pythontk import SHOT_PALETTE  # noqa: E402
+from pythontk.core_utils.engines.shots.manifest.behaviors import (  # noqa: E402
+    Behaviors as _PyBehaviors,
+)
 
 # QSettings namespace
 SETTINGS_NS = "ShotManifest"
@@ -52,12 +55,17 @@ class ManifestData:
 
     @staticmethod
     def fmt_behavior(name: str) -> str:
-        """``'fade_in'`` → ``'Fade In'``."""
-        return name.replace("_", " ").title() if name else ""
+        """``'fade_in'`` → ``'Fade In'`` (``Behaviors.label``: the marker
+        notes a Build writes read the same)."""
+        return _PyBehaviors.label(name)
+
+    #: Before a behavior Build marks on the timeline instead of keying: the
+    #: shape of the marker it places.
+    MARKED_GLYPH = "\u25c6"
 
     @staticmethod
     def format_behavior_html(
-        behaviors, broken=(), status_color=None, stale=(), disabled=()
+        behaviors, broken=(), status_color=None, stale=(), disabled=(), marked=()
     ) -> str:
         """Return rich-text HTML for a list of behavior names.
 
@@ -73,6 +81,8 @@ class ManifestData:
                 (Build re-keys them), rendered in the ``stale`` colour.
             disabled: Behavior types turned off (header menu): struck through
                 in the ``locked`` grey, whatever else applies.
+            marked: Behavior types set to Marker (header menu): shown after
+                :attr:`MARKED_GLYPH`; *broken* then means its marker is missing.
         """
         if not behaviors:
             return ""
@@ -81,7 +91,9 @@ class ManifestData:
         if off:
             grey = PASTEL_STATUS["locked"][0]
             on = [b for b in behaviors if b not in off]
-            html = ManifestData.format_behavior_html(on, broken, status_color, stale)
+            html = ManifestData.format_behavior_html(
+                on, broken, status_color, stale, marked=marked
+            )
             struck = [
                 f'<span style="color:{grey};text-decoration:line-through">'
                 f"{ManifestData.fmt_behavior(b)}</span>"
@@ -89,14 +101,20 @@ class ManifestData:
                 if b in off
             ]
             return "  ".join(([html] if html else []) + struck)
+        marked = set(marked)
+
+        def _display(b):
+            text = ManifestData.fmt_behavior(b)
+            return f"{ManifestData.MARKED_GLYPH} {text}" if b in marked else text
+
         if status_color:
             for b in behaviors:
-                display = ManifestData.fmt_behavior(b)
+                display = _display(b)
                 spans.append(f'<span style="color:{status_color}">{display}</span>')
         else:
             broken_set, stale_set = set(broken), set(stale)
             for b in behaviors:
-                display = ManifestData.fmt_behavior(b)
+                display = _display(b)
                 if b in broken_set:
                     color = BEHAVIOR_STATUS_COLORS.get("missing")
                     spans.append(f'<span style="color:{color}">{display}</span>')

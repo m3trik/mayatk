@@ -874,6 +874,30 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return AnimUtils._curve_key_spans(curves=curves, windows=windows)
 
     @staticmethod
+    def get_key_curves(curves: List[str]) -> List["ptk.KeyCurve"]:
+        """Read animation curves as host-free :class:`pythontk.KeyCurve` s.
+
+        Every key with its tangent handles as vectors in frame / display-value
+        units -- ``weight * (cos a, sin a)`` on a weighted curve, the slope
+        ``tan a`` alone on an unweighted one (the control point a third of the
+        span out; both verified against ``keyframe -q -eval``) -- plus tangent
+        types, broken (unlocked) and breakdown flags, and infinity. Every
+        span is a cubic but a ``step`` / ``stepnext`` one: Maya's ``linear``
+        tangent is an angle like any other, so a linear key beside a spline
+        one draws as the cubic Maya evaluates.
+
+        Parameters:
+            curves: Animation curve node names. A missing, empty or
+                set-driven curve (keyed on driver values, not frames) is
+                skipped.
+
+        Returns:
+            One ``KeyCurve`` per readable curve, in input order: ``curve_id``
+            is the node name, ``label`` the plug it drives.
+        """
+        return AnimUtils._get_key_curves(curves=curves)
+
+    @staticmethod
     def get_keyframe_times(
         sources: Union[str, List[str]],
         mode: str = "all",
@@ -2349,6 +2373,42 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
         return AnimUtils._fit_playback_range(objects=objects, padding=padding)
 
     # ---- key selection -----------------------------------------------------
+
+    @staticmethod
+    @CoreUtils.undoable
+    def euler_filter(objects: Union[str, List[str]]) -> List[str]:
+        """Unflip rotation curves: Maya's Euler filter, as the Graph Editor's
+        Curves > Euler Filter runs it.
+
+        Removes the 360-degree jumps and gimbal flips a bake or a constraint
+        leaves between keys, by values alone (no key moves).  Rotation
+        (angular) curves only, each whole; any other curve is left alone.
+
+        Parameters:
+            objects: Nodes (their rotation curves) or animation curves.
+
+        Returns:
+            The rotation curves filtered.
+        """
+        return AnimUtils._euler_filter(objects=objects)
+
+    @staticmethod
+    def shift_key_values(edits: Dict[str, List[Tuple[float, float]]]) -> int:
+        """Offset key VALUES in place: ``{curve: [(time, delta), ...]}``.
+
+        The value half of a graph-editor move (the time half belongs to
+        whatever owns key timing -- the shot sequencer moves keys through its
+        own shot-aware path). One ``keyframe -e -relative`` per key (the
+        command takes a single time range); a key is matched within 1e-3
+        frames of *time*.
+
+        Parameters:
+            edits: Per curve node, ``(time, value delta)`` pairs.
+
+        Returns:
+            The number of keys changed.
+        """
+        return AnimUtils._shift_key_values(edits=edits)
 
     @staticmethod
     def clear_key_selection() -> None:

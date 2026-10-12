@@ -10,6 +10,9 @@
     <height>485</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Edit shots on a timeline: objects as tracks, keys as clips, with ripple edits.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

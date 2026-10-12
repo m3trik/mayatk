@@ -219,6 +219,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 ("key_selection_changed", "on_key_selection_changed"),
                 ("key_menu_requested", "on_key_menu"),
                 ("keys_tangent_dragged", "on_keys_tangent_dragged"),
+                ("editor_changed", "_on_editor_changed"),
             ]
             for sig_name, slot in getattr(sequencer, "_slots_connections", []):
                 try:
@@ -276,7 +277,18 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                     "Paste copied keys at the playhead",
                 ),
             ):
-                sequencer._shortcut_mgr.add_shortcut(_key, _action, _desc, _ctx)
+                sequencer.shortcut_manager.add_shortcut(_key, _action, _desc, _ctx)
+
+            # The graph editor's feed and commits, rebuilt with the controller
+            # (the previous one is detached first, as the wiring above is).
+            from mayatk.anim_utils.shots.shot_sequencer.graph_sync import GraphSync
+
+            prev_graph = getattr(sequencer, "_graph_sync", None)
+            if prev_graph is not None:
+                prev_graph.detach()
+            self.graph_sync = GraphSync(self.controller, sequencer)
+            sequencer._graph_sync = self.graph_sync
+            self._register_track_options(sequencer)
         self._setup_shot_nav()
         self.controller._setup_transport_controls()
 
@@ -312,8 +324,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             ctl._prev_action = existing["prev"]
             ctl._next_action = existing["next"]
             ctl._view_mode_action = existing["view"]
-            ctl._holds_action = existing["holds"]
-            ctl._show_internal_holds = existing["holds"].current_state == 1
+            views_opt = existing.get("views")
+            if views_opt is not None:
+                ctl._view = ctl.VIEWS[views_opt.current_state][0]
             ctl._shot_display_mode = _VIEW_MODE_MAP.get(
                 existing["view"].current_state, "current"
             )
@@ -337,21 +350,21 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             order=1,
         )
 
-        # View mode cycle: Current → Adjacent → All
+        # Shot scope cycle: Current → Adjacent → All
         _VIEW_STATES = [
             {
                 "icon": "target",
-                "tooltip": "View: Current Shot (click for adjacent)",
+                "tooltip": "Scope: Current Shot (click for adjacent)",
                 "callback": lambda: cmb._nav_controller._set_view_mode("adjacent"),
             },
             {
                 "icon": "columns",
-                "tooltip": "View: Adjacent Shots (click for all)",
+                "tooltip": "Scope: Adjacent Shots (click for all)",
                 "callback": lambda: cmb._nav_controller._set_view_mode("all"),
             },
             {
                 "icon": "grid",
-                "tooltip": "View: All Shots (click for current)",
+                "tooltip": "Scope: All Shots (click for current)",
                 "callback": lambda: cmb._nav_controller._set_view_mode("current"),
             },
         ]
@@ -376,39 +389,11 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         )
         cmb.option_box.add_option(add_opt)
 
-        # Refresh button — re-collect animation data and rebuild widget
-        refresh_opt = ActionOption(
-            wrapped_widget=cmb,
-            callback=lambda: cmb._nav_controller.refresh(),
-            icon="refresh",
-            tooltip="Refresh Sequencer",
-            order=6,
-        )
-        cmb.option_box.add_option(refresh_opt)
-
-        # Show Internal Holds toggle (two-state: off / on)
-        _HOLD_STATES = [
-            {
-                "icon": "eye_off",
-                "tooltip": "Show Internal Holds (off)\nClick to reveal flat-key spans in sub-rows",
-                "callback": lambda: cmb._nav_controller._set_show_internal_holds(True),
-            },
-            {
-                "icon": "eye",
-                "tooltip": "Show Internal Holds (on)\nClick to hide flat-key spans in sub-rows",
-                "callback": lambda: cmb._nav_controller._set_show_internal_holds(False),
-            },
-        ]
-        holds_opt = ActionOption(
-            wrapped_widget=cmb,
-            states=_HOLD_STATES,
-            order=5,
-            settings_key="shot_sequencer_show_holds",
-        )
-        cmb.option_box.add_option(holds_opt)
-        # Sync controller state from persisted option state
-        self.controller._show_internal_holds = holds_opt.current_state == 1
-        self.controller._holds_action = holds_opt
+        # View cycle beside the scope: Standard -> Compact -> Graph.
+        views_opt = self._view_option(cmb)
+        cmb.option_box.add_option(views_opt)
+        # Shown once, here: the button's persisted state is the view.
+        self.controller._set_view(self.controller.VIEWS[views_opt.current_state][0])
 
         self.controller._prev_action = prev_opt
         self.controller._next_action = next_opt
@@ -422,7 +407,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             "prev": prev_opt,
             "next": next_opt,
             "view": view_opt,
-            "holds": holds_opt,
+            "views": views_opt,
         }
 
         # Install right-click context menu on the combobox
@@ -614,6 +599,11 @@ class ShotSequencerSlots(ptk.LoggingMixin):
 
     def header_init(self, widget):
         """Configure header menu."""
+        # Refresh is a window verb: the header's own button, beside the menu.
+        # A tool panel stays open (sticky): hide, not pin -- a header carries
+        # one dismissal button, and the user's persistence choice swaps it.
+        widget.config_buttons("refresh", "menu", "collapse", "hide")
+        widget.refresh_requested.connect(lambda: self.controller.refresh())
         widget.menu.add(
             "QSpinBox",
             setMinimum=0,
@@ -681,7 +671,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             setToolTip="Control how Maya's playback range tracks the visible shots.",
         )
         cmb_pb.addItem("Playback Range: Off", "off")
-        cmb_pb.addItem("Playback Range: Follows View", "follows_view")
+        cmb_pb.addItem("Playback Range: Follows Scope", "follows_view")
         cmb_pb.addItem("Playback Range: Locked to Shot", "locked")
         cmb_pb.setCurrentIndex(1)
         cmb_pb.currentIndexChanged.connect(self._on_playback_range_changed)
@@ -769,109 +759,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
             setObjectName="btn_shot_settings",
             setToolTip="Open shared shot generation, gap, and editing settings.",
         )
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Shot Sequencer",
-                body="Visual timeline editor for per-shot animation with ripple editing, gap management, markers, and audio tracks.",
-                sections=[
-                    (
-                        "Quick Start",
-                        [
-                            "Click <b>+</b> to create a shot (or use the Manifest).",
-                            "Select a shot from the dropdown to load its clips.",
-                            "Drag clips to adjust timing; drag edges to resize.",
-                            "Use <b>View Mode</b> to see adjacent or all shots.",
-                        ],
-                    ),
-                    (
-                        "Shot Navigation",
-                        [
-                            "<b>Dropdown</b> \u2014 Select shot (sets playback range, selects objects, reframes the timeline, and puts the playhead on its first frame while <i>Playhead to Shot Start</i> is on in the header menu). Right-click for Edit Shot, Generate Next Shot, Delete Shot, Delete Shots (Stale / Empty / All) \u2014 the shot body's own menu carries the rest.",
-                            "<b>\u25c4 / \u25ba</b> \u2014 Previous / next shot. &nbsp; <b>+</b> \u2014 Append new shot.",
-                            "<b>View Mode</b> (cycles): Current \u2192 Adjacent \u2192 All.",
-                            "<b>Refresh</b> \u2014 Rebuild from Maya.",
-                        ],
-                    ),
-                    (
-                        "Clips",
-                        [
-                            "<b>Drag body</b> \u2014 Move in time (ripple editing).",
-                            "<b>Drag edge</b> \u2014 Resize the clip (scales its keyframes).",
-                            "<b>Shift+drag</b> \u2014 Move across shot boundaries without changing them.",
-                            "<b>Ctrl</b> while dragging \u2014 Snap to whole frames.",
-                            "A drag that lands on a frame already carrying keys is marked with a guide; <i>Snap to Keys</i> in the header menu also pulls the drag onto it.",
-                            "<b>Right-click</b> \u2014 Lock/Unlock, Rename, Store Keys (one entry per gesture, however many channels it covered), Retrieve Stored Keys (\u25b8 Restore Keys\u2026 opens the Key Stash panel), Move to Shot (Next / Previous Shot lead the list; its <i>Copy</i> toggle copies instead, the originals left in place). On a key: tangent types, Break/Unify Tangents, Store Keys, the key edits under Edit, Move / Copy to Shot (keys); drag a selected key's handles to shape its tangents — the drag carries every selected key, <b>Ctrl</b> reshapes only the one grabbed, <b>Shift</b> gives them all that exact tangent, <b>Alt</b> breaks it. All edits undoable (Ctrl+Z).",
-                        ],
-                    ),
-                    (
-                        "Shot Edges",
-                        [
-                            "The shot's own edges (and the ruler band's edges) never move its keyframes:",
-                            "<b>Drag</b> \u2014 Move the bound; the neighbouring shots move with their keys to keep the gaps.",
-                            "<b>Ctrl+drag</b> \u2014 Move the bound and no key: the shot grows over the keys in the gap and on into the next shot, whose bound gives way, or shrinks and leaves its keys (to the next shot when the two touch). The objects moving in the frames that change hands change shots with them.",
-                            "<b>Shift+drag</b> \u2014 Retime: the shot's keyframes scale into the new range.",
-                            "<b>Drag the ruler band</b> \u2014 Move the shot with its keys. A gap's edge belongs to the shot beyond it: drag to slide that shot, Ctrl moves that bound only, Shift retimes it. The <i>Shortcut Overlay</i> (header menu) keeps this legend in the timeline's corner.",
-                        ],
-                    ),
-                    (
-                        "Ruler / Tracks / Gaps / Markers",
-                        [
-                            "<b>Ruler:</b> Click/drag to move playhead, double-click to add a marker, scroll to zoom, middle-drag to pan.",
-                            "<b>Shot Lane:</b> Right-click a shot block on the ruler for its menu: Edit, New Shot (insert before / after), Split Here (or at the current time), Merge (previous / next), Move To (re-slot it among the other shots; the one holding that slot moves downstream), Add Frames, Trim Empty Space (leading / trailing), Delete (the shot, its keys and its space). Hover a row to open its finer forms. Right-click the ruler, or the tracks clear of every shot, for the timeline's own menu (markers and display toggles). The selected shot is drawn with a tinted band, a rule along the top of the lane, and ticks at its two bounds. Double-click the shot dropdown to edit name / start / end / description in place.",
-                            "<b>Tracks:</b> Double-click header to expand per-attribute sub-rows. Right-click to hide, delete, or reveal in Outliner.",
-                            "<b>Gaps:</b> Drag an edge to slide the shot beyond it (Ctrl moves the bound only, Shift retimes); drag the body to slide the gap. Right-click to lock. The caps before the first shot and after the last are those shots' own bounds: a plain drag moves the bound and nothing else.",
-                            "<b>Markers:</b> M or double-click ruler to add. Drag to move. Right-click to edit note, color, or style.",
-                            "<b>Audio:</b> Auto-discovered from Maya audio nodes. Read-only.",
-                        ],
-                    ),
-                    (
-                        "Keyboard",
-                        [
-                            # NOTE: \u2190/\u2192 keys + Shift+\u2190/\u2192 \u2014 kbd() args are pulled
-                            # out of the expression because Python 3.11 forbids
-                            # backslashes (and thus ``\uXXXX`` escapes) inside
-                            # f-string ``{}`` expressions. Using module-level
-                            # constants keeps the surface text readable in tools
-                            # that auto-escape non-ASCII on save.
-                            (
-                                self.sb.tooltip.kbd(_KB_LEFT)
-                                + " / "
-                                + self.sb.tooltip.kbd(_KB_RIGHT)
-                                + " \u2014 prev / next key &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("Shift", _KB_LEFT)
-                                + " / "
-                                + self.sb.tooltip.kbd("Shift", _KB_RIGHT)
-                                + " \u2014 step \u00b11 frame"
-                            ),
-                            (
-                                self.sb.tooltip.kbd("Home")
-                                + " / "
-                                + self.sb.tooltip.kbd("End")
-                                + " \u2014 start / end &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("F")
-                                + " \u2014 frame shot &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("M")
-                                + " \u2014 add marker"
-                            ),
-                            (
-                                self.sb.tooltip.kbd("Ctrl", "Z")
-                                + " \u2014 undo &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("Ctrl", "Shift", "Z")
-                                + " \u2014 redo &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("Del")
-                                + " \u2014 delete keys, or the selected shot when the tracks have no selection"
-                            ),
-                            (
-                                self.sb.tooltip.kbd("Ctrl", "C")
-                                + " \u2014 copy the selected keys &nbsp;\u00b7&nbsp; "
-                                + self.sb.tooltip.kbd("Ctrl", "V")
-                                + " \u2014 paste them at the playhead"
-                            ),
-                        ],
-                    ),
-                ],
-            )
-        )
+        self._set_help(widget)
 
     def btn_colors(self):
         """Open the attribute color configuration dialog."""
@@ -910,6 +798,104 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         if shot_id is not None:
             self.controller._go_to_shot(shot_id)
 
+    def _view_option(self, cmb):
+        """The view button beside the scope: Standard, Compact, Graph.
+
+        Each state shows the view on screen; a click shows the next one
+        (``_set_view``), and the choice persists like the scope's.
+        """
+        from uitk.widgets.optionBox.options.action import ActionOption
+
+        views = self.controller.VIEWS
+        states = []
+        for i, (_name, label, icon) in enumerate(views):
+            nxt = views[(i + 1) % len(views)]
+            states.append(
+                {
+                    "icon": icon,
+                    "tooltip": f"View: {label} (click for {nxt[1]})",
+                    "callback": lambda n=nxt[0]: cmb._nav_controller._set_view(n),
+                }
+            )
+        return ActionOption(
+            wrapped_widget=cmb,
+            states=states,
+            order=5,
+            settings_key="shot_sequencer_view",
+        )
+
+    #: Where the track view's Options rows keep their state.
+    _OPTIONS_NAMESPACE = "shot_sequencer/options"
+
+    def _register_track_options(self, sequencer) -> None:
+        """The track view's rows of the header pane's Options menu: Show
+        Internal Holds (a track-row matter), remembered across sessions."""
+        from uitk.managers.settings_manager import SettingsManager
+
+        settings = SettingsManager(namespace=self._OPTIONS_NAMESPACE)
+        saved = settings.value("show_internal_holds", False)
+        self.controller._show_internal_holds = saved in (True, 1, "1", "true", "True")
+
+        def set_holds(on):
+            settings.setValue("show_internal_holds", bool(on))
+            self.controller._set_show_internal_holds(bool(on))
+
+        sequencer.editor("tracks").add_option(
+            "holds",
+            "Show Internal Holds",
+            lambda: self.controller._show_internal_holds,
+            set_holds,
+            "Draw the flat-key spans inside the attribute rows",
+            section="Display",
+        )
+
+    #: The full guide; the header's help is its short form.
+    HELP_URL = "https://github.com/m3trik/mayatk/blob/main/docs/shot_sequencer.md"
+
+    def _set_help(self, header) -> None:
+        """The header's help: the essentials at a glance, and the full guide
+        a click away (:attr:`HELP_URL`)."""
+        kbd = self.sb.tooltip.kbd
+        dot = " &nbsp;\u00b7&nbsp; "
+        header.set_help_text(
+            self.sb.tooltip.fmt(
+                title="Shot Sequencer",
+                body="Shots on the ruler, objects as tracks, keys as clips, rows or curves.",
+                sections=[
+                    (
+                        "Shots",
+                        [
+                            "<b>+</b> adds a shot; the dropdown and <b>\u25c4 / \u25ba</b> change shots.",
+                            "<b>Scope</b> shows the current, adjacent or all shots; <b>View</b> switches Standard, Compact and Graph.",
+                        ],
+                    ),
+                    (
+                        "Editing",
+                        [
+                            "Drag a clip to move its keys; drag its edge to scale them.",
+                            "Drag a shot's edge to resize it as neighbours ripple; Ctrl moves the bound only, Shift retimes its keys, Alt resizes about the centre.",
+                            "Right-click anything for its menu; Ctrl+Z undoes every edit.",
+                        ],
+                    ),
+                    (
+                        "Keys",
+                        [
+                            dot.join(
+                                (
+                                    f"{kbd(_KB_LEFT)} / {kbd(_KB_RIGHT)} prev / next key",
+                                    f"{kbd('F')} frame",
+                                    f"{kbd('M')} marker",
+                                    f"{kbd('Del')} delete",
+                                )
+                            ),
+                            f"{kbd('Ctrl', 'C')} / {kbd('Ctrl', 'V')} copy / paste keys",
+                        ],
+                    ),
+                ],
+            ),
+            url=self.HELP_URL,
+        )
+
     def spn_snap(self, value):
         """Set the snap interval on the sequencer widget."""
         widget = self.controller._get_sequencer_widget()
@@ -921,7 +907,9 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         """Open the sequencer shortcut editor."""
         widget = self.controller._get_sequencer_widget()
         if widget is not None:
-            widget._shortcut_mgr.show_editor(parent=widget, title="Sequencer Shortcuts")
+            widget.shortcut_manager.show_editor(
+                parent=widget, title="Sequencer Shortcuts"
+            )
 
     def btn_shot_settings(self):
         """Open the shared shots settings panel (pinned, as Edit Shot does)."""

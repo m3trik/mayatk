@@ -10,6 +10,9 @@
     <height>463</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Bake constrained, driven and IK channels to keyframes, reversible with Unbake.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <property name="minimumSize">
     <size>

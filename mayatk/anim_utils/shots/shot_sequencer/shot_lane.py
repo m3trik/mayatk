@@ -55,7 +55,7 @@ class ShotLaneMixin:
         if widget is None:
             return None
         menu = ContextMenu(parent=widget)
-        menu.add_entries(widget._timeline.default_context_entries(time))
+        menu.add_entries(widget.context_entries(time))
         return menu
 
     def _build_shot_lane_context_menu(self, time: float):
@@ -595,12 +595,19 @@ class ShotLaneMixin:
         idx = next(
             (i for i, sh in enumerate(sorted_s) if sh.shot_id == anchor_shot_id), 0
         )
+        # Guarded: the store announces the new shot from inside the edit, and
+        # rebuilding on that drew the panel twice (0.75 s of a 2.8 s New Shot
+        # on a production assembly); ``_take_new_shot`` draws it once.
+        was_syncing = self._syncing
+        self._syncing = True
         try:
             with store.scene_edit("insert"):
                 shot = seq.new_shot(at_position=(idx + 1) if before else (idx + 2))
         except Exception:
             self._discard_shot_state()
             raise
+        finally:
+            self._syncing = was_syncing
         self._take_new_shot(shot)
         self._set_footer(
             f"Inserted {shot.name} \u00b7 {shot.start:.0f}\u2013{shot.end:.0f}"
@@ -630,12 +637,19 @@ class ShotLaneMixin:
         # so the new shot is never built on top of it — and the snapshot makes
         # the creation undoable via the ledger's membership diff.  The Shots
         # window's New Shot is the same call.
+        # Guarded: the store announces the new shot from inside the edit, and
+        # rebuilding on that drew the panel twice (0.75 s of a 2.8 s New Shot
+        # on a production assembly); ``_take_new_shot`` draws it once.
+        was_syncing = self._syncing
+        self._syncing = True
         try:
             with self.sequencer.store.scene_edit("newshot"):
                 shot = self.sequencer.new_shot()
         except Exception:
             self._discard_shot_state()
             raise
+        finally:
+            self._syncing = was_syncing
         self._take_new_shot(shot)
         self._set_footer(
             f"Created {shot.name} \u00b7 {shot.start:.0f}\u2013{shot.end:.0f}"

@@ -10,6 +10,9 @@
     <height>600</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Build a morph between two meshes, add in-between shapes and apply edits back.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

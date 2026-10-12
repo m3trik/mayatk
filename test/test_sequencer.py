@@ -549,17 +549,16 @@ class TestSequencerMaya(unittest.TestCase):
             ]
         )
         curves = cmds.listConnections(str(c1), type="animCurve", s=True, d=False) or []
-        # Record in-tangent type before enforcement
-        itt_before = cmds.keyTangent(
-            curves[0], q=True, time=(50, 50), inTangentType=True
-        )
+        # The in-tangent's slope: a derived one is frozen where it plays
+        # (ledger format 2, the held tail), so its TYPE may become fixed.
+        angle_before = cmds.keyTangent(curves[0], q=True, time=(50, 50), inAngle=True)
 
         seq._enforce_gap_holds()
 
-        itt_after = cmds.keyTangent(
-            curves[0], q=True, time=(50, 50), inTangentType=True
+        angle_after = cmds.keyTangent(curves[0], q=True, time=(50, 50), inAngle=True)
+        self.assertAlmostEqual(
+            angle_before[0], angle_after[0], 6, "In-tangent should be preserved"
         )
-        self.assertEqual(itt_before[0], itt_after[0], "In-tangent should be preserved")
 
     def test_enforce_gap_holds_idempotent(self):
         """Calling _enforce_gap_holds twice should not change anything the second time."""
@@ -1169,6 +1168,21 @@ class TestReconcileStalePaths(unittest.TestCase):
         new_long = cmds.ls("C", long=True)[0]
         self.assertIn(new_long, store.shots[0].objects)
         self.assertNotIn(stored_long, store.shots[0].objects)
+
+    def test_a_doc_name_resolves_into_a_referenced_namespace(self):
+        """BACKLOG 2026-10-10: a doc name ``door_geo`` for a referenced
+        ``AC:door_geo`` was never re-pointed (``ShotStore.member_nodes`` looks
+        inside namespaces, ``_resolved_name`` did not), so the scene scan
+        listed the node again beside it -- one object, two members."""
+        # Unkeyed: a keyed one was re-pointed already, through its curves'
+        # names (``_renamed_target``); a static prop has none to follow.
+        cmds.namespace(add="AC")
+        node = cmds.polyCube(name="AC:door_geo")[0]
+        store = ShotStore()
+        store.define_shot("S", 0, 50, objects=["door_geo"])
+        seq = ShotSequencer(store=store)
+        self.assertTrue(seq.reconcile_all_shots())
+        self.assertEqual(store.shots[0].objects, cmds.ls(node, long=True))
 
     def test_reconcile_resolves_ambiguous_leaf_to_animated(self):
         """A stale stored path whose leaf name is now non-unique resolves
@@ -2517,36 +2531,62 @@ class TestResizeShotBoundsRipple(unittest.TestCase):
         )
         self.assertEqual(self._pins(cube, seq), [(55.0, 1, "start")])
 
+    def _plays_on(self, cube, before, sid, span, start=None):
+        """Shot *sid* plays its first *span* frames as it did, from *start*
+        (default: where it starts now) -- the one rule (2026-10-10).  The
+        segment from 45 to 70 crosses the gap keyless, so the ripple re-timed
+        it in the shot on each side until both of its bounds were pinned
+        first (2026-10-12)."""
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        lo = self._seq.shot_by_id(sid).start if start is None else start
+        played = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+        now = played(crv, lo, lo + span)
+        off = max(abs(x - y) for x, y in zip(before[sid][: span + 1], now))
+        self.assertLess(off, 1e-4, f"shot {sid} plays on")
+
+    def _played_before(self, cube, seq):
+        self._seq = seq
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        played = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+        return {s.shot_id: played(crv, s.start, s.end) for s in seq.shots}
+
     def test_head_shrink_pulls_the_upstream_in_and_keeps_the_gap(self):
         cube, seq = self._two_shots_shared()
+        before = self._played_before(cube, seq)
         seq.resize_shot_bounds(1, 80, 100)  # asked for +20; B's first key is at 70
         self.assertEqual(self._gap(seq), 10.0)
         self.assertAlmostEqual(seq.shot_by_id(1).start, 70.0, msg="stops at content")
         self.assertAlmostEqual(seq.shot_by_id(0).end, 60.0, msg="A follows in")
         self.assertEqual(
             self._keys(cube),
-            [20.0, 55.0, 70.0, 95.0],
-            "B's own keys (70, 95) hold; A's ride the +10",
+            [20.0, 55.0, 60.0, 70.0, 95.0],
+            "B's own keys (70, 95) hold; A's ride the +10, its closing pose too",
         )
+        self._plays_on(cube, before, 0, 50)
 
     def test_tail_grow_still_ripples_downstream(self):
         cube, seq = self._two_shots_shared()
+        before = self._played_before(cube, seq)
         seq.resize_shot_bounds(0, 0, 55)
         self.assertEqual(self._gap(seq), 10.0)
         self.assertAlmostEqual(seq.shot_by_id(1).start, 65.0)
         self.assertEqual(
             self._keys(cube),
-            [10.0, 45.0, 65.0, 75.0, 100.0],
-            "B's keys ride the +5 push; A's stay; 65 stops the hold",
+            [10.0, 45.0, 50.0, 65.0, 75.0, 100.0],
+            "B's keys ride the +5 push, its opening pose too; A's stay, 50 its "
+            "closing pose",
         )
-        self.assertEqual(self._pins(cube, seq), [(65.0, 1, "start")])
+        self._plays_on(cube, before, 0, 50)
+        self._plays_on(cube, before, 1, 40)
 
     def test_head_grow_still_ripples_upstream(self):
         cube, seq = self._two_shots_shared()
+        before = self._played_before(cube, seq)
         seq.resize_shot_bounds(1, 55, 100)
         self.assertEqual(self._gap(seq), 10.0)
-        self.assertEqual(self._keys(cube), [5.0, 40.0, 55.0, 70.0, 95.0])
-        self.assertEqual(self._pins(cube, seq), [(55.0, 1, "start")])
+        self.assertEqual(self._keys(cube), [5.0, 40.0, 45.0, 55.0, 60.0, 70.0, 95.0])
+        self._plays_on(cube, before, 0, 50)
+        self._plays_on(cube, before, 1, 40, start=60)  # its content stayed
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -2639,10 +2679,89 @@ class TestGapHoldKeepsAPastedStep(unittest.TestCase):
         self.assertEqual(self.seq.ledger.step_times(self.crv), [50.0])
 
     def test_a_moved_seam_still_releases_the_systems_own_hold(self):
+        cmds.setKeyframe(self.cube, at="translateX", t=50, v=3.0)  # a new seam
+        self.seq.reconcile_system_edits()
+        self.assertNotEqual(self._ott(40.0), "step", "the hold was never released")
+
+    def test_a_re_posed_held_key_is_the_animators(self):
+        """Ledger format 2 knows the held key by its value and frozen in half
+        (maintainer 2026-10-11): re-posed, it is the animator's, its step
+        with it.  Format 1 read the unchanged in side as the hold's own and
+        released the step from under the new pose."""
         cmds.setKeyframe(self.cube, at="translateX", t=40, v=7.5)  # re-posed
         cmds.setKeyframe(self.cube, at="translateX", t=50, v=3.0)
         self.seq.reconcile_system_edits()
-        self.assertNotEqual(self._ott(40.0), "step", "the hold was never released")
+        self.assertEqual(self._ott(40.0), "step", "the animator's step was taken")
+        self.assertEqual(self.seq.ledger.step_times(self.crv), [50.0])
+
+
+@unittest.skipUnless(HAS_MAYA, "Requires Maya (standalone or GUI)")
+class TestAHoldKeepsWhatItHolds(unittest.TestCase):
+    """Ledger format 2 (maintainer 2026-10-11): a gap hold freezes its key's
+    derived IN half and records it with the OUT half the step discards.  A
+    held tail's last segment no longer re-derives from the next shot's moves
+    (BACKLOG 2026-10-11: A 0.06 off for +10, 0.34 for +190), and a released
+    hold gives a weighted FIXED out tangent its exact weight back (BACKLOG
+    2026-10-05: 0.05 off)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    @staticmethod
+    def _played(crv, lo, hi):
+        return [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def _off(self, crv, before, lo, hi):
+        return max(abs(x - y) for x, y in zip(before, self._played(crv, lo, hi)))
+
+    def _held_tail(self, b_to):
+        cube = cmds.polyCube(name="held_tail_cube")[0]
+        for t, v in ((0, 0), (20, 5), (60, 9), (90, 2)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 60, 100, [cube])]
+        )
+        seq.reconcile_system_edits()  # 20 holds; B is keyed on its start
+        a0 = self._played(crv, 0, 50)
+        seq.move_shot(1, b_to)
+        self.assertLess(self._off(crv, a0, 0, 50), 1e-4, "A plays on")
+
+    def test_a_held_tail_keeps_its_last_segment_as_the_next_shot_moves(self):
+        self._held_tail(70)
+
+    def test_a_held_tail_keeps_its_last_segment_however_far_it_moves(self):
+        self._held_tail(250)
+
+    def test_a_released_hold_gives_a_weighted_fixed_tangent_back(self):
+        cube = cmds.polyCube(name="weighted_cube")[0]
+        for t, v in ((0, 0), (20, 5), (60, 9), (90, 2)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        cmds.keyTangent(crv, edit=True, weightedTangents=True)
+        tt = (20, 20)
+        cmds.keyTangent(crv, edit=True, time=tt, lock=False, weightLock=False)
+        cmds.keyTangent(crv, edit=True, time=tt, itt="fixed", ott="fixed")
+        cmds.keyTangent(crv, edit=True, time=tt, inAngle=10.0, inWeight=4.0)
+        cmds.keyTangent(crv, edit=True, time=tt, outAngle=-20.0, outWeight=9.0)
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 60, 100, [cube])]
+        )
+        seq.reconcile_system_edits()
+        self.assertEqual(cmds.keyTangent(crv, q=True, time=tt, ott=True), ["step"])
+        cmds.setKeyframe(cube, at="translateX", t=45, v=6.0)  # a new seam
+        seq.reconcile_system_edits()
+        self.assertEqual(cmds.keyTangent(crv, q=True, time=tt, ott=True), ["fixed"])
+        angle = cmds.keyTangent(crv, q=True, time=tt, outAngle=True)[0]
+        weight = cmds.keyTangent(crv, q=True, time=tt, outWeight=True)[0]
+        self.assertAlmostEqual(angle, -20.0, 4)
+        self.assertAlmostEqual(weight, 9.0, 4)
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -2741,12 +2860,20 @@ class TestExtendToKeys(unittest.TestCase):
 
     def test_reach_reads_the_leading_gap_but_never_the_previous_span(self):
         a, b, seq = self._two({0: 0, 40: 5}, {45: -2, 62: -1, 80: 0, 100: 5})
+        played = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+        crv = cmds.listConnections(f"{b}.translateX", type="animCurve")[0]
+        s0_before = played(crv, 0, 50)
         head, tail = seq.extend_shot_to_fit(1, reach=10)
         self.assertEqual((head, tail), (-8.0, 0.0), "62 is S1's; 45 is inside S0")
         self.assertEqual(seq.shot_by_id(1).start, 62.0)
-        self.assertEqual(self._keys(b), [37.0, 62.0, 80.0, 100.0], "45 rode with S0")
+        # 45 rode with S0, and S0's closing pose was pinned first (42 now):
+        # b's ramp from 45 to 62 crossed the gap keyless, and S0 played it
+        # stretched over its last frames (the one rule, 2026-10-10).
+        self.assertEqual(self._keys(b), [37.0, 42.0, 62.0, 80.0, 100.0])
         self.assertEqual((seq.shot_by_id(0).start, seq.shot_by_id(0).end), (-8.0, 42.0))
         self.assertEqual(self._keys(a), [-8.0, 32.0])
+        off = max(abs(x - y) for x, y in zip(s0_before, played(crv, -8, 42)))
+        self.assertLess(off, 1e-4, "S0 plays on")
 
     def test_without_reach_the_leading_gap_still_belongs_to_the_previous_shot(self):
         a, b, seq = self._two({0: 0, 40: 5}, {62: -1, 80: 0, 100: 5})
@@ -3981,8 +4108,11 @@ class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
     # where every derived type re-derives.
     EXTREMUM = ((10, 0), (40, 5), (50, 3), (70, 9), (90, 2))
     SLOPE = ((10, 0), (40, 3), (50, 5), (70, 9), (90, 2))
-    # Keyed before A and through B, never inside A: the seam sample is B's.
-    CARRIED = ((-30, 1), (50, 3), (70, 9), (90, 2))
+    # Keyed from the seam on, nothing before it: the seam sample is B's.
+    CARRIED = ((50, 3), (70, 9), (90, 2))
+    # Keyed before A and through B, never inside A: A still PLAYS the ramp
+    # into the seam sample, so it is shared (2026-10-11, the one rule).
+    PLAYED_INTO = ((-30, 1), (50, 3), (70, 9), (90, 2))
     DERIVED = ("spline", "auto", "clamped", "plateau")
 
     def setUp(self):
@@ -4036,21 +4166,35 @@ class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
         self._assert_both_play_on(lambda s: s.move_shot(1, 60))
 
     def test_a_carried_opening_pose_keeps_its_slope(self):
-        """The curve is keyed before A and through B, never inside A, so the
+        """The curve is keyed from the seam on, nothing before it, so the
         seam sample is B's alone and is carried rather than copied (re-keyed
-        at B's new start, cut from its old frame).  Two faults, measured for
-        spline: cut BEFORE the moves, its absence re-derived B's next key while
-        the move snapshotted it, and the interior hold pinned that damaged
-        angle (B 0.099 off); and its own OUT half re-derived against the key
-        before A, now ten frames further away (0.022 off; auto 0.025).  (What
-        A plays between that key and B's pose is not a shot's own motion under
-        the planner's sharing rule, so only B is pinned.)"""
+        at B's new start, cut from its old frame).  Cut BEFORE the moves, its
+        absence re-derived B's next key while the move snapshotted it, and
+        the interior hold pinned that damaged angle (B 0.099 off, spline)."""
         for tangent in (*self.DERIVED, "linear"):
             with self.subTest(tangent=tangent):
-                _da, db = self._drift(
+                da, db = self._drift(
                     tangent, lambda s: s.move_shot(1, 60), self.CARRIED
                 )
+                self.assertLess(da, 1e-4, f"A drifted {da}")
                 self.assertLess(db, 1e-3, f"B drifted {db}")
+
+    def test_a_seam_sample_the_preceding_shot_plays_into_is_shared(self):
+        """Keyed before A and through B, never inside A: A plays the ramp
+        into the seam sample, so it is A's closing pose as much as B's
+        opening one -- copied, never carried.  Carried, A's ramp re-timed to
+        B's new start (the old rule called it "not a shot's own motion"; the
+        one rule, 2026-10-11 acceptance, says what A plays is A's)."""
+        for tangent in (*self.DERIVED, "linear"):
+            with self.subTest(tangent=tangent):
+                da, db = self._drift(
+                    tangent, lambda s: s.move_shot(1, 60), self.PLAYED_INTO
+                )
+                self.assertLess(da, 1e-4, f"A drifted {da}")
+                self.assertLess(db, 1e-3, f"B drifted {db}")
+        crv, seq = self._curve("spline", self.PLAYED_INTO)
+        seq.move_shot(1, 60)
+        self.assertEqual(cmds.keyframe(crv, q=True), [-30.0, 50.0, 60.0, 80.0, 100.0])
 
     def test_a_carried_sample_leaves_no_claim_behind(self):
         """A carried sample the system had claimed (B's start-bound sample)
@@ -4059,7 +4203,7 @@ class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
         crv, seq = self._curve("spline", self.CARRIED)
         seq.ledger.record_key(crv, 50.0, 1, "start")
         seq.move_shot(1, 60)
-        self.assertEqual(cmds.keyframe(crv, q=True), [-30.0, 60.0, 80.0, 100.0])
+        self.assertEqual(cmds.keyframe(crv, q=True), [60.0, 80.0, 100.0])
         self.assertEqual(seq.ledger.key_times(crv), [60.0])
 
     def test_a_carried_animator_pose_stays_the_animators(self):
@@ -4069,7 +4213,7 @@ class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
         edit could move or cut it as the system's own."""
         crv, seq = self._curve("spline", self.CARRIED)
         seq.move_shot(1, 60)
-        self.assertEqual(cmds.keyframe(crv, q=True), [-30.0, 60.0, 80.0, 100.0])
+        self.assertEqual(cmds.keyframe(crv, q=True), [60.0, 80.0, 100.0])
         self.assertEqual(seq.ledger.key_times(crv), [])
 
     @staticmethod
@@ -4101,6 +4245,1631 @@ class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
         self.assertEqual(self._half(crv, 60, "outTangentType"), "linear")
         self.assertTrue(self._half(crv, 60, "lock"))
         self.assertEqual(self._half(crv, 50, "inTangentType"), "linear")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestAMidMotionSeamKeepsBothSides(unittest.TestCase):
+    """BACKLOG 2026-10-07 (decided 2026-10-10): opening a flush seam that has
+    NO key on it reshaped both shots.  A curve moving through the shared frame
+    (keys 0/40/100 under A [0,50] and B [50,100]) had no sample to split, so
+    every op that pulled B away re-timed the segment both shots shared: A's
+    last key gained a moved neighbour and its tangent re-derived from A's
+    first frame on, the gap hold stepped A's tail, and B opened at another
+    value -- measured A 1.21 off and B 1.10 for a 10-frame move.
+
+    The one rule: an op on one shot never changes what another shot plays
+    inside its own span.  ``_reconcile_boundaries`` -- the chokepoint every
+    whole-shot move passes -- now pins A's own evaluated pose on the seam
+    (``setKeyframe -insert``, ``ShotPlanner.keyless_seam``) before anything
+    moves, so the split copies it onto B's new start like any shared sample;
+    the pin is A's last key, so the gap hold carries its pose across the new
+    gap.  Every op that opens the seam passes; each case checks A over its own
+    span and B over its own, shifted, for five tangent types.
+    """
+
+    KEYS = ((0, 0), (40, 3), (100, 10))
+    TANGENTS = ("auto", "spline", "clamped", "plateau", "linear")
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _scene(self, tangent, shots=((0, "A", 0, 50), (1, "B", 50, 100))):
+        cmds.file(new=True, force=True)
+        ShotStore.clear_active()
+        self.cube = cmds.polyCube(name="seam_cube")[0]
+        for t, v in self.KEYS:
+            cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
+        self.crv = cmds.listConnections(f"{self.cube}.translateX", type="animCurve")[0]
+        cmds.keyTangent(self.crv, edit=True, itt=tangent, ott=tangent)
+        self.seq = ShotSequencer(
+            [ShotBlock(i, n, s, e, [self.cube]) for i, n, s, e in shots]
+        )
+        return self.seq
+
+    def _play(self, lo, hi, shift=0.0):
+        return [
+            cmds.keyframe(self.crv, q=True, eval=True, time=(f + shift,) * 2)[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def _assert_both_play_on(self, setup, op, b_shift=None):
+        """Run *setup* then *op* per tangent type; A over its own span and B
+        over its own, shifted by its start's move (or *b_shift*), unchanged."""
+        for tangent in self.TANGENTS:
+            with self.subTest(tangent=tangent):
+                seq = self._scene(tangent)
+                setup(seq)
+                a, b = seq.sorted_shots()[0], seq.sorted_shots()[-1]
+                a_span, b_span = (a.start, a.end), (b.start, b.end)
+                a_before, b_before = self._play(*a_span), self._play(*b_span)
+                self.assertTrue(a_before and b_before, "zero samples compared")
+                op(seq, a.shot_id, b.shot_id)
+                shift = seq.shot_by_id(b.shot_id).start - b_span[0]
+                shift = shift if b_shift is None else b_shift
+                da = max(abs(x - y) for x, y in zip(a_before, self._play(*a_span)))
+                db = max(
+                    abs(x - y) for x, y in zip(b_before, self._play(*b_span, shift))
+                )
+                self.assertLess(da, 1e-4, f"A plays differently ({da:.5f})")
+                self.assertLess(db, 1e-4, f"B plays differently ({db:.5f})")
+
+    @staticmethod
+    def _as_one_shot(seq):
+        seq.store.remove_shot(1)
+        seq.store.update_shot(0, end=100)
+
+    def test_a_split_then_moving_the_tail(self):
+        def setup(seq):
+            self._as_one_shot(seq)
+            seq.split_shot(0, 50)
+
+        self._assert_both_play_on(setup, lambda s, a, b: s.move_shot(b, 60))
+
+    def test_moving_the_second_shot_leaves_the_first_alone(self):
+        self._assert_both_play_on(lambda s: None, lambda s, a, b: s.move_shot(b, 60))
+
+    def test_a_split_with_a_gap(self):
+        for tangent in self.TANGENTS:
+            with self.subTest(tangent=tangent):
+                seq = self._scene(tangent)
+                self._as_one_shot(seq)
+                before = self._play(0, 100)
+                tail = seq.split_shot(0, 50, gap=10)
+                self.assertEqual(tail.start, 60.0)
+                da = max(abs(x - y) for x, y in zip(before[:51], self._play(0, 50)))
+                db = max(
+                    abs(x - y) for x, y in zip(before[50:], self._play(50, 100, 10))
+                )
+                self.assertLess(da, 1e-4, f"A plays differently ({da:.5f})")
+                self.assertLess(db, 1e-4, f"B plays differently ({db:.5f})")
+
+    def test_after_a_ctrl_seam_move_too(self):
+        def setup(seq):
+            seq.set_shot_edge(0, new_end=45, push=True)
+            seq.reconcile_system_edits(follow=False)
+
+        self._assert_both_play_on(setup, lambda s, a, b: s.move_shot(b, 55))
+
+    def test_inserting_a_shot_between(self):
+        self._assert_both_play_on(
+            lambda s: None,
+            lambda s, a, b: s.insert_shot("N", 10, after_shot_id=a, gap=0),
+        )
+
+    def test_room_at_the_second_shots_head(self):
+        """B's start stays and its content moves on: B is compared shifted by
+        the room, not by its start."""
+        self._assert_both_play_on(
+            lambda s: None,
+            lambda s, a, b: s.add_shot_space(b, 10, edge="leading"),
+            b_shift=10.0,
+        )
+
+    def test_room_at_the_first_shots_tail(self):
+        """The trailing pad wrote A's end before it rippled, so B read as no
+        neighbour and the split was never seen (keyed seams too)."""
+        self._assert_both_play_on(
+            lambda s: None, lambda s, a, b: s.add_shot_space(a, 10, edge="trailing")
+        )
+
+    def test_a_plain_drag_growing_the_first_shot(self):
+        self._assert_both_play_on(
+            lambda s: None, lambda s, a, b: s.resize_shot_bounds(a, 0, 60)
+        )
+
+    def test_an_animators_keys_across_the_seam_then_a_move(self):
+        def setup(seq):
+            for t in (45, 55):
+                v = cmds.keyframe(self.crv, q=True, eval=True, time=(t, t))[0]
+                cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
+
+        self._assert_both_play_on(setup, lambda s, a, b: s.move_shot(b, 60))
+
+    def test_closing_the_gap_again_gives_both_back(self):
+        for tangent in self.TANGENTS:
+            with self.subTest(tangent=tangent):
+                seq = self._scene(tangent)
+                before = self._play(0, 100)
+                seq.move_shot(1, 60)
+                seq.move_shot(1, 50)
+                d = max(abs(x - y) for x, y in zip(before, self._play(0, 100)))
+                self.assertLess(d, 1e-4, f"plays differently ({d:.5f})")
+
+    def test_the_pin_is_the_first_shots_end_and_stays_where_it_is(self):
+        """Claimed as A's end and ``stays``: a later plain grow of A's end
+        disowns it in place.  Followed, it re-timed A's last ramp."""
+        seq = self._scene("auto")
+        seq.move_shot(1, 60)
+        self.assertIn((50.0, 0, "end"), seq.ledger.key_records(self.crv))
+        self.assertTrue(seq.ledger.key_stays(self.crv, 50.0))
+        a_before = self._play(0, 50)
+        seq.resize_shot_bounds(0, 0, 55)
+        self.assertIn(50.0, cmds.keyframe(self.crv, q=True), "the pin stayed")
+        self.assertNotIn(50.0, seq.ledger.key_times(self.crv), "disowned")
+        d = max(abs(x - y) for x, y in zip(a_before, self._play(0, 50)))
+        self.assertLess(d, 1e-4, f"A plays differently ({d:.5f})")
+
+    def test_the_copy_opens_on_the_pins_fixed_slope(self):
+        """``setKeyframe -insert`` pins with FIXED tangents, which the split
+        did not carry: the copy froze the slope Maya derived at its new frame
+        and B opened ~1.0 off.  Its out half is the pin's."""
+        seq = self._scene("auto")
+        seq.move_shot(1, 60)
+        tt50, tt60 = (50, 50), (60, 60)
+        self.assertEqual(
+            cmds.keyTangent(self.crv, q=True, time=tt60, outTangentType=True),
+            ["fixed"],
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(self.crv, q=True, time=tt60, outAngle=True)[0],
+            cmds.keyTangent(self.crv, q=True, time=tt50, inAngle=True)[0],
+            places=3,
+        )
+
+    def test_a_landing_that_fills_the_room_pins_nothing(self):
+        """Move to Shot's expansion ripples before it writes the grown bound
+        (``pending_bounds``): no pin lands where the dragged key does."""
+        seq = self._scene("auto")
+        with seq.pending_bounds({0: (0.0, 60.0)}):
+            seq.ripple_downstream(0, 60.0, 10.0)
+        self.assertEqual(cmds.keyframe(self.crv, q=True), [0.0, 40.0, 110.0])
+        self.assertEqual(seq.ledger.key_times(self.crv), [])
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestARespaceKeepsAHeldTailHolding(unittest.TestCase):
+    """BACKLOG 2026-10-05 (maintainer 2026-10-10: tails keep HOLDING): a
+    shot's frames after its last key hold that key's pose, but a respace
+    pinned every bound shape-preservingly -- on a tail the gap hold had not
+    reached yet it pinned the curve PLAYED ON toward the next shot's first
+    key, so the same scene played its tail on after a respace and held it
+    after any other op.  The respace now holds every gap before it pins."""
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _scene(self, keys=((0, 0), (30, 3), (70, 7), (90, 9))):
+        cmds.file(new=True, force=True)
+        ShotStore.clear_active()
+        cube = cmds.polyCube(name="tail_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        self.crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        return ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 60, 100, [cube])]
+        )
+
+    def _play(self, lo, hi, shift=0.0):
+        return [
+            cmds.keyframe(self.crv, q=True, eval=True, time=(f + shift,) * 2)[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def test_a_respace_holds_the_tail_as_any_other_op_does(self):
+        self._scene().reconcile_system_edits()  # what every other op leaves
+        held_a, held_b = self._play(0, 50), self._play(60, 100)
+        self.assertEqual(held_a[30:], [3.0] * 21, "the reference tail holds")
+
+        self._scene().respace(gap=20, start_frame=0)
+        da = max(abs(x - y) for x, y in zip(held_a, self._play(0, 50)))
+        db = max(abs(x - y) for x, y in zip(held_b, self._play(60, 100, 10)))
+        self.assertLess(da, 1e-4, f"A's tail played on ({da:.5f})")
+        self.assertLess(db, 1e-4, f"B plays differently ({db:.5f})")
+
+    def test_a_held_tail_plays_identically_across_a_respace(self):
+        """B's first key sits ON its start, so no pin went in beside the held
+        key (20) to fix its slope: its auto IN half derived from B's key, and
+        the respace moving B re-shaped A's last segment (0.34 off for +190).
+        The respace pins the held tail at its held pose: that half, frozen."""
+        seq = self._scene(((0, 0), (20, 5), (60, 9), (120, 30), (140, 40)))
+        seq.reconcile_system_edits()
+        a_before, b_before = self._play(0, 50), self._play(60, 100)
+        seq.respace(gap=200, start_frame=0)
+        da = max(abs(x - y) for x, y in zip(a_before, self._play(0, 50)))
+        db = max(abs(x - y) for x, y in zip(b_before, self._play(60, 100, 190)))
+        self.assertLess(da, 1e-4, f"A plays differently ({da:.5f})")
+        self.assertLess(db, 1e-4, f"B plays differently ({db:.5f})")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestTheGapHoldPinPassIsScoped(unittest.TestCase):
+    """BACKLOG 2026-10-05 perf note: New Shot on a production assembly spent
+    1.0 of its 1.5 s in 190 gap-hold pin writes -- ``insert_keys`` asked about
+    every gap again for one appended shot, inserting nothing.  The pass stays
+    stateless (it keeps no memory, so no edit by another path can leave a seam
+    skipped); the hook writes only where the curve, read now, can take a pin
+    (``_pinnable_frames``): an untouched shot's pins are not re-written and
+    its keys stay as they are."""
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    @staticmethod
+    def _keys(crv):
+        q = dict(q=True, time=(-1e6, 1e6))
+        return list(
+            zip(
+                cmds.keyframe(crv, timeChange=True, **q),
+                cmds.keyframe(crv, valueChange=True, **q),
+                cmds.keyTangent(crv, inTangentType=True, **q),
+                cmds.keyTangent(crv, outTangentType=True, **q),
+                cmds.keyTangent(crv, inAngle=True, **q),
+                cmds.keyTangent(crv, outAngle=True, **q),
+            )
+        )
+
+    def _scene(self, steps=()):
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="scope_cube")[0]
+        for t, v in ((0, 0), (30, 3), (70, 7), (90, 9), (130, 2), (140, 5)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        for t in steps:
+            cmds.keyTangent(crv, edit=True, time=(t, t), outTangentType="step")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 60, 100, [cube]),
+                ShotBlock(2, "C", 110, 150, [cube]),
+            ]
+        )
+        return crv, seq
+
+    def test_a_new_shot_writes_no_pin_on_an_untouched_gap(self):
+        # The animator's own steps on the A|B and B|C seams: never the
+        # system's to claim, so every pass offers their gaps a pin -- the
+        # production shape (baked, stepped curves).
+        from unittest import mock
+
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        crv, seq = self._scene(steps=(30, 90))
+        seq.reconcile_system_edits()
+        untouched = [k for k in self._keys(crv) if k[0] < 105]
+        real = AnimUtils.insert_keys
+        asked = []
+
+        def spy(objects, times, *a, **k):
+            asked.extend(float(t) for t in times)
+            return real(objects, times, *a, **k)
+
+        with mock.patch.object(AnimUtils, "insert_keys", side_effect=spy):
+            seq.insert_shot("D", 20, gap=10)
+        self.assertFalse({60.0, 110.0} & set(asked), f"pins written: {asked}")
+        self.assertEqual([k for k in self._keys(crv) if k[0] < 105], untouched)
+
+    def test_a_seam_an_undo_unsettled_is_pinned_again(self):
+        """Review 2026-10-11: a pass that remembered its settled seams went
+        stale on any edit but its own.  Settle a seam (B's start pinned, A's
+        last key held), undo it with plain ``cmds.undo`` -- the curve comes
+        back without the pin, the ledger back without the claim -- and the
+        next sequencer op must pin it again: held without the pin, A's pose
+        ran on into B's opening."""
+        crv, seq = self._scene()
+        play = TestARespaceKeepsAHeldTailHolding._play
+        self.crv = crv
+        cmds.undoInfo(state=True, infinity=True)
+        seq.store.push_boundary_snapshot()
+        cmds.undoInfo(openChunk=True)
+        seq.reconcile_system_edits()
+        cmds.undoInfo(closeChunk=True)
+        self.assertIn(60.0, cmds.keyframe(crv, q=True), "fixture: B's start pinned")
+        b_settled = play(self, 60, 100)
+        cmds.undo()
+        seq.store.restore_boundary_snapshot()  # what the controller does on Undo
+        self.assertNotIn(60.0, cmds.keyframe(crv, q=True), "fixture: undone")
+        self.assertEqual(seq.ledger.step_times(crv), [], "fixture: claim undone")
+        seq.reconcile_system_edits()
+        self.assertIn(60.0, cmds.keyframe(crv, q=True), "the seam was not re-pinned")
+        db = max(abs(x - y) for x, y in zip(b_settled, play(self, 60, 100)))
+        self.assertLess(db, 1e-4, f"B's opening held A's pose ({db:.5f})")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestTheSOLAcceptanceFindings(unittest.TestCase):
+    """Defects the SOL_REPLACE_ASSEMBLY acceptance (every shot op, gap 0 and
+    gap 10, 2026-10-11) found, all older than the seam pin."""
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def _cube(self, keys):
+        cube = cmds.polyCube(name="accept_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        return cube, crv
+
+    def test_deleting_an_empty_shot_moves_each_key_once(self):
+        """The ripple's windows only touched -- D's new closed end on C's old
+        closed start -- and C, moved second, carried D's closing sample on:
+        150 landed at 50, not 100 (production: a door pose 200 frames early,
+        playing from frame 0)."""
+        cmds.file(new=True, force=True)
+        cube, crv = self._cube(((0, 0), (110, 3), (150, -5), (180, 2)))
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, []),
+                ShotBlock(2, "C", 100, 120, [cube]),
+                ShotBlock(3, "D", 120, 150, [cube]),
+                ShotBlock(4, "E", 150, 200, [cube]),
+            ]
+        )
+        a0 = self._played(crv, 0, 50)
+        seq.delete_shot(1)
+        # A closes mid-ramp and C opens elsewhere on it, so C lands one frame
+        # after A (maintainer 2026-10-11), each pose pinned on its bound.
+        times = cmds.keyframe(crv, q=True)
+        self.assertEqual(times, [0.0, 50.0, 51.0, 61.0, 101.0, 131.0])
+        self.assertEqual(
+            cmds.keyframe(crv, q=True, valueChange=True)[3:], [3.0, -5.0, 2.0]
+        )
+        self.assertLess(self._off(crv, a0, 0, 50), 1e-4, "A plays on")
+
+    def test_a_head_block_ending_on_the_next_shots_pin_lands_in_front(self):
+        """A's run ended on B's claimed start pin, so Move to Shot read it as
+        coming from AFTER B and appended it behind B's content: it became the
+        curve's last pose, and the shot after B played it (production: KEYS
+        78 off over all 81 frames of A02)."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        cmds.file(new=True, force=True)
+        cube, crv = self._cube(((0, 0), (20, 5), (40, 2), (70, 6), (90, 1)))
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, [cube]),
+                ShotBlock(2, "C", 100, 150, []),
+            ]
+        )
+        for c, t in AnimUtils.insert_keys([crv], [50.0], report=True):
+            seq.ledger.record_key(c, t, 1, "start")  # B's start pin
+        c_before = [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(100, 151)
+        ]
+        run = next(
+            s
+            for s in seq.collect_shot_sequences(0, include_audio=False)
+            if cube in s["obj"]
+        )
+        # As the panel sends it: the drawn clip, whose motion runs on into
+        # B's pin on the shared frame.
+        self.assertEqual(run["end"], 50.0, "the drawn run reaches B's pin")
+        seq.move_sequences_to_shot([run], 1)
+        c = seq.shot_by_id(2)
+        c_after = [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(int(c.start), int(c.start) + 51)
+        ]
+        d = max(abs(x - y) for x, y in zip(c_before, c_after))
+        self.assertLess(d, 1e-4, f"C plays the moved block's pose ({d:.5f})")
+        times = cmds.keyframe(crv, q=True)
+        self.assertEqual(times[0], 50.0, "the block landed at B's start, in front")
+
+    @staticmethod
+    def _played(crv, lo, hi):
+        return [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def _off(self, crv, before, lo, hi):
+        return max(abs(x - y) for x, y in zip(before, self._played(crv, lo, hi)))
+
+    def test_deleting_a_shot_keeps_both_neighbours_playing(self):
+        """The deleted shot's keys were its neighbours' too where a curve
+        crossed into them: the value its last key held over every shot
+        after it, the ramp out of the previous shot's last key, the next
+        shot's opening segment (production, gap 10: "A02" KEYS 78 off over
+        all 81 frames, "C02" SOLENOID 7.2 over 256)."""
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="vacate_cube")[0]
+        shapes = {
+            "translateX": ((0, 0), (20, 5), (70, 3), (90, 8)),  # held after B
+            "translateY": ((0, 0), (20, 5), (70, 3), (90, 8), (130, 2)),  # into C
+            "translateZ": ((0, 0), (80, 4), (130, 9)),  # a step held into C
+            "rotateX": ((70, 6), (90, 1)),  # keyed only in B
+        }
+        for at, keys in shapes.items():
+            for t, v in keys:
+                cmds.setKeyframe(cube, at=at, t=t, v=v)
+        cmds.keyTangent(f"{cube}.translateZ", time=(80, 80), outTangentType="step")
+        crvs = {
+            at: cmds.listConnections(f"{cube}.{at}", type="animCurve")[0]
+            for at in shapes
+        }
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 60, 100, [cube]),
+                ShotBlock(2, "C", 110, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()  # the settled scene the panel shows
+        a0 = {at: self._played(c, 0, 50) for at, c in crvs.items()}
+        c0 = {at: self._played(c, 110, 150) for at, c in crvs.items()}
+        seq.delete_shot(1)
+        c = seq.shot_by_id(2)
+        self.assertEqual((c.start, c.end), (60.0, 100.0))
+        for at, crv in crvs.items():
+            self.assertTrue(cmds.objExists(crv), f"{at}: its curve was deleted")
+            da = self._off(crv, a0[at], 0, 50)
+            dc = self._off(crv, c0[at], 60, 100)
+            self.assertLess(da, 1e-4, f"{at}: A plays {da:.5f} off")
+            self.assertLess(dc, 1e-4, f"{at}: C plays {dc:.5f} off")
+
+    def test_a_run_sent_out_of_a_shot_keeps_the_next_one_playing(self):
+        """B's run went to A and B's start pin -- its system sample, which
+        stays with B -- became the curve's last key, so C played it (the
+        production Move to Shot, gap 10: "A02" KEYS 80 off)."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        cmds.file(new=True, force=True)
+        cube, crv = self._cube(((10, 0), (30, 5), (70, 2), (90, 7)))
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 60, 100, [cube]),
+                ShotBlock(2, "C", 110, 150, []),
+            ]
+        )
+        for c, t in AnimUtils.insert_keys([crv], [60.0], report=True):
+            seq.ledger.record_key(c, t, 1, "start")  # B's start pin
+        seq.reconcile_system_edits()
+        c0 = self._played(crv, 110, 150)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 70.0, "end": 90.0}], 0
+        )
+        c = seq.shot_by_id(2)
+        dc = self._off(crv, c0, c.start, c.end)
+        self.assertLess(dc, 1e-4, f"C plays {dc:.5f} off")
+
+    def test_a_moved_shot_keeps_its_boundary_slopes(self):
+        """A shot moved by a plan (any ripple) relative to a key it does not
+        take along -- a pose far back in another shot, held across every gap
+        -- re-derived its first key's auto slope from that key's new
+        distance, and its first segment played differently (production, gap
+        10: "B06_1" SCREWDRIVER 0.003 to 0.1 off over 46 frames after almost
+        every op upstream; the curve below is that one, 941's out angle
+        -2.984 -> -2.996).  The drag path held these halves; the plan writer
+        did not."""
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="slope_cube")[0]
+        keys = (
+            (12, 0.0),
+            (941, -46.6029),
+            (991, -51.0343),
+            (1012, -52.3835),
+            (1031, -53.384),
+            (1041, -53.772),
+            (1081, 0.0),
+        )
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        for t in (12, 1041, 1081):
+            cmds.keyTangent(crv, time=(t, t), outTangentType="step")
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 111, [cube]), ShotBlock(1, "B", 941, 1081, [cube])]
+        )
+        seq.reconcile_system_edits()
+        b0 = self._played(crv, 941, 1081)
+        seq.add_shot_space(0, -4.0, edge="trailing")  # B ripples back; 12 stays
+        b = seq.shot_by_id(1)
+        self.assertEqual((b.start, b.end), (937.0, 1077.0))
+        db = self._off(crv, b0, 937, 1077)
+        self.assertLess(db, 1e-4, f"B plays {db:.5f} off")
+
+    def test_a_slid_shot_keeps_its_boundary_slopes_on_a_small_move(self):
+        """The drag mover (a slide, a clip drag) held a moved run's inward
+        halves only past 0.01 degrees: on the production curve a 1-frame
+        slide re-derived 941's out slope by 0.003 degrees and B played
+        0.0004 off (2 frames 0.0008, +3 frames 0.0012).  Maya's re-derivation
+        from unmoved neighbours is exact -- over every SOL op at gap 0 and 10
+        each drift the hold was asked about was 0 or under 1e-12 -- so the
+        hold now uses the plan writer's 1e-6 too."""
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="small_slide_cube")[0]
+        keys = (
+            (12, 0.0),
+            (941, -46.6029),
+            (991, -51.0343),
+            (1012, -52.3835),
+            (1031, -53.384),
+            (1041, -53.772),
+            (1081, 0.0),
+        )
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        for t in (12, 1041, 1081):
+            cmds.keyTangent(crv, time=(t, t), outTangentType="step")
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 111, [cube]), ShotBlock(1, "B", 941, 1081, [cube])]
+        )
+        seq.reconcile_system_edits()
+        b0 = self._played(crv, 941, 1081)
+        seq.slide_shot(1, 940, direction=None)  # B alone, one frame
+        db = self._off(crv, b0, 940, 1080)
+        self.assertLess(db, 1e-4, f"B plays {db:.5f} off")
+
+    def test_a_ramp_through_shots_that_do_not_key_it_is_pinned_where_opened(
+        self,
+    ):
+        """A ramp keyed only in the first and last of four flush shots runs
+        keyless through the two between, none of which lists its object.
+        Pulling R away re-timed the whole ramp: the seam pin wanted a key in
+        the shot before the seam and a member of either shot (production,
+        gap 0: a door ramp keyed at 1061 and 3230 played up to 0.003 off in
+        every one of the 30 shots it crosses after a band move at 2116)."""
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="ramp_cube")[0]
+        for t, v in ((10, -70.0), (190, 0.0)):
+            cmds.setKeyframe(cube, at="rotateY", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.rotateY", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, []),
+                ShotBlock(2, "R", 100, 150, []),
+                ShotBlock(3, "S", 150, 200, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        q0 = self._played(crv, 50, 100)
+        r0 = self._played(crv, 101, 150)
+        seq.move_shot(2, 107)
+        self.assertEqual(seq.shot_by_id(2).start, 107.0)
+        dq = self._off(crv, q0, 50, 100)
+        dr = self._off(crv, r0, 108, 157)
+        self.assertLess(dq, 1e-4, f"Q plays {dq:.5f} off")
+        self.assertLess(dr, 1e-4, f"R plays {dr:.5f} off")
+
+    def test_a_slid_shot_lands_its_seam_sample_on_its_own_copy(self):
+        """A slide rippling downstream moves the shots AFTER the pivot first:
+        for that moment the pivot's closing seam is split, and its sample --
+        shared, since a key before it plays into it -- is copied onto the
+        next shot's new start.  The pivot then lands its own sample on that
+        copy: the same pose on the same frame, which the landing pushed a
+        frame on as if it were another pose (production, gap 0: "C04_1"
+        SCREW_UPPER 0.375 off over 59 frames after a band move of the shot
+        before it).  The landing's collision check read the moving shots'
+        members, and B does not list the object whose sample it moves."""
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="slide_cube")[0]
+        # The production curve's shape: a pose reached in A, held flat
+        # through B, and leaving from the B|C seam.
+        for t, v in ((10, 0.0), (20, 1440.0), (100, 1440.0), (130, 0.0)):
+            cmds.setKeyframe(cube, at="rotateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.rotateX", type="animCurve")[0]
+        cmds.keyTangent(crv, time=(20, 20), itt="fixed", ott="auto")
+        cmds.keyTangent(crv, time=(100, 100), itt="flat", ott="fixed")
+        cmds.keyTangent(crv, time=(130, 130), ott="step")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, []),  # keys nothing of it but its end
+                ShotBlock(2, "C", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        c0 = self._played(crv, 101, 150)
+        seq.move_shot(1, 57)  # B and C slide +7; A stays
+        self.assertEqual(seq.shot_by_id(2).start, 107.0)
+        times = cmds.keyframe(crv, q=True)
+        self.assertEqual(
+            [t for t in times if 100 < t < 137], [107.0], "one key on C's start"
+        )
+        dc = self._off(crv, c0, 108, 157)
+        self.assertLess(dc, 1e-4, f"C plays {dc:.5f} off")
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer(unittest.TestCase):
+    """The maintainer's rule (2026-10-11) for every op that closes a seam to
+    gap 0 -- delete, the scoped gap collapse, respace to 0: flush where the
+    two poses agree, exactly one frame apart where they differ, keyed or
+    held; never refused, never re-timing a shot (BACKLOG 2026-10-11 S1 / S2:
+    a gap-0 delete played "A02" KEYS 80 off, a collapse onto a held tail
+    re-timed "A01_1" 2.08 off, a respace to 0 refused)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    @staticmethod
+    def _played(crv, lo, hi):
+        return [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
+
+    def _off(self, crv, before, lo, hi):
+        return max(abs(x - y) for x, y in zip(before, self._played(crv, lo, hi)))
+
+    def _curve(self, keys, name="close_cube"):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        return cube, cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+
+    def test_a_flush_delete_keeps_the_next_shots_opening_a_frame_apart(self):
+        # A closes on 3, B's closing sample (100) is C's opening pose 5.
+        cube, crv = self._curve(((0, 0), (40, 2), (50, 3), (70, 8), (100, 5), (130, 1)))
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, [cube]),
+                ShotBlock(2, "C", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        a0, c0 = self._played(crv, 0, 50), self._played(crv, 100, 150)
+        seq.delete_shot(1)
+        c = seq.shot_by_id(2)
+        self.assertEqual((c.start, c.end), (51.0, 101.0), "one frame apart")
+        self.assertLess(self._off(crv, a0, 0, 50), 1e-4, "A plays on")
+        self.assertLess(self._off(crv, c0, 51, 101), 1e-4, "C plays on")
+
+    def test_a_flush_delete_closes_flush_where_the_poses_agree(self):
+        cube, crv = self._curve(((0, 0), (40, 2), (50, 3), (70, 8), (100, 3), (130, 1)))
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, [cube]),
+                ShotBlock(2, "C", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        c0 = self._played(crv, 100, 150)
+        seq.delete_shot(1)
+        self.assertEqual(seq.shot_by_id(2).start, 50.0, "flush")
+        self.assertLess(self._off(crv, c0, 50, 100), 1e-4, "C plays on")
+
+    def test_collapsing_onto_a_held_tail_keeps_one_frame(self):
+        # A holds 5 from 20 to its end; B opens on 9.  The held key's IN half
+        # is derived: the hold froze it (ledger format 2), so B's move no
+        # longer re-derives it (BACKLOG 2026-10-11, the held tail).
+        cube, crv = self._curve(((0, 0), (20, 5), (60, 9), (90, 2)))
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 60, 100, [cube])]
+        )
+        seq.reconcile_system_edits()  # the gap hold: 20 steps
+        a0, b0 = self._played(crv, 0, 50), self._played(crv, 60, 100)
+        seq.apply_gap(0, scope="end", shot_id=0)
+        b = seq.shot_by_id(1)
+        self.assertEqual((b.start, b.end), (51.0, 91.0), "one frame apart")
+        self.assertLess(self._off(crv, a0, 0, 50), 1e-4, "A's tail holds on")
+        self.assertLess(self._off(crv, b0, 51, 91), 1e-4, "B plays on")
+
+    def test_respace_to_zero_keeps_disagreeing_seams_a_frame_apart(self):
+        cube, crv = self._curve(((10, 0.0), (40, 1.0), (50, 2.0), (70, 3.0)))
+        # A's closing key is the gap hold's stepped key, its derived IN half
+        # frozen by the hold (ledger format 2).
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 40, [cube]), ShotBlock(1, "B", 50, 90, [cube])]
+        )
+        seq.reconcile_system_edits()
+        a0, b0 = self._played(crv, 0, 40), self._played(crv, 50, 90)
+        seq.respace(gap=0, start_frame=0)
+        layout = [(s.start, s.end) for s in seq.sorted_shots()]
+        self.assertEqual(layout, [(0.0, 40.0), (41.0, 81.0)])
+        self.assertLess(self._off(crv, a0, 0, 40), 1e-4, "A plays on")
+        self.assertLess(self._off(crv, b0, 41, 81), 1e-4, "B plays on")
+        seq.respace(gap=0, start_frame=0)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()], layout, "idempotent"
+        )
+        self.assertLess(self._off(crv, b0, 41, 81), 1e-4, "B still plays on")
+
+    def test_respace_to_zero_keeps_a_frame_where_the_gap_holds_a_key(self):
+        """Bug: the poses agree (1 and 1), so the seam closed flush -- but the
+        retime refuses a zero-width gap (it would cut or stack the key), so
+        the gap's key stayed where it was and B played it.  Found on
+        SOL_REPLACE_ASSEMBLY pulled into Blender with its stepped keys: A04
+        0.0012 off.  Fixed: 2026-10-12"""
+        cube, crv = self._curve(((10, 0.0), (40, 1.0), (45, 5.0), (50, 1.0), (70, 3.0)))
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 40, [cube]), ShotBlock(1, "B", 50, 90, [cube])]
+        )
+        seq.reconcile_system_edits()
+        a0, b0 = self._played(crv, 0, 40), self._played(crv, 50, 90)
+        seq.respace(gap=0, start_frame=0)
+        layout = [(s.start, s.end) for s in seq.sorted_shots()]
+        self.assertEqual(layout, [(0.0, 40.0), (41.0, 81.0)])
+        self.assertLess(self._off(crv, a0, 0, 40), 1e-4, "A plays on")
+        self.assertLess(self._off(crv, b0, 41, 81), 1e-4, "B plays on")
+        times = cmds.keyframe(crv, q=True, timeChange=True) or []
+        gap = [t for t in times if 40.0 + 1e-3 < t < 41.0 - 1e-3]
+        self.assertEqual(len(gap), 1, f"the gap's key kept, inside the gap: {times}")
+        self.assertTrue(
+            all(b - a > 1e-3 for a, b in zip(times, times[1:])), f"stacked: {times}"
+        )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestRetimesLandExactlyWithAutoSnapOn(unittest.TestCase):
+    """GUI Maya's ``scaleKeyAutoSnap`` preference (on by default; mayapy has
+    none) rounded every ``scaleKey`` the shot system issues to a whole frame.
+    A gap kept a frame for its key landed that key ON a bound, stacked: 45 ->
+    40.00000017 beside A's 40, measured in a GUI Maya, while the ledger's
+    claims followed the unrounded frames.  The retimes switch it off
+    (``AnimUtils._exact_scale``).  Fixed: 2026-10-12"""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self._had = cmds.optionVar(exists="scaleKeyAutoSnap")
+        self._was = cmds.optionVar(q="scaleKeyAutoSnap") if self._had else None
+        cmds.optionVar(intValue=("scaleKeyAutoSnap", 1))  # as a GUI Maya has it
+
+    def tearDown(self):
+        if self._had:
+            cmds.optionVar(intValue=("scaleKeyAutoSnap", self._was))
+        else:
+            cmds.optionVar(remove="scaleKeyAutoSnap")
+        ShotStore.clear_active()
+
+    def _curve(self, keys):
+        cube = cmds.polyCube(name="snap_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        return cube, cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+
+    def test_a_gap_kept_a_frame_keeps_its_key_inside_it(self):
+        cube, crv = self._curve(((10, 0.0), (40, 1.0), (45, 5.0), (50, 1.0), (70, 3.0)))
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 40, [cube]), ShotBlock(1, "B", 50, 90, [cube])]
+        )
+        seq.respace(gap=0, start_frame=0)
+        times = cmds.keyframe(crv, q=True, timeChange=True) or []
+        self.assertEqual([round(t, 3) for t in times], [10.0, 40.0, 40.5, 41.0, 61.0])
+        self.assertTrue(cmds.optionVar(q="scaleKeyAutoSnap"), "the preference is back")
+
+    def test_a_shot_retime_lands_its_keys_where_the_claims_say(self):
+        cube, crv = self._curve(((10, 0.0), (13, 2.0), (20, 1.0), (40, 3.0)))
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 10, 20, [cube]), ShotBlock(1, "B", 30, 40, [cube])]
+        )
+        seq.ledger.record_key(crv, 13.0, 0, "end")
+        seq.scale_object_keys(cube, 10, 20, 10, 15)
+        times = cmds.keyframe(crv, q=True, timeChange=True) or []
+        self.assertIn(
+            11.5, [round(t, 3) for t in times], f"13 -> 11.5, not rounded: {times}"
+        )
+        self.assertEqual(seq.ledger.key_times(crv), [11.5])
+
+
+class TestExplicitPlacementsFollowTheClosingRule(unittest.TestCase):
+    """The closing rule for the explicit placements too (maintainer
+    2026-10-11, "ALL of them"): a band move, a slide, a Ctrl edge and Move to
+    Shot's landing land a seam flush where the two poses agree and a frame
+    short where they differ, keyed or held.  Measured on SOL_REPLACE_ASSEMBLY
+    at gap 10: a band move or slide dropped flush played B's opening pose on
+    A's last frame (up to 71.5 apart) and, onto a held tail, ramped A01_1's
+    last 10 frames 2.08; Move to Shot shoved C02's opening keys a frame."""
+
+    A_CLOSES = ((0, 0), (40, 2), (50, 5), (90, 9))  # A ends on 2, B opens on 5
+    AGREE = ((0, 0), (40, 2), (50, 2), (90, 9))
+    HELD = ((0, 0), (30, 5), (50, 9), (90, 2))  # A holds 5 from 30 to its end
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _scene(self, keys):
+        cube = cmds.polyCube(name="placed_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        # A's last key is the gap hold's stepped key: its derived IN half,
+        # frozen by the hold (ledger format 2), no longer re-derives from B's
+        # move (BACKLOG 2026-10-11, the held tail).
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 40, [cube]), ShotBlock(1, "B", 50, 90, [cube])]
+        )
+        seq.reconcile_system_edits()  # the gap hold
+        return seq, crv, self._played(crv, 0, 49), self._played(crv, 50, 90)
+
+    def _check(self, op, keys, b_start, a_hi=40, b_moves=True):
+        """*op*, then B starts at *b_start*; A plays its frames up to *a_hi*
+        as they played (the gap's own, where A grew over it) and B plays its
+        40 frames on, wherever it went."""
+        seq, crv, a0, b0 = self._scene(keys)
+        op(seq)
+        b = seq.shot_by_id(1)
+        self.assertEqual(b.start, b_start)
+        self.assertLess(self._off(crv, a0[: a_hi + 1], 0, a_hi), 1e-4, "A plays on")
+        lo = b.start if b_moves else 50
+        self.assertLess(self._off(crv, b0, lo, lo + 40), 1e-4, "B plays on")
+        return seq, crv
+
+    # ---- band move: the body drag is move_shot ---------------------------------------
+    def test_a_band_move_lands_a_frame_short_where_the_poses_differ(self):
+        self._check(lambda s: s.move_shot(1, 40), self.A_CLOSES, 41.0)
+
+    def test_a_band_move_lands_flush_where_the_poses_agree(self):
+        self._check(lambda s: s.move_shot(1, 40), self.AGREE, 40.0)
+
+    def test_a_band_move_onto_a_held_tail_keeps_it(self):
+        self._check(lambda s: s.move_shot(1, 40), self.HELD, 41.0)
+
+    # ---- slide: a gap handle's plain drag ----------------------------------------------
+    def test_a_slide_lands_a_frame_short_where_the_poses_differ(self):
+        self._check(lambda s: s.slide_shot(1, 40, direction=None), self.A_CLOSES, 41.0)
+
+    def test_a_slide_lands_flush_where_the_poses_agree(self):
+        self._check(lambda s: s.slide_shot(1, 40, direction=None), self.AGREE, 40.0)
+
+    def test_a_slide_onto_a_held_tail_keeps_it(self):
+        self._check(lambda s: s.slide_shot(1, 40, direction=None), self.HELD, 41.0)
+
+    # ---- Ctrl edge: the bound moves, no key does --------------------------------------
+    def _a_end(self, seq):
+        seq.set_shot_edge(0, new_end=50, push=True)
+
+    def test_a_ctrl_edge_stops_a_frame_short_where_the_poses_differ(self):
+        seq, _crv = self._check(self._a_end, self.A_CLOSES, 50.0, 49, False)
+        self.assertEqual(seq.shot_by_id(0).end, 49.0, "A ends on its own pose")
+
+    def test_a_ctrl_edge_lands_flush_where_the_poses_agree(self):
+        seq, _crv = self._check(self._a_end, self.AGREE, 50.0, 49, False)
+        self.assertEqual(seq.shot_by_id(0).end, 50.0)
+
+    def test_a_ctrl_edge_over_a_held_tail_ends_on_it(self):
+        seq, _crv = self._check(self._a_end, self.HELD, 50.0, 49, False)
+        self.assertEqual(seq.shot_by_id(0).end, 49.0)
+
+    def test_a_ctrl_edge_back_onto_the_shot_before_stops_a_frame_short(self):
+        seq, _crv = self._check(
+            lambda s: s.set_shot_edge(1, new_start=40, push=True),
+            self.A_CLOSES,
+            41.0,
+            b_moves=False,
+        )
+        self.assertEqual(seq.shot_by_id(1).end, 90.0)
+
+    # ---- a lossless merge keeps what each side played -------------------------------
+    def test_a_merge_keeps_a_stepped_opening_stepped(self):
+        """Q band-moved +7 between flush P and R: R ripples first and gets a
+        copy of the shared sample, then Q's original lands on it.  The merge
+        keeps the copy's OUT half -- here ``stepnext``, a type an angle set
+        on it turned ``fixed``: SOL "C02" ramped where it held, 69.5 off."""
+        cube = cmds.polyCube(name="merge_step_cube")[0]
+        for t, v in ((60, 3), (100, 0), (120, 9)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        cmds.keyTangent(crv, time=(100, 100), outTangentType="stepnext")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, [cube]),
+                ShotBlock(2, "R", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        r0 = self._played(crv, 100, 150)
+        seq.move_shot(1, 57)
+        r = seq.shot_by_id(2)
+        self.assertEqual(r.start, 107.0)
+        self.assertLess(self._off(crv, r0, r.start, r.end), 1e-4, "R plays on")
+
+    # ---- Move to Shot: the landing that grows the destination onto a flush seam -------
+    def test_a_landing_on_a_flush_seam_keeps_the_next_shots_opening(self):
+        """A's last run (ending on the seam it shares with B) lands after B's
+        content; B grows, C ripples flush and would open on the run's last
+        pose (-1) instead of its own (0)."""
+        cube = cmds.polyCube(name="landed_cube")[0]
+        for t, v in ((10, 0), (25, 4), (40, -1), (55, 3), (80, 0), (95, 6), (120, 2)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 40, [cube]),
+                ShotBlock(1, "B", 40, 80, [cube]),
+                ShotBlock(2, "C", 80, 120, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        c0 = self._played(crv, 80, 120)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 10.0, "end": 40.0}], 1
+        )
+        b, c = seq.shot_by_id(1), seq.shot_by_id(2)
+        self.assertEqual(c.start - b.end, 1.0, "one frame apart")
+        self.assertLess(self._off(crv, c0, c.start, c.end), 1e-4, "C plays on")
+
+
+class TestAShiftRetimeKeepsItsFlushNeighbour(unittest.TestCase):
+    """A Shift retime (``resize_shot``) of a shot flush with its neighbour
+    retimes that shot only.  Bug (BACKLOG 2026-10-11): growing A's end, the
+    ripple copied the seam sample onto B's new start and the retime scaled
+    A's own onto it -- two keys at 60 (SOL: A01_1's end +8 stacked KEYS
+    (119, 119)); keyless, B opened 0.08 off; shrinking, B's opening slope
+    was scaled with A (0.006)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _retime(self, keys, shots, shot, new_start, new_end, watch):
+        cube = cmds.polyCube(name="retime_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [ShotBlock(i, n, s, e, [cube]) for i, (n, s, e) in enumerate(shots)]
+        )
+        seq.reconcile_system_edits()
+        w = next(s for s in seq.sorted_shots() if s.name == watch)
+        w0 = self._played(crv, w.start, w.end)
+        seq.resize_shot(shot, new_start, new_end)
+        times = sorted(cmds.keyframe(crv, q=True) or [])
+        self.assertFalse(
+            [b for a, b in zip(times, times[1:]) if b - a < 0.01], f"stacked: {times}"
+        )
+        w = next(s for s in seq.sorted_shots() if s.name == watch)
+        self.assertLess(self._off(crv, w0, w.start, w.end), 1e-4, f"{watch} plays on")
+
+    ABC = [("A", 0, 50), ("B", 50, 100), ("C", 100, 150)]
+
+    def test_growing_onto_a_keyed_seam_stacks_nothing(self):
+        self._retime(((0, 0), (40, 2), (50, 3), (100, 5)), self.ABC, 0, 0, 60, "B")
+
+    def test_growing_onto_a_keyless_seam_keeps_the_next_shot(self):
+        self._retime(((0, 0), (40, 2), (100, 5)), self.ABC, 0, 0, 60, "B")
+
+    def test_shrinking_a_keyed_seam_keeps_the_next_shots_slope(self):
+        self._retime(((0, 0), (40, 2), (50, 3), (100, 5)), self.ABC, 0, 0, 45, "B")
+
+    def test_growing_the_start_keeps_the_shot_before(self):
+        self._retime(
+            ((10, 0), (40, 2), (50, 3), (60, 4), (100, 5)), self.ABC, 1, 40, 100, "A"
+        )
+
+
+class TestALinkedDuplicateRetimesOnce(unittest.TestCase):
+    """A duplicate with input connections shares its source's anim curves: a
+    Shift retime scaled them once per sharer, and a shrink lands the first
+    pass's keys back inside the old span, where the second pass scaled them
+    again (BACKLOG 2026-10-05: [10, 20] to [10, 15] played [10, 12.5])."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def test_a_shared_curve_is_scaled_once(self):
+        cube = cmds.polyCube(name="link_a")[0]
+        for t, v in ((10, 0), (20, 5)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        twin = cmds.duplicate(cube, name="link_b", inputConnections=True)[0]
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        self.assertEqual(
+            cmds.listConnections(f"{twin}.translateX", type="animCurve"), [crv]
+        )
+        seq = ShotSequencer([ShotBlock(0, "A", 10, 20, [cube, twin])])
+        seq.resize_shot(0, 10, 15)
+        self.assertEqual(cmds.keyframe(crv, q=True), [10.0, 15.0])
+
+
+class TestAPlainEdgeShrinkKeepsItsFlushNeighbour(unittest.TestCase):
+    """A plain edge shrink (``resize_shot_bounds``) of a shot flush with its
+    neighbour ripples that neighbour onto the new bound under the closing
+    rule: flush where the two poses agree, a frame short where they differ
+    (maintainer 2026-10-11), and every shot plays on.  Bug (BACKLOG
+    2026-10-11): a ramp crossing the seam keyless was compressed between the
+    edited shot's last key and the neighbour's first -- SOL "C02_2"
+    SOCKET_WRENCH 0.096 off over 55 frames; here A 0.13 and B 0.29 off."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    RAMP = ((10, 0), (30, 2), (80, 6), (120, 1))  # 30 -> 80 crosses A|B keyless
+
+    def _shrink(self, keys, shot, new_start, new_end, spline=False, pin=False):
+        cube = cmds.polyCube(name="shrink_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        if spline:
+            cmds.keyTangent(crv, itt="spline", ott="spline")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 50, [cube]),
+                ShotBlock(1, "B", 50, 100, [cube]),
+                ShotBlock(2, "C", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        if pin:  # the seam a respace pins: claimed for A's end
+            seq._pin_bound_poses(
+                [cube], (49.0, 51.0), [(50.0, 0, "end")], crossing=True
+            )
+        before = {s.shot_id: self._played(crv, s.start, s.end) for s in seq.shots}
+        seq.resize_shot_bounds(shot, new_start, new_end)
+        times = sorted(cmds.keyframe(crv, q=True) or [])
+        self.assertFalse(
+            [b for a, b in zip(times, times[1:]) if b - a < 0.01], f"stacked: {times}"
+        )
+        return seq, crv, before
+
+    def _plays_on(self, seq, crv, before, sid, frames=None):
+        """Shot *sid* plays its first *frames* (all) as it did, from wherever
+        it starts now."""
+        s = seq.shot_by_id(sid)
+        ref = before[sid][: frames or len(before[sid])]
+        self.assertLess(
+            self._off(crv, ref, s.start, s.start + len(ref) - 1),
+            1e-4,
+            f"{s.name} plays on",
+        )
+
+    def test_a_keyless_ramp_lands_a_frame_short_where_the_poses_differ(self):
+        seq, crv, before = self._shrink(self.RAMP, 0, 0, 46)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0, 46), (47, 97), (97, 147)],
+        )
+        self._plays_on(seq, crv, before, 0, 47)
+        self._plays_on(seq, crv, before, 1)
+        self._plays_on(seq, crv, before, 2)
+
+    def test_a_keyless_ramp_lands_flush_where_the_poses_agree(self):
+        """A spline dip symmetric about 48: the poses at 46 and 50 agree."""
+        keys = ((6, 5), (26, 0), (70, 0), (90, 5), (130, 2))
+        seq, crv, before = self._shrink(keys, 0, 0, 46, spline=True)
+        self.assertEqual(seq.shot_by_id(1).start, 46.0, "flush")
+        self._plays_on(seq, crv, before, 0, 47)
+        self._plays_on(seq, crv, before, 1)
+        self._plays_on(seq, crv, before, 2)
+        # The merged sample on the flush seam is A's (the fencepost).
+        self.assertEqual(seq.ledger.key_records(crv), [(46.0, 0, "end")])
+
+    def test_a_keyed_opening_rides_with_the_next_shot(self):
+        """A curve still in A keys the seam and ramps in B: the seam's key is
+        B's opening now that A gave the frame up (B was 0.51 off)."""
+        seq, crv, before = self._shrink(((10, 2), (50, 2), (80, 6), (120, 1)), 0, 0, 46)
+        self.assertEqual(seq.shot_by_id(1).start, 46.0, "the poses agree")
+        self._plays_on(seq, crv, before, 0, 47)
+        self._plays_on(seq, crv, before, 1)
+
+    def test_a_claimed_seam_pin_becomes_the_next_shots_opening(self):
+        seq, crv, before = self._shrink(self.RAMP, 0, 0, 46, pin=True)
+        self._plays_on(seq, crv, before, 0, 47)
+        self._plays_on(seq, crv, before, 1)
+        self.assertEqual(
+            sorted(seq.ledger.key_records(crv)), [(46.0, 0, "end"), (47.0, 1, "start")]
+        )
+
+    def test_a_head_shrink_keeps_the_shot_before(self):
+        seq, crv, before = self._shrink(self.RAMP, 1, 54, 100)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(3, 53), (54, 100), (100, 150)],
+        )
+        self._plays_on(seq, crv, before, 0)
+        self.assertLess(self._off(crv, before[1][4:], 54, 100), 1e-4, "B plays on")
+
+    def _across_a_gap(self, op):
+        """P [0,50] | Q [60,110] | R [120,170] | S [180,230], gap 10: a ramp
+        keyed at 5 and 200 crosses them all, Q's members don't include it
+        (only ``mover``, keyed 62..90).  The gap hold steps 5 and pins Q's
+        start; Q's start pin is never held, so Q|R stays a keyless crossing."""
+        mover = cmds.polyCube(name="gap_mover")[0]
+        for t, v in ((62, 0), (90, 5)):
+            cmds.setKeyframe(mover, at="translateY", t=t, v=v)
+        cube = cmds.polyCube(name="gap_ramp")[0]
+        for t, v in ((5, 0), (200, 10)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 60, 110, [mover]),
+                ShotBlock(2, "R", 120, 170, [cube]),
+                ShotBlock(3, "S", 180, 230, [cube]),
+            ]
+        )
+        seq.store.gap = 10.0
+        seq.reconcile_system_edits()
+        before = {s.shot_id: self._played(crv, s.start, s.end) for s in seq.shots}
+        op(seq)
+        return seq, crv, before
+
+    def test_a_slide_across_a_gap_keeps_the_shot_before(self):
+        """The gap hold now also ends Q's keyless crossing on Q's own end and
+        pins R's start, so a ripple of what follows leaves Q as it was (the
+        ramp from Q's start pin to a key four shots on was re-timed by every
+        ripple: SOL pulled into Blender, a band move played the next shots
+        about 1.0 off)."""
+        seq, crv, before = self._across_a_gap(
+            lambda s: s.slide_shot(2, 130, direction="downstream")
+        )
+        self.assertEqual(seq.shot_by_id(2).start, 130.0)
+        self._plays_on(seq, crv, before, 1)
+        self._plays_on(seq, crv, before, 2)
+        self._plays_on(seq, crv, before, 3)
+
+    def test_a_trim_across_a_gap_keeps_the_shots_after(self):
+        """A ramp crossing the gap keyless was compressed by the ripple: R
+        1.196 off (SOL in Blender: trimming "A01_2" played "A02" 1.496 off,
+        all 81 frames)."""
+        seq, crv, before = self._across_a_gap(
+            lambda s: s.trim_shot_to_content(1, edge="trailing")
+        )
+        self.assertEqual(seq.shot_by_id(1).end, 90.0)
+        self._plays_on(seq, crv, before, 1, 31)  # Q to its new end
+        self._plays_on(seq, crv, before, 2)
+        self._plays_on(seq, crv, before, 3)
+
+    def test_a_grow_across_a_gap_keeps_the_shots_after(self):
+        seq, crv, before = self._across_a_gap(
+            lambda s: s.resize_shot_bounds(1, 60, 116)
+        )
+        self.assertEqual(seq.shot_by_id(2).start, 126.0)
+        self._plays_on(seq, crv, before, 1, 51)  # Q to its old end
+        self._plays_on(seq, crv, before, 2)
+        self._plays_on(seq, crv, before, 3)
+
+    def test_a_head_shrink_behind_a_held_gap_keeps_the_held_tail(self):
+        """The gap hold's stop pin on Q's start is superseded by Q's pose
+        pinned on its new start.  Left where it was, it became the gap's last
+        key, the hold moved onto it, and P's held tail ramped (SOL "A01_1"
+        1.18 off over its last 11 frames)."""
+        cube = cmds.polyCube(name="held_gap_cube")[0]
+        for t, v in ((0, 0), (40, 5), (90, 9), (130, 1)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 60, 110, [cube]),
+                ShotBlock(2, "R", 120, 170, [cube]),
+            ]
+        )
+        seq.store.gap = 10.0
+        seq.reconcile_system_edits()  # 40 holds, Q's start is pinned
+        p0, q0 = self._played(crv, 0, 50), self._played(crv, 64, 110)
+        seq.resize_shot_bounds(1, 64, 110)
+        p = seq.shot_by_id(0)
+        self.assertEqual((p.start, p.end), (4.0, 54.0))
+        self.assertLess(self._off(crv, p0, 4, 54), 1e-4, "P's held tail plays on")
+        self.assertLess(self._off(crv, q0, 64, 110), 1e-4, "Q plays on")
+        self.assertEqual(
+            seq.ledger.step_times(crv), [44.0, 90.0], "the holds stay P's and Q's"
+        )
+
+    def test_a_keyed_seam_still_stops_the_shrink(self):
+        """A key on the seam of a curve moving in A is A's content: the
+        shrink stops there and nothing changes (the guard)."""
+        keys = ((10, 0), (30, 2), (50, 3), (80, 6), (120, 1))
+        seq, crv, before = self._shrink(keys, 0, 0, 46)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()],
+            [(0, 50), (50, 100), (100, 150)],
+        )
+        self.assertEqual(sorted(cmds.keyframe(crv, q=True)), [10, 30, 50, 80, 120])
+
+
+class TestALeadingPadKeepsTheShotsOpening(unittest.TestCase):
+    """A leading pad slides a shot's content on and puts its start back.  The
+    gap hold's stop pin on that start carries the content's opening pose; as
+    the start's claim it FOLLOWED the start back, and the shot's first
+    segment played stretched (SOL real-scene harness, `multi_shot_playback_
+    integrity`: "A01_2" KEYS_translateY 1.65 off over its first 16 frames,
+    present on the 2026-10-10 release too)."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _pad(self, gap):
+        cube = cmds.polyCube(name="pad_cube")[0]
+        for t, v in ((10, 2), (90, 8), (150, 1)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50 + gap, 110, [cube]),
+                ShotBlock(2, "R", 120, 170, [cube]),
+            ]
+        )
+        seq.store.gap = float(gap)
+        seq.reconcile_system_edits()  # P's hold steps 10 and pins Q's start
+        p0, q0 = self._played(crv, 0, 50), self._played(crv, 50 + gap, 110)
+        seq.add_shot_space(1, 10.0, edge="leading")
+        q = seq.shot_by_id(1)
+        self.assertEqual(q.start, 50.0 + gap, "the start holds")
+        self.assertLess(self._off(crv, p0, 0, 50), 1e-4, "P plays on")
+        self.assertLess(
+            self._off(crv, q0, q.start + 10, q.end), 1e-4, "Q's content plays on"
+        )
+
+    def test_a_leading_pad_behind_a_gap_keeps_the_opening_pose(self):
+        self._pad(10)
+
+    def test_a_leading_pad_on_a_flush_seam_keeps_the_opening_pose(self):
+        self._pad(0)
+
+
+class TestAHeadLandingKeepsTheSourcesClosingPose(unittest.TestCase):
+    """Move to Shot's HEAD landing: a run from the shot before lands in front
+    of the destination's content, and the block owns the seam it lands on
+    (maintainer 2026-09-23).  Flush behind a shot closing on a different
+    pose, the destination opens a frame later (the closing rule, maintainer
+    2026-10-11); the shot before keeps its closing pose either way."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _land(self, first):
+        """P [0,50] | Q [50,100] flush; P's run 10..30 (opening on *first*)
+        moved to Q, which animates the object too (50: the shared closing
+        pose 5, then 70 and 100)."""
+        cube = cmds.polyCube(name="head_cube")[0]
+        for t, v in ((10, first), (20, 4), (30, 2), (50, 5), (70, 8), (100, 3)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [ShotBlock(0, "P", 0, 50, [cube]), ShotBlock(1, "Q", 50, 100, [cube])]
+        )
+        seq.reconcile_system_edits()
+        closing = self._played(crv, 50, 50)[0]
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 10.0, "end": 30.0}], 1
+        )
+        q = seq.shot_by_id(1)
+        landed = [self._played(crv, q.start + d, q.start + d)[0] for d in (0, 10, 20)]
+        return seq, crv, closing, q, landed
+
+    def test_a_head_landing_keeps_a_frame_where_the_poses_differ(self):
+        seq, crv, closing, q, landed = self._land(0)
+        self.assertEqual(q.start, 51.0, "one frame in")
+        self.assertAlmostEqual(self._played(crv, 50, 50)[0], closing, 4, "P's close")
+        self.assertEqual([round(v, 4) for v in landed], [0.0, 4.0, 2.0], "the block")
+
+    def test_a_head_landing_is_flush_where_the_poses_agree(self):
+        seq, crv, closing, q, landed = self._land(5)
+        self.assertEqual(q.start, 50.0, "flush")
+        self.assertAlmostEqual(self._played(crv, 50, 50)[0], closing, 4, "P's close")
+        self.assertEqual([round(v, 4) for v in landed], [5.0, 4.0, 2.0], "the block")
+
+    def test_a_head_landing_leaves_the_next_shot_its_pose(self):
+        """The block lands clear of Q's end, but nothing keys the curve after
+        it until past R's start: R played the block's last pose (SOL: "D05"
+        SOCKET_WRENCH 1.7 off over all 61 frames).  R's opening is pinned."""
+        cube = cmds.polyCube(name="head_next_cube")[0]
+        for t, v in ((10, 9), (30, 8), (50, 0)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, [cube]),
+                ShotBlock(2, "R", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        r0 = self._played(crv, 100, 150)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 10.0, "end": 30.0}], 1
+        )
+        r = seq.shot_by_id(2)
+        self.assertLess(self._off(crv, r0, r.start, r.end), 1e-4, "R plays on")
+        self.assertAlmostEqual(self._played(crv, 50, 50)[0], 0.0, 4, "P's close")
+
+    def _anchored(self, first):
+        """X holds 0 from 10 (stepped) to its run 105..125 in R; the run is
+        sent to Q, which keys nothing of X: anchored to Q's start."""
+        cube = cmds.polyCube(name="anchored_cube")[0]
+        for t, v in ((10, 0), (105, first), (125, 4)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        cmds.keyTangent(crv, time=(10, 10), outTangentType="step")
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, [cube]),
+                ShotBlock(2, "R", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        p0 = self._played(crv, 0, 50)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 105.0, "end": 125.0}], 1
+        )
+        return seq, crv, p0, seq.shot_by_id(1)
+
+    def test_a_landing_from_after_keeps_the_shot_befores_close(self):
+        """A run from AFTER the destination, of an object it keys nothing of,
+        is anchored to its start -- on a flush seam, the shot before's last
+        frame, which then played the run's first pose (SOL gap 0, B11's
+        first run sent to B10_2: B10_1's last frame 98.35 off).  The
+        destination opens a frame later where the poses differ, as for a
+        head block (the closing rule)."""
+        seq, crv, p0, q = self._anchored(9)
+        self.assertEqual(q.start, 51.0, "one frame in")
+        self.assertLess(self._off(crv, p0, 0, 50), 1e-4, "P plays on")
+        landed = [
+            round(self._played(crv, q.start + d, q.start + d)[0], 4) for d in (0, 20)
+        ]
+        self.assertEqual(landed, [9.0, 4.0], "the run lands at Q's start")
+
+    def test_a_landing_from_after_is_flush_where_the_poses_agree(self):
+        seq, crv, p0, q = self._anchored(0)
+        self.assertEqual(q.start, 50.0, "flush")
+        self.assertLess(self._off(crv, p0, 0, 50), 1e-4, "P plays on")
+
+
+class TestMoveToShotKeepsWhatStaysInTheSource(unittest.TestCase):
+    """Move to Shot re-timed what STAYS in the source: the key a run leaves
+    behind re-derived its slope from the key that replaced the run beside
+    it, so the source played its own content differently (BACKLOG
+    2026-10-11; SOL "A01_2" / "C02").  The source plays the same up to its
+    last stayed key (from its first, for a head run); past it is the run's
+    own, which the user moved."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _send(self, keys, run, dest, gap=0):
+        """P [0,50] | Q [50,100] | R [100+gap, 150+gap]; Q's *run* sent to
+        *dest*.  Returns ``(seq, crv, q_before)``, Q's frames as offsets."""
+        cube = cmds.polyCube(name="stays_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, [cube]),
+                ShotBlock(2, "R", 100 + gap, 150 + gap, [cube]),
+            ]
+        )
+        seq.store.gap = float(gap)
+        seq.reconcile_system_edits()
+        q0 = self._played(crv, 50, 100)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": run[0], "end": run[1]}],
+            seq.shot_by_name(dest).shot_id,
+        )
+        return seq, crv, q0
+
+    # 75 is no extreme: its slope comes from both neighbours.
+    TAIL = ((10, 3), (55, 0), (65, 2), (75, 4), (85, 6), (95, 1), (110, 5), (140, 0))
+    HEAD = ((10, 3), (55, 6), (65, 5), (75, 3), (85, 1), (95, 0), (110, 5), (140, 0))
+
+    def test_a_tail_run_leaves_the_source_playing_to_its_last_stayed_key(self):
+        seq, crv, q0 = self._send(self.TAIL, (85.0, 95.0), "R")
+        q = seq.shot_by_name("Q")
+        self.assertEqual(q.start, 50.0)
+        self.assertLess(self._off(crv, q0[:26], 50, 75), 1e-4, "Q to 75")
+
+    def test_a_tail_run_across_a_gap_leaves_the_source_playing(self):
+        seq, crv, q0 = self._send(self.TAIL, (85.0, 95.0), "R", gap=10)
+        self.assertLess(self._off(crv, q0[:26], 50, 75), 1e-4, "Q to 75")
+
+    def test_a_head_run_leaves_the_source_playing_from_its_first_stayed_key(self):
+        seq, crv, q0 = self._send(self.HEAD, (55.0, 65.0), "P")
+        q = seq.shot_by_name("Q")
+        self.assertLess(
+            self._off(crv, q0[25:], q.start + 25, q.start + 50), 1e-4, "Q from 75"
+        )
+
+
+class TestMoveToShotCopiesASharedSeamSample(unittest.TestCase):
+    """Move to Shot copies, not carries, a run's sample on a FLUSH seam: it
+    is the neighbour's pose too.  Bug (2026-10-11, SOL_REPLACE_ASSEMBLY gap
+    0): "B12"'s last run opened on B11's end, SOLENOID's first key; carried
+    away, every shot before played the new first key's extrapolation --
+    4.85 off over 1734 frames."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+    def _scene(self, keys):
+        cube = cmds.polyCube(name="shared_cube")[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "P", 0, 50, [cube]),
+                ShotBlock(1, "Q", 50, 100, [cube]),
+                ShotBlock(2, "R", 100, 150, [cube]),
+            ]
+        )
+        seq.reconcile_system_edits()
+        return cube, crv, seq
+
+    def test_a_run_opening_on_the_curves_first_key_leaves_it(self):
+        # Q's run 50..70 leaves 90 behind: carried, 90 became the first key
+        # and P played its 5 instead of 3.
+        cube, crv, seq = self._scene(((50, 3), (70, 8), (90, 5)))
+        p0 = self._played(crv, 0, 50)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 50.0, "end": 70.0}], 2
+        )
+        self.assertLess(self._off(crv, p0, 0, 50), 1e-4, "P plays on")
+        r = seq.shot_by_id(2)  # a frame after Q's close (5), the run opening on 3
+        self.assertEqual(r.start, 101.0)
+        landed = [
+            cmds.keyframe(crv, q=True, eval=True, time=(r.start + d, r.start + d))[0]
+            for d in (0, 20)
+        ]
+        self.assertEqual(
+            [round(v, 4) for v in landed], [3.0, 8.0], "the run lands whole"
+        )
+
+    def test_a_run_closing_on_the_next_shots_opening_leaves_it(self):
+        cube, crv, seq = self._scene(((60, 1), (80, 4), (100, 7), (130, 2)))
+        r0 = self._played(crv, 100, 150)
+        seq.move_sequences_to_shot(
+            [{"kind": "anim", "obj": cube, "start": 60.0, "end": 100.0}], 0
+        )
+        self.assertLess(self._off(crv, r0, 100, 150), 1e-4, "R plays on")
+
+
+class TestAReleasedHoldOtherShotsPlayStays(unittest.TestCase):
+    """A gap hold written before its stop pin existed runs on to the curve's
+    next key, through every shot between, and those shots play it.  Released
+    when its gap closed, the restored interpolation re-timed them all:
+    SOL_REPLACE_ASSEMBLY, a respace 10 -> 0 played a held door
+    (``LCKR_DOOR_LOC_rotateY``) off its hold in 15 shots, up to 1.22, and
+    the layout settled only on a second respace."""
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def test_a_respace_to_zero_keeps_the_hold_the_shots_play(self):
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="legacy_hold_cube")[0]
+        for t, v in ((10, 0), (20, 10), (100, 0)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 20, [cube]),
+                ShotBlock(1, "B", 30, 50, [cube]),
+                ShotBlock(2, "C", 60, 80, [cube]),
+                ShotBlock(3, "D", 90, 110, [cube]),
+            ]
+        )
+        # The old hold: 20 stepped and claimed, no stop pin on B's start.
+        seq.ledger.record_step(crv, 20.0, "auto", "auto", 10.0)
+        cmds.keyTangent(crv, time=(20, 20), outTangentType="step")
+        played = {
+            name: self._played(crv, s.start, s.end)
+            for name, s in ((s.name, s) for s in seq.sorted_shots())
+        }
+        seq.respace(gap=0, start_frame=0)
+        for s in seq.sorted_shots():
+            self.assertLess(
+                self._off(crv, played[s.name], s.start, s.end),
+                1e-4,
+                f"{s.name} plays on",
+            )
+        layout = [(s.start, s.end) for s in seq.sorted_shots()]
+        seq.respace(gap=0, start_frame=0)
+        self.assertEqual(
+            [(s.start, s.end) for s in seq.sorted_shots()], layout, "one pass"
+        )
+
+    _played = staticmethod(
+        TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._played
+    )
+    _off = TestAClosingSeamStaysOneFrameApartWhereItsPosesDiffer._off
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestAHoldClaimedInBlenderReleases(unittest.TestCase):
+    """``ShotTransfer`` carries the ledger verbatim, so a scene pushed from
+    Blender holds claims naming Blender interpolations; ``keyTangent``
+    refused ``BEZIER`` silently and the hold stayed stepped once its key was
+    no longer a seam (found 2026-10-11 from the Blender side, where the
+    reverse crashed).  The release maps a foreign type by kind."""
+
+    def tearDown(self):
+        ShotStore.clear_active()
+
+    def test_a_blender_claim_releases_to_a_maya_type(self):
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="foreign_hold_cube")[0]
+        for t, v in ((0, 0), (30, 3), (70, 7), (90, 9)):
+            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        crv = cmds.listConnections(f"{cube}.translateX", type="animCurve")[0]
+        seq = ShotSequencer(
+            [ShotBlock(0, "A", 0, 50, [cube]), ShotBlock(1, "B", 60, 100, [cube])]
+        )
+        seq.reconcile_system_edits()
+        self.assertEqual(seq.ledger.step_times(crv), [30.0], "fixture: 30 is held")
+        claim = seq.ledger.claimed_step(crv, 30.0)
+        seq.ledger.release_step(crv, 30.0)
+        seq.ledger.record_step(crv, 30.0, "AUTO_CLAMPED", "BEZIER", claim[2])
+        cmds.setKeyframe(cube, at="translateX", t=45, v=4.0)  # the seam moves on
+        seq.reconcile_system_edits()
+        self.assertEqual(
+            cmds.keyTangent(crv, q=True, time=(30, 30), outTangentType=True), ["auto"]
+        )
 
 
 class TestMoveToShotTakesEveryVisibleClip(unittest.TestCase):
@@ -4503,7 +6272,9 @@ class TestABoundEnclosesFractionalContent(unittest.TestCase):
         # 0.2 into it: the room inserted in front must clear the whole block
         # (89.35 frames: 90, where the nearest frame is 89), or the block
         # lands past the destination's first key, which then no longer moves
-        # with the rest of its content.
+        # with the rest of its content.  S0 closes mid-ramp (2.0 at 200) on
+        # a pose the block's (0) is not: S1 opens a frame later (the closing
+        # rule at the head), S0's close pinned at 200.
         c = cmds.polyCube(name="frHead")[0]
         for t, v in ((110.6, 0), (150, 5), (199.95, 2), (200.2, 7), (230, 1)):
             cmds.setKeyframe(c, at="translateX", t=t, v=v)
@@ -4518,7 +6289,7 @@ class TestABoundEnclosesFractionalContent(unittest.TestCase):
         values = cmds.keyframe(c, q=True, attribute="translateX", valueChange=True)
         self.assertEqual(
             [(round(t, 3), round(v)) for t, v in zip(times, values)],
-            [(200.0, 0), (239.4, 5), (289.35, 2), (290.2, 7), (320.0, 1)],
+            [(200.0, 2), (201.0, 0), (240.4, 5), (290.35, 2), (291.2, 7), (321.0, 1)],
         )
 
 
@@ -4624,15 +6395,18 @@ class TestARetimeCarriesTheSystemsClaims(unittest.TestCase):
         for t, v in ((10, 0), (40, 5), (70, 2), (90, 8)):
             cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
         self.crv = cmds.listConnections(f"{self.cube}.translateX", type="animCurve")[0]
+        # Flush, so the respace OPENS the A|B seam: it pins A's end on the
+        # ramp A plays through it, claims it, and the new gap's hold steps it
+        # -- the way the production assembly carries them.  (A tail a gap
+        # already held is a hold the respace no longer pins: BACKLOG
+        # 2026-10-05, TestARespaceKeepsAHeldTailHolding.)
         self.seq = ShotSequencer(
             [
                 ShotBlock(0, "A", 0, 50, [self.cube]),
-                ShotBlock(1, "B", 60, 100, [self.cube]),
+                ShotBlock(1, "B", 50, 90, [self.cube]),
             ]
         )
-        # The respace plants and claims the pins (and steps the gap seam) the
-        # way the production assembly carries them.
-        self.seq.respace(gap=20, start_frame=0)
+        self.seq.respace(gap=20, start_frame=0)  # B -> [70, 110]
 
     def tearDown(self):
         ShotStore.clear_active()
@@ -4791,6 +6565,12 @@ class TestResizeShotBounds(unittest.TestCase):
     """``resize_shot_bounds`` is the plain shot-edge drag: the boundary moves
     and the keyframes stay where the animator put them.  ``resize_shot`` (the
     Shift gesture) is the one that retimes content."""
+
+    def setUp(self):
+        # An empty scene: the ripple moves (and checks for collisions on) the
+        # scene's whole keyed content, a previous class's objects included.
+        if HAS_MAYA:
+            cmds.file(new=True, force=True)
 
     def _seq(self):
         return ShotSequencer(
@@ -6808,31 +8588,59 @@ class TestRenderedRowColors(unittest.TestCase):
 
 
 class TestMarkerPersistence(unittest.TestCase):
-    """Marker dict fields round-trip through controller persistence."""
+    """A widget marker serializes into the store's marker dict
+    (``MarkerManagerMixin._marker_to_dict``) with every field it has.  The
+    reverse -- a legacy dict read with defaults -- is
+    ``test_sequencer_gui.TestToolMarkersOnTheTimeline``, through the real
+    widget sync.
+
+    Both tests asserted on a dict literal they had just built -- nothing under
+    test ran (rewritten 2026-10-11)."""
+
+    @staticmethod
+    def _to_dict(md):
+        from mayatk.anim_utils.shots.shot_sequencer.marker_manager import (
+            MarkerManagerMixin,
+        )
+
+        return MarkerManagerMixin._marker_to_dict(md)
 
     def test_marker_dict_has_all_fields(self):
-        """A marker dict must include draggable, style, line_style, opacity."""
-        d = {
-            "time": 10.0,
-            "note": "test",
-            "color": "#FF0000",
-            "draggable": False,
-            "style": "bracket",
-            "line_style": "solid",
-            "opacity": 0.85,
-        }
-        self.assertIn("draggable", d)
-        self.assertIn("style", d)
-        self.assertIn("line_style", d)
-        self.assertIn("opacity", d)
+        from uitk.widgets.sequencer._data import MarkerData
 
-    def test_marker_dict_defaults(self):
-        """Legacy marker dicts without new fields should get defaults."""
-        d = {"time": 5.0, "note": "", "color": "#E8A84A"}
-        self.assertTrue(d.get("draggable", True))
-        self.assertEqual(d.get("style", "triangle"), "triangle")
-        self.assertEqual(d.get("line_style", "dashed"), "dashed")
-        self.assertAlmostEqual(d.get("opacity", 1.0), 1.0)
+        md = MarkerData(
+            marker_id=0,
+            time=10.0,
+            note="test",
+            color="#FF0000",
+            draggable=False,
+            style="bracket",
+            line_style="solid",
+            opacity=0.85,
+        )
+        self.assertEqual(
+            self._to_dict(md),
+            {
+                "time": 10.0,
+                "note": "test",
+                "color": "#FF0000",
+                "draggable": False,
+                "style": "bracket",
+                "line_style": "solid",
+                "opacity": 0.85,
+            },
+        )
+
+    def test_a_tools_payload_rides_along(self):
+        """The Shot Manifest's owner tag survives the store rewrite every
+        marker edit makes; a hand's marker gains no empty payload."""
+        from uitk.widgets.sequencer._data import MarkerData
+
+        tag = {"owner": "shot_manifest", "shot_id": 2}
+        out = self._to_dict(MarkerData(marker_id=0, time=1.0, data=tag))
+        self.assertEqual(out["data"], tag)
+        self.assertIsNot(out["data"], tag)
+        self.assertNotIn("data", self._to_dict(MarkerData(marker_id=1, time=2.0)))
 
 
 class TestDetectShots(unittest.TestCase):
@@ -9063,46 +10871,120 @@ class TestReconcileNeverDropsMembership(unittest.TestCase):
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
 class TestOrderedRippleClearsUnownedKeys(unittest.TestCase):
-    """A rippled key must be able to pass a key that will NOT move.
+    """A placement closing a gap that holds the stationary shot's key.
 
-    ``option="move"`` refuses to let a key pass a neighbour and clamps it
-    onto that frame instead — producing two keys at one time, the travelling
-    one at the wrong frame.  The plan's topological order does not help: it
-    only orders the moves the plan CONTAINS.
-
-    A moving shot carries everything keyed inside its envelope
-    (``_content_objects``), so plain non-membership no longer produces an
-    immovable key.  Ambiguity still does, deliberately: a leaf name that
-    matches two scene nodes is never resolved, because guessing would move
-    the wrong object.
+    The key sits in the gap after a shot that does not move, so the shot
+    sliding back onto it carried nothing of it: it landed over the key and
+    played it (B 0.5 where it played 1.0), the travelling keys passing it.
+    Maintainer 2026-10-12, "same as respace": the seam keeps a frame and the
+    gap's keys are retimed into it, the poses on both bounds pinned first
+    (pythontk ``_retime_closed_gap``).  A band move, a plain slide and a
+    start set alike.  Fixed: 2026-10-12
     """
 
     def setUp(self):
         cmds.file(new=True, force=True)
 
-    def test_a_travelling_key_passes_a_key_in_a_stationary_shot(self):
-        """One curve, two shots, only the second moves — backwards, past the
-        first shot's key.
+    @staticmethod
+    def _played(crv, lo, hi):
+        return [
+            cmds.keyframe(crv, q=True, eval=True, time=(f, f))[0]
+            for f in range(int(lo), int(hi) + 1)
+        ]
 
-        The back-fill cannot help here: the stationary shot is not in the
-        plan's move set, so its key is genuinely immovable, and the
-        travelling key has to pass it rather than clamp onto it.
-        """
-        loc = cmds.spaceLocator(name="shared_loc")[0]
-        for t, v in ((90, 0.0), (110, 1.0)):
-            cmds.setKeyframe(loc, at="translateX", t=t, v=v)
-        # A [0,60] stays put; its envelope is [0,100) and owns the key at 90.
-        # B [100,160] respaces back to 60 (delta -40) and its key at 110
-        # must travel to 70 — straight through 90.
-        seq = ShotSequencer(
-            [ShotBlock(0, "A", 0, 60, []), ShotBlock(1, "B", 100, 160, [])]
-        )
-        seq.respace(gap=0, start_frame=0)
+    def test_a_closing_placement_retimes_the_gaps_key_into_its_kept_frame(self):
+        for label, op in (
+            ("band move", lambda s: s.move_shot(1, 60.0)),
+            ("slide", lambda s: s.slide_shot(1, 60.0, direction=None)),
+            ("start", lambda s: s.set_shot_start(1, 60.0, ripple=False)),
+        ):
+            with self.subTest(op=label):
+                cmds.file(new=True, force=True)
+                loc = cmds.spaceLocator(name="shared_loc")[0]
+                for t, v in ((90, 0.5), (100, 0.0), (110, 1.0)):
+                    cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+                crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
+                seq = ShotSequencer(
+                    [ShotBlock(0, "A", 0, 60, []), ShotBlock(1, "B", 100, 160, [])]
+                )
+                a0, b0 = self._played(crv, 0, 60), self._played(crv, 100, 160)
+                op(seq)
+                b = seq.shot_by_id(1)
+                self.assertEqual((b.start, b.end), (61.0, 121.0), "a frame apart")
+                off_a = max(abs(x - y) for x, y in zip(a0, self._played(crv, 0, 60)))
+                off_b = max(abs(x - y) for x, y in zip(b0, self._played(crv, 61, 121)))
+                self.assertLess(off_a, 1e-4, "A plays on")
+                self.assertLess(off_b, 1e-4, "B plays on")
+                times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+                gap = [t for t in times if 60.0 + 1e-3 < t < 61.0 - 1e-3]
+                self.assertEqual(
+                    len(gap), 1, f"the gap's key in its kept frame: {times}"
+                )
+                self.assertTrue(
+                    all(b - a > 1e-3 for a, b in zip(times, times[1:])),
+                    f"stacked: {times}",
+                )
 
-        times = sorted(cmds.keyframe(loc, q=True, at="translateX") or [])
-        self.assertEqual(len(times), len(set(times)), f"duplicate key times: {times}")
-        self.assertIn(90.0, times, "the stationary shot's key must not move")
-        self.assertIn(70.0, times, f"the 110 key must travel its full -40, got {times}")
+    def test_a_shift_edge_closing_a_keyed_gap_keeps_a_frame_the_key_in_it(self):
+        """A Shift edge -- a retime -- the same (maintainer 2026-10-12):
+        B's start retimed onto A's end was written across the gap's key and
+        played it, and A played 0.0 for 0.5.  Each edge: B's start onto A,
+        and A's end onto B (the gap's key then A's own tail).
+        Fixed: 2026-10-12"""
+        for label, keys, a, b, edit, still, want in (
+            (
+                "start",
+                ((90, 0.5), (100, 0.0), (110, 1.0)),
+                (0, 60),
+                (100, 160),
+                {"shot": 1, "new_start": 60.0},
+                (0, 0, 60),
+                ([(0, 60), (61.0, 160)], (60.0, 61.0), [61.0, 77.5]),
+            ),
+            (
+                "end",
+                ((10, 0.0), (40, 1.0), (45, 5.0), (50, 1.0), (70, 3.0)),
+                (0, 40),
+                (50, 90),
+                {"shot": 0, "new_end": 50.0},
+                (1, 50, 90),
+                ([(0, 49.0), (50, 90)], (49.0, 50.0), [12.25, 49.0]),
+            ),
+        ):
+            with self.subTest(edge=label):
+                cmds.file(new=True, force=True)
+                loc = cmds.spaceLocator(name="shift_loc")[0]
+                for t, v in keys:
+                    cmds.setKeyframe(loc, at="translateX", t=t, v=v)
+                crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
+                seq = ShotSequencer(
+                    [ShotBlock(0, "A", *a, []), ShotBlock(1, "B", *b, [])]
+                )
+                sid, lo, hi = still
+                before = self._played(crv, lo, hi)
+                edit = dict(edit)
+                seq.set_shot_edge(edit.pop("shot"), scale=True, **edit)
+                layout = [(s.start, s.end) for s in seq.sorted_shots()]
+                self.assertEqual(layout, want[0])
+                still_shot = seq.shot_by_id(sid)
+                after = self._played(crv, still_shot.start, still_shot.end)
+                self.assertLess(
+                    max(abs(x - y) for x, y in zip(before, after)),
+                    1e-4,
+                    "the other shot plays on",
+                )
+                times = sorted(cmds.keyframe(crv, q=True, timeChange=True) or [])
+                g_lo, g_hi = want[1]
+                gap = [t for t in times if g_lo + 1e-3 < t < g_hi - 1e-3]
+                self.assertEqual(len(gap), 1, f"the gap's key in its frame: {times}")
+                retimed = seq.shot_by_id(1 - sid)
+                inside = [
+                    round(t, 3)
+                    for t in times
+                    if retimed.start - 1e-3 <= t <= retimed.end + 1e-3
+                    and not g_lo < t < g_hi
+                ]
+                self.assertEqual(inside, want[2], "the retimed shot's own keys only")
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -9200,7 +11082,9 @@ class TestUndoPairing(unittest.TestCase):
 
     def test_an_edit_that_changes_nothing_lands_no_step(self):
         """The no-op step is for an edit that changed the shot records; one
-        that changed nothing must not cost the user a dead Ctrl+Z."""
+        that changed nothing must not cost the user a dead Ctrl+Z -- nor
+        leave a restore point: unpaired on top of the ledger, it blocked the
+        native undo of the edit before it (BACKLOG 2026-10-05)."""
         store = self._store()
         loc = cmds.spaceLocator(name="noop_loc")[0]
         with CoreUtils.undo_chunk("before_edit"):
@@ -9208,7 +11092,29 @@ class TestUndoPairing(unittest.TestCase):
         with store.scene_edit("noop"):
             pass
         self.assertEqual(store.undo_queue_top(), "before_edit")
-        self.assertFalse(store.peek_boundary_tag()[0])
+        self.assertFalse(store.has_boundary_snapshot())
+
+    def test_a_no_op_edit_keeps_the_point_of_the_edit_before_it(self):
+        """...and the caller's own no-op discard after it drops nothing:
+        one discard per push.  Before, the pair took the REAL edit's point."""
+        store = self._store()
+        with store.scene_edit("real"):
+            store.update_shot(0, end=40)
+        real = store.peek_boundary_tag()
+        with store.scene_edit("noop"):
+            pass
+        store.discard_boundary_snapshot()  # what 29 no-op callers do
+        self.assertEqual(store.peek_boundary_tag(), real)
+        self.assertEqual(len(store._boundary_undo), 1)
+
+    def test_a_refused_edit_leaves_no_restore_point(self):
+        """A body that raised before changing anything (a ShotBoundaryConflict
+        refusal) recorded nothing either."""
+        store = self._store()
+        with self.assertRaises(RuntimeError):
+            with store.scene_edit("refused"):
+                raise RuntimeError("declined")
+        self.assertFalse(store.has_boundary_snapshot())
 
     def test_an_edit_made_with_undo_off_is_tagged_unpaired(self):
         store = self._store()
@@ -9259,7 +11165,9 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
     whose keys Maya left exactly where they were — bounds and keys desync
     with nothing on screen to explain it.  The entry Maya just moved is
     named by the OPPOSITE queue, and our restore point knows the marker its
-    edit landed under, so the two match only when the event is ours.
+    edit landed under, so the two match only when the event is ours
+    (``ShotStore._native_step_crossed``; the store is not made active here, so
+    its own Undo listener leaves these points alone).
     """
 
     def setUp(self):
@@ -9270,18 +11178,11 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
     def tearDown(self):
         ShotStore.clear_active()
 
-    def _controller(self):
-        """A controller stub carrying only what the ownership test reads."""
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
+    def _store(self):
         store = ShotStore()
         store.define_shot("A", 0, 50)
         store.define_shot("B", 60, 100)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        return ctrl, store
+        return store
 
     def _keyed(self, name):
         loc = cmds.spaceLocator(name=name)[0]
@@ -9289,19 +11190,18 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
         return loc
 
     def test_no_restore_point_is_not_ours(self):
-        ctrl, _store = self._controller()
-        self.assertFalse(ctrl._native_event_is_ours())
+        self.assertFalse(self._store()._native_step_crossed())
 
     def test_our_own_edit_on_top_is_ours(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._keyed("own_loc")
         with store.scene_edit("keys"):
             cmds.setKeyframe(loc, at="translateX", t=20, v=5)
         cmds.undo()  # Maya undoes OUR chunk
-        self.assertTrue(ctrl._native_event_is_ours())
+        self.assertTrue(store._native_step_crossed())
 
     def test_an_unrelated_undo_is_not_ours(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._keyed("other_loc")
         with store.scene_edit("keys"):
             cmds.setKeyframe(loc, at="translateX", t=20, v=5)
@@ -9309,7 +11209,7 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
             cmds.setAttr(loc + ".translateY", 5)
         cmds.undo()  # Maya undoes the UNRELATED edit
         self.assertFalse(
-            ctrl._native_event_is_ours(),
+            store._native_step_crossed(),
             "our restore point must survive an undo of someone else's edit",
         )
 
@@ -9319,7 +11219,7 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
         operation before it.  Before: Maya discarded the empty chunk, the
         Ctrl+Z after a new first shot undid something else, and the shot
         stayed (2026-10-07: "new shot creation is not undoable")."""
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._keyed("bounds_loc")
         with CoreUtils.undo_chunk("unrelated_edit"):
             cmds.setAttr(loc + ".translateY", 5)
@@ -9327,7 +11227,7 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
             store.update_shot(0, end=40)
         self.assertEqual(store.peek_boundary_tag()[0], True, "the step landed")
         cmds.undo()
-        self.assertTrue(ctrl._native_event_is_ours())
+        self.assertTrue(store._native_step_crossed())
         self.assertEqual(cmds.getAttr(loc + ".translateY"), 5, "theirs untouched")
 
     def test_the_undo_step_changes_nothing_in_the_scene(self):
@@ -9335,7 +11235,7 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
         undoing it leaves the private data node in place."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        _ctrl, store = self._controller()
+        store = self._store()
         nodes = set(cmds.ls())
         with store.scene_edit("boundsonly"):
             store.update_shot(0, end=40)
@@ -9346,19 +11246,223 @@ class TestNativeUndoEventOwnership(unittest.TestCase):
         self.assertTrue(cmds.objExists(node))
 
     def test_redo_direction_matches_on_the_undo_queue(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._keyed("redo_loc")
         with store.scene_edit("keys"):
             cmds.setKeyframe(loc, at="translateX", t=20, v=5)
         store.restore_boundary_snapshot()  # move our entry to the redo side
         cmds.undo()
         cmds.redo()
-        self.assertTrue(ctrl._native_event_is_ours(redo=True))
+        self.assertTrue(store._native_step_crossed(redo=True))
 
     def test_an_untagged_push_keeps_the_pre_pairing_behaviour(self):
-        ctrl, store = self._controller()
+        store = self._store()
         store.push_boundary_snapshot()
-        self.assertTrue(ctrl._native_event_is_ours())
+        self.assertTrue(store._native_step_crossed())
+        self.assertFalse(
+            store._native_step_crossed(first=False),
+            "for the first point of a step only",
+        )
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestTheStoreFollowsMayasUndo(unittest.TestCase):
+    """Maya's own Ctrl+Z restores the shot state with NO Sequencer this
+    session (BACKLOG 2026-10-05 / 2026-10-07).
+
+    The restore points were applied by the Sequencer controller's Undo/Redo
+    listener alone, and uitk keeps a closed panel's controller, so the real
+    trigger was "no Sequencer opened yet": measured in a fresh mayapy, an
+    Align with claims [3, 10] undone with no controller left claims [9]; a
+    Shots-window resize undone left its bound.  The store follows the undo
+    itself now (``ShotStore.active()`` subscribes it).
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        cmds.undoInfo(state=True, infinity=True)
+        ShotStore.clear_active()
+        self.store = ShotStore.active()
+        self.addCleanup(ShotStore.clear_active)
+        self.store.define_shot("A", 0, 50)
+        self.store.define_shot("B", 60, 100)
+        self.loc = cmds.spaceLocator(name="follow_loc")[0]
+        for t in (3, 4, 10, 20):
+            cmds.setKeyframe(self.loc, at="translateX", t=t, v=float(t))
+        self.crv = cmds.keyframe(self.loc, at="translateX", q=True, name=True)[0]
+        for t in (3.0, 10.0):
+            self.store.edit_ledger.record_authored(self.crv, t, 0, "fade_in", self.loc)
+        cmds.select(self.loc, replace=True)
+
+    def _claims(self):
+        return sorted(round(t, 3) for _c, t in self.store.edit_ledger.authored())
+
+    def _keys(self):
+        return sorted(cmds.keyframe(self.crv, q=True, timeChange=True))
+
+    def _align(self):
+        """tb007's shape: keys 3 and 4 move as one block onto 9 and 10."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        cmds.selectKey(self.crv, time=(3, 4), replace=True)
+        with self.store.key_edit("alignkeys", [self.loc]) as (rep, mov):
+            AnimUtils.align_selected_keyframes(
+                [self.loc], target_frame=9, on_replace=rep, on_move=mov
+            )
+
+    def _noop_snap(self):
+        """tb009's shape over whole frames: nothing moves."""
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        with self.store.key_edit("snapkeys", [self.loc]) as (_rep, mov):
+            AnimUtils.snap_keys_to_frames([self.loc], method="nearest", on_move=mov)
+
+    def test_an_undone_key_edit_puts_its_claims_back(self):
+        self._align()
+        self.assertEqual((self._claims(), self._keys()), ([9.0], [9.0, 10.0, 20.0]))
+        cmds.undo()
+        self.assertEqual(
+            (self._claims(), self._keys()), ([3.0, 10.0], [3.0, 4.0, 10.0, 20.0])
+        )
+        cmds.redo()
+        self.assertEqual((self._claims(), self._keys()), ([9.0], [9.0, 10.0, 20.0]))
+
+    def test_a_no_op_edit_between_does_not_block_the_undo(self):
+        """A no-op Snap left an unpaired point on top of the ledger, and the
+        undo of the Align under it then restored nothing."""
+        self._align()
+        self._noop_snap()
+        cmds.undo()
+        self.assertEqual(
+            (self._claims(), self._keys()), ([3.0, 10.0], [3.0, 4.0, 10.0, 20.0])
+        )
+
+    def test_a_shots_window_resize_is_undone_in_its_bounds(self):
+        """The Shots window's End field (``ShotsController.on_shot_end_changed``)
+        moves the bound and ripples the keys after it; Ctrl+Z undid the keys
+        and kept the bound."""
+        from mayatk.anim_utils.shots.shots_slots import ShotsController
+
+        shots = ShotsController.__new__(ShotsController)
+        shots._refreshing_editor = False
+        shots.logger = logging.getLogger("test.shots_window")
+        shots._set_footer = lambda *_a, **_k: None
+        a = self.store.shot_by_name("A")
+        self.store.set_active_shot(a.shot_id)
+        before = (a.end, self.store.shot_by_name("B").start)
+        shots.on_shot_end_changed(40.0)
+        self.assertEqual(self.store.shot_by_id(a.shot_id).end, 40.0)
+        cmds.undo()
+        self.assertEqual(
+            (a.end, self.store.shot_by_name("B").start), before, "bounds undone"
+        )
+        cmds.redo()
+        self.assertEqual(self.store.shot_by_id(a.shot_id).end, 40.0)
+
+    def test_an_unrelated_undo_leaves_the_shots_alone(self):
+        with self.store.scene_edit("boundsonly"):
+            self.store.update_shot(0, end=40)
+        with CoreUtils.undo_chunk("unrelated_edit"):
+            cmds.setAttr(self.loc + ".translateY", 5)
+        cmds.undo()
+        self.assertEqual(self.store.shot_by_id(0).end, 40.0)
+        self.assertTrue(self.store.has_boundary_snapshot())
+        cmds.undo()
+        self.assertEqual(self.store.shot_by_id(0).end, 50.0)
+
+    def test_the_panel_hears_once_per_step(self):
+        heard = []
+        ShotStore.add_native_step_listener(heard.append)
+        self.addCleanup(ShotStore.remove_native_step_listener, heard.append)
+        with self.store.scene_edit("boundsonly"):
+            self.store.update_shot(0, end=40)
+        cmds.undo()
+        cmds.redo()
+        self.assertEqual([(e.redo, e.applied) for e in heard], [(False, 1), (True, 1)])
+
+    def test_the_panels_own_undo_holds_the_sync(self):
+        """The Sequencer's Undo button applies the point itself (its plan
+        covers an unpaired one); the store must not follow the same step.
+        Untagged (legacy) points read as "ours" to any step, so they show it."""
+        self.store.push_boundary_snapshot()
+        self.store.update_shot(0, end=40)
+        self.store.push_boundary_snapshot()
+        self.store.update_shot(0, end=30)
+        with CoreUtils.undo_chunk("some_edit"):
+            cmds.setAttr(self.loc + ".translateY", 5)
+        with ShotStore.native_undo_sync_held():
+            self.store.restore_boundary_snapshot()
+            cmds.undo()
+        self.assertEqual(self.store.shot_by_id(0).end, 40.0, "one point, not two")
+
+    def test_clear_active_unsubscribes_and_active_subscribes_once(self):
+        mgr, tokens = ShotStore.__dict__["_native_undo_subs"]
+        self.assertEqual(len(tokens), 2, "Undo + Redo")
+        ShotStore.active()
+        self.assertIs(ShotStore.__dict__["_native_undo_subs"][1], tokens)
+        ShotStore.clear_active()
+        self.assertIsNone(ShotStore.__dict__.get("_native_undo_subs"))
+        self.assertFalse(set(tokens) & set(mgr._om_subs))
+
+
+@unittest.skipUnless(HAS_MAYA, "requires Maya")
+class TestTheSequencersOwnMembersAreNoHandEdit(unittest.TestCase):
+    """The members the sequencer adds on its own -- filling a shot that names
+    no object the scene holds, when it shows it; an object keyed in the active
+    shot -- are tagged, so the Shot Manifest does not read them as a hand edit
+    (BACKLOG 2026-10-10: such a shot became "edited" and every later Build
+    kept it, doc changes and all).  A hand's add still counts."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        ShotStore.clear_active()
+        self.addCleanup(ShotStore.clear_active)
+        self.store = ShotStore()
+        self.mover = cmds.polyCube(name="keyed_mover")[0]
+        cmds.setKeyframe(self.mover, at="translateX", t=5, v=0)
+        cmds.setKeyframe(self.mover, at="translateX", t=40, v=9)
+        # The doc names an object this scene does not have.
+        self.step = BuilderStep("A01", "A", "SEC A", "", [BuilderObject("GHOST")])
+        ShotManifest(self.store).update([self.step], initial_shot_length=50)
+        self.shot = self.store.shot_by_name("A01")
+
+    def _edited(self):
+        return ShotManifest(self.store).edited_by_hand(self.shot)
+
+    def test_showing_a_shot_of_missing_objects_is_no_edit(self):
+        self.assertFalse(self._edited(), "as built")
+        segments = ShotSequencer(store=self.store).collect_object_segments(
+            self.shot.shot_id
+        )
+        self.assertTrue(segments, "the keyed mover was filled in")
+        objects = self.store.shot_by_id(self.shot.shot_id).objects
+        self.assertIn("GHOST", objects, "the doc's name stays, inert")
+        self.assertTrue(any(o.endswith("keyed_mover") for o in objects), objects)
+        self.assertFalse(self._edited())
+        self.step.objects.append(BuilderObject("DOC_ADDED"))  # a doc change
+        self.assertEqual(
+            ShotManifest(self.store).update([self.step], remove_missing=False),
+            {"A01": "patched"},
+            "the doc's changes still apply",
+        )
+
+    def test_an_object_keyed_in_the_active_shot_is_no_edit(self):
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        ctrl = ShotSequencerController.__new__(ShotSequencerController)
+        ctrl._sequencer = ShotSequencer(store=self.store)
+        ctrl._edited_curves = set(cmds.keyframe(self.mover, q=True, name=True))
+        self.assertTrue(ctrl._auto_add_keyed_objects(self.shot.shot_id))
+        self.assertFalse(self._edited())
+
+    def test_a_hand_add_still_counts(self):
+        self.store.update_shot(
+            self.shot.shot_id,
+            objects=self.shot.objects + cmds.ls(self.mover, long=True),
+        )
+        self.assertTrue(self._edited())
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -9660,6 +11764,12 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         seq = ShotSequencer(
             [ShotBlock(0, "A", 0, 50, [loc]), ShotBlock(1, "B", 60, 100, [loc])]
         )
+        # What the shots play once the gap holds stand (A's tail after its
+        # last key, 20, HOLDS -- every op leaves it so).  Sampled before any
+        # hold, this pinned the respace playing that tail on toward B's first
+        # key, which the maintainer ruled out (BACKLOG 2026-10-05, decided
+        # 2026-10-10: tails keep holding; TestARespaceKeepsAHeldTailHolding).
+        seq.reconcile_system_edits()
         before_a = self._samples(loc, 0, 50)
         before_b = self._samples(loc, 60, 100)
         seq.respace(gap=200, start_frame=0)
@@ -9936,7 +12046,10 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         across every key the merge took in: found 2026-10-05 on a respace's
         pins, 84 frames of the curve changed in Blender."""
         loc = cmds.spaceLocator(name="merge_pin_loc")[0]
-        for t, v in ((0, 0.0), (10, 4.0), (50, 9.0), (55, 2.0)):
+        # A key in the gap (30): A's tail ramps toward it rather than holding,
+        # so the respace pins A's end (a held tail is a hold, which it no
+        # longer pins -- BACKLOG 2026-10-05).
+        for t, v in ((0, 0.0), (10, 4.0), (30, 6.0), (50, 9.0), (55, 2.0)):
             cmds.setKeyframe(loc, at="translateX", t=t, v=v)
         seq = ShotSequencer(
             [ShotBlock(0, "A", 0, 20, [loc]), ShotBlock(1, "B", 40, 60, [loc])]
@@ -9947,7 +12060,7 @@ class TestRespacePreservesEachShot(unittest.TestCase):
         pinned = cmds.keyframe(crv, q=True, timeChange=True)
         before_a = self._samples(loc, 0, 20)
         before_b = self._samples(loc, 45, 65)
-        seq.merge_shots([0, 1])  # no gap any more: the hold on 20 goes
+        seq.merge_shots([0, 1])  # no gap any more: the gap key's hold goes
         self.assertEqual(
             cmds.keyframe(crv, q=True, timeChange=True), pinned, "nothing moved"
         )
@@ -10134,40 +12247,29 @@ class TestMovingShotCarriesItsEnvelope(unittest.TestCase):
         self.assertEqual(self._times(loc), [0.0, 50.0, 100.0, 110.0, 120.0, 150.0])
         self.assertEqual(seq.ledger.key_times(crv), [50.0, 100.0])
 
-    def test_collapsing_a_gap_onto_disagreeing_poses_is_refused_intact(self):
-        """A hard cut cannot live at gap 0 — one frame holds one pose.  The
-        operation must refuse BEFORE writing, leaving the scene untouched."""
-        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
-
+    def test_collapsing_a_gap_onto_disagreeing_poses_keeps_one_frame(self):
+        """A hard cut cannot live at gap 0 -- one frame holds one pose.  It
+        was refused; the maintainer's rule (2026-10-11) keeps the seam one
+        frame apart instead, every key carried with its shot."""
         loc = cmds.spaceLocator(name="cut_loc")[0]
         for t, v in ((10, 0.0), (40, 1.0), (50, 2.0), (70, 3.0)):
             cmds.setKeyframe(loc, at="translateX", t=t, v=v)
         seq = ShotSequencer(
             [ShotBlock(0, "A", 0, 40, [loc]), ShotBlock(1, "B", 50, 90, [loc])]
         )
-        before = self._times(loc)
-        with self.assertRaises(ShotBoundaryConflict) as ctx:
-            seq.respace(gap=0, start_frame=0)
-        self.assertIn("cut_loc", str(ctx.exception), "the curve must be named")
-        self.assertEqual(self._times(loc), before, "nothing was written")
+        seq.respace(gap=0, start_frame=0)
+        self.assertEqual(self._times(loc), [10.0, 40.0, 41.0, 61.0])
         self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0, 40), (50, 90)],
-            "and the layout is unchanged too",
+            [(s.start, s.end) for s in seq.sorted_shots()], [(0, 40), (41, 81)]
         )
 
-    def test_a_refusal_leaves_nothing_written_on_the_two_step_paths(self):
+    def test_the_two_step_paths_keep_a_disagreeing_seam_one_frame_apart(self):
         """``slide_shot`` / ``set_shot_start`` write in TWO steps (ripple and
-        pivot, ordered by the delta's sign).  A refusal in the second step
-        after the first already wrote would leave the scene half-moved and
-        make the "nothing was written" guarantee false.
-
-        It cannot: the step that could newly make two shots contiguous always
-        runs first, and it refuses before writing.  Pinned here because the
-        guarantee is what lets the panel report a conflict and stop.
+        pivot, ordered by the delta's sign).  Dropped flush onto poses that
+        differ they refused, before writing anything; the closing rule
+        (maintainer 2026-10-11, "ALL of them") lands them a frame short
+        instead, every key carried with its shot.
         """
-        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
-
         for label, op in (
             ("no ripple", lambda s: s.set_shot_start(1, 40, ripple=False)),
             ("ripple", lambda s: s.set_shot_start(1, 40, ripple=True)),
@@ -10184,15 +12286,11 @@ class TestMovingShotCarriesItsEnvelope(unittest.TestCase):
                         ShotBlock(1, "B", 50, 90, [loc]),
                     ]
                 )
-                before_keys = self._times(loc)
-                before_layout = [(s.start, s.end) for s in seq.sorted_shots()]
-                with self.assertRaises(ShotBoundaryConflict):
-                    op(seq)
-                self.assertEqual(self._times(loc), before_keys, "no keys written")
+                op(seq)
+                self.assertEqual(self._times(loc), [10.0, 40.0, 41.0, 61.0])
                 self.assertEqual(
                     [(s.start, s.end) for s in seq.sorted_shots()],
-                    before_layout,
-                    "no bounds written",
+                    [(0, 40), (41, 81)],
                 )
 
     def test_a_split_then_collapse_round_trip_is_lossless(self):
@@ -10533,16 +12631,23 @@ class TestShotLifecycle(unittest.TestCase):
         return [(s.name, s.start, s.end) for s in self.seq.sorted_shots()]
 
     def test_delete_cuts_contents_and_closes_the_gap(self):
-        """The default delete takes the shot, its keys, and its space."""
+        """The default delete takes the shot, its keys, and its space -- and
+        leaves the shots beside it the poses those keys gave them (the one
+        rule, 2026-10-11): ``delB`` stood at 0 through A and at 1 through C,
+        so a claimed pin keeps each pose on its bound."""
         a = self._cube("delA", {1: 0, 20: 1})
         b = self._cube("delB", {40: 0, 60: 1})
         c = self._cube("delC", {80: 0, 100: 1})
-        self.seq.define_shot("A", 1, 20, objects=[a])
+        sa = self.seq.define_shot("A", 1, 20, objects=[a])
         sb = self.seq.define_shot("B", 40, 60, objects=[b])
-        self.seq.define_shot("C", 80, 100, objects=[c])
+        sc = self.seq.define_shot("C", 80, 100, objects=[c])
         result = self.seq.delete_shot(sb.shot_id)
+        crv = cmds.listConnections(f"{b}.translateX", type="animCurve")[0]
+        self.assertEqual(self._times(b), [20.0, 40.0], "only A's end and C's start")
+        self.assertEqual(cmds.keyframe(crv, q=True, valueChange=True), [0.0, 1.0])
         self.assertEqual(
-            cmds.keyframe(f"{b}.translateX", q=True, keyframeCount=True) or 0, 0
+            sorted(self.seq.ledger.key_records(crv)),
+            [(20.0, sa.shot_id, "end"), (40.0, sc.shot_id, "start")],
         )
         self.assertEqual(round(result["closed"]), 40)
         self.assertEqual(self._ranges(), [("A", 1.0, 20.0), ("C", 40.0, 60.0)])
@@ -10559,14 +12664,16 @@ class TestShotLifecycle(unittest.TestCase):
         self.assertEqual(self._ranges(), [("C", 80.0, 100.0)])
 
     def test_delete_of_the_last_shot_takes_its_trailing_content(self):
-        """The final shot's envelope runs past its end, and the cut honours it."""
+        """The final shot's envelope runs past its end, and the cut honours
+        it; A keeps the pose ``lastB`` stood in before B (its pin)."""
         a = self._cube("lastA", {1: 0, 20: 1})
         b = self._cube("lastB", {40: 0, 60: 1, 80: 2})  # 80 is a trailing tail
         self.seq.define_shot("A", 1, 20, objects=[a])
         sb = self.seq.define_shot("B", 40, 60, objects=[b])
         self.seq.delete_shot(sb.shot_id)
+        self.assertEqual(self._times(b), [20.0], "B's keys gone, A's end pinned")
         self.assertEqual(
-            cmds.keyframe(f"{b}.translateX", q=True, keyframeCount=True) or 0, 0
+            cmds.keyframe(f"{b}.translateX", q=True, valueChange=True), [0.0]
         )
         self.assertEqual(self._times(a), [1.0, 20.0], "A is untouched")
         self.assertEqual(self._ranges(), [("A", 1.0, 20.0)])
@@ -11033,7 +13140,9 @@ class TestMoveToShotPlacement(unittest.TestCase):
         the source's closing-pose copy ON the destination's start, the block's
         first key landed there, and the copy was pushed to 290.1 beside the
         destination's true opening pose at 290 -- a sixth, stray key. The
-        block owns the seam frame; the source ends on its first pose."""
+        block owns the destination's start.  S0 closes on 7, the block opens
+        on 0, so that start is a frame after S0's end (the closing rule at
+        the head, maintainer 2026-10-11): S0 keeps its closing pose."""
         self.addCleanup(ShotStore.clear_active)
         cube = cmds.polyCube(name="mvSeam")[0]
         for t, v in ((110.7, 0), (150, 5), (199.8, 2), (200, 7), (230, 1)):
@@ -11049,17 +13158,26 @@ class TestMoveToShotPlacement(unittest.TestCase):
         values = cmds.keyframe(cube, q=True, at="translateX", valueChange=True)
         self.assertEqual(
             [(round(t, 3), round(v, 3)) for t, v in zip(times, values)],
-            [(200.0, 0.0), (239.3, 5.0), (289.1, 2.0), (290.0, 7.0), (320.0, 1.0)],
+            [
+                (200.0, 7.0),
+                (201.0, 0.0),
+                (240.3, 5.0),
+                (290.1, 2.0),
+                (291.0, 7.0),
+                (321.0, 1.0),
+            ],
         )
         self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()], [(100, 200), (200, 330)]
+            [(s.start, s.end) for s in seq.sorted_shots()], [(100, 200), (201, 331)]
         )
 
     def test_a_head_block_owns_the_seam_on_a_two_key_curve_too(self):
         """A curve of just the block's key and the seam pose -- the common
         on/off shape: "never below two keys" left that pose to be pushed a
         frame into S1 (201 (7)), though the block's own key keeps the curve
-        alive.  translateY gives S1 content, so the leading room is made."""
+        alive.  translateY gives S1 content, so the leading room is made.  The
+        block (5) owns S1's start, a frame after S0's closing 7 (the closing
+        rule at the head, 2026-10-11)."""
         self.addCleanup(ShotStore.clear_active)
         cube = cmds.polyCube(name="mvSeamTwo")[0]
         for t, v in ((150, 5), (200, 7)):
@@ -11085,7 +13203,8 @@ class TestMoveToShotPlacement(unittest.TestCase):
         times = cmds.keyframe(cube, q=True, at="translateX")
         values = cmds.keyframe(cube, q=True, at="translateX", valueChange=True)
         self.assertEqual(
-            [(round(t, 3), round(v, 3)) for t, v in zip(times, values)], [(200.0, 5.0)]
+            [(round(t, 3), round(v, 3)) for t, v in zip(times, values)],
+            [(200.0, 7.0), (201.0, 5.0)],
         )
 
 
@@ -12993,40 +15112,18 @@ class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
 
     def test_the_delete_key_takes_every_claim_on_the_keys_it_cuts(self):
         """The Delete key over a KEY selection (``_delete_selected_clip_keys``),
-        the selection stood in for by a stub ``KeyframeItem``."""
-        import sys
-        import types
-
+        the selection stood in for by the widget's ``selected_keys``."""
         obj = self._keyed("del_sel_loc", [0, 10, 20])
         clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
         ctrl, store = self._controller(clips)
         crv = cmds.listConnections(f"{obj}.translateX", type="animCurve")[0]
         store.edit_ledger.record_authored(crv, 10.0, 0, "fade_in", obj)
 
-        class _Key:
-            def __init__(self, time):
-                self._time = time
-                self._parent_clip = types.SimpleNamespace(
-                    _data=types.SimpleNamespace(clip_id=1)
-                )
-
         widget = ctrl._get_sequencer_widget()
-        widget._timeline = types.SimpleNamespace(
-            _scene=types.SimpleNamespace(selectedItems=lambda: [_Key(10.0)])
-        )
-        fake_uitk = types.ModuleType("uitk")  # a module: import hooks read __name__
-        fake_uitk.KeyframeItem = _Key
-        saved = sys.modules.get("uitk")
-        sys.modules["uitk"] = fake_uitk
-        try:
-            # No panel: the refresh after the edit reads the shot combo.
-            with patch.object(type(ctrl), "active_shot_id", None):
-                ctrl._delete_selected_clip_keys()
-        finally:
-            if saved is not None:
-                sys.modules["uitk"] = saved
-            else:
-                sys.modules.pop("uitk", None)
+        widget.selected_keys = lambda: [{"clip_id": 1, "times": [10.0]}]
+        # No panel: the refresh after the edit reads the shot combo.
+        with patch.object(type(ctrl), "active_shot_id", None):
+            ctrl._delete_selected_clip_keys()
 
         self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True), [0.0, 20.0])
         self.assertFalse(store.edit_ledger.owns_any(crv, 10.0))
@@ -13039,6 +15136,109 @@ class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
         ctrl._syncing = True
         ctrl.on_keys_deleted(1, [10.0])
         self.assertTrue(ctrl._syncing)
+
+
+class TestSegmentCollectorSummaryTimes(unittest.TestCase):
+    """Compact view's object-row ticks: real keys, never the system's samples.
+
+    A time the shot system claimed on a curve drops out unless another channel
+    of the same object has an animator key there.
+    """
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        self.store = ShotStore()
+        self.seq = ShotSequencer(store=self.store)
+        self.node = cmds.polyCube(name="sumCube")[0]
+        for attr, keys in (("translateX", (1, 20, 50)), ("translateY", (1, 50))):
+            for t in keys:
+                cmds.setKeyframe(self.node, attribute=attr, time=t, value=t)
+        self.tx, self.ty = (
+            cmds.listConnections(f"{self.node}.{a}", type="animCurve")[0]
+            for a in ("translateX", "translateY")
+        )
+        self.segment = {"curves": [self.tx, self.ty], "keyframes": [1.0, 20.0, 50.0]}
+
+    def _summary(self):
+        from mayatk.anim_utils.shots.shot_sequencer.segment_collector import (
+            SegmentCollector,
+        )
+
+        return SegmentCollector.summary_times([self.segment], self.seq.ledger.key_times)
+
+    def test_unclaimed_keys_all_tick(self):
+        self.assertEqual(self._summary(), [1.0, 20.0, 50.0])
+
+    def test_a_sample_claimed_on_its_only_curve_drops(self):
+        self.seq.ledger.record_key(self.tx, 20.0, 0, "end")
+        self.assertEqual(self._summary(), [1.0, 50.0])
+
+    def test_a_claim_beside_a_real_key_on_another_channel_keeps_the_tick(self):
+        self.seq.ledger.record_key(self.tx, 50.0, 0, "end")
+        self.assertEqual(self._summary(), [1.0, 20.0, 50.0])
+
+    def test_a_time_claimed_on_every_keyed_curve_drops(self):
+        self.seq.ledger.record_key(self.tx, 50.0, 0, "end")
+        self.seq.ledger.record_key(self.ty, 50.0, 0, "end")
+        self.assertEqual(self._summary(), [1.0, 20.0])
+
+
+class TestResolveFullName(unittest.TestCase):
+    """``_resolve_full_name``: a name the shots already hold is its own
+    answer -- the graph outline names objects that way, and its row menu's
+    Hide / Delete Track carry those names -- before a leaf match that could
+    pick another object of the same leaf name."""
+
+    def _controller(self, *shots):
+        """A controller over one shot per *shots* entry (its objects)."""
+        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
+            ShotSequencerController,
+        )
+
+        store = ShotStore()
+        for i, objects in enumerate(shots):
+            store.define_shot(f"S{i}", i * 100, i * 100 + 50, objects=objects)
+        ctrl = ShotSequencerController.__new__(ShotSequencerController)
+        ctrl._sequencer = ShotSequencer(store=store)
+        return ctrl
+
+    def test_a_held_name_resolves_to_itself(self):
+        # The earlier shot's object shares the later one's leaf name.
+        ctrl = self._controller(["|grp|wrench"], ["wrench"])
+        self.assertEqual(ctrl._resolve_full_name("wrench"), "wrench")
+        self.assertEqual(ctrl._resolve_full_name("|grp|wrench"), "|grp|wrench")
+
+    def test_a_leaf_name_still_finds_its_object(self):
+        ctrl = self._controller(["|grp|nut"])
+        self.assertEqual(ctrl._resolve_full_name("nut"), "|grp|nut")
+
+    def test_every_track_label_resolves_back_to_its_object(self):
+        # The track header's Hide / Delete Track hand a track's label back
+        # through ``_resolve_full_name``.  Labelled by leaf name alone, two
+        # held objects of one leaf name (path-held, or one held bare) sent
+        # each other's actions to the same object.
+        cmds.file(new=True, force=True)
+        cmds.group(empty=True, name="grp")
+        for name in ("wrench", "bolt", "nut"):
+            cmds.createNode("transform", name=name, parent="grp")
+        for name in ("wrench", "bolt"):
+            cmds.createNode("transform", name=name)
+        ctrl = self._controller(
+            ["|grp|wrench", "|grp|bolt"], ["wrench", "|bolt", "|grp|nut"]
+        )
+        ctrl._track_order_scope = "global"
+        ctrl._try_load_maya_icons = lambda: None
+
+        class _Widget:
+            @staticmethod
+            def add_track(label, **_kw):
+                return label
+
+        objects = ["|grp|wrench", "wrench", "|grp|bolt", "|bolt", "|grp|nut"]
+        labels = ctrl._build_tracks(_Widget(), objects, objects)
+        self.assertEqual(labels["|grp|nut"], "nut")
+        for obj in objects:
+            self.assertEqual(ctrl._resolve_full_name(labels[obj]), obj)
 
 
 if __name__ == "__main__":

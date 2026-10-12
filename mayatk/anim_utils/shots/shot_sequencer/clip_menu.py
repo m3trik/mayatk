@@ -319,7 +319,7 @@ class ClipMenuMixin:
             return
         # Collect all unique main-row object names in the active shot
         obj_names: set = set()
-        for cd in widget._clips.values():
+        for cd in widget.clips():
             o = cd.data.get("obj")
             if o and not cd.sub_row and not cd.data.get("read_only"):
                 obj_names.add(o)
@@ -329,10 +329,10 @@ class ClipMenuMixin:
             else:
                 store.locked_objects.add(o)
         # Apply to all clips
-        for cid, cd in list(widget._clips.items()):
+        for cd in widget.clips():
             o = cd.data.get("obj")
             if o and not cd.data.get("read_only"):
-                widget.set_clip_locked(cid, o != keep_obj)
+                widget.set_clip_locked(cd.clip_id, o != keep_obj)
         self._sub_row_cache.clear()
 
     def _unlock_all(self, widget) -> None:
@@ -340,9 +340,9 @@ class ClipMenuMixin:
         store = self.sequencer.store if self.sequencer else None
         if store is not None:
             store.locked_objects.clear()
-        for cid, cd in list(widget._clips.items()):
+        for cd in widget.clips():
             if cd.locked and not cd.data.get("read_only"):
-                widget.set_clip_locked(cid, False)
+                widget.set_clip_locked(cd.clip_id, False)
         self._sub_row_cache.clear()
 
     def on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None:
@@ -594,19 +594,8 @@ class ClipMenuMixin:
             self.logger.debug("_delete_selected_clip_keys: no widget.")
             return
 
-        from uitk import KeyframeItem
-
-        try:
-            items = widget._timeline._scene.selectedItems()
-        except RuntimeError:
-            items = []
-
-        # Group selected keyframe items by clip_id.
-        by_clip: dict = {}
-        for item in items:
-            if isinstance(item, KeyframeItem):
-                cid = item._parent_clip._data.clip_id
-                by_clip.setdefault(cid, []).append(item._time)
+        # The widget's key selection, grouped by clip (``selected_keys``).
+        by_clip = {g["clip_id"]: list(g["times"]) for g in widget.selected_keys()}
 
         if by_clip:
             # Batch-delete all selected keyframes in a single undo chunk.

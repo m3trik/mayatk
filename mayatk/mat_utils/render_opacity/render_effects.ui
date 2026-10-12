@@ -10,6 +10,9 @@
     <height>320</height>
    </rect>
   </property>
+  <property name="accessibleDescription">
+   <string>Key per-object opacity fades and highlight pulses for engine export.</string>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout">
     <property name="spacing">

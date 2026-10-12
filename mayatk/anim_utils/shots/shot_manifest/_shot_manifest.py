@@ -162,7 +162,8 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
         from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 
         # Shots a build keeps (locked, or edited by hand) get no behavior
-        # pass, and turned-off behavior types are neither keyed nor released.
+        # pass, and behavior types turned off or marked are neither keyed nor
+        # released (``sync`` marks the marked ones).
         return Behaviors.apply_to_shots(
             self._behavior_shots(),
             apply_fn=functools.partial(
@@ -174,7 +175,7 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
             release_fn=lambda shot, name, b: self.release_authored(
                 shot.shot_id, name, b
             ),
-            skip_behaviors=self.disabled_behaviors,
+            skip_behaviors=self.unkeyed_behaviors,
         )
 
     @staticmethod

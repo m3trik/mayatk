@@ -8,9 +8,10 @@ Composed of one mixin per job, each its own module: the table's rows
 following the scene's store (:mod:`.store_follow`), where the steps come from
 (:mod:`.manifest_source`), the mapping template (:mod:`.mapping_picker`), the
 rows' context menus (:mod:`.row_menus`), the header menu
-(:mod:`.header_menu`) and the Export button (:mod:`.export_menu`).  Local
-Edits are a collaborator (:class:`~.manifest_editor.ManifestEditor`); every
-call that names the host goes through :class:`~.manifest_host.ManifestHost`.
+(:mod:`.header_menu`) and the Export button's preview
+(:mod:`.export_preview`).  Local Edits are a collaborator
+(:class:`~.manifest_editor.ManifestEditor`); every call that names the host
+goes through :class:`~.manifest_host.ManifestHost`.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
@@ -21,9 +22,9 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
 
 import pythontk as ptk
-from pythontk import BuilderStep, ColumnMap, ShotPairing
+from pythontk import BuilderStep, ColumnMap, ShotPairing, StepStatus
 
-from .export_menu import ExportMenuMixin
+from .export_preview import ExportPreviewMixin
 from .header_menu import HeaderMenuMixin
 from .manifest_data import ERROR_COLOR, SETTINGS_NS
 from .manifest_editor import ManifestEditor
@@ -44,7 +45,7 @@ class ShotManifestController(
     MappingPickerMixin,
     RowMenusMixin,
     HeaderMenuMixin,
-    ExportMenuMixin,
+    ExportPreviewMixin,
     ptk.LoggingMixin,
 ):
     """Business logic for the Shot Manifest UI (see the module docstring)."""
@@ -110,7 +111,8 @@ class ShotManifestController(
         self._shown_pairing = None  # a sheet's pairing as the table last drew it
         self._reassess_timer = None  # _reassess_soon's, made on first use
         self._reassess_on_show = False  # owed while the panel was hidden
-        self._behaviors_off = None  # _disabled_behaviors, read once
+        self._reassess_note = ""  # the edit a pending re-assessment follows
+        self._behavior_sets = {}  # _behavior_set's lists, read once
         self._store_listener_bound = False
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
@@ -130,6 +132,12 @@ class ShotManifestController(
         self._active_mapping = None  # effective template (options applied)
         self._mapping_template = None  # the template as loaded, options block and all
         self._mapping_name = None
+        self._user_template = None  # the user's pick (_apply_mapping)
+        # The option values the scene keeps for the sheet loaded; None: the
+        # user's own (MappingPickerMixin._adopt_sheet_options).
+        self._sheet_values = None
+        # (key, values) of the last _inferred_sheet_options read: one sheet.
+        self._inferred_options: Optional[tuple] = None
         self._option_rows: list = []  # header-menu rows built from its options
         self._mapping_dir = None  # custom directory override
         self._setup_recent_csv()
@@ -138,7 +146,7 @@ class ShotManifestController(
         self._setup_mapping_combo()
         self._restore_color_overrides()
         self._move_action_buttons_to_footer()
-        self._setup_export_menu()  # wrapped where it now sits, in the footer
+        self._setup_export_button()
         self.ui.on_first_show.connect(self._on_first_show)
         self.ui.on_show.connect(self._on_show)
 
@@ -204,6 +212,7 @@ class ShotManifestController(
             match=self._match,
             rebuild_edited=self._rebuild_edited,
             disabled_behaviors=self._disabled_behaviors(),
+            marked_behaviors=self._marked_behaviors(),
         )
 
     def _pairing(self, steps=None, store=None) -> ShotPairing:
@@ -335,7 +344,8 @@ class ShotManifestController(
         Priority order:
         1. If steps are already loaded, return True immediately.
         2. Load the source: the CSV in the field, else the scene's shots.
-        3. Otherwise, run scene detection.
+        3. Otherwise, run scene detection -- unless the field names a sheet:
+           guessed regions would stand in for the sheet that failed to load.
 
         Returns True if steps are now available.
         """
@@ -345,6 +355,21 @@ class ShotManifestController(
         self._populate_from_source()
         if self._steps:
             return True
+        if self.ui.txt_csv_path.text().strip():
+            if self._source != "csv":
+                reason = (
+                    "The sheet in the field did not load (see the field) and "
+                    "the scene has no shots -- nothing to assess."
+                )
+            elif self._sheet_steps:  # Local Edits hide what the sheet has
+                reason = (
+                    "Every step of the sheet is hidden (Local Edits: Show "
+                    "Hidden) -- nothing to assess."
+                )
+            else:
+                reason = "Every step of the sheet is excluded -- nothing to assess."
+            self._set_footer(reason, color=ERROR_COLOR)
+            return False
 
         # Fall back to scene detection
         try:
@@ -364,9 +389,9 @@ class ShotManifestController(
         Build always starts disabled. It is warranted while a step is unbuilt,
         an object is one a build fixes -- not in its shot, its behavior keys
         missing or made under an older effect recipe -- a shot holds keys of
-        behaviors the doc dropped (``StepStatus.needs_build``), or a Local
-        Edit (a behavior ticked, a step renamed, an object moved...) was made
-        since that Assess.
+        behaviors the doc dropped, or a shot's name, description or objects
+        are not the step's (``StepStatus.needs_build``).  A Local Edit is
+        judged by the Assess it runs again (:meth:`_reassess_soon`).
         """
         btn = getattr(self.ui, "b003", None)
         if btn is None:
@@ -374,13 +399,7 @@ class ShotManifestController(
         if self._editor.viewing_original:
             btn.setEnabled(False)  # a view of the sheet, never built
             return
-        if self._last_results:
-            needs_build = getattr(self, "_edited_since_assess", False) or any(
-                r.needs_build for r in self._last_results
-            )
-        else:
-            needs_build = False
-        btn.setEnabled(needs_build)
+        btn.setEnabled(any(r.needs_build for r in self._last_results))
 
     def build(self) -> None:
         """Build or update shots in the store from loaded steps."""
@@ -498,6 +517,9 @@ class ShotManifestController(
                     if csv_path and store.source_csv != csv_path:
                         store.source_csv = csv_path
                         store.mark_dirty()
+                    # And how it was read: the scene reopens on it this way,
+                    # whatever the user's own options are by then.
+                    self._record_sheet_options(store)
             finally:
                 self._building = False
 
@@ -512,6 +534,7 @@ class ShotManifestController(
             n_beh_applied = len(beh.get("applied", []))
             n_beh_skipped = len(beh.get("skipped", []))
             n_beh_failed = len(beh.get("failed", []))
+            n_beh_marked = len(beh.get("marked", []))
             parts = []
             if n_created:
                 parts.append(f"{n_created} created")
@@ -529,6 +552,8 @@ class ShotManifestController(
                 parts.append(f"{n_beh_applied} behaviors applied")
             if n_beh_skipped:
                 parts.append(f"{n_beh_skipped} behaviors kept (animator keys)")
+            if n_beh_marked:
+                parts.append(f"{n_beh_marked} behaviors marked (Shot Sequencer)")
             if n_beh_failed:
                 parts.append(f"{n_beh_failed} behaviors failed (see log)")
             self._set_footer(
@@ -581,13 +606,15 @@ class ShotManifestController(
             if widget is not None:
                 widget.setEnabled(enabled)
 
-    def assess(self, skip_key_check: bool = False) -> None:
+    def assess(self, skip_key_check: bool = False, note: str = "") -> None:
         """Compare the steps against the scene's shots and colour the tree.
 
         Parameters:
             skip_key_check: When ``True``, bypass the selected-keys guard.
                 Used by internal callers (e.g. re-apply behavior) that
                 already know the scene state and just need a status refresh.
+            note: What the footer says before the assessment's summary --
+                the edit a re-assessment follows (:meth:`_reassess_soon`).
         """
         if not self._ensure_steps():
             return
@@ -665,6 +692,10 @@ class ShotManifestController(
         n_dropped = sum(len(r.dropped_behaviors) for r in results)
         n_additional = sum(len(r.additional_objects) for r in results)
         n_shrinkable = sum(1 for r in results if r.shrinkable_frames > 0)
+        n_updates = sum(1 for r in results if r.updates)
+        pending = [
+            u for u in StepStatus.UPDATES if any(u in r.updates for r in results)
+        ]
         sorted_shots = store.sorted_shots()
         total_frames = (
             (sorted_shots[-1].end - sorted_shots[0].start) if sorted_shots else 0
@@ -685,5 +716,7 @@ class ShotManifestController(
             parts.append(f"{n_additional} scene objects")
         if n_shrinkable:
             parts.append(f"{n_shrinkable} shrinkable")
-        self._set_footer(f"Assessment: {', '.join(parts)}")
+        if n_updates:
+            parts.append(f"{n_updates} shot(s) to update ({', '.join(pending)})")
+        self._set_footer(f"{note} Assessment: {', '.join(parts)}".strip())
         self._update_build_button()

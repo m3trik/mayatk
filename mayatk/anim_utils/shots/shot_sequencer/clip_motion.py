@@ -69,6 +69,7 @@ def scale_attribute_keys(
     snapshotted for undo needs to know a no-op happened so it can discard
     the snapshot instead of leaving a dead restore point.
     """
+    from mayatk.anim_utils._anim_utils import AnimUtils
     from mayatk.anim_utils.shots._shot_apply import ShotApply
 
     curves = curves_for_attr(obj_name, attr_name)
@@ -84,12 +85,13 @@ def scale_attribute_keys(
             (old_start, old_end),
             lambda t: new_start + (t - old_start) * ratio,
         ):
-            cmds.scaleKey(
-                str(crv),
-                time=(old_start, old_end),
-                newStartTime=new_start,
-                newEndTime=new_end,
-            )
+            with AnimUtils._exact_scale():  # GUI Maya rounds a scaled key
+                cmds.scaleKey(
+                    str(crv),
+                    time=(old_start, old_end),
+                    newStartTime=new_start,
+                    newEndTime=new_end,
+                )
     return True
 
 
@@ -577,10 +579,20 @@ class ClipMotionMixin:
                 # stays; the planner never cuts into the neighbour, so a bound
                 # on its keyed start (or inside it) moves it whole, boundary
                 # pose included, and the dragged key lands on a free frame.
-                if abs(start_delta) > 1e-6:
-                    self.sequencer.ripple_upstream(shot_id, expanded_start, start_delta)
-                if abs(end_delta) > 1e-6:
-                    self.sequencer.ripple_downstream(shot_id, expanded_end, end_delta)
+                # The room is the landing's: declared, the ripple's moment of
+                # gap is no split, and no keyless seam is pinned in its way
+                # (ShotSequencer.pending_bounds).
+                with self.sequencer.pending_bounds(
+                    {shot_id: (expanded_start, expanded_end)}
+                ):
+                    if abs(start_delta) > 1e-6:
+                        self.sequencer.ripple_upstream(
+                            shot_id, expanded_start, start_delta
+                        )
+                    if abs(end_delta) > 1e-6:
+                        self.sequencer.ripple_downstream(
+                            shot_id, expanded_end, end_delta
+                        )
                 self.sequencer.store.update_shot(
                     shot_id, start=expanded_start, end=expanded_end
                 )

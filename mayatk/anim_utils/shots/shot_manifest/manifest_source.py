@@ -26,7 +26,8 @@ class ManifestSourceMixin:
     Uses the controller's ``ui`` (``txt_csv_path``, ``tbl_steps``), ``sb``,
     ``_editor``, ``_column_map``, ``_active_mapping``, ``_active_store()``,
     ``_manifest()``, ``_pairing()``, ``_shown_steps()``, ``_populate_table()``,
-    ``_refresh_ranges()``, ``_update_build_button()`` and ``_set_footer()``.
+    ``_refresh_ranges()``, ``_update_build_button()``, ``_set_footer()`` and
+    ``MappingPickerMixin._adopt_sheet_options()``.
     """
 
     def _detect_regions(self, gap_threshold: float) -> list:
@@ -339,8 +340,12 @@ class ManifestSourceMixin:
         scene's shots) funnels through here so that state and the table are
         always consistent.  *source* defaults to ``"csv"`` with a
         *csv_path*, else ``"detect"``.  *steps* are the source's own; the
-        table shows them with this source's Local Edits applied.
+        table shows them with this source's Local Edits applied.  A showing
+        assessment stays showing: it is run again over the new steps
+        (:meth:`_reassess_soon`) -- a template option or a sheet read again
+        never leaves it to another click.
         """
+        assessed = bool(self._last_results)
         self._csv_path = csv_path
         self._source = source or ("csv" if csv_path else "detect")
         self._sheet_steps = steps
@@ -364,6 +369,8 @@ class ManifestSourceMixin:
             footer = f"{footer} {hidden} without a shot hidden.".strip()
         if footer:
             self._set_footer(footer)
+        if assessed and self._steps:
+            self._reassess_soon(note=footer)
 
     def _on_csv_browsed(self, path: str) -> None:
         """Handle a CSV path selected via browse or BrowseOption."""
@@ -394,6 +401,18 @@ class ManifestSourceMixin:
             self._mark_csv_invalid(f"File not found: {path}")
             return False
 
+        # Read it the way the scene reads it: the template and options the
+        # scene keeps for this sheet, not the user's (MappingPickerMixin).  A
+        # sheet that does not load leaves the sheet shown read as it was: a
+        # Build or an option change records on THAT sheet.
+        shown = self._sheet_read_state()
+        self._adopt_sheet_options(path)
+
+        def refuse(reason: str) -> bool:
+            self._restore_sheet_read_state(shown)
+            self._mark_csv_invalid(reason)
+            return False
+
         try:
             if self._active_mapping is not None:
                 from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
@@ -408,21 +427,27 @@ class ManifestSourceMixin:
             # disk/sync diagnosis below would be wrong for a URL, and Error
             # subclasses OSError, so this branch must come first.
             self.logger.error("Failed to fetch CSV %r: %s", path, exc)
-            self._mark_csv_invalid(str(exc))
-            return False
+            return refuse(str(exc))
         except OSError as exc:
             # isfile() passed but the bytes can't be read.  Don't assume a
             # single cause -- _describe_read_failure enumerates the likely
             # culprits (full disk / stopped sync client / locked / disconnected),
             # always surfaces the raw error, and appends the free space if low.
             self.logger.error("Failed to read CSV %r: %s", path, exc)
-            self._mark_csv_invalid(self._describe_read_failure(path, exc))
-            return False
+            return refuse(self._describe_read_failure(path, exc))
         except Exception as exc:
             self.logger.error("Failed to parse CSV: %s", exc)
-            self._mark_csv_invalid(f"Error: {exc}")
-            return False
+            return refuse(f"Error: {exc}")
 
+        if not steps:
+            # A sheet the template reads nothing of is not a manifest to
+            # check the scene against; an empty table would read as one.
+            # (Steps the user excluded below are theirs, not a misread.)
+            return refuse(
+                "No steps read: no step-ID cell matches the mapping template. "
+                "Set its Step IDs (header menu) to the way the sheet writes "
+                "them, or Auto."
+            )
         # Honor context-menu exclusions on BOTH branches.  parse_csv already
         # applies them on the no-mapping branch (idempotent here); resolve()
         # builds a fresh ColumnMap from the mapping JSON and never sees

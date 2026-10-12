@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-8609%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-8811%20passed-brightgreen.svg)](../test/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -170,6 +170,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 
 ## Guides
 
+- **[Shot Sequencer](shot_sequencer.md)** — the per-shot animation timeline: its Standard / Compact / Graph views, the shot, clip and key gestures, the graph editor, keys and header settings (the panel's `?` help links here).
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 - **[Lightmap Baker](lightmap_baker.md)** — Arnold lighting baked into engine lightmaps: the panel, presets shared with the headless API, the Exclude set, where the maps land, and how the engine binds them.

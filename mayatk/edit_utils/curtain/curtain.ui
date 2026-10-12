@@ -5,6 +5,9 @@
   <property name="geometry"><rect><x>0</x><y>0</y><width>230</width><height>680</height></rect></property>
   <property name="tabShape"><enum>QTabWidget::Triangular</enum></property>
   <property name="dockNestingEnabled"><bool>true</bool></property>
+  <property name="accessibleDescription">
+   <string>Drape a pleated cloth curtain from a curve, edge loop or generated rail.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize"><size><width>230</width><height>0</height></size></property>
    <layout class="QVBoxLayout" name="verticalLayout_2">

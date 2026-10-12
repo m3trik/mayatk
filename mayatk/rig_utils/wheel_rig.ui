@@ -22,6 +22,9 @@
   <property name="enabled" stdset="0">
    <bool>true</bool>
   </property>
+  <property name="accessibleDescription">
+   <string>Make wheels roll automatically as their control moves, sized by wheel height.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

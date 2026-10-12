@@ -149,6 +149,7 @@ class ManifestTableMixin:
                 broken = list(obj_st.broken_behaviors or [])
                 stale = list(obj_st.stale_behaviors or [])
         off = self._disabled_behaviors()
+        marked = self._marked_behaviors()
         label.setText(
             ManifestData.format_behavior_html(
                 obj.behaviors,
@@ -156,6 +157,7 @@ class ManifestTableMixin:
                 status_color=status_color,
                 stale=stale,
                 disabled=off,
+                marked=marked,
             )
         )
         # Build a per-behavior status tooltip
@@ -175,8 +177,18 @@ class ManifestTableMixin:
                     continue
                 if obj_st.status == "missing_object":
                     lines.append(f"\u2716 {display}  (object missing)")
+                elif b in broken_set and b in marked:
+                    lines.append(
+                        f"\u2716 {display}  (no marker where its keys would go "
+                        "-- Build places it)"
+                    )
                 elif b in broken_set:
                     lines.append(f"\u2716 {display}  (not verified)")
+                elif b in marked:
+                    lines.append(
+                        f"\u2714 {display}  (marked on the Shot Sequencer's "
+                        "timeline -- header menu)"
+                    )
                 else:
                     lines.append(f"\u2714 {display}")
             label.setToolTip("\n".join(lines))
@@ -323,16 +335,15 @@ class ManifestTableMixin:
         self._locked_rows = self._locked_step_ids(pairing)
 
         _kind_cache: dict = {}
+        steps_by_id = {s.step_id: s for s in self._steps}
 
         for step, shot in self._rows(pairing):
             if step is None:
-                self._add_shot_row(tree, shot)
+                # A shot split off a step's shot shows that step's section.
+                linked = steps_by_id.get(pairing.links.get(shot.shot_id))
+                self._add_shot_row(tree, shot, section=self._section_text(linked))
                 continue
-            section = (
-                f"{step.section}: {step.section_title}"
-                if step.section_title
-                else step.section
-            )
+            section = self._section_text(step)
 
             parent = tree.create_item(
                 [step.shot_name, section, step.display_text, "", "", ""],
@@ -409,11 +420,23 @@ class ManifestTableMixin:
         tree.set_stretch_column(2)  # Stretch "Description" column
         tree.restore_column_state()  # Persist user header changes
         self._editor.decorate()
+        self._refresh_export_preview()  # an open one shows these rows
 
-    def _add_shot_row(self, tree, shot):
+    @staticmethod
+    def _section_text(step) -> str:
+        """*step*'s Section cell -- ``"A: Title"``, or the bare section --
+        ``""`` for no step."""
+        if step is None:
+            return ""
+        if step.section_title:
+            return f"{step.section}: {step.section_title}"
+        return step.section
+
+    def _add_shot_row(self, tree, shot, section: str = ""):
         """An italic, non-editable "not in doc" row for *shot* -- a shot no
         step pairs with -- its members under it; its context menu adds it to
-        the manifest, pairs it with a step, or removes it."""
+        the manifest, pairs it with a step, or removes it.  *section*: the
+        section of the step it was split off (``ShotPairing.links``)."""
         from qtpy.QtCore import Qt
         from qtpy.QtGui import QBrush, QColor
 
@@ -422,7 +445,7 @@ class ManifestTableMixin:
         row = tree.create_item(
             [
                 shot.name,
-                "",
+                section,
                 shot.description or "",
                 "",
                 f"{shot.start:.0f}",
@@ -580,10 +603,12 @@ class ManifestTableMixin:
         col_count = tree.columnCount()
         content_col = COL_DESC
         beh_col = COL_BEHAVIORS
-        # Fresh results answer for every Local Edit made before them.
-        self._edited_since_assess = False
 
         status_map = {r.step_id: r for r in results}
+
+        def add_tip(item, text):
+            tip = item.toolTip(0)
+            item.setToolTip(0, f"{tip}\n{text}" if tip else text)
 
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
@@ -615,23 +640,19 @@ class ManifestTableMixin:
                 parent.setToolTip(0, StepStatus.HELP[step_status.status])
 
             if step_status.shrinkable_frames > 0:
-                existing_tip = parent.toolTip(0) or ""
-                shrink_tip = f"{step_status.shrinkable_frames:.0f}f unused"
-                parent.setToolTip(
-                    0, f"{existing_tip}\n{shrink_tip}" if existing_tip else shrink_tip
-                )
+                add_tip(parent, f"{step_status.shrinkable_frames:.0f}f unused")
             if step_status.dropped_behaviors:
-                existing_tip = parent.toolTip(0) or ""
                 dropped = ", ".join(
                     f"{name} \u2192 {ManifestData.fmt_behavior(b)}"
                     for name, b in step_status.dropped_behaviors
                 )
-                dropped_tip = (
-                    f"Keys of dropped behaviors -- Build removes them: {dropped}"
+                add_tip(
+                    parent,
+                    f"Keys of dropped behaviors -- Build removes them: {dropped}",
                 )
-                parent.setToolTip(
-                    0, f"{existing_tip}\n{dropped_tip}" if existing_tip else dropped_tip
-                )
+            if step_status.updates:
+                done = " and ".join(StepStatus.UPDATES[u] for u in step_status.updates)
+                add_tip(parent, f"Build {done}.")
 
             # Recolor step icon and step text to reflect status
             fg_hex, _ = PASTEL_STATUS.get(step_status.status, (None, None))
@@ -775,6 +796,7 @@ class ManifestTableMixin:
                         extra_item.setIcon(content_col, icon)
 
         self._editor.decorate()
+        self._refresh_export_preview()  # an open one shows these rows
 
     def expand_missing(self) -> None:
         """Expand all step rows that have missing objects, behaviors, or additional objects."""

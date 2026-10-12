@@ -556,6 +556,202 @@ class TestStaggerKeysFixes(MayaTkTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class TestStaggerSegmentReorder(MayaTkTestCase):
+    """A layout that reverses a split curve's own segments moves every segment
+    exactly once, to where the layout puts it.
+
+    One range move per segment, each picking its keys by time from the curve
+    as it stood, landed an earlier move on a later one's source range --
+    cutting the key there -- and the later move then carried the first one's
+    keys again (measured 2026-10-05: Invert at spacing 0 lost a segment, at
+    spacing 5 scrambled both).  Called as tentacle's Stagger (tb003) calls it.
+    """
+
+    # A rises 0 -> 10 over 0..10, holds to 20, B falls back over 20..30.
+    TWO = ((0, 0), (10, 10), (20, 10), (30, 0))
+    # B, A laid end to start, 5 apart: B on 0..10, A on 15..25.
+    SPACED = [(0.0, 10.0), (10.0, 0.0), (15.0, 0.0), (25.0, 10.0)]
+
+    @staticmethod
+    def _cube(keys, name="reorder_cube"):
+        cube = cmds.polyCube(name=name)[0]
+        for t, v in keys:
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
+        cmds.selectKey(clear=True)
+        return cube
+
+    @staticmethod
+    def _keys(cube):
+        times = cmds.keyframe(cube, attribute="translateX", query=True, tc=True)
+        values = cmds.keyframe(cube, attribute="translateX", query=True, vc=True)
+        return [(round(t, 4), round(v, 4)) for t, v in zip(times or [], values or [])]
+
+    @staticmethod
+    def _stagger(cube, **kwargs):
+        StaggerKeys.stagger_keys([cube], avoid_overlap=True, **kwargs)
+
+    def test_invert_keeps_every_segment(self):
+        """B lands on 0..10 and A on 10..20; at the seam A's start key -- the
+        later-placed segment's -- replaces B's end key."""
+        cube = self._cube(self.TWO)
+
+        self._stagger(cube, invert=True)
+
+        self.assertEqual(self._keys(cube), [(0.0, 10.0), (10.0, 0.0), (20.0, 10.0)])
+
+    def test_invert_with_spacing_moves_each_segment_once(self):
+        cube = self._cube(self.TWO)
+
+        self._stagger(cube, invert=True, spacing=5)
+
+        self.assertEqual(self._keys(cube), self.SPACED)
+
+    def test_a_layout_reversing_segments_without_invert(self):
+        """An overlap longer than a segment (-25 after a 10-frame one) lays B
+        before A without Invert."""
+        cube = self._cube(self.TWO)
+
+        self._stagger(cube, spacing=-25, start_frame=15)
+
+        self.assertEqual(self._keys(cube), self.SPACED)
+
+    def test_invert_of_three_segments_the_later_start_wins_each_seam(self):
+        """C, B, A laid end to start: at 10 B's start key (10) replaces C's
+        end key (5), at 20 A's start key replaces B's end key."""
+        cube = self._cube(((0, 0), (10, 10), (20, 10), (30, 0), (40, 0), (50, 5)))
+
+        self._stagger(cube, invert=True)
+
+        self.assertEqual(
+            self._keys(cube), [(0.0, 0.0), (10.0, 10.0), (20.0, 0.0), (30.0, 10.0)]
+        )
+
+    def test_interval_layout_reversing_segments(self):
+        cube = self._cube(self.TWO)
+
+        self._stagger(cube, invert=True, use_intervals=True, spacing=15)
+
+        self.assertEqual(self._keys(cube), self.SPACED)
+
+
+class TestStaggerKeepsEachSegmentsShape(MayaTkTestCase):
+    """A layout moves each segment rigidly, the tangent halves on its boundary
+    keys included: a segment plays after the stagger as it played before.
+
+    A boundary key's derived tangent (auto, spline, clamped...) takes its slope
+    from its neighbours, and the layout gives it new ones; where two segments
+    meet at spacing 0 one key also has to stand for both sides, and the key the
+    landing replaced took its side's tangent with it (measured 2026-10-11:
+    a segment landed on a stationary one's start, auto, 0.74 off on both
+    sides; Invert, spline, 1.92).  The merge (maintainer 2026-10-11): one key
+    per seam, its value and out-half from the later segment's start, its
+    in-half from the earlier segment's end.
+    """
+
+    _cube = staticmethod(TestStaggerSegmentReorder._cube)
+
+    @staticmethod
+    def _curve(cube):
+        return cmds.keyframe(cube, attribute="translateX", query=True, name=True)[0]
+
+    @staticmethod
+    def _plays(crv, lo, hi):
+        """*crv* sampled every quarter frame over ``[lo, hi]``."""
+        return [
+            cmds.keyframe(crv, query=True, eval=True, time=(t, t), valueChange=True)[0]
+            for t in (lo + i * 0.25 for i in range(int((hi - lo) * 4) + 1))
+        ]
+
+    def _assert_segments_keep_their_shape(self, cube, tangent, segments, **kwargs):
+        """Stagger *cube* (keyed with *tangent* tangents); each of *segments*,
+        ``((lo, hi), new_lo)``, plays over its new span as it did before."""
+        crv = self._curve(cube)
+        cmds.keyTangent(crv, edit=True, itt=tangent, ott=tangent)
+        before = [self._plays(crv, lo, hi) for (lo, hi), _new in segments]
+
+        StaggerKeys.stagger_keys([cube], avoid_overlap=True, **kwargs)
+
+        for ((lo, hi), new), was in zip(segments, before):
+            now = self._plays(crv, new, new + hi - lo)
+            off = max(abs(a - b) for a, b in zip(was, now))
+            with self.subTest(tangent=tangent, segment=(lo, hi)):
+                self.assertLess(off, 1e-4, f"{len(was)} samples, max {off:.4f} off")
+
+    def test_a_segment_landed_on_a_stationary_ones_start_keeps_both_shapes(self):
+        """B1 (0..5) lands on 10..15, its end on B2's start: the seam key, flat
+        on both sides before, re-derived to 45 degrees."""
+        for tangent in ("auto", "spline", "clamped"):
+            cube = self._cube(((0, 0), (5, 5), (15, 5), (20, 10)), name="seam_still")
+            self._assert_segments_keep_their_shape(
+                cube,
+                tangent,
+                (((0, 5), 10), ((15, 20), 15)),
+                start_frame=10,
+            )
+            cmds.delete(cube)
+
+    def test_invert_at_spacing_0_keeps_both_shapes(self):
+        """B (20..30) on 0..10, A (0..10) on 10..20: the seam key and the
+        curve's new ends all take new neighbours."""
+        for tangent in ("auto", "spline", "clamped", "linear"):
+            cube = self._cube(TestStaggerSegmentReorder.TWO, name="seam_invert")
+            self._assert_segments_keep_their_shape(
+                cube,
+                tangent,
+                (((20, 30), 0), ((0, 10), 10)),
+                invert=True,
+            )
+            cmds.delete(cube)
+
+    def test_the_seam_key_merges_both_sides(self):
+        """B's end (30) arrives at -35 degrees, A's start (0) leaves at 25:
+        the one key at the seam carries both, broken."""
+        cube = self._cube(TestStaggerSegmentReorder.TWO, name="seam_merge")
+        crv = self._curve(cube)
+        cmds.keyTangent(crv, edit=True, time=(0, 30), lock=False)
+        cmds.keyTangent(crv, edit=True, time=(30, 30), inAngle=-35)
+        cmds.keyTangent(crv, edit=True, time=(0, 0), outAngle=25)
+
+        StaggerKeys.stagger_keys([cube], avoid_overlap=True, invert=True)
+
+        seam = (10, 10)
+        self.assertAlmostEqual(
+            cmds.keyTangent(crv, query=True, time=seam, inAngle=True)[0], -35, 3
+        )
+        self.assertAlmostEqual(
+            cmds.keyTangent(crv, query=True, time=seam, outAngle=True)[0], 25, 3
+        )
+        self.assertFalse(cmds.keyTangent(crv, query=True, time=seam, lock=True)[0])
+
+    def test_a_seam_that_takes_the_later_value_keeps_the_span_before_it(self):
+        """C (40..50) ends at 5, B (20..30) starts at 10: laid C, B the seam
+        holds B's 10, so C's last span arrives somewhere new -- but C's key at
+        45 keeps its neighbours, and its auto slope re-derived from the new
+        value, re-shaping C's FIRST span too (measured on SOL_REPLACE_ASSEMBLY
+        2026-10-11: SOCKET_WRENCH_translateY 0.37 off over a span two keys
+        from the seam)."""
+        cube = self._cube(
+            ((0, 0), (10, 10), (20, 10), (30, 0), (40, 0), (45, 4), (50, 5)),
+            name="seam_value",
+        )
+        self._assert_segments_keep_their_shape(
+            cube, "auto", (((40, 45), 0),), invert=True
+        )
+
+    def test_a_layout_that_changes_no_slope_leaves_the_types(self):
+        """Auto keys whose slopes the layout does not change stay auto: only a
+        half that would play differently is frozen."""
+        cube = self._cube(TestStaggerSegmentReorder.TWO, name="seam_types")
+        crv = self._curve(cube)
+        cmds.keyTangent(crv, edit=True, itt="auto", ott="auto")
+
+        StaggerKeys.stagger_keys([cube], avoid_overlap=True, invert=True)
+
+        self.assertEqual(
+            set(cmds.keyTangent(crv, query=True, itt=True, ott=True)), {"auto"}
+        )
+
+
 class TestStaggerClaimHooks(MayaTkTestCase):
     """Stagger reports the keys it moves (``on_move``), so the shot system's
     claims ride along with them (mirror of blendertk's ``stagger_keys``)."""
@@ -599,6 +795,33 @@ class TestStaggerClaimHooks(MayaTkTestCase):
         self.assertEqual(
             list(zip(times, values)), [(10.0, 0.0), (15.0, 5.0), (20.0, 10.0)]
         )
+
+    def test_invert_carries_each_claim_with_its_own_key(self):
+        """Invert lays B (20..30) on 0..10 and A (0..10) on 10..20: A's end key
+        carries its claim 10 -> 20, and B's end key, replaced at the seam by
+        A's start key, takes its claim with it.  Every hop is reported as it
+        happens: one net pair per key would hand B's claim, landed on 10, to
+        A's 10 -> 20."""
+        cube = cmds.polyCube(name="reorder_claims")[0]
+        for t, v in ((0, 0), (10, 10), (20, 10), (30, 0)):
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=v)
+        crv = cmds.keyframe(cube, attribute="translateX", query=True, name=True)[0]
+        store = mtk.ShotStore()
+        store.edit_ledger.record_authored(crv, 10.0, 0, "fade_in", cube)
+        store.edit_ledger.record_authored(crv, 30.0, 0, "fade_out", cube)
+        cmds.selectKey(clear=True)
+        on_replace, on_move = store.claim_hooks([cube])
+
+        StaggerKeys.stagger_keys(
+            [cube],
+            avoid_overlap=True,
+            invert=True,
+            on_replace=on_replace,
+            on_move=on_move,
+        )
+
+        self.assertEqual(store.edit_ledger.authored(), [(crv, 20.0)])
+        self.assertEqual(store.edit_ledger.authored(behavior="fade_in"), [(crv, 20.0)])
 
 
 if __name__ == "__main__":

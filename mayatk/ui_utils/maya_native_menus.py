@@ -6,7 +6,7 @@ try:
 except Exception:
     cmds = mel = None
 from typing import Optional
-from qtpy import QtWidgets
+from qtpy import QtCore, QtWidgets
 import pythontk as ptk
 from uitk import Bootstrap
 from uitk.widgets.mainWindow import MainWindow
@@ -30,8 +30,8 @@ class MayaNativeMenus(ptk.LoggingMixin):
             "menu_set": "renderingMenuSet",
         },
         "cache": {
-            "maya_name": "Cache",
-            "command": "NucleusCacheMenu MayaWindow|mainCacheMenu",
+            "maya_name": "nCache",
+            "command": "NucleusCacheMenu MayaWindow|mainNCacheMenu",
             "menu_set": "dynamicsMenuSet",
         },
         "constrain": {
@@ -46,7 +46,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
         },
         "create": {
             "maya_name": "Create",
-            "command": "editMenuUpdate MayaWindow|mainCreateMenu",
+            "command": "ModCreateMenu MayaWindow|mainCreateMenu",
             "menu_set": "commonMenuSet",
         },
         "curves": {
@@ -86,7 +86,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
         },
         "file": {
             "maya_name": "File",
-            "command": "buildFileMenu MayaWindow|mainFileMenu",
+            "command": "buildFileMenu",
             "menu_set": "commonMenuSet",
         },
         "fluids": {
@@ -101,7 +101,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
         },
         "help": {
             "maya_name": "Help",
-            "command": "buildHelpMenu MayaWindow|mainHelpMenu",
+            "command": "buildHelpMenu",
             "menu_set": "commonMenuSet",
         },
         "key": {
@@ -201,7 +201,7 @@ class MayaNativeMenus(ptk.LoggingMixin):
         },
         "toon": {
             "maya_name": "Toon",
-            "command": "buildToonMenu MayaWindow|mainToonMenu",
+            "command": "buildCartoonMenu MayaWindow|mainCartoonMenu",
             "menu_set": "renderingMenuSet",
         },
         "uv": {
@@ -269,16 +269,16 @@ class MayaNativeMenus(ptk.LoggingMixin):
             try:
                 mel.eval(init_command)
             except Exception as e:
-                # The init command is Maya-version-specific. Several mappings are
-                # stale on newer Maya — build procs renamed (``buildToonMenu``
-                # gone), arguments changed (``buildHelpMenu`` now takes none), or
-                # the target menu shell no longer exists (``mainCacheMenu``). A
-                # raise here means the native menu can't be built in this Maya, so
-                # bail immediately and let the caller fall back to the hand-authored
-                # ``<key>#submenu`` overlay. Previously this only warned, then spun
-                # a doomed 15-attempt ``processEvents`` populate loop — that loop,
-                # not the error itself, was the bulk of the multi-second stall when
-                # a broken menu was requested (e.g. toon ~10s, help ~5s).
+                # The init command is Maya-version-specific: a release can rename
+                # a build proc, change its arguments or rename the menu shell
+                # (each mapping mirrors ``initMainMenuBar.mel``; five had drifted
+                # by Maya 2025). A raise here means the native menu can't be built
+                # in this Maya, so bail immediately and let the caller fall back to
+                # the hand-authored ``<key>#submenu`` overlay. Previously this only
+                # warned, then spun a doomed 15-attempt ``processEvents`` populate
+                # loop — that loop, not the error itself, was the bulk of the
+                # multi-second stall when a broken menu was requested (e.g. toon
+                # ~10s, help ~5s).
                 self.logger.debug(f"Native menu '{menu_key}' unavailable: {e}")
                 return None
             cmds.refresh()
@@ -348,7 +348,8 @@ class MayaNativeMenus(ptk.LoggingMixin):
             attempt += 1
 
             for action in menu_bar.actions():
-                if action.text() == maya_menu_name:
+                # Stripped: Maya pads some labels on purpose (Help is "Help ").
+                if action.text().strip() == maya_menu_name:
                     target_menu = action.menu()
                     break
 
@@ -377,7 +378,12 @@ class MayaNativeMenus(ptk.LoggingMixin):
             else:
                 self.logger.debug(f"Menu '{maya_menu_name}' not found yet...")
 
-            QtWidgets.QApplication.processEvents()
+            # User input waits for the outer loop: handled in here, a key press
+            # ran its whole handler mid-build -- the marking menu's activation
+            # inside a warm-up, with its overlay presented off-screen.
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ExcludeUserInputEvents
+            )
 
         if target_menu and previous_action_count > 0:
             placeholder_widget.menu.clear()

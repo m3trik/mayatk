@@ -66,6 +66,9 @@ _logger = logging.getLogger(__name__)
 _IMPORT_TEMPLATE = _TEMPLATE_DIR / "_import_scene.py"
 _IMPORT_TEMPLATE_USD = _TEMPLATE_DIR / "_import_scene_usd.py"
 _BAKE_TEMPLATE = _TEMPLATE_DIR / "_bake_scene.py"
+# The bake template replays the payload through this module's import_payload, so an
+# engine fix must invalidate a cached bake as a template fix does.
+_BAKE_ENGINE = os.path.abspath(__file__)
 
 # Conversion intermediates by route: "fbx" = classic material model + texture-
 # manifest sidecar rebuilt via the GameShader engine; "usd" = native materials /
@@ -1884,19 +1887,26 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 "Blender: "
                 + ("reused the cached conversion" if conversion.hit else "converted"),
             )
-            sidecar = ptk.HandoffManifest.path_for(inter_path)
-            if via == "usd" and not os.path.isfile(sidecar):
-                # The v2 conversion always writes the sidecar; without it the
-                # bake could silently cache a flattened .ma (see the bake
-                # template's apply_instances).
-                raise RuntimeError(
-                    f"USD conversion sidecar missing: {sidecar}. "
-                    "Refusing to bake (a flat bake could silently lose "
-                    "instancing); clear the conversion cache or bake via FBX."
-                )
+        sidecar = ptk.HandoffManifest.path_for(inter_path)
+        has_sidecar = os.path.isfile(sidecar)
+        if conversion is not None and via == "usd" and not has_sidecar:
+            # The v2 conversion always writes the sidecar; without it the
+            # bake could silently cache a flattened .ma (see the bake
+            # template's apply_instances).
+            raise RuntimeError(
+                f"USD conversion sidecar missing: {sidecar}. "
+                "Refusing to bake (a flat bake could silently lose "
+                "instancing); clear the conversion cache or bake via FBX."
+            )
 
+        key_files = [inter_path, _BAKE_TEMPLATE, _BAKE_ENGINE]
+        # The manifest the bake applies is an input too: a payload can land before
+        # its sidecar (a synced drive), and a bake cached in that window would
+        # replay the sidecar-less scene after the sidecar arrived.
+        if has_sidecar:
+            key_files.append(sidecar)
         got = ptk.CachedArtifact("blender_bake_mtk", extension=".ma").get(
-            ptk.CachedArtifact.key(files=[inter_path, _BAKE_TEMPLATE]),
+            ptk.CachedArtifact.key(files=key_files),
             lambda out: self.bake(
                 inter_path,
                 out,
@@ -1990,32 +2000,24 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """Import *fbx_path* into the current scene; return ALL new nodes
         (the manifest apply needs the shading engines, not just transforms).
 
+        Through :meth:`FbxUtils.import_scene`, so ALL of the file's animation
+        lands: a pushed scene carries its whole timeline as one take beside a
+        take per shot, and the importer alone plays the LAST take (a cube
+        keyed 1-100 with shots 1-30 / 50-70 arrived as 21 keys, 50-70).
         Deterministic baseline first: the plugin's import options are global
         and sticky (the user's last interactive FBX import shapes this one),
         and the factory default mode "merge" can RETARGET animation onto
-        same-named nodes already in the scene -- reset, then pin "add". The
-        import mirror of the conversion template's FBXResetExport rule;
-        best-effort, so a plugin build missing a command can't block the
-        import.
+        same-named nodes already in the scene -- reset, then pin "add" (and
+        nothing else, as before). *fbx_options* are ``cmds.file`` flags.
         """
-        import maya.cmds as cmds
-
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        FbxUtils.load_plugin()
-        try:
-            FbxUtils.reset_import()
-        except RuntimeError as e:
-            self.logger.debug(f"FBXResetImport unavailable: {e}")
-        FbxUtils._apply_import_options({"FBXImportMode": "add"})
-        options = dict(
-            i=True,
-            type="FBX",
-            ignoreVersion=True,
-            returnNewNodes=True,
+        return FbxUtils.import_scene(
+            fbx_path,
+            options={"FBXImportMode": "add"},
+            file_options=fbx_options,
+            logger=self.logger,
         )
-        options.update(fbx_options or {})
-        return cmds.file(fbx_path, **options) or []
 
     @staticmethod
     def _manifest_empty_rules(

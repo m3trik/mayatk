@@ -16,6 +16,9 @@
   <property name="windowTitle">
    <string>Material Updater</string>
   </property>
+  <property name="accessibleDescription">
+   <string>Rework scene materials for a target workflow, packing or unpacking texture maps.</string>
+  </property>
   <widget class="QWidget" name="central_widget">
    <property name="minimumSize">
     <size>

@@ -65,6 +65,8 @@ class StaggerKeys:
                 overlap with the previous one, skip to the next interval position.
             smooth_tangents: If True, adjusts tangents for smooth transitions.
             invert: If True, the objects list is processed in reverse order.
+                With split_static each segment is placed on its own, so an
+                object's own segments are reversed too.
             group_overlapping: If True, treats objects with overlapping keyframes as a
                 single block. Objects in the same group will be moved together.
             ignore: Attribute name(s) to ignore when staggering (e.g., 'visibility').
@@ -82,8 +84,10 @@ class StaggerKeys:
             verbose: If True, prints detailed information including original time ranges.
             verbose_header: Optional custom text to prefix the verbose output headers.
             on_replace: ``on_replace(curve, frames)`` hears the keys a staggered
-                segment lands on and replaces -- the next segment's start key,
-                where end-to-start placement lays a split curve's segments --
+                segment lands on and replaces -- where end-to-start placement
+                lays two moved segments of a split curve together, the earlier
+                one's end key, replaced by the later one's start key; a key
+                that does not move, replaced by the segment landing on it --
                 what the shot system releases its claims on.
             on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames of
                 the keys staggered -- what the shot system carries its claims

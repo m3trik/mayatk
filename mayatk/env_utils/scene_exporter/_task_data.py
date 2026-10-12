@@ -252,8 +252,8 @@ class _TaskDataMixin:
     def _assess_optimization(self, path: str, template: Optional[str]):
         """What the optimization pass would do to *path* — judged once.
 
-        The one criterion the task (skip already-optimal sources, re-verify a
-        reused staged file) and the check (name residuals) share, via
+        The one criterion the task (skip already-optimal sources) and the
+        check (name residuals) share, via
         ``ptk.MapOptimizer.assess``: the per-map-type pass (mode / bit depth),
         plus the *template*'s per-map-type container when one is active, plus
         the size ceiling when one is set
@@ -276,9 +276,9 @@ class _TaskDataMixin:
         clamp = self._texture_size_clamp(template)
         # Memoised per run on the file's identity (path + mtime + size) and
         # the pass it is judged against: ``assess`` decodes the image every
-        # time, and one export asks the same question of the same file up to
-        # three times (the task's plan, its post-write re-verification, and
-        # the check). A rewritten file changes its stat and misses.
+        # time, and one export asks the same question of the same file more
+        # than once (the task's plan and the check, which judges the staged
+        # copy too). A rewritten file changes its stat and misses.
         try:
             st = os.stat(path)
             key = (

@@ -896,6 +896,96 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
         self.assertEqual(write.call_count, 1)
 
 
+class TestSteppedKeysRideTheManifest(MayaTkTestCase):
+    """A Maya stepped key holds in Blender (``HandoffManifest.STEPPED_KEYS``).
+
+    FBX carries the key, but Blender's importer makes every key LINEAR, so a
+    hold arrived as a ramp to the next key (SOL_REPLACE_ASSEMBLY's SCREWDRIVER
+    steps at 12 and holds to 731; pulled, it moved the whole way).
+    ``MayaExportMixin.stepped_keys`` lists the steps off the authored curves --
+    for the pull's conversion template and for the send -- and blendertk's
+    ``MayaSceneImport`` makes those keys CONSTANT again.
+    """
+
+    def setUp(self):
+        super().setUp()
+        tmp = ptk.TempArtifacts("mtk_bridge_stepped_keys", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.dir_path()
+
+    @staticmethod
+    def _held(name, attrs=("translateY",), step_at=12, also=()):
+        cube = cmds.polyCube(name=name)[0]
+        for attr in attrs:
+            for f, v in ((1, 0.0), (step_at, 0.0), (731, -0.65), (760, -0.3)):
+                cmds.setKeyframe(cube, attribute=attr, t=f, v=v)
+            cmds.keyTangent(
+                cube, attribute=attr, time=(step_at, step_at), outTangentType="step"
+            )
+        for attr in also:  # keyed in the family, never stepped
+            for f in (1, 12, 731):
+                cmds.setKeyframe(cube, attribute=attr, t=f, v=f * 0.01)
+        return cube
+
+    def test_the_collector_lists_a_step_per_transform_family(self):
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+
+        held = self._held("held")
+        both = self._held("both", attrs=("rotateX", "rotateZ"))
+        mixed = self._held("mixed", also=("translateX",))
+        cmds.polyCube(name="plain")
+        cmds.setKeyframe("plain", attribute="translateX", t=1, v=0)
+        cmds.setKeyframe("plain", attribute="translateX", t=9, v=1)
+        found = MayaExportMixin.stepped_keys()
+        self.assertEqual(found.get(held), {"translate": [12.0]})
+        self.assertEqual(found.get(both), {"rotate": [12.0]})
+        # translateX keys 12 linearly: a family-wide CONSTANT would freeze it.
+        self.assertNotIn(mixed, found)
+        self.assertNotIn("plain", found)
+        # Scoped to the nodes asked for, spelled as the carrier spells them.
+        scoped = MayaExportMixin.stepped_keys(
+            [held], spell=lambda name: "x_" + name.split("|")[-1]
+        )
+        self.assertEqual(scoped, {"x_held": {"translate": [12.0]}})
+
+    def test_a_family_frame_needs_every_animated_channel_stepping_there(self):
+        """Bug: a frame was listed where a sibling channel of its family moves
+        through it with no key. Blender's FBX importer keys every transform
+        curve of an object at the union of their times, so the sibling got a
+        key there, made CONSTANT: it held where Maya ramps.
+        Fixed: 2026-10-12"""
+        from mayatk.env_utils.handoff_export import MayaExportMixin
+
+        moving = self._held("moving_sibling")  # translateY steps at 12
+        for f, v in ((0, 0.0), (30, 3.0)):  # translateX ramps through 12
+            cmds.setKeyframe(moving, attribute="translateX", t=f, v=v)
+        static = self._held("static_sibling")
+        cmds.setKeyframe(static, attribute="translateX", t=5, v=1.0)  # one key
+        found = MayaExportMixin.stepped_keys()
+        self.assertNotIn(moving, found)
+        self.assertEqual(found.get(static), {"translate": [12.0]})
+
+    def test_a_send_with_animation_sidecars_its_steps(self):
+        cube = self._held("sent_cube")
+        fbx = os.path.join(self.tmp, "send.fbx")
+        path = fbx + ".manifest.json"
+        BlenderBridge()._write_manifest(
+            [cube], fbx, include_materials=False, include_animation=True
+        )
+        with open(path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(
+            manifest[ptk.HandoffManifest.STEPPED_KEYS],
+            {"sent_cube": {"translate": [12.0]}},
+        )
+        # A send without animation ships no curves, so no steps either.
+        os.remove(path)
+        BlenderBridge()._write_manifest(
+            [cube], fbx, include_materials=False, include_scene_data=False
+        )
+        self.assertFalse(os.path.exists(path))
+
+
 class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
     """A manifest-declared opacity must reach the shader that has a slot for it.
 

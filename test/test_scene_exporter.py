@@ -2712,6 +2712,50 @@ class TestSceneExporter(MayaTkTestCase):
         finally:
             tm.run_deferred_restores()
 
+    def test_optimize_textures_a_second_fbx_export_encodes_nothing(self):
+        """An FBX run stages into a throwaway dir, so every export encoded every
+        map again (three 4K maps: 4.8 s and 5.5 s, measured 2026-10-10). The
+        second run is served by pythontk's encode cache: no encode, and the
+        same bytes staged.
+
+        Added: 2026-10-11
+        """
+        from unittest import mock
+
+        cache_root = os.path.join(self.temp_dir, "tmp")  # the cache's temp dir
+        os.makedirs(cache_root)
+        tex = self._make_png("cache_src_Normal.png", mode="P")  # coerced to RGB
+        file_node = self._assign_texture(self.cube, tex)
+        tm = self.exporter.task_manager
+        tm.objects = [cmds.ls(str(self.cube), l=True)[0]]
+        tm.run = tm.run.replace(
+            export_path=os.path.join(self.temp_dir, "cache.fbx"),
+            output_format="fbx",
+            texture_write_back=False,
+        )
+        runs = []
+        try:
+            with mock.patch.object(tempfile, "tempdir", cache_root):
+                for _ in range(2):
+                    with mock.patch.object(
+                        ptk.MapOptimizer,
+                        "optimize_map",
+                        wraps=ptk.MapOptimizer.optimize_map,
+                    ) as encode:
+                        tm.optimize_textures(True)
+                    staged = cmds.getAttr(f"{file_node}.fileTextureName")
+                    with open(staged, "rb") as fh:
+                        runs.append((encode.call_count, staged, fh.read()))
+                    tm.run_deferred_restores()
+                    self.assertFalse(os.path.exists(staged), "temp staging removed")
+        finally:
+            tm.run_deferred_restores()
+        (first, first_path, first_bytes), (second, second_path, second_bytes) = runs
+        self.assertEqual((first, second), (1, 0), "the second run encodes nothing")
+        self.assertNotEqual(first_path, second_path, "each run stages its own")
+        self.assertEqual(first_bytes, second_bytes)
+        self.assertFalse(os.path.exists(os.path.join(self.temp_dir, "textures")))
+
     def test_check_texture_optimization_gates_and_clears_after_task(self):
         """The paired check fails on an unoptimized source, passes once the
         task has staged the fix (checks run after tasks and read the CURRENT
