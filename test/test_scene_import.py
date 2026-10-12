@@ -1486,7 +1486,9 @@ class TestFbxNameMatching(unittest.TestCase):
         )
         objects = [SimpleNamespace(name=n) for n in ("Crate.001", "Crate_001")]
         materials = [SimpleNamespace(name="Crate.001")]
-        bpy = SimpleNamespace(data=SimpleNamespace(objects=objects, materials=materials))
+        bpy = SimpleNamespace(
+            data=SimpleNamespace(objects=objects, materials=materials)
+        )
 
         renamed = sanitize(bpy)
 
