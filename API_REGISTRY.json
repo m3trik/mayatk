@@ -11934,7 +11934,7 @@
         {
           "name": "BlenderSceneImport",
           "summary": "Engine: convert a .blend to FBX via headless Blender, then import it.",
-          "line": 408,
+          "line": 411,
           "bases": [
             "pythontk.LoggingMixin",
             "_BlenderSceneImportInternal"
@@ -11946,7 +11946,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The Blender executable (explicit, or discovered via the bridge's AppSpec).",
-              "line": 428,
+              "line": 431,
               "deprecated": false
             },
             {
@@ -11955,7 +11955,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Return :attr:`blender_path` or raise the spec's not-found error.",
-              "line": 438,
+              "line": 441,
               "deprecated": false
             },
             {
@@ -11964,7 +11964,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]",
               "summary": "Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.",
-              "line": 447,
+              "line": 450,
               "deprecated": false
             },
             {
@@ -11973,7 +11973,7 @@
               "kind": "classmethod",
               "signature": "(cls, src_path: str) -> bool",
               "summary": "Cheap pre-conversion probe: does the ``.blend`` carry rig logic",
-              "line": 478,
+              "line": 481,
               "deprecated": false
             },
             {
@@ -11982,7 +11982,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True, texture_dir: str = '', rig_mode: str = 'auto') -> str",
               "summary": "Render the Blender-side conversion script (exposed for tests/preview).",
-              "line": 507,
+              "line": 510,
               "deprecated": false
             },
             {
@@ -11991,7 +11991,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: Optional[float] = None, texture_dir: Optional[str] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None, **script_opts: Any) -> 'ptk.ScriptRunResult'",
               "summary": "Convert *src_path* to *out_path* in a fresh headless Blender (blocking).",
-              "line": 567,
+              "line": 570,
               "deprecated": false
             },
             {
@@ -12000,7 +12000,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: Optional[float] = None, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', scene_data: bool = True, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> List[str]",
               "summary": "Import the Blender scene at *src_path*;",
-              "line": 781,
+              "line": 784,
               "deprecated": false
             },
             {
@@ -12009,7 +12009,7 @@
               "kind": "method",
               "signature": "(self, payload_path: str, *, via: str = 'fbx', fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', adopt_scene: bool = False, scene_data: bool = True, step: Optional[Callable[[int, int, str], Any]] = None) -> List[str]",
               "summary": "Import the conversion payload at *payload_path* -- the FBX or USD plus",
-              "line": 1002,
+              "line": 1005,
               "deprecated": false
             },
             {
@@ -12018,7 +12018,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The headless ``mayapy`` used for the bake — this host's own interpreter.",
-              "line": 1693,
+              "line": 1696,
               "deprecated": false
             },
             {
@@ -12027,7 +12027,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Return :attr:`mayapy_path` or raise an error naming what's missing.",
-              "line": 1721,
+              "line": 1724,
               "deprecated": false
             },
             {
@@ -12036,7 +12036,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str) -> str",
               "summary": "Render the Maya-side intermediate->.ma bake script (exposed for",
-              "line": 1732,
+              "line": 1735,
               "deprecated": false
             },
             {
@@ -12045,7 +12045,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, timeout: Optional[float] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None) -> Any",
               "summary": "Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a",
-              "line": 1764,
+              "line": 1767,
               "deprecated": false
             },
             {
@@ -12054,7 +12054,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: Optional[float] = None, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> str",
               "summary": "Bake *src_path* to a cached ``.ma`` and return its path — the reference path.",
-              "line": 1809,
+              "line": 1812,
               "deprecated": false
             },
             {
@@ -12063,7 +12063,7 @@
               "kind": "staticmethod",
               "signature": "(baked_path: str) -> Optional[str]",
               "summary": "The foreign scene *baked_path* was baked from, or None if it is not a bake.",
-              "line": 1940,
+              "line": 1950,
               "deprecated": false
             },
             {
@@ -12072,7 +12072,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes: List[str], joints: bool = False) -> int",
               "summary": "Remove the redundant level a round trip nests around a node;",
-              "line": 2257,
+              "line": 2267,
               "deprecated": false
             }
           ]
@@ -12085,7 +12085,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 77,
+          "line": 80,
           "deprecated": false
         },
         {
@@ -12094,7 +12094,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 88,
+          "line": 91,
           "deprecated": false
         },
         {
@@ -12103,7 +12103,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 91,
+          "line": 94,
           "deprecated": false
         },
         {
@@ -12112,7 +12112,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 101,
+          "line": 104,
           "deprecated": false
         },
         {
@@ -12121,7 +12121,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 107,
+          "line": 110,
           "deprecated": false
         },
         {
@@ -12130,7 +12130,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 111,
+          "line": 114,
           "deprecated": false
         }
       ]
