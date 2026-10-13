@@ -6738,6 +6738,42 @@ class TestInsertShot(unittest.TestCase):
         )
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
+    def test_overlapping_shots_sharing_a_start_move_together_with_their_keys(self):
+        """B1 [60, 90] and B2 [60, 100] overlap from one start frame; a shot
+        inserted after B1 moves both, each keeping its keys.
+
+        Bug: moved by position, B1 stayed at [60, 90] while its keys -- in the
+        window B2 owns, B1's own one empty -- went 30 frames on with B2.
+        Fixed: 2026-10-13
+        """
+        cmds.file(new=True, force=True)
+        b1 = cmds.polyCube(name="tie_b1")[0]
+        b2 = cmds.polyCube(name="tie_b2")[0]
+        for obj, frames in ((b1, (65, 85)), (b2, (70, 95))):
+            for i, t in enumerate(frames):
+                cmds.setKeyframe(obj, at="translateX", t=t, v=i)
+        seq = ShotSequencer(
+            [
+                ShotBlock(0, "S0", 0, 50, []),
+                ShotBlock(1, "B1", 60, 90, [b1]),
+                ShotBlock(2, "B2", 60, 100, [b2]),
+            ]
+        )
+        seq.store.gap = 10
+        new = seq.insert_shot("N", duration=20, after_shot_id=1)
+        self.assertEqual((new.start, new.end), (100, 120))
+        self.assertEqual(
+            [(s.name, s.start, s.end) for s in seq.sorted_shots()],
+            [("S0", 0, 50), ("B1", 90, 120), ("B2", 90, 130), ("N", 100, 120)],
+        )
+        self.assertEqual(
+            sorted(cmds.keyframe(b1, q=True, at="translateX") or []), [95.0, 115.0]
+        )
+        self.assertEqual(
+            sorted(cmds.keyframe(b2, q=True, at="translateX") or []), [100.0, 125.0]
+        )
+
+    @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_a_refused_name_moves_nothing(self):
         """The hole was opened -- every later shot and its keys rippled -- before
         the new shot's name was checked, so a taken or illegal name left the

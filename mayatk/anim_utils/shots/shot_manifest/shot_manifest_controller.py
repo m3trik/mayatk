@@ -8,14 +8,17 @@ Composed of one mixin per job, each its own module: the table's rows
 following the scene's store (:mod:`.store_follow`), where the steps come from
 (:mod:`.manifest_source`), the mapping template (:mod:`.mapping_picker`), the
 rows' context menus (:mod:`.row_menus`), the header menu
-(:mod:`.header_menu`) and the Export button's preview
+(:mod:`.header_menu`), the view row above the table (:mod:`.view_combos`)
+and the Export button's preview
 (:mod:`.export_preview`).  Local Edits are a collaborator
 (:class:`~.manifest_editor.ManifestEditor`); every call that names the host
 goes through :class:`~.manifest_host.ManifestHost`.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from contextlib import contextmanager
@@ -35,6 +38,7 @@ from .range_column import RangeColumnMixin
 from .row_menus import RowMenusMixin
 from .store_follow import StoreFollowMixin
 from .table_presenter import ManifestTableMixin
+from .view_combos import ViewCombosMixin
 
 
 class ShotManifestController(
@@ -45,6 +49,7 @@ class ShotManifestController(
     MappingPickerMixin,
     RowMenusMixin,
     HeaderMenuMixin,
+    ViewCombosMixin,
     ExportPreviewMixin,
     ptk.LoggingMixin,
 ):
@@ -83,6 +88,9 @@ class ShotManifestController(
                 _qs.remove(_legacy)
 
         self._user_ranges: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+        # The entries of _user_ranges a load seeded from the steps' shots: a
+        # shot's bounds, not a place the user typed (_typed_ranges).
+        self._seeded_ranges: Dict[str, Tuple[float, float]] = {}
 
         tree = self.ui.tbl_steps
         tree.enable_column_config()
@@ -117,6 +125,20 @@ class ShotManifestController(
         self._cached_gaps: Optional[List[float]] = None
         self._cached_gap_ends: Optional[Dict[float, float]] = None
         self._last_resolved: List[Tuple[str, float, Optional[float], bool]] = []
+        # {step_id: where}: the steps whose resolved range is where Build
+        # would insert their shot on a built timeline (_projected_inserts).
+        self._projected: Dict[str, str] = {}
+        # {step_id: frames}: the unbuilt steps whose typed range Build's
+        # inserts move, and how far (_resolve_ranges).
+        self._typed_shift: Dict[str, float] = {}
+        # The inserts the shown preview was resolved with (_resolve_ranges).
+        self._inserts: list = []
+        # The last Build's typed ranges before and after it, and the shots it
+        # made: put back when that Build is undone (_on_native_step_followed).
+        self._build_undo: Optional[dict] = None
+        # {step_id: [(status, text)]}: the steps whose range overlaps a
+        # neighbour's (_validate_range_collisions); their rows say so.
+        self._range_issues: Dict[str, list] = {}
         self._detection_snapshot: tuple = ()  # _detection_inputs, last seen
         self._bind_store_listener()
         # A swapped store -- scene new / open, a referenced file's shots
@@ -125,6 +147,9 @@ class ShotManifestController(
         # scriptJobs this used to hang on missed a merge, leaving the panel on
         # the dead store, and relied on running after the store's own.
         self._store_cls().add_invalidation_listener(self._on_store_invalidated)
+        # The DCC's own undo / redo, once the store followed it: a Build undone
+        # takes its typed-range bookkeeping with it.
+        self._store_cls().add_native_step_listener(self._on_native_step_followed)
         # Tear down on panel close: the ShotStore listener needs remove_callbacks,
         # or it keeps the dead controller alive and firing after the panel closes.
         self.ui.destroyed.connect(lambda *_: self.remove_callbacks())
@@ -138,12 +163,14 @@ class ShotManifestController(
         self._sheet_values = None
         # (key, values) of the last _inferred_sheet_options read: one sheet.
         self._inferred_options: Optional[tuple] = None
-        self._option_rows: list = []  # header-menu rows built from its options
+        self._option_rows: list = []  # the mapping popup's rows of its options
+        self._mapping_menu = None  # that popup (_mapping_popup)
         self._mapping_dir = None  # custom directory override
         self._setup_recent_csv()
         self._setup_csv_path_editing()
         self._setup_header_menu()
         self._setup_mapping_combo()
+        self._setup_view_combos()
         self._restore_color_overrides()
         self._move_action_buttons_to_footer()
         self._setup_export_button()
@@ -234,13 +261,13 @@ class ShotManifestController(
 
     @property
     def _hide_missing(self) -> bool:
-        """Header menu > Hide Missing Shots (kept per user): leave out the
-        steps that have no shot -- the table, Assess and Build alike."""
+        """Hide > Steps Without a Shot (kept per user): leave out the steps
+        that have no shot -- the table, Assess and Build alike."""
         return bool(self._settings.value("hide_missing", False))
 
     def _rows(self, pairing: Optional[ShotPairing] = None) -> list:
         """The table's ``(step, shot)`` rows (``ShotPairing.rows``): the
-        steps, less those with no shot while Hide Missing Shots is on and some
+        steps, less those with no shot while they are hidden and some
         step has one (a step Local Edits added stays: the user just asked for
         it), and the shots no step pairs with where the timeline has them."""
         pairing = pairing if pairing is not None else self._pairing()
@@ -292,11 +319,23 @@ class ShotManifestController(
     def _redraw(self, reassess: bool = False) -> None:
         """Draw the table again, keeping its expansion and scroll, with the
         showing assessment over it -- run again once edits settle when
-        *reassess* (the scene changed, not only the view)."""
+        *reassess* (the scene changed, not only the view).
+
+        On a built timeline the unbuilt rows' frames are worked out again --
+        the shots' bounds and the insert preview, no animation scan
+        (:meth:`_resolve_ranges`) -- so a Build, a shot edited elsewhere or
+        the steps shown again never leave a preview of the timeline before.
+        """
         state = self._save_tree_state()
         self._populate_table()
-        if self._last_results:
-            self._apply_assessment(self._last_results)
+        assessed = bool(self._last_results)
+        if self._is_built and not self._use_selected_keys:
+            self._refresh_ranges(mark=not assessed)
+        elif self._last_resolved:  # the unbuilt rows' frames, as last resolved
+            self._auto_fill_ranges(self._last_resolved)
+            self._validate_range_collisions(self._last_resolved, mark=not assessed)
+        if assessed:
+            self._apply_assessment(self._last_results)  # marks every row
             if reassess:
                 self._reassess_soon()
         self._restore_tree_state(state)
@@ -401,6 +440,34 @@ class ShotManifestController(
             return
         btn.setEnabled(any(r.needs_build for r in self._last_results))
 
+    def _confirm_inserts(self, inserts: list, store) -> bool:
+        """Ask before *inserts* (``ShotManifest.plan_insertions``) move shots
+        already built: how many new shots, how many existing ones move later
+        with their keys, how many of those are locked.  Appending after the
+        last shot moves nothing and asks nothing."""
+        shots = store.sorted_shots()
+        index = {shot.shot_id: i for i, shot in enumerate(shots)}
+        # Every shot after the earliest existing shot an insert goes after
+        # moves (PlannedInsert.after_shot_id).
+        first = min(
+            0 if p.after_shot_id is None else index[p.after_shot_id] + 1
+            for p in inserts
+        )
+        moving = shots[first:]
+        if not moving:
+            return True
+        locked = sum(1 for shot in moving if shot.locked)
+        note = f" ({locked} of them locked)" if locked else ""
+        answer = self.sb.message_box(
+            f"<b>Insert {len(inserts)} new shot(s)?</b><br>"
+            "Each goes in sheet order, after its previous step's shot.<br>"
+            f"{len(moving)} existing shot(s){note} move later to make room, "
+            "their keys with them.",
+            "Insert",
+            "Cancel",
+        )
+        return answer == "Insert"
+
     def build(self) -> None:
         """Build or update shots in the store from loaded steps."""
         if self._editor.refuse_viewing("build"):  # a view, never built
@@ -439,23 +506,12 @@ class ShotManifestController(
 
             # Resolve ranges — short-circuit when all ranges are
             # already complete (detection mode provides full ranges).
-            # Incremental mode: when shots already exist and we're not
-            # in selected-keys mode, use the resolver's last-cascaded
-            # positions so that user edits ripple downstream.  Fall
-            # back to store positions when there is no resolved data.
+            # Incremental mode (shots exist, no selected keys): a new step's
+            # shot is inserted in sheet order, the later shots rippling out
+            # of its way; the ranges are read once the inserts are in.
             incremental = self._is_built and not use_sel
             if incremental:
-                # Grow-only: built steps keep their shots' bounds; new ones
-                # land between their neighbours (RangeResolver).
-                range_map = ptk.RangeResolver.incremental_ranges(
-                    self._steps,
-                    {
-                        sid: (shot.start, shot.end)
-                        for sid, shot in self._pairing(store=store).shots.items()
-                    },
-                    self._last_resolved,
-                    self._user_ranges,
-                )
+                range_map = None
             elif self._all_ranges_complete():
                 range_map = dict(self._user_ranges)
             else:
@@ -475,13 +531,7 @@ class ShotManifestController(
             # This prevents update() from creating shots via its own
             # sequential cursor fallback for unresolved steps.  Only the
             # shown steps build: one hidden as a missing shot gets none.
-            build_steps = self._shown_steps()
-            if not build_steps:
-                self._set_footer(
-                    "Nothing to build: every step is hidden (Hide Missing Shots).",
-                    color=ERROR_COLOR,
-                )
-                return
+            build_steps = self._shown_steps()  # never empty: a built step shows
             if use_sel and range_map:
                 resolved_ids = set(range_map)
                 build_steps = [s for s in build_steps if s.step_id in resolved_ids]
@@ -496,9 +546,49 @@ class ShotManifestController(
                     )
                     return
 
+            inserts, typed = [], self._typed_ranges()
+            if incremental:  # a typed step goes there, the next follows it
+                inserts = builder.plan_insertions(
+                    build_steps,
+                    typed=typed,
+                    fit_mode=self._fit_mode,
+                    initial_shot_length=self._initial_shot_length,
+                )
+                if inserts and not self._confirm_inserts(inserts, store):
+                    self._set_footer("Build cancelled -- no shot moved.")
+                    return
+
+            ranges_before = (dict(self._user_ranges), dict(self._seeded_ranges))
+            ids_before = {shot.shot_id for shot in store.shots}
+            ridden = typed
             self._building = True
             try:
                 with store.scene_edit("manifest_build"), store.batch_update():
+                    inserted = (
+                        builder.insert_planned(inserts, typed=typed) if inserts else {}
+                    )
+                    if incremental:
+                        # A typed range is in the timeline's frames as they
+                        # were: it moves with the shots the inserts moved (a
+                        # refused one moved nothing).
+                        made = [
+                            p
+                            for p in inserts
+                            if inserted.get(p.step.step_id) == "created"
+                        ]
+                        ridden = ptk.ShotManifest.ride_inserts(typed, made)
+                        # Grow-only: a step with a shot keeps its bounds, a
+                        # typed range places the rest (RangeResolver).
+                        range_map = ptk.RangeResolver.incremental_ranges(
+                            self._steps,
+                            {
+                                sid: (shot.start, shot.end)
+                                for sid, shot in self._pairing(
+                                    store=store
+                                ).shots.items()
+                            },
+                            user_ranges=ridden,
+                        )
                     actions, beh, assessment = builder.sync(
                         build_steps,
                         ranges=range_map,
@@ -509,6 +599,15 @@ class ShotManifestController(
                         fit_mode=self._fit_mode,
                         initial_shot_length=self._initial_shot_length,
                         skip_scene_discovery=use_sel,
+                    )
+                    # Sync patched what an insert made; a refused insert
+                    # stays refused unless sync made its shot after all.
+                    actions.update(
+                        {
+                            sid: action
+                            for sid, action in inserted.items()
+                            if action != "refused" or actions.get(sid) != "created"
+                        }
                     )
                     # Record the source CSV for provenance on reopen -- only
                     # the one these steps came from: a path still in the field
@@ -525,12 +624,14 @@ class ShotManifestController(
 
             # Store the store for later handoff to Shot Sequencer UI
             self._store = store
+            self._rebase_typed_ranges(store, typed, ridden, ranges_before, ids_before)
 
             n_created = sum(1 for a in actions.values() if a == "created")
             n_patched = sum(1 for a in actions.values() if a == "patched")
             n_skipped = sum(1 for a in actions.values() if a == "skipped")
             n_refused = sum(1 for a in actions.values() if a == "refused")
             n_kept = sum(1 for a in actions.values() if a == "kept")
+            n_locked = sum(1 for a in actions.values() if a == "locked")
             n_beh_applied = len(beh.get("applied", []))
             n_beh_skipped = len(beh.get("skipped", []))
             n_beh_failed = len(beh.get("failed", []))
@@ -546,8 +647,10 @@ class ShotManifestController(
                 parts.append(f"{n_refused} not built (name taken, see log)")
             if n_kept:
                 parts.append(
-                    f"{n_kept} edited by hand, kept (Rebuild Edited Shots rebuilds them)"
+                    f"{n_kept} edited by hand, kept (Edits: Rebuild Hand-Edited Shots rebuilds them)"
                 )
+            if n_locked:
+                parts.append(f"{n_locked} locked, left as they are")
             if n_beh_applied:
                 parts.append(f"{n_beh_applied} behaviors applied")
             if n_beh_skipped:
@@ -578,6 +681,33 @@ class ShotManifestController(
                 f"<b>Build failed.</b><br>{exc}",
             )
             self._set_footer(f"Build error: {exc}", color=ERROR_COLOR)
+
+    def _rebase_typed_ranges(
+        self, store, typed: dict, ridden: dict, before: tuple, ids_before: set
+    ) -> None:
+        """The typed ranges after a Build: a step it gave a shot is placed by
+        its shot now (its range goes -- left, it would place the step where it
+        was once the shot is gone); the rest move with the inserts it made
+        (*ridden*), as the shots after them did.  What they were is kept for
+        an undo of the Build (:meth:`_on_native_step_followed`), with the
+        shots it made -- the sign it was undone."""
+        shots = self._pairing(store=store).shots
+        for sid in typed:
+            if sid in shots:
+                self._user_ranges.pop(sid, None)
+            elif ridden.get(sid) is not None:
+                self._user_ranges[sid] = ridden[sid]
+        made = {shot.shot_id for shot in store.shots} - ids_before
+        self._build_undo = (
+            {
+                "store": store,
+                "made": made,
+                "before": before,
+                "after": (dict(self._user_ranges), dict(self._seeded_ranges)),
+            }
+            if made
+            else None
+        )
 
     def _apply_post_build(self, results: list, store) -> None:
         """Refresh tree with timing from the store and assessment results."""
@@ -669,12 +799,12 @@ class ShotManifestController(
         if status_changed:
             store.mark_dirty()
 
-        # Rebuild tree and enrich with timing from store + status
+        # Rebuild tree and enrich with timing from store + status: the rows
+        # are marked once, by this assessment (_apply_assessment).
         state = self._save_tree_state()
-        self._populate_table()
-        if not self._is_built:
-            self._refresh_ranges()
         self._last_results = results
+        self._populate_table()
+        self._refresh_ranges(mark=False)  # built: no scan -- the insert preview
         self._apply_assessment(results)
         self._restore_tree_state(state)
 

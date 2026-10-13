@@ -909,8 +909,8 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         norm_path = os.path.normcase(os.path.normpath(file_path))
         namespaces = []
         for ref in self.controller.current_references:
-            try:
-                if os.path.normcase(os.path.normpath(ref.path)) == norm_path:
+            try:  # the row's references -- through the bake standing in for it, too
+                if self.controller._row_key(ref.path) == norm_path:
                     namespaces.append(ref.namespace)
             except Exception:
                 continue
@@ -920,10 +920,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         """The active reference whose file is *file_path* (directly or through its bake), or None."""
         norm_fp = os.path.normcase(os.path.normpath(file_path))
         for ref in self.controller.current_references:
-            if norm_fp in (
-                os.path.normcase(os.path.normpath(ref.path)),
-                self.controller._bake_source_key(ref.path),
-            ):
+            if self.controller._row_key(ref.path) == norm_fp:
                 return ref
         return None
 
@@ -991,11 +988,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             if success:
                 t.actions.set(row, 1, "referenced")
                 # Reflect any display-override state baked into the source file
+                # (the reference may read a bake standing in for this row).
                 disp_mode = "off"
-                norm_ref = os.path.normcase(os.path.normpath(ref_path))
+                norm_row = os.path.normcase(os.path.normpath(file_path))
                 for ref in self.controller.current_references:
                     try:
-                        if os.path.normcase(os.path.normpath(ref.path)) == norm_ref:
+                        if self.controller._row_key(ref.path) == norm_row:
                             disp_mode = self.controller.get_reference_display_mode(ref)
                             if disp_mode != "off":
                                 break
@@ -1101,11 +1099,13 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
     def _bake_foreign_path(self, path):
         """Bake the foreign scene at *path* to a cached .ma; return its path or None.
 
-        Maya references FBX natively, so this bake is symmetry rather than necessity:
-        both panels reference a cached NATIVE scene, so the referenced-file surface
-        behaves identically no matter which DCC the row came from. Both stages are
-        cached, so re-referencing an unchanged scene is instant; a first run reports
-        into the footer (:meth:`_conversion_progress`, Esc-hold stops it).
+        For a .blend this bake is symmetry: both panels reference a cached NATIVE
+        scene, so the referenced-file surface behaves identically no matter which DCC
+        the row came from. An FBX no one take reads whole comes here too (the
+        engine's ``add_reference``, through the controller's ``_bake_for_reference``).
+        Both stages are cached, so re-referencing an unchanged scene is instant; a
+        first run reports into the footer (:meth:`_conversion_progress`, Esc-hold
+        stops it).
         """
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
@@ -1146,11 +1146,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if not file_path:
             return
 
+        # The row's references -- through the bake that stands in for it, too.
         norm_fp = os.path.normcase(os.path.normpath(file_path))
         matched_refs = [
             ref
             for ref in self.controller.current_references
-            if os.path.normcase(os.path.normpath(ref.path)) == norm_fp
+            if self.controller._row_key(ref.path) == norm_fp
         ]
 
         if not matched_refs:
@@ -1804,32 +1805,18 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if row is None:
             self.sb.message_box("No scene selected.")
             return
+        # The row's references, a bake-backed row's included (a foreign row, a
+        # multi-take FBX): made local. A row with none is imported fresh.
         namespaces = self._get_row_reference_namespaces(row)
         if namespaces:
             self.controller.unlink_references(namespaces)
             return
-        # No DIRECT reference. A foreign (Blender) row references its BAKE, so its namespace
-        # isn't found by a path match — resolve it through the bake source (same as the toggle
-        # path). If it IS referenced, make that reference local; otherwise import it fresh.
         item = self.ui.tbl000.item(row, 0)
         path = item.data(self.sb.QtCore.Qt.UserRole) if item else None
         if not (path and self._is_importable(path)):
             self.sb.message_box("No active reference selected.")
             return
-        norm_fp = os.path.normcase(os.path.normpath(path))
-        bake_ns = [
-            ref.namespace
-            for ref in self.controller.current_references
-            if norm_fp
-            in (
-                os.path.normcase(os.path.normpath(ref.path)),
-                self.controller._bake_source_key(ref.path),
-            )
-        ]
-        if bake_ns:
-            self.controller.unlink_references(bake_ns)
-        else:
-            self._import_paths([path])
+        self._import_paths([path])
 
     def btn_save_scene(self):
         """Save the current scene to the workspace."""

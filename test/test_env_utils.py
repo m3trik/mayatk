@@ -816,6 +816,64 @@ class TestReferenceScene(MayaTkTestCase):
             EnvUtils.reference_scene(path)
         self.assertEqual(EnvUtils.list_reference_nodes(), [])
 
+    def _fbx(self, name, takes):
+        """A keyed cube written with one take per entry of *takes* (Shots Only:
+        the whole-timeline take dropped)."""
+        import pythontk as ptk
+        import maya.mel as mel
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.addCleanup(mel.eval, "FBXImportSetTake -ti -1")
+        path = self._path(name)
+        cube = cmds.polyCube(name="ref_scene_cube")[0]
+        for t, v in ((1, 0.0), (10, 4.0), (20, -2.0)):
+            cmds.setKeyframe(cube, attribute="translateX", t=t, v=v)
+        FbxUtils.apply_takes(takes)
+        try:
+            FbxUtils.export(path, objects=[cube])
+        finally:
+            FbxUtils.reset_takes()
+        ptk.FbxMedia.drop_takes(path, names=["Take 001"])
+        cmds.file(new=True, force=True)
+        return path
+
+    def test_an_fbx_reads_under_the_per_file_take_whatever_the_session_holds(self):
+        """The plugin plays the take the session's sticky selector names: an
+        index past the file's takes referenced NOTHING, silently (BACKLOG
+        2026-10-10)."""
+        import maya.mel as mel
+
+        path = self._fbx(
+            "_reference_scene_one_take.fbx", ({"name": "all", "start": 1, "end": 20},)
+        )
+        mel.eval("FBXImportSetTake -ti 5")
+
+        EnvUtils.reference_scene(path)
+
+        ref_node = cmds.file(path, q=True, referenceNode=True)
+        nodes = cmds.ls(
+            cmds.referenceQuery(ref_node, nodes=True) or [], type="transform"
+        )
+        self.assertTrue(nodes, "nothing was loaded")
+        self.assertEqual(
+            len(cmds.keyframe(nodes[0], attribute="translateX", q=True) or []), 20
+        )
+
+    def test_an_fbx_no_one_take_reads_whole_is_warned_about(self):
+        path = self._fbx(
+            "_reference_scene_shots.fbx",
+            (
+                {"name": "early", "start": 1, "end": 8},
+                {"name": "late", "start": 12, "end": 20},
+            ),
+        )
+
+        with self.assertLogs("mayatk.env_utils._env_utils", "WARNING") as logs:
+            EnvUtils.reference_scene(path)
+
+        self.assertIn("merged", " ".join(logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()

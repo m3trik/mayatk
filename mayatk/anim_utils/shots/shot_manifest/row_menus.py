@@ -8,7 +8,9 @@ the Manifest, Pair with Step, Remove Shot).  Local Edits add their own.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from typing import Dict, List, Tuple
@@ -277,8 +279,8 @@ class RowMenusMixin:
         else:
             act_add.setEnabled(False)
             act_add.setToolTip(
-                "Viewing the original sheet: turn off View Original Sheet (header "
-                "menu) to add it."
+                "Comparing to the original sheet: pick another Edits mode "
+                "(header menu) to add it."
             )
         built = self._pairing().shots
         self._add_pair_menu(

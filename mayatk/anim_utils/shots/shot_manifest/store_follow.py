@@ -6,7 +6,9 @@ open), the settings detection reads, and the re-assessment owed after edits.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 import pythontk as ptk
@@ -81,8 +83,28 @@ class StoreFollowMixin:
         and stop a pending re-assessment."""
         self._unbind_store_listener()
         self._store_cls().remove_invalidation_listener(self._on_store_invalidated)
+        self._store_cls().remove_native_step_listener(self._on_native_step_followed)
         if self._reassess_timer is not None:
             self._reassess_timer.stop()
+
+    def _on_native_step_followed(self, event) -> None:
+        """The DCC's own undo or redo ran (``NativeStepFollowed``): when it
+        undid the last Build -- every shot it made gone again -- the typed
+        ranges it re-based come back as they were, and a redo of it brings
+        its own back (``_build_undo``, kept by ``_rebase_typed_ranges``)."""
+        undo = self._build_undo
+        if undo is None or event.store is not undo["store"] or not event.applied:
+            return
+        ids = {shot.shot_id for shot in undo["store"].shots}
+        if event.redo and undo["made"] <= ids:
+            ranges = undo["after"]
+        elif not event.redo and not undo["made"] & ids:
+            ranges = undo["before"]
+        else:
+            return
+        self._user_ranges, self._seeded_ranges = (dict(r) for r in ranges)
+        if self._first_shown and self._steps and not self._building:
+            self._redraw()
 
     def _on_store_invalidated(self, event=None) -> None:
         """The active store was swapped (:meth:`_on_scene_changed`)."""
@@ -175,9 +197,12 @@ class StoreFollowMixin:
 
         The scene's own shots ARE the steps, so they are read again (keeping
         the user's expansion); a sheet's or a detection's built rows take
-        their shots' live Start / End.  A showing assessment judged the scene
-        before the edit, so it is re-run once the edits settle
-        (:meth:`_reassess_soon`); with none showing nothing is assessed.
+        their shots' live Start / End, and on a built timeline the unbuilt
+        rows' preview is worked out again (:meth:`_refresh_ranges`: the
+        shots' bounds, no animation scan) -- an edited shot moves where Build
+        inserts the next.  A showing assessment judged the scene before the
+        edit, so it is re-run once the edits settle (:meth:`_reassess_soon`);
+        with none showing nothing is assessed.
         """
         if not self._first_shown:
             return
@@ -200,6 +225,8 @@ class StoreFollowMixin:
                 self._redraw()
             else:
                 self._refresh_timing()
+                if self._is_built and not self._use_selected_keys:
+                    self._refresh_ranges()
         else:
             return
         if assessed:

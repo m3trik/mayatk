@@ -1278,5 +1278,92 @@ class TestImportSceneParksAConflictingTake(_TakeFilesCase):
         self.assertTrue(KeyStash.active().is_empty())
 
 
+class TestNativeReadGap(_TakeFilesCase):
+    """What Maya's OWN reader of a file misses that ``import_scene`` imports.
+
+    A reference re-reads its file through the FBX plugin at every load, reload
+    and scene open, and plays the ONE take the session's sticky
+    ``FBXImportSetTake`` names -- never a merge. ``-1`` (the last take) is the
+    selector a session keeps, so a file reads whole natively only when its last
+    take is the one the import plays and nothing is parked; the Reference
+    Manager bakes any other (BACKLOG 2026-10-10: a Shots Only reference played
+    its last shot alone).
+    """
+
+    LOG = logging.getLogger(__name__)
+
+    def test_a_file_its_last_take_reads_whole_has_no_gap(self):
+        cube = self._cube()
+        whole = {"name": "whole", "start": 1, "end": 100}
+        cases = {
+            "one take": self._write("single", [cube], (whole,)),
+            "a cover listed last": self._write(
+                "cover_last", [cube], (*self.EARLY_LATE, whole)
+            ),
+        }
+        for case, path in cases.items():
+            with self.subTest(case=case):
+                self.assertIsNone(FbxUtils._native_read_gap(path, self.LOG))
+
+    def test_a_file_no_one_take_reads_whole_names_what_is_missed(self):
+        cube = self._cube()
+        cases = {
+            "merged": self._write("shots", [cube], self.EARLY_LATE),
+            "covered": self._write("both", [cube], self.EARLY_LATE, drop=()),
+        }
+        for kind, path in cases.items():
+            with self.subTest(kind=kind):
+                gap = FbxUtils._native_read_gap(path, self.LOG)
+                self.assertTrue(gap and gap.startswith(f"{kind}:"), gap)
+
+    def test_a_parked_take_is_a_gap(self):
+        path = TestImportSceneParksAConflictingTake._clip_library(self)
+
+        gap = FbxUtils._native_read_gap(path, self.LOG)
+
+        self.assertTrue(gap and gap.startswith("conflicted:"), gap)
+        self.assertIn("'run'", gap)
+
+    def test_an_ascii_file_is_judged_by_the_importer_s_own_spans(self):
+        """pythontk reads binary FBX only, so an ASCII file is judged by the
+        spans the importer reports: its whole-timeline take, listed FIRST, is
+        not the last take a native read plays."""
+        cube = self._cube()
+        mel.eval("FBXExportInAscii -v true")
+        try:
+            path = self._write("both_ascii", [cube], self.EARLY_LATE, drop=())
+        finally:
+            mel.eval("FBXExportInAscii -v false")
+        self.assertFalse(ptk.FbxFile.is_fbx(path), "the fixture must be ASCII")
+
+        gap = FbxUtils._native_read_gap(path, self.LOG)
+
+        self.assertIn("'Take 001'", gap or "")
+
+
+class TestNativeReadMemo(_TakeFilesCase):
+    """``_native_read`` reads a version of a file's takes once: a large FBX's
+    take layout takes seconds (~19 s measured on a 133 MB, 13-take file), and
+    every add, Open and ``reference_scene`` read it again."""
+
+    LOG = logging.getLogger(__name__)
+
+    def test_a_version_of_a_file_is_read_once(self):
+        from unittest.mock import patch
+
+        path = self._write("shots", [self._cube()], self.EARLY_LATE)
+        real = ptk.FbxFile.load
+        with patch.object(ptk.FbxFile, "load", side_effect=real) as load:
+            first = FbxUtils._native_read(path, self.LOG)
+            reads = load.call_count
+            self.assertEqual(FbxUtils._native_read(path, self.LOG), first)
+            self.assertEqual(load.call_count, reads, "an unchanged file was read again")
+            stat = os.stat(path)  # a re-export: a new version of the file
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+            self.assertEqual(FbxUtils._native_read(path, self.LOG), first)
+            self.assertGreater(load.call_count, reads, "a changed file was not read")
+        self.assertTrue(first and first.startswith("merged:"), first)
+
+
 if __name__ == "__main__":
     unittest.main()

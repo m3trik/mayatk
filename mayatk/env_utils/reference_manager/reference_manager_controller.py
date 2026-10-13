@@ -20,6 +20,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdReadRefused, UsdUtils
 from mayatk.env_utils.reference_manager._reference_manager import (
     AssemblyManager,
@@ -480,22 +481,20 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             in ReferenceManagerSlots.FOREIGN_EXTENSIONS
         )
 
-    @staticmethod
-    def _bake_source_key(referenced_path):
-        """Normalized path of the foreign scene *referenced_path* was baked from, or None.
+    def _bake_for_reference(self, file_path):
+        """The engine's FBX bake, run the way a foreign row's is: in the footer's
+        progress (an Esc-hold stops it), its error in front of the user."""
+        return self.slot._bake_foreign_path(file_path)
 
-        A foreign row references a cached ``.ma`` bake, so mapping a live reference back
-        to the source row the user sees is the only way that row can read as referenced
-        (and be un-referenced by a second click).
-        """
-        if not referenced_path:
-            return None
-        try:
-            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
-        except ImportError:  # bridge unavailable — no row can be bake-backed
-            return None
-        source = BlenderSceneImport.bake_source(referenced_path)
-        return os.path.normcase(os.path.normpath(source)) if source else None
+    def _read_fbx_takes(self, file_path):
+        """The engine's take read, under the footer's busy progress the first time
+        a version of *file_path* is read (a large file's take layout takes
+        seconds); a version read before answers at once."""
+        if FbxUtils._native_read_known(file_path):
+            return super()._read_fbx_takes(file_path)
+        name = os.path.basename(file_path)
+        with self.slot._conversion_progress(f"Reading the takes of {name}"):
+            return super()._read_fbx_takes(file_path)
 
     def handle_item_selection(self):
         t = self.ui.tbl000
@@ -544,10 +543,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # path (which is unique) rather than by display text.  Two files
         # sharing a display name in different folders -- or rendered
         # identically once "Hide Extension" is on -- must each be referenced,
-        # not collapse to a single arbitrary entry.
+        # not collapse to a single arbitrary entry. Each reference is keyed by
+        # the ROW it stands for: a bake-backed one (a foreign row, a multi-take
+        # FBX the engine baked) by the scene it was baked from, never its .ma.
         current_refs_by_path = {
-            os.path.normcase(os.path.normpath(ref.path)): ref
-            for ref in current_references
+            self._row_key(ref.path): ref for ref in current_references
         }
         selected_by_path = {
             os.path.normcase(os.path.normpath(file_path)): (text, file_path)
@@ -556,11 +556,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
 
         paths_to_add = set(selected_by_path) - set(current_refs_by_path)
         # Only a LISTED file can be deselected: a reference whose file has no row here
-        # (another workspace, a filtered-out type) is left alone. A foreign row
-        # references its BAKE (a cached .ma, never a row) and is intentionally
-        # non-selectable, so the bake-backed exclusion keeps an unrelated selection
-        # change from silently un-referencing every foreign row — those are toggled by
-        # their own icon. Mirror of blendertk's ``_on_selection_changed``.
+        # (another workspace, a filtered-out type) is left alone. A foreign row is
+        # intentionally non-selectable, so it is never in the selection either way:
+        # excluding it keeps an unrelated selection change from silently
+        # un-referencing every foreign row — those are toggled by their own icon. A
+        # baked FBX row stays selectable, so its deselect unreferences it. Mirror of
+        # blendertk's ``_on_selection_changed``.
         listed = set()
         for row in range(t.rowCount()):
             item = t.item(row, 0)
@@ -570,7 +571,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         paths_to_remove = {
             p
             for p in (set(current_refs_by_path) & listed) - set(selected_by_path)
-            if not self._bake_source_key(current_refs_by_path[p].path)
+            if not self._is_foreign(p)
         }
 
         self.logger.debug(
@@ -614,10 +615,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             _scene = cmds.file(q=True, sceneName=True) or ""
             current_scene = os.path.normcase(os.path.normpath(_scene)) if _scene else ""
 
-            # Create a mapping from file paths to namespaces for current references
+            # Map each current reference's ROW to its namespace (a bake-backed
+            # reference's row is the scene it was baked from).
             ref_path_to_namespace = {
-                os.path.normcase(os.path.normpath(ref.path)): ref.namespace
-                for ref in current_references
+                self._row_key(ref.path): ref.namespace for ref in current_references
             }
 
             self.logger.debug(
@@ -886,6 +887,10 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         """Refresh the file list for the table widget."""
         # Row indices change on refresh — invalidate any captured context-menu row
         self._context_menu_row = None
+        # A bake-backed reference follows its source as it is now (re-baked and
+        # repointed when the FBX was re-exported); outside the signal block, as
+        # a re-bake reports into the footer.
+        self._follow_bake_sources()
         # Use internal method for the table operations that need signal blocking
         self._refresh_file_list_internal(invalidate)
 
@@ -1031,29 +1036,42 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         self._active_include_files = include_files
         self._active_include_notes = include_notes
 
-        # Identify and include external references
-        current_refs = self.current_references
-        external_refs_paths = []
+        # Identify and include external references, each listed by the ROW it
+        # stands for: a bake-backed one (a foreign row, a multi-take FBX the engine
+        # baked) by the scene it was baked from -- its cached .ma is never a row.
+        ref_rows = []
+        for ref in self.current_references:
+            try:
+                ref_rows.append(self._bake_source(ref.path) or ref.path)
+            except Exception:
+                continue
 
-        # Get all files in current workspace to check against (unfiltered)
+        # Get all files in current workspace to check against (unfiltered). A
+        # foreign scene is found by the foreign scan, run once for this check and
+        # for the foreign listing below.
         full_workspace_files = self.workspace_files.get(workspace_path, [])
         full_workspace_files_set = set(
             os.path.normcase(os.path.normpath(f)) for f in full_workspace_files
         )
+        foreign_ext = {e for e in self.slot.FOREIGN_EXTENSIONS if e in included}
+        foreign_found = []
+        if foreign_ext or any(self._is_foreign(r) for r in ref_rows):
+            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
-        for ref in current_refs:
-            try:
-                path = os.path.normcase(os.path.normpath(ref.path))
-                # If path is not in the current workspace, it's external
-                if path not in full_workspace_files_set:
-                    # Avoid duplicates in external list
-                    if path not in [
-                        os.path.normcase(os.path.normpath(p))
-                        for p in external_refs_paths
-                    ]:
-                        external_refs_paths.append(ref.path)
-            except Exception:
-                continue
+            foreign_found = BlenderSceneImport.find_scenes(
+                workspace_path, recursive=self.recursive_search
+            )
+            full_workspace_files_set.update(
+                os.path.normcase(os.path.normpath(p)) for p in foreign_found
+            )
+
+        external_refs_paths, seen = [], set()
+        for row in ref_rows:
+            key = os.path.normcase(os.path.normpath(row))
+            # Not in the current workspace: external, listed once.
+            if key not in full_workspace_files_set and key not in seen:
+                seen.add(key)
+                external_refs_paths.append(row)
 
         # Prepend external references to the file list
         if external_refs_paths:
@@ -1078,14 +1096,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # (.blend). A foreign row's reference icon bakes it through the blender_bridge (headless
         # convert -> cached .ma) and references the result. Discovery uses the importer's own
         # scan, filtered to the checked extensions (mirror of the Blender panel's .ma/.mb listing).
-        foreign_ext = {e for e in self.slot.FOREIGN_EXTENSIONS if e in included}
         if foreign_ext:
-            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
-
             existing = {os.path.normcase(os.path.normpath(p)) for p in file_list}
-            for p in BlenderSceneImport.find_scenes(
-                workspace_path, recursive=self.recursive_search
-            ):
+            for p in foreign_found:
                 if (
                     os.path.splitext(p)[1].lower() in foreign_ext
                     and os.path.normcase(os.path.normpath(p)) not in existing
@@ -1138,18 +1151,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             ref_path_set = set()
             display_mode_by_path = {}
             for ref in self.current_references:
+                # Keyed by the ROW it stands for (a bake-backed reference: the
+                # scene it was baked from) -- else that row reads unreferenced.
                 try:
-                    norm = os.path.normcase(os.path.normpath(ref.path))
+                    key = self._row_key(ref.path)
                 except Exception:
                     continue
                 mode = self.get_reference_display_mode(ref)
-                # A foreign row references its BAKE, so key the reference by the source
-                # scene the user sees too — otherwise the row reads as unreferenced.
-                for key in filter(None, (norm, self._bake_source_key(ref.path))):
-                    ref_path_set.add(key)
-                    # If multiple refs share a path, prefer any non-off mode
-                    if mode != "off" or key not in display_mode_by_path:
-                        display_mode_by_path[key] = mode
+                ref_path_set.add(key)
+                # If multiple refs share a path, prefer any non-off mode
+                if mode != "off" or key not in display_mode_by_path:
+                    display_mode_by_path[key] = mode
 
             for row, (scene_name, file_path) in enumerate(zip(file_names, file_list)):
                 item = t.item(row, 0)  # Files column is at index 0
@@ -1322,13 +1334,12 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         t = self.ui.tbl000
         path_to_refs = {}
         for ref in self.current_references:
+            # Keyed by its row, so a bake-backed row tracks its own reference.
             try:
-                key = os.path.normcase(os.path.normpath(ref.path))
+                key = self._row_key(ref.path)
             except Exception:
                 continue
-            # Also key by the bake's source so a foreign row tracks its own reference.
-            for k in filter(None, (key, self._bake_source_key(ref.path))):
-                path_to_refs.setdefault(k, []).append(ref)
+            path_to_refs.setdefault(key, []).append(ref)
 
         for row in range(t.rowCount()):
             item = t.item(row, 0)
@@ -1405,6 +1416,18 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 read = UsdUtils.live_read_options(file_path)
             except RuntimeError as e:
                 return self._refuse_live_read(file_path, e)
+        elif self._is_fbx(file_path):
+            # The plugin opens the ONE take the session's sticky selector names:
+            # pinned to the per-file -1 (an index past the file's takes opened an
+            # empty scene). A file that take does not read whole opens in part.
+            gap = self._read_fbx_takes(file_path)
+            if gap:
+                self.logger.warning(
+                    f"{os.path.basename(file_path)} ({gap}) opens with its last take "
+                    "only; reference the row to read every take."
+                )
+        else:  # a scene that references an FBX reads it under the selector too
+            FbxUtils._default_import_take(if_loaded=True)
 
         try:
             cmds.file(file_path, open=True, force=True, **read)

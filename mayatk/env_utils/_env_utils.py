@@ -973,7 +973,11 @@ class EnvUtils(ptk.HelpMixin):
 
         A USD layer reads through mayaUsd's translator, named, and only once the stage
         is proven safe to read live (:meth:`UsdUtils.live_read_options`): left to pick
-        the translator by extension, Maya reads it with animation off.
+        the translator by extension, Maya reads it with animation off. An FBX reads
+        through the plugin under the per-file take selector (the last take); a file
+        that take does not read whole -- its takes merged on import, one parked --
+        is warned about (``ReferenceManager.add_reference`` references a baked
+        ``.ma`` of it instead).
 
         Parameters:
             file_path (str): The path to the file to reference.
@@ -991,6 +995,21 @@ class EnvUtils(ptk.HelpMixin):
             from mayatk.env_utils.usd import UsdUtils
 
             read = UsdUtils.live_read_options(file_path)
+        else:
+            import logging
+
+            from mayatk.env_utils.fbx_utils import FbxUtils
+
+            if os.path.splitext(file_path)[1].lower() == ".fbx":
+                log = logging.getLogger(__name__)
+                gap = FbxUtils._native_read(file_path, log)
+                if gap:
+                    log.warning(
+                        f"{os.path.basename(file_path)} ({gap}): a native FBX "
+                        "reference plays its last take only."
+                    )
+            else:  # a scene that references an FBX reads it under the selector too
+                FbxUtils._default_import_take(if_loaded=True)
         cmds.file(file_path, reference=True, **read)
 
     @staticmethod

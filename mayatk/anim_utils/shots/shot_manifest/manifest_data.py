@@ -4,7 +4,9 @@
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa: F401
@@ -14,7 +16,10 @@ from pythontk.core_utils.engines.shots.manifest.range_resolver import (  # noqa:
 # canonical home is the engine class; re-exported under the historical name for callers
 prune_to_top_boundaries = _PyRangeResolver.prune_to_top_boundaries  # noqa: F401
 
-from pythontk import SHOT_PALETTE  # noqa: E402
+import html as _html  # noqa: E402
+from typing import Iterable, Optional, Tuple  # noqa: E402
+
+from pythontk import SHOT_PALETTE, SHOT_STATUS_LEVELS  # noqa: E402
 from pythontk.core_utils.engines.shots.manifest.behaviors import (  # noqa: E402
     Behaviors as _PyBehaviors,
 )
@@ -35,16 +40,9 @@ COL_END = 5
 
 STEP_ICON_COLOR = "#8E8E8E"  # neutral dark grey for parent step rows
 
-# Assessment status colours — the pythontk engine's palette (single source of truth).
-PASTEL_STATUS = SHOT_PALETTE
-
-# Foreground colors for behavior issue states on child rows.
-# Valid behaviors are rendered without color.
-BEHAVIOR_STATUS_COLORS = {
-    "missing": PASTEL_STATUS["missing_behavior"][0],  # warn gold
-    "error": PASTEL_STATUS["missing_object"][0],  # error red
-    "stale": PASTEL_STATUS["stale_behavior"][0],  # keyed under an older recipe
-}
+# Assessment status colours: the pythontk engine's palette, copied -- the
+# Colors... editor recolours this panel, never the Shot Sequencer's.
+PASTEL_STATUS = SHOT_PALETTE.copy()
 
 # Derived from the palette — used for footer error labels
 ERROR_COLOR = PASTEL_STATUS["error"][0]
@@ -52,6 +50,69 @@ ERROR_COLOR = PASTEL_STATUS["error"][0]
 
 class ManifestData:
     """ManifestData — module namespace."""
+
+    #: The glyph a status line leads with, by its severity
+    #: (``SHOT_STATUS_LEVELS``): its shape says what its colour does.
+    LEVEL_GLYPHS = {
+        "error": "\u2716",
+        "warn": "\u25b2",
+        "info": "\u25cf",
+        "locked": "\u25a0",
+    }
+    #: The icon of a row whose worst issue has that severity.
+    LEVEL_ICONS = {
+        "error": "error",
+        "warn": "warning",
+        "info": "info",
+        "locked": "lock",
+    }
+    #: The severities, mildest first.
+    LEVELS = ("valid", "locked", "info", "warn", "error")
+
+    @staticmethod
+    def level(status: str) -> str:
+        """*status*'s severity (``SHOT_STATUS_LEVELS``); a severity is its own."""
+        if status in ManifestData.LEVELS:
+            return status
+        return SHOT_STATUS_LEVELS.get(status, "valid")
+
+    @staticmethod
+    def status_color(status: str) -> Optional[str]:
+        """*status*'s colour in this panel's palette, or ``None`` for none."""
+        fg = PASTEL_STATUS.get(status, (None, None))[0]
+        return str(fg) if fg else None
+
+    @staticmethod
+    def worst(statuses: Iterable[str]) -> Optional[str]:
+        """The status of *statuses* at the worst severity (the first of
+        equals), or ``None`` when none has one."""
+        order = ManifestData.LEVELS.index
+        best, rank = None, 0
+        for status in statuses:
+            r = order(ManifestData.level(status))
+            if r > rank:
+                best, rank = status, r
+        return best
+
+    @staticmethod
+    def glyph_html(status: str) -> str:
+        """*status*'s glyph in its colour, as rich text (``""``: no severity)."""
+        glyph = ManifestData.LEVEL_GLYPHS.get(ManifestData.level(status))
+        if not glyph:
+            return ""
+        color = ManifestData.status_color(status)
+        return f'<span style="color:{color}">{glyph}</span>' if color else glyph
+
+    @staticmethod
+    def issues_html(issues: Iterable[Tuple[str, str]]) -> str:
+        """``(status, text)`` *issues* as rich text, a line each: its glyph,
+        in its colour, before the text (escaped; a newline stays one)."""
+        lines = []
+        for status, text in issues:
+            body = _html.escape(text, quote=False).replace("\n", "<br>")
+            glyph = ManifestData.glyph_html(status)
+            lines.append(f"{glyph}&nbsp;{body}" if glyph else body)
+        return "<br>".join(lines)
 
     @staticmethod
     def fmt_behavior(name: str) -> str:
@@ -69,16 +130,16 @@ class ManifestData:
     ) -> str:
         """Return rich-text HTML for a list of behavior names.
 
+        A behavior with an issue is led by its glyph, in its colour
+        (:meth:`glyph_html`); the name itself is never coloured.
+
         Parameters:
             behaviors: Sequence of raw behavior names to display.
-            broken: Subset of *behaviors* that failed verification.
-                These are rendered with the ``missing_behavior`` palette
-                colour; the rest are left uncoloured.
-            status_color: Optional override colour applied to *all* behaviours.
-                When set, *broken* is ignored and every behaviour is rendered
-                in this colour (e.g. the error colour for missing objects).
+            broken: Subset of *behaviors* that failed verification: led by the
+                ``missing_behavior`` glyph.
+            status_color: Optional colour every behaviour is shown in instead.
             stale: Subset of *behaviors* keyed under an older effect recipe
-                (Build re-keys them), rendered in the ``stale`` colour.
+                (Build re-keys them): led by the ``stale_behavior`` glyph.
             disabled: Behavior types turned off (header menu): struck through
                 in the ``locked`` grey, whatever else applies.
             marked: Behavior types set to Marker (header menu): shown after
@@ -116,11 +177,8 @@ class ManifestData:
             for b in behaviors:
                 display = _display(b)
                 if b in broken_set:
-                    color = BEHAVIOR_STATUS_COLORS.get("missing")
-                    spans.append(f'<span style="color:{color}">{display}</span>')
+                    display = f"{ManifestData.glyph_html('missing_behavior')} {display}"
                 elif b in stale_set:
-                    color = BEHAVIOR_STATUS_COLORS.get("stale")
-                    spans.append(f'<span style="color:{color}">{display}</span>')
-                else:
-                    spans.append(display)
+                    display = f"{ManifestData.glyph_html('stale_behavior')} {display}"
+                spans.append(display)
         return "  ".join(spans)

@@ -173,6 +173,23 @@ class FbxUtils(ptk.HelpMixin):
         # with ``FBXImport error: take not found`` and ``cmds.file`` returns
         # NO nodes without raising, silently emptying every later import
         # (the hierarchy-sync "won't load an FBX reference" failure).
+        FbxUtils._default_import_take()
+
+    @staticmethod
+    def _default_import_take(if_loaded: bool = False) -> None:
+        """Leave the importer's sticky take selector at ``-1``, which it
+        resolves per file at read time (:meth:`reset_import`): the last take,
+        as a fresh session reads it. Any fixed index binds every later read of
+        every file -- one past a file's take count reads NOTHING, silently.
+
+        Parameters:
+            if_loaded: Only when the plug-in is already loaded -- before a read
+                that MAY reach an FBX (a scene that references one): a plug-in
+                that loads for it starts at the fresh-session choice anyway.
+        """
+        if if_loaded and not cmds.pluginInfo("fbxmaya", query=True, loaded=True):
+            return
+        FbxUtils.load_plugin()
         mel.eval("FBXImportSetTake -ti -1")
 
     @staticmethod
@@ -742,6 +759,66 @@ class FbxUtils(ptk.HelpMixin):
             + ", ".join(repr(n) for n in names[:-1])
         )
         return -1, f"unread: {names[-1]!r} imported, {len(names) - 1} left out"
+
+    #: :meth:`_native_read_gap` verdicts by file identity (path, mtime, size):
+    #: a large file's take layout takes seconds to read.
+    _NATIVE_READ_MEMO: Dict[str, Optional[str]] = {}
+
+    @staticmethod
+    def _native_read_key(file_path: str) -> str:
+        return ptk.CachedArtifact.key(files=[os.path.abspath(file_path)])
+
+    @classmethod
+    def _native_read_known(cls, file_path: str) -> bool:
+        """True when :meth:`_native_read` answers *file_path* without reading it."""
+        return cls._native_read_key(file_path) in cls._NATIVE_READ_MEMO
+
+    @classmethod
+    def _native_read(cls, file_path: str, log: logging.Logger) -> Optional[str]:
+        """Ready Maya's own reader for *file_path*: pin the per-file take
+        (:meth:`_default_import_take`) and return what that read misses
+        (:meth:`_native_read_gap`), read once per version of the file."""
+        key = cls._native_read_key(file_path)
+        if key not in cls._NATIVE_READ_MEMO:
+            cls._NATIVE_READ_MEMO[key] = cls._native_read_gap(file_path, log)
+        cls._default_import_take()
+        return cls._NATIVE_READ_MEMO[key]
+
+    @classmethod
+    def _native_read_gap(cls, file_path: str, log: logging.Logger) -> Optional[str]:
+        """What Maya's own FBX reader misses of *file_path* that
+        :meth:`import_scene` imports, as a report clause; ``None`` for nothing.
+
+        The native reader -- a reference, which re-reads its file at every
+        load, reload and scene open -- plays the ONE take the session's sticky
+        selector names when it reads, never a merge, and ``-1`` (the last
+        take, :meth:`_default_import_take`) is the only selector a session can
+        be relied on to hold. So a file reads whole natively when nothing in it
+        is keyed, or when its last take is the one the import plays and no
+        take is parked; a file whose import merges takes, parks one, or plays
+        a cover listed before its slices reads whole under no single take. A
+        file pythontk cannot read (ASCII) is judged by the importer's own spans
+        (:meth:`_covering_take`), as its import is.
+        """
+        _fbx, layout = cls._take_layout(file_path, log)
+        if layout is not None:
+            live, stash = layout["live"], layout["stash"]
+            if not stash and (not live or live == [layout["takes"][-1]["name"]]):
+                return None
+            parks = ", ".join(repr(t) for t in stash)
+            return cls._take_report(layout) + (f"; parks {parks}" if parks else "")
+        try:
+            cls.load_plugin()
+            index, names = cls._covering_take(mel, file_path)
+        except Exception as error:  # noqa: BLE001 - its import falls back to -1 too
+            log.debug(f"FBX take spans unreadable ({error}).")
+            return None
+        if index in (-1, len(names)):
+            return None
+        return (
+            f"unread: {names[index - 1]!r} covers the rest, but the last take is "
+            f"{names[-1]!r}"
+        )
 
     @staticmethod
     def _covering_take(mel, path):

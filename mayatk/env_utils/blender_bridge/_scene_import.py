@@ -69,6 +69,33 @@ _BAKE_TEMPLATE = _TEMPLATE_DIR / "_bake_scene.py"
 # The bake template replays the payload through this module's import_payload, so an
 # engine fix must invalidate a cached bake as a template fix does.
 _BAKE_ENGINE = os.path.abspath(__file__)
+# The cached bakes, one per key (``CachedArtifact`` names its cache ``<name>_cache``).
+_BAKE_CACHE = "blender_bake_mtk"
+
+
+def _fbx_take_engine() -> List[str]:
+    """The modules that decide what an FBX bakes to -- which takes play, merged,
+    or parked (``FbxUtils.import_scene``; pythontk's ``FbxFile.take_layout`` and
+    ``FbxMedia.merge_takes``): a fix to any of them must invalidate a cached bake
+    as an engine fix does."""
+    import inspect
+
+    from mayatk.env_utils.fbx_utils import FbxUtils
+
+    return [inspect.getfile(c) for c in (FbxUtils, ptk.FbxFile, ptk.FbxMedia)]
+
+
+_bake_slot_store = None
+
+
+def _bake_slots() -> "ptk.TempArtifacts":
+    """The bake cache's store, built once: each build sweeps the cache's stale
+    entries, and a slot is looked up on every panel refresh."""
+    global _bake_slot_store
+    if _bake_slot_store is None:
+        _bake_slot_store = ptk.TempArtifacts(f"{_BAKE_CACHE}_cache", policy="detached")
+    return _bake_slot_store
+
 
 # Conversion intermediates by route: "fbx" = classic material model + texture-
 # manifest sidecar rebuilt via the GameShader engine; "usd" = native materials /
@@ -1899,14 +1926,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 "instancing); clear the conversion cache or bake via FBX."
             )
 
-        key_files = [inter_path, _BAKE_TEMPLATE, _BAKE_ENGINE]
-        # The manifest the bake applies is an input too: a payload can land before
-        # its sidecar (a synced drive), and a bake cached in that window would
-        # replay the sidecar-less scene after the sidecar arrived.
-        if has_sidecar:
-            key_files.append(sidecar)
-        got = ptk.CachedArtifact("blender_bake_mtk", extension=".ma").get(
-            ptk.CachedArtifact.key(files=key_files),
+        got = ptk.CachedArtifact(_BAKE_CACHE, extension=".ma").get(
+            ptk.CachedArtifact.key(files=self._bake_key_files(inter_path)),
             lambda out: self.bake(
                 inter_path,
                 out,
@@ -1915,6 +1936,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             ),
             use_cache=use_cache,
         )
+        if got.hit:
+            # The cache's age sweep goes by mtime, and a hit writes nothing: a bake
+            # in daily use would be collected 7 days after it was made.
+            self._touch_bake(got.path)
         relay.report(
             stages - 1,
             1,
@@ -1935,6 +1960,40 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         # ANSI code page: under a TEMP it cannot hold (Cyrillic on cp1252) the
         # reference loaded nothing. Its 8.3 form, where that differs.
         return ptk.AppLauncher.ansi_safe_path(got.path)
+
+    @staticmethod
+    def _bake_key_files(inter_path: str) -> List[str]:
+        """Every file a bake of the intermediate *inter_path* depends on -- its
+        cache key's inputs: the intermediate, the template, this engine, the FBX
+        take engine (:func:`_fbx_take_engine`) and, when present, the manifest the
+        bake applies (a payload can land before its sidecar on a synced drive, and
+        a bake cached in that window would replay the sidecar-less scene after
+        the sidecar arrived)."""
+        files = [inter_path, _BAKE_TEMPLATE, _BAKE_ENGINE, *_fbx_take_engine()]
+        sidecar = ptk.HandoffManifest.path_for(inter_path)
+        if os.path.isfile(sidecar):
+            files.append(sidecar)
+        return files
+
+    @classmethod
+    def _bake_slot(cls, src_path: str) -> str:
+        """Where :meth:`bake_scene` caches the ``.ma`` of the ``.fbx`` *src_path*
+        as the file is NOW -- there or not. A reference reading any other bake of
+        it reads an old version of the file, or one an older engine made."""
+        src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
+        key = ptk.CachedArtifact.key(files=cls._bake_key_files(src))
+        return _bake_slots().path(extension=".ma", name=key)
+
+    @staticmethod
+    def _touch_bake(baked_path: str) -> None:
+        """Mark the cached bake *baked_path* -- and its source sidecar, which maps
+        a reference back to its row -- in use: the cache's age sweep goes by
+        mtime, so a bake a scene reads must not look abandoned."""
+        for path in (baked_path, baked_path + BAKE_SOURCE_SUFFIX):
+            try:
+                os.utime(path, None)
+            except OSError as e:  # a missing or locked file: the sweep decides
+                _logger.debug(f"Could not touch {path}: {e}")
 
     def _write_bake_source(self, baked_path: str, src: str) -> None:
         """Record beside *baked_path* which foreign scene it was baked from."""

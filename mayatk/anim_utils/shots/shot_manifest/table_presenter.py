@@ -9,7 +9,9 @@ Mixed into :class:`~.shot_manifest_controller.ShotManifestController`.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 import pythontk as ptk
@@ -17,7 +19,6 @@ from pythontk import BuilderObject, BuilderStep, StepStatus
 
 from .behaviors import Behaviors
 from .manifest_data import (
-    BEHAVIOR_STATUS_COLORS,
     COL_BEHAVIORS,
     COL_DESC,
     COL_END,
@@ -25,7 +26,6 @@ from .manifest_data import (
     COL_STEP,
     ERROR_COLOR,
     HEADERS,
-    PASTEL_STATUS,
     STEP_ICON_COLOR,
     ManifestData,
 )
@@ -38,16 +38,17 @@ _ORIGIN_NOTES = {
     "shot": "Auto-filled from the scene -- not listed in the sheet.",
     # The members of a shot shown under its row (``_add_member_rows``).
     "member": "In the step's shot, not listed in the manifest.",
-    "orphan_member": "A member of this shot.",
 }
 
-#: Object statuses about a behavior (counted on the step's Behaviors cell).
-_BEHAVIOR_ISSUES = (
-    "missing_behavior",
-    "behavior_conflict",
-    "unknown_behavior",
-    "stale_behavior",
-)
+#: Object statuses about a behavior, and the word the step's Behaviors cell
+#: counts each by ("2 missing, 1 to re-key").
+_BEHAVIOR_WORDS = {
+    "missing_behavior": "missing",
+    "behavior_conflict": "in conflict",
+    "unknown_behavior": "unknown",
+    "stale_behavior": "to re-key",
+}
+_BEHAVIOR_ISSUES = tuple(_BEHAVIOR_WORDS)
 
 
 class ManifestTableMixin:
@@ -138,23 +139,20 @@ class ManifestTableMixin:
         """
         broken: list = []
         stale: list = []
-        status_color = None
         obj_st = ptk.StepStatus.find_object(
             getattr(self, "_last_results", None) or [], obj.name, step_id
         )
-        if obj_st is not None:
-            if obj_st.status == "missing_object":
-                status_color = BEHAVIOR_STATUS_COLORS.get("error")
-            else:
-                broken = list(obj_st.broken_behaviors or [])
-                stale = list(obj_st.stale_behaviors or [])
+        # A missing object's row says so (_set_row_status): its behaviors
+        # are not each marked.
+        if obj_st is not None and obj_st.status != "missing_object":
+            broken = list(obj_st.broken_behaviors or [])
+            stale = list(obj_st.stale_behaviors or [])
         off = self._disabled_behaviors()
         marked = self._marked_behaviors()
         label.setText(
             ManifestData.format_behavior_html(
                 obj.behaviors,
                 broken=broken,
-                status_color=status_color,
                 stale=stale,
                 disabled=off,
                 marked=marked,
@@ -436,12 +434,10 @@ class ManifestTableMixin:
         """An italic, non-editable "not in doc" row for *shot* -- a shot no
         step pairs with -- its members under it; its context menu adds it to
         the manifest, pairs it with a step, or removes it.  *section*: the
-        section of the step it was split off (``ShotPairing.links``)."""
+        section of the step it was split off (``ShotPairing.links``).  Its
+        status is marked with the rest (:meth:`_apply_formatting`)."""
         from qtpy.QtCore import Qt
-        from qtpy.QtGui import QBrush, QColor
 
-        fg, _bg = PASTEL_STATUS.get("not_in_doc", (None, None))
-        tip = StepStatus.HELP["not_in_doc"]
         row = tree.create_item(
             [
                 shot.name,
@@ -458,9 +454,6 @@ class ManifestTableMixin:
         font.setItalic(True)
         for c in range(tree.columnCount()):
             row.setFont(c, font)
-            row.setToolTip(c, tip)
-            if fg:
-                row.setForeground(c, QBrush(QColor(fg)))
         self._add_member_rows(tree, row, shot, in_step=False)
         return row
 
@@ -468,22 +461,18 @@ class ManifestTableMixin:
         """A child row under *parent* per member of *shot* not among *listed*
         (names, compared as ``ShotStore.member_key`` does): the shot's own
         objects, shown before any Assess -- italic, never editable; under a
-        step (*in_step*) in the ``additional`` colours: in the shot, not in
-        the step.
+        step (*in_step*) marked ``additional`` (:meth:`_set_row_status`): in
+        the shot, not in the step.
 
         Each row's data is a ``BuilderObject`` of origin ``"member"``: the
         object rows' own actions (Outliner, Copy) reach it, Local Edits do
         not -- the sheet does not list it.
         """
         from qtpy.QtCore import Qt
-        from qtpy.QtGui import QBrush, QColor
 
         key = ptk.ShotStore.member_key
         seen = {key(n) for n in listed}
-        a_fg, a_bg = (
-            PASTEL_STATUS.get("additional", (None, None)) if in_step else (None, None)
-        )
-        tip = _ORIGIN_NOTES["member" if in_step else "orphan_member"]
+        issues = [("additional", _ORIGIN_NOTES["member"])] if in_step else []
         for name in shot.objects:
             if key(name) in seen:
                 continue
@@ -499,11 +488,10 @@ class ManifestTableMixin:
             font.setItalic(True)
             for c in range(tree.columnCount()):
                 child.setFont(c, font)
-                if a_fg:
-                    child.setForeground(c, QBrush(QColor(a_fg)))
-                if a_bg:
-                    child.setBackground(c, QBrush(QColor(a_bg)))
-            child.setToolTip(COL_DESC, f"{name}\n{tip}" if display != name else tip)
+            if display != name:
+                child.setToolTip(COL_DESC, name)
+            if issues:
+                self._set_row_status(child, issues)
 
     def _step_items(self, step_ids) -> list:
         """The step rows of *step_ids*, in table order."""
@@ -563,10 +551,17 @@ class ManifestTableMixin:
         tree.set_column_tint(COL_STEP, QColor(0, 0, 0, 45))
         tree.set_column_tint(COL_BEHAVIORS, QColor(0, 0, 0, 45))
 
-        # Icons: step icon on parents, type-coded icon on child Content column
+        # Icons: step icon on parents -- a "not in doc" row's marked as such
+        # -- and a type-coded icon on child Content column.
+        not_in_doc = [("not_in_doc", StepStatus.HELP["not_in_doc"])]
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
-            tree.set_item_icon(parent, self._row_icon(parent), color=STEP_ICON_COLOR)
+            step = parent.data(0, Qt.UserRole)
+            self._set_row_status(
+                parent,
+                [] if isinstance(step, BuilderStep) else not_in_doc,
+                icon=self._row_icon(parent),
+            )
             for j in range(parent.childCount()):
                 child = parent.child(j)
                 obj_name = child.text(content_col)
@@ -594,10 +589,136 @@ class ManifestTableMixin:
         # Run registered formatters
         tree.apply_formatting()
 
-    def _apply_assessment(self, results: list) -> None:
-        """Walk tree items and apply pastel colors + tooltips from results."""
+    def _set_row_status(self, item, issues, icon=None) -> None:
+        """Mark *item*'s row with its *issues* -- ``(status, text)`` pairs --
+        the one status signal a row carries: its icon in the Step column, in
+        the worst issue's colour (*icon*: the row's own shape, else that
+        severity's), and a row tooltip on every cell listing them, a coloured
+        glyph before each (``TreeWidget.set_row_tooltip``).  No issues: the
+        row's own icon, neutral, and no row tooltip."""
+        from qtpy import QtGui
+
+        tree = self.ui.tbl_steps
+        worst = ManifestData.worst(status for status, _text in issues)
+        if icon is None and worst is not None:
+            icon = ManifestData.LEVEL_ICONS.get(ManifestData.level(worst))
+        if icon:
+            color = ManifestData.status_color(worst) if worst else None
+            tree.set_item_icon(item, icon, color=color or STEP_ICON_COLOR)
+        else:
+            item.setIcon(COL_STEP, QtGui.QIcon())
+        tree.set_row_tooltip(item, ManifestData.issues_html(issues) or None)
+
+    def _mark_step_row(self, item, step_status=None) -> None:
+        """Mark a step row (:meth:`_set_row_status`) with what the shown
+        assessment found (*step_status*; ``None``: none) and with its
+        range's collisions (``_range_issues``, the Start / End column's)."""
         from qtpy.QtCore import Qt
-        from qtpy.QtGui import QColor, QBrush
+
+        issues = self._step_issues(step_status) if step_status is not None else []
+        issues += self._range_issues.get(item.data(0, Qt.UserRole).step_id, [])
+        self._set_row_status(item, issues, icon=self._row_icon(item))
+
+    def _mark_step_rows(self) -> None:
+        """Mark every step row (:meth:`_mark_step_row`) from the shown
+        assessment and the range collisions."""
+        from qtpy.QtCore import Qt
+
+        tree = self.ui.tbl_steps
+        results = {r.step_id: r for r in self._last_results or ()}
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            step = item.data(0, Qt.UserRole)
+            if isinstance(step, BuilderStep):
+                self._mark_step_row(item, results.get(step.step_id))
+
+    @staticmethod
+    def _behavior_names(names) -> str:
+        return ", ".join(ManifestData.fmt_behavior(b) for b in names)
+
+    def _step_issues(self, step_status) -> list:
+        """A step row's ``(status, text)`` issues (:meth:`_set_row_status`):
+        its own status, then each object with a behavior issue, and what a
+        Build changes besides."""
+        r = step_status
+        issues = []
+        groups: dict = {}  # an object status -> the objects at it
+        for o in r.objects:
+            if o.status != "valid" and o.status not in _BEHAVIOR_ISSUES:
+                groups.setdefault(o.status, []).append(o.name)
+        if (
+            r.status in StepStatus.HELP
+            and r.status not in groups
+            and r.status not in _BEHAVIOR_ISSUES
+        ):
+            issues.append((r.status, StepStatus.HELP[r.status]))  # the step's own
+        for status, names in groups.items():
+            if status in StepStatus.HELP:
+                issues.append(
+                    (status, f"{', '.join(names)}: {StepStatus.HELP[status]}")
+                )
+        for o in r.objects:
+            if o.status not in _BEHAVIOR_ISSUES:
+                continue
+            names = o.broken_behaviors or o.stale_behaviors or o.behaviors
+            word = _BEHAVIOR_WORDS[o.status]
+            issues.append((o.status, f"{o.name}: {self._behavior_names(names)} {word}"))
+        if r.dropped_behaviors:
+            dropped = ", ".join(
+                f"{name} \u2192 {ManifestData.fmt_behavior(b)}"
+                for name, b in r.dropped_behaviors
+            )
+            issues.append(
+                (
+                    "missing_behavior",
+                    f"Keys of dropped behaviors -- Build removes them: {dropped}",
+                )
+            )
+        if r.additional_objects:
+            extra = ", ".join(r.additional_objects)
+            issues.append(("additional", f"In the shot, not in the manifest: {extra}"))
+        if r.updates:
+            done = " and ".join(StepStatus.UPDATES[u] for u in r.updates)
+            issues.append(("missing_shot", f"Build {done}."))
+        if r.shrinkable_frames > 0:
+            issues.append(("valid", f"{r.shrinkable_frames:.0f}f unused"))
+        return issues
+
+    @staticmethod
+    def _object_issues(obj_st) -> list:
+        """An object row's ``(status, text)`` issues (:meth:`_set_row_status`)."""
+        status = obj_st.status
+        if status == "missing_object":
+            return [
+                (
+                    status,
+                    f"Not found in {ManifestHost.APP} -- an artist's to add; "
+                    "Build never creates objects.",
+                )
+            ]
+        if status == "missing_behavior":
+            lines = []
+            for b in obj_st.broken_behaviors or obj_st.behaviors:
+                entry = ManifestData.fmt_behavior(b)
+                try:
+                    desc = Behaviors.load_behavior(b).get("description", "")
+                except Exception:
+                    desc = ""
+                lines.append(f"{entry} \u2014 {desc}" if desc else entry)
+            return [(status, "Not verified:\n" + "\n".join(lines))]
+        if status == "user_animated" and obj_st.key_range:
+            lo, hi = obj_st.key_range
+            return [(status, f"User-animated: keys {lo:.0f}-{hi:.0f}")]
+        if status in StepStatus.HELP:
+            return [(status, StepStatus.HELP[status])]
+        return []
+
+    def _apply_assessment(self, results: list) -> None:
+        """Mark each row with what the assessment found (:meth:`_set_row_status`:
+        an icon and a row tooltip, nothing tinted), count the step's behavior
+        issues in its Behaviors cell, and add the objects animating in a
+        step's shot that it neither lists nor holds."""
+        from qtpy.QtCore import Qt
 
         tree = self.ui.tbl_steps
         col_count = tree.columnCount()
@@ -605,91 +726,29 @@ class ManifestTableMixin:
         beh_col = COL_BEHAVIORS
 
         status_map = {r.step_id: r for r in results}
-
-        def add_tip(item, text):
-            tip = item.toolTip(0)
-            item.setToolTip(0, f"{tip}\n{text}" if tip else text)
-
         for i in range(tree.topLevelItemCount()):
             parent = tree.topLevelItem(i)
             step_data = parent.data(0, Qt.UserRole)
             if not isinstance(step_data, BuilderStep):
                 continue
             step_status = status_map.get(step_data.step_id)
+            # Every step row, once: one this assessment did not judge (shown
+            # since) still says its range's collisions.
+            self._mark_step_row(parent, step_status)
             if step_status is None:
                 continue
 
-            # Parent tooltip
-            if step_status.status == "missing_shot":
-                parent.setToolTip(0, "Shot not built in sequencer")
-            elif step_status.status == "missing_object":
-                names = [o.name for o in step_status.objects if not o.exists]
-                parent.setToolTip(0, f"Missing: {', '.join(names)}")
-            elif step_status.status == "missing_behavior":
-                lines = []
-                for o in step_status.objects:
-                    if o.status != "missing_behavior":
-                        continue
-                    broken = ", ".join(
-                        ManifestData.fmt_behavior(b)
-                        for b in (o.broken_behaviors or o.behaviors)
-                    )
-                    lines.append(f"{o.name}: {broken}")
-                parent.setToolTip(0, "Unverified behaviors:\n" + "\n".join(lines))
-            elif step_status.status in StepStatus.HELP:
-                parent.setToolTip(0, StepStatus.HELP[step_status.status])
-
-            if step_status.shrinkable_frames > 0:
-                add_tip(parent, f"{step_status.shrinkable_frames:.0f}f unused")
-            if step_status.dropped_behaviors:
-                dropped = ", ".join(
-                    f"{name} \u2192 {ManifestData.fmt_behavior(b)}"
-                    for name, b in step_status.dropped_behaviors
+            # The Behaviors cell counts the objects with a behavior issue.
+            counts: dict = {}
+            for o in step_status.objects:
+                if o.status in _BEHAVIOR_ISSUES:
+                    word = _BEHAVIOR_WORDS[o.status]
+                    counts[word] = counts.get(word, 0) + 1
+            if counts:
+                parent.setText(
+                    beh_col, ", ".join(f"{n} {word}" for word, n in counts.items())
                 )
-                add_tip(
-                    parent,
-                    f"Keys of dropped behaviors -- Build removes them: {dropped}",
-                )
-            if step_status.updates:
-                done = " and ".join(StepStatus.UPDATES[u] for u in step_status.updates)
-                add_tip(parent, f"Build {done}.")
 
-            # Recolor step icon and step text to reflect status
-            fg_hex, _ = PASTEL_STATUS.get(step_status.status, (None, None))
-            icon_color = fg_hex or STEP_ICON_COLOR
-            tree.set_item_icon(parent, self._row_icon(parent), color=icon_color)
-            if fg_hex:
-                parent.setForeground(COL_STEP, QBrush(QColor(fg_hex)))
-            else:
-                parent.setForeground(COL_STEP, QBrush())
-
-            # Color parent behavior column if any child has a behavior issue
-            beh_issues = [
-                o for o in step_status.objects if o.status in _BEHAVIOR_ISSUES
-            ]
-            if beh_issues:
-                only_stale = all(o.status == "stale_behavior" for o in beh_issues)
-                b_fg, b_bg = PASTEL_STATUS[
-                    "stale_behavior" if only_stale else "missing_behavior"
-                ]
-                if b_fg:
-                    parent.setForeground(beh_col, QBrush(QColor(b_fg)))
-                if b_bg:
-                    parent.setBackground(beh_col, QBrush(QColor(b_bg)))
-                only_missing = all(o.status == "missing_behavior" for o in beh_issues)
-                word = (
-                    "to re-key"
-                    if only_stale
-                    else ("missing" if only_missing else "to check")
-                )
-                parent.setText(beh_col, f"{len(beh_issues)} {word}")
-                lines = [
-                    f"{o.name}  \u2192  {', '.join(ManifestData.fmt_behavior(b) for b in (o.broken_behaviors or o.stale_behaviors or o.behaviors))}"
-                    for o in beh_issues
-                ]
-                parent.setToolTip(beh_col, "\n".join(lines))
-
-            # Color child rows — only problem statuses
             obj_status_map = {o.name: o for o in step_status.objects}
             for j in range(parent.childCount()):
                 child = parent.child(j)
@@ -699,15 +758,12 @@ class ManifestTableMixin:
                 obj_st = obj_status_map.get(child_data.name)
                 if obj_st is None:
                     continue
-
-                # Refresh behavior label to highlight broken behaviors
                 if obj_st.behaviors:
                     beh_widget = tree.itemWidget(child, beh_col)
                     if beh_widget is not None:
                         self._color_behavior_label(
                             child_data, beh_widget, step_id=step_status.step_id
                         )
-
                 if obj_st.status == "valid":
                     # Re-resolve icon: initial formatting may have set a
                     # fallback X because the node didn't exist yet
@@ -715,42 +771,7 @@ class ManifestTableMixin:
                     icon = ManifestHost.object_icon(child_data, child.text(content_col))
                     if icon is not None:
                         child.setIcon(content_col, icon)
-                    continue
-
-                c_fg, c_bg = PASTEL_STATUS.get(obj_st.status, (None, None))
-                if c_fg:
-                    brush = QBrush(QColor(c_fg))
-                    for c in range(col_count):
-                        child.setForeground(c, brush)
-                if c_bg:
-                    bg = QBrush(QColor(c_bg))
-                    for c in range(col_count):
-                        child.setBackground(c, bg)
-
-                if obj_st.status == "missing_object":
-                    child.setToolTip(
-                        content_col, f"Object not found in {ManifestHost.APP}"
-                    )
-                elif obj_st.status == "missing_behavior":
-                    lines = []
-                    for b in obj_st.broken_behaviors or obj_st.behaviors:
-                        desc = ""
-                        try:
-                            desc = Behaviors.load_behavior(b).get("description", "")
-                        except Exception:
-                            pass
-                        entry = ManifestData.fmt_behavior(b)
-                        if desc:
-                            entry += f" \u2014 {desc}"
-                        lines.append(entry)
-                    child.setToolTip(content_col, "Unverified:\n" + "\n".join(lines))
-                elif obj_st.status in StepStatus.HELP:
-                    child.setToolTip(content_col, StepStatus.HELP[obj_st.status])
-                elif obj_st.status == "user_animated" and obj_st.key_range:
-                    child.setToolTip(
-                        content_col,
-                        f"User-animated: keys {obj_st.key_range[0]:.0f}-{obj_st.key_range[1]:.0f}",
-                    )
+                self._set_row_status(child, self._object_issues(obj_st))
 
             # Additional objects (in shot but not in CSV): the shot's members
             # are listed already (_add_member_rows); what animates in its
@@ -762,97 +783,94 @@ class ManifestTableMixin:
                 if isinstance(parent.child(j).data(0, Qt.UserRole), BuilderObject)
             }
             extras = [n for n in step_status.additional_objects if key(n) not in listed]
-            if extras:
-                a_fg, a_bg = PASTEL_STATUS.get("additional", (None, None))
-                for extra_name in extras:
-                    display = (
-                        ManifestHost.leaf_name(extra_name)
-                        if self._use_short_names
-                        else extra_name
-                    )
-                    extra_item = tree.create_item(
-                        ["", "", display, "", "", ""],
-                        parent=parent,
-                    )
-                    tip = "Unexpected: object is in the shot but not listed in the manifest CSV."
-                    if display != extra_name:
-                        tip = f"{extra_name}\n{tip}"
-                    extra_item.setToolTip(content_col, tip)
-                    # Italic font to visually distinguish from CSV objects
-                    font = extra_item.font(content_col)
-                    font.setItalic(True)
-                    for c in range(col_count):
-                        extra_item.setFont(c, font)
-                    if a_fg:
-                        brush = QBrush(QColor(a_fg))
-                        for c in range(col_count):
-                            extra_item.setForeground(c, brush)
-                    if a_bg:
-                        bg = QBrush(QColor(a_bg))
-                        for c in range(col_count):
-                            extra_item.setBackground(c, bg)
-                    icon = ManifestHost.object_icon(None, extra_name)
-                    if icon is not None:
-                        extra_item.setIcon(content_col, icon)
+            for extra_name in extras:
+                display = (
+                    ManifestHost.leaf_name(extra_name)
+                    if self._use_short_names
+                    else extra_name
+                )
+                extra_item = tree.create_item(
+                    ["", "", display, "", "", ""], parent=parent
+                )
+                if display != extra_name:
+                    extra_item.setToolTip(content_col, extra_name)
+                font = extra_item.font(content_col)
+                font.setItalic(True)  # not the manifest's: set apart, untinted
+                for c in range(col_count):
+                    extra_item.setFont(c, font)
+                icon = ManifestHost.object_icon(None, extra_name)
+                if icon is not None:
+                    extra_item.setIcon(content_col, icon)
+                self._set_row_status(
+                    extra_item,
+                    [
+                        (
+                            "additional",
+                            "Animates in the shot's range, but neither the "
+                            "manifest nor the shot lists it.",
+                        )
+                    ],
+                )
 
         self._editor.decorate()
         self._refresh_export_preview()  # an open one shows these rows
 
+    def _issue_ids(self) -> set:
+        """The steps the shown assessment found something in: Build has work
+        there, or its status is not valid."""
+        return {
+            r.step_id
+            for r in self._last_results or ()
+            if r.needs_build or r.status not in ("valid", "locked")
+        }
+
+    def _extra_rows(self) -> list:
+        """The step rows holding an object the step does not list -- a member
+        of its shot, or one animating in its range (once assessed)."""
+        from qtpy.QtCore import Qt
+
+        tree = self.ui.tbl_steps
+        rows = []
+        for i in range(tree.topLevelItemCount()):
+            row = tree.topLevelItem(i)
+            if not isinstance(row.data(0, Qt.UserRole), BuilderStep):
+                continue
+            for j in range(row.childCount()):
+                data = row.child(j).data(0, Qt.UserRole)
+                if not isinstance(data, BuilderObject) or data.origin == "member":
+                    rows.append(row)
+                    break
+        return rows
+
     def expand_missing(self) -> None:
-        """Expand all step rows that have missing objects, behaviors, or additional objects."""
+        """Expand the step rows the shown assessment found something in
+        (Expand > Rows with Issues); what it found goes to the log."""
         if not self._last_results:
-            self._set_footer("Build first to detect issues.")
+            self._set_footer("Assess first to find the issues.")
             return
-
-        problem_ids = set()
-        lines: list[str] = []
-        for r in self._last_results:
-            issues: list[str] = []
-            if r.status == "missing_shot":
-                issues.append("shot not built")
-            elif r.status == "missing_object":
-                missing = [o.name for o in r.objects if not o.exists]
-                if missing:
-                    issues.append(f"missing objects: {', '.join(missing)}")
-            elif r.status == "missing_behavior":
-                no_beh = [o.name for o in r.objects if o.status == "missing_behavior"]
-                if no_beh:
-                    issues.append(f"missing behaviors: {', '.join(no_beh)}")
-            elif r.status == "stale_behavior":
-                stale = [o.name for o in r.objects if o.status == "stale_behavior"]
-                if stale:
-                    issues.append(f"keyed under an older recipe: {', '.join(stale)}")
-            if r.dropped_behaviors:
-                issues.append(
-                    "dropped behaviors' keys: "
-                    + ", ".join(f"{name} {b}" for name, b in r.dropped_behaviors)
-                )
-            if r.additional_objects:
-                issues.append(f"additional objects: {', '.join(r.additional_objects)}")
-            if issues:
-                problem_ids.add(r.step_id)
-                lines.append(f"  {r.step_id}: {'; '.join(issues)}")
-
-        if not problem_ids:
+        ids = self._issue_ids()
+        if not ids:
             self._set_footer("No issues found.")
             return
-
+        lines = [
+            f"  {r.step_id}: {'; '.join(text for _s, text in self._step_issues(r))}"
+            for r in self._last_results
+            if r.step_id in ids
+        ]
         self.logger.info("Expand Missing (%d steps):\n%s", len(lines), "\n".join(lines))
-        self._set_footer(f"{len(problem_ids)} step(s) with issues expanded.")
-
-        for item in self._step_items(problem_ids):
+        self._set_footer(f"{len(ids)} step(s) with issues expanded.")
+        for item in self._step_items(ids):
             item.setExpanded(True)
 
     def expand_extra(self) -> None:
-        """Expand all step rows that have scene-discovered extra objects."""
-        if not self._last_results:
-            self._set_footer("Assess or build first to detect extra objects.")
+        """Expand the step rows holding an object the step does not list
+        (Expand > Rows with Objects Not in the Manifest)."""
+        rows = self._extra_rows()
+        if not rows:
+            self._set_footer("No step's shot holds an object it does not list.")
             return
-
-        extra_ids = {r.step_id for r in self._last_results if r.additional_objects}
-        if not extra_ids:
-            self._set_footer("No extra objects found.")
-            return
-
-        for item in self._step_items(extra_ids):
-            item.setExpanded(True)
+        for row in rows:
+            row.setExpanded(True)
+        self._set_footer(
+            f"{len(rows)} step(s) with objects not in the manifest expanded."
+        )

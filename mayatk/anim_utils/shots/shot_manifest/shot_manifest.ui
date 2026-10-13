@@ -91,6 +91,138 @@
      </layout>
     </item>
     <item>
+     <layout class="QHBoxLayout" name="view_layout">
+      <property name="spacing">
+       <number>1</number>
+      </property>
+      <item>
+       <widget class="ComboBox" name="cmb_select">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Select rows in the table, or the rows' objects in the scene.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_expand">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Expand every row, the rows with issues or with objects not in the manifest, or the selected rows.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_collapse">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Collapse every row, the rows without issues, or the selected rows.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_hide">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Hide the selected steps or their sections (Local Edits), or every step without a shot.</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="ComboBox" name="cmb_show">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch>
+          <verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Show the steps and objects Local Edits hid, or the steps without a shot.</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
      <widget class="TreeWidget" name="tbl_steps">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
@@ -218,6 +350,11 @@ automatically. Assesses the scene after completion.</string>
   </widget>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>ComboBox</class>
+   <extends>QComboBox</extends>
+   <header>uitk.widgets.comboBox</header>
+  </customwidget>
   <customwidget>
    <class>Header</class>
    <extends>QWidget</extends>

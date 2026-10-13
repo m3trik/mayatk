@@ -102,17 +102,17 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ExportPreviewMixin`
   - methods: export
 
-### `anim_utils/shots/shot_manifest/header_menu.py` — The Shot Manifest's header menu: display options (Long Names, Hide Missing
+### `anim_utils/shots/shot_manifest/header_menu.py` — The Shot Manifest's header menu: Long Names, Local Edits' Edits mode and
 - `class HeaderMenuMixin`
 
 ### `anim_utils/shots/shot_manifest/manifest_data.py` — Constants, column layout, and pure helper functions for the Shot Manifest UI.
-- constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, BEHAVIOR_STATUS_COLORS, ERROR_COLOR
+- constants: SETTINGS_NS, HEADERS, COL_STEP, COL_SECTION, COL_DESC, COL_BEHAVIORS, COL_START, COL_END, STEP_ICON_COLOR, PASTEL_STATUS, ERROR_COLOR
 - `class ManifestData`
-  - methods: fmt_behavior, format_behavior_html
+  - methods: level, status_color, worst, glyph_html, issues_html, fmt_behavior, format_behavior_html
 
 ### `anim_utils/shots/shot_manifest/manifest_editor.py` — Local Edits for the Shot Manifest panel: change the table, never the sheet.
 - `class ManifestEditor`
-  - methods: enabled, add_header_options, view_original, refuse_viewing, reset, source_key, load, save, apply, stale, refresh, refuse_locked, begin_edit, commit_edit, set_behaviors, add_menu_actions, add_step, add_shot, remove_step, hide_steps, hide_object, move_object, rename_all, revert_step, revert_object, decorate
+  - methods: enabled, add_header_options, edits_mode, view_original, refuse_viewing, reset, source_key, load, save, apply, stale, refresh, refuse_locked, begin_edit, commit_edit, set_behaviors, add_menu_actions, add_step, add_shot, remove_step, hide_steps, unlocked_hidden_objects, show_hidden_objects, hide_object, move_object, rename_all, revert_step, revert_object, decorate
 
 ### `anim_utils/shots/shot_manifest/manifest_host.py` — What the Shot Manifest panel needs from Maya: its store, engine and detection
 - `class ManifestHost`
@@ -122,7 +122,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ManifestSourceMixin`
   - methods: detect
 
-### `anim_utils/shots/shot_manifest/mapping_picker.py` — The Shot Manifest's mapping template: the picker in the header menu (built-in
+### `anim_utils/shots/shot_manifest/mapping_picker.py` — The Shot Manifest's mapping template: its own popup on the build sheet
 - `class MappingPickerMixin`
 
 ### `anim_utils/shots/shot_manifest/range_column.py` — The Shot Manifest table's Start / End column: what a step's range is
@@ -136,12 +136,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class RowMenusMixin`
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_controller.py` — The Shot Manifest panel's controller: its state, the steps the table shows,
-- `class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ExportPreviewMixin, pythontk.LoggingMixin)`
+- `class ShotManifestController(ManifestTableMixin, RangeColumnMixin, StoreFollowMixin, ManifestSourceMixin, MappingPickerMixin, RowMenusMixin, HeaderMenuMixin, ViewCombosMixin, ExportPreviewMixin, pythontk.LoggingMixin)`
   - methods: build, assess
 
 ### `anim_utils/shots/shot_manifest/shot_manifest_slots.py` — Switchboard slots for the Shot Manifest panel: the ``.ui``'s widgets routed to
 - `class ShotManifestSlots(pythontk.LoggingMixin)`
-  - methods: header_init, btn_expand_missing, btn_expand_extra, btn_settings, b002, b003, b004
+  - methods: header_init, btn_settings, b002, b003, b004
 
 ### `anim_utils/shots/shot_manifest/store_follow.py` — The Shot Manifest panel following the scene's store: its events (a shot
 - `class StoreFollowMixin`
@@ -150,6 +150,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `anim_utils/shots/shot_manifest/table_presenter.py` — The Shot Manifest tree's rows: populating them (``ShotPairing.rows``: steps,
 - `class ManifestTableMixin`
   - methods: expand_missing, expand_extra
+
+### `anim_utils/shots/shot_manifest/view_combos.py` — The Shot Manifest's view row, above the table: Select, Expand, Collapse,
+- `class ViewCombosMixin`
 
 ### `anim_utils/shots/shot_sequencer/_shot_sequencer.py` — Shot Sequencer — manages per-shot animation with ripple editing.
 - `class ShotSequencer(pythontk.ShotSequencer)`
