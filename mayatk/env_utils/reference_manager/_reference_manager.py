@@ -22,6 +22,7 @@ from mayatk.core_utils.plugins._plugins import Plugins
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 
@@ -60,6 +61,9 @@ class _FileRef:
         cmds.file(removeReference=True, referenceNode=self._ref_node)
 
     def load(self):
+        # An FBX (this one, or one this scene references) re-reads under the
+        # importer's sticky take selector: an index past its takes loads nothing.
+        FbxUtils._default_import_take(if_loaded=True)
         cmds.file(loadReference=self._ref_node)
 
     def importContents(self, removeNamespace: bool = True):
@@ -211,6 +215,42 @@ class _ReferenceManagerInternal(object):
         """True if *path* is a USD layer or package -- read through mayaUsd's translator."""
         return (
             bool(path) and os.path.splitext(str(path))[1].lower() in UsdUtils.EXTENSIONS
+        )
+
+    @staticmethod
+    def _is_fbx(path) -> bool:
+        """True if *path* is an FBX -- read through the FBX plugin."""
+        return bool(path) and os.path.splitext(str(path))[1].lower() == ".fbx"
+
+    @staticmethod
+    def _bake_source(referenced_path) -> Optional[str]:
+        """The scene *referenced_path* was baked from, or None.
+
+        A foreign row, and an FBX no one take reads whole (:meth:`add_reference`),
+        reference a cached ``.ma`` bake; mapping a live reference back to the row
+        the user sees is the only way that row can read as referenced (and be
+        un-referenced by a second click).
+        """
+        if not referenced_path:
+            return None
+        try:
+            from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+        except ImportError:  # bridge unavailable — no row can be bake-backed
+            return None
+        return BlenderSceneImport.bake_source(referenced_path)
+
+    @classmethod
+    def _bake_source_key(cls, referenced_path) -> Optional[str]:
+        """:meth:`_bake_source`, normalized for comparison."""
+        source = cls._bake_source(referenced_path)
+        return os.path.normcase(os.path.normpath(source)) if source else None
+
+    @classmethod
+    def _row_key(cls, referenced_path) -> str:
+        """Normalized path of the row a reference to *referenced_path* stands
+        for: its bake's source (:meth:`_bake_source_key`), else the file itself."""
+        return cls._bake_source_key(referenced_path) or os.path.normcase(
+            os.path.normpath(referenced_path)
         )
 
     @staticmethod
@@ -531,6 +571,19 @@ class ReferenceManager(
         return EnvUtils.sanitize_namespace(namespace)
 
     def add_reference(self, namespace: str, file_path: str) -> bool:
+        """Reference *file_path* under *namespace* (sanitized; Maya makes it unique).
+
+        A USD layer reads through mayaUsd's translator, refused when it is not safe
+        to read live. An FBX its last take reads whole is referenced natively, its
+        take selector pinned; any other FBX (``FbxUtils._native_read_gap``: takes
+        merged, one parked, a cover listed first) through a cached ``.ma`` bake,
+        which maps back to the FBX (:meth:`_bake_source_key`) and follows it when
+        it is re-exported (:meth:`_follow_bake_sources`) -- a native FBX reference
+        plays one take, whichever the session's selector names, at every load.
+
+        Returns:
+            (bool): True once *file_path* is referenced, also when it already was.
+        """
         # Ensure the file exists before proceeding
         if not os.path.exists(file_path):
             file_not_found_error_msg = f"File not found: {file_path}"
@@ -553,13 +606,11 @@ class ReferenceManager(
             cmds.warning(error_msg)
             return False
 
-        # Normalize the file path to ensure consistent comparison
-        normalized_file_path = os.path.normcase(os.path.normpath(file_path))
-
-        # Check if the file is already referenced
-        for ref in self.current_references:
-            if os.path.normcase(os.path.normpath(ref.path)) == normalized_file_path:
-                return True  # Exit the method if the file is already referenced
+        # Already referenced -- the file itself, or through the bake that stands in
+        # for it (either side may be a bake: a foreign row adds its bake's path).
+        row = self._row_key(file_path)
+        if any(self._row_key(ref.path) == row for ref in self.current_references):
+            return True
 
         # A USD layer reads through mayaUsd's translator, NAMED -- left to pick one by
         # extension, Maya reads it with animation off -- and only once the stage is
@@ -572,13 +623,34 @@ class ReferenceManager(
             except RuntimeError as e:
                 return self._refuse_live_read(file_path, e)
 
+        # An FBX reads through the plugin, which plays the ONE take the session's
+        # sticky selector names -- at this load and at every reload and reopen.
+        # A file the per-file -1 reads whole is pinned to it; any other (takes
+        # merged, one parked, a cover listed first) is referenced through a
+        # cached .ma bake of what FbxUtils.import_scene makes of it. A bake cached
+        # for the file as it is now answers without reading its takes again.
+        target = file_path
+        if self._is_fbx(file_path):
+            baked = self._has_current_bake(file_path)
+            gap = None if baked else self._read_fbx_takes(file_path)
+            if baked or gap is not None:
+                self.logger.info(
+                    f"{os.path.basename(file_path)} ({gap or 'baked before'}): no "
+                    "one take reads it whole, so the reference reads a baked .ma."
+                )
+                target = self._bake_for_reference(file_path)
+                if not target:
+                    return False
+        else:  # a scene that references an FBX reads it under the selector too
+            FbxUtils._default_import_take(if_loaded=True)
+
         # Sanitize the namespace to ensure it contains only valid characters
         sanitized_namespace = self.sanitize_namespace(namespace)
 
         try:
-            cmds.file(file_path, reference=True, namespace=sanitized_namespace, **read)
+            cmds.file(target, reference=True, namespace=sanitized_namespace, **read)
             # Validate that a reference node was actually created
-            rn = cmds.file(file_path, q=True, referenceNode=True)
+            rn = cmds.file(target, q=True, referenceNode=True)
             if not rn or cmds.nodeType(rn) != "reference":
                 raise RuntimeError(
                     f"Failed to create reference for {file_path}. No valid reference node found."
@@ -611,6 +683,103 @@ class ReferenceManager(
         puts *error* in front of the user."""
         cmds.warning(str(error))
         return False
+
+    def _read_fbx_takes(self, file_path: str) -> Optional[str]:
+        """What a native reference of the FBX *file_path* misses, its take
+        selector pinned for the read (``FbxUtils._native_read``). A hook: the
+        panel's controller reads a file the first time under its busy footer."""
+        return FbxUtils._native_read(file_path, self.logger)
+
+    @staticmethod
+    def _has_current_bake(file_path: str) -> bool:
+        """True when a bake of the FBX *file_path* as it is now is cached."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        slot = BlenderSceneImport._bake_slot(file_path)
+        return os.path.isfile(slot) and os.path.getsize(slot) > 0
+
+    def _follow_bake_sources(self) -> list:
+        """Keep every bake-backed reference on its source as the source is NOW.
+
+        A native reference re-reads its file at every load; a baked one reads its
+        cached .ma. So a reference whose FBX has been re-exported (or whose bake
+        an older take engine made, ``BlenderSceneImport._bake_slot``) is baked
+        again -- a cache hit when that version was baked before -- and repointed
+        IN PLACE (``file -loadReference``), keeping its reference edits. Every
+        bake still read is marked in use first (``_touch_bake``), so the cache's
+        age sweep never collects a bake a scene reads. A foreign (.blend) row's
+        bake is only marked: following it means a Blender conversion.
+
+        Returns:
+            (list): The references repointed.
+        """
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        baked_refs = []
+        for ref in self.current_references:
+            try:
+                path = ref.path
+            except RuntimeError:
+                continue
+            source = self._bake_source(path)
+            if source:
+                # All marked before the first slot lookup sweeps the cache.
+                BlenderSceneImport._touch_bake(path)
+                baked_refs.append((ref, path, source))
+        # Slots a refresh failed or was stopped on: retried once the source
+        # moves, never at every list rebuild.
+        unfollowed = self.__dict__.setdefault("_unfollowed_bakes", set())
+        moved = []
+        for ref, path, source in baked_refs:
+            if not (self._is_fbx(source) and os.path.isfile(source)):
+                continue
+            slot = BlenderSceneImport._bake_slot(source)
+            if slot in unfollowed or (
+                os.path.isfile(slot)
+                and os.path.isfile(path)
+                and os.path.samefile(slot, path)
+            ):
+                continue
+            self.logger.info(
+                f"{os.path.basename(source)} changed since its reference was baked: "
+                "baking it again."
+            )
+            baked = self._bake_for_reference(source)
+            if not baked:
+                # Failed or stopped (already reported): this version is not
+                # baked again at the next refresh; a newer source is.
+                unfollowed.add(slot)
+                continue
+            try:
+                # Repointing loads it; one the user had unloaded stays unloaded.
+                loaded = cmds.referenceQuery(ref._ref_node, isLoaded=True)
+                cmds.file(baked, loadReference=ref._ref_node)
+                if not loaded:
+                    cmds.file(unloadReference=ref._ref_node)
+            except RuntimeError as e:
+                self.logger.warning(f"Could not repoint '{ref.label}' to {baked}: {e}")
+                continue
+            moved.append(ref)
+        return moved
+
+    def _bake_for_reference(self, file_path: str) -> Optional[str]:
+        """The cached ``.ma`` a reference reads in place of the FBX *file_path*,
+        or None with a warning.
+
+        ``BlenderSceneImport.bake_scene``, the foreign rows' bake: a fresh mayapy
+        imports the file as :meth:`FbxUtils.import_scene` does -- its takes
+        merged, an alternative parked in Key Stash, where it rides the reference
+        and lands in this scene's on an import (:meth:`import_references`) --
+        and saves it. A hook: the panel's controller runs it in its footer
+        progress.
+        """
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        try:
+            return BlenderSceneImport().bake_scene(file_path)
+        except Exception as e:  # noqa: BLE001 — reported; the reference is not made
+            cmds.warning(f"Could not bake {file_path} for a reference: {e}")
+            return None
 
     # What an unlink does with the imported reference's namespace.
     NAMESPACE_MODES = ("remove", "keep", "root")
@@ -853,9 +1022,12 @@ class ReferenceManager(
         return ctx
 
     def update_references(self):
-        """Update all references to reflect the latest changes from the original files."""
+        """Update all references to reflect the latest changes from the original files
+        -- a bake-backed one through a fresh bake of its source (:meth:`_follow_bake_sources`)."""
+        moved = {ref._ref_node for ref in self._follow_bake_sources()}
         for ref in self.current_references:
-            ref.load()
+            if ref._ref_node not in moved:
+                ref.load()
 
     def get_reference_top_transforms(self, ref):
         """Return the reference's top-level transforms — those whose parent is outside it.

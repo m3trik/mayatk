@@ -744,6 +744,11 @@ class TestSceneImportProgress(unittest.TestCase):
         engine = os.path.join(self.dir, "engine.py")
         with open(engine, "w") as fh:
             fh.write("# v1\n")
+        # What decides an FBX's takes (FbxUtils.import_scene, pythontk's
+        # take_layout / merge_takes) shapes the bake as much as the engine does.
+        take_engine = os.path.join(self.dir, "take_engine.py")
+        with open(take_engine, "w") as fh:
+            fh.write("# v1\n")
         stub, runs = self._stub(), []
         run_bake = stub._run_bake_script
         stub._run_bake_script = lambda *a, **k: runs.append(1) or run_bake(*a, **k)
@@ -754,8 +759,12 @@ class TestSceneImportProgress(unittest.TestCase):
             ("nothing changed", None, 1),
             ("the sidecar arrived", (sidecar, "{}\n"), 2),
             ("the engine changed", (engine, "# v2\n"), 3),
+            ("the FBX take engine changed", (take_engine, "# v2\n"), 4),
         )
-        with mock.patch.object(si, "_BAKE_ENGINE", engine):
+        with (
+            mock.patch.object(si, "_BAKE_ENGINE", engine),
+            mock.patch.object(si, "_fbx_take_engine", lambda: [take_engine]),
+        ):
             for step, write, expected in steps:
                 if write:
                     with open(write[0], "a") as fh:
@@ -763,6 +772,29 @@ class TestSceneImportProgress(unittest.TestCase):
                 self.baked.append(stub.bake_scene(src, use_cache=True))
                 with self.subTest(step=step):
                     self.assertEqual(len(runs), expected)
+
+    def test_a_cache_hit_marks_the_bake_in_use(self):
+        """The cache's age sweep goes by mtime and a hit wrote nothing to the
+        .ma, so a bake a scene read every day was collected 7 days after it was
+        made, the reference left pointing at nothing."""
+        import time
+
+        src = os.path.join(self.dir, "payload.fbx")
+        with open(src, "wb") as fh:
+            fh.write(b"fbx")
+        stub, runs = self._stub(), []
+        run_bake = stub._run_bake_script
+        stub._run_bake_script = lambda *a, **k: runs.append(1) or run_bake(*a, **k)
+        baked = stub.bake_scene(src, use_cache=True)
+        self.baked.append(baked)
+        days_ago = time.time() - 3 * 86400  # read since, but not touched
+        os.utime(baked, (days_ago, days_ago))
+
+        self.assertEqual(stub.bake_scene(src, use_cache=True), baked)
+
+        self.assertEqual(len(runs), 1, "the second bake must be a cache hit")
+        self.assertGreater(os.path.getmtime(baked), time.time() - 60)
+        self.assertEqual(si.BlenderSceneImport._bake_slot(src), baked)
 
     def test_no_default_timeout(self):
         # A production scene converts for minutes; a fixed budget killed one that was

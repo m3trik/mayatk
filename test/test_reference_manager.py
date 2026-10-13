@@ -8,11 +8,13 @@ GUI-only (registered in ``run_tests.GUI_REQUIRED``):
 ``TableWidget``, which hard-crashes mayapy in batch.
 """
 
+import contextlib
 import unittest
 import os
+import shutil
 import tempfile
 from html import escape as html_escape
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import patch, call, MagicMock, PropertyMock
 
 import pythontk as ptk
 import mayatk.env_utils.reference_manager as ref_mgr
@@ -89,6 +91,12 @@ class QtWidgets:
 
         def toolTip(self):
             return self._tooltip
+
+        def setSelected(self, selected):
+            self._selected = selected
+
+        def isSelected(self):
+            return getattr(self, "_selected", False)
 
     class QTableWidget:
         def __init__(self):
@@ -172,6 +180,12 @@ class QtWidgets:
 
         def selectedIndexes(self):
             return []  # nothing selectable is selected — the foreign-row scenario
+
+        def clearSelection(self):
+            for row in self._rows:
+                for item in row:
+                    if item is not None and hasattr(item, "setSelected"):
+                        item.setSelected(False)
 
 
 class MockSettings:
@@ -994,6 +1008,368 @@ class TestReferenceManager(unittest.TestCase):
             self.controller.handle_item_selection()
 
         self.assertEqual(removed, [], "an unlisted reference must not be removed")
+
+    # A multi-take FBX row references a BAKE (the engine's add_reference, BACKLOG
+    # 2026-10-10) and, unlike a foreign row, stays selectable: the selection sync
+    # keys each reference by the row it stands for.
+    BAKE = "C:/temp/blender_bake_mtk_cache_abc.ma"
+    FBX_ROW = "C:/proj/scenes/shots.fbx"
+
+    def _baked_fbx_row(self, selected):
+        """The table listing FBX_ROW (*selected* or not); a reference to its bake."""
+        self.controller.update_table(["shots"], [self.FBX_ROW])
+        t = self.controller.ui.tbl000
+        item = t.item(0, 0)
+        item.setFlags(item.flags() | MockQt.ItemIsSelectable)
+        index = MagicMock()
+        index.row.return_value, index.column.return_value = 0, 0
+        t.selectedIndexes = lambda: [index] if selected else []
+        ref = MagicMock()
+        ref.path, ref.namespace = self.BAKE, "shots"
+        return ref
+
+    def _bake_maps_back(self, ref):
+        fbx = os.path.normcase(os.path.normpath(self.FBX_ROW))
+        return (
+            patch.object(
+                type(self.controller),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_bake_source_key",
+                staticmethod(lambda p: fbx if p == self.BAKE else None),
+            ),
+        )
+
+    def _sync_selection(self, ref):
+        calls = {"removed": [], "added": []}
+        refs, bake = self._bake_maps_back(ref)
+        with (
+            refs,
+            bake,
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "remove_references",
+                lambda self, ns: calls["removed"].append(ns),
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "add_reference",
+                lambda self, ns, fp: calls["added"].append(fp) or True,
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_sync_reference_icons",
+                lambda self: None,
+            ),
+        ):
+            self.controller.handle_item_selection()
+        return calls
+
+    def test_deselecting_a_baked_fbx_row_unreferences_it(self):
+        calls = self._sync_selection(self._baked_fbx_row(selected=False))
+        self.assertEqual(calls["removed"], ["shots"])
+
+    def test_a_selected_baked_fbx_row_is_not_referenced_again(self):
+        calls = self._sync_selection(self._baked_fbx_row(selected=True))
+        self.assertEqual(calls, {"removed": [], "added": []})
+
+    def test_the_selection_shows_the_row_a_bake_stands_for(self):
+        ref = self._baked_fbx_row(selected=False)
+        refs, bake = self._bake_maps_back(ref)
+        with refs, bake:
+            self.controller.sync_selection_to_references()
+        self.assertTrue(self.controller.ui.tbl000.item(0, 0).isSelected())
+
+    def test_a_bake_backed_row_cycles_its_reference_s_display_mode(self):
+        """The display icon matched the row's path against each reference's own:
+        a row whose reference reads a bake (a foreign row, a baked FBX) found
+        none and reset itself to 'unavailable'."""
+        ref = self._baked_fbx_row(selected=False)
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.ui, slots.sb, slots.logger = self.slot.ui, self.slot.sb, MockLogger()
+        slots.controller = self.controller
+        t = self.controller.ui.tbl000
+        t.actions = self._action_recorder()
+        applied = []
+        refs, bake = self._bake_maps_back(ref)
+        with (
+            refs,
+            bake,
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "get_reference_display_mode",
+                lambda self, r: "off",
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "set_reference_display_mode",
+                lambda self, r, mode: applied.append((r.namespace, mode)) or True,
+            ),
+        ):
+            slots._cycle_display_mode_at_row(0, 3)
+
+        self.assertEqual(applied, [("shots", "reference")])
+        self.assertEqual(t.actions.get(0, 3), "reference")
+
+    def test_a_multi_take_fbx_bakes_in_the_panel_s_progress(self):
+        """An FBX no one take reads whole (``FbxUtils._native_read_gap``) is
+        baked, and the panel runs that bake the way it runs a foreign row's --
+        footer progress, Esc-hold stop (``_bake_foreign_path``); a stopped bake
+        references nothing."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        store = ptk.TempArtifacts("mtk_rm_fbx_route", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "shots.fbx")
+        with open(path, "wb") as fh:
+            fh.write(b"fbx")
+        baked = []
+        self.slot._bake_foreign_path = baked.append  # None: the user stopped it
+        busy = self._busy_footer()
+        gap = "merged: 2 takes merged into one (early, late)"
+        with patch.object(FbxUtils, "_native_read_gap", return_value=gap):
+            self.assertFalse(self.controller.add_reference("shots", path))
+        self.assertEqual(baked, [path])
+        self.assertEqual(busy, ["Reading the takes of shots.fbx"])
+        self.assertFalse(
+            [
+                c
+                for c in self._mock_cmds_file.call_args_list
+                if c.kwargs.get("reference")
+            ]
+        )
+
+    def _busy_footer(self):
+        """Record each footer progress the controller opens (by its text)."""
+        import contextlib
+
+        opened = []
+
+        def progress(text):
+            opened.append(text)
+            return contextlib.nullcontext(lambda *a: True)
+
+        self.slot._conversion_progress = progress
+        return opened
+
+    def test_a_file_s_takes_are_read_once_per_version(self):
+        """A large FBX's take layout takes seconds (BACKLOG review: ~19 s on a
+        133 MB, 13-take file), and it was read again on every add and every
+        Open, on the UI thread before any progress showed. A version read before
+        answers at once; a first read runs under the busy footer."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        store = ptk.TempArtifacts("mtk_rm_fbx_memo", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "single.fbx")
+        with open(path, "wb") as fh:
+            fh.write(b"fbx")
+        busy = self._busy_footer()
+        with patch.object(FbxUtils, "_native_read_gap", return_value=None) as read:
+            self.assertIsNone(self.controller._read_fbx_takes(path))
+            self.assertIsNone(self.controller._read_fbx_takes(path))
+            self.assertEqual((read.call_count, len(busy)), (1, 1))
+            stat = os.stat(path)  # a re-export: a new version of the file
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+            self.controller._read_fbx_takes(path)
+            self.assertEqual((read.call_count, len(busy)), (2, 2))
+
+    def test_unlink_and_import_makes_a_baked_fbx_row_local(self):
+        """The row's Unlink and Import matched references by their own path, so
+        a row whose reference reads a bake answered "No active reference
+        selected" -- the bake-source fallback was gated to .blend / USD rows."""
+        ref = self._baked_fbx_row(selected=False)
+        slots = ref_mgr.ReferenceManagerSlots.__new__(ref_mgr.ReferenceManagerSlots)
+        slots.ui, slots.sb, slots.logger = self.slot.ui, self.slot.sb, MockLogger()
+        slots.controller = self.controller
+        slots._context_row = lambda: 0
+        unlinked, boxes = [], []
+        slots.sb.message_box = lambda msg, *b: boxes.append(msg)
+        refs, bake = self._bake_maps_back(ref)
+        with (
+            refs,
+            bake,
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "unlink_references",
+                lambda self, ns: unlinked.append(ns),
+                create=True,
+            ),
+        ):
+            slots.btn_unlink_import()
+
+        self.assertEqual((unlinked, boxes), ([["shots"]], []))
+
+    def test_a_refresh_follows_bake_sources_first(self):
+        """A bake-backed reference plays its source as it is NOW: the panel's
+        refresh (also what a scene open runs) re-bakes and repoints it before
+        the table is built."""
+        calls = []
+        self.controller._follow_bake_sources = lambda: calls.append("follow") or []
+        self.controller._refresh_file_list_internal = lambda inv: calls.append("list")
+        self.controller.sync_selection_to_references = lambda: None
+
+        self.controller.refresh_file_list()
+
+        self.assertEqual(calls, ["follow", "list"])
+
+    def _bake_files(self):
+        """A source FBX and a bake of it on disk, the bake's files a week old."""
+        import time
+
+        store = ptk.TempArtifacts("mtk_rm_fbx_follow", policy="scoped")
+        self.addCleanup(store.cleanup)
+        root = store.dir_path()
+        source, bake = os.path.join(root, "shots.fbx"), os.path.join(root, "bake.ma")
+        for path in (source, bake, bake + ".source.json"):
+            with open(path, "w") as fh:
+                fh.write("x")
+        week_ago = time.time() - 8 * 86400
+        os.utime(bake, (week_ago, week_ago))
+        os.utime(bake + ".source.json", (week_ago, week_ago))
+        ref = MagicMock()
+        ref.path, ref.namespace, ref._ref_node = bake, "shots", "shotsRN"
+        return source, bake, ref
+
+    def _follow(self, ref, source, slot, loaded=True, bake=None):
+        from mayatk.env_utils.blender_bridge import _scene_import as si
+
+        rebaked = []
+        self.slot._bake_foreign_path = bake or (lambda p: rebaked.append(p) or slot)
+        with (
+            patch.object(
+                ref_engine.cmds, "referenceQuery", create=True, return_value=loaded
+            ),
+            patch.object(
+                type(self.controller),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_bake_source",
+                staticmethod(lambda p: source if p == ref.path else None),
+            ),
+            patch.object(si.BlenderSceneImport, "_bake_slot", lambda src: slot),
+        ):
+            moved = self.controller._follow_bake_sources()
+        return moved, rebaked
+
+    def test_a_current_bake_is_marked_in_use_and_left_alone(self):
+        """The cache's 7-day sweep goes by mtime: a bake a scene reads must look
+        fresh, or the next bake allocation collects it from under the scene."""
+        import time
+
+        source, bake, ref = self._bake_files()
+
+        moved, rebaked = self._follow(ref, source, slot=bake)
+
+        self.assertEqual((moved, rebaked), ([], []))
+        for path in (bake, bake + ".source.json"):
+            self.assertGreater(os.path.getmtime(path), time.time() - 60)
+
+    def test_a_bake_its_source_moved_past_is_baked_again_and_repointed(self):
+        source, bake, ref = self._bake_files()
+        new = os.path.join(os.path.dirname(bake), "bake_v2.ma")
+
+        moved, rebaked = self._follow(ref, source, slot=new)
+
+        self.assertEqual((moved, rebaked), ([ref], [source]))
+        self._mock_cmds_file.assert_any_call(new, loadReference="shotsRN")
+        self.assertNotIn(
+            call(unloadReference="shotsRN"),
+            self._mock_cmds_file.call_args_list,
+        )
+
+    def test_a_bake_that_failed_is_not_retried_until_its_source_moves(self):
+        """The refresh runs on every list rebuild: a bake that failed or was
+        stopped (Esc-hold) must not run again at each one -- minutes of child
+        mayapy, or the prompt, every time. A newer source tries again."""
+        source, bake, ref = self._bake_files()
+        v2 = os.path.join(os.path.dirname(bake), "bake_v2.ma")
+        v3 = os.path.join(os.path.dirname(bake), "bake_v3.ma")
+        attempts = []
+
+        for slot in (v2, v2, v3):
+            moved, _ = self._follow(
+                ref, source, slot=slot, bake=lambda p: attempts.append(p)
+            )
+            self.assertEqual(moved, [])
+
+        self.assertEqual(attempts, [source, source])
+
+    def test_an_unloaded_reference_stays_unloaded_when_repointed(self):
+        source, bake, ref = self._bake_files()
+        new = os.path.join(os.path.dirname(bake), "bake_v2.ma")
+
+        moved, _ = self._follow(ref, source, slot=new, loaded=False)
+
+        self.assertEqual(moved, [ref])
+        self.assertEqual(
+            self._mock_cmds_file.call_args_list[-2:],
+            [
+                call(new, loadReference="shotsRN"),
+                call(unloadReference="shotsRN"),
+            ],
+        )
+
+    def test_a_referenced_bake_is_listed_by_its_source_row(self):
+        """The External rows matched a reference by its own path, so a referenced
+        bake (a cached .ma in temp) was listed again as "(External)"."""
+        import types
+
+        store = ptk.TempArtifacts("mtk_rm_fbx_rows", policy="scoped")
+        self.addCleanup(store.cleanup)
+        ws = store.dir_path()
+        source = os.path.join(ws, "shots.fbx")
+        ref = MagicMock()
+        ref.path = "C:/temp/blender_bake_mtk_cache_abc.ma"
+        listed = []
+        c = self.controller
+        c.ui = types.SimpleNamespace(
+            tbl000=self.slot.ui.tbl000,
+            cmb000=MagicMock(currentIndex=lambda: 0, itemData=lambda i: ws),
+            txt001=MagicMock(text=lambda: ""),
+        )
+        c.slot.ui.header = types.SimpleNamespace(menu=types.SimpleNamespace())
+        c.slot._included_extensions = lambda: {".ma", ".mb", ".fbx"}
+        c.slot.FOREIGN_EXTENSIONS = (".blend",)
+        c._naming_options = lambda: ("", "", "")
+        c._filter_enabled = True
+        c.update_table = lambda names, files: listed.extend(files)
+        with (
+            patch.object(
+                type(c),
+                "current_references",
+                new_callable=PropertyMock,
+                return_value=[ref],
+            ),
+            patch.object(
+                type(c),
+                "workspace_files",
+                new_callable=PropertyMock,
+                return_value={ws: [source]},
+            ),
+            patch.object(
+                type(c),
+                "recursive_search",
+                new_callable=PropertyMock,
+                return_value=False,
+            ),
+            patch.object(
+                ref_mgr.ReferenceManagerController,
+                "_bake_source",
+                staticmethod(lambda p: source if p == ref.path else None),
+            ),
+        ):
+            c._refresh_file_list_internal()
+
+        self.assertEqual(listed, [source])
 
     def test_update_table_native_row_editable_after_reusing_foreign_item(self):
         """update_table reuses items across refreshes: a row that held a non-editable
@@ -1887,7 +2263,9 @@ class TestToggleReferenceOnCurrentSceneIsOneClick(unittest.TestCase):
             return ""
 
         try:
-            with patch.object(ref_engine.cmds, "file", create=True, side_effect=fake_file):
+            with patch.object(
+                ref_engine.cmds, "file", create=True, side_effect=fake_file
+            ):
                 slot._toggle_reference_at_row(0, 1)
 
             # One click: the scene was closed AND the reference persists.
@@ -2150,7 +2528,9 @@ class TestFolderStructurePreview(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="C:/proj/MyGame",
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
@@ -2181,7 +2561,9 @@ class TestFolderStructurePreview(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value="C:/proj/MyGame",
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             html = controller._folder_structure_preview()
@@ -2229,7 +2611,9 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=os.path.normpath(tempfile.gettempdir()),
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
         ):
             path = controller._resolve_save_target(
                 "Env", "None", "_v01", "{scenes}/{name}"
@@ -2258,7 +2642,9 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             preview = controller._save_scene_preview()
@@ -2279,7 +2665,9 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=os.path.normpath(tempfile.gettempdir()),
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, return_value=""),
         ):
             preview = controller._save_scene_preview()
@@ -2323,7 +2711,9 @@ class TestSaveTargetAndFooterActions(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, side_effect=_file),
             patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == ws),
             patch.object(ref_engine.os, "makedirs"),  # nothing touches disk
@@ -2533,7 +2923,9 @@ class TestNamingConventionsNeverDoubleTheSuffix(unittest.TestCase):
                 new_callable=PropertyMock,
                 return_value=ws,
             ),
-            patch.object(ref_engine.cmds, "workspace", create=True, return_value="scenes"),
+            patch.object(
+                ref_engine.cmds, "workspace", create=True, return_value="scenes"
+            ),
             patch.object(ref_engine.cmds, "file", create=True, side_effect=_file),
             patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == ws),
             patch.object(ref_engine.os, "makedirs"),  # nothing touches disk
@@ -2747,9 +3139,7 @@ class TestPerSceneFolderMovesOnlyWithItsOwnScene(_OnDiskRename, unittest.TestCas
         open(self.old, "w").close()
         self._controller("final").rename_scene()
         self.assertTrue(os.path.isdir(self.workspace), "the workspace was renamed")
-        self.assertEqual(
-            sorted(os.listdir(self.workspace)), ["final_v01.ma", "scenes"]
-        )
+        self.assertEqual(sorted(os.listdir(self.workspace)), ["final_v01.ma", "scenes"])
 
 
 class TestDeleteRemovesOnlyWhatItNames(_OnDiskRename, unittest.TestCase):
@@ -2973,7 +3363,9 @@ class TestRenameOpenSceneSavesAndReopens(unittest.TestCase):
                 create=True,
                 side_effect=self._fake_cmds_file(calls),
             ),
-            patch.object(ref_engine.os.path, "exists", side_effect=lambda p: p == taken),
+            patch.object(
+                ref_engine.os.path, "exists", side_effect=lambda p: p == taken
+            ),
             patch.object(
                 ref_engine.os,
                 "rename",
@@ -3039,7 +3431,9 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
         self.controller._scenes_folder = lambda: "scenes"
 
     def tearDown(self):
-        ref_engine.cmds.file(new=True, force=True)  # leave no scene open for the next test
+        ref_engine.cmds.file(
+            new=True, force=True
+        )  # leave no scene open for the next test
         self._store.cleanup()
 
     @staticmethod
@@ -3058,6 +3452,8 @@ class TestRenameOpenSceneAgainstRealMaya(unittest.TestCase):
                 getattr(ref_mgr.ReferenceManagerSlots, name).__get__(slot, type(slot)),
             )
         slot._foreign_scratch_path = ref_mgr.ReferenceManagerSlots._foreign_scratch_path
+        # The footer a first FBX take read (or a bake) reports into: none here.
+        slot._conversion_progress = lambda text: contextlib.nullcontext(lambda *a: True)
         controller.slot = slot
         controller.sb = slot.sb
         controller.ui = slot.ui
@@ -3738,7 +4134,8 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
         self.assertTrue(controller.open_scene(self.usd, set_workspace=False))
         self.assertEqual(
-            self._norm(ref_engine.cmds.file(q=True, sceneName=True)), self._norm(self.usd)
+            self._norm(ref_engine.cmds.file(q=True, sceneName=True)),
+            self._norm(self.usd),
         )
         self.assertTrue(
             ref_engine.cmds.keyframe("crate", q=True, timeChange=True),
@@ -3775,7 +4172,11 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
             self.assertFalse(manager.add_reference("damaged", self._garbage_layer()))
         self.assertEqual(manager.current_references, [])
         self.assertEqual(
-            [r for r in ref_engine.cmds.ls(type="reference") or [] if "shared" not in r],
+            [
+                r
+                for r in ref_engine.cmds.ls(type="reference") or []
+                if "shared" not in r
+            ],
             [],
         )
         self.assertIn("not a readable USD layer", warned.call_args[0][0])
@@ -3794,6 +4195,207 @@ class TestUsdRowsAgainstRealMaya(unittest.TestCase):
         self.assertTrue(shown and "not a readable USD layer" in shown[0], shown)
         self.assertNotIn("Unlink and Import", shown[0])
         self.assertNotIn("</>", shown[0])
+
+
+class TestFbxRowsAgainstRealMaya(unittest.TestCase):
+    """An .fbx row read through the FBX plugin plays the ONE take the session's
+    sticky ``FBXImportSetTake`` names -- at every load, reload and reopen.
+
+    BACKLOG 2026-10-10, measured (fresh mayapy): a Shots Only file (shots 1-30 /
+    50-70) referenced as 21 keys, 50-70 -- its last take, 30 of 51 frames off the
+    source -- a reload under ``-ti 1`` played the other shot alone, and a sticky
+    index past the file's takes loaded 0 nodes while ``add_reference`` returned
+    True. No one take reads such a file whole, so the reference reads a cached
+    ``.ma`` bake of it (``FbxUtils.import_scene``'s take rules in a fresh mayapy);
+    a file its last take reads whole stays native, under the per-file ``-1``.
+    """
+
+    KEYS = ((1, 0.0), (10, 5.0), (40, -3.0), (60, 8.0), (90, 2.0), (100, 10.0))
+    SHOTS = (
+        {"name": "early", "start": 1, "end": 30},
+        {"name": "late", "start": 50, "end": 70},
+    )
+
+    def setUp(self):
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self.mel, self.fbx = mel, FbxUtils
+        FbxUtils.load_plugin()
+        self._store = ptk.TempArtifacts("mtk_rm_fbx_test", policy="scoped")
+        self.root = self._store.dir_path()
+        self.manager = TestImportReferencesNamespaceModes._make_manager()
+        self.addCleanup(self._store.cleanup)
+        self.addCleanup(mel.eval, "FBXImportSetTake -ti -1")
+        self.addCleanup(ref_engine.cmds.file, new=True, force=True)
+
+    def _write(self, name, takes, keys=None):
+        """CUBE keyed 1-100 (*keys*, default :attr:`KEYS`), written as the Scene
+        Exporter writes a Shots Only file: one take per entry of *takes*, the
+        whole-timeline take dropped. Returns the path and the source's value on
+        every frame a take holds."""
+        cmds = ref_engine.cmds
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="CUBE")[0]
+        for t, v in keys or self.KEYS:
+            cmds.setKeyframe(f"{cube}.translateX", t=t, v=v)
+        expected = {
+            f: cmds.getAttr(f"{cube}.translateX", time=f)
+            for take in takes
+            for f in range(take["start"], take["end"] + 1)
+        }
+        path = os.path.join(self.root, f"{name}.fbx")
+        self.fbx.apply_takes(takes)
+        try:
+            self.fbx.export(path, objects=[cube])
+        finally:
+            self.fbx.reset_takes()
+        ptk.FbxMedia.drop_takes(path, names=["Take 001"])
+        cmds.file(new=True, force=True)
+        return path, expected
+
+    def _forget_bake(self, ref_path):
+        """Delete the cached bake *ref_path* (and its source sidecar) after the test."""
+        from mayatk.env_utils.blender_bridge import _scene_import as si
+
+        if not si.BlenderSceneImport.bake_source(ref_path):
+            return
+
+        def forget():
+            ref_engine.cmds.file(new=True, force=True)
+            for f in (ref_path, ref_path + si.BAKE_SOURCE_SUFFIX):
+                if os.path.isfile(f):
+                    os.remove(f)
+
+        self.addCleanup(forget)
+
+    def _assert_plays(self, plug, expected):
+        cmds = ref_engine.cmds
+        self.assertTrue(cmds.objExists(plug), f"{plug}: nothing was loaded")
+        wrong = {
+            f: (v, cmds.getAttr(plug, time=f))
+            for f, v in expected.items()
+            if abs(cmds.getAttr(plug, time=f) - v) > 1e-3
+        }
+        self.assertEqual(wrong, {}, f"{len(wrong)} of {len(expected)} frames off")
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(os.path.normpath(path))
+
+    def test_a_shots_only_reference_plays_every_shot_at_every_load(self):
+        cmds = ref_engine.cmds
+        path, expected = self._write("shots", self.SHOTS)
+        self.mel.eval("FBXImportSetTake -ti -1")  # a fresh session's selector
+
+        self.assertTrue(self.manager.add_reference("shots", path))
+
+        refs = self.manager.current_references
+        self.assertEqual(len(refs), 1)
+        ref = refs[0]
+        self._forget_bake(ref.path)
+        plug = f"{ref.namespace}:CUBE.translateX"
+        self._assert_plays(plug, expected)
+        # A reload re-reads the file under the selector the session holds THEN.
+        self.mel.eval("FBXImportSetTake -ti 9")
+        cmds.file(unloadReference=ref._ref_node)
+        cmds.file(loadReference=ref._ref_node)
+        self._assert_plays(plug, expected)
+        # The reference stands for the FBX: it maps back to the row, and adding
+        # the FBX again adds nothing.
+        self.assertEqual(self.manager._bake_source_key(ref.path), self._norm(path))
+        self.assertTrue(self.manager.add_reference("shots", path))
+        self.assertEqual(len(self.manager.current_references), 1)
+
+    def test_a_re_exported_fbx_is_played_as_it_is_now(self):
+        """A native reference re-read its FBX at every load; a baked one read
+        its cached .ma, so a re-exported Shots Only file kept playing the old
+        bake. Its reference is now baked again and repointed in place, its
+        reference edits kept."""
+        cmds = ref_engine.cmds
+        later = tuple((t, v * 2 + 1) for t, v in self.KEYS)
+        v2, expected_v2 = self._write("shots_v2", self.SHOTS, keys=later)
+        path, expected = self._write("shots", self.SHOTS)
+        self.assertTrue(self.manager.add_reference("shots", path))
+        ref = self.manager.current_references[0]
+        self._forget_bake(ref.path)
+        node, plug = ref._ref_node, f"{ref.namespace}:CUBE.translateX"
+        self._assert_plays(plug, expected)
+        cmds.setAttr(f"{ref.namespace}:CUBE.scaleY", 3)  # a reference edit
+        shutil.copyfile(v2, path)  # the re-export
+
+        self.manager.update_references()
+
+        ref = self.manager.current_references[0]
+        self._forget_bake(ref.path)
+        self.assertEqual(ref._ref_node, node, "repointed in place")
+        self._assert_plays(plug, expected_v2)
+        self.assertEqual(cmds.getAttr(f"{ref.namespace}:CUBE.scaleY"), 3)
+
+    def test_a_static_fbx_stays_native_under_any_selector(self):
+        cmds = ref_engine.cmds
+        cmds.file(new=True, force=True)
+        cube = cmds.polyCube(name="CRATE")[0]
+        path = os.path.join(self.root, "static.fbx")
+        self.fbx.export(path, objects=[cube])
+        cmds.file(new=True, force=True)
+        self.mel.eval("FBXImportSetTake -ti 5")
+
+        self.assertTrue(self.manager.add_reference("static", path))
+
+        ref = self.manager.current_references[0]
+        self.assertEqual(self._norm(ref.path), self._norm(path), "read natively")
+        self.assertTrue(cmds.objExists(f"{ref.namespace}:CRATE"), "nothing loaded")
+
+    def test_a_scene_referencing_an_fbx_opens_it_under_the_per_file_take(self):
+        """The panel's Open of a scene reads the FBX it references through the
+        same plug-in: under a stale index that reference loaded nothing."""
+        cmds = ref_engine.cmds
+        path, expected = self._write(
+            "single", ({"name": "all", "start": 1, "end": 100},)
+        )
+        self.mel.eval("FBXImportSetTake -ti -1")
+        cmds.file(path, reference=True, namespace="single")
+        host = os.path.join(self.root, "host.ma")
+        cmds.file(rename=host)
+        cmds.file(save=True, type="mayaAscii")
+        cmds.file(new=True, force=True)
+        self.mel.eval("FBXImportSetTake -ti 5")
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+
+        self.assertTrue(controller.open_scene(host, set_workspace=False))
+
+        self._assert_plays("single:CUBE.translateX", expected)
+
+    def test_a_file_its_last_take_reads_whole_stays_native_under_any_selector(self):
+        path, expected = self._write(
+            "single", ({"name": "all", "start": 1, "end": 100},)
+        )
+        self.mel.eval("FBXImportSetTake -ti 5")  # an index the file does not have
+
+        self.assertTrue(self.manager.add_reference("single", path))
+
+        ref = self.manager.current_references[0]
+        self.assertEqual(self._norm(ref.path), self._norm(path), "read natively")
+        plug = f"{ref.namespace}:CUBE.translateX"
+        self._assert_plays(plug, expected)
+        self.mel.eval("FBXImportSetTake -ti 5")
+        ref_engine.cmds.file(unloadReference=ref._ref_node)
+        self.manager.update_references()
+        self._assert_plays(plug, expected)
+
+    def test_an_fbx_row_opens_under_the_per_file_take(self):
+        """Open reads through the same plugin: under a stale index it opened an
+        empty scene (measured, fresh mayapy)."""
+        path, expected = self._write(
+            "single", ({"name": "all", "start": 1, "end": 100},)
+        )
+        self.mel.eval("FBXImportSetTake -ti 5")
+        controller = TestRenameOpenSceneAgainstRealMaya._make_controller()
+
+        self.assertTrue(controller.open_scene(path, set_workspace=False))
+
+        self._assert_plays("CUBE.translateX", expected)
 
 
 class TestImportReferencesSceneData(unittest.TestCase):
