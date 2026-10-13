@@ -23,7 +23,9 @@ engine's :class:`~pythontk.ShotManifest` and overrides only its scene hooks:
   build claims as its own and releases;
 - ``_placed_clip_keys`` → a track's clip keys exactly where a build puts
   them (adopted when no claim covers them);
-- ``rewire_audio`` → the audio compositor sync.
+- ``rewire_audio`` → the audio compositor sync;
+- ``_sequencer`` → Maya's ``ShotSequencer``, which ``insert_planned`` inserts
+  through: the shots an insert moves take their keys and audio with them.
 
 The pure model classes (:class:`BuilderStep`, :class:`ColumnMap`,
 :class:`ManifestModel`, …) are re-exported so existing
@@ -138,6 +140,15 @@ class ShotManifest(_EngineShotManifest, _ShotManifestInternal):
     def _measure_audio(self, obj: BuilderObject) -> Optional[float]:
         """Audio-clip length in frames via source path or registered track."""
         return _ShotManifestInternal._measure_audio_obj(obj, self._resolve_fps())
+
+    def _sequencer(self):
+        """Maya's ``ShotSequencer``: an insert moves the later shots' keys and
+        audio with them.  Imported on use, like the store edits that need it."""
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer,
+        )
+
+        return ShotSequencer(store=self.store)
 
     def _audio_grow_duration(self, audio_objs: List[BuilderObject]) -> float:
         """Content-driven duration for an existing audio step.

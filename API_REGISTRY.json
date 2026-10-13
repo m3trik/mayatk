@@ -2122,7 +2122,7 @@
         {
           "name": "ShotManifest",
           "summary": ":class:`pythontk.ShotManifest` with the scene hooks bound to Maya.",
-          "line": 116,
+          "line": 118,
           "bases": [
             "pythontk.core_utils.engines.shots.manifest.manifest_engine.ShotManifest",
             "_ShotManifestInternal"
@@ -2134,7 +2134,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, list]",
               "summary": "Apply detected behaviors to Maya objects (fades, highlights, audio",
-              "line": 155,
+              "line": 166,
               "deprecated": false
             },
             {
@@ -2143,7 +2143,7 @@
               "kind": "staticmethod",
               "signature": "(tracks: Optional[List[str]] = None) -> Dict[str, List[str]]",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 182,
+              "line": 193,
               "deprecated": false
             },
             {
@@ -2152,7 +2152,7 @@
               "kind": "classmethod",
               "signature": "(cls, filepath: str, store: Optional[ShotStore] = None, columns: Optional[ColumnMap] = None, post_process: Optional[Callable[[BuilderStep], None]] = None) -> Tuple['ShotManifest', List[BuilderStep]]",
               "summary": "Convenience: parse a CSV and return a ready-to-build engine.",
-              "line": 459,
+              "line": 470,
               "deprecated": false
             }
           ]
@@ -2232,7 +2232,7 @@
         {
           "name": "ExportPreviewMixin",
           "summary": "The Export button's preview, mixed into ``ShotManifestController``.",
-          "line": 25,
+          "line": 27,
           "bases": [],
           "members": [
             {
@@ -2241,7 +2241,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Open the preview of the export (or bring the open one up): its",
-              "line": 231,
+              "line": 233,
               "deprecated": false
             }
           ]
@@ -2251,13 +2251,13 @@
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/header_menu.py",
-      "summary": "The Shot Manifest's header menu: display options (Long Names, Hide Missing",
+      "summary": "The Shot Manifest's header menu: Long Names, Local Edits' Edits mode and",
       "functions": [],
       "classes": [
         {
           "name": "HeaderMenuMixin",
           "summary": "The header menu, mixed into ``ShotManifestController``.",
-          "line": 18,
+          "line": 21,
           "bases": [],
           "members": []
         }
@@ -2272,16 +2272,61 @@
         {
           "name": "ManifestData",
           "summary": "ManifestData — module namespace.",
-          "line": 53,
+          "line": 51,
           "bases": [],
           "members": [
+            {
+              "name": "level",
+              "qualname": "ManifestData.level",
+              "kind": "staticmethod",
+              "signature": "(status: str) -> str",
+              "summary": "*status*'s severity (``SHOT_STATUS_LEVELS``);",
+              "line": 73,
+              "deprecated": false
+            },
+            {
+              "name": "status_color",
+              "qualname": "ManifestData.status_color",
+              "kind": "staticmethod",
+              "signature": "(status: str) -> Optional[str]",
+              "summary": "*status*'s colour in this panel's palette, or ``None`` for none.",
+              "line": 80,
+              "deprecated": false
+            },
+            {
+              "name": "worst",
+              "qualname": "ManifestData.worst",
+              "kind": "staticmethod",
+              "signature": "(statuses: Iterable[str]) -> Optional[str]",
+              "summary": "The status of *statuses* at the worst severity (the first of",
+              "line": 86,
+              "deprecated": false
+            },
+            {
+              "name": "glyph_html",
+              "qualname": "ManifestData.glyph_html",
+              "kind": "staticmethod",
+              "signature": "(status: str) -> str",
+              "summary": "*status*'s glyph in its colour, as rich text (``\"\"``: no severity).",
+              "line": 98,
+              "deprecated": false
+            },
+            {
+              "name": "issues_html",
+              "qualname": "ManifestData.issues_html",
+              "kind": "staticmethod",
+              "signature": "(issues: Iterable[Tuple[str, str]]) -> str",
+              "summary": "``(status, text)`` *issues* as rich text, a line each: its glyph,",
+              "line": 107,
+              "deprecated": false
+            },
             {
               "name": "fmt_behavior",
               "qualname": "ManifestData.fmt_behavior",
               "kind": "staticmethod",
               "signature": "(name: str) -> str",
               "summary": "``'fade_in'`` → ``'Fade In'`` (``Behaviors.label``: the marker",
-              "line": 57,
+              "line": 118,
               "deprecated": false
             },
             {
@@ -2290,7 +2335,7 @@
               "kind": "staticmethod",
               "signature": "(behaviors, broken=(), status_color=None, stale=(), disabled=(), marked=()) -> str",
               "summary": "Return rich-text HTML for a list of behavior names.",
-              "line": 67,
+              "line": 128,
               "deprecated": false
             }
           ]
@@ -2303,7 +2348,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 23,
+          "line": 28,
           "deprecated": false
         },
         {
@@ -2312,7 +2357,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 26,
+          "line": 31,
           "deprecated": false
         },
         {
@@ -2321,7 +2366,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 29,
+          "line": 34,
           "deprecated": false
         },
         {
@@ -2330,7 +2375,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 30,
+          "line": 35,
           "deprecated": false
         },
         {
@@ -2339,7 +2384,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 31,
+          "line": 36,
           "deprecated": false
         },
         {
@@ -2348,7 +2393,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 32,
+          "line": 37,
           "deprecated": false
         },
         {
@@ -2357,7 +2402,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 33,
+          "line": 38,
           "deprecated": false
         },
         {
@@ -2366,7 +2411,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 34,
+          "line": 39,
           "deprecated": false
         },
         {
@@ -2375,7 +2420,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 36,
+          "line": 41,
           "deprecated": false
         },
         {
@@ -2384,16 +2429,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 39,
-          "deprecated": false
-        },
-        {
-          "name": "BEHAVIOR_STATUS_COLORS",
-          "qualname": "BEHAVIOR_STATUS_COLORS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 43,
+          "line": 45,
           "deprecated": false
         },
         {
@@ -2402,7 +2438,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 50,
+          "line": 48,
           "deprecated": false
         }
       ]
@@ -2415,7 +2451,7 @@
         {
           "name": "ManifestEditor",
           "summary": "One panel's Local Edits: its edit layer, its cell editors, and the",
-          "line": 42,
+          "line": 45,
           "bases": [],
           "members": [
             {
@@ -2424,7 +2460,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Whether the edits are in force -- applied and editable: always,",
-              "line": 66,
+              "line": 96,
               "deprecated": false
             },
             {
@@ -2432,8 +2468,17 @@
               "qualname": "ManifestEditor.add_header_options",
               "kind": "method",
               "signature": "(self, menu) -> None",
-              "summary": "Add View Original Sheet and Reset Local Edits to *menu*.",
-              "line": 71,
+              "summary": "Add the Local Edits row to *menu*: the Edits combo",
+              "line": 101,
+              "deprecated": false
+            },
+            {
+              "name": "edits_mode",
+              "qualname": "ManifestEditor.edits_mode",
+              "kind": "property",
+              "signature": "(self) -> str",
+              "summary": "The Edits mode in force: ``\"keep\"``, ``\"rebuild\"`` or ``\"compare\"``.",
+              "line": 153,
               "deprecated": false
             },
             {
@@ -2442,7 +2487,7 @@
               "kind": "method",
               "signature": "(self, on: bool = True) -> None",
               "summary": "Show the sheet as delivered (*on*), or the manifest with its edits.",
-              "line": 110,
+              "line": 175,
               "deprecated": false
             },
             {
@@ -2451,7 +2496,7 @@
               "kind": "method",
               "signature": "(self, to: str = 'edit') -> bool",
               "summary": "Say so and return ``True`` while the original sheet is viewed:",
-              "line": 142,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -2460,7 +2505,7 @@
               "kind": "method",
               "signature": "(self, confirm: bool = True) -> None",
               "summary": "Drop every edit of the current source, after asking.",
-              "line": 154,
+              "line": 215,
               "deprecated": false
             },
             {
@@ -2469,7 +2514,7 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "The source the edits belong to: the sheet's path, or ``\"\"`` for",
-              "line": 174,
+              "line": 235,
               "deprecated": false
             },
             {
@@ -2478,7 +2523,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Read the current source's edits from the scene -- a sheet moved",
-              "line": 180,
+              "line": 241,
               "deprecated": false
             },
             {
@@ -2487,7 +2532,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Write the current source's edits to the scene, under the sheet's",
-              "line": 186,
+              "line": 247,
               "deprecated": false
             },
             {
@@ -2496,7 +2541,7 @@
               "kind": "method",
               "signature": "(self, steps: List[ptk.BuilderStep]) -> List[ptk.BuilderStep]",
               "summary": "*steps* with the edits applied -- as delivered while the original",
-              "line": 197,
+              "line": 258,
               "deprecated": false
             },
             {
@@ -2505,7 +2550,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "The edits the loaded sheet gives no place to (``ManifestEdits.stale``).",
-              "line": 202,
+              "line": 263,
               "deprecated": false
             },
             {
@@ -2514,7 +2559,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Re-apply the edits to the loaded steps and redraw the table.",
-              "line": 206,
+              "line": 267,
               "deprecated": false
             },
             {
@@ -2523,7 +2568,7 @@
               "kind": "method",
               "signature": "(self, step) -> bool",
               "summary": "Say so and return ``True`` when *step* is locked (:meth:`_locked`).",
-              "line": 256,
+              "line": 317,
               "deprecated": false
             },
             {
@@ -2532,7 +2577,7 @@
               "kind": "method",
               "signature": "(self, item, column: int) -> bool",
               "summary": "Open an editor on a step's name or description, or an object's",
-              "line": 275,
+              "line": 336,
               "deprecated": false
             },
             {
@@ -2541,7 +2586,7 @@
               "kind": "method",
               "signature": "(self, item, column: int) -> bool",
               "summary": "Record the edit a cell editor committed;",
-              "line": 327,
+              "line": 388,
               "deprecated": false
             },
             {
@@ -2550,7 +2595,7 @@
               "kind": "method",
               "signature": "(self, step_id: str, obj, behaviors: List[str]) -> bool",
               "summary": "Record *obj*'s ticked *behaviors* in step *step_id*;",
-              "line": 419,
+              "line": 480,
               "deprecated": false
             },
             {
@@ -2559,7 +2604,7 @@
               "kind": "method",
               "signature": "(self, menu, item, selected: List[str] = ()) -> None",
               "summary": "Add Local Edits' actions for the row at *item* (``None``: empty",
-              "line": 434,
+              "line": 495,
               "deprecated": false
             },
             {
@@ -2568,7 +2613,7 @@
               "kind": "method",
               "signature": "(self, after: str) -> str",
               "summary": "Add a step after step *after* (``\"\"``: at the top) and open its",
-              "line": 561,
+              "line": 621,
               "deprecated": false
             },
             {
@@ -2577,7 +2622,7 @@
               "kind": "method",
               "signature": "(self, shot, after: str) -> Optional[str]",
               "summary": "Take a shot no step pairs with into the manifest: a step of its own",
-              "line": 573,
+              "line": 633,
               "deprecated": false
             },
             {
@@ -2586,7 +2631,7 @@
               "kind": "method",
               "signature": "(self, step) -> None",
               "summary": "Remove an added step;",
-              "line": 600,
+              "line": 660,
               "deprecated": false
             },
             {
@@ -2595,7 +2640,25 @@
               "kind": "method",
               "signature": "(self, step_ids: List[str], hidden: bool = True) -> None",
               "summary": "Hide (or show) steps.",
-              "line": 611,
+              "line": 671,
+              "deprecated": false
+            },
+            {
+              "name": "unlocked_hidden_objects",
+              "qualname": "ManifestEditor.unlocked_hidden_objects",
+              "kind": "method",
+              "signature": "(self) -> List[Tuple[str, str]]",
+              "summary": "The hidden objects :meth:`show_hidden_objects` shows, as",
+              "line": 683,
+              "deprecated": false
+            },
+            {
+              "name": "show_hidden_objects",
+              "qualname": "ManifestEditor.show_hidden_objects",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Show every object the edits hide, wherever it sits -- but in a",
+              "line": 694,
               "deprecated": false
             },
             {
@@ -2604,7 +2667,7 @@
               "kind": "method",
               "signature": "(self, home: str, sheet_name: str, hidden: bool = True) -> None",
               "summary": "Hide (or show) an object: a hidden one leaves its step, and Build",
-              "line": 623,
+              "line": 703,
               "deprecated": false
             },
             {
@@ -2613,7 +2676,7 @@
               "kind": "method",
               "signature": "(self, step, obj, target) -> None",
               "summary": "Move *obj* from *step* to *target* (to the end of its objects).",
-              "line": 630,
+              "line": 710,
               "deprecated": false
             },
             {
@@ -2622,7 +2685,7 @@
               "kind": "method",
               "signature": "(self, name: str, new: Optional[str] = None) -> int",
               "summary": "Point every step listing *name* at *new* (asked for when",
-              "line": 641,
+              "line": 721,
               "deprecated": false
             },
             {
@@ -2631,7 +2694,7 @@
               "kind": "method",
               "signature": "(self, step) -> None",
               "summary": "Drop *step*'s own edits (name, description);",
-              "line": 673,
+              "line": 753,
               "deprecated": false
             },
             {
@@ -2640,7 +2703,7 @@
               "kind": "method",
               "signature": "(self, home: str, sheet_name: str, name: str = '') -> None",
               "summary": "Drop an object's edits: the sheet's name, step and behaviors.",
-              "line": 678,
+              "line": 758,
               "deprecated": false
             },
             {
@@ -2649,7 +2712,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Mark the edited cells -- italic, the sheet's value in the tooltip --",
-              "line": 685,
+              "line": 765,
               "deprecated": false
             }
           ]
@@ -2762,7 +2825,7 @@
         {
           "name": "ManifestSourceMixin",
           "summary": "The panel's sources, mixed into ``ShotManifestController``.",
-          "line": 23,
+          "line": 25,
           "bases": [],
           "members": [
             {
@@ -2771,7 +2834,7 @@
               "kind": "method",
               "signature": "(self, gap: Optional[float] = None) -> None",
               "summary": "Detect animation regions in the scene and populate the table.",
-              "line": 53,
+              "line": 55,
               "deprecated": false
             }
           ]
@@ -2781,13 +2844,13 @@
     },
     {
       "relpath": "anim_utils/shots/shot_manifest/mapping_picker.py",
-      "summary": "The Shot Manifest's mapping template: the picker in the header menu (built-in",
+      "summary": "The Shot Manifest's mapping template: its own popup on the build sheet",
       "functions": [],
       "classes": [
         {
           "name": "MappingPickerMixin",
           "summary": "The mapping template, mixed into ``ShotManifestController``.",
-          "line": 19,
+          "line": 22,
           "bases": [],
           "members": []
         }
@@ -2802,7 +2865,7 @@
         {
           "name": "RangeColumnMixin",
           "summary": "The Start / End column, mixed into ``ShotManifestController``.",
-          "line": 25,
+          "line": 27,
           "bases": [],
           "members": []
         }
@@ -2842,7 +2905,7 @@
         {
           "name": "RowMenusMixin",
           "summary": "The rows' context menus, mixed into ``ShotManifestController``.",
-          "line": 24,
+          "line": 26,
           "bases": [],
           "members": []
         }
@@ -2857,7 +2920,7 @@
         {
           "name": "ShotManifestController",
           "summary": "Business logic for the Shot Manifest UI (see the module docstring).",
-          "line": 40,
+          "line": 44,
           "bases": [
             "ManifestTableMixin",
             "RangeColumnMixin",
@@ -2866,6 +2929,7 @@
             "MappingPickerMixin",
             "RowMenusMixin",
             "HeaderMenuMixin",
+            "ViewCombosMixin",
             "ExportPreviewMixin",
             "pythontk.LoggingMixin"
           ],
@@ -2876,7 +2940,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Build or update shots in the store from loaded steps.",
-              "line": 404,
+              "line": 471,
               "deprecated": false
             },
             {
@@ -2885,7 +2949,7 @@
               "kind": "method",
               "signature": "(self, skip_key_check: bool = False, note: str = '') -> None",
               "summary": "Compare the steps against the scene's shots and colour the tree.",
-              "line": 609,
+              "line": 739,
               "deprecated": false
             }
           ]
@@ -2901,7 +2965,7 @@
         {
           "name": "ShotManifestSlots",
           "summary": "Switchboard slot class — routes UI events to the controller.",
-          "line": 17,
+          "line": 19,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -2912,25 +2976,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Header menu is configured once in controller.__init__.",
-              "line": 30,
-              "deprecated": false
-            },
-            {
-              "name": "btn_expand_missing",
-              "qualname": "ShotManifestSlots.btn_expand_missing",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Expand all step rows that have missing objects or behaviors.",
-              "line": 34,
-              "deprecated": false
-            },
-            {
-              "name": "btn_expand_extra",
-              "qualname": "ShotManifestSlots.btn_expand_extra",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Expand all step rows that have scene-discovered extra objects.",
-              "line": 38,
+              "line": 32,
               "deprecated": false
             },
             {
@@ -2939,7 +2985,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the shared shots settings panel.",
-              "line": 42,
+              "line": 36,
               "deprecated": false
             },
             {
@@ -2948,7 +2994,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Assess the steps against the scene.",
-              "line": 48,
+              "line": 42,
               "deprecated": false
             },
             {
@@ -2957,7 +3003,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Build shots from loaded steps (or auto-detect from scene).",
-              "line": 52,
+              "line": 46,
               "deprecated": false
             },
             {
@@ -2966,7 +3012,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Export the manifest's rows (the option menu says how).",
-              "line": 56,
+              "line": 50,
               "deprecated": false
             }
           ]
@@ -2982,7 +3028,7 @@
         {
           "name": "StoreFollowMixin",
           "summary": "Store events and scene swaps, mixed into ``ShotManifestController``.",
-          "line": 28,
+          "line": 30,
           "bases": [],
           "members": [
             {
@@ -2991,7 +3037,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Remove the ShotStore listener and the invalidation subscription,",
-              "line": 79,
+              "line": 81,
               "deprecated": false
             }
           ]
@@ -3007,7 +3053,7 @@
         {
           "name": "ManifestTableMixin",
           "summary": "Presentation methods for the manifest tree widget.",
-          "line": 53,
+          "line": 54,
           "bases": [],
           "members": [
             {
@@ -3015,8 +3061,8 @@
               "qualname": "ManifestTableMixin.expand_missing",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "Expand all step rows that have missing objects, behaviors, or additional objects.",
-              "line": 801,
+              "summary": "Expand the step rows the shown assessment found something in",
+              "line": 845,
               "deprecated": false
             },
             {
@@ -3024,11 +3070,26 @@
               "qualname": "ManifestTableMixin.expand_extra",
               "kind": "method",
               "signature": "(self) -> None",
-              "summary": "Expand all step rows that have scene-discovered extra objects.",
-              "line": 846,
+              "summary": "Expand the step rows holding an object the step does not list",
+              "line": 865,
               "deprecated": false
             }
           ]
+        }
+      ],
+      "constants": []
+    },
+    {
+      "relpath": "anim_utils/shots/shot_manifest/view_combos.py",
+      "summary": "The Shot Manifest's view row, above the table: Select, Expand, Collapse,",
+      "functions": [],
+      "classes": [
+        {
+          "name": "ViewCombosMixin",
+          "summary": "The view row, mixed into ``ShotManifestController``.",
+          "line": 28,
+          "bases": [],
+          "members": []
         }
       ],
       "constants": []
@@ -5521,7 +5582,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> str",
               "summary": "Create the per-track enum attr if missing.",
-              "line": 468,
+              "line": 476,
               "deprecated": false
             },
             {
@@ -5530,7 +5591,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Return True if *track_id* has a per-track attr on the carrier.",
-              "line": 521,
+              "line": 529,
               "deprecated": false
             },
             {
@@ -5539,7 +5600,7 @@
               "kind": "classmethod",
               "signature": "(cls, raw: str, carrier: Optional[str] = None) -> bool",
               "summary": "True when *raw* (canonical or raw name) resolves to a registered track.",
-              "line": 534,
+              "line": 542,
               "deprecated": false
             },
             {
@@ -5548,7 +5609,7 @@
               "kind": "classmethod",
               "signature": "(cls, carrier: Optional[str] = None) -> List[str]",
               "summary": "Return all track_ids with attrs on *carrier* (sorted).",
-              "line": 543,
+              "line": 551,
               "deprecated": false
             },
             {
@@ -5557,7 +5618,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> List[tuple]",
               "summary": "Return ``[(frame, value), ...]`` for *track_id* (time-ordered).",
-              "line": 559,
+              "line": 567,
               "deprecated": false
             },
             {
@@ -5566,7 +5627,7 @@
               "kind": "staticmethod",
               "signature": "(pairs) -> List[Tuple[float, Optional[float]]]",
               "summary": "Pair time-ordered ``(frame, value)`` keys into on/off spans.",
-              "line": 575,
+              "line": 583,
               "deprecated": false
             },
             {
@@ -5575,7 +5636,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> List[TrackEvent]",
               "summary": "Return :class:`TrackEvent` list for *track_id*.",
-              "line": 605,
+              "line": 613,
               "deprecated": false
             },
             {
@@ -5584,7 +5645,7 @@
               "kind": "classmethod",
               "signature": "(cls, carrier: Optional[str] = None) -> Dict[str, List[Tuple[float, Optional[float]]]]",
               "summary": "Every track's on/off spans: ``{track_id: [(start, stop), ...]}``.",
-              "line": 620,
+              "line": 628,
               "deprecated": false
             },
             {
@@ -5593,7 +5654,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, frame: float, value: int = 1, carrier: Optional[str] = None, snap: Optional[bool] = None) -> None",
               "summary": "Set a key at *frame* with *value* (0=off, 1=on) on the track attr.",
-              "line": 659,
+              "line": 667,
               "deprecated": false
             },
             {
@@ -5602,7 +5663,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, start: float, end: Optional[float] = None, duration: Optional[float] = None, auto_end: bool = True, carrier: Optional[str] = None) -> List[Tuple[str, float]]",
               "summary": "Key one clip of *track_id*: ON at *start* and, with *auto_end*, OFF",
-              "line": 688,
+              "line": 696,
               "deprecated": false
             },
             {
@@ -5611,7 +5672,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> Optional[str]",
               "summary": "The anim curve keying *track_id*, or ``None`` before its first key.",
-              "line": 758,
+              "line": 766,
               "deprecated": false
             },
             {
@@ -5620,7 +5681,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> float",
               "summary": "*track_id*'s clip length in timeline frames, from its source file;",
-              "line": 768,
+              "line": 776,
               "deprecated": false
             },
             {
@@ -5629,7 +5690,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, frame: float, carrier: Optional[str] = None) -> bool",
               "summary": "Remove the key at *frame* on the track attr.",
-              "line": 781,
+              "line": 789,
               "deprecated": false
             },
             {
@@ -5638,7 +5699,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Remove every key on *track_id*'s attr.",
-              "line": 803,
+              "line": 811,
               "deprecated": false
             },
             {
@@ -5647,7 +5708,7 @@
               "kind": "classmethod",
               "signature": "(cls, old_start: float, old_end: float, delta: float, track_ids: Optional[List[str]] = None, carrier: Optional[str] = None, ledger=None) -> List[str]",
               "summary": "Shift audio keys in ``[old_start, old_end]`` by *delta*.",
-              "line": 831,
+              "line": 839,
               "deprecated": false
             },
             {
@@ -5656,7 +5717,7 @@
               "kind": "classmethod",
               "signature": "(cls, frame: float, carrier: Optional[str] = None, track_ids: Optional[List[str]] = None) -> List[str]",
               "summary": "Return track_ids currently \"on\" (value=1) at *frame*.",
-              "line": 928,
+              "line": 936,
               "deprecated": false
             },
             {
@@ -5665,7 +5726,7 @@
               "kind": "classmethod",
               "signature": "(cls, carrier: Optional[str] = None, display_map: Optional[dict] = None) -> List[tuple]",
               "summary": "Return the keyed \"on\" events as ``[(frame, label), ...]``.",
-              "line": 961,
+              "line": 969,
               "deprecated": false
             },
             {
@@ -5674,7 +5735,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Remove the per-track attr and its keys.",
-              "line": 998,
+              "line": 1006,
               "deprecated": false
             },
             {
@@ -5683,7 +5744,7 @@
               "kind": "classmethod",
               "signature": "(cls, old_id: str, new_id: str, carrier: Optional[str] = None) -> bool",
               "summary": "Rename a track's attr + enum labels + file_map key.",
-              "line": 1015,
+              "line": 1023,
               "deprecated": false
             },
             {
@@ -5692,7 +5753,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Un-hide track attrs in the Channel Box.",
-              "line": 1058,
+              "line": 1066,
               "deprecated": false
             },
             {
@@ -5701,7 +5762,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_id: Optional[str] = None, carrier: Optional[str] = None) -> List[str]",
               "summary": "Hide track attrs from the Channel Box.",
-              "line": 1065,
+              "line": 1073,
               "deprecated": false
             },
             {
@@ -5710,7 +5771,7 @@
               "kind": "staticmethod",
               "signature": "(tracks=None, carrier=None)",
               "summary": "Reconcile managed DG audio nodes with keyed track state.",
-              "line": 1095,
+              "line": 1103,
               "deprecated": false
             },
             {
@@ -5719,7 +5780,7 @@
               "kind": "staticmethod",
               "signature": "(track_id)",
               "summary": "Return the managed DG audio node for *track_id*, or ``None``.",
-              "line": 1105,
+              "line": 1113,
               "deprecated": false
             },
             {
@@ -5728,7 +5789,7 @@
               "kind": "staticmethod",
               "signature": "(node)",
               "summary": "True if *node* has the ``audio_node_source`` marker attr.",
-              "line": 1112,
+              "line": 1120,
               "deprecated": false
             },
             {
@@ -5737,7 +5798,7 @@
               "kind": "staticmethod",
               "signature": "(auto_sync=True, undo=True)",
               "summary": "Context manager grouping audio edits into one undo + one sync.",
-              "line": 1119,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -5746,7 +5807,7 @@
               "kind": "staticmethod",
               "signature": "(obj=CARRIER_NODE, category='audio')",
               "summary": "Return True if *obj* has legacy ``<category>_trigger`` attr.",
-              "line": 1129,
+              "line": 1137,
               "deprecated": false
             },
             {
@@ -5755,7 +5816,7 @@
               "kind": "staticmethod",
               "signature": "(obj, category='audio', keep_old_attrs=False)",
               "summary": "Migrate legacy trigger keys to per-track attrs.",
-              "line": 1139,
+              "line": 1147,
               "deprecated": false
             }
           ]
@@ -11655,7 +11716,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Remove a reference to a Maya scene.",
-              "line": 997,
+              "line": 1016,
               "deprecated": false
             },
             {
@@ -11664,7 +11725,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Check if a Maya scene is referenced.",
-              "line": 1011,
+              "line": 1030,
               "deprecated": false
             },
             {
@@ -11673,7 +11734,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Get the nodes from a referenced Maya scene.",
-              "line": 1026,
+              "line": 1045,
               "deprecated": false
             },
             {
@@ -11682,7 +11743,7 @@
               "kind": "staticmethod",
               "signature": "(top_level: bool = True, file_less: bool = False) -> list",
               "summary": "The scene's reference nodes, screened to the ones Maya can answer for.",
-              "line": 1044,
+              "line": 1063,
               "deprecated": false
             },
             {
@@ -11691,7 +11752,7 @@
               "kind": "classmethod",
               "signature": "(cls, top_level: bool = True) -> list",
               "summary": "The file behind each reference in the current Maya scene.",
-              "line": 1097,
+              "line": 1116,
               "deprecated": false
             },
             {
@@ -11700,7 +11761,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, *, selection_only: bool = False, **fbx_options: Any) -> None",
               "summary": "Export the Maya scene as an FBX file with flexible MEL command options.",
-              "line": 1114,
+              "line": 1133,
               "deprecated": false
             },
             {
@@ -11709,7 +11770,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, *, selection_only: bool = False, materials: bool = True, smoothing: bool = True, normals: bool = True, groups: bool = True) -> str",
               "summary": "Export the Maya scene as a Wavefront OBJ.",
-              "line": 1210,
+              "line": 1229,
               "deprecated": false
             },
             {
@@ -11718,7 +11779,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 1283,
+              "line": 1302,
               "deprecated": false
             },
             {
@@ -11727,7 +11788,7 @@
               "kind": "staticmethod",
               "signature": "(selected_file: str, workspace_files: dict) -> Optional[str]",
               "summary": "Resolve a file name to its full path by searching in workspace files.",
-              "line": 1297,
+              "line": 1316,
               "deprecated": false
             },
             {
@@ -11736,7 +11797,7 @@
               "kind": "classmethod",
               "signature": "(cls, workspaces: list, recursive: bool = True) -> dict",
               "summary": "Build a cache of workspace files for multiple workspaces.",
-              "line": 1320,
+              "line": 1339,
               "deprecated": false
             },
             {
@@ -11745,7 +11806,7 @@
               "kind": "staticmethod",
               "signature": "(filename: str) -> bool",
               "summary": "Check if a file matches the Maya autosave pattern.",
-              "line": 1345,
+              "line": 1364,
               "deprecated": false
             },
             {
@@ -11754,7 +11815,7 @@
               "kind": "staticmethod",
               "signature": "(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]",
               "summary": "Save a backup copy of the current scene.",
-              "line": 1360,
+              "line": 1379,
               "deprecated": false
             },
             {
@@ -11763,7 +11824,7 @@
               "kind": "classmethod",
               "signature": "(cls, autosave_path: Optional[str] = None) -> Optional[str]",
               "summary": "Resolve the original scene file an autosave was generated from.",
-              "line": 1455,
+              "line": 1474,
               "deprecated": false
             },
             {
@@ -11772,7 +11833,7 @@
               "kind": "classmethod",
               "signature": "(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]",
               "summary": "Save the currently open autosave scene back to its original path.",
-              "line": 1556,
+              "line": 1575,
               "deprecated": false
             }
           ]
@@ -11934,7 +11995,7 @@
         {
           "name": "BlenderSceneImport",
           "summary": "Engine: convert a .blend to FBX via headless Blender, then import it.",
-          "line": 411,
+          "line": 438,
           "bases": [
             "pythontk.LoggingMixin",
             "_BlenderSceneImportInternal"
@@ -11946,7 +12007,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The Blender executable (explicit, or discovered via the bridge's AppSpec).",
-              "line": 431,
+              "line": 458,
               "deprecated": false
             },
             {
@@ -11955,7 +12016,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Return :attr:`blender_path` or raise the spec's not-found error.",
-              "line": 441,
+              "line": 468,
               "deprecated": false
             },
             {
@@ -11964,7 +12025,7 @@
               "kind": "staticmethod",
               "signature": "(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]",
               "summary": "Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.",
-              "line": 450,
+              "line": 477,
               "deprecated": false
             },
             {
@@ -11973,7 +12034,7 @@
               "kind": "classmethod",
               "signature": "(cls, src_path: str) -> bool",
               "summary": "Cheap pre-conversion probe: does the ``.blend`` carry rig logic",
-              "line": 481,
+              "line": 508,
               "deprecated": false
             },
             {
@@ -11982,7 +12043,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True, texture_dir: str = '', rig_mode: str = 'auto') -> str",
               "summary": "Render the Blender-side conversion script (exposed for tests/preview).",
-              "line": 510,
+              "line": 537,
               "deprecated": false
             },
             {
@@ -11991,7 +12052,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: Optional[float] = None, texture_dir: Optional[str] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None, **script_opts: Any) -> 'ptk.ScriptRunResult'",
               "summary": "Convert *src_path* to *out_path* in a fresh headless Blender (blocking).",
-              "line": 570,
+              "line": 597,
               "deprecated": false
             },
             {
@@ -12000,7 +12061,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: Optional[float] = None, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', scene_data: bool = True, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> List[str]",
               "summary": "Import the Blender scene at *src_path*;",
-              "line": 784,
+              "line": 811,
               "deprecated": false
             },
             {
@@ -12009,7 +12070,7 @@
               "kind": "method",
               "signature": "(self, payload_path: str, *, via: str = 'fbx', fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', adopt_scene: bool = False, scene_data: bool = True, step: Optional[Callable[[int, int, str], Any]] = None) -> List[str]",
               "summary": "Import the conversion payload at *payload_path* -- the FBX or USD plus",
-              "line": 1005,
+              "line": 1032,
               "deprecated": false
             },
             {
@@ -12018,7 +12079,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "The headless ``mayapy`` used for the bake — this host's own interpreter.",
-              "line": 1696,
+              "line": 1723,
               "deprecated": false
             },
             {
@@ -12027,7 +12088,7 @@
               "kind": "method",
               "signature": "(self) -> str",
               "summary": "Return :attr:`mayapy_path` or raise an error naming what's missing.",
-              "line": 1724,
+              "line": 1751,
               "deprecated": false
             },
             {
@@ -12036,7 +12097,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str) -> str",
               "summary": "Render the Maya-side intermediate->.ma bake script (exposed for",
-              "line": 1735,
+              "line": 1762,
               "deprecated": false
             },
             {
@@ -12045,7 +12106,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, out_path: str, *, timeout: Optional[float] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None) -> Any",
               "summary": "Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a",
-              "line": 1767,
+              "line": 1794,
               "deprecated": false
             },
             {
@@ -12054,7 +12115,7 @@
               "kind": "method",
               "signature": "(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: Optional[float] = None, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> str",
               "summary": "Bake *src_path* to a cached ``.ma`` and return its path — the reference path.",
-              "line": 1812,
+              "line": 1839,
               "deprecated": false
             },
             {
@@ -12063,7 +12124,7 @@
               "kind": "staticmethod",
               "signature": "(baked_path: str) -> Optional[str]",
               "summary": "The foreign scene *baked_path* was baked from, or None if it is not a bake.",
-              "line": 1950,
+              "line": 2009,
               "deprecated": false
             },
             {
@@ -12072,7 +12133,7 @@
               "kind": "classmethod",
               "signature": "(cls, nodes: List[str], joints: bool = False) -> int",
               "summary": "Remove the redundant level a round trip nests around a node;",
-              "line": 2267,
+              "line": 2326,
               "deprecated": false
             }
           ]
@@ -12085,7 +12146,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 80,
+          "line": 107,
           "deprecated": false
         },
         {
@@ -12094,7 +12155,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 91,
+          "line": 118,
           "deprecated": false
         },
         {
@@ -12103,7 +12164,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 94,
+          "line": 121,
           "deprecated": false
         },
         {
@@ -12112,7 +12173,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 104,
+          "line": 131,
           "deprecated": false
         },
         {
@@ -12121,7 +12182,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 110,
+          "line": 137,
           "deprecated": false
         },
         {
@@ -12130,7 +12191,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 114,
+          "line": 141,
           "deprecated": false
         }
       ]
@@ -13686,7 +13747,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Reset the FBX plugin's global EXPORT options to factory defaults.",
-              "line": 179,
+              "line": 196,
               "deprecated": false
             },
             {
@@ -13695,7 +13756,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 200,
+              "line": 217,
               "deprecated": false
             },
             {
@@ -13704,7 +13765,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 231,
+              "line": 248,
               "deprecated": false
             },
             {
@@ -13713,7 +13774,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 248,
+              "line": 265,
               "deprecated": false
             },
             {
@@ -13722,7 +13783,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, scope: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]",
               "summary": "Remove the apparatus of the rigs a written FBX baked, in place.",
-              "line": 310,
+              "line": 327,
               "deprecated": false
             },
             {
@@ -13731,7 +13792,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, search_dirs: Optional[Iterable[str]] = None, files: Optional[Iterable[Any]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]",
               "summary": "Embed every file a written FBX's scene records name, in place.",
-              "line": 381,
+              "line": 398,
               "deprecated": false
             },
             {
@@ -13740,7 +13801,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, *, stash: bool = True, file_options: Optional[Dict[str, Any]] = None, logger: Optional[logging.Logger] = None) -> List[str]",
               "summary": "Import an FBX file -- ALL of its animation -- optionally into a namespace.",
-              "line": 473,
+              "line": 490,
               "deprecated": false
             },
             {
@@ -13749,7 +13810,7 @@
               "kind": "staticmethod",
               "signature": "() -> Tuple[float, float]",
               "summary": "Point the bake range at the scene's ANIMATION range.",
-              "line": 1123,
+              "line": 1200,
               "deprecated": false
             },
             {
@@ -13758,7 +13819,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the next write will BAKE complex animation.",
-              "line": 1150,
+              "line": 1227,
               "deprecated": false
             },
             {
@@ -13767,7 +13828,7 @@
               "kind": "staticmethod",
               "signature": "(command: str) -> bool",
               "summary": "An ``FBXExport*`` switch's current value, read the one safe way.",
-              "line": 1165,
+              "line": 1242,
               "deprecated": false
             },
             {
@@ -13776,7 +13837,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The ``(start, end)`` frames the next write will actually BAKE.",
-              "line": 1184,
+              "line": 1261,
               "deprecated": false
             },
             {
@@ -13785,7 +13846,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether this export will carry animation at all.",
-              "line": 1228,
+              "line": 1305,
               "deprecated": false
             },
             {
@@ -13794,7 +13855,7 @@
               "kind": "staticmethod",
               "signature": "(enabled: bool) -> None",
               "summary": "Turn the Animation include group on or off (see :attr:`ANIMATION_INCLUDE_PROPERTY`).",
-              "line": 1248,
+              "line": 1325,
               "deprecated": false
             },
             {
@@ -13803,7 +13864,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear FBX take definitions and restore pre-takes bake-complex state.",
-              "line": 1255,
+              "line": 1332,
               "deprecated": false
             },
             {
@@ -13812,7 +13873,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any], resample: bool = True) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 1291,
+              "line": 1368,
               "deprecated": false
             },
             {
@@ -13821,7 +13882,7 @@
               "kind": "staticmethod",
               "signature": "() -> list",
               "summary": "The takes the scene's records declare -- each ``shot_metadata``",
-              "line": 1410,
+              "line": 1487,
               "deprecated": false
             },
             {
@@ -13830,7 +13891,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None, resample: bool = True) -> int",
               "summary": "Realize the takes the scene declares into FBX export state.",
-              "line": 1426,
+              "line": 1503,
               "deprecated": false
             },
             {
@@ -13839,7 +13900,7 @@
               "kind": "classmethod",
               "signature": "(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]",
               "summary": ":attr:`PRODUCERS` resolved to callables, unimportable ones skipped;",
-              "line": 1603,
+              "line": 1680,
               "deprecated": false
             },
             {
@@ -13848,7 +13909,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext",
               "summary": "A context for this scene: provenance filled in, *decisions*",
-              "line": 1619,
+              "line": 1696,
               "deprecated": false
             },
             {
@@ -13857,7 +13918,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot",
               "summary": "Assemble every producer's record and commit the carrier ONCE.",
-              "line": 1638,
+              "line": 1715,
               "deprecated": false
             },
             {
@@ -13866,7 +13927,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot",
               "summary": "Commit a tool's own records at AUTHORING time, with this scene's",
-              "line": 1684,
+              "line": 1761,
               "deprecated": false
             },
             {
@@ -13875,7 +13936,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "The stager table for a bracket: the known stagers (*names* narrows",
-              "line": 1707,
+              "line": 1784,
               "deprecated": false
             },
             {
@@ -13884,7 +13945,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "Run every stager's ``prepare`` now and return the table that ran.",
-              "line": 1725,
+              "line": 1802,
               "deprecated": false
             },
             {
@@ -13893,7 +13954,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None) -> Optional[ptk.ExportSnapshot]",
               "summary": "Open an export bracket (outermost only): stage the scene, then --",
-              "line": 1770,
+              "line": 1847,
               "deprecated": false
             },
             {
@@ -13902,7 +13963,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Close an export bracket: run the stagers' finish (outermost only).",
-              "line": 1817,
+              "line": 1894,
               "deprecated": false
             },
             {
@@ -13911,7 +13972,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None)",
               "summary": "Stage the scene (and publish, given a *ctx* or *only* -- see",
-              "line": 1827,
+              "line": 1904,
               "deprecated": false
             },
             {
@@ -13920,7 +13981,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 1847,
+              "line": 1924,
               "deprecated": false
             },
             {
@@ -13929,7 +13990,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Run *spec*'s producer before every FBX export this session",
-              "line": 1869,
+              "line": 1946,
               "deprecated": false
             },
             {
@@ -13938,7 +13999,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Opt *spec* out of the session hook;",
-              "line": 1877,
+              "line": 1954,
               "deprecated": false
             },
             {
@@ -13947,7 +14008,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None",
               "summary": "Run *prepare* before and *finish* after every FBX export this",
-              "line": 1884,
+              "line": 1961,
               "deprecated": false
             },
             {
@@ -13956,7 +14017,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> None",
               "summary": "",
-              "line": 1901,
+              "line": 1978,
               "deprecated": false
             },
             {
@@ -13965,7 +14026,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export -- shot-agnostic.",
-              "line": 1906,
+              "line": 1983,
               "deprecated": false
             },
             {
@@ -13974,7 +14035,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 1919,
+              "line": 1996,
               "deprecated": false
             },
             {
@@ -13983,7 +14044,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 2120,
+              "line": 2197,
               "deprecated": false
             }
           ]
@@ -15404,7 +15465,7 @@
         {
           "name": "AssemblyManager",
           "summary": "",
-          "line": 75,
+          "line": 79,
           "bases": [],
           "members": [
             {
@@ -15413,7 +15474,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Get the current scene references.",
-              "line": 77,
+              "line": 81,
               "deprecated": false
             },
             {
@@ -15422,7 +15483,7 @@
               "kind": "classmethod",
               "signature": "(cls, namespace: str, file_path: str) -> str",
               "summary": "Create an assembly definition for the given file path.",
-              "line": 86,
+              "line": 90,
               "deprecated": false
             },
             {
@@ -15431,7 +15492,7 @@
               "kind": "classmethod",
               "signature": "(cls, assembly_node: str, representation_name: str) -> bool",
               "summary": "Set the active representation for an assembly.",
-              "line": 127,
+              "line": 131,
               "deprecated": false
             },
             {
@@ -15440,7 +15501,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Convert all current references to assembly definitions and references.",
-              "line": 147,
+              "line": 151,
               "deprecated": false
             }
           ]
@@ -15448,7 +15509,7 @@
         {
           "name": "ReferenceManager",
           "summary": "Core Maya scene reference management functionality.",
-          "line": 356,
+          "line": 396,
           "bases": [
             "WorkspaceManager",
             "pythontk.HelpMixin",
@@ -15462,7 +15523,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "Get the current scene references.",
-              "line": 386,
+              "line": 426,
               "deprecated": false
             },
             {
@@ -15471,7 +15532,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 529,
+              "line": 569,
               "deprecated": false
             },
             {
@@ -15479,8 +15540,8 @@
               "qualname": "ReferenceManager.add_reference",
               "kind": "method",
               "signature": "(self, namespace: str, file_path: str) -> bool",
-              "summary": "",
-              "line": 533,
+              "summary": "Reference *file_path* under *namespace* (sanitized;",
+              "line": 573,
               "deprecated": false
             },
             {
@@ -15489,7 +15550,7 @@
               "kind": "method",
               "signature": "(self, namespaces=None, namespace_mode='remove', scene_data='merge')",
               "summary": "Import referenced objects into the scene, making their data local.",
-              "line": 653,
+              "line": 822,
               "deprecated": false
             },
             {
@@ -15497,8 +15558,8 @@
               "qualname": "ReferenceManager.update_references",
               "kind": "method",
               "signature": "(self)",
-              "summary": "Update all references to reflect the latest changes from the original files.",
-              "line": 855,
+              "summary": "Update all references to reflect the latest changes from the original files",
+              "line": 1024,
               "deprecated": false
             },
             {
@@ -15507,7 +15568,7 @@
               "kind": "method",
               "signature": "(self, ref)",
               "summary": "Return the reference's top-level transforms — those whose parent is outside it.",
-              "line": 860,
+              "line": 1032,
               "deprecated": false
             },
             {
@@ -15516,7 +15577,7 @@
               "kind": "method",
               "signature": "(self, ref) -> str",
               "summary": "Return the active display mode for the reference's top-level transforms.",
-              "line": 921,
+              "line": 1093,
               "deprecated": false
             },
             {
@@ -15525,7 +15586,7 @@
               "kind": "method",
               "signature": "(self, ref, mode: str) -> bool",
               "summary": "Set the display override mode on the reference's top-level transforms.",
-              "line": 945,
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -15534,7 +15595,7 @@
               "kind": "method",
               "signature": "(self, namespaces=None)",
               "summary": "Remove references based on their namespaces.",
-              "line": 984,
+              "line": 1156,
               "deprecated": false
             }
           ]
@@ -15550,7 +15611,7 @@
         {
           "name": "ReferenceManagerController",
           "summary": "Controller that bridges Maya reference functionality with UI interactions.",
-          "line": 46,
+          "line": 47,
           "bases": [
             "ReferenceManager",
             "pythontk.LoggingMixin"
@@ -15562,7 +15623,7 @@
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 347,
+              "line": 348,
               "deprecated": false
             },
             {
@@ -15571,7 +15632,7 @@
               "kind": "method",
               "signature": "(method)",
               "summary": "",
-              "line": 382,
+              "line": 383,
               "deprecated": false
             },
             {
@@ -15580,7 +15641,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Prepare an item for editing by showing the full filename.",
-              "line": 396,
+              "line": 397,
               "deprecated": false
             },
             {
@@ -15589,7 +15650,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Restore the item to its display name after editing.",
-              "line": 412,
+              "line": 413,
               "deprecated": false
             },
             {
@@ -15598,7 +15659,7 @@
               "kind": "method",
               "signature": "(self, item)",
               "summary": "Check if an item is currently being edited.",
-              "line": 427,
+              "line": 428,
               "deprecated": false
             },
             {
@@ -15607,7 +15668,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 500,
+              "line": 499,
               "deprecated": false
             },
             {
@@ -15616,7 +15677,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Sync the table selection to match current scene references.",
-              "line": 607,
+              "line": 608,
               "deprecated": false
             },
             {
@@ -15625,7 +15686,7 @@
               "kind": "method",
               "signature": "(self, text: Optional[str] = None)",
               "summary": "",
-              "line": 658,
+              "line": 659,
               "deprecated": false
             },
             {
@@ -15634,7 +15695,7 @@
               "kind": "method",
               "signature": "(self, workspace_path: str, invalidate: bool = True) -> bool",
               "summary": "Set the current workspace for browsing and refresh the file list.",
-              "line": 719,
+              "line": 720,
               "deprecated": false
             },
             {
@@ -15643,7 +15704,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set Maya's project (workspace) to the browsed workspace — the explicit",
-              "line": 774,
+              "line": 775,
               "deprecated": false
             },
             {
@@ -15652,7 +15713,7 @@
               "kind": "method",
               "signature": "(self, invalidate=False)",
               "summary": "Refresh the file list for the table widget.",
-              "line": 885,
+              "line": 886,
               "deprecated": false
             },
             {
@@ -15661,7 +15722,7 @@
               "kind": "method",
               "signature": "(self, file_names, file_list)",
               "summary": "",
-              "line": 1123,
+              "line": 1136,
               "deprecated": false
             },
             {
@@ -15670,7 +15731,7 @@
               "kind": "method",
               "signature": "(self, file_path: str, set_workspace: bool = True)",
               "summary": "Open a scene file, optionally setting the workspace to match the file.",
-              "line": 1356,
+              "line": 1367,
               "deprecated": false
             },
             {
@@ -15679,7 +15740,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Discard the current file and start an empty scene (Maya's ``file -new``).",
-              "line": 1495,
+              "line": 1518,
               "deprecated": false
             },
             {
@@ -15688,7 +15749,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1513,
+              "line": 1536,
               "deprecated": false
             },
             {
@@ -15697,7 +15758,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1583,
+              "line": 1606,
               "deprecated": false
             },
             {
@@ -15706,7 +15767,7 @@
               "kind": "method",
               "signature": "(self, namespaces)",
               "summary": "Unlink specific references.",
-              "line": 1607,
+              "line": 1630,
               "deprecated": false
             },
             {
@@ -15715,7 +15776,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 1647,
+              "line": 1670,
               "deprecated": false
             },
             {
@@ -15724,7 +15785,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace, prompting for a name.",
-              "line": 1677,
+              "line": 1700,
               "deprecated": false
             },
             {
@@ -15733,7 +15794,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Rename the scene file at the right-clicked row.",
-              "line": 1857,
+              "line": 1880,
               "deprecated": false
             },
             {
@@ -15742,7 +15803,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Delete the scene file at the right-clicked row: to the Recycle Bin",
-              "line": 1969,
+              "line": 1992,
               "deprecated": false
             }
           ]
@@ -15815,7 +15876,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the containing folder of the right-clicked scene file in the file explorer.",
-              "line": 1393,
+              "line": 1394,
               "deprecated": false
             },
             {
@@ -15824,7 +15885,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the text input for the current working directory with pin values.",
-              "line": 1418,
+              "line": 1419,
               "deprecated": false
             },
             {
@@ -15833,7 +15894,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the filter text input with filtering options.",
-              "line": 1486,
+              "line": 1487,
               "deprecated": false
             },
             {
@@ -15842,7 +15903,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Handle the filter text input.",
-              "line": 1533,
+              "line": 1534,
               "deprecated": false
             },
             {
@@ -15851,7 +15912,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 1539,
+              "line": 1540,
               "deprecated": false
             },
             {
@@ -15860,7 +15921,7 @@
               "kind": "method",
               "signature": "(self, index, widget)",
               "summary": "Handle workspace selection changes.",
-              "line": 1555,
+              "line": 1556,
               "deprecated": false
             },
             {
@@ -15869,7 +15930,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the recursive search toggle.",
-              "line": 1578,
+              "line": 1579,
               "deprecated": false
             },
             {
@@ -15878,7 +15939,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore empty workspaces toggle.",
-              "line": 1617,
+              "line": 1618,
               "deprecated": false
             },
             {
@@ -15887,7 +15948,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the ignore case checkbox.",
-              "line": 1666,
+              "line": 1667,
               "deprecated": false
             },
             {
@@ -15896,7 +15957,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by suffix checkbox.",
-              "line": 1671,
+              "line": 1672,
               "deprecated": false
             },
             {
@@ -15905,7 +15966,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide suffix checkbox.",
-              "line": 1676,
+              "line": 1677,
               "deprecated": false
             },
             {
@@ -15914,7 +15975,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the hide extension checkbox.",
-              "line": 1681,
+              "line": 1682,
               "deprecated": false
             },
             {
@@ -15923,7 +15984,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Toggle visibility of the Notes (metadata) column.",
-              "line": 1686,
+              "line": 1687,
               "deprecated": false
             },
             {
@@ -15932,7 +15993,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Suffix edited: re-filter if a suffix-dependent option is on.",
-              "line": 1703,
+              "line": 1704,
               "deprecated": false
             },
             {
@@ -15941,7 +16002,7 @@
               "kind": "method",
               "signature": "(self, text)",
               "summary": "Folder structure edited: re-filter if a dependent option is on.",
-              "line": 1707,
+              "line": 1708,
               "deprecated": false
             },
             {
@@ -15950,7 +16011,7 @@
               "kind": "method",
               "signature": "(self, checked)",
               "summary": "Handle the filter by folder structure checkbox.",
-              "line": 1726,
+              "line": 1727,
               "deprecated": false
             },
             {
@@ -15959,7 +16020,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Browse for a root directory.",
-              "line": 1731,
+              "line": 1732,
               "deprecated": false
             },
             {
@@ -15968,7 +16029,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the current directory in the file explorer.",
-              "line": 1748,
+              "line": 1749,
               "deprecated": false
             },
             {
@@ -15977,7 +16038,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Set dir to current workspace.",
-              "line": 1753,
+              "line": 1754,
               "deprecated": false
             },
             {
@@ -15986,7 +16047,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Open the scene file at the right-clicked row — a **reopen** (reload from disk) when",
-              "line": 1758,
+              "line": 1759,
               "deprecated": false
             },
             {
@@ -15995,7 +16056,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Toggle reference state for the right-clicked row.",
-              "line": 1773,
+              "line": 1774,
               "deprecated": false
             },
             {
@@ -16004,7 +16065,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Copy the right-clicked row's full file path to the clipboard.",
-              "line": 1780,
+              "line": 1781,
               "deprecated": false
             },
             {
@@ -16013,7 +16074,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import at the right-clicked row — covers both cases (mirror of Blender).",
-              "line": 1795,
+              "line": 1796,
               "deprecated": false
             },
             {
@@ -16022,7 +16083,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Save the current scene to the workspace.",
-              "line": 1834,
+              "line": 1821,
               "deprecated": false
             },
             {
@@ -16031,7 +16092,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Refresh the file list.",
-              "line": 1838,
+              "line": 1825,
               "deprecated": false
             },
             {
@@ -16040,7 +16101,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Convert all references to assemblies.",
-              "line": 1842,
+              "line": 1829,
               "deprecated": false
             },
             {
@@ -16049,7 +16110,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Unlink and import all references.",
-              "line": 1846,
+              "line": 1833,
               "deprecated": false
             },
             {
@@ -16058,7 +16119,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Remove all references from the scene.",
-              "line": 1850,
+              "line": 1837,
               "deprecated": false
             }
           ]

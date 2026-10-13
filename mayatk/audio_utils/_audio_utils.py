@@ -427,8 +427,16 @@ class AudioUtils(ptk.HelpMixin):
 
         Non-WAV sources are resolved against a sibling ``_maya_audio_cache``
         directory.  Returns ``(0.0, file_path)`` when no readable audio is
-        found.
+        found.  Read once per file as it is on disk
+        (``pythontk.AudioUtils.memo_duration``: a replaced file reads again).
         """
+        return _PtkAudioUtils.memo_duration(
+            file_path, fps, AudioUtils._read_duration_frames
+        )
+
+    @staticmethod
+    def _read_duration_frames(file_path: str, fps: float) -> Tuple[float, str]:
+        """:meth:`audio_duration_frames`' reading, every time."""
         p = Path(file_path)
         wav_path = file_path
         if p.suffix.lower() not in (".wav", ".aif", ".aiff"):

@@ -6,7 +6,9 @@ panel's logic (one module per job; see its docstring).
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 import pythontk as ptk
@@ -30,14 +32,6 @@ class ShotManifestSlots(ptk.LoggingMixin):
     def header_init(self, widget):
         """Header menu is configured once in controller.__init__."""
         pass
-
-    def btn_expand_missing(self):
-        """Expand all step rows that have missing objects or behaviors."""
-        self.controller.expand_missing()
-
-    def btn_expand_extra(self):
-        """Expand all step rows that have scene-discovered extra objects."""
-        self.controller.expand_extra()
 
     def btn_settings(self):
         """Open the shared shots settings panel."""

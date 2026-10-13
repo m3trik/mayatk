@@ -7,8 +7,10 @@ renamed, re-described, hidden or added; objects renamed, hidden, moved or
 re-behaviored -- each recorded against the sheet's own identities and saved on
 the scene's ``ShotStore.manifest_edits``, one layer per source.  The edits are
 the manifest's own revision of its sheet, so they always apply and Build
-follows them; **View Original Sheet** (header menu) shows the sheet as delivered
-beside them for comparison -- read-only, Build off -- and changes nothing.
+follows them.  The header menu's **Edits** says how a Build treats them -- Keep
+All Edits (a shot edited by hand stays as the hand left it), Rebuild
+Hand-Edited Shots, or Compare to Original Sheet: the sheet as delivered, shown
+for comparison, read-only and Build off -- with **Reset** beside it.
 
 The controller drives it at five seams: loading steps (:meth:`load` +
 :meth:`apply`), a double-click (:meth:`begin_edit`), a committed cell
@@ -24,7 +26,8 @@ Host protocol (the panel controller): ``ui.tbl_steps``, ``sb``, ``logger``,
 ``_populate_table()``,
 ``_save_tree_state()`` / ``_restore_tree_state()``, ``_refresh_ranges()``,
 ``_apply_assessment()``, ``_last_results``, ``_reassess_soon()``,
-``_hide_missing`` / ``_set_hide_missing()``, ``_update_build_button()``,
+``_hide_missing`` / ``_set_hide_missing()``, ``_rebuild_edited`` /
+``_set_rebuild_edited()``, ``_update_build_button()``,
 ``_record_sheet_options()`` and ``_set_footer()``.
 
 A locked step (its shot locked: final) takes no edit until it is unlocked; a
@@ -47,13 +50,40 @@ class ManifestEditor:
     #: edits always apply); the controller drops it from the user's settings.
     RETIRED_SETTING = "local_edits"
 
+    #: The header menu's Edits modes: (label, mode, tooltip).  Keep and
+    #: Rebuild are kept per user (``rebuild_edited``); Compare is a view of
+    #: this session.
+    EDITS_MODES = (
+        (
+            "Keep All Edits",
+            "keep",
+            "Your local edits apply, and Build keeps a shot edited by hand\n"
+            "since its last Build -- renamed, resized, its members or\n"
+            "description changed -- as it is, its behaviors not re-keyed.",
+        ),
+        (
+            "Rebuild Hand-Edited Shots",
+            "rebuild",
+            "Your local edits apply, and Build rebuilds a shot edited by hand\n"
+            "since its last Build from the manifest like any other.",
+        ),
+        (
+            "Compare to Original Sheet",
+            "compare",
+            "Show the sheet as it was delivered, without your local edits, to\n"
+            "compare it with your manifest. Read-only: nothing edits and Build\n"
+            "is off. Pick another mode to return; nothing is lost.",
+        ),
+    )
+
     def __init__(self, host):
         self.host = host
         self.edits = ptk.ManifestEdits()
         #: Showing the sheet as delivered (:meth:`view_original`): a view of
         #: this session, never saved -- a panel opens on the manifest.
         self.viewing_original = False
-        self._chk = None
+        self._edits_row = None
+        self._cmb_edits = None
         self._btn_reset = None
         # The cell editor begin_edit opened: {"data", "column", "item", "shown"}.
         self._pending: Optional[dict] = None
@@ -69,43 +99,78 @@ class ManifestEditor:
         return not self.viewing_original
 
     def add_header_options(self, menu) -> None:
-        """Add View Original Sheet and Reset Local Edits to *menu*."""
-        self._chk = menu.add(
-            "QCheckBox",
-            setText="View Original Sheet",
-            setObjectName="chk_view_original_sheet",
-            setChecked=False,
-            setToolTip=(
-                "Show the sheet as it was delivered -- without your local edits\n"
-                "-- to compare it with your manifest. Read-only while on: nothing\n"
-                "can be edited and Build is off. Turn it off to return; nothing\n"
-                "is lost either way."
-            ),
+        """Add the Local Edits row to *menu*: the Edits combo
+        (:attr:`EDITS_MODES`) and Reset beside it."""
+        from qtpy import QtCore, QtWidgets
+        from uitk.widgets.comboBox import ComboBox
+
+        menu.add("Separator", setTitle="Local Edits")
+        row = QtWidgets.QWidget()
+        hbox = QtWidgets.QHBoxLayout(row)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(2)
+        cmb = ComboBox(row)
+        cmb.setObjectName("cmb_edits")
+        cmb.restore_state = False  # its modes are kept (or not) by name
+        cmb.setCurrentTextPrefix("Edits:  ")
+        cmb.setToolTip(
+            "How Build treats your edits: keep a shot edited by hand, rebuild\n"
+            "it, or compare the manifest with the sheet as delivered."
         )
-        self._chk.restore_state = False  # a view of this session, not a preference
-        self._chk.toggled.connect(self.view_original)
-        self._btn_reset = menu.add(
-            "QPushButton",
-            setText="Reset Local Edits",
-            setObjectName="btn_reset_local_edits",
-            setToolTip=(
-                "Drop every local edit of this sheet: the manifest returns to the\n"
-                "sheet as delivered. Shots already built keep their changes until\n"
-                "the next Build."
-            ),
+        for i, (label, mode, tip) in enumerate(self.EDITS_MODES):
+            cmb.addItem(label, mode)
+            cmb.setItemData(i, tip, QtCore.Qt.ToolTipRole)
+        btn = QtWidgets.QPushButton("Reset", row)
+        btn.setObjectName("btn_reset_local_edits")
+        btn.setToolTip(
+            "Drop every local edit of this sheet: the manifest returns to the\n"
+            "sheet as delivered. Shots already built keep their changes until\n"
+            "the next Build."
         )
-        self._btn_reset.released.connect(self.reset)
+        hbox.addWidget(cmb, 1)
+        hbox.addWidget(btn)
+        menu.add(row)
+        self._edits_row = row  # held: a mocked menu (logic tests) parents nothing
+        self._cmb_edits, self._btn_reset = cmb, btn
         self._sync_header()
+        cmb.currentIndexChanged.connect(self._on_edits_mode)
+        btn.released.connect(self.reset)
+
+    def _on_edits_mode(self, index: int) -> None:
+        """Apply the Edits mode picked (:attr:`EDITS_MODES`)."""
+        mode = self._cmb_edits.itemData(index)
+        if mode == "compare":
+            self.view_original(True)
+            return
+        rebuild = mode == "rebuild"
+        changed = rebuild != self.host._rebuild_edited
+        leaving = self.viewing_original  # its redraw and re-assess judge it
+        if changed:
+            self.host._set_rebuild_edited(rebuild, judge=not leaving)
+        self.view_original(False)
+
+    @property
+    def edits_mode(self) -> str:
+        """The Edits mode in force: ``"keep"``, ``"rebuild"`` or ``"compare"``."""
+        if self.viewing_original:
+            return "compare"
+        return "rebuild" if self.host._rebuild_edited else "keep"
 
     def _sync_header(self) -> None:
-        """Enable Reset while there are edits to drop and they are in force."""
+        """Show the Edits mode in force, and enable Reset while there are
+        edits to drop and they are in force."""
+        cmb = self._cmb_edits
+        if cmb is not None:
+            index = cmb.findData(self.edits_mode)
+            if cmb.currentIndex() != index:
+                cmb.blockSignals(True)
+                cmb.setCurrentIndex(index)
+                cmb.blockSignals(False)
         if self._btn_reset is None:
             return
         n = self.edits.count()
         self._btn_reset.setEnabled(self.enabled and n > 0)
-        self._btn_reset.setText(
-            f"Reset Local Edits ({n})" if n else "Reset Local Edits"
-        )
+        self._btn_reset.setText(f"Reset ({n})" if n else "Reset")
 
     def view_original(self, on: bool = True) -> None:
         """Show the sheet as delivered (*on*), or the manifest with its edits.
@@ -119,10 +184,6 @@ class ManifestEditor:
         if on == self.viewing_original:
             return
         self.viewing_original = on
-        if self._chk is not None and self._chk.isChecked() != on:
-            self._chk.blockSignals(True)
-            self._chk.setChecked(on)
-            self._chk.blockSignals(False)
         host = self.host
         self.refresh()  # the rows it now shows, drawn whatever Assess can reach
         if host._last_results:
@@ -132,8 +193,8 @@ class ManifestEditor:
         if on:
             hidden = f" ({n} local edit(s) hidden)" if n else ""
             host._set_footer(
-                f"Viewing the original sheet{hidden}: read-only, and Build is off "
-                "until you turn it off."
+                f"Comparing to the original sheet{hidden}: read-only, and Build "
+                "is off until you pick another Edits mode."
             )
         else:
             applied = f": {n} local edit(s) applied" if n else ""
@@ -145,7 +206,7 @@ class ManifestEditor:
         if not self.viewing_original:
             return False
         self.host._set_footer(
-            "Viewing the original sheet: turn off View Original Sheet (header "
+            "Comparing to the original sheet: pick another Edits mode (header "
             f"menu) to {to}.",
             color=ERROR_COLOR,
         )
@@ -488,8 +549,7 @@ class ManifestEditor:
     def _hide_flyout(self, menu, step, selected: List[str]) -> None:
         """A step row's Hide flyout: the step, the selected steps, the steps
         of its section -- Local Edits, the built ones left out (Build never
-        removes a shot) -- and the view's Steps Without a Shot (the header
-        menu's Hide Missing Shots)."""
+        removes a shot) -- and the view's Steps Without a Shot."""
         host = self.host
         built = host._pairing().shots
         sub = menu.addMenu("Hide")
@@ -526,9 +586,9 @@ class ManifestEditor:
         act.setCheckable(True)
         act.setChecked(host._hide_missing)
         act.setToolTip(
-            "Hide Missing Shots (header menu): leave out every step that has\n"
-            "no shot, once any step has one. A view, not an edit: Assess and\n"
-            "Build skip them, and turning it off shows them again."
+            "Leave out every step that has no shot, once any step has one\n"
+            "(also Hide / Show above the table). A view, not an edit: Assess\n"
+            "and Build skip them, and turning it off shows them again."
         )
         act.toggled.connect(host._set_hide_missing)
 
@@ -619,6 +679,26 @@ class ManifestEditor:
         if step_ids:
             verb = "Hid" if hidden else "Showed"
             self._commit(f"{verb} {len(step_ids)} step(s).")
+
+    def unlocked_hidden_objects(self) -> List[Tuple[str, str]]:
+        """The hidden objects :meth:`show_hidden_objects` shows, as
+        ``[(home, sheet_name)]``: every one but those sitting in a locked
+        step, which takes no edit until it is unlocked."""
+        held = {
+            pair
+            for step_id in self.host._locked_step_ids()
+            for pair in self.edits.hidden_objects(step_id)
+        }
+        return [pair for pair in self.edits.hidden_objects() if pair not in held]
+
+    def show_hidden_objects(self) -> None:
+        """Show every object the edits hide, wherever it sits -- but in a
+        locked step (:meth:`unlocked_hidden_objects`)."""
+        hidden = self.unlocked_hidden_objects()
+        for home, sheet_name in hidden:
+            self.edits.set_object(home, sheet_name, "hidden", False)
+        if hidden:
+            self._commit(f"Showed {len(hidden)} object(s).")
 
     def hide_object(self, home: str, sheet_name: str, hidden: bool = True) -> None:
         """Hide (or show) an object: a hidden one leaves its step, and Build

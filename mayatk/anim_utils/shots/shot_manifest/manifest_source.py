@@ -8,7 +8,9 @@ filling it from the scene.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -353,8 +355,14 @@ class ManifestSourceMixin:
         self._editor.load()
         self._steps = self._editor.apply(steps)
         self._user_ranges = dict(ranges) if ranges else {}
+        self._seeded_ranges = dict(self._user_ranges)  # the shots', not typed
         self._last_results = []
         self._last_resolved = []
+        self._projected = {}
+        self._typed_shift = {}
+        self._range_issues = {}
+        self._inserts = []
+        self._build_undo = None  # another sheet: no Build of it to undo
         self._cached_gaps = None
         self._cached_gap_ends = None
 
@@ -445,7 +453,7 @@ class ManifestSourceMixin:
             # (Steps the user excluded below are theirs, not a misread.)
             return refuse(
                 "No steps read: no step-ID cell matches the mapping template. "
-                "Set its Step IDs (header menu) to the way the sheet writes "
+                "Set its Step IDs (the field's columns button) to the way the sheet writes "
                 "them, or Auto."
             )
         # Honor context-menu exclusions on BOTH branches.  parse_csv already
@@ -478,6 +486,7 @@ class ManifestSourceMixin:
             store_ranges = {}
         if store_ranges:
             self._user_ranges.update(store_ranges)
+            self._seeded_ranges.update(store_ranges)
             self._refresh_ranges()
         self._fill_missing_assets()
         return True

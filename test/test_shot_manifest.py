@@ -297,6 +297,7 @@ class TestUpdateWithRanges(unittest.TestCase):
 
 # Qt setup
 from qtpy import QtCore, QtWidgets
+from uitk.managers.settings_manager import SettingsManager
 
 _app = QtWidgets.QApplication.instance()
 if _app is None:
@@ -586,8 +587,10 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         "mayatk.anim_utils.shots.shot_manifest.manifest_host.Detection.detect_shot_regions"
     )
     @patch("mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors.compute_duration")
-    def test_collision_applies_background_color(self, mock_dur, mock_regions):
-        """Collision cells should have both foreground and background color set."""
+    def test_a_collision_is_a_row_status_not_a_tint(self, mock_dur, mock_regions):
+        """Both rows of an overlap say so in their row tooltip; the range
+        cells stay untinted (2026-10-12: the colour coding "overlaps and is
+        confusing")."""
         from qtpy.QtCore import Qt
 
         mock_dur.return_value = 30.0
@@ -600,18 +603,15 @@ class TestValidateCollisions(unittest.TestCase, _ControllerHarness):
         self.ctrl._populate_table()
         self.ctrl._validate_range_collisions()
 
-        # Find A01 item - should have collision background
+        tips = {}
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
-            step_data = item.data(0, Qt.UserRole)
-            if isinstance(step_data, BuilderStep) and step_data.step_id == "A01":
-                bg = item.background(COL_START)
-                self.assertEqual(
-                    bg.color(),
-                    "#3d2828",
-                    "Collision cell should have rose background",
-                )
-                break
+            step = item.data(0, Qt.UserRole)
+            tips[step.step_id] = self.tree.row_tooltip(item) or ""
+            self.assertEqual(item.background(COL_START).style(), Qt.NoBrush)
+        self.assertIn("overlaps 'A02'", tips["A01"])
+        self.assertIn("overlaps 'A01'", tips["A02"])
+        self.assertEqual(tips["A03"], "")
 
 
 class TestUserRangesPersistence(unittest.TestCase, _ControllerHarness):
@@ -941,8 +941,9 @@ class TestDetectController(unittest.TestCase, _ControllerHarness):
 class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
     """Step names, descriptions and object names edit through Local Edits
     (``ManifestEditor``): always in force, recorded against the sheet's IDs,
-    kept on the scene's store, never written into the loaded steps; View
-    Original Sheet shows the sheet as delivered, read-only, Build off."""
+    kept on the scene's store, never written into the loaded steps; Edits >
+    Compare to Original Sheet shows the sheet as delivered, read-only, Build
+    off."""
 
     SHEET = "/some/file.csv"
 
@@ -988,7 +989,7 @@ class TestLocalEditsCells(unittest.TestCase, _ControllerHarness):
         for col in (COL_STEP, COL_DESC):
             self.assertTrue(self.ctrl._editor.begin_edit(parent, col))
             self.assertIsNone(self.ctrl._editor._pending, "no editor opened")
-        self.assertIn("View Original Sheet", self.ui.footer.setText.call_args[0][0])
+        self.assertIn("another Edits mode", self.ui.footer.setText.call_args[0][0])
 
     def test_an_edit_runs_the_assessment_again_and_a_rename_wants_a_build(self):
         """Bug: a Local Edit left the last Assess up and marked Build due
@@ -2102,6 +2103,7 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         """sync() should receive zero_duration_fallback=True in incremental mode."""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
+        mock_builder.plan_insertions.return_value = []
         mock_cls.return_value = mock_builder
         _mock_undo_info(self)
 
@@ -2124,6 +2126,7 @@ class TestIncrementalBuild(unittest.TestCase, _ControllerHarness):
         Fixed: 2026-10-10"""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
+        mock_builder.plan_insertions.return_value = []
         mock_cls.return_value = mock_builder
         _mock_undo_info(self)
         self.ctrl._steps = _make_steps("A01", "A02")
@@ -2181,6 +2184,7 @@ class TestCsvModeRespectsDetectionMode(unittest.TestCase, _ControllerHarness):
         selected-keys detection for range verification."""
         mock_builder = MagicMock()
         mock_builder.sync.return_value = ({}, {}, [])
+        mock_builder.plan_insertions.return_value = []
         mock_cls.return_value = mock_builder
         _mock_undo_info(self)
 
@@ -2420,80 +2424,447 @@ class TestIncrementalBuildWithUserRange(unittest.TestCase):
 
 
 class TestIncrementalPlacement(unittest.TestCase, _ControllerHarness):
-    """New steps in incremental build should be placed between their
-    CSV-order neighbors instead of at the end of the timeline.
+    """On a built timeline Build inserts a new step's shot in sheet order --
+    after its previous step's shot -- and the later shots move out of its
+    way, after the user confirms how many move.
 
     Bug: New CSV step A09 (between A08 and A10) was placed at frame
     21041 (end of timeline) instead of at A08's end (2520).
     Fixed: 2026-04-04
+    Bug: the fix placed it zero-length at A08's end, ON A10, and a step with
+    a stale resolved range wherever that range was: Build with Hide Missing
+    Shots off left overlapping, zero-length, out-of-order shots (SOL: 37 new
+    shots, dozens of overlaps, 9 zero-length).
+    Fixed: 2026-10-12
     """
 
     def setUp(self):
         self.setup_controller()
         self.store = _fresh_store()
-        # Three existing shots in the store
+        self.store.gap = 0.0
         self.store.define_shot("A01", 1, 100, ["obj_A01"])
         self.store.define_shot("A02", 100, 200, ["obj_A02"])
         self.store.define_shot("A03", 200, 300, ["obj_A03"])
-
-    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
-    def test_new_shot_placed_between_neighbors(self, mock_cls):
-        """A new step B01 inserted between A02 and A03 should get
-        (200, 200) — A02's end — not (300+, 300+)."""
-        mock_builder = MagicMock()
-        mock_builder.sync.return_value = ({}, {}, [])
-        mock_cls.return_value = mock_builder
+        self.ctrl._csv_path = "/fake.csv"
+        self.ctrl._source = "csv"
         _mock_undo_info(self)
 
-        # CSV order: A01, A02, B01(new), A03
-        self.ctrl._steps = _make_steps("A01", "A02", "B01", "A03")
-        self.ctrl._csv_path = "/fake.csv"
+    def _layout(self):
+        return [(s.name, s.start, s.end) for s in self.store.sorted_shots()]
+
+    def _build(self, *ids, answer="Insert"):
+        self.ctrl._steps = _make_steps(*ids, behaviors=[])
+        self.sb.message_box.return_value = answer
         self.ctrl.build()
 
-        call_kwargs = mock_builder.sync.call_args
-        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
-        self.assertIn("B01", ranges)
+    def test_a_new_step_goes_after_its_previous_step_and_the_rest_ripple(self):
+        length = self.ctrl._initial_shot_length
+        self._build("A01", "A02", "B01", "A03")
         self.assertEqual(
-            ranges["B01"], (200, 200), "New step should be at predecessor A02's end"
+            self._layout(),
+            [
+                ("A01", 1, 100),
+                ("A02", 100, 200),
+                ("B01", 200, 200 + length),
+                ("A03", 200 + length, 300 + length),
+            ],
+        )
+        self.sb.message_box.assert_called_once()
+        self.assertIn("1 existing shot(s)", self.sb.message_box.call_args.args[0])
+
+    def test_consecutive_new_steps_keep_their_sheet_order(self):
+        length = self.ctrl._initial_shot_length
+        self._build("A01", "B01", "B02", "A02", "A03")
+        names = [name for name, _start, _end in self._layout()]
+        self.assertEqual(names, ["A01", "B01", "B02", "A02", "A03"])
+        rows = self._layout()
+        for (_a, _s, end), (_b, start, _e) in zip(rows, rows[1:]):
+            self.assertLessEqual(end, start, "no overlap")
+        self.assertEqual(rows[1][1:], (100, 100 + length))
+
+    def test_a_new_first_step_takes_the_head(self):
+        length = self.ctrl._initial_shot_length
+        self._build("B01", "A01", "A02", "A03")
+        self.assertEqual(
+            self._layout()[:2],
+            [("B01", 1, 1 + length), ("A01", 1 + length, 100 + length)],
         )
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
-    def test_consecutive_new_shots_stack(self, mock_cls):
-        """Two adjacent new steps should both stack at the same position."""
-        mock_builder = MagicMock()
-        mock_builder.sync.return_value = ({}, {}, [])
-        mock_cls.return_value = mock_builder
+    def test_cancel_moves_nothing(self):
+        before = self._layout()
+        self._build("A01", "B01", "A02", "A03", answer="Cancel")
+        self.assertEqual(self._layout(), before)
+
+    def test_appending_after_the_last_shot_asks_nothing(self):
+        self._build("A01", "A02", "A03", "B01")
+        self.sb.message_box.assert_not_called()
+        self.assertEqual(self._layout()[-1][0], "B01")
+        self.assertEqual(self._layout()[-1][1], 300)
+
+    def test_the_table_previews_where_build_inserts(self):
+        """An unbuilt step's Start / End is where Build will put it, not the
+        animation regions' guess, and a projection is no collision."""
+        length = self.ctrl._initial_shot_length
+        self.ctrl._steps = _make_steps("A01", "A02", "B01", "A03", behaviors=[])
+        resolved = {r[0]: r for r in self.ctrl._resolve_ranges()}
+        self.assertEqual(resolved["B01"], ("B01", 200, 200 + length, False))
+        self.assertEqual(self.ctrl._projected, {"B01": "after shot 'A02'"})
+        self.ctrl._populate_table()  # an Assess, an option: a redraw
+        self.ctrl._redraw()
+        row = self.ctrl._step_items(["B01"])[0]
+        self.assertEqual(
+            (row.text(COL_START), row.text(COL_END)), ("200", f"{200 + length:.0f}")
+        )
+        self.assertIn("after shot 'A02'", row.toolTip(COL_START))
+
+    def test_a_step_whose_shot_was_deleted_is_inserted_not_put_back(self):
+        """A load seeds each built step's range from its shot: once the shot
+        is gone (and the timeline closed up behind it) that range is no
+        place the user chose, and putting the step back there would lay it
+        over the next shot."""
+        self.ctrl._user_ranges["A02"] = self.ctrl._seeded_ranges["A02"] = (100, 200)
+        self.ctrl._user_ranges["A04"] = (900, 950)  # typed
+        self.assertEqual(self.ctrl._typed_ranges(), {"A04": (900, 950)})
+
+    def _hide_missing(self, on=True):
+        self.addCleanup(self.ctrl._settings.setValue, "hide_missing", False)
+        self.ctrl._settings.setValue("hide_missing", on)
+
+    def _preview(self, *ids):
+        """The table showing *ids*' steps, Start / End resolved."""
+        self.ctrl._steps = _make_steps(*ids, behaviors=[])
+        self.ctrl._populate_table()
+        self.ctrl._refresh_ranges()
+
+    def test_hidden_steps_mark_no_overlap(self):
+        """Bug: with the steps without a shot hidden, their ranges -- never
+        previewed -- were still checked, marking built rows as overlapping.
+        Fixed: 2026-10-12"""
+        self._hide_missing()
+        self._preview("A01", "A02", "B01", "B02", "A03")
+        self.assertEqual(self.ctrl._range_issues, {})
+
+    def test_after_a_build_the_table_shows_what_was_built(self):
+        """Bug: a redraw after the Build re-applied the insert preview: the
+        new shot's Start still said "Build inserts this step's shot after
+        ...", and every built row's length tooltip was blanked.
+        Fixed: 2026-10-12"""
+        length = self.ctrl._initial_shot_length
+        self._preview("A01", "A02", "B01", "A03")
+        self.assertIn(
+            "Build inserts", self.ctrl._step_items(["B01"])[0].toolTip(COL_START)
+        )
+        self.sb.message_box.return_value = "Insert"
+        self.ctrl.build()
+        b01 = self.ctrl._step_items(["B01"])[0]
+        a01 = self.ctrl._step_items(["A01"])[0]
+        self.assertEqual(b01.toolTip(COL_START), f"{length:.0f}f")
+        self.assertEqual(a01.toolTip(COL_START), "99f")
+        self.assertEqual(self.ctrl._projected, {})
+
+    def test_a_shot_resized_elsewhere_moves_the_preview(self):
+        """Bug: a shot resized in the Shot Sequencer left the unbuilt rows
+        previewing the frames from before.
+        Fixed: 2026-10-12"""
+        self.ctrl._first_shown = True
+        self._preview("A01", "A02", "B01", "A03")
+        self.assertEqual(self.ctrl._step_items(["B01"])[0].text(COL_START), "200")
+        a02 = self.store.shot_by_name("A02")
+        self.store.update_shot(a02.shot_id, end=250)
+        self.ctrl._follow_store()
+        self.assertEqual(self.ctrl._step_items(["B01"])[0].text(COL_START), "250")
+
+    def test_showing_the_steps_without_a_shot_previews_them(self):
+        """Bug: Show > Steps Without a Shot (no Assess showing) re-applied the
+        ranges resolved while they were hidden: no insert preview.
+        Fixed: 2026-10-12"""
+        self._hide_missing()
+        self._preview("A01", "A02", "B01", "A03")
+        self.ctrl._set_hide_missing(False)
+        row = self.ctrl._step_items(["B01"])[0]
+        self.assertEqual(row.text(COL_START), "200")
+        self.assertIn("after shot 'A02'", row.toolTip(COL_START))
+
+    def test_assess_marks_each_row_once_by_its_own_results(self):
+        """Bug: Assess marked the rows from the assessment before it, then
+        again from its own -- two or three markings per row per redraw.
+        Fixed: 2026-10-12"""
+        from pythontk import StepStatus
+
+        self._preview("A01", "A02", "B01", "A03")
+        self.ctrl._last_results = [StepStatus(step_id="A01", built=False)]  # stale
+        new = [StepStatus(step_id=s.step_id, built=True) for s in self.ctrl._steps]
+        engine = self.ctrl._manifest(self.store)
+        engine.assess = lambda *a, **k: new
+        marks = []
+        mark = self.ctrl._mark_step_row
+
+        def spy(item, step_status=None):
+            marks.append((item.text(COL_STEP), step_status))
+            mark(item, step_status)
+
+        with (
+            patch.object(self.ctrl, "_manifest", return_value=engine),
+            patch.object(self.ctrl, "_mark_step_row", new=spy),
+        ):
+            self.ctrl.assess(skip_key_check=True)
+        self.assertEqual(
+            sorted(name for name, _st in marks), ["A01", "A02", "A03", "B01"]
+        )
+        for name, status in marks:
+            self.assertIs(status, next(r for r in new if r.step_id == name), name)
+
+    def test_a_step_sync_built_after_a_refused_insert_counts_as_built(self):
+        """A refused insert leaves the step to the build, which may still
+        make its shot: the footer counts what was made."""
+        engine = self.ctrl._manifest(self.store)
+        engine.insert_planned = lambda plans, typed=None: {
+            p.step.step_id: "refused" for p in plans
+        }
+        with patch.object(self.ctrl, "_manifest", return_value=engine):
+            self._build("A01", "A02", "B01", "A03")
+        self.assertIsNotNone(self.store.shot_by_name("B01"))
+        footer = self.ui.footer.setText.call_args[0][0]
+        self.assertIn("1 created", footer)
+        self.assertNotIn("not built", footer)
+
+    def test_a_trailing_key_past_the_last_shot_moves_the_preview(self):
+        """The preview plans afresh on every redraw: what it reads -- keys
+        trailing the last shot, the clips' lengths -- raises no store event.
+
+        Bug: the plan was kept against the store's records, so a key set past
+        the last shot left B01 previewed over it.
+        Fixed: 2026-10-13"""
+        from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
+            ShotSequencer as MayaShotSequencer,
+        )
+
+        self._preview("A01", "A02", "A03", "B01")
+        self.assertEqual(self.ctrl._step_items(["B01"])[0].text(COL_START), "300")
+        with patch.object(
+            MayaShotSequencer,
+            "_trailing_content_extent",
+            lambda seq, shot: shot.end + (30 if shot.name == "A03" else 0),
+        ):
+            self.ctrl._redraw()
+        self.assertEqual(self.ctrl._step_items(["B01"])[0].text(COL_START), "330")
+
+    def test_an_audio_file_replaced_on_disk_is_measured_again(self):
+        """A clip's length is read once per file as it is on disk: the same
+        file is not read again, a replaced one is."""
+        import struct
+        import wave
+
+        import pythontk as ptk
+        from mayatk.anim_utils.shots.shot_manifest._shot_manifest import (
+            _ShotManifestInternal,
+        )
+
+        tmp = ptk.TempArtifacts("mtk_manifest_clip", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        path = tmp.path(".wav")
+
+        def write(seconds):
+            with wave.open(path, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(4800)
+                w.writeframes(struct.pack("<h", 0) * int(4800 * seconds))
+
+        obj = BuilderObject("vo", kind="audio", source_path=path)
+        write(1.0)
+        self.assertEqual(_ShotManifestInternal._measure_audio_obj(obj, 24.0), 24.0)
+        write(2.0)
+        self.assertEqual(_ShotManifestInternal._measure_audio_obj(obj, 24.0), 48.0)
+
+
+class TestTypedRangesRideTheInserts(unittest.TestCase, _ControllerHarness):
+    """A range typed for an unbuilt step is in the timeline's current frames:
+    Build moves it with every shot an earlier insert moves (maintainer
+    2026-10-12), and the table shows and checks it there.
+
+    Bug: Build placed the typed A04 (220, 270) as typed, over A03, which
+    A02's insert had moved to [170, 270].
+    Fixed: 2026-10-12
+    """
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.gap = 10.0
+        self.store.initial_shot_length = 50
+        self.store.define_shot("A01", 0, 100, ["obj_A01"])
+        self.store.define_shot("A03", 110, 210, ["obj_A03"])
+        self.ctrl._csv_path, self.ctrl._source = "/fake.csv", "csv"
         _mock_undo_info(self)
 
-        # CSV order: A01, B01(new), B02(new), A02, A03
-        self.ctrl._steps = _make_steps("A01", "B01", "B02", "A02", "A03")
-        self.ctrl._csv_path = "/fake.csv"
+    def _layout(self):
+        return [(s.name, s.start, s.end) for s in self.store.sorted_shots()]
+
+    def _load(self, *ids, typed):
+        self.ctrl._steps = _make_steps(*ids, behaviors=[])
+        self.ctrl._user_ranges.update(typed)
+        self.ctrl._populate_table()
+
+    def test_build_moves_it_with_the_shots_an_insert_moves(self):
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        self.sb.message_box.return_value = "Insert"
         self.ctrl.build()
+        self.assertEqual(
+            self._layout(),
+            [("A01", 0, 100), ("A02", 110, 160), ("A03", 170, 270), ("A04", 280, 330)],
+        )
 
-        call_kwargs = mock_builder.sync.call_args
-        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
-        # Both should be at A01's end (100)
-        self.assertEqual(ranges["B01"], (100, 100))
-        self.assertEqual(ranges["B02"], (100, 100))
+    def test_the_table_shows_it_where_build_puts_it(self):
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        resolved = {r[0]: r for r in self.ctrl._refresh_ranges()}
+        self.assertEqual(resolved["A04"], ("A04", 280, 330, True))
+        row = self.ctrl._step_items(["A04"])[0]
+        self.assertEqual((row.text(COL_START), row.text(COL_END)), ("280", "330"))
+        self.assertIn("220", row.toolTip(COL_START))
+        self.assertEqual(self.ctrl._range_issues, {})
+        self.assertEqual(self.ctrl._user_ranges["A04"], (220.0, 270.0), "kept as typed")
 
-    @patch("mayatk.anim_utils.shots.shot_manifest.manifest_host.ShotManifest")
-    def test_new_shot_at_start_of_csv(self, mock_cls):
-        """A new step at the very start of the CSV should use the
-        first existing neighbor's start position."""
-        mock_builder = MagicMock()
-        mock_builder.sync.return_value = ({}, {}, [])
-        mock_cls.return_value = mock_builder
+    def test_an_edit_reads_the_cell_it_changed_and_keeps_the_other(self):
+        """The other cell shows the moved frame; it is not read back as a
+        typed one (which would move it twice)."""
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        self.ctrl._refresh_ranges()
+        row = self.ctrl._step_items(["A04"])[0]
+        row.setText(COL_END, "300")  # committed; its start cell still reads 280
+        self.assertEqual(self.ctrl._user_ranges["A04"], (220.0, 300.0))
+
+    def test_a_typed_range_over_a_projected_insert_is_an_overlap(self):
+        """B01 appends after A03 at [220, 270] and moves B02's typed range
+        (205, 260) 60 frames, to (265, 320): still over B01 -- the projection
+        is checked, not passed by."""
+        self._load("A01", "A03", "B01", "B02", typed={"B02": (205.0, 260.0)})
+        self.ctrl._refresh_ranges()
+        self.assertEqual(set(self.ctrl._range_issues), {"B01", "B02"})
+
+    def test_build_drops_the_typed_range_of_a_step_it_gave_a_shot(self):
+        """The shot carries the placement once built: a typed range left over
+        would place the step again, where it was, once the shot is gone.
+
+        Bug: typed ranges were never re-based after a Build.
+        Fixed: 2026-10-13"""
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        self.sb.message_box.return_value = "Insert"
+        self.ctrl.build()
+        self.assertNotIn("A04", self.ctrl._user_ranges)
+
+    def test_build_moves_the_typed_range_of_a_step_it_could_not_build(self):
+        """A step the store refuses keeps its typed range -- moved with the
+        shots the inserts moved, or the next preview places it 60 frames early.
+        """
+        self.store.define_shot("a05", 900, 950)  # A05 ignoring case: refused
+        self._load("A01", "A02", "A03", "A05", typed={"A05": (220.0, 270.0)})
+        self.sb.message_box.return_value = "Insert"
+        self.ctrl.build()
+        self.assertIsNone(self.store.shot_by_name("A05"))
+        self.assertEqual(self.ctrl._user_ranges["A05"], (280.0, 330.0))
+
+    def test_undoing_the_build_puts_the_typed_ranges_back(self):
+        from pythontk import NativeStepFollowed
+
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        self.sb.message_box.return_value = "Insert"
+        self.ctrl.build()
+        self.assertNotIn("A04", self.ctrl._user_ranges)
+        for name in ("A02", "A04"):  # the undo takes the shots it made
+            self.store.remove_shot(self.store.shot_by_name(name).shot_id)
+        self.ctrl._on_native_step_followed(
+            NativeStepFollowed(redo=False, applied=1, store=self.store)
+        )
+        self.assertEqual(self.ctrl._user_ranges["A04"], (220.0, 270.0))
+
+    def test_a_built_steps_shot_removed_later_is_placed_like_an_unbuilt_one(self):
+        self._load("A01", "A02", "A03", "A04", typed={"A04": (220.0, 270.0)})
+        self.sb.message_box.return_value = "Insert"
+        self.ctrl.build()
+        self.store.remove_shot(self.store.shot_by_name("A04").shot_id)
+        self.ctrl._refresh_ranges()
+        self.assertIn("A04", self.ctrl._projected, "inserted, not put back")
+        self.assertNotIn("A04", self.ctrl._typed_shift)
+
+
+class TestTypedRangesOnTheTimelineFrames(unittest.TestCase, _ControllerHarness):
+    """Q [1, 100], R [200, 300], S [400, 500], gap 10; N inserted after Q
+    moves the rest 60 frames; P typed at (510, 550) shows at (570, 610)."""
+
+    def setUp(self):
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.gap = 10.0
+        self.store.initial_shot_length = 50
+        for name, start, end in (("Q", 1, 100), ("R", 200, 300), ("S", 400, 500)):
+            self.store.define_shot(name, start, end, [f"obj_{name}"])
+        self.ctrl._csv_path, self.ctrl._source = "/fake.csv", "csv"
         _mock_undo_info(self)
+        self.ctrl._steps = _make_steps("Q", "N", "R", "S", "P", "X", behaviors=[])
+        self.ctrl._user_ranges["P"] = (510.0, 550.0)
+        self.ctrl._populate_table()
+        self.resolved = {r[0]: r for r in self.ctrl._refresh_ranges()}
 
-        # CSV order: B01(new), A01, A02, A03
-        self.ctrl._steps = _make_steps("B01", "A01", "A02", "A03")
-        self.ctrl._csv_path = "/fake.csv"
+    def _layout(self):
+        return [(s.name, s.start, s.end) for s in self.store.sorted_shots()]
+
+    def test_a_new_step_after_a_typed_one_follows_it(self):
+        """Bug: X appended after the last SHOT, previewed at (570, 620) over
+        P's (570, 610), and Build made both.
+        Fixed: 2026-10-13"""
+        self.assertEqual(self.resolved["P"], ("P", 570, 610, True))
+        self.assertEqual(self.resolved["X"], ("X", 620, 670, False))
+        self.assertEqual(self.ctrl._range_issues, {})
+        self.sb.message_box.return_value = "Insert"
         self.ctrl.build()
+        self.assertEqual(
+            self._layout(),
+            [
+                ("Q", 1, 100),
+                ("N", 110, 160),
+                ("R", 260, 360),
+                ("S", 460, 560),
+                ("P", 570, 610),
+                ("X", 620, 670),
+            ],
+        )
 
-        call_kwargs = mock_builder.sync.call_args
-        ranges = call_kwargs.kwargs.get("ranges") or call_kwargs[1].get("ranges")
-        # B01 should be at A01's start (1)
-        self.assertEqual(ranges["B01"], (1, 1))
+    def test_a_typed_start_is_checked_where_build_puts_it(self):
+        """X typed at 560 lands at 620, after P's 610: accepted.
+
+        Bug: the start, in the timeline's current frames, was checked against
+        P's end where Build puts it (610): silently reverted, so the user
+        typed 610 -- which then moved too, to 670.
+        Fixed: 2026-10-13"""
+        row = self.ctrl._step_items(["X"])[0]
+        row.setText(COL_START, "560")
+        self.assertEqual(self.ctrl._user_ranges["X"][0], 560.0)
+
+
+class TestAnEditOfAMovedTypedRange(unittest.TestCase, _ControllerHarness):
+    """A01 [0, 50], A02 [60, 90], gap 10; N (40 frames) inserted after A01
+    moves the rest 50 frames: B typed at (100, 150) shows at (150, 200)."""
+
+    def test_an_end_edit_reads_the_start_as_typed(self):
+        """Bug: an End edit read the Start cell's moved frame (150), so End
+        140 -- (100, 140) as typed -- was refused.
+        Fixed: 2026-10-13"""
+        self.setup_controller()
+        self.store = _fresh_store()
+        self.store.gap = 10.0
+        self.store.initial_shot_length = 40
+        self.store.define_shot("A01", 0, 50, ["obj_A01"])
+        self.store.define_shot("A02", 60, 90, ["obj_A02"])
+        self.ctrl._csv_path, self.ctrl._source = "/fake.csv", "csv"
+        self.ctrl._steps = _make_steps("A01", "N", "A02", "B", behaviors=[])
+        self.ctrl._user_ranges["B"] = (100.0, 150.0)
+        self.ctrl._populate_table()
+        resolved = {r[0]: r for r in self.ctrl._refresh_ranges()}
+        self.assertEqual(resolved["B"], ("B", 150, 200, True))
+        row = self.ctrl._step_items(["B"])[0]
+        row.setText(COL_END, "140")
+        self.assertEqual(self.ctrl._user_ranges["B"], (100.0, 140.0))
 
 
 # ---------------------------------------------------------------------------
@@ -2613,49 +2984,344 @@ class TestColorOverrideRestore(unittest.TestCase, _ControllerHarness):
                 str(PASTEL_STATUS["missing_object"][1]),
             )
 
-    def test_restore_updates_behavior_status_colors(self):
-        """Persisted missing_behavior override propagates to BEHAVIOR_STATUS_COLORS."""
-        from uitk.managers.settings_manager import SettingsManager
+
+class TestRowStatus(unittest.TestCase, _ControllerHarness):
+    """Each row carries one status signal: its icon in the Step column, in
+    its worst issue's colour, and a row tooltip listing the issues, a
+    coloured glyph before each -- nothing tinted (2026-10-12: "the error
+    color coding overlaps and is confusing ... format and color code (can
+    just be newline text with a prefixed color coded icon)")."""
+
+    def setUp(self):
+        self.store = _fresh_store()
+        self.setup_controller()
+        self.store.define_shot("A01", 1, 40, ["obj_A01", "stray"])
+        self.ctrl._steps = _make_steps("A01", "A02")
+        self.ctrl._populate_table()
+
+    def _assess(self):
+        from pythontk import ObjectStatus, StepStatus
+
+        missing = ObjectStatus(
+            name="obj_A01", exists=False, status="missing_object", behaviors=[]
+        )
+        self.ctrl._last_results = [
+            StepStatus(step_id="A01", built=True, objects=[missing]),
+            StepStatus(step_id="A02", built=False),
+        ]
+        self.ctrl._apply_assessment(self.ctrl._last_results)
+
+    def _row(self, step_id):
+        return self.ctrl._step_items([step_id])[0]
+
+    def _tinted(self, item):
+        return [
+            c
+            for c in range(self.tree.columnCount())
+            if item.background(c).style() != QtCore.Qt.NoBrush
+            or item.foreground(c).style() != QtCore.Qt.NoBrush
+        ]
+
+    def test_a_row_says_its_issues_in_its_tooltip_never_in_a_tint(self):
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
-            PASTEL_STATUS,
-            BEHAVIOR_STATUS_COLORS,
+            ManifestData,
         )
 
-        settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
-        orig_fg = str(PASTEL_STATUS["missing_behavior"][0])
-        try:
-            settings.setValue("missing_behavior/fg", "#AABBCC")
-            self.ctrl._restore_color_overrides()
-            self.assertEqual(str(BEHAVIOR_STATUS_COLORS["missing"]), "#AABBCC")
-        finally:
-            settings.clear("missing_behavior/fg")
-            PASTEL_STATUS["missing_behavior"] = (
-                orig_fg,
-                str(PASTEL_STATUS["missing_behavior"][1]),
-            )
-            BEHAVIOR_STATUS_COLORS["missing"] = orig_fg
+        self._assess()
+        a01, a02 = self._row("A01"), self._row("A02")
+        tip = self.tree.row_tooltip(a01)
+        self.assertIn(ManifestData.glyph_html("missing_object"), tip)
+        self.assertIn("obj_A01", tip)
+        self.assertIn(ManifestData.LEVEL_GLYPHS["info"], self.tree.row_tooltip(a02))
+        for row in (a01, a02, a01.child(0), a01.child(1)):
+            self.assertEqual(self._tinted(row), [], row.text(COL_DESC))
+        missing = a01.child(0)
+        self.assertIn("Not found", self.tree.row_tooltip(missing))
+        self.assertFalse(missing.icon(COL_STEP).isNull(), "its status icon")
 
-    def test_restore_updates_error_color(self):
-        """Persisted missing_object override propagates to BEHAVIOR_STATUS_COLORS['error']."""
-        from uitk.managers.settings_manager import SettingsManager
+    def test_a_shots_member_the_step_does_not_list_is_marked_not_tinted(self):
+        member = self._row("A01").child(1)
+        self.assertEqual(member.text(COL_DESC), "stray")
+        self.assertEqual(self._tinted(member), [])
+        self.assertIn("not listed", self.tree.row_tooltip(member))
+
+    def test_a_cells_own_tooltip_follows_the_rows(self):
+        self._assess()
+        a01 = self._row("A01")
+        a01.setToolTip(COL_DESC, "Sheet: Open the lid")
+        index = self.tree.indexFromItem(a01, COL_DESC)
+        tip = self.tree.item_tooltip(index, a01.toolTip(COL_DESC))
+        self.assertTrue(tip.endswith("Sheet: Open the lid"), tip)
+        self.assertIn("obj_A01", tip)
+
+    def test_overlapping_ranges_are_a_row_status(self):
+        self.ctrl._user_ranges.update({"A01": (1.0, 40.0), "A02": (30.0, 60.0)})
+        self.ctrl._validate_range_collisions(
+            [("A01", 1.0, 40.0, True), ("A02", 30.0, 60.0, True)]
+        )
+        a02 = self._row("A02")
+        self.assertIn("overlaps 'A01'", self.tree.row_tooltip(a02))
+        self.assertEqual(self._tinted(a02), [])
+
+
+class TestPanelPalette(unittest.TestCase):
+    """Bug: the panel's palette WAS the engine's (``PASTEL_STATUS =
+    SHOT_PALETTE``), so the Colors... editor recoloured the Shot Sequencer too.
+    Fixed: 2026-10-12"""
+
+    def test_recolouring_the_panel_leaves_the_engines_palette(self):
+        from pythontk import SHOT_PALETTE
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             PASTEL_STATUS,
-            BEHAVIOR_STATUS_COLORS,
+            ManifestData,
         )
 
-        settings = SettingsManager(namespace=self.ctrl._COLOR_SETTINGS_NS)
-        orig_fg = str(PASTEL_STATUS["missing_object"][0])
-        try:
-            settings.setValue("missing_object/fg", "#DD0011")
-            self.ctrl._restore_color_overrides()
-            self.assertEqual(str(BEHAVIOR_STATUS_COLORS["error"]), "#DD0011")
-        finally:
-            settings.clear("missing_object/fg")
-            PASTEL_STATUS["missing_object"] = (
-                orig_fg,
-                str(PASTEL_STATUS["missing_object"][1]),
+        orig = PASTEL_STATUS["missing_behavior"]
+        self.addCleanup(PASTEL_STATUS.__setitem__, "missing_behavior", orig)
+        PASTEL_STATUS["missing_behavior"] = ("#AABBCC", None)
+        self.assertNotEqual(str(SHOT_PALETTE["missing_behavior"][0]), "#AABBCC")
+        self.assertIn("#AABBCC", ManifestData.glyph_html("missing_behavior"))
+
+
+class TestEditsMode(unittest.TestCase, _ControllerHarness):
+    """Header menu > Edits: Keep All Edits, Rebuild Hand-Edited Shots or
+    Compare to Original Sheet, Reset beside it -- one control for what View
+    Original Sheet, Reset Local Edits and Rebuild Edited Shots each did
+    (2026-10-12: "view original sheet should be renamed ... its not only a
+    view. and it feels redundant with reset local edits. perhaps rebuild
+    edited shots can also be collapsed into this option")."""
+
+    SHEET = "/some/file.csv"
+
+    def setUp(self):
+        self.store = _fresh_store()
+        SettingsManager(namespace="ShotManifest").clear("rebuild_edited")
+        self.setup_controller()
+        self.addCleanup(self.ctrl._settings.clear, "rebuild_edited")
+        from uitk.widgets.menu import Menu
+
+        self.menu = Menu()
+        self.addCleanup(self.menu.deleteLater)
+        self.ctrl._editor.add_header_options(self.menu)
+        self.cmb = self.ctrl._editor._cmb_edits
+        self.btn = self.ctrl._editor._btn_reset
+        self.ctrl._load_data(_make_steps("A01", "A02"), csv_path=self.SHEET)
+
+    def _pick(self, mode):
+        self.cmb.setCurrentIndex(self.cmb.findData(mode))
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
+
+    def test_its_modes_and_the_mode_in_force(self):
+        self.assertEqual(
+            [self.cmb.itemText(i) for i in range(self.cmb.count())],
+            [
+                "Keep All Edits",
+                "Rebuild Hand-Edited Shots",
+                "Compare to Original Sheet",
+            ],
+        )
+        self.assertEqual(self.cmb.currentData(), "keep")
+        self.assertEqual(self.btn.text(), "Reset")
+        self.assertFalse(self.btn.isEnabled(), "nothing to reset")
+
+    def test_rebuild_is_kept_per_user(self):
+        self._pick("rebuild")
+        self.assertTrue(self.ctrl._rebuild_edited)
+        self.assertTrue(self.ctrl._manifest(self.store).rebuild_edited)
+        self._pick("keep")
+        self.assertFalse(self.ctrl._rebuild_edited)
+
+    def test_compare_shows_the_sheet_refuses_build_and_returns_to_the_mode(self):
+        self._pick("rebuild")
+        self.ctrl._editor.edits.set_step("A01", "name", "Renamed", sheet="A01")
+        self.ctrl._editor.refresh()
+        self.assertEqual(self.btn.text(), "Reset (1)")
+        self.assertTrue(self.btn.isEnabled())
+        self._pick("compare")
+        self.assertTrue(self.ctrl._editor.viewing_original)
+        self.assertFalse(self.btn.isEnabled(), "the edits are not in force")
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "A01")
+        with patch.object(self.ctrl, "_ensure_steps") as ensure:
+            self.ctrl.build()
+        ensure.assert_not_called()
+        self._pick("rebuild")
+        self.assertFalse(self.ctrl._editor.viewing_original)
+        self.assertTrue(self.ctrl._rebuild_edited, "Compare kept the mode")
+        self.assertEqual(self.tree.topLevelItem(0).text(COL_STEP), "Renamed")
+
+    def test_the_combo_follows_a_view_set_elsewhere(self):
+        self.ctrl._editor.view_original(True)
+        self.assertEqual(self.cmb.currentData(), "compare")
+        self.ctrl._editor.view_original(False)
+        self.assertEqual(self.cmb.currentData(), "keep")
+
+
+class TestViewCombos(unittest.TestCase, _ControllerHarness):
+    """The row above the table: Select, Expand, Collapse, Hide and Show, a
+    combobox each covering every action of its kind -- the header menu's
+    Expand All Missing / Expand All Extra and Hide Missing Shots folded in
+    (2026-10-12: "add a select, expand, collapse, hide, show comboboxes and
+    remove the existing individual buttons for these actions. they should
+    cover all perceived actions including expand and collapse all")."""
+
+    def setUp(self):
+        from uitk.widgets.comboBox import ComboBox
+
+        self.store = _fresh_store()
+        self.setup_controller()
+        self.addCleanup(self.ctrl._settings.setValue, "hide_missing", False)
+        self.ctrl._settings.setValue("hide_missing", False)
+        self.store.define_shot("A01", 1, 40, ["obj_A01", "stray"])
+        self.ctrl._steps = _make_steps("A01", "A02", "A03")
+        self.ctrl._source, self.ctrl._csv_path = "csv", "X:/sheet.csv"
+        self.ctrl._populate_table()
+        self.combos = {}
+        for name, _title, _lister in self.ctrl.VIEW_COMBOS:
+            cmb = ComboBox()
+            self.addCleanup(cmb.deleteLater)
+            setattr(self.ui, name, cmb)
+            self.combos[name] = cmb
+        self.ctrl._setup_view_combos()
+
+    def _labels(self, name):
+        cmb = self.combos[name]
+        return [cmb.itemText(i) for i in range(cmb.count())]
+
+    def _pick(self, name, label):
+        """Open the combo (its rows listed afresh) and pick *label*."""
+        cmb = self.combos[name]
+        cmb.before_popup_shown.emit()
+        index = next(i for i in range(cmb.count()) if cmb.itemText(i).startswith(label))
+        self.assertTrue(cmb.model().item(index).isEnabled(), label)
+        cmb.setCurrentIndex(index)
+        self.assertEqual(cmb.currentIndex(), -1, "its title again")
+
+    def _expanded(self):
+        return [
+            self.tree.topLevelItem(i).text(COL_STEP)
+            for i in range(self.tree.topLevelItemCount())
+            if self.tree.topLevelItem(i).isExpanded()
+        ]
+
+    def test_each_shows_its_title_and_lists_its_actions(self):
+        for name, title, _lister in self.ctrl.VIEW_COMBOS:
+            cmb = self.combos[name]
+            self.assertEqual(cmb.currentIndex(), -1)
+            self.assertEqual(cmb.header_text, title)
+        self.assertEqual(
+            self._labels("cmb_expand"),
+            [
+                "All",
+                "Rows with Issues",
+                "Rows with Objects Not in the Manifest",
+                "Selected Rows",
+            ],
+        )
+        self.assertEqual(
+            self._labels("cmb_collapse"),
+            ["All", "Rows Without Issues", "Selected Rows"],
+        )
+
+    def test_expand_and_collapse_all(self):
+        self._pick("cmb_expand", "All")
+        self.assertEqual(self._expanded(), ["A01", "A02", "A03"])
+        self._pick("cmb_collapse", "All")
+        self.assertEqual(self._expanded(), [])
+
+    def test_expand_the_rows_with_objects_not_in_the_manifest(self):
+        self._pick("cmb_expand", "Rows with Objects Not in the Manifest")
+        self.assertEqual(self._expanded(), ["A01"])
+
+    def test_an_action_with_nothing_to_act_on_is_disabled(self):
+        cmb = self.combos["cmb_expand"]
+        cmb.before_popup_shown.emit()
+        issues = self._labels("cmb_expand").index("Rows with Issues")
+        self.assertFalse(cmb.model().item(issues).isEnabled(), "not assessed")
+        self.assertIn("Assess first", cmb.itemData(issues, QtCore.Qt.ToolTipRole))
+
+    def test_select_rows_then_their_objects_in_the_scene(self):
+        self._pick("cmb_select", "Unbuilt Steps")
+        selected = sorted(i.text(COL_STEP) for i in self.tree.selectedItems())
+        self.assertEqual(selected, ["A02", "A03"])
+        with patch.object(self.ctrl, "_show_in_outliner") as reveal:
+            self._pick("cmb_select", "Scene: Objects of Selected Rows")
+        reveal.assert_called_once_with(["obj_A02", "obj_A03"])
+
+    def test_hide_and_show_the_steps_without_a_shot(self):
+        self.assertFalse(self.ctrl._hide_missing)
+        self._pick("cmb_hide", "Steps Without a Shot")
+        self.assertTrue(self.ctrl._hide_missing)
+        self.assertEqual([s.step_id for s in self.ctrl._shown_steps()], ["A01"])
+        self._pick("cmb_show", "Steps Without a Shot")
+        self.assertFalse(self.ctrl._hide_missing)
+
+    def test_hide_the_selected_steps_as_a_local_edit(self):
+        self.ctrl._editor.load()
+        self.ctrl._step_items(["A03"])[0].setSelected(True)
+        with patch.object(self.ctrl._editor, "_commit") as commit:
+            self._pick("cmb_hide", "Selected Steps")
+        commit.assert_called_once()
+        self.assertEqual(self.ctrl._editor.edits.hidden_steps(), ["A03"])
+        self._pick_show_hidden()
+
+    def _pick_show_hidden(self):
+        with patch.object(self.ctrl._editor, "_commit"):
+            self._pick("cmb_show", "Hidden Steps")
+        self.assertEqual(self.ctrl._editor.edits.hidden_steps(), [])
+
+    def test_a_wheel_over_a_closed_combo_runs_nothing(self):
+        """Bug: a wheel turned over the closed Hide combo stepped to its first
+        enabled row and ran it: Steps Without a Shot hidden, unseen.
+        Fixed: 2026-10-12"""
+        from qtpy import QtGui
+
+        cmb = self.combos["cmb_hide"]
+        for delta in (-120, 120):
+            event = QtGui.QWheelEvent(
+                QtCore.QPointF(5, 5),
+                QtCore.QPointF(5, 5),
+                QtCore.QPoint(0, 0),
+                QtCore.QPoint(0, delta),
+                QtCore.Qt.NoButton,
+                QtCore.Qt.NoModifier,
+                QtCore.Qt.NoScrollPhase,
+                False,
             )
-            BEHAVIOR_STATUS_COLORS["error"] = orig_fg
+            QtWidgets.QApplication.sendEvent(cmb, event)
+        self.assertFalse(self.ctrl._hide_missing)
+        self.assertEqual(cmb.currentIndex(), -1)
+
+    def test_a_pick_acts_on_the_rows_drawn_since_the_list_opened(self):
+        """Bug: an action held the rows listed when its combo opened; a
+        redraw while it was open (a store edit, the deferred Assess) deleted
+        them, and the pick raised "Internal C++ object already deleted".
+        Fixed: 2026-10-12"""
+        cmb = self.combos["cmb_select"]
+        cmb.before_popup_shown.emit()
+        self.ctrl._populate_table()  # a redraw while it is open
+        index = next(
+            i for i in range(cmb.count()) if cmb.itemText(i).startswith("All Steps")
+        )
+        cmb.setCurrentIndex(index)
+        selected = sorted(i.text(COL_STEP) for i in self.tree.selectedItems())
+        self.assertEqual(selected, ["A01", "A02", "A03"])
+
+    def test_show_hidden_objects_leaves_a_locked_steps_hidden(self):
+        """A locked step takes no Local Edit until it is unlocked; Show >
+        Hidden Objects showed its objects all the same.
+        Fixed: 2026-10-12"""
+        editor = self.ctrl._editor
+        editor.load()
+        editor.edits.set_object("A01", "obj_A01", "hidden", True)
+        editor.edits.set_object("A02", "obj_A02", "hidden", True)
+        self.store.update_shot(self.store.shot_by_name("A01").shot_id, locked=True)
+        cmb = self.combos["cmb_show"]
+        cmb.before_popup_shown.emit()
+        self.assertIn("Hidden Objects (1)", self._labels("cmb_show"))
+        with patch.object(editor, "_commit"):
+            self._pick("cmb_show", "Hidden Objects")
+        self.assertEqual(editor.edits.hidden_objects(), [("A01", "obj_A01")])
 
 
 class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
@@ -2726,7 +3392,7 @@ class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self._cells("A02"), ("60", "90"))
 
     def test_a_showing_assessment_is_run_again_once_edits_settle(self):
-        from types import SimpleNamespace
+        from pythontk import StepStatus
         from mayatk.anim_utils.shots._shots import (
             ActiveShotChanged,
             BatchComplete,
@@ -2743,7 +3409,7 @@ class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
             ShotsEdited(label="trim"),
         ):
             with self.subTest(event=event.name):
-                sentinel = [SimpleNamespace(built=True, needs_build=False)]
+                sentinel = [StepStatus(step_id="A01", built=True)]
                 self.ctrl._last_results = sentinel
                 with patch.object(self.ctrl, "_reassess_soon") as soon:
                     self.ctrl._on_store_event(event)
@@ -2774,34 +3440,79 @@ class TestTheTableFollowsEveryShotEdit(unittest.TestCase, _ControllerHarness):
 
 
 class TestBuildOptions(unittest.TestCase, _ControllerHarness):
-    """The header menu's Build options reach the engine: Rebuild Edited Shots
-    (off by default) and a Key / Marker / Off choice per behavior type, both
-    kept per user."""
+    """The header menu's Build options reach the engine: the Edits mode's
+    Keep / Rebuild Hand-Edited Shots (Keep by default) and a Key / Marker /
+    Off choice per behavior type (Off by default), both kept per user."""
+
+    _KEYS = ("rebuild_edited", "keyed_behaviors", "marked_behaviors")
 
     def setUp(self):
         self.store = _fresh_store()
+        for key in self._KEYS + ("disabled_behaviors",):
+            SettingsManager(namespace="ShotManifest").clear(key)
         self.setup_controller()
-        self.addCleanup(self.ctrl._settings.clear, "rebuild_edited")
-        self.addCleanup(self.ctrl._settings.clear, "disabled_behaviors")
-        self.addCleanup(self.ctrl._settings.clear, "marked_behaviors")
+        for key in self._KEYS + ("disabled_behaviors",):
+            self.addCleanup(self.ctrl._settings.clear, key)
 
     def test_edited_shots_are_kept_by_default(self):
         self.assertFalse(self.ctrl._rebuild_edited)
         self.assertFalse(self.ctrl._manifest(self.store).rebuild_edited)
 
+    def test_behaviors_are_off_until_chosen(self):
+        """("behaviors should default to off")"""
+        every = frozenset(Behaviors.list_behaviors())
+        self.assertEqual({self.ctrl._behavior_mode(n) for n in every}, {"off"})
+        self.assertEqual(self.ctrl._manifest(self.store).disabled_behaviors, every)
+
     def test_the_options_reach_the_engine(self):
-        self.ctrl._on_rebuild_edited_toggled(True)
-        self.ctrl._set_behavior_mode("highlight", "off")
+        every = frozenset(Behaviors.list_behaviors())
+        self.ctrl._set_rebuild_edited(True)
+        self.ctrl._set_behavior_mode("highlight", "key")
         self.ctrl._set_behavior_mode("fade_in", "marker")
         mani = self.ctrl._manifest(self.store)
         self.assertTrue(mani.rebuild_edited)
-        self.assertEqual(mani.disabled_behaviors, frozenset({"highlight"}))
+        self.assertEqual(mani.disabled_behaviors, every - {"highlight", "fade_in"})
         self.assertEqual(mani.marked_behaviors, frozenset({"fade_in"}))
-        self.ctrl._set_behavior_mode("highlight", "key")
-        self.ctrl._set_behavior_mode("fade_in", "off")
+        self.ctrl._set_behavior_mode("highlight", "off")
+        self.ctrl._set_behavior_mode("fade_in", "key")
         mani = self.ctrl._manifest(self.store)
-        self.assertEqual(mani.disabled_behaviors, frozenset({"fade_in"}))
+        self.assertEqual(mani.disabled_behaviors, every - {"fade_in"})
         self.assertEqual(mani.marked_behaviors, frozenset())
+
+    def test_a_users_old_choices_carry_over(self):
+        """Before Off became the default, the settings named the types turned
+        Off and every other type was keyed: those stay keyed.
+
+        Bug: the carry-over deleted the old list from the store Maya and
+        Blender share, so an older blendertk read no list and keyed every
+        behavior the user had Off.  It stays for an older release to read.
+        Fixed: 2026-10-12
+        """
+        settings = self.ctrl._settings
+        settings.setValue("disabled_behaviors", ["highlight"])
+        settings.setValue("marked_behaviors", ["set_clip"])
+        self.ctrl._behavior_sets.clear()
+        self.ctrl._migrate_behavior_modes()
+        modes = {n: self.ctrl._behavior_mode(n) for n in Behaviors.list_behaviors()}
+        self.assertEqual(modes["highlight"], "off")
+        self.assertEqual(modes["set_clip"], "marker")
+        self.assertEqual(modes["fade_in"], "key")
+        self.assertEqual(settings.value("disabled_behaviors", None), ["highlight"])
+
+    def test_the_carry_over_runs_once(self):
+        """The old list stays, so the carry-over must not run again over the
+        choices the user makes since."""
+        settings = self.ctrl._settings
+        settings.setValue("disabled_behaviors", ["highlight"])
+        self.ctrl._behavior_sets.clear()
+        self.ctrl._migrate_behavior_modes()
+        self.assertEqual(self.ctrl._behavior_mode("fade_in"), "key")
+        for name in Behaviors.list_behaviors():  # the user turns every one Off
+            self.ctrl._set_behavior_mode(name, "off")
+        self.ctrl._behavior_sets.clear()
+        self.ctrl._migrate_behavior_modes()  # the next open
+        modes = {self.ctrl._behavior_mode(n) for n in Behaviors.list_behaviors()}
+        self.assertEqual(modes, {"off"})
 
     def test_each_behavior_picks_key_marker_or_off_in_the_header_menu(self):
         """Acting on the menu's choice: it opens on the kept mode, and a pick
@@ -2820,7 +3531,7 @@ class TestBuildOptions(unittest.TestCase, _ControllerHarness):
             [cmb.itemText(i) for i in range(cmb.count())], ["Key", "Marker", "Off"]
         )
         self.assertEqual(cmb.currentData(), "marker")
-        self.assertEqual(modes["fade_in"].currentData(), "key")
+        self.assertEqual(modes["fade_in"].currentData(), "off")
         cmb.setCurrentIndex(cmb.findData("off"))
         self.ctrl._behavior_sets.clear()  # read back from the settings
         self.assertEqual(self.ctrl._behavior_mode("highlight"), "off")
@@ -2856,16 +3567,17 @@ class TestBuildOptions(unittest.TestCase, _ControllerHarness):
 
 
 class TestFormatBehaviorHtml(unittest.TestCase):
-    """Verify behaviour label HTML respects broken / status_color flags."""
+    """Verify behaviour label HTML: an issue leads its behavior with its
+    glyph in its colour (the name itself never coloured); ``status_color``
+    colours every behaviour."""
 
     def setUp(self):
         from mayatk.anim_utils.shots.shot_manifest.manifest_data import (
             ManifestData,
-            BEHAVIOR_STATUS_COLORS,
         )
 
         self.format = ManifestData.format_behavior_html
-        self.colors = BEHAVIOR_STATUS_COLORS
+        self.glyph = ManifestData.glyph_html
 
     def test_plain_when_no_broken(self):
         """Behaviours with no issues produce plain text (no span tags)."""
@@ -2874,12 +3586,17 @@ class TestFormatBehaviorHtml(unittest.TestCase):
         self.assertIn("Fade In", html)
         self.assertIn("Fade Out", html)
 
-    def test_broken_gets_missing_color(self):
-        """Only the broken behaviour gets a colour span."""
+    def test_broken_leads_with_its_glyph(self):
+        """Only the broken behaviour is marked: its glyph, in the
+        ``missing_behavior`` colour, before its plain name."""
         html = self.format(["fade_in", "fade_out"], broken=["fade_out"])
-        self.assertNotIn("Fade In</span>", html)  # fade_in is plain
-        self.assertIn(self.colors["missing"], html)  # fade_out is coloured
-        self.assertIn("Fade Out</span>", html)
+        self.assertTrue(html.startswith("Fade In"), html)  # fade_in is plain
+        self.assertIn(f"{self.glyph('missing_behavior')} Fade Out", html)
+        self.assertNotIn("Fade Out</span>", html)
+
+    def test_stale_leads_with_its_glyph(self):
+        html = self.format(["fade_in"], stale=["fade_in"])
+        self.assertEqual(html, f"{self.glyph('stale_behavior')} Fade In")
 
     def test_status_color_overrides_all(self):
         """status_color colours every behaviour, ignoring broken."""
@@ -2891,13 +3608,6 @@ class TestFormatBehaviorHtml(unittest.TestCase):
         self.assertEqual(html.count("color:#FF0000"), 2)
         self.assertIn("Fade In</span>", html)
         self.assertIn("Fade Out</span>", html)
-
-    def test_missing_object_error_color(self):
-        """error colour (from BEHAVIOR_STATUS_COLORS) renders all red."""
-        error_color = self.colors["error"]
-        html = self.format(["fade_in"], status_color=error_color)
-        self.assertIn(f"color:{error_color}", html)
-        self.assertIn("Fade In</span>", html)
 
     def test_empty_behaviors(self):
         """Empty list returns empty string."""
@@ -3779,6 +4489,7 @@ class TestSceneShotsSource(unittest.TestCase, _ControllerHarness):
         self.assertEqual(self.ctrl._source, "scene")
         builder = MagicMock()
         builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+        builder.plan_insertions.return_value = []
         mock_cls.return_value = builder
         _mock_undo_info(self)
 
@@ -4624,12 +5335,13 @@ class TestShotsTheDocDoesNotList(unittest.TestCase, _ControllerHarness):
     def test_hidden_missing_shots_are_neither_shown_nor_built(self, mock_cls):
         """("we should be able to hide missing shots in the manifest")"""
         self._load()
-        self.ctrl._on_hide_missing_toggled(True)
+        self.ctrl._set_hide_missing(True)
         self.assertEqual(
             [r.text(COL_STEP) for r in self._rows()], ["A01", "A01_2", "A02"]
         )
         builder = MagicMock()
         builder.sync.return_value = ({}, {"applied": [], "skipped": []}, [])
+        builder.plan_insertions.return_value = []
         mock_cls.return_value = builder
         _mock_undo_info(self)
         self.ctrl.build()

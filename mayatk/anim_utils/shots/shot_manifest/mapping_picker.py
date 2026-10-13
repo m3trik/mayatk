@@ -1,12 +1,15 @@
 # !/usr/bin/python
 # coding=utf-8
-"""The Shot Manifest's mapping template: the picker in the header menu (built-in
-and user templates, Refresh and Open Folder on its option box), the template's
-options as rows under it, and applying them to the loaded sheet.
+"""The Shot Manifest's mapping template: its own popup on the build sheet
+field (a columns button) holding the picker (built-in and user templates,
+Refresh and Open Folder on its option box) and the template's options as rows
+under it, and applying them to the loaded sheet.
 
 Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
-copied over.  Only ``manifest_host.py`` differs between the two.
+copied over.  Only the modules that answer to their host differ:
+``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
+``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from typing import Dict, Optional
@@ -19,24 +22,25 @@ from .manifest_data import ERROR_COLOR
 class MappingPickerMixin:
     """The mapping template, mixed into ``ShotManifestController``.
 
-    Uses the controller's ``ui.header.menu``, ``ui.txt_csv_path``,
+    Uses the controller's ``ui.txt_csv_path`` (``ui.header.menu`` standing
+    in for its popup on a mocked UI),
     ``_settings``, ``_csv_path``, ``_mapping_*`` / ``_active_mapping`` /
     ``_option_rows`` state, ``logger``, ``_load_csv()`` and ``_set_footer()``.
     """
 
     def _setup_mapping_combo(self) -> None:
-        """Add the mapping selector to the header menu as an option-box template.
+        """Put the mapping selector in its popup (:meth:`_mapping_popup`).
 
-        A titled divider introduces the control, then a
-        :class:`~uitk.widgets.comboBox.ComboBox` whose ``option_box`` carries two
-        icon buttons to its right — *Refresh* (rescan the folder) and *Open
-        folder*.  Mapping files aren't edited in-place from the UI; the workflow
-        is to open the folder, manage the files externally, then refresh.
+        A :class:`~uitk.widgets.comboBox.ComboBox` whose ``option_box``
+        carries two icon buttons to its right — *Refresh* (rescan the folder)
+        and *Open folder* -- with the template's options as rows below it
+        (:meth:`_build_option_rows`).  Mapping files aren't edited in-place
+        from the UI; the workflow is to open the folder, manage the files
+        externally, then refresh.
         """
         from uitk.widgets.comboBox import ComboBox
 
-        menu = self.ui.header.menu
-        menu.add("Separator", setTitle="CSV Mapping")
+        menu = self._mapping_menu = self._mapping_popup()
         cmb = menu.add(
             ComboBox,
             setObjectName="cmb_csv_mapping",
@@ -49,11 +53,37 @@ class MappingPickerMixin:
         self._cmb_mapping = cmb
         self._refresh_mapping_list()
         cmb.currentIndexChanged.connect(self._on_mapping_changed)
-        # Pin the combo (and thus its square icon buttons) to the header menu's
-        # row height so the template row lines up with the sibling buttons.
+        # Pin the combo (and thus its square icon buttons) to the menu's row
+        # height so the template row lines up with the option rows.
         self._wire_mapping_option_box(
             cmb, target_h=getattr(menu, "fixed_item_height", None)
         )
+
+    def _mapping_popup(self):
+        """The CSV mapping's popup: a menu on the build sheet field's option
+        box, opened by its columns button -- how the sheet's columns are read
+        is the field's business, not the panel's.  A mocked field (logic
+        tests) has no option box: the header menu stands in."""
+        from qtpy import QtWidgets
+        from uitk.widgets.optionBox.options.option_menu import OptionMenuOption
+
+        txt = self.ui.txt_csv_path
+        if not isinstance(txt, QtWidgets.QWidget):
+            return self.ui.header.menu
+        option = OptionMenuOption(
+            wrapped_widget=txt,
+            icon="columns",
+            tooltip=(
+                "CSV Mapping: the template that says how the sheet's columns are\n"
+                "read, and its options."
+            ),
+            add_apply_button=False,
+            match_parent_width=False,  # its content's width, not the field's
+        )
+        txt.option_box.add_option(option)
+        menu = option.menu
+        menu.setTitle("CSV Mapping:")
+        return menu
 
     def _wire_mapping_option_box(self, cmb, target_h=None) -> None:
         """Attach the option-box toolbar to *cmb*: *Refresh* then *Open folder*.
@@ -451,54 +481,58 @@ class MappingPickerMixin:
         return {"template": self._mapping_name, "values": dict(cached[1])}
 
     def _build_option_rows(self) -> None:
-        """Show the current template's options under its picker in the header menu.
+        """Show the current template's options under its picker (:meth:`_mapping_popup`).
 
-        One row per option (``Mapping.option_specs``), built by uitk's widget
-        factory from an ``AttributeSpec`` -- the template declares its own
-        settings, so a new option needs no code here.  Values persist per
+        One form (uitk's ``FormRows``): a caption per option in one column,
+        its control in the next, so the values line up -- under a titled
+        divider per section the template names (``Mapping.option_sections``).
+        Each control is built by uitk's widget factory from an
+        ``AttributeSpec`` -- the template declares its own settings and how
+        they group, so a new option needs no code here.  Values persist per
         template; the template, not the widget state, owns them.
         """
-        from qtpy import QtCore, QtWidgets
+        from qtpy import QtWidgets
         from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
         from uitk.bridge.spec import AttributeSpec, KindFactory
         from uitk.bridge.tooltip import Tooltip
+        from uitk.widgets.form_rows import FormRows
 
-        menu = self.ui.header.menu
+        menu = self._mapping_menu
         for row in self._option_rows:
             menu.remove_widget(row)
+            row.hide()  # gone now, not when the deferred delete runs
             row.deleteLater()
         self._option_rows = []
         if not isinstance(menu, QtWidgets.QWidget):
             return  # mocked UI (logic tests)
         values = self._option_values()
-        for opt in Mapping.option_specs(self._mapping_template):
-            spec = AttributeSpec(
-                key=opt["key"],
-                label=opt["label"],
-                kind=opt["kind"],
-                default=values.get(opt["key"], opt["default"]),
-                choices=tuple(opt.get("choices", ())),
-                tooltip=opt["tooltip"],
-            )
-            row = QtWidgets.QWidget()
-            hbox = QtWidgets.QHBoxLayout(row)
-            hbox.setContentsMargins(0, 0, 0, 0)
-            hbox.setSpacing(2)
-            label = QtWidgets.QLabel(f"{spec.display_label}:", row)
-            label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            widget = KindFactory.make_widget(spec, row)
-            widget.setObjectName(f"opt_{spec.key}")
-            widget.restore_state = False  # the template owns the value
-            tip = Tooltip.format_param_tooltip(spec)
-            label.setToolTip(tip)
-            widget.setToolTip(tip)
-            hbox.addWidget(label)
-            hbox.addWidget(widget, 1)
-            KindFactory.connect_changed(
-                widget, lambda value, key=spec.key: self._on_option_changed(key, value)
-            )
-            menu.add(row)
-            self._option_rows.append(row)
+        form = FormRows()
+        for title, specs in Mapping.option_sections(self._mapping_template):
+            if title:
+                form.add("Separator", setTitle=title)
+            for opt in specs:
+                spec = AttributeSpec(
+                    key=opt["key"],
+                    label=opt["label"],
+                    kind=opt["kind"],
+                    default=values.get(opt["key"], opt["default"]),
+                    choices=tuple(opt.get("choices", ())),
+                    tooltip=opt["tooltip"],
+                )
+                widget = KindFactory.make_widget(spec, form)
+                widget.setObjectName(f"opt_{spec.key}")
+                widget.restore_state = False  # the template owns the value
+                form.add(
+                    widget,
+                    label=spec.display_label,
+                    tooltip=Tooltip.format_param_tooltip(spec),
+                )
+                KindFactory.connect_changed(
+                    widget,
+                    lambda value, key=spec.key: self._on_option_changed(key, value),
+                )
+        menu.add(form)
+        self._option_rows.append(form)
 
     def _open_mappings_folder(self) -> None:
         """Open the writable folder where user mapping files live.
