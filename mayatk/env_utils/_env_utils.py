@@ -42,11 +42,6 @@ class EnvUtils(ptk.HelpMixin):
         ".mb": "mayaBinary",
     }
 
-    #: Scene files opened in place of a source scene (the Reference Manager's
-    #: open-as-new scratch twins in temp): normcased path -> that source
-    #: (:meth:`set_scene_source`).
-    _scene_sources: ClassVar[Dict[str, str]] = {}
-
     @staticmethod
     def get_env_info(key=None):
         """Fetch information about the current Maya environment.
@@ -797,53 +792,167 @@ class EnvUtils(ptk.HelpMixin):
         """Record that the scene file *scene* stands in for the scene *source*;
         ``None`` forgets it. Returns the recorded source (absolute), or ``None``.
 
-        A foreign scene the Reference Manager opens as new is a scratch copy in
-        temp (``ptk.ScratchTwins``), but the work in it belongs to its source's
-        project: :meth:`scene_project_root` resolves such a scene from its
-        source. Held for the session. Twin of ``btk.EnvUtils.set_scene_source``.
-        """
-        if not scene:
-            return None
-        key = os.path.normcase(os.path.abspath(scene))
-        if not source:
-            cls._scene_sources.pop(key, None)
-            return None
-        cls._scene_sources[key] = os.path.abspath(source)
-        return cls._scene_sources[key]
-
-    @classmethod
-    def scene_source(cls, scene: Optional[str] = None) -> Optional[str]:
-        """The scene the scene file *scene* (default: the open one) stands in
-        for (:meth:`set_scene_source`), or ``None``. Twin of
-        ``btk.EnvUtils.scene_source``."""
-        if scene is None:
-            scene = cls.saved_scene_path()
-        if not scene:
-            return None
-        return cls._scene_sources.get(os.path.normcase(os.path.abspath(scene)))
-
-    @staticmethod
-    def scene_project_root() -> Optional[str]:
-        """The project the open scene's files belong to; ``None`` without one.
-
-        The scene FILE's own project (``DataNodes.project_root_of``: its
-        nearest ``workspace.mel``, else its folder) -- the one its records are
-        spelled from -- or, while the scene is unsaved, the session's
-        (:meth:`workspace_root`). A scene opened in place of a source scene
-        (:meth:`scene_source`, the Reference Manager's open-as-new scratch in
-        temp) has its source's. The boundary a tool keeps when it writes,
-        renames or retires files (a lightmap bake, Keep Names In Sync): a
-        folder two projects share is the other one's too, and no scene of
-        this project can see that one's reads.
+        ``DataNodes.set_scene_source`` holds the record (the scene's project
+        resolves from it below this package); this also arms the save that
+        moves a copy in temp: its FIRST save is a Save As into the source
+        project's scenes folder (:meth:`twin_save_target`), so work never lands
+        in temp. Twin of ``btk.EnvUtils.set_scene_source``.
         """
         from mayatk.node_utils.data_nodes import DataNodes
 
-        scene = DataNodes.scene_path()
-        root = (
-            DataNodes.project_root_of(EnvUtils.scene_source(scene) or scene)
-            or EnvUtils.workspace_root()
+        recorded = DataNodes.set_scene_source(scene, source)
+        if recorded:
+            cls._arm_twin_save()
+        return recorded
+
+    @classmethod
+    def twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]:
+        """Where a save of the stand-in *scene* (default: the open one) lands
+        instead of temp, or ``None`` when it saves where it is.
+
+        A scene opened in place of a source (:meth:`set_scene_source`) that
+        lives in the temp root is a scratch twin: saved as it is, real work
+        would sit in a folder the age sweep reclaims. Its first save goes to
+        the source's project scenes folder under the twin's own name
+        (``<stem>_<ext>.ma``: what it was converted from), never over a file
+        already there. Twin of ``btk.EnvUtils.twin_save_target``.
+
+        Parameters:
+            scene: The stand-in scene file.
+
+        Returns:
+            The path to save to, or ``None``.
+        """
+        if scene is None:
+            scene = cls.saved_scene_path()
+        source = cls.scene_source(scene) if scene else None
+        if not source or not cls._in_temp(scene):
+            return None
+        ws = ptk.Workspace.for_scene(source, session_root=cls.workspace_root() or None)
+        if ws is None:
+            return None
+        folder = ws.scene_dir
+        stem, ext = os.path.splitext(os.path.basename(scene))
+        try:
+            taken = os.listdir(folder)
+        except OSError:
+            taken = []
+        return ptk.FileUtils.unique_path(folder, stem, ext, claims=taken)
+
+    @staticmethod
+    def _in_temp(path: str) -> bool:
+        """True when *path* is scratch ``ptk.TempArtifacts`` holds (its root, or
+        the system temp dir a pre-root flat twin lives in)."""
+        return ptk.TempArtifacts.contains(path)
+
+    #: The scratch twin a redirected save is writing (:meth:`_redirect_twin_save`),
+    #: forgotten once that save is written (:meth:`_forget_saved_twin`).
+    _saving_twin: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def _redirect_twin_save(cls) -> Optional[str]:
+        """The before-save hook: a save of a scratch twin is renamed to its
+        :meth:`twin_save_target` first, so Maya writes THAT file (the twin
+        stays the untouched copy, discarded as such). Returns the new path.
+
+        The twin's record is kept until the save is written
+        (:meth:`_forget_saved_twin`, after the save): a save that fails leaves
+        the twin standing in for its source as it did."""
+        scene = cls.saved_scene_path()
+        target = cls.twin_save_target(scene)
+        if not target:
+            return None
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        cmds.file(rename=target)
+        cls._saving_twin = scene
+        import maya.api.OpenMaya as om
+
+        om.MGlobal.displayInfo(
+            f"Saved into the project instead of the temp copy: {target}"
         )
-        return os.path.abspath(root) if root else None
+        return target
+
+    @classmethod
+    def _forget_saved_twin(cls) -> None:
+        """The after-save hook: the twin a redirected save wrote into the
+        project stands in for nothing any more. Maya calls it only for a save
+        that was written."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        twin, cls._saving_twin = cls._saving_twin, None
+        if twin:
+            DataNodes.set_scene_source(twin, None)
+
+    @staticmethod
+    def _arm_twin_save() -> None:
+        """Install the save hooks (:meth:`_redirect_twin_save` before a save,
+        :meth:`_forget_saved_twin` after one) once a session; kept on
+        ``__main__`` so a module reload does not add a second."""
+        import __main__
+
+        module = __name__
+
+        def hooked(method):
+            def hook(*_):
+                # Resolved at call time: a reloaded module is a second class,
+                # and the live one holds the redirect in progress.
+                current = sys.modules.get(module)
+                if current is not None:
+                    getattr(current.EnvUtils, method)()
+
+            return hook
+
+        try:
+            import maya.api.OpenMaya as om
+        except Exception:  # noqa: BLE001 - no Maya (mock tests, headless tooling)
+            return
+        message = om.MSceneMessage
+        for attr, when, method in (
+            ("_mayatk_twin_save_callback", message.kBeforeSave, "_redirect_twin_save"),
+            ("_mayatk_twin_saved_callback", message.kAfterSave, "_forget_saved_twin"),
+        ):
+            if getattr(__main__, attr, None) is None:
+                setattr(__main__, attr, message.addCallback(when, hooked(method)))
+
+    @staticmethod
+    def scene_source(scene: Optional[str] = None) -> Optional[str]:
+        """The scene the scene file *scene* (default: the open one) stands in
+        for, or ``None`` (``DataNodes.scene_source``). Twin of
+        ``btk.EnvUtils.scene_source``."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_source(scene)
+
+    @staticmethod
+    def scene_project_root() -> Optional[str]:
+        """The project the open scene's files belong to; ``None`` without one
+        (``DataNodes.scene_project_root``: ``ptk.Workspace.for_scene`` of the
+        scene FILE, a stand-in resolved as its source). The boundary a tool
+        keeps when it writes, renames or retires files. Twin of
+        ``btk.EnvUtils.scene_project_root``."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_project_root()
+
+    @staticmethod
+    def scene_workspace() -> Optional[ptk.Workspace]:
+        """The open scene's project as a ``ptk.Workspace``, or ``None``
+        (``DataNodes.scene_workspace``): where every permanent file a tool
+        writes for this scene resolves its folder -- the SCENE's project, never
+        merely the active one. Twin of ``btk.EnvUtils.scene_workspace``."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_workspace()
+
+    @staticmethod
+    def scene_source_images_dir(subfolder: str = "", create: bool = False) -> str:
+        """Where a tool's generated maps for the open scene go by default: the
+        scene project's texture folder plus *subfolder*, ``""`` without a
+        project (``DataNodes.scene_source_images_dir``). Twin of
+        ``btk.EnvUtils.scene_source_images_dir``."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_source_images_dir(subfolder, create=create)
 
     @staticmethod
     def scenes_dir(path: Optional[str] = None) -> str:
@@ -1390,7 +1499,11 @@ class EnvUtils(ptk.HelpMixin):
 
         Parameters:
             backup_path: Where to save the backup:
-                - True: Save to scene directory with auto-generated name using suffix
+                - True: Save to the scene's incremental-save folder
+                  (``ptk.Workspace.backup_dir``:
+                  ``<scene dir>/incrementalSave/<scene file>/``, where Maya's
+                  Increment & Save keeps its versions) with an auto-generated
+                  name using suffix
                 - False/None: Skip backup, return None
                 - str: Custom absolute path for the backup file
             suffix: Suffix to append to scene name when backup_path=True.
@@ -1413,11 +1526,11 @@ class EnvUtils(ptk.HelpMixin):
         Example:
             >>> # Auto-generate backup path
             >>> path = EnvUtils.save_scene_backup()
-            >>> print(path)  # "/projects/myScene_backup.ma"
+            >>> print(path)  # "/scenes/incrementalSave/myScene.ma/myScene_backup.ma"
 
             >>> # Custom suffix
             >>> path = EnvUtils.save_scene_backup(suffix="_prebake")
-            >>> print(path)  # "/projects/myScene_prebake.ma"
+            >>> print(path)  # ".../incrementalSave/myScene.ma/myScene_prebake.ma"
 
             >>> # Custom path
             >>> path = EnvUtils.save_scene_backup("/backups/archive.ma")
@@ -1428,7 +1541,10 @@ class EnvUtils(ptk.HelpMixin):
         if not backup_path:
             return None
 
-        scene_path = cmds.file(query=True, sceneName=True)
+        # saved_scene_path, never the raw sceneName: batch reports a phantom
+        # "<active project>/untitled" for an unsaved scene, and the backup of
+        # one landed as untitled_prebake.ma in the user's default project.
+        scene_path = EnvUtils.saved_scene_path()
         if not scene_path:
             cmds.warning(
                 "EnvUtils.save_scene_backup: Cannot save backup - "
@@ -1444,11 +1560,12 @@ class EnvUtils(ptk.HelpMixin):
             if backup_dir and not os.path.exists(backup_dir):
                 os.makedirs(backup_dir, exist_ok=True)
         else:
-            # backup_path is True - auto-generate path
-            scene_dir = os.path.dirname(scene_path)
+            # backup_path is True - auto-generate path in the scene's
+            # incremental-save folder (shared with blendertk's backups).
+            backup_dir = ptk.Workspace.backup_dir(scene_path, create=True)
             scene_name = os.path.splitext(os.path.basename(scene_path))[0]
             ext = ".ma" if file_type == "mayaAscii" else ".mb"
-            final_path = os.path.join(scene_dir, f"{scene_name}{suffix}{ext}")
+            final_path = os.path.join(backup_dir, f"{scene_name}{suffix}{ext}")
 
         try:
             # Temporarily rename scene to backup path, save, then restore
@@ -1581,7 +1698,8 @@ class EnvUtils(ptk.HelpMixin):
 
         Renames the in-memory scene to `original_path` and saves. The autosave
         file on disk is left untouched. The existing original is optionally
-        copied to a `.bak` sibling first (or `.<timestamp>.bak` if a `.bak`
+        copied to `<name>.bak` in its incremental-save folder first
+        (``ptk.Workspace.backup_dir``; `<name>.<timestamp>.bak` if a `.bak`
         already exists, so prior backups are never clobbered). Stamps
         `fileInfo "originalScene"` so future autosaves of this scene are
         self-identifying.
@@ -1589,7 +1707,8 @@ class EnvUtils(ptk.HelpMixin):
         Parameters:
             original_path: Target path. If None, resolved via
                 `find_original_for_autosave`.
-            backup_existing: Copy the existing original to `<path>.bak` before
+            backup_existing: Copy the existing original to
+                `<scene dir>/incrementalSave/<name>/<name>.bak` before
                 overwriting.
 
         Returns:
@@ -1615,13 +1734,15 @@ class EnvUtils(ptk.HelpMixin):
         if backup_existing and os.path.isfile(original_path):
             from datetime import datetime
 
-            backup_path = f"{original_path}.bak"
-            # Never overwrite an existing .bak — it may hold the *real* original
-            # from a prior recovery attempt.
-            if os.path.exists(backup_path):
-                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_path = f"{original_path}.{stamp}.bak"
+            name = os.path.basename(original_path)
             try:
+                folder = ptk.Workspace.backup_dir(original_path, create=True)
+                backup_path = os.path.join(folder, f"{name}.bak")
+                # Never overwrite an existing .bak — it may hold the *real*
+                # original from a prior recovery attempt.
+                if os.path.exists(backup_path):
+                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    backup_path = os.path.join(folder, f"{name}.{stamp}.bak")
                 shutil.copy2(original_path, backup_path)
             except OSError as e:
                 cmds.warning(f"EnvUtils.save_autosave_to_original: backup failed: {e}")

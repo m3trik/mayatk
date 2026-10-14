@@ -1177,7 +1177,9 @@ class SmartBake(_SmartBakeInternal):
                 - None (default): auto — backup only when delete_inputs=True
                   in base-layer mode (the one non-restorable path).
                 - False: never back up.
-                - True: Save to scene directory as 'scenename_prebake.ma'.
+                - True: Save as 'scenename_prebake.ma' in the scene's
+                  incremental-save folder (``<scene dir>/incrementalSave/
+                  <scene file>/``, ``ptk.Workspace.backup_dir``).
                 - str: Custom file path for backup.
             restorable: Record a restore-manifest session for this bake
                 (default: True). The manifest persists on the data_internal

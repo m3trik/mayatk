@@ -191,14 +191,9 @@ class RizomUVBridge(ptk.LoggingMixin, _RizomUVBridgeInternal):
         age-sweeps same-prefix leftovers, so crashed runs can't accumulate.
         """
         if self._temp is None:
-            # Prefer ~/temp when it exists -- the original export dir, kept
-            # because it can have friendlier permissions than %TEMP%.
-            home_temp = Path.home() / "temp"
-            self._temp = ptk.TempArtifacts(
-                "rizom_roundtrip",
-                policy="scoped",
-                dir=str(home_temp) if home_temp.exists() else None,
-            )
+            # The one temp root (blendertk's twin uses the same store): a
+            # second root under ~/temp was a folder no sweep_all ever visited.
+            self._temp = ptk.TempArtifacts("rizom_roundtrip", policy="scoped")
         return self._temp
 
     def _release_temp_payloads(self) -> None:

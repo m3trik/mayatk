@@ -85,3 +85,23 @@ class TestLegacyAliases(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheRunsProjectIsASandbox(base_test.MayaTkTestCase):
+    """No test writes into the user's real Maya projects.
+
+    A tool that names no path writes into the active project; mayapy opens the
+    user's default project (measured 2026-10-13: ``Documents/maya/projects/
+    default`` held test-made ``*_shadow.png``, ``untitled_prebake.ma`` and
+    lightmap EXRs). The suite driver opens a throwaway project for a run, and
+    ``MayaTkTestCase`` does for a module run straight under mayapy.
+    Added: 2026-10-13
+    """
+
+    def test_the_active_project_is_a_throwaway_one(self):
+        import maya.cmds as cmds
+        import pythontk as ptk
+
+        active = os.path.normcase(os.path.realpath(cmds.workspace(q=True, rd=True)))
+        root = os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
+        self.assertTrue(active.startswith(root), f"the run writes into {active}")

@@ -448,6 +448,103 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
             "An explicitly named Output Dir must keep its hand-off artifacts.",
         )
 
+    def test_a_roundtrip_with_no_output_dir_saves_its_scene_in_the_project(self):
+        """The saved ``.tbscene`` is the one artifact of a roundtrip a user
+        opens again: with the hand-off in scratch it goes to the scene
+        project's ``<FBX export rule>/marmoset`` (``data/marmoset``), never
+        into the scratch the run then deletes. Added: 2026-10-13"""
+        import re
+
+        root = self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_tbscene_cube")[0]
+        saved = {}
+        bake = self._fake_toolbag_bake("MAT_Base_Color")
+
+        def fake_run(exe, args=None, cwd=None, timeout=None):
+            body = Path(args[-1]).read_text(encoding="utf-8")
+            saved["path"] = re.search(r'SAVE_PATH = r"(.*)"', body).group(1)
+            return bake(exe, args=args, cwd=cwd, timeout=timeout)
+
+        with unittest.mock.patch(
+            "mayatk.mat_utils.marmoset_bridge._marmoset_engine.AppLauncher.run",
+            side_effect=fake_run,
+        ):
+            result = MarmosetBridge(toolbag_path="fake_toolbag.exe").send(
+                objects=[cube], output_name="rt", template="bake", mode=ROUND_TRIP
+            )
+        self.assertIsNotNone(result)
+        expected = Path(root) / "data" / "marmoset" / "rt.tbscene"
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(saved["path"])),
+            os.path.normcase(os.path.normpath(str(expected))),
+        )
+
+    def test_a_send_to_with_no_output_dir_hands_off_from_its_own_scratch(self):
+        """Blank Output Dir: a send_to's hand-off goes to temp scratch, a fresh
+        folder per send -- never the scene folder, and never one shared folder
+        a second send rewrites while the first Toolbag still reads it.
+        Added: 2026-10-13"""
+        import pythontk as ptk
+
+        root = self._temp_workspace()
+        cube = cmds.polyCube(name="marmoset_send_scratch")[0]
+        bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+        dirs = []
+        with (
+            unittest.mock.patch.object(
+                bridge.deliverer,
+                "_launch_toolbag",
+                return_value=unittest.mock.MagicMock(),
+            ),
+            unittest.mock.patch.object(
+                type(bridge.deliverer), "toolbag_log_path", None
+            ),
+        ):
+            for _ in range(2):
+                result = bridge.send(
+                    objects=[cube], output_name="scene", template="import", mode=SEND_TO
+                )
+                self.assertIsNotNone(result)
+                dirs.append(os.path.normcase(os.path.realpath(result["output_dir"])))
+        temp_root = os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
+        for d in dirs:
+            self.assertTrue(d.startswith(temp_root), d)
+            self.assertFalse(d.startswith(os.path.normcase(os.path.realpath(root))), d)
+        self.assertNotEqual(dirs[0], dirs[1], "two sends shared one hand-off folder")
+
+    def test_the_maps_follow_the_scenes_project_not_the_active_one(self):
+        """A scene saved in project A while B is active bakes into A's
+        ``sourceimages/baked``. Added: 2026-10-13"""
+        import shutil
+
+        self._temp_workspace()  # B: the active project
+        other = os.path.realpath(tempfile.mkdtemp(prefix="marmoset_scene_proj_"))
+        self.addCleanup(shutil.rmtree, other, True)
+        import pythontk as ptk
+
+        ptk.Workspace.create(other, create_dirs=False)
+        os.makedirs(os.path.join(other, "scenes"))
+        cmds.file(rename=os.path.join(other, "scenes", "shot.ma"))
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(MarmosetBridge.baked_texture_dir())),
+            os.path.normcase(os.path.join(other, "sourceimages", "baked")),
+        )
+
+    def test_the_panel_leaves_every_mode_to_the_bridge_when_blank(self):
+        """Blank Output Dir means the bridge's own rule in every mode (scratch
+        for the hand-off, project folders for what is kept) -- not the scene
+        folder for a send_to, where the hand-off silted up the project.
+        Added: 2026-10-13"""
+        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
+            MarmosetBridgeSlots,
+        )
+        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+
+        self.assertEqual(
+            set(MarmosetBridgeSlots.TRANSIENT_OUTPUT_MODES), {SEND_TO, ROUND_TRIP}
+        )
+        self.assertEqual(MayaBridgeSlotsBase.default_output_dir(None), "")
+
     def test_roundtrip_keeps_the_scratch_when_the_maps_land_in_it(self):
         """No project texture folder -> the maps ARE the scratch dir; keep it.
 

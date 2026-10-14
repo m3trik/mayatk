@@ -149,6 +149,11 @@ if not _in_interactive_maya():
 
     # TempArtifacts, not mkdtemp: mayapy test processes are routinely killed,
     # so only the primitive's age-gated sweep ever reclaims the dir. The store
-    # must stay referenced so its session-exit cleanup fires.
-    _config_store = ptk.TempArtifacts("mayatk_test_config", policy="session")
+    # must stay referenced so its session-exit cleanup fires. Flat in the
+    # sandbox's temp root (``dir=``) and short-named: the scene-data records
+    # the exporter suites write under it ran within 4 characters of Windows'
+    # 260 before the temp root existed, and its folder level put them past.
+    _config_store = ptk.TempArtifacts(
+        "mtk_cfg", policy="session", dir=ptk.TempArtifacts.root()
+    )
     os.environ[ptk.UserConfig.CONFIG_ROOT_ENV_VAR] = _config_store.dir_path()

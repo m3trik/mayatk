@@ -356,21 +356,18 @@ class TestSceneImportRendering(unittest.TestCase):
 
     def test_the_bake_returns_a_path_the_host_can_reference(self):
         """``bake_scene`` returns the ``.ma`` the host passes to
-        ``cmds.file(reference=True)``; under a TEMP named in Cyrillic that
-        reference loaded nothing (measured). It returns the 8.3 form."""
-        from unittest import mock
-
+        ``cmds.file(reference=True)``; under a folder named outside the ANSI
+        code page that reference loaded nothing (measured). It returns the 8.3
+        form -- of the project bake, wherever the project is."""
         where = self._non_ansi_dir()
         src = os.path.join(where, "scene.fbx")
-        baked = os.path.join(where, "baked.ma")
-        for path in (src, baked):
-            with open(path, "w") as fh:
-                fh.write("x")
-        got = SimpleNamespace(path=baked, hit=True, scratch=None)
-        with mock.patch.object(ptk.CachedArtifact, "get", return_value=got):
-            result = BlenderSceneImport(blender_path="X:/fake/b.exe").bake_scene(src)
+        with open(src, "w") as fh:
+            fh.write("x")
+        result = _StubBake().bake_scene(src, project=where)
         self.assertTrue(result.isascii(), ascii(result))
-        self.assertTrue(os.path.samefile(result, baked))
+        self.assertTrue(
+            os.path.samefile(result, BlenderSceneImport.bake_slot(src, project=where))
+        )
 
 
 class TestPullManifestSlots(unittest.TestCase):
@@ -646,74 +643,81 @@ class TestSendReceiversShareOneConsumerCall(unittest.TestCase):
                 self.assertEqual(send[name], save.get(name))
 
 
+def _write_stub_bake(artifact, script_text):
+    """What the bake template saves, as far as the parent reads it back: a
+    ``.ma`` whose header carries the rendered ``BAKE_INFO`` as fileInfo."""
+    found = re.search(r"^BAKE_INFO = (.*)$", script_text, re.M)
+    info = ast.literal_eval(found.group(1)) if found else {}
+    with open(artifact, "w", encoding="utf-8") as fh:
+        fh.write("//Maya ASCII 2025 scene\n")
+        for key, value in info.items():
+            fh.write(f'fileInfo "{key}" "{value}";\n')
+        fh.write('createNode transform -n "stub";\n')
+
+
+class _StubBake(BlenderSceneImport):
+    """Both headless runs stubbed: the conversion writes a payload, the bake a
+    ``.ma`` carrying what the template would record (:func:`_write_stub_bake`).
+    Counts each child it would have launched."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.conversions, self.bakes, self.scripts = [], [], []
+
+    def _run_script(
+        self, app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+    ):
+        self.conversions.append(artifact)
+        for line in (
+            "a line that is not a marker",
+            "::progress:: 1/2 Opening the scene",
+            "::progress:: 2/2 Writing the FBX",
+        ):
+            if on_output is not None and on_output(line) is False:
+                raise ptk.OperationCancelled("stub child stopped")
+        with open(artifact, "wb") as fh:
+            fh.write(b"fbx")
+        return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
+
+    def _run_bake_script(
+        self, app_exe, script_text, *, artifact, timeout, env=None, on_output=None
+    ):
+        self.bakes.append(artifact)
+        self.scripts.append(script_text)
+        if on_output is not None:
+            on_output("::progress:: 1/2 Importing the intermediate")
+        _write_stub_bake(artifact, script_text)
+        return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
+
+    def require_blender(self):
+        return "stub_blender"
+
+    def require_mayapy(self):
+        return "stub_mayapy"
+
+
 class TestSceneImportProgress(unittest.TestCase):
     """bake_scene streams both children's progress markers into ONE bar, and a stop
     request ends the run (pure: both headless runs stubbed)."""
 
     def setUp(self):
-        import tempfile
-
         self.dir = tempfile.mkdtemp(prefix="mtk_progress_")
+        self.addCleanup(shutil.rmtree, self.dir, True)
         self.src = os.path.join(self.dir, "scene.blend")
         with open(self.src, "wb") as fh:
             fh.write(b"BLENDER")
-        self.baked = []
-
-    def tearDown(self):
-        import shutil
-
-        shutil.rmtree(self.dir, ignore_errors=True)
-        for path in self.baked:
-            for p in (path, path + si.BAKE_SOURCE_SUFFIX):
-                if os.path.exists(p):
-                    os.remove(p)
 
     @staticmethod
     def _stub():
-        import pythontk as ptk
-
-        class Stub(BlenderSceneImport):
-            @staticmethod
-            def _run_script(
-                app_exe, script_text, *, artifact, timeout, env=None, on_output=None
-            ):
-                for line in (
-                    "a line that is not a marker",
-                    "::progress:: 1/2 Opening the scene",
-                    "::progress:: 2/2 Writing the FBX",
-                ):
-                    if on_output is not None and on_output(line) is False:
-                        raise ptk.OperationCancelled("stub child stopped")
-                with open(artifact, "wb") as fh:
-                    fh.write(b"fbx")
-                return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
-
-            @staticmethod
-            def _run_bake_script(
-                app_exe, script_text, *, artifact, timeout, env=None, on_output=None
-            ):
-                if on_output is not None:
-                    on_output("::progress:: 1/2 Importing the intermediate")
-                with open(artifact, "w") as fh:
-                    fh.write("//Maya ASCII\n")
-                return ptk.ScriptRunResult(artifact, 0, "", 0.1, "s.py")
-
-            def require_blender(self):
-                return "stub_blender"
-
-            def require_mayapy(self):
-                return "stub_mayapy"
-
-        return Stub()
+        return _StubBake()
 
     def test_both_stages_share_one_bar(self):
         reports = []
-        self.baked.append(
-            self._stub().bake_scene(
-                self.src,
-                use_cache=False,
-                progress=lambda c, t, m: reports.append((c, t, m)),
-            )
+        self._stub().bake_scene(
+            self.src,
+            use_cache=False,
+            project=self.dir,
+            progress=lambda c, t, m: reports.append((c, t, m)),
         )
         self.assertIn((25, 100, "Blender: Opening the scene"), reports)
         self.assertIn((50, 100, "Blender: Writing the FBX"), reports)
@@ -727,74 +731,11 @@ class TestSceneImportProgress(unittest.TestCase):
 
         with self.assertRaises(ptk.OperationCancelled):
             self._stub().bake_scene(
-                self.src, use_cache=False, progress=lambda c, t, m: False
+                self.src,
+                use_cache=False,
+                project=self.dir,
+                progress=lambda c, t, m: False,
             )
-
-    def test_the_cached_bake_is_keyed_on_its_manifest_and_engine(self):
-        """A payload can land before its sidecar (a synced drive), and a bake cached
-        in that window replayed the sidecar-less scene after the sidecar arrived; an
-        engine fix left a cached bake replaying the old bug."""
-        from unittest import mock
-
-        import pythontk as ptk
-
-        src = os.path.join(self.dir, "payload.fbx")
-        with open(src, "wb") as fh:
-            fh.write(b"fbx")
-        engine = os.path.join(self.dir, "engine.py")
-        with open(engine, "w") as fh:
-            fh.write("# v1\n")
-        # What decides an FBX's takes (FbxUtils.import_scene, pythontk's
-        # take_layout / merge_takes) shapes the bake as much as the engine does.
-        take_engine = os.path.join(self.dir, "take_engine.py")
-        with open(take_engine, "w") as fh:
-            fh.write("# v1\n")
-        stub, runs = self._stub(), []
-        run_bake = stub._run_bake_script
-        stub._run_bake_script = lambda *a, **k: runs.append(1) or run_bake(*a, **k)
-        sidecar = ptk.HandoffManifest.path_for(src)
-        # (step, (path, text) appended before its bake, child bakes so far)
-        steps = (
-            ("first bake", None, 1),
-            ("nothing changed", None, 1),
-            ("the sidecar arrived", (sidecar, "{}\n"), 2),
-            ("the engine changed", (engine, "# v2\n"), 3),
-            ("the FBX take engine changed", (take_engine, "# v2\n"), 4),
-        )
-        with (
-            mock.patch.object(si, "_BAKE_ENGINE", engine),
-            mock.patch.object(si, "_fbx_take_engine", lambda: [take_engine]),
-        ):
-            for step, write, expected in steps:
-                if write:
-                    with open(write[0], "a") as fh:
-                        fh.write(write[1])
-                self.baked.append(stub.bake_scene(src, use_cache=True))
-                with self.subTest(step=step):
-                    self.assertEqual(len(runs), expected)
-
-    def test_a_cache_hit_marks_the_bake_in_use(self):
-        """The cache's age sweep goes by mtime and a hit wrote nothing to the
-        .ma, so a bake a scene read every day was collected 7 days after it was
-        made, the reference left pointing at nothing."""
-        import time
-
-        src = os.path.join(self.dir, "payload.fbx")
-        with open(src, "wb") as fh:
-            fh.write(b"fbx")
-        stub, runs = self._stub(), []
-        run_bake = stub._run_bake_script
-        stub._run_bake_script = lambda *a, **k: runs.append(1) or run_bake(*a, **k)
-        baked = stub.bake_scene(src, use_cache=True)
-        self.baked.append(baked)
-        days_ago = time.time() - 3 * 86400  # read since, but not touched
-        os.utime(baked, (days_ago, days_ago))
-
-        self.assertEqual(stub.bake_scene(src, use_cache=True), baked)
-
-        self.assertEqual(len(runs), 1, "the second bake must be a cache hit")
-        self.assertGreater(os.path.getmtime(baked), time.time() - 60)
-        self.assertEqual(si.BlenderSceneImport._bake_slot(src), baked)
 
     def test_no_default_timeout(self):
         # A production scene converts for minutes; a fixed budget killed one that was
@@ -809,6 +750,352 @@ class TestSceneImportProgress(unittest.TestCase):
         ):
             with self.subTest(fn=fn.__name__):
                 self.assertIsNone(inspect.signature(fn).parameters["timeout"].default)
+
+
+class TestProjectBakeStore(unittest.TestCase):
+    """A scene bake is a PROJECT file: a saved scene references it.
+
+    Maintainer-decided 2026-10-13 (file-handling audit): bakes lived in
+    ``%TEMP%`` (``CachedArtifact("blender_bake_mtk")``, age-swept), so a saved
+    scene's reference pointed at a file the temp sweep reclaimed; every
+    re-export of an FBX source minted a new slot and orphaned the old one; the
+    key covered the engine's own files, so a package upgrade re-baked every
+    reference; a ``.source.json`` sidecar sat beside each bake. Now: one slot per
+    source in ``<project>/cache/bridge/``, replaced on re-bake, never age-swept,
+    keyed on the source + :data:`_BAKE_FORMAT`, recorded inside the bake.
+    """
+
+    def setUp(self):
+        self.project = tempfile.mkdtemp(prefix="mtk_bake_store_")
+        self.addCleanup(shutil.rmtree, self.project, True)
+        os.makedirs(os.path.join(self.project, "scenes"))
+        self.src = os.path.join(self.project, "scenes", "shots.fbx")
+        with open(self.src, "wb") as fh:
+            fh.write(b"fbx v1")
+
+    def _home(self):
+        return os.path.join(self.project, "cache", "bridge")
+
+    def test_the_bake_lives_in_the_project_cache_never_temp(self):
+        baked = _StubBake().bake_scene(self.src, project=self.project)
+
+        self.assertTrue(
+            ptk.FileUtils.is_under(baked, self._home()), f"{baked} not in cache/bridge"
+        )
+        # Not in the temp root's bake stores (the project itself is in the
+        # sandboxed temp dir here, so "in temp" alone cannot tell).
+        for store in (si._BAKE_STORE, "blender_bake_mtk_cache"):
+            self.assertFalse(
+                ptk.FileUtils.is_under(
+                    baked, os.path.join(ptk.TempArtifacts.root(), store)
+                ),
+                baked,
+            )
+        self.assertRegex(
+            os.path.basename(baked), r"^mtk_bake_cache_shots_[0-9a-f]{8}\.ma$"
+        )
+
+    def test_a_rebake_replaces_the_one_slot(self):
+        """For an .fbx source the bake intermediate is the user's FBX itself:
+        every re-export got a new slot, and the old one piled up."""
+        stub = _StubBake()
+        first = stub.bake_scene(self.src, project=self.project)
+        with open(self.src, "ab") as fh:
+            fh.write(b" v2")  # the re-export
+        second = stub.bake_scene(self.src, project=self.project)
+
+        self.assertEqual(len(stub.bakes), 2, "a changed source bakes again")
+        self.assertTrue(ptk.FileUtils.is_same_file(first, second))
+        self.assertEqual(
+            [n for n in os.listdir(self._home()) if n.endswith(".ma")],
+            [os.path.basename(second)],
+        )
+
+    def test_an_unchanged_source_reuses_its_bake_with_no_child(self):
+        stub = _StubBake()
+        first = stub.bake_scene(self.src, project=self.project)
+        self.assertEqual(stub.bake_scene(self.src, project=self.project), first)
+        self.assertEqual(len(stub.bakes), 1)
+
+    def test_a_current_bake_of_a_blend_needs_no_conversion(self):
+        """The key is the SOURCE's: a current bake answers without Blender --
+        the key over the temp intermediate re-converted once the conversion
+        cache aged out, and re-baked because the new intermediate's mtime moved."""
+        blend = os.path.join(self.project, "scenes", "room.blend")
+        with open(blend, "wb") as fh:
+            fh.write(b"BLENDER")
+        stub = _StubBake()
+        first = stub.bake_scene(blend, project=self.project)
+        calls = []
+        real = stub._cached_conversion
+        stub._cached_conversion = lambda *a, **k: calls.append(1) or real(*a, **k)
+
+        self.assertEqual(stub.bake_scene(blend, project=self.project), first)
+        self.assertEqual(calls, [], "a current bake must not convert again")
+
+    def test_the_key_survives_an_engine_upgrade_and_follows_the_format(self):
+        """An upgrade that changes nothing about bakes keeps them (the engine's
+        own mtimes were the key); a bump of _BAKE_FORMAT re-bakes."""
+        from unittest import mock
+
+        stub = _StubBake()
+        stub.bake_scene(self.src, project=self.project)
+        engine = si.__file__
+        stat = os.stat(engine)
+        try:
+            os.utime(engine, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+            stub.bake_scene(self.src, project=self.project)
+        finally:
+            os.utime(engine, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertEqual(len(stub.bakes), 1, "an engine file's mtime re-baked")
+        with mock.patch.object(si, "_BAKE_FORMAT", si._BAKE_FORMAT + 1):
+            stub.bake_scene(self.src, project=self.project)
+        self.assertEqual(len(stub.bakes), 2, "a format bump must re-bake")
+
+    def test_the_bake_records_its_source_and_key_inside_no_sidecar(self):
+        stub = _StubBake()
+        baked = stub.bake_scene(self.src, project=self.project)
+
+        info = BlenderSceneImport.bake_info(baked)
+        self.assertEqual(
+            info.get(si.BAKE_INFO_SOURCE), "../../scenes/shots.fbx", "project-relative"
+        )
+        self.assertTrue(info.get(si.BAKE_INFO_KEY))
+        self.assertTrue(
+            ptk.FileUtils.is_same_file(BlenderSceneImport.bake_source(baked), self.src)
+        )
+        self.assertFalse(os.path.exists(baked + si.BAKE_SOURCE_SUFFIX))
+
+    def test_a_legacy_sidecar_still_maps_an_old_bake_back(self):
+        old = os.path.join(self.project, "blender_bake_mtk_cache_abc.ma")
+        with open(old, "w") as fh:
+            fh.write("//Maya ASCII\n")
+        with open(old + si.BAKE_SOURCE_SUFFIX, "w") as fh:
+            json.dump({"source": self.src}, fh)
+        self.assertEqual(BlenderSceneImport.bake_source(old), self.src)
+
+    def test_no_project_refuses_and_writes_nothing(self):
+        from unittest import mock
+
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        stub = _StubBake()
+        with mock.patch.object(EnvUtils, "scene_project_root", return_value=None):
+            with self.assertRaises(RuntimeError):
+                stub.bake_scene(self.src)
+        self.assertEqual(stub.bakes, [], "no bake ran")
+
+    def test_an_uncached_bake_leaves_no_scratch(self):
+        """``use_cache=False`` bakes lived in a scoped scratch nothing released."""
+        stub = _StubBake()
+        baked = stub.bake_scene(self.src, project=self.project, use_cache=False)
+
+        self.assertTrue(ptk.FileUtils.is_under(baked, self._home()), baked)
+        self.assertFalse(os.path.exists(stub.bakes[0]), "the scratch bake was left")
+
+    def test_purge_removes_only_the_bakes_no_scene_references(self):
+        stub = _StubBake()
+        used = stub.bake_scene(self.src, project=self.project)
+        other = os.path.join(self.project, "scenes", "props.fbx")
+        with open(other, "wb") as fh:
+            fh.write(b"fbx")
+        unused = stub.bake_scene(other, project=self.project)
+        with open(unused + si.BAKE_SOURCE_SUFFIX, "w") as fh:
+            fh.write("{}")  # named for the bake: goes with it
+        rel = os.path.relpath(used, self.project).replace("\\", "/")
+        with open(os.path.join(self.project, "scenes", "host.ma"), "w") as fh:
+            fh.write("//Maya ASCII 2025 scene\n")
+            fh.write(f'file -rdi 1 -ns "shots" -rfn "shotsRN" "{rel}";\n')
+            fh.write('createNode transform -n "x";\n')
+
+        dry = BlenderSceneImport().purge_unused_bakes(self.project, dry_run=True)
+        self.assertTrue(os.path.isfile(unused), "a dry run removes nothing")
+        removed = BlenderSceneImport().purge_unused_bakes(self.project)
+
+        self.assertEqual(sorted(dry), sorted(removed))
+        self.assertEqual(
+            sorted(os.path.basename(p) for p in removed),
+            sorted(
+                [os.path.basename(unused), os.path.basename(unused) + ".source.json"]
+            ),
+        )
+        self.assertTrue(os.path.isfile(used), "a referenced bake stays")
+
+    def test_a_temp_bake_is_rehomed_into_the_project(self):
+        """A scene saved before 2026-10-13 references a bake in temp; the panel
+        moves it into the project slot with its source recorded inside."""
+        store = ptk.TempArtifacts("mtk_bake_rehome_test", policy="scoped")
+        self.addCleanup(store.cleanup)
+        old = store.path(extension=".ma")
+        with open(old, "w") as fh:
+            fh.write('//Maya ASCII 2025 scene\ncreateNode transform -n "old";\n')
+        with open(old + si.BAKE_SOURCE_SUFFIX, "w") as fh:
+            json.dump({"source": self.src}, fh)
+
+        moved = BlenderSceneImport().rehome_bake(old, project=self.project)
+
+        self.assertTrue(
+            ptk.FileUtils.is_same_file(
+                moved, BlenderSceneImport.bake_slot(self.src, project=self.project)
+            )
+        )
+        self.assertTrue(
+            ptk.FileUtils.is_same_file(BlenderSceneImport.bake_source(moved), self.src)
+        )
+        with open(moved) as fh:
+            self.assertIn('createNode transform -n "old"', fh.read())
+
+    def _cp1252_bake(self):
+        """A bake a Maya on a cp1252 locale wrote: its header names the codeset,
+        and a non-ASCII name sits in it as one cp1252 byte."""
+        path = os.path.join(self.project, "mtk_bake_cache_room_0123abcd.ma")
+        text = (
+            "//Maya ASCII 2025 scene\r\n"
+            "//Codeset: 1252\r\n"
+            f'fileInfo "{si.BAKE_INFO_SOURCE}" "../../scenes/caf\u00e9.blend";\r\n'
+            'createNode transform -n "caf\u00e9_root";\r\n'
+        )
+        with open(path, "wb") as fh:
+            fh.write(text.encode("cp1252"))
+        return path
+
+    def test_a_cp1252_bake_is_stamped_byte_for_byte(self):
+        """Pre-release review 2026-10-13: the stamp read the file with
+        surrogateescape and wrote it as strict UTF-8, so a cp1252 ``.ma``
+        holding a non-ASCII byte raised UnicodeEncodeError (a ValueError the
+        panel's refresh did not catch) -- and a write would have turned its
+        CRLF lines into LF ones."""
+        path = self._cp1252_bake()
+        with open(path, "rb") as fh:
+            before = fh.read()
+
+        BlenderSceneImport.stamp_bake_info(path, {si.BAKE_INFO_KEY: "k1"})
+
+        with open(path, "rb") as fh:
+            after = fh.read()
+        stamped = f'fileInfo "{si.BAKE_INFO_KEY}" "k1";\r\n'.encode("ascii")
+        self.assertIn(stamped, after)
+        self.assertEqual(after.replace(stamped, b""), before, "only the record added")
+
+    def test_bake_info_reads_values_in_the_files_codeset(self):
+        self.assertEqual(
+            BlenderSceneImport.bake_info(self._cp1252_bake())[si.BAKE_INFO_SOURCE],
+            "../../scenes/caf\u00e9.blend",
+        )
+
+    def test_a_rehomed_bake_names_no_texture_in_temp(self):
+        """Pre-release review 2026-10-13: a temp bake was re-homed byte for
+        byte, so its file nodes still named textures in temp -- which the age
+        sweep deletes, leaving the project bake's materials blank."""
+        store = ptk.TempArtifacts("mtk_bake_rehome_media_test", policy="scoped")
+        self.addCleanup(store.cleanup)
+        old = store.path(extension=".ma")
+        texture = store.path(extension=".png")
+        with open(texture, "wb") as fh:
+            fh.write(b"png")
+        spelled = texture.replace("\\", "/")
+        with open(old, "w", newline="\n") as fh:
+            fh.write("//Maya ASCII 2025 scene\n")
+            fh.write('createNode file -n "file1";\n')
+            fh.write(f'\tsetAttr ".ftn" -type "string" "{spelled}";\n')
+        with open(old + si.BAKE_SOURCE_SUFFIX, "w") as fh:
+            json.dump({"source": self.src}, fh)
+
+        moved = BlenderSceneImport().rehome_bake(old, project=self.project)
+
+        home = os.path.join(
+            BlenderSceneImport._media_home(self.src, self.project),
+            os.path.basename(texture),
+        )
+        with open(moved) as fh:
+            text = fh.read()
+        self.assertNotIn(spelled, text)
+        self.assertIn(
+            f'setAttr ".ftn" -type "string" "{home.replace(os.sep, "/")}";', text
+        )
+        self.assertTrue(os.path.isfile(home), "the texture was copied into the project")
+
+    def test_the_bake_child_opens_the_host_project_before_it_imports(self):
+        """Pre-release review 2026-10-13: the child never opened the host's
+        project, so everything it resolved from "the scene's project" (an
+        FBX's embedded media) went to the user's default Maya project."""
+        txt = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
+        self.assertLess(
+            txt.index("cmds.workspace(PROJECT, openWorkspace=True)"),
+            txt.index("engine.import_payload("),
+        )
+        spelled = ptk.ScriptTemplate.child_path(self.project)
+        script = BlenderSceneImport().render_bake_script(
+            self.src, os.path.join(self.project, "o.ma"), project=self.project
+        )
+        self.assertIn(f'PROJECT = r"{spelled}"', script)
+        stub = _StubBake()
+        stub.bake_scene(self.src, project=self.project)
+        self.assertIn(f'PROJECT = r"{spelled}"', stub.scripts[0])
+
+    def test_the_bake_template_records_the_info_before_the_save(self):
+        txt = si._BAKE_TEMPLATE.read_text(encoding="utf-8")
+        record = txt.index("cmds.fileInfo(key, value)")
+        self.assertLess(record, txt.index("cmds.file(save=True"))
+        self.assertIn("media_home=MEDIA_HOME or None", txt)
+        script = BlenderSceneImport().render_bake_script(
+            self.src, os.path.join(self.project, "o.ma"), info={"k": "v"}
+        )
+        self.assertIn("BAKE_INFO = {'k': 'v'}", script)
+
+
+class TestImportMovesTexturesOutOfTemp(MayaTkTestCase):
+    """A glTF's unpacked images and an FBX's extracted media sit in the temp
+    root, so the imported file nodes -- and a bake saved from them -- named
+    files the temp sweep reclaims (TEMP-REF, file-handling audit 2026-10-13)."""
+
+    def setUp(self):
+        super().setUp()
+        self.store = ptk.TempArtifacts("mtk_media_rehome_test", policy="scoped")
+        self.addCleanup(self.store.cleanup)
+        self.project = tempfile.mkdtemp(prefix="mtk_media_home_")
+        self.addCleanup(shutil.rmtree, self.project, True)
+        self.png = os.path.join(self.store.dir_path(), "crate_BaseColor.png")
+        with open(self.png, "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+
+    def test_a_temp_texture_is_copied_home_and_repointed(self):
+        node = cmds.shadingNode("file", asTexture=True)
+        cmds.setAttr(f"{node}.fileTextureName", self.png, type="string")
+        home = os.path.join(self.project, "sourceimages", "crate")
+
+        moved = BlenderSceneImport._rehome_temp_media([node], home)
+
+        self.assertEqual(moved, 1)
+        path = cmds.getAttr(f"{node}.fileTextureName")
+        self.assertTrue(ptk.FileUtils.is_under(path, home), path)
+        self.assertTrue(os.path.isfile(path))
+
+    def test_the_import_moves_what_it_brought_in(self):
+        cube = cmds.polyCube(name="crate")[0]
+        shader = cmds.shadingNode("lambert", asShader=True)
+        tex = cmds.shadingNode("file", asTexture=True)
+        cmds.setAttr(f"{tex}.fileTextureName", self.png, type="string")
+        cmds.connectAttr(f"{tex}.outColor", f"{shader}.color")
+        cmds.select(cube)
+        cmds.hyperShade(assign=shader)
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        FbxUtils.load_plugin()
+        fbx = os.path.join(self.store.dir_path(), "crate.fbx")
+        cmds.select(cube)
+        cmds.file(fbx, exportSelected=True, type="FBX export", force=True)
+        cmds.file(new=True, force=True)
+        home = os.path.join(self.project, "sourceimages", "crate")
+
+        BlenderSceneImport().import_payload(fbx, media_home=home)
+
+        paths = [
+            cmds.getAttr(f"{n}.fileTextureName") for n in cmds.ls(type="file") or []
+        ]
+        self.assertTrue(paths, "the import brought no texture")
+        for path in paths:
+            self.assertTrue(ptk.FileUtils.is_under(path, home), path)
 
 
 class TestSceneImportGltfSource(unittest.TestCase):
@@ -4277,21 +4564,20 @@ class TestUsdInstanceReplayStrict(MayaTkTestCase):
             def require_mayapy(self):
                 return "stub_mayapy"
 
+        project = tempfile.mkdtemp(prefix="mtk_strict_bake_project_")
         try:
             with self.assertRaises(RuntimeError) as ctx:
-                Stub().bake_scene(src, via="usd", use_cache=False)
+                Stub().bake_scene(src, via="usd", use_cache=False, project=project)
             self.assertIn("manifest", str(ctx.exception).lower())
             self.assertNotIn("ran", baked, "the bake must not run without the sidecar")
 
             with open(usd + ".manifest.json", "w", encoding="utf-8") as fh:
                 json.dump({"version": 2, "format": "names", "instances": []}, fh)
-            out = Stub().bake_scene(src, via="usd", use_cache=False)
+            out = Stub().bake_scene(src, via="usd", use_cache=False, project=project)
             self.assertTrue(baked.get("ran"))
             self.assertTrue(out.endswith(".ma"))
-            for p in (out, out + si.BAKE_SOURCE_SUFFIX):
-                if os.path.exists(p):
-                    os.remove(p)
         finally:
+            shutil.rmtree(project, ignore_errors=True)
             for p in (usd, usd + ".manifest.json", src):
                 if os.path.exists(p):
                     os.remove(p)

@@ -593,6 +593,114 @@ class DataNodes(ptk.SceneStoreBase):
 
         return EnvUtils.saved_scene_path()
 
+    # ------------------------------------------------------------------
+    # The scene's project
+    # ------------------------------------------------------------------
+    # Here, beside the scene path, so every part that writes a file for the
+    # scene resolves it without reaching up into env_utils. EnvUtils keeps
+    # the same names as delegates (its twin-save hook arms on top of them).
+
+    #: Scene files opened in place of a source scene (the Reference Manager's
+    #: open-as-new scratch twins in temp): normcased path -> that source
+    #: (:meth:`set_scene_source`).
+    _scene_sources: Dict[str, str] = {}
+
+    @classmethod
+    def set_scene_source(
+        cls, scene: str, source: Optional[str] = None
+    ) -> Optional[str]:
+        """Record that the scene file *scene* stands in for the scene *source*;
+        ``None`` forgets it. Returns the recorded source (absolute), or ``None``.
+
+        A foreign scene the Reference Manager opens as new is a scratch copy in
+        temp (``ptk.ScratchTwins``), but the work in it belongs to its source's
+        project: :meth:`scene_project_root` resolves such a scene from its
+        source. Held for the session. Only records: ``EnvUtils.set_scene_source``
+        also arms the save that moves a twin out of temp. Twin of
+        ``btk.DataNodes.set_scene_source``.
+        """
+        if not scene:
+            return None
+        key = os.path.normcase(os.path.abspath(scene))
+        if not source:
+            cls._scene_sources.pop(key, None)
+            return None
+        cls._scene_sources[key] = os.path.abspath(source)
+        return cls._scene_sources[key]
+
+    @classmethod
+    def scene_source(cls, scene: Optional[str] = None) -> Optional[str]:
+        """The scene the scene file *scene* (default: the open one) stands in
+        for (:meth:`set_scene_source`), or ``None``. Twin of
+        ``btk.DataNodes.scene_source``."""
+        if scene is None:
+            scene = cls.scene_path()
+        if not scene:
+            return None
+        return cls._scene_sources.get(os.path.normcase(os.path.abspath(scene)))
+
+    @staticmethod
+    def _session_root() -> Optional[str]:
+        """Maya's active project root (``workspace -q -rd``), or ``None``."""
+        try:
+            root = cmds.workspace(q=True, rd=True) or ""
+        except Exception:  # noqa: BLE001 - no Maya (headless tooling / mock tests)
+            return None
+        return os.path.normpath(root) if root and os.path.isdir(root) else None
+
+    @classmethod
+    def scene_workspace(cls) -> Optional[ptk.Workspace]:
+        """The project the open scene's files belong to, as a ``ptk.Workspace``;
+        ``None`` without one.
+
+        ``ptk.Workspace.for_scene`` -- the one rule both DCCs share: the scene
+        FILE's nearest ``workspace.mel``, else the active project when it holds
+        the scene, else the scene's folder; while the scene is unsaved, the
+        active project. A scene opened in place of a source scene
+        (:meth:`scene_source`, the Reference Manager's open-as-new scratch in
+        temp) is resolved as its source. Where every permanent file a tool
+        writes for this scene resolves its folder (``.cache_dir(kind)``,
+        ``.source_images_dir``, ``.images_dir()``), and the boundary a tool
+        keeps when it writes, renames or retires files: a folder two projects
+        share is the other one's too. Twin of ``btk.DataNodes.scene_workspace``.
+        """
+        scene = cls.scene_path()
+        return ptk.Workspace.for_scene(
+            cls.scene_source(scene) or scene, session_root=cls._session_root()
+        )
+
+    @classmethod
+    def scene_project_root(cls) -> Optional[str]:
+        """The root of :meth:`scene_workspace`, or ``None`` without a project.
+        Twin of ``btk.DataNodes.scene_project_root``."""
+        ws = cls.scene_workspace()
+        return ws.root if ws is not None else None
+
+    @classmethod
+    def scene_source_images_dir(cls, subfolder: str = "", create: bool = False) -> str:
+        """Where a tool's generated maps for the open scene go by default.
+
+        The scene project's texture folder (its ``sourceImages`` rule,
+        ``ptk.Workspace.source_images_dir``) plus *subfolder* -- one per output
+        kind (``"baked"``, ``"uv_transfer"``) -- the same folder in both DCCs.
+        Twin of ``btk.DataNodes.scene_source_images_dir``.
+
+        Parameters:
+            subfolder: A folder under the texture folder; ``""`` for the
+                folder itself.
+            create: Create the folder.
+
+        Returns:
+            The folder (absolute), or ``""`` when the scene has no project.
+        """
+        ws = cls.scene_workspace()
+        if ws is None:
+            return ""
+        folder = os.path.normpath(os.path.join(ws.source_images_dir, subfolder))
+        if create:
+            os.makedirs(folder, exist_ok=True)
+        return folder
+
     #: The files a copy of the scene carries its private records in: Maya
     #: scenes. An FBX or an OBJ export writes no network node, so there is
     #: nothing to spell for it.

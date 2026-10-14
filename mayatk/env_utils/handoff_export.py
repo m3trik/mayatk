@@ -74,13 +74,25 @@ class MayaExportMixin:
     #: full refresh wiped a lightmap manifest and previewed the asset unlit).
     export_stagers: Tuple[str, ...] = ()
 
+    #: Whether an animated write splits the scene's declared shots into one
+    #: FBX take each (:meth:`FbxUtils.apply_takes_from_node`). On where the far
+    #: side plays the FBX's takes: Unity builds its clips from them
+    #: (``UnityBridge``), and the WebXR preview's GLB carries one clip per
+    #: take. A DCC hand-off turns it OFF (``BlenderBridge``): every importer
+    #: plays ONE take (Maya's the last, Blender's the first stack per object),
+    #: the receiver lands the shots from the manifest's ``shots`` section, and
+    #: the split only costs -- it bounds the whole take by the shots' union
+    #: range, so a key outside every shot never ships. Unsplit, the write is
+    #: one take over the scene's animation range. Mirror of blendertk's flag
+    #: of the same name.
+    split_takes: bool = True
+
     #: Whether an animated hand-off's take split resamples every curve
     #: (:meth:`FbxUtils.apply_takes`), making each take an exact slice of the
     #: animation. On only where the FBX's takes ARE what the far side plays --
-    #: Unity builds its clips from them (``UnityBridge``). Off by default: a
-    #: DCC hand-off keeps the authored keys editable rather than one per
-    #: frame, and the WebXR preview cuts its own clips from the
-    #: whole-timeline take.
+    #: Unity builds its clips from them (``UnityBridge``). Off by default: the
+    #: WebXR preview cuts its own clips from the whole-timeline take. Moot
+    #: without :attr:`split_takes`.
     resample_takes: bool = False
 
     #: Drop the baked rig's apparatus from the FBX payload after the write
@@ -390,8 +402,9 @@ class MayaExportMixin:
             try:
                 if wants_animation:
                     # Realize the shots the scene DECLARES as named AnimStacks, so
-                    # every animated hand-off carries per-shot clips rather than one
-                    # whole-timeline "Take 001" a consumer has to slice by hand.
+                    # an animated hand-off whose far side plays takes carries
+                    # per-shot clips rather than one whole-timeline "Take 001" a
+                    # consumer has to slice by hand.
                     #
                     # Here, not in a caller: the session hook that does this for
                     # File > Export is opt-in (``enable_auto_takes`` / a registered
@@ -407,13 +420,21 @@ class MayaExportMixin:
                     # documents) rather than running the producers, so a preview
                     # push stays free of scene side effects. Idempotent alongside
                     # the hook -- ``apply_takes`` clears prior take state first.
-                    takes = FbxUtils.apply_takes_from_node(resample=self.resample_takes)
+                    #
+                    # Only where the far side plays the takes (:attr:`split_takes`):
+                    # a DCC hand-off ships one whole take, and ``apply_takes([])``
+                    # still clears a split some earlier write left armed.
+                    takes = (
+                        FbxUtils.apply_takes_from_node(resample=self.resample_takes)
+                        if self.split_takes
+                        else FbxUtils.apply_takes(())
+                    )
                     if takes:
                         self.logger.info(
                             f"Animation: realized {takes} declared take(s)."
                         )
                     else:
-                        # No shots to set a union range, and the reset above left the
+                        # No split to set a union range, and the reset above left the
                         # plugin's factory 1-48 -- which would ship 48 frames of
                         # whatever timeline this scene actually has.
                         #
@@ -458,7 +479,9 @@ class MayaExportMixin:
                             # nothing. It ships as itself.
                             shaded, unshaded = [], []
                             for t in transforms:
-                                (shaded if self._holds_shading(t) else unshaded).append(t)
+                                (shaded if self._holds_shading(t) else unshaded).append(
+                                    t
+                                )
                             for orig in shaded:
                                 duplicates.append(
                                     NodeUtils.static_copy(orig, strip_children=False)

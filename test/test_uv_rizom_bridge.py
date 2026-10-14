@@ -276,6 +276,21 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         # Temp payloads the bridges allocate are scoped to this test.
         self.addCleanup(self.bridge._release_temp_payloads)
 
+    def test_the_round_trip_payloads_live_under_the_one_temp_root(self):
+        """Even with a ``~/temp`` folder present: a second temp root is one
+        ``TempArtifacts.sweep_all`` never visits, and blendertk's twin never
+        had it. Added: 2026-10-13"""
+        import pythontk as ptk
+
+        (self.tmp_dir / "temp").mkdir()
+        with mock.patch.object(Path, "home", return_value=self.tmp_dir):
+            store = RizomUVBridge(rizom_path="not-used.exe")._temp_store
+        self.assertTrue(store.managed, store.dir)
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(os.path.normpath(store.dir))),
+            os.path.normcase(os.path.normpath(ptk.TempArtifacts.root())),
+        )
+
     def test_a_transfer_that_lands_nothing_is_reported(self):
         """A round trip that leaves the UVs untouched must say so.
 

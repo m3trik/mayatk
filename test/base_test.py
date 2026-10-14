@@ -215,13 +215,53 @@ def skipIfBatch(reason: str = "Interactive-only (needs GUI Maya)"):
     return unittest.skipIf(_is_batch(), reason)
 
 
+#: The throwaway project a module run straight under mayapy opens
+#: (:meth:`MayaTkTestCase.open_throwaway_project`); kept referenced so its
+#: session cleanup fires.
+_project_store = None
+
+
 class MayaTkTestCase(unittest.TestCase):
     """Base class for all mayatk test cases."""
+
+    @staticmethod
+    def open_throwaway_project():
+        """Make sure the active project is a throwaway one under the temp root.
+
+        A tool that names no path writes into the active project, and mayapy
+        opens the user's default one: a module run straight under mayapy
+        (``mayapy test_x.py``, outside the suite driver's sandboxed project)
+        wrote shadow maps, pre-bake backups and lightmap EXRs into it. Batch
+        only: in an interactive Maya the project is the USER's, and the suite
+        driver swaps it for the run and gives it back. Checked per test (one
+        query), so a test that opened and restored a project of its own
+        cannot leave the next one in the user's.
+        """
+        global _project_store
+        if not _is_batch():
+            return
+        try:
+            import pythontk as ptk
+
+            active = cmds.workspace(q=True, rd=True) or ""
+            root = os.path.realpath(ptk.TempArtifacts.root())
+            if active and ptk.FileUtils.is_under(os.path.realpath(active), root):
+                return
+            if _project_store is None:
+                _project_store = ptk.TempArtifacts(
+                    "mtk_test_project", policy="session", max_age_days=1
+                )
+            folder = _project_store.dir_path(name="project")
+            ptk.Workspace.create(folder)
+            cmds.workspace(folder, openWorkspace=True)
+        except Exception as e:  # noqa: BLE001 - never block a test on this
+            print(f"Warning: could not open a throwaway project: {e}")
 
     @classmethod
     def setUpClass(cls):
         """Set up once for all tests in the class."""
         cls.test_messages = []
+        cls.open_throwaway_project()
 
     def setUp(self):
         """Set up clean Maya scene for each test.
@@ -235,6 +275,7 @@ class MayaTkTestCase(unittest.TestCase):
             cmds.file(new=True, force=True)
         except Exception as e:
             print(f"Warning: Could not create new scene: {e}")
+        self.open_throwaway_project()
         self._fbx_state_at_setup = self._fbx_export_hook_state()
 
     @staticmethod
@@ -481,6 +522,7 @@ class QuickTestCase(MayaTkTestCase):
         the guard exists to prevent.  Two attribute reads, no scene work, so
         the speed this class exists for is untouched.
         """
+        self.open_throwaway_project()
         self._fbx_state_at_setup = self._fbx_export_hook_state()
 
 

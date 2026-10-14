@@ -98,12 +98,12 @@ order = [
     "cam_utils",
     "light_utils",
     "uv_utils",
+    "render_utils",
     "mat_utils",
     "audio_utils",
     "display_utils",
     "node_utils",
     "xform_utils",
     "ui_utils",
-    "render_utils",
     "core_utils",
 ]

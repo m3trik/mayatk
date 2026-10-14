@@ -1,6 +1,7 @@
 # !/usr/bin/python
 # coding=utf-8
 import os
+import re
 import shutil
 import logging
 import contextlib
@@ -854,6 +855,24 @@ class FbxUtils(ptk.HelpMixin):
         return -1, names
 
     @staticmethod
+    def _source_media_dir(source: str, project: Optional[str] = None) -> Optional[str]:
+        """Where a project keeps the media of the scene file *source* that has
+        no home of its own: ``<sourceimages>/<source stem>`` (the stem in
+        ``[0-9A-Za-z_]``) in *project*, default the open scene's
+        (``DataNodes.scene_source_images_dir``) -- or None without a project.
+        The ONE folder convention for a source's media: an FBX's embedded
+        media an import cannot extract beside it, and the textures an import
+        or bake would read from temp (``BlenderSceneImport._media_home``)."""
+        stem = re.sub(
+            r"[^0-9A-Za-z_]", "_", os.path.splitext(os.path.basename(source))[0]
+        )
+        if project:
+            return os.path.join(ptk.Workspace.load(project).source_images_dir, stem)
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_source_images_dir(stem) or None
+
+    @staticmethod
     def _rehome_files(
         nodes: List[str], copy: str, source: str, fbx: Any, log: logging.Logger
     ) -> None:
@@ -868,8 +887,11 @@ class FbxUtils(ptk.HelpMixin):
         are copied to ``<source>.fbm`` and every filename attribute of the new
         nodes follows them, and a path that is gone is resolved as the import
         of *source* resolves it, from *fbx*'s ``RelativeFilename`` records.
-        When ``<source>.fbm`` cannot be written the media goes to a temp
-        folder that outlives this import, with a warning.
+        When ``<source>.fbm`` cannot be written (a read-only delivery folder)
+        the media goes to ``<sourceimages>/<source stem>`` in the open
+        scene's project (:meth:`_source_media_dir`) -- never temp, which the
+        nodes would name in a saved scene -- with a warning; to temp only when
+        no project resolves.
         """
 
         def key(path: str) -> str:
@@ -881,13 +903,22 @@ class FbxUtils(ptk.HelpMixin):
             try:
                 shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
             except OSError as error:
-                media = ptk.TempArtifacts("fbx_media", policy="detached").dir_path()
-                shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
-                log.warning(
-                    f"Embedded media could not be extracted beside {source} "
-                    f"({error}); it is in {media}, which is cleaned up within "
-                    "days -- copy it somewhere permanent."
-                )
+                media = FbxUtils._source_media_dir(source)
+                if media is not None:
+                    shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
+                    log.warning(
+                        f"Embedded media could not be extracted beside {source} "
+                        f"({error}); it is in the project's {media}."
+                    )
+                else:
+                    media = ptk.TempArtifacts("fbx_media", policy="detached").dir_path()
+                    shutil.copytree(copy_fbm, media, dirs_exist_ok=True)
+                    log.warning(
+                        f"Embedded media could not be extracted beside {source} "
+                        f"({error}) and no project resolves; it is in {media}, "
+                        "which is cleaned up within days -- copy it somewhere "
+                        "permanent."
+                    )
         relative: Dict[str, str] = {}
         for record in fbx.iter_objects() if fbx is not None else ():
             if record["name"] not in ("Texture", "Video"):

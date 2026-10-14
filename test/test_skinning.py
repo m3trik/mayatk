@@ -373,6 +373,30 @@ class TestWeightTransfer(MayaTkTestCase):
         j1_mean = sum(_row(mirrored, n, v)[0] for v in neg_verts) / len(neg_verts)
         self.assertGreater(j1_mean, 0.9)
 
+    def test_default_export_path_is_a_fresh_temp_artifact(self):
+        """No path: the XML goes to a fresh ``ptk.TempArtifacts`` folder (aged
+        out by its sweep), under the mesh's own name -- never a fixed
+        ``<maya tmp>/skin_weights/<mesh>.xml`` that a second export, or
+        another mesh of that name, overwrote. Added: 2026-10-13"""
+        import pythontk as ptk
+
+        tube = _make_cylinder()
+        joints = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)])
+        SkinUtils.bind_to_curve(
+            tube, joints, centerline=[(-5, 0, 0), (0, 0, 0), (5, 0, 0)]
+        )
+        first = SkinUtils.export_weights(tube)
+        second = SkinUtils.export_weights(tube)
+        root = os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
+        for path in (first, second):
+            self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+            self.assertTrue(os.path.isfile(path), path)
+            self.assertTrue(
+                os.path.normcase(os.path.realpath(path)).startswith(root), path
+            )
+            self.assertEqual(os.path.basename(path), f"{tube}.xml")
+        self.assertNotEqual(os.path.dirname(first), os.path.dirname(second))
+
     def test_export_import_roundtrip(self):
         tube = _make_cylinder()
         joints = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)])

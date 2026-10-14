@@ -41,14 +41,16 @@ FBX_OPTIONS = {}
 #  * User PARAMS (``__PAINTER_RENDER_OUTPUT_PATH__``) go through
 #    :func:`uitk.bridge.js_literal` and arrive as JS literals --
 #    already quoted.
-#  * Internal tokens (``__OUTPUT_DIR__``) substitute as raw strings, so
+#  * Internal tokens (``__IMAGES_DIR__``) substitute as raw strings, so
 #    the template body wraps them in manual double quotes to land a
 #    valid JS string literal.
 # Empty ``__PAINTER_RENDER_OUTPUT_PATH__`` renders as ``""`` and the
-# ``||`` falls back to ``<output_dir>/painter_render.png``.
+# ``||`` falls back to ``<images_dir>/painter_render.png``: the named
+# Output Dir, else the scene project's images folder (a render is a
+# deliverable, never part of the scratch hand-off).
 RPC_SCRIPT = (
     "alg.imageExporter.exportRenderImage({"
-    'path: __PAINTER_RENDER_OUTPUT_PATH__ || ("__OUTPUT_DIR__" + "/painter_render.png"),'
+    'path: __PAINTER_RENDER_OUTPUT_PATH__ || ("__IMAGES_DIR__" + "/painter_render.png"),'
     "width: __PAINTER_RENDER_WIDTH__,"
     "height: __PAINTER_RENDER_HEIGHT__,"
     "samples: __PAINTER_RENDER_SAMPLES__"

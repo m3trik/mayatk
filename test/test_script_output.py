@@ -102,9 +102,16 @@ class TestScriptOutput(unittest.TestCase):
         widget.show()
         widget.setFocus()
 
-        QtTest.QTest.keyClick(widget, QtCore.Qt.Key_C, QtCore.Qt.ControlModifier)
-
+        # The probe above can pass and the copy still lose the clipboard to
+        # another process a moment later (measured: one false failure in a full
+        # run, green alone). A real regression fails every attempt; the probe's
+        # text stays put until a copy lands, so no attempt passes by accident.
         clipboard = QtWidgets.QApplication.clipboard()
+        for _ in range(3):
+            QtTest.QTest.keyClick(widget, QtCore.Qt.Key_C, QtCore.Qt.ControlModifier)
+            if clipboard.text() == "Hello":
+                break
+            QtTest.QTest.qWait(100)
         self.assertEqual(clipboard.text(), "Hello")
 
     def test_show_is_not_a_shadowing_classmethod(self):

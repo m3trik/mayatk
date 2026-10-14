@@ -1,0 +1,10 @@
+{
+    "_meta": {"version": 1, "description": "Arnold's own defaults: a clean-enough look-dev pass with moderate noise."},
+    "camera_samples": 3,
+    "diffuse_samples": 2,
+    "specular_samples": 2,
+    "transmission_samples": 2,
+    "diffuse_depth": 1,
+    "specular_depth": 1,
+    "transmission_depth": 8
+}

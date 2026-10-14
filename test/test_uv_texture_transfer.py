@@ -1605,6 +1605,19 @@ class TestOutputDirResolution(MayaTkTestCase):
             os.path.normpath(TextureTransfer.default_output_dir()), self.base
         )
 
+    def test_the_base_follows_the_scenes_project_not_the_active_one(self):
+        """A scene saved in another project resolves against THAT project's
+        texture folder: the maps belong to the scene that references them.
+        Added: 2026-10-13"""
+        other = os.path.realpath(ptk.TempArtifacts("uv_transfer_proj").dir_path())
+        ptk.Workspace.create(other, create_dirs=False)
+        os.makedirs(os.path.join(other, "scenes"), exist_ok=True)
+        cmds.file(rename=os.path.join(other, "scenes", "shot.ma"))
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(TextureTransfer.default_output_dir())),
+            os.path.normcase(os.path.join(other, "sourceimages", "uv_transfer")),
+        )
+
     def test_a_relative_entry_lands_under_sourceimages(self):
         self.assertEqual(
             os.path.normpath(TextureTransfer.resolve_output_dir("bakes/v2")),

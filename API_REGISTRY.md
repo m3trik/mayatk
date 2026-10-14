@@ -379,14 +379,14 @@ Applies tween mesh edits back to blendShape in-between targets.
 
 Switchboard slots controller for blendshape_animator.ui.
 
-- [`COL_NAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L27) — constant
-- [`COL_WEIGHT`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L28) — constant
-- [`COL_FRAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L29) — constant
-- [`COL_TOPOLOGY`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L30) — constant
-- [`COL_STATUS`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L31) — constant
-- [`MODE_WEIGHT`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L34) — constant
-- [`MODE_FRAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L35) — constant
-- **[`class BlendshapeAnimatorSlots(BlendshapeAnimator)`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L57)** — Controller wiring blendshape_animator.ui to the BlendshapeAnimator domain class.
+- [`COL_NAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L28) — constant
+- [`COL_WEIGHT`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L29) — constant
+- [`COL_FRAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L30) — constant
+- [`COL_TOPOLOGY`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L31) — constant
+- [`COL_STATUS`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L32) — constant
+- [`MODE_WEIGHT`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L35) — constant
+- [`MODE_FRAME`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L36) — constant
+- **[`class BlendshapeAnimatorSlots(BlendshapeAnimator)`](mayatk/mayatk/anim_utils/blendshape_animator/blendshape_animator_slots.py#L58)** — Controller wiring blendshape_animator.ui to the BlendshapeAnimator domain class.
   - `BlendshapeAnimatorSlots.header_init(self, widget) -> None` — Configure header buttons + about menu.
   - `BlendshapeAnimatorSlots.b000_init(self, widget) -> None` — Create Setup button — option_box exposes alternative entrypoints.
   - `BlendshapeAnimatorSlots.b000(self, widget) -> None` — Create Setup.
@@ -506,7 +506,7 @@ Slots for the Key Stash panel (key_stash.ui).
 
 Playblast capture, encoding, and preview-render exports for Maya.
 
-- **[`class PlayblastExporter(pythontk.SequenceExporter)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L59)** — Viewport capture and preview-render exports.
+- **[`class PlayblastExporter(pythontk.SequenceExporter)`](mayatk/mayatk/anim_utils/playblast_exporter.py#L60)** — Viewport capture and preview-render exports.
   - `PlayblastExporter.scene_name() -> str` *(static)* — Basename of the current scene without extension;
   - `PlayblastExporter.scene_fps() -> float` *(static)* — The scene frame rate as a float.
   - `PlayblastExporter.sequence_name(self) -> str`
@@ -1174,9 +1174,10 @@ Unified audio system for Maya scenes.
 - [`ATTR_PREFIX`](mayatk/mayatk/audio_utils/_audio_utils.py#L65) — constant
 - [`FILE_MAP_ATTR`](mayatk/mayatk/audio_utils/_audio_utils.py#L68) — constant
 - [`MARKER_ATTR`](mayatk/mayatk/audio_utils/_audio_utils.py#L72) — constant
-- [`RESERVED_TRACK_IDS`](mayatk/mayatk/audio_utils/_audio_utils.py#L75) — constant
+- [`LEGACY_CACHE_DIR_NAMES`](mayatk/mayatk/audio_utils/_audio_utils.py#L75) — constant
+- [`RESERVED_TRACK_IDS`](mayatk/mayatk/audio_utils/_audio_utils.py#L80) — constant
 - **[`class TrackEvent`](mayatk/mayatk/audio_utils/_audio_utils.py#L33)** — One keyed play-event on a track.
-- **[`class AudioUtils(pythontk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L83)** — Unified audio system API for Maya scenes.
+- **[`class AudioUtils(pythontk.HelpMixin)`](mayatk/mayatk/audio_utils/_audio_utils.py#L88)** — Unified audio system API for Maya scenes.
   - `AudioUtils.get_snap_frames() -> bool` *(static)* — Whether audio key writes snap to whole frames -- the scene's effect
   - `AudioUtils.set_snap_frames(value: bool) -> None` *(static)* — Set the scene recipe's whole-frame snap for audio key writes.
   - `AudioUtils.validate_track_id(track_id: str) -> None` *(static)* — Raise ``ValueError`` if *track_id* violates schema rules.
@@ -1228,7 +1229,7 @@ Unified audio system for Maya scenes.
 
 Scene-wide audio event manager — thin facade over ``audio_utils``.
 
-- **[`class AudioClips(pythontk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L47)** — Scene-wide audio event facade.
+- **[`class AudioClips(pythontk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L46)** — Scene-wide audio event facade.
   - `AudioClips.sync(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]` *(class)* — Reconcile DG nodes and rebuild the composite WAV.
   - `AudioClips.rebuild_composite(cls) -> Optional[str]` *(class)* — Rebuild the scene-wide composite WAV from keyed start events.
   - `AudioClips.remove(cls) -> int` *(class)* — Delete every managed DG node, the composite, and all tracks.
@@ -1271,7 +1272,7 @@ Maya event lifecycle and hydration for Audio Clips.
 
 Export operations for Audio Clips.
 
-- **[`class ExportMixin`](mayatk/mayatk/audio_utils/audio_clips/export_ops.py#L32)** — Composite and per-clip WAV export.
+- **[`class ExportMixin`](mayatk/mayatk/audio_utils/audio_clips/export_ops.py#L34)** — Composite and per-clip WAV export.
 
 <a id="audio_utils--batch"></a>
 ### `audio_utils/batch.py`
@@ -1305,7 +1306,7 @@ One-shot migration from legacy single-enum carriers to per-track schema.
 
 Low-level DG audio node primitives.
 
-- **[`class Nodes(_NodesInternal)`](mayatk/mayatk/audio_utils/nodes.py#L47)** — Nodes — module namespace.
+- **[`class Nodes(_NodesInternal)`](mayatk/mayatk/audio_utils/nodes.py#L45)** — Nodes — module namespace.
   - `Nodes.resolve_playable_path(audio_path: str, cache_dir: Optional[str] = None) -> Optional[str]` *(static)* — Return a Maya-playable path, converting to WAV via ``ptk.AudioUtils``.
   - `Nodes.workspace_sound_dir() -> Optional[str]` *(static)* — Return the Maya workspace ``sound/`` directory, or ``None``.
   - `Nodes.create_dg(file_path: str, name: Optional[str] = None, offset: float = 0, track_id: Optional[str] = None) -> Optional[str]` *(static)* — Create a new audio DG node configured for playback.
@@ -2082,8 +2083,11 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project (``workspace -openWorkspace``).
   - `EnvUtils.workspace_root(path: Optional[str] = None) -> str` *(static)* — Absolute root of the current workspace, or ''.
   - `EnvUtils.set_scene_source(cls, scene: str, source: Optional[str] = None) -> Optional[str]` *(class)* — Record that the scene file *scene* stands in for the scene *source*;
-  - `EnvUtils.scene_source(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — The scene the scene file *scene* (default: the open one) stands in
+  - `EnvUtils.twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — Where a save of the stand-in *scene* (default: the open one) lands
+  - `EnvUtils.scene_source(scene: Optional[str] = None) -> Optional[str]` *(static)* — The scene the scene file *scene* (default: the open one) stands in
   - `EnvUtils.scene_project_root() -> Optional[str]` *(static)* — The project the open scene's files belong to;
+  - `EnvUtils.scene_workspace() -> Optional[ptk.Workspace]` *(static)* — The open scene's project as a ``ptk.Workspace``, or ``None``
+  - `EnvUtils.scene_source_images_dir(subfolder: str = '', create: bool = False) -> str` *(static)* — Where a tool's generated maps for the open scene go by default: the
   - `EnvUtils.scenes_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →
   - `EnvUtils.source_images_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's texture folder — its ``sourceImages`` rule → an existing
   - `EnvUtils.texture_search_dirs(path: Optional[str] = None) -> List[str]` *(static)* — Where this scene's map files can be found NOW, most specific first.
@@ -2135,13 +2139,16 @@ Blender bridge engine -- export the Maya selection and run a chosen import templ
 
 Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
 
-- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L107) — constant
-- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L118) — constant
-- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L121) — constant
-- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L131) — constant
-- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L137) — constant
-- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L141) — constant
-- **[`class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L438)** — Engine: convert a .blend to FBX via headless Blender, then import it.
+- [`BAKE_CACHE_KIND`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L82) — constant
+- [`BAKE_INFO_SOURCE`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L87) — constant
+- [`BAKE_INFO_KEY`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L88) — constant
+- [`SUPPORTED_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L98) — constant
+- [`GLTF_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L109) — constant
+- [`CONVERTIBLE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L112) — constant
+- [`BAKE_SOURCE_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L122) — constant
+- [`BAKE_SOURCE_SUFFIX`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L127) — constant
+- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L131) — constant
+- **[`class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`](mayatk/mayatk/env_utils/blender_bridge/_scene_import.py#L404)** — Engine: convert a .blend to FBX via headless Blender, then import it.
   - `BlenderSceneImport.blender_path(self) -> Optional[str]` *(property)* — The Blender executable (explicit, or discovered via the bridge's AppSpec).
   - `BlenderSceneImport.require_blender(self) -> str` — Return :attr:`blender_path` or raise the spec's not-found error.
   - `BlenderSceneImport.find_scenes(root_dir: str, recursive: bool = False, extensions: Optional[Sequence[str]] = None) -> List[str]` *(static)* — Every importable Blender scene (``.blend``) under *root_dir* — sorted abs paths.
@@ -2149,13 +2156,19 @@ Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
   - `BlenderSceneImport.render_script(self, src_path: str, out_path: str, *, via: str = 'fbx', embed_textures: bool = False, include_animation: bool = True, texture_dir: str = '', rig_mode: str = 'auto') -> str` — Render the Blender-side conversion script (exposed for tests/preview).
   - `BlenderSceneImport.convert(self, src_path: str, out_path: str, *, via: str = 'fbx', timeout: Optional[float] = None, texture_dir: Optional[str] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None, **script_opts: Any) -> 'ptk.ScriptRunResult'` — Convert *src_path* to *out_path* in a fresh headless Blender (blocking).
   - `BlenderSceneImport.import_scene(self, src_path: str, *, via: str = 'fbx', cleanup: bool = True, use_cache: bool = True, timeout: Optional[float] = None, fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', scene_settings: Any = 'auto', scene_data: bool = True, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> List[str]` — Import the Blender scene at *src_path*;
-  - `BlenderSceneImport.import_payload(self, payload_path: str, *, via: str = 'fbx', fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', adopt_scene: bool = False, scene_data: bool = True, step: Optional[Callable[[int, int, str], Any]] = None) -> List[str]` — Import the conversion payload at *payload_path* -- the FBX or USD plus
+  - `BlenderSceneImport.import_payload(self, payload_path: str, *, via: str = 'fbx', fbx_options: Optional[Dict[str, Any]] = None, shader_type: str = 'stingray', adopt_scene: bool = False, scene_data: bool = True, step: Optional[Callable[[int, int, str], Any]] = None, media_home: Optional[str] = None) -> List[str]` — Import the conversion payload at *payload_path* -- the FBX or USD plus
   - `BlenderSceneImport.mayapy_path(self) -> Optional[str]` *(property)* — The headless ``mayapy`` used for the bake — this host's own interpreter.
   - `BlenderSceneImport.require_mayapy(self) -> str` — Return :attr:`mayapy_path` or raise an error naming what's missing.
-  - `BlenderSceneImport.render_bake_script(self, src_path: str, out_path: str) -> str` — Render the Maya-side intermediate->.ma bake script (exposed for
-  - `BlenderSceneImport.bake(self, src_path: str, out_path: str, *, timeout: Optional[float] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None) -> Any` — Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a
-  - `BlenderSceneImport.bake_scene(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: Optional[float] = None, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', **script_opts: Any) -> str` — Bake *src_path* to a cached ``.ma`` and return its path — the reference path.
-  - `BlenderSceneImport.bake_source(baked_path: str) -> Optional[str]` *(static)* — The foreign scene *baked_path* was baked from, or None if it is not a bake.
+  - `BlenderSceneImport.render_bake_script(self, src_path: str, out_path: str, info: Optional[Mapping[str, str]] = None, media_home: Optional[str] = None, project: Optional[str] = None) -> str` — Render the Maya-side intermediate->.ma bake script (exposed for
+  - `BlenderSceneImport.bake(self, src_path: str, out_path: str, *, timeout: Optional[float] = None, on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None, info: Optional[Mapping[str, str]] = None, media_home: Optional[str] = None, project: Optional[str] = None) -> Any` — Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a
+  - `BlenderSceneImport.bake_scene(self, src_path: str, *, via: str = 'fbx', use_cache: bool = True, timeout: Optional[float] = None, progress: Optional[Callable[..., Optional[bool]]] = None, rig_mode: str = 'auto', project: Optional[str] = None, **script_opts: Any) -> str` — Bake *src_path* to a ``.ma`` in the project's bake cache and return its
+  - `BlenderSceneImport.bake_dir(cls, project: Optional[str] = None, create: bool = False) -> Optional[str]` *(class)* — Where the bakes of *project* (default: the open scene's) live: its
+  - `BlenderSceneImport.bake_slot(cls, src_path: str, project: Optional[str] = None) -> Optional[str]` *(class)* — Where *project*'s (default: the open scene's) bake of *src_path* lives
+  - `BlenderSceneImport.bake_info(cls, baked_path: str) -> Dict[str, str]` *(class)* — The ``fileInfo`` records of the ``.ma`` at *baked_path*, read from its
+  - `BlenderSceneImport.bake_source(cls, baked_path: str) -> Optional[str]` *(class)* — The foreign scene *baked_path* was baked from, or None if it is not a bake.
+  - `BlenderSceneImport.stamp_bake_info(cls, baked_path: str, info: Mapping[str, str]) -> None` *(class)* — Write *info* into the ``.ma`` *baked_path*'s header as ``fileInfo``
+  - `BlenderSceneImport.rehome_bake(self, baked_path: str, project: Optional[str] = None) -> Optional[str]` — The project bake standing in for the bake *baked_path* that lives in
+  - `BlenderSceneImport.purge_unused_bakes(self, project: Optional[str] = None, dry_run: bool = False) -> List[str]` — Remove the bakes in *project*'s bake cache that no scene references.
   - `BlenderSceneImport.collapse_nested_levels(cls, nodes: List[str], joints: bool = False) -> int` *(class)* — Remove the redundant level a round trip nests around a node;
 
 <a id="env_utils--blender_bridge--blender_bridge_slots"></a>
@@ -2185,16 +2198,19 @@ Registry of user-tunable Blender-bridge parameters exposed to the panel.
 
 Import a converted intermediate (USD or FBX) headlessly (mayapy) and save it as a ``.ma``
 
-- [`covering_take(mel, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L84) — ``(index, names)``: the 1-based index of the take whose span covers every
-- [`import_source(cmds)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L110) — Import *SRC_FILE* into the empty standalone scene without mayatk;
-- [`restore_usd_locators(cmds, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L162) — Give point-marker Empties their locator shapes back (USD source): every
-- [`apply_instances()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L183) — Refuse a USD sidecar the child cannot replay (no mayatk): GUARANTEED-OR-FAIL.
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L212)
+- [`covering_take(mel, path)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L94) — ``(index, names)``: the 1-based index of the take whose span covers every
+- [`import_source(cmds)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L120) — Import *SRC_FILE* into the empty standalone scene without mayatk;
+- [`restore_usd_locators(cmds, new_nodes)`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L172) — Give point-marker Empties their locator shapes back (USD source): every
+- [`apply_instances()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L193) — Refuse a USD sidecar the child cannot replay (no mayatk): GUARANTEED-OR-FAIL.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L222)
 - [`SRC_FILE`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L46) — constant
 - [`OUT_MA`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L47) — constant
 - [`EXTRA_SYS_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L48) — constant
-- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L50) — constant
-- [`USD_IMPORT_OPTIONS`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L58) — constant
+- [`BAKE_INFO`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L52) — constant
+- [`MEDIA_HOME`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L54) — constant
+- [`PROJECT`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L58) — constant
+- [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L60) — constant
+- [`USD_IMPORT_OPTIONS`](mayatk/mayatk/env_utils/blender_bridge/templates/_bake_scene.py#L68) — constant
 
 <a id="env_utils--blender_bridge--templates--_import_scene"></a>
 ### `env_utils/blender_bridge/templates/_import_scene.py`
@@ -2263,7 +2279,8 @@ Open a .blend headlessly (blender --background) and export it as USD for a Maya 
 Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 
 - [`import_payload()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L85) — Import the payload (FBX or USD) and apply its manifest;
-- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L117)
+- [`pack_payload_images()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L117) — Pack every image still read from beside the temp payload into the .blend.
+- [`main()`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L138)
 - [`BRIDGE_MODES`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L41) — constant
 - [`FBX_PATH`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L53) — constant
 - [`USD_EXTENSIONS`](mayatk/mayatk/env_utils/blender_bridge/templates/_save_scene.py#L54) — constant
@@ -2371,7 +2388,7 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 <a id="env_utils--fbx_utils"></a>
 ### `env_utils/fbx_utils.py`
 
-- **[`class FbxUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L56)** — Low-level utilities for FBX import/export operations in Maya.
+- **[`class FbxUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/fbx_utils.py#L57)** — Low-level utilities for FBX import/export operations in Maya.
   - `FbxUtils.load_plugin()` *(static)* — Ensure the fbxmaya plugin is loaded.
   - `FbxUtils.embed_media_write_cwd()` *(static)* — Yield with the process CWD at the workspace root when the live FBX
   - `FbxUtils.reset_import()` *(static)* — Reset the FBX plugin's global IMPORT options to factory defaults.
@@ -2457,7 +2474,7 @@ The scene's hierarchy baseline, stored in the scene.
 <a id="env_utils--hierarchy_sync--hierarchy_sync_slots"></a>
 ### `env_utils/hierarchy_sync/hierarchy_sync_slots.py`
 
-- **[`class HierarchySyncController(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L25)** — Controller for hierarchy management operations.
+- **[`class HierarchySyncController(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L26)** — Controller for hierarchy management operations.
   - `HierarchySyncController.workspace(self) -> Optional[str]` *(property)* — Get the current workspace directory.
   - `HierarchySyncController.reference_path(self) -> str` *(property)* — The current reference scene path.
   - `HierarchySyncController.analyze_hierarchies(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool` — Analyze hierarchies and perform comparison.
@@ -2471,7 +2488,7 @@ The scene's hierarchy baseline, stored in the scene.
   - `HierarchySyncController.log_diff_results(self)` — Log detailed hierarchy difference analysis results using rich formatting.
   - `HierarchySyncController.get_recent_reference_scenes(self) -> List[str]` — Get recent reference scenes from settings.
   - `HierarchySyncController.save_recent_reference_scene(self, scene_path: str)` — Save reference scene to recent list.
-- **[`class HierarchySyncSlots(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1055)** — Slots class for hierarchy management UI operations.
+- **[`class HierarchySyncSlots(pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/hierarchy_sync/hierarchy_sync_slots.py#L1056)** — Slots class for hierarchy management UI operations.
   - `HierarchySyncSlots.header_init(self, widget)` — Initialize the header widget.
   - `HierarchySyncSlots.tree000_init(self, widget)` — Initialize the reference/imported hierarchy tree widget.
   - `HierarchySyncSlots.tree001_init(self, widget)` — Initialize the current scene hierarchy tree widget.
@@ -2620,10 +2637,11 @@ Reference Manager engine — Maya file references, assemblies and workspaces.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L396)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L384)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool` — Reference *file_path* under *namespace* (sanitized;
+  - `ReferenceManager.purge_unused_bakes(self, dry_run: bool = False) -> list` — Remove the bakes in the open scene's project that no scene references
   - `ReferenceManager.import_references(self, namespaces=None, namespace_mode='remove', scene_data='merge')` — Import referenced objects into the scene, making their data local.
   - `ReferenceManager.update_references(self)` — Update all references to reflect the latest changes from the original files
   - `ReferenceManager.get_reference_top_transforms(self, ref)` — Return the reference's top-level transforms — those whose parent is outside it.
@@ -2637,6 +2655,7 @@ Reference Manager engine — Maya file references, assemblies and workspaces.
 Reference Manager controller — the panel-facing layer over the engine.
 
 - **[`class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_controller.py#L47)** — Controller that bridges Maya reference functionality with UI interactions.
+  - `ReferenceManagerController.scene_notes(self) -> 'ptk.SceneNotes'` *(property)* — The Notes column's store (:class:`pythontk.SceneNotes`: one file per
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.block_table_selection_method(method)`
   - `ReferenceManagerController.prepare_item_for_edit(self, item)` — Prepare an item for editing by showing the full filename.
@@ -2702,7 +2721,7 @@ Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
 
-- **[`class SceneExporter(pythontk.SceneExporterBase)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L33)** — Maya's Scene Exporter: the export write, its scope and its FBX /
+- **[`class SceneExporter(pythontk.SceneExporterBase)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L32)** — Maya's Scene Exporter: the export write, its scope and its FBX /
   - `SceneExporter.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
   - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, timestamp: bool = False, name_regex: Optional[str] = None, log_level: Optional[str] = None, hide_log_file: Optional[bool] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[int, int, Optional[str]], Any]] = None) -> bool` — Perform the export operation, including initialization and task management.
   - `SceneExporter.name_context(self, name_regex: Optional[str] = None) -> Dict[str, str]` — Live value for every token in :attr:`NAME_TOKENS` but the counter.
@@ -3079,7 +3098,7 @@ The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 
 The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 
-- **[`class LightmapRecords(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L70)** — Maya's lightmap markers and manifest, and the files they name.
+- **[`class LightmapRecords(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_records.py#L71)** — Maya's lightmap markers and manifest, and the files they name.
   - `LightmapRecords.baked_objects(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — The objects :meth:`revert` would take the lightmap from.
   - `LightmapRecords.lightmap_info(cls, obj: str) -> Dict[str, Any]` *(class)* — *obj*'s committed lightmap -- its marker plus where the map is NOW.
   - `LightmapRecords.commit(cls, mapping: Dict[str, str], scale_offsets: Optional[Dict[str, List[float]]] = None, intensity: float = 1.0, written: bool = True) -> Dict[str, str]` *(class)* — Record a lighting-only bake for the engine (fully non-destructive).
@@ -3238,7 +3257,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `EmissiveGroups.discard_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's groups were dropped: delete the member sets it
   - `EmissiveGroups.export_record(cls, ctx: 'ptk.ExportContext') -> Optional['ptk.Record']` *(class)* — The ``emissive_groups`` manifest record, or ``None`` when no group
   - `EmissiveGroups.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Republish the ``emissive_groups`` channel on the ``data_export``
-- **[`class EmissiveGroupsSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L817)** — Switchboard slots for the ``emissive_groups.ui`` panel.
+- **[`class EmissiveGroupsSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L826)** — Switchboard slots for the ``emissive_groups.ui`` panel.
   - `EmissiveGroupsSlots.header_init(self, widget) -> None`
   - `EmissiveGroupsSlots.txt000_init(self, widget) -> None` — Group-name field — clearable back to the auto-derived name.
   - `EmissiveGroupsSlots.tbl000_init(self, widget) -> None` — Table setup: one-time construction, then (re)wire signals and populate.
@@ -3274,6 +3293,7 @@ Emissive groups — named face sets that gate emissive regions at runtime.
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
 - **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L2440)**
+  - `GameShaderSlots.source_images_dir(self) -> str` *(property)* — Where Browse opens: the scene project's texture folder, resolved
   - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
   - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
   - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
@@ -3317,7 +3337,8 @@ Maya-side glue for the Marmoset Toolbag engine.
   - `MarmosetBridge.params_defaults(self) -> Dict[str, Any]`
   - `MarmosetBridge.render_template(self, *args, **kwargs) -> Optional[str]` — Render a Toolbag script body (delegates to the engine deliverer).
   - `MarmosetBridge.source_model_path_for(cls, fbx_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx`` (shared convention).
-  - `MarmosetBridge.baked_texture_dir(cls) -> str` *(class)* — ``<project>/sourceimages/baked`` -- where a roundtrip's maps land.
+  - `MarmosetBridge.baked_texture_dir(cls) -> str` *(class)* — ``<scene project>/sourceimages/baked`` -- where a roundtrip's maps land.
+  - `MarmosetBridge.toolbag_scene_dir(cls) -> str` *(class)* — ``<scene project>/data/marmoset`` -- where a roundtrip's ``.tbscene``
   - `MarmosetBridge.source_material_name(cls, mat_name: str) -> str` *(class)* — *mat_name* with every trailing ``_BAKED`` removed.
   - `MarmosetBridge.baked_material_name(cls, mat_name: str) -> str` *(class)* — ``<source material>_BAKED``, idempotent across re-bakes.
   - `MarmosetBridge.texture_set_aliases(cls, materials, log=None) -> Dict[str, str]` *(class)* — ``{material: name its map files carry}`` for every renamed material.
@@ -3336,8 +3357,8 @@ Drive Marmoset Toolbag from the outside -- launch + templated automation.
   - `MarmosetEngine.toolbag_log_path(self) -> Optional[str]` *(property)* — Resolve Toolbag's application log file (script prints + tracebacks).
   - `MarmosetEngine.preflight(self, bridge, request) -> bool` — Validate the (template, mode) before the bridge produces its payload.
   - `MarmosetEngine.deliver(self, bridge, payload, request) -> Optional[Dict[str, Any]]` — Hand the produced model + manifests to Toolbag via :meth:`send`.
-  - `MarmosetEngine.send(self, model_path: str, manifest_path: Optional[str] = None, pairs_path: Optional[str] = None, source_model_path: Optional[str] = None, output_dir: Optional[str] = None, texture_dir: Optional[str] = None, texture_set_aliases: Optional[Dict[str, str]] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]` — Render *template* in *mode* against *model_path* and hand off to Toolbag.
-  - `MarmosetEngine.render_template(self, template: str, model_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None, source_model_path: Optional[str] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
+  - `MarmosetEngine.send(self, model_path: str, manifest_path: Optional[str] = None, pairs_path: Optional[str] = None, source_model_path: Optional[str] = None, output_dir: Optional[str] = None, texture_dir: Optional[str] = None, texture_set_aliases: Optional[Dict[str, str]] = None, output_name: Optional[str] = None, toolbag_exe: Optional[str] = None, template: str = 'import', mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, scene_dir: Optional[str] = None) -> Optional[Dict[str, Any]]` — Render *template* in *mode* against *model_path* and hand off to Toolbag.
+  - `MarmosetEngine.render_template(self, template: str, model_path: str, manifest_path: str, output_dir: str, mode: str = SEND_TO, params: Optional[Dict[str, Any]] = None, headless: Optional[bool] = None, pairs_path: Optional[str] = None, source_model_path: Optional[str] = None, save_dir: Optional[str] = None) -> Optional[str]` — Return the rendered Toolbag Python script body, or *None* on miss.
   - `MarmosetEngine.list_templates() -> List[Path]` *(static)* — Return user-visible templates in ``templates/`` (skips underscore-prefixed).
   - `MarmosetEngine.template_modes(template_path: Path) -> Tuple[str, ...]` *(static)* — Return the modes declared by *template_path*'s ``BRIDGE_MODES`` constant.
   - `MarmosetEngine.list_template_modes() -> List[Tuple[str, str]]` *(static)* — Return ``[(stem, mode), ...]`` for every (template, mode) pairing.
@@ -3734,6 +3755,8 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
   - `GraphRestorer.restore_graph(self)` — Restore the graph based on the YAML configuration and textures.
   - `GraphRestorer.restore_connections(self)` — Connect nodes as specified in the graph configuration.
 - **[`class ShaderTemplates`](mayatk/mayatk/mat_utils/shader_templates/_shader_templates.py#L531)** — Facade class for managing shader templates.
+  - `ShaderTemplates.store(cls) -> 'ptk.PresetStore'` *(class)* — The template store: shipped templates read-only, the user's in
+  - `ShaderTemplates.migrate_package_templates(cls, store: 'ptk.PresetStore') -> List[str]` *(class)* — Move user templates out of *store*'s built-in folder into its user
   - `ShaderTemplates.save_template(nodes, file_path, exclude_types=None, logger=None)` *(static)* — Save the specified nodes as a shader template.
   - `ShaderTemplates.restore_template(file_path, texture_paths=None, name=None, logger=None)` *(static)* — Restore a shader template from a file.
 
@@ -3743,14 +3766,15 @@ Retype a material in place — legacy Maya shaders to an exportable PBR one.
 Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
 
 - **[`class ShaderTemplatesSlots(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/shader_templates/shader_templates_slots.py#L27)**
+  - `ShaderTemplatesSlots.source_images_dir(self) -> str` *(property)* — Where Browse opens: the scene project's texture folder, resolved
   - `ShaderTemplatesSlots.header_init(self, widget)` — Initialize the header widget.
   - `ShaderTemplatesSlots.lbl_graph_material(self)` — Graph the last restored material in the Hypershade.
-  - `ShaderTemplatesSlots.lbl_open_templates_dir(self)` — Open the shader templates directory in file explorer.
+  - `ShaderTemplatesSlots.lbl_open_templates_dir(self)` — Open the user's shader templates directory in file explorer.
   - `ShaderTemplatesSlots.cmb002_init(self, widget)` — Initialize the ComboBox for shader templates.
-  - `ShaderTemplatesSlots.refresh_templates(self, widget)` — Refresh the list of templates.
+  - `ShaderTemplatesSlots.refresh_templates(self, widget)` — Refresh the list of templates: shipped and user (a user template
   - `ShaderTemplatesSlots.rename_template_safe(self, widget, new_name)` — Safe rename that checks for None.
   - `ShaderTemplatesSlots.lbl000(self)` — Set the ComboBox as editable to allow renaming.
-  - `ShaderTemplatesSlots.lbl001(self)` — Delete the selected template.
+  - `ShaderTemplatesSlots.lbl001(self)` — Delete the selected (user) template.
   - `ShaderTemplatesSlots.lbl002(self)` — Open the selected template in the default editor.
   - `ShaderTemplatesSlots.b000(self)` — Create shader network using selected template.
   - `ShaderTemplatesSlots.b001(self)` — Load texture maps and update GUI.
@@ -3821,7 +3845,7 @@ Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
 Slots for the Substance Painter bridge panel.
 
-- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L48)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
+- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L50)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `SubstanceBridgeSlots.set_bake_source_from_selection(self) -> None` — Store the current selection as the scene's bake source.
   - `SubstanceBridgeSlots.select_bake_source(self) -> None` — Select the bake-source set's members (hidden ones included).
   - `SubstanceBridgeSlots.clear_bake_source(self) -> None` — Delete the bake-source set node;
@@ -3935,9 +3959,9 @@ Import the FBX as a new project, then bake Iray lighting into diffuse.
 - [`BRIDGE_MODES`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L52) — constant
 - [`LAUNCH_ARGS`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L66) — constant
 - [`RPC_SCRIPT`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L76) — constant
-- [`BUILD_MANIFEST`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L102) — constant
-- [`FBX_OPTIONS`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L107) — constant
-- [`TARGET_INSTANCE`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L112) — constant
+- [`BUILD_MANIFEST`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L103) — constant
+- [`FBX_OPTIONS`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L108) — constant
+- [`TARGET_INSTANCE`](mayatk/mayatk/mat_utils/substance_bridge/templates/bake_lighting.py#L113) — constant
 
 <a id="mat_utils--substance_bridge--templates--import"></a>
 ### `mat_utils/substance_bridge/templates/import.py`
@@ -3974,9 +3998,9 @@ Render the current Painter project via Iray (JS body unverified).
 - [`LAUNCH_ARGS`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L28) — constant
 - [`EXPORT_FBX`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L33) — constant
 - [`FBX_OPTIONS`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L34) — constant
-- [`RPC_SCRIPT`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L49) — constant
-- [`BUILD_MANIFEST`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L58) — constant
-- [`TARGET_INSTANCE`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L61) — constant
+- [`RPC_SCRIPT`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L51) — constant
+- [`BUILD_MANIFEST`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L60) — constant
+- [`TARGET_INSTANCE`](mayatk/mayatk/mat_utils/substance_bridge/templates/render.py#L63) — constant
 
 <a id="mat_utils--texture_baker"></a>
 ### `mat_utils/texture_baker.py`
@@ -3987,7 +4011,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
   - `TextureBaker.arnold_available() -> bool` *(static)* — True if the ``mtoa`` plugin is loaded AND its bake cmd is registered.
   - `TextureBaker.ensure_arnold(cls) -> bool` *(class)* — Load mtoa if it isn't loaded, then answer :meth:`arnold_available`.
   - `TextureBaker.render_panorama(self, position: Sequence[float], path: str, width: int = 1024, hide: Optional[Sequence[str]] = None, lights: Optional[Sequence[str]] = None) -> Optional[str]` — Render an equirectangular HDR of the scene seen from *position* to *path*.
-  - `TextureBaker.default_output_dir(subdir: str = 'baked_textures') -> str` *(static)* — ``<subdir>`` next to the saved scene, else under the workspace root.
+  - `TextureBaker.default_output_dir(subdir: str = 'baked') -> str` *(static)* — Where a bake writes when no ``output_dir`` is given: *subdir* in the
   - `TextureBaker.resolve_meshes(objects=None, descendants: bool = False) -> List[str]` *(static)* — Normalize *objects* (names / components / ``None`` = selection) to mesh transforms.
   - `TextureBaker.bake(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'bake_', suffix: str = '', backend: str = 'auto', uv_set: Optional[Union[str, Dict[str, str]]] = None, on_progress: Optional[Callable[[int, int, str], bool]] = None, stem: Optional[Union[Callable[[str], str], Dict[str, str]]] = None, size: Optional[Any] = None, shader: Optional[str] = None, batch: bool = False, claims: Optional[Any] = None, region: Optional[Any] = None, camera_shader: Optional[str] = None) -> Dict[str, str]` — Bake lighting per object to texture files (EXR on Arnold).
   - `TextureBaker.arnold_translation_guard(self)` — Bridge untranslatable (game/ShaderFX) materials for the bake.
@@ -3998,7 +4022,7 @@ Bake an object's shaded surface (material under scene lighting) to a texture.
 <a id="mat_utils--texture_path_editor"></a>
 ### `mat_utils/texture_path_editor.py`
 
-- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L26)**
+- **[`class TexturePathEditorSlots`](mayatk/mayatk/mat_utils/texture_path_editor.py#L27)**
   - `TexturePathEditorSlots.header_init(self, widget)` — Initialize the header menu.
   - `TexturePathEditorSlots.tb_set_texture_directory_init(self, widget)` — Populate the Set Directory option-box with the relocate-mode combobox.
   - `TexturePathEditorSlots.tb_normalize_paths_init(self, widget)` — Populate the Normalize Paths option-box with the external-mode combobox.
@@ -4209,6 +4233,11 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
   - `DataNodes.dump_export_nodes(cls, decode: bool = True) -> Dict[str, Dict[str, object]]` *(class)* — Every ``data_export`` carrier's channels, keyed by node (long path).
   - `DataNodes.carriers_in(cls, namespace: str) -> Dict[ptk.Scope, str]` *(class)* — The carriers a referenced module keeps under *namespace*
   - `DataNodes.scene_path(cls) -> str` *(class)* — The open scene's file, ``""`` while unsaved
+  - `DataNodes.set_scene_source(cls, scene: str, source: Optional[str] = None) -> Optional[str]` *(class)* — Record that the scene file *scene* stands in for the scene *source*;
+  - `DataNodes.scene_source(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — The scene the scene file *scene* (default: the open one) stands in
+  - `DataNodes.scene_workspace(cls) -> Optional[ptk.Workspace]` *(class)* — The project the open scene's files belong to, as a ``ptk.Workspace``;
+  - `DataNodes.scene_project_root(cls) -> Optional[str]` *(class)* — The root of :meth:`scene_workspace`, or ``None`` without a project.
+  - `DataNodes.scene_source_images_dir(cls, subfolder: str = '', create: bool = False) -> str` *(class)* — Where a tool's generated maps for the open scene go by default.
   - `DataNodes.install_path_rebase(cls) -> bool` *(class)* — Keep the path records spelled from the project of whichever file
   - `DataNodes.ensure_path_rebase(cls) -> bool` *(class)* — :meth:`install_path_rebase` unless a copy of it already is.
   - `DataNodes.remove_path_rebase(cls) -> None` *(class)* — Remove the re-base hook's callbacks (every copy's, by id).
@@ -4245,12 +4274,12 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
 
 - **[`class BluePencilMixin(object)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L30)** — Mixin for handling Blue Pencil operations.
   - `BluePencilMixin.get_blue_pencil_curves(self)` — Converts active Blue Pencil strokes to NURBS curves.
-- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L113)** — A class to trace images into Maya NURBS curves and generate geometry.
+- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L110)** — A class to trace images into Maya NURBS curves and generate geometry.
   - `ImageTracer.trace_curves(self) -> List[str]` — Traces the image and returns a list of created NURBS curves.
   - `ImageTracer.create_mesh(self, curves: Optional[List[str]] = None, combine: bool = True, name: str = 'traced_mesh', group_output: bool = True) -> Union[str, List[str]]` — Creates a polygon mesh from the traced curves (positive space).
   - `ImageTracer.create_negative_space_mesh(self, curves: Optional[List[str]] = None, margin_scale: float = 0.1, name: str = 'negative_space_mesh', group_output: bool = True) -> Optional[str]` — Creates a mesh representing the negative space (plane with holes).
   - `ImageTracer.project_on_plane(self, curves: Optional[List[str]] = None, name: str = 'projected_curves', group_output: bool = True) -> Union[str, List[str], None]` — Projects curves onto a plane.
-- **[`class ImageTracerSlots`](mayatk/mayatk/nurbs_utils/image_tracer.py#L418)** — UI slots for the Image Tracer tool.
+- **[`class ImageTracerSlots`](mayatk/mayatk/nurbs_utils/image_tracer.py#L415)** — UI slots for the Image Tracer tool.
   - `ImageTracerSlots.header_init(self, widget)` — Initialize the header widget.
   - `ImageTracerSlots.txt000_init(self, widget)`
   - `ImageTracerSlots.browse_image(self)`
@@ -4265,14 +4294,20 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
 
 Render-control helpers.
 
-- **[`class RenderUtils(pythontk.HelpMixin)`](mayatk/mayatk/render_utils/_render_utils.py#L28)** — Renderer enumeration / selection and Render-View control.
+- **[`class RenderUtils(pythontk.HelpMixin)`](mayatk/mayatk/render_utils/_render_utils.py#L37)** — Renderer enumeration / selection and Render-View control.
   - `RenderUtils.get_available_renderers(cls) -> List[Dict[str, object]]` *(class)* — Renderers the user can pick.
   - `RenderUtils.current_renderer() -> str` *(static)* — The scene's active renderer (``defaultRenderGlobals.currentRenderer``).
   - `RenderUtils.set_renderer(cls, name: str) -> None` *(class)* — Make *name* the active renderer, loading its plugin if required.
+  - `RenderUtils.ensure_arnold_options(cls) -> str` *(class)* — Load mtoa and create the scene's Arnold options if missing.
+  - `RenderUtils.render_settings(cls) -> Dict[str, Any]` *(class)* — The scene's current value of every :attr:`RENDER_SETTINGS` key.
+  - `RenderUtils.set_render_settings(cls, values: Dict[str, Any]) -> int` *(class)* — Write render settings to the scene.
+  - `RenderUtils.render_preset_store() -> 'ptk.PresetStore'` *(static)* — Named render-setting presets: shipped Arnold tiers + user presets.
   - `RenderUtils.render_camera(camera: str, render_mode: str = 'render') -> None` *(static)* — Render *camera* into the Render View, opening it if needed.
   - `RenderUtils.redo_previous_render(render_mode: str = 'render') -> None` *(static)* — Re-render the last render with its previous settings (fast path).
   - `RenderUtils.supports_ipr(cls, renderer: Optional[str] = None) -> bool` *(class)* — True if *renderer* can start an interactive (IPR) session.
   - `RenderUtils.start_ipr(cls, camera: str, renderer: Optional[str] = None) -> bool` *(class)* — Launch interactive (IPR) realtime rendering for *renderer*.
+  - `RenderUtils.prepare_arnold_preview(cls) -> Dict[str, List[str]]` *(class)* — Give Arnold what it needs to render what the viewport shows.
+  - `RenderUtils.sync_arnold_backface_culling(cls) -> List[str]` *(class)* — Make Arnold camera rays cull the backfaces Viewport 2.0 culls.
 
 <a id="rig_utils--_rig_utils"></a>
 ### `rig_utils/_rig_utils.py`
@@ -4471,6 +4506,7 @@ Shadow Rig engine — a projected-shadow rig for engine export.
   - `ShadowRig.horizon_output_path(self)` — ``<base>_horizon.png`` beside the silhouette.
   - `ShadowRig.bake_horizon(self, size=None, spans=None, path=None, *, only_if_changed=False)` — Bake the target's height-field shadow map
   - `ShadowRig.plane_is_atlased(cls, plane)` *(class)* — True while the plane samples the shared silhouette atlas.
+  - `ShadowRig.default_texture_dir() -> str` *(static)* — Where a rig's maps go when no path names one: the open SCENE's
   - `ShadowRig.pack_atlas(cls, planes=None, *, gutter=None)` *(class)* — Pack the scene's shadow tiles into one atlas per kind — every
   - `ShadowRig.unpack_atlas(cls, planes=None)` *(class)* — Undo :meth:`pack_atlas` for *planes* (all when None): unit UVs,
   - `ShadowRig.find_shadow_planes(cls, nodes=None)` *(class)* — Shadow planes = transforms carrying the stamped ``basePlaneSize``
@@ -4487,7 +4523,7 @@ Shadow Rig engine — a projected-shadow rig for engine export.
 
 A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 
-- **[`class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig/shadow_preview.py#L379)** — Attach / detach the live horizon preview on shadow planes (module doc).
+- **[`class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/shadow_rig/shadow_preview.py#L382)** — Attach / detach the live horizon preview on shadow planes (module doc).
   - `ShadowPreview.device(cls) -> Optional[str]` *(class)* — The live Viewport 2.0 device, or None headless.
   - `ShadowPreview.language(cls) -> Tuple[Optional[str], str]` *(class)* — ``(language, refusal)``: the shader language this session can
   - `ShadowPreview.shader_node(cls, plane) -> Optional[str]` *(class)* — The plane's preview shader node, or None.
@@ -4499,6 +4535,8 @@ A live Viewport 2.0 preview of a horizon rig: the artist drags the light
   - `ShadowPreview.toggle(cls, planes: Sequence[str], on: bool) -> Tuple[List[str], List[str]]` *(class)* — Attach (*on*) or detach the preview on *planes*;
   - `ShadowPreview.detach_all(cls) -> List[str]` *(class)* — Detach every preview in the scene;
   - `ShadowPreview.prepare_for_export(cls) -> None` *(class)* — Stand every preview down, then republish the shadow record: no
+  - `ShadowPreview.preview_dir(png: Optional[str] = None) -> str` *(static)* — Where the preview's viewport-only files go: the open scene's
+  - `ShadowPreview.texture_path(cls, png: str) -> str` *(class)* — Where :meth:`_write_texture` keeps the 16-bit promotion of *png*:
   - `ShadowPreview.classify_device(info: Iterable[str]) -> Optional[str]` *(static)* — ``"dx11"``, ``"glcore"``, ``"gl"`` (legacy) or None, from the lines
   - `ShadowPreview.effect_text(cls, language: str) -> str` *(class)* — The complete effect for *language*: Maya's prologue around the
   - `ShadowPreview.refusal(cls, device: Optional[str]) -> str` *(class)* — Why a preview cannot be shown on *device* (empty when it can).
@@ -4800,8 +4838,7 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
 
 Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 
-- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L26)** — Adds a Maya-flavored ``default_output_dir`` + Scope resolution to
-  - `MayaBridgeSlotsBase.default_output_dir(self) -> str` — Scene-dir then workspace fallback for an empty Output Dir field.
+- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L28)** — Adds the Maya-side Scope resolution and live tooltips to
   - `MayaBridgeSlotsBase.live_param_tooltip_blocks(self)` — Make the Bake Source row report the scene's CURRENT members.
   - `MayaBridgeSlotsBase.resolve_scope_objects(self, scope: str)` — Objects to export for the chosen ``SCOPE`` param.
 
@@ -5011,7 +5048,7 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - **[`class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`](mayatk/mayatk/uv_utils/texture_transfer.py#L572)** — Move textures between UV layouts of the same mesh(es) -- see module doc.
   - `TextureTransfer.CONSTANT_ATTRS(cls) -> Dict[str, Dict[str, str]]` **DEPRECATED (remove in 0.23.0)** — The table moved to :attr:`ShaderAttributeMap.CONSTANT_ATTRS`, read
   - `TextureTransfer.transfer(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, assign_from: str = 'target') -> Dict[str, Dict[str, str]]` — Transfer the source material(s)' maps onto the target UV layout.
-  - `TextureTransfer.default_output_dir(cls) -> str` *(class)* — Where the maps go when the caller names no directory.
+  - `TextureTransfer.default_output_dir(cls) -> str` *(class)* — Where the maps go when the caller names no directory: the scene
   - `TextureTransfer.output_base_dir() -> Optional[str]` *(static)* — The directory a RELATIVE output entry is resolved against.
   - `TextureTransfer.resolve_output_dir(cls, entry: Optional[str] = None) -> str` *(class)* — The absolute output directory for a user-typed *entry*.
   - `TextureTransfer.assign_results(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '', assign_from: str = 'target') -> Dict[str, str]` — One ``<prefix><layout><suffix>`` material per output, on its faces.

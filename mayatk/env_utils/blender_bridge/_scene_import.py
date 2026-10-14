@@ -66,35 +66,26 @@ _logger = logging.getLogger(__name__)
 _IMPORT_TEMPLATE = _TEMPLATE_DIR / "_import_scene.py"
 _IMPORT_TEMPLATE_USD = _TEMPLATE_DIR / "_import_scene_usd.py"
 _BAKE_TEMPLATE = _TEMPLATE_DIR / "_bake_scene.py"
-# The bake template replays the payload through this module's import_payload, so an
-# engine fix must invalidate a cached bake as a template fix does.
-_BAKE_ENGINE = os.path.abspath(__file__)
-# The cached bakes, one per key (``CachedArtifact`` names its cache ``<name>_cache``).
-_BAKE_CACHE = "blender_bake_mtk"
-
-
-def _fbx_take_engine() -> List[str]:
-    """The modules that decide what an FBX bakes to -- which takes play, merged,
-    or parked (``FbxUtils.import_scene``; pythontk's ``FbxFile.take_layout`` and
-    ``FbxMedia.merge_takes``): a fix to any of them must invalidate a cached bake
-    as an engine fix does."""
-    import inspect
-
-    from mayatk.env_utils.fbx_utils import FbxUtils
-
-    return [inspect.getfile(c) for c in (FbxUtils, ptk.FbxFile, ptk.FbxMedia)]
-
-
-_bake_slot_store = None
-
-
-def _bake_slots() -> "ptk.TempArtifacts":
-    """The bake cache's store, built once: each build sweeps the cache's stale
-    entries, and a slot is looked up on every panel refresh."""
-    global _bake_slot_store
-    if _bake_slot_store is None:
-        _bake_slot_store = ptk.TempArtifacts(f"{_BAKE_CACHE}_cache", policy="detached")
-    return _bake_slot_store
+#: What a bake makes of one source: BUMP it whenever the bake changes for the same
+#: input -- this engine's import_payload, the bake template, the FBX take engine
+#: (``FbxUtils.import_scene``, ``ptk.FbxFile.take_layout`` / ``FbxMedia.merge_takes``)
+#: or the conversion templates. A bake's key is otherwise its SOURCE's identity, so
+#: a package upgrade that changes nothing about bakes keeps every scene's bake (the
+#: engine files' own mtimes, the key before, re-baked every reference on upgrade).
+_BAKE_FORMAT = 1
+#: The project bake store's name: its slots are ``<project>/cache/bridge/
+#: mtk_bake_cache_<source stem>_<hash8>.ma`` (``CachedArtifact`` prefixes
+#: ``<name>_cache_``), scratch under the temp root. blendertk's is ``btk_bake``.
+_BAKE_STORE = "mtk_bake"
+#: The project cache kind bakes live in (``Workspace.cache_dir``: a
+#: ``bridgeCache`` rule, else ``cache/bridge``), shared with blendertk.
+BAKE_CACHE_KIND = "bridge"
+#: ``fileInfo`` keys the bake template writes into every bake -- readable from the
+#: ``.ma`` header without opening it (:meth:`BlenderSceneImport.bake_info`): the
+#: source it was baked from (relative to the bake's folder when inside the
+#: project) and the content key of the source version it holds.
+BAKE_INFO_SOURCE = "mtk_bake_source"
+BAKE_INFO_KEY = "mtk_bake_key"
 
 
 # Conversion intermediates by route: "fbx" = classic material model + texture-
@@ -130,10 +121,9 @@ _CACHE_MAX_AGE_DAYS = 7
 # conversion first; an .fbx is already the bake's own input, so it skips that hop.
 BAKE_SOURCE_EXTENSIONS = (".blend", ".fbx")
 
-# Sidecar written beside every bake naming the scene it came from. The Reference Manager
-# lists SOURCE rows but references the BAKED file, so "is this row referenced?" can only
-# be answered by walking back from a reference to its origin. On disk rather than in panel
-# settings so the mapping survives a session change and is shared by every panel.
+# The sidecar a bake made before 2026-10-13 carried beside it, naming the scene it came
+# from (its own fileInfo does now: BAKE_INFO_SOURCE). Read for one release, so a scene
+# that references an old temp bake still maps it back to its row (and re-homes it).
 BAKE_SOURCE_SUFFIX = ".source.json"
 
 # USD sources short-circuit the whole pipeline: both DCCs speak USD natively,
@@ -325,30 +315,6 @@ class _BlenderSceneImportInternal(object):
         return MatUtils.claim_material_name(sg, desired)
 
     @staticmethod
-    def _open_blend(path: str):
-        """*path* as a readable binary stream of its raw ``.blend`` bytes, or ``None``.
-
-        Undoes the file's compression: gzip (Blender <= 2.9) via the stdlib, zstd
-        (3.0+ "Compress") only where the interpreter ships ``compression.zstd``
-        (Python 3.14+) -- elsewhere a zstd file is unreadable here, and ``None``.
-        """
-        import gzip
-
-        with open(path, "rb") as fh:
-            magic = fh.read(4)
-        if magic == b"BLEN":
-            return open(path, "rb")
-        if magic[:2] == b"\x1f\x8b":
-            return gzip.open(path, "rb")
-        if magic == b"\x28\xb5\x2f\xfd":
-            try:
-                from compression import zstd  # Python 3.14+
-            except ImportError:
-                return None
-            return zstd.open(path, "rb")
-        return None
-
-    @staticmethod
     def _blend_block_structs(path: str) -> Optional[set]:
         """The DNA struct names of every data block written to the ``.blend`` at *path*.
 
@@ -363,7 +329,7 @@ class _BlenderSceneImportInternal(object):
         import struct
 
         try:
-            fh = _BlenderSceneImportInternal._open_blend(path)
+            fh = ptk.FileDependencies.open_decompressed(path)
         except OSError:
             return None
         if fh is None:
@@ -513,8 +479,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
 
         Reads the file's block headers against its own DNA catalog
         (:meth:`_blend_block_structs`). A ``.blend`` that cannot be read here --
-        zstd-compressed on an interpreter without ``compression.zstd`` -- counts
-        as True: the cost of that guess is one unneeded question, never a wrong
+        zstd-compressed with no decoder in this interpreter
+        (``ptk.FileDependencies.open_decompressed``) -- counts as True: the cost of that guess is one unneeded question, never a wrong
         conversion. ``False`` for anything that is not an existing ``.blend``.
         """
         ext = os.path.splitext(str(src_path))[1].lower()
@@ -1005,6 +971,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 "imported (a flat import could silently lose instancing); clear "
                 "the conversion cache or re-pull via FBX."
             )
+        # The textures a glTF's conversion unpacked (or an FBX's extracted media)
+        # sit in temp: the imported nodes are moved onto a project copy.
+        project = EnvUtils.scene_project_root()
         try:
             imported = self.import_payload(
                 out_path,
@@ -1016,6 +985,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 step=lambda done, total, text: self._step(
                     relay, 1, done, total, "Maya: " + text
                 ),
+                media_home=self._media_home(src, project) if project else None,
             )
         except Exception:
             if tmp is not None and os.path.isfile(out_path):
@@ -1039,6 +1009,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         adopt_scene: bool = False,
         scene_data: bool = True,
         step: Optional[Callable[[int, int, str], Any]] = None,
+        media_home: Optional[str] = None,
     ) -> List[str]:
         """Import the conversion payload at *payload_path* -- the FBX or USD plus
         its ``.manifest.json`` sidecar -- and replay every manifest section onto
@@ -1062,10 +1033,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 decision (:meth:`import_scene`'s ``scene_settings`` policy;
                 always, for a fresh bake).
             step: ``step(done, total, text)`` called between the phases.
+            media_home: Where the textures the import would read from temp
+                (a glTF's unpacked images, an FBX's extracted ``.fbm``) are
+                copied, the new file nodes repointed there
+                (:meth:`_rehome_temp_media`) -- a saved scene must not name a
+                file the temp sweep reclaims. ``None`` leaves them.
         """
         import maya.cmds as cmds
 
         manifest = ptk.HandoffManifest.read(payload_path)
+        files_before = set(cmds.ls(type="file") or [])
         manifest_path = manifest.path
         # What Maya's importers (and pxr) are handed: Maya opens files through the
         # ANSI code page, and the payload sits under %TEMP% ("File not found" under
@@ -1263,7 +1240,55 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 )
                 or imported
             )
+        if media_home:
+            fresh = [n for n in cmds.ls(type="file") or [] if n not in files_before]
+            self._best_effort(
+                "Moving the textures out of temp",
+                lambda: self._rehome_temp_media(fresh, media_home),
+            )
         return imported
+
+    @staticmethod
+    def _rehome_temp_media(file_nodes: List[str], media_home: str) -> int:
+        """Copy every texture of the file nodes *file_nodes* that lives in temp
+        into *media_home* and repoint the node there; return how many moved.
+
+        The conversion unpacks a glTF's images, and Maya extracts an FBX's
+        embedded media, into the temp root, so the imported nodes -- and a bake
+        saved from them -- named files the age sweep reclaims. One copy per
+        file; a same-named different file takes a free name.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        copied: Dict[str, str] = {}
+        moved = 0
+        for node in cmds.ls(file_nodes, type="file") or []:
+            plug = f"{node}.fileTextureName"
+            path = cmds.getAttr(plug) or ""
+            if not (path and os.path.isfile(path) and EnvUtils._in_temp(path)):
+                continue
+            key = os.path.normcase(os.path.realpath(path))
+            target = copied.get(key)
+            if target is None:
+                os.makedirs(media_home, exist_ok=True)
+                stem, ext = os.path.splitext(os.path.basename(path))
+                target = os.path.join(media_home, stem + ext)
+                if os.path.isfile(target) and not ptk.FileUtils.has_same_content(
+                    path, target
+                ):
+                    target = ptk.FileUtils.unique_path(
+                        media_home, stem, ext, claims=os.listdir(media_home)
+                    )
+                if not os.path.isfile(target):
+                    shutil.copy2(path, target)
+                copied[key] = target
+            cmds.setAttr(plug, target, type="string")
+            moved += 1
+        if moved:
+            _logger.info(f"Moved {len(copied)} texture(s) out of temp to {media_home}.")
+        return moved
 
     def _clean_import_residue(
         self, imported: List[str], new_nodes: List[str]
@@ -1759,10 +1784,22 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             )
         return mayapy
 
-    def render_bake_script(self, src_path: str, out_path: str) -> str:
+    def render_bake_script(
+        self,
+        src_path: str,
+        out_path: str,
+        info: Optional[Mapping[str, str]] = None,
+        media_home: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> str:
         """Render the Maya-side intermediate->.ma bake script (exposed for
         tests/preview). *src_path* may be a USD or FBX intermediate -- the template
-        dispatches on extension."""
+        dispatches on extension. *info* is written into the bake as ``fileInfo``
+        (:data:`BAKE_INFO_SOURCE` / :data:`BAKE_INFO_KEY`); *media_home* is where
+        the bake's textures that live in temp are copied (``import_payload``);
+        *project* is the host project the child opens before it imports, so
+        what it resolves from "the scene's project" lands there, never in the
+        user's default Maya project."""
         return ptk.ScriptTemplate.render_template(
             _BAKE_TEMPLATE,
             {
@@ -1770,6 +1807,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 # ANSI code page cannot hold -- mayapy opens files through it.
                 "SRC_FILE": ptk.ScriptTemplate.child_path(src_path),
                 "OUT_MA": ptk.ScriptTemplate.child_path(out_path),
+                "BAKE_INFO": repr(dict(info or {})),
+                "MEDIA_HOME": (
+                    ptk.ScriptTemplate.child_path(media_home) if media_home else ""
+                ),
+                "PROJECT": ptk.ScriptTemplate.child_path(project) if project else "",
                 # The child is the same Maya build, so the parent's importable set
                 # is valid there -- this is what makes the shared manifest replay
                 # (mayatk in the child) reliable rather than best-effort.
@@ -1798,9 +1840,13 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         *,
         timeout: Optional[float] = None,
         on_output: Optional[Callable[[Optional[str]], Optional[bool]]] = None,
+        info: Optional[Mapping[str, str]] = None,
+        media_home: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> Any:
         """Bake the USD/FBX intermediate *src_path* into the .ma at *out_path* in a
-        fresh ``mayapy`` (blocking; *on_output* as :meth:`convert`)."""
+        fresh ``mayapy`` (blocking; *on_output* as :meth:`convert`; *info* /
+        *media_home* / *project* as :meth:`render_bake_script`)."""
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         if not os.path.isfile(src):
             raise FileNotFoundError(f"Bake source not found: {src}")
@@ -1810,7 +1856,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         env.update(_FAST_MAYA_ENV)
         result = self._run_bake_script(
             mayapy,
-            self.render_bake_script(src, out_path),
+            self.render_bake_script(
+                src, out_path, info=info, media_home=media_home, project=project
+            ),
             artifact=out_path,
             timeout=timeout,
             env=env,
@@ -1845,9 +1893,11 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         timeout: Optional[float] = None,
         progress: Optional[Callable[..., Optional[bool]]] = None,
         rig_mode: str = "auto",
+        project: Optional[str] = None,
         **script_opts: Any,
     ) -> str:
-        """Bake *src_path* to a cached ``.ma`` and return its path — the reference path.
+        """Bake *src_path* to a ``.ma`` in the project's bake cache and return its
+        path — the reference path.
 
         Maya references FBX natively, so this is not a capability gap the way the
         Blender side's is; it is deliberate **symmetry**. Both panels reference a cached
@@ -1858,9 +1908,16 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         then baked to a ``.ma`` in a headless ``mayapy``; an ``.fbx`` source skips
         straight to the bake.
 
-        Both stages are cached independently, and the bake's key includes the
-        intermediate's identity **and the bake template's**, so a template fix
-        invalidates stale bakes (a retry after an upgrade must not replay the old bug).
+        The bake is a permanent project file -- a saved scene references it -- in
+        the host scene's project (:meth:`bake_dir`: ``<project>/cache/bridge/``),
+        never age-swept. ONE slot per source (:meth:`bake_slot`), so a re-bake
+        replaces the old file instead of leaving it behind; the bake records
+        which source it holds and that source's content key inside itself
+        (``fileInfo``, :meth:`bake_info`), which is how a current bake is told
+        from a stale one without a conversion. The key is the source's identity
+        (its size + mtime, an FBX's manifest beside it), the options that shape
+        the bake and :data:`_BAKE_FORMAT` -- not the engine's files, so an
+        upgrade that changes nothing about bakes keeps them.
 
         Parameters:
             src_path: A ``.blend`` / ``.fbx`` file.
@@ -1869,7 +1926,8 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 ``"usd"`` (native materials / animation, instancing replayed
                 guaranteed-or-fail from the conversion's required sidecar; see
                 :meth:`import_scene`).
-            use_cache: Reuse a prior conversion + bake of the identical source.
+            use_cache: Reuse the project's bake of the identical source version
+                (and the conversion of it); ``False`` bakes again into the slot.
             timeout: Max seconds for EACH headless stage; unset by default (see
                 :meth:`convert`).
             progress: ``progress(current, total, message) -> bool`` over both stages
@@ -1877,11 +1935,17 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 raises :class:`pythontk.OperationCancelled`.
             rig_mode: How a ``.blend`` source's rig logic travels (see
                 :meth:`import_scene`); inert for an ``.fbx`` source.
+            project: The project root whose bake cache holds it; default the
+                open scene's (``EnvUtils.scene_project_root``: an unsaved scene's
+                is the active project).
             **script_opts: Blender-side conversion knobs (``embed_textures`` /
                 ``include_animation``); inert for an ``.fbx`` source.
 
         Returns:
-            str: Path to the cached ``.ma`` — pass it to ``cmds.file(reference=True)``.
+            str: Path to the bake — pass it to ``cmds.file(reference=True)``.
+
+        Raises:
+            RuntimeError: No project resolves (nothing is written to temp instead).
         """
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
         ext = os.path.splitext(src)[1].lower()
@@ -1893,8 +1957,18 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             raise FileNotFoundError(f"Scene not found: {src}")
 
         self._rig_mode_opts(script_opts, rig_mode)
+        root = self._bake_project(project)
+        bakes = self._bakes()
+        key = self._bake_key(src, via, script_opts)
         stages = 1 if ext == ".fbx" else 2
         relay = ptk.ProgressRelay(progress, stages=stages)
+        if use_cache:
+            current = bakes.current(src, root, key)
+            if current is not None:
+                relay.report(stages - 1, 1, 1, "Maya: reused the project's bake")
+                self.logger.info(f"Reused the bake of {src_path}: {current}")
+                return ptk.AppLauncher.ansi_safe_path(current)
+
         if ext == ".fbx":
             inter_path, conversion = src, None
         else:
@@ -1915,8 +1989,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 + ("reused the cached conversion" if conversion.hit else "converted"),
             )
         sidecar = ptk.HandoffManifest.path_for(inter_path)
-        has_sidecar = os.path.isfile(sidecar)
-        if conversion is not None and via == "usd" and not has_sidecar:
+        if conversion is not None and via == "usd" and not os.path.isfile(sidecar):
             # The v2 conversion always writes the sidecar; without it the
             # bake could silently cache a flattened .ma (see the bake
             # template's apply_instances).
@@ -1926,99 +1999,403 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 "instancing); clear the conversion cache or bake via FBX."
             )
 
-        got = ptk.CachedArtifact(_BAKE_CACHE, extension=".ma").get(
-            ptk.CachedArtifact.key(files=self._bake_key_files(inter_path)),
-            lambda out: self.bake(
-                inter_path,
-                out,
-                timeout=timeout,
-                on_output=relay.reader(stages - 1, "Maya"),
-            ),
-            use_cache=use_cache,
-        )
-        if got.hit:
-            # The cache's age sweep goes by mtime, and a hit writes nothing: a bake
-            # in daily use would be collected 7 days after it was made.
-            self._touch_bake(got.path)
-        relay.report(
-            stages - 1,
-            1,
-            1,
-            "Maya: " + ("reused the cached bake" if got.hit else "baked"),
-        )
-        # The intermediate scratch is consumed once the bake has read it; the .ma
-        # scratch is NOT cleaned up -- the caller references that file, so it must
-        # outlive this call (an uncached bake therefore lives under the scoped store's
-        # stale sweep).
-        if conversion is not None and conversion.scratch is not None:
-            conversion.scratch.cleanup()
-        # Rewritten on a cache hit too: cheap, and it self-heals a sidecar lost to a
-        # partial sweep (without it the panel silently forgets the row is referenced).
-        self._write_bake_source(got.path, src)
-        self.logger.info(f"Baked {src_path} -> {got.path}")
+        # Produced into scratch under the temp root and only then moved into the
+        # slot (a killed bake never leaves a partial slot), carrying the record
+        # of the source it holds (BakeCache.write).
+        try:
+            slot = bakes.write(
+                src,
+                root,
+                lambda out, info: self.bake(
+                    inter_path,
+                    out,
+                    timeout=timeout,
+                    on_output=relay.reader(stages - 1, "Maya"),
+                    info=info,
+                    media_home=self._media_home(src, root),
+                    project=root,
+                ),
+                key=key,
+            )
+        finally:
+            # The intermediate scratch is consumed once the bake has read it.
+            if conversion is not None and conversion.scratch is not None:
+                conversion.scratch.cleanup()
+        relay.report(stages - 1, 1, 1, "Maya: baked")
+        self.logger.info(f"Baked {src_path} -> {slot}")
         # The host references this file through Maya, which opens files through the
-        # ANSI code page: under a TEMP it cannot hold (Cyrillic on cp1252) the
-        # reference loaded nothing. Its 8.3 form, where that differs.
-        return ptk.AppLauncher.ansi_safe_path(got.path)
+        # ANSI code page: a project path it cannot hold loads nothing. Its 8.3 form,
+        # where that differs.
+        return ptk.AppLauncher.ansi_safe_path(slot)
 
     @staticmethod
-    def _bake_key_files(inter_path: str) -> List[str]:
-        """Every file a bake of the intermediate *inter_path* depends on -- its
-        cache key's inputs: the intermediate, the template, this engine, the FBX
-        take engine (:func:`_fbx_take_engine`) and, when present, the manifest the
-        bake applies (a payload can land before its sidecar on a synced drive, and
-        a bake cached in that window would replay the sidecar-less scene after
-        the sidecar arrived)."""
-        files = [inter_path, _BAKE_TEMPLATE, _BAKE_ENGINE, *_fbx_take_engine()]
-        sidecar = ptk.HandoffManifest.path_for(inter_path)
-        if os.path.isfile(sidecar):
-            files.append(sidecar)
-        return files
+    def _bake_project(project: Optional[str] = None) -> str:
+        """The project root a bake belongs to: *project*, else the open scene's.
+
+        Raises:
+            RuntimeError: Neither resolves -- a bake a saved scene references
+                must not be written to temp.
+        """
+        if not project:
+            from mayatk.env_utils._env_utils import EnvUtils
+
+            project = EnvUtils.scene_project_root()
+        if not project or not os.path.isdir(project):
+            raise RuntimeError(
+                "No project to keep the bake in: save the scene or set a project "
+                "first (a referenced bake is a project file, never a temp one)."
+            )
+        return os.path.abspath(project)
 
     @classmethod
-    def _bake_slot(cls, src_path: str) -> str:
-        """Where :meth:`bake_scene` caches the ``.ma`` of the ``.fbx`` *src_path*
-        as the file is NOW -- there or not. A reference reading any other bake of
-        it reads an old version of the file, or one an older engine made."""
+    def bake_dir(
+        cls, project: Optional[str] = None, create: bool = False
+    ) -> Optional[str]:
+        """Where the bakes of *project* (default: the open scene's) live: its
+        ``bridgeCache`` rule, else ``<project>/cache/bridge`` -- shared with
+        blendertk's bakes. ``None`` when no project resolves.
+
+        Parameters:
+            project: The project root.
+            create: Create the folder.
+
+        Returns:
+            The folder (absolute), or ``None``.
+        """
+        if not project:
+            from mayatk.env_utils._env_utils import EnvUtils
+
+            project = EnvUtils.scene_project_root()
+        if not project:
+            return None
+        return cls._bakes().cache_dir(project, create=create)
+
+    @classmethod
+    def _bakes(cls) -> "ptk.BakeCache":
+        """The project bake store (``ptk.BakeCache``: one never-aged slot per
+        source), its record read from a bake's ``fileInfo`` (:meth:`bake_info`)."""
+        return ptk.BakeCache(
+            _BAKE_STORE,
+            ".ma",
+            read_info=cls.bake_info,
+            source_field=BAKE_INFO_SOURCE,
+            key_field=BAKE_INFO_KEY,
+            kind=BAKE_CACHE_KIND,
+            legacy_suffix=BAKE_SOURCE_SUFFIX,
+        )
+
+    @staticmethod
+    def _bake_key(src: str, via: str = "fbx", script_opts: Mapping = ()) -> str:
+        """The content key of a bake of *src* as it is now: :data:`_BAKE_FORMAT`,
+        the source's size + mtime (and, for an ``.fbx``, the manifest beside it:
+        a payload can land before its sidecar on a synced drive), and the options
+        that shape a ``.blend``'s conversion. No path: a moved project keeps it
+        (``ptk.BakeCache.source_key``)."""
+        fbx = os.path.splitext(src)[1].lower() == ".fbx"
+        opts = () if fbx else (via, sorted(dict(script_opts).items()))
+        companions = [ptk.HandoffManifest.path_for(src)] if fbx else []
+        return ptk.BakeCache.source_key(src, _BAKE_FORMAT, opts, companions=companions)
+
+    @classmethod
+    def _media_home(cls, src: str, project: str) -> str:
+        """Where the textures an import or bake of *src* would read from temp go:
+        the project's texture folder, ``<sourceimages>/<source stem>/``
+        (``FbxUtils._source_media_dir``, the one convention for a source's
+        media)."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        return FbxUtils._source_media_dir(src, project)
+
+    @classmethod
+    def bake_slot(cls, src_path: str, project: Optional[str] = None) -> Optional[str]:
+        """Where *project*'s (default: the open scene's) bake of *src_path* lives
+        -- there or not; ``None`` without a project. One per source: every
+        version of it is baked into this one file."""
         src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
-        key = ptk.CachedArtifact.key(files=cls._bake_key_files(src))
-        return _bake_slots().path(extension=".ma", name=key)
-
-    @staticmethod
-    def _touch_bake(baked_path: str) -> None:
-        """Mark the cached bake *baked_path* -- and its source sidecar, which maps
-        a reference back to its row -- in use: the cache's age sweep goes by
-        mtime, so a bake a scene reads must not look abandoned."""
-        for path in (baked_path, baked_path + BAKE_SOURCE_SUFFIX):
-            try:
-                os.utime(path, None)
-            except OSError as e:  # a missing or locked file: the sweep decides
-                _logger.debug(f"Could not touch {path}: {e}")
-
-    def _write_bake_source(self, baked_path: str, src: str) -> None:
-        """Record beside *baked_path* which foreign scene it was baked from."""
-        import json
-
         try:
-            with open(baked_path + BAKE_SOURCE_SUFFIX, "w", encoding="utf-8") as fh:
-                json.dump({"source": os.path.abspath(src)}, fh)
-        except OSError as e:  # cosmetic bookkeeping — never fail a completed bake
-            self.logger.debug(f"Could not write the bake source sidecar: {e}")
+            root = cls._bake_project(project)
+        except RuntimeError:
+            return None
+        return cls._bakes().slot(src, root)
+
+    @classmethod
+    def _current_bake(
+        cls,
+        src_path: str,
+        project: Optional[str] = None,
+        via: str = "fbx",
+        **script_opts: Any,
+    ) -> Optional[str]:
+        """The project's bake of *src_path* when it holds the source as it is NOW
+        (what :meth:`bake_scene` would reuse), else None. A reference reading any
+        other version reads an old file, or one an older bake format made."""
+        src = os.path.abspath(os.path.expanduser(os.path.expandvars(str(src_path))))
+        if not os.path.isfile(src):
+            return None
+        try:
+            root = cls._bake_project(project)
+        except RuntimeError:
+            return None
+        return cls._bakes().current(src, root, cls._bake_key(src, via, script_opts))
+
+    # The .ma header line a fileInfo record is written as (MEL-escaped strings).
+    _FILE_INFO_LINE = re.compile(
+        r'^fileInfo\s+"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s*;'
+    )
+
+    @classmethod
+    def bake_info(cls, baked_path: str) -> Dict[str, str]:
+        """The ``fileInfo`` records of the ``.ma`` at *baked_path*, read from its
+        header without opening it (``{}`` when unreadable or not a ``.ma``).
+
+        A bake carries :data:`BAKE_INFO_SOURCE` and :data:`BAKE_INFO_KEY`. The
+        records sit above the first ``createNode``, so only the header is read
+        (bounded: a header is a few hundred lines). Values are decoded in the
+        file's own codeset (its ``//Codeset:`` line: a Maya on a cp1252 locale
+        writes cp1252), UTF-8 when it names none.
+        """
+        found: Dict[str, str] = {}
+        if os.path.splitext(str(baked_path))[1].lower() != ".ma":
+            return found
+        try:
+            # latin-1: every byte is one character, so a line reads whatever
+            # its codeset, and encodes back to the bytes it was.
+            with open(baked_path, "r", encoding="latin-1", newline="") as fh:
+                lines = []
+                for count, line in enumerate(fh):
+                    if line.startswith("createNode") or count > 20000:
+                        break
+                    lines.append(line)
+            codec = cls._ma_codec(lines)
+            for line in lines:
+                match = cls._FILE_INFO_LINE.match(line)
+                if match:
+                    key, value = (
+                        cls._mel_unescape(
+                            group.encode("latin-1").decode(codec, "replace")
+                        )
+                        for group in match.groups()
+                    )
+                    found[key] = value
+        except (OSError, ValueError):
+            return {}
+        return found
 
     @staticmethod
-    def bake_source(baked_path: str) -> Optional[str]:
+    def _ma_codec(header: List[str]) -> str:
+        """The Python codec of a ``.ma`` header's ``//Codeset:`` line (``1252``
+        -> ``cp1252``), ``utf-8`` when it names none Python knows."""
+        import codecs
+
+        for line in header:
+            if line.startswith("//Codeset:"):
+                name = line.split(":", 1)[1].strip()
+                name = f"cp{name}" if name.isdigit() else name
+                try:
+                    return codecs.lookup(name).name
+                except LookupError:
+                    break
+        return "utf-8"
+
+    @staticmethod
+    def _mel_unescape(text: str) -> str:
+        """A MEL string literal's body as the string it spells."""
+        escapes = {"n": "\n", "t": "\t"}
+        return re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), m.group(1)), text)
+
+    @classmethod
+    def bake_source(cls, baked_path: str) -> Optional[str]:
         """The foreign scene *baked_path* was baked from, or None if it is not a bake.
 
         The inverse of :meth:`bake_scene` — lets a browser map a reference back to the
-        source row the user actually sees.
+        source row the user actually sees. Read from the bake's own ``fileInfo``
+        (:meth:`bake_info`); a bake made before 2026-10-13 from its
+        ``.source.json`` sidecar (:data:`BAKE_SOURCE_SUFFIX`).
         """
-        import json
+        # Only a file named as a bake is read: a refresh asks this of every
+        # reference, and a native scene's header is not a bake's.
+        return cls._bakes().source_of(baked_path)
 
-        try:
-            with open(baked_path + BAKE_SOURCE_SUFFIX, "r", encoding="utf-8") as fh:
-                return json.load(fh).get("source") or None
-        except (OSError, ValueError):
+    @classmethod
+    def stamp_bake_info(cls, baked_path: str, info: Mapping[str, str]) -> None:
+        """Write *info* into the ``.ma`` *baked_path*'s header as ``fileInfo``
+        records, replacing the same keys -- for a bake that was made without
+        them (a temp bake re-homed into the project: :meth:`rehome_bake`).
+
+        Byte-preserving: every other line keeps its bytes and line ending, and
+        the records are written in the file's codeset (:meth:`_ma_codec`).
+
+        Raises:
+            OSError: The file could not be rewritten (it is left as it was).
+            ValueError: A value the file's codeset cannot spell.
+        """
+        lines = cls._read_ma_lines(baked_path)
+        codec = cls._ma_codec(lines)
+        newline = "\r\n" if lines and lines[0].endswith("\r\n") else "\n"
+        stamped = [
+            cls._ma_text(
+                'fileInfo "{}" "{}";'.format(
+                    k.replace("\\", "\\\\").replace('"', '\\"'),
+                    str(v).replace("\\", "\\\\").replace('"', '\\"'),
+                )
+                + newline,
+                codec,
+            )
+            for k, v in info.items()
+        ]
+        out, inserted = [], False
+        for line in lines:
+            match = None if inserted else cls._FILE_INFO_LINE.match(line)
+            if match and cls._mel_unescape(match.group(1)) in info:
+                continue
+            if not inserted and line.startswith("createNode"):
+                out.extend(stamped)
+                inserted = True
+            out.append(line)
+        if not inserted:
+            out.extend(stamped)
+        cls._write_ma_lines(baked_path, out)
+
+    @staticmethod
+    def _read_ma_lines(path: str) -> List[str]:
+        """The ``.ma`` at *path* as lines, one character per byte (latin-1),
+        each with its own line ending: what :meth:`_write_ma_lines` writes back
+        byte for byte."""
+        with open(path, "r", encoding="latin-1", newline="") as fh:
+            return fh.readlines()
+
+    @staticmethod
+    def _write_ma_lines(path: str, lines: List[str]) -> None:
+        """Write :meth:`_read_ma_lines`' *lines* back to *path*, atomically."""
+        data = "".join(lines).encode("latin-1")
+
+        def write(part: str) -> None:
+            with open(part, "wb") as fh:
+                fh.write(data)
+
+        ptk.FileUtils.atomic_write(path, write)
+
+    @staticmethod
+    def _ma_text(text: str, codec: str) -> str:
+        """*text* as :meth:`_read_ma_lines` holds a line of a file in *codec*."""
+        return text.encode(codec).decode("latin-1")
+
+    #: A file node's texture path in a ``.ma`` (``setAttr ".ftn" -type "string" "..."``).
+    _FILE_TEXTURE_LINE = re.compile(
+        r'^(\s*setAttr\s+"\.(?:ftn|fileTextureName)"\s+-type\s+"string"\s+")'
+        r'((?:[^"\\]|\\.)*)("\s*;.*)$',
+        re.S,
+    )
+
+    @classmethod
+    def _rehome_ma_media(cls, baked_path: str, media_home: str, project: str) -> int:
+        """Copy every texture the ``.ma`` *baked_path*'s file nodes name in temp
+        into *media_home* and rewrite those lines to name the copy -- what
+        :meth:`_rehome_temp_media` does to a live import, for a bake on disk.
+        A texture already in *project*, or gone, is left as it is. Returns how
+        many lines changed."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        lines = cls._read_ma_lines(baked_path)
+        codec = cls._ma_codec(lines)
+        copied: Dict[str, str] = {}
+        changed = 0
+        for index, line in enumerate(lines):
+            match = cls._FILE_TEXTURE_LINE.match(line)
+            if not match:
+                continue
+            path = cls._mel_unescape(match.group(2).encode("latin-1").decode(codec))
+            if not (path and os.path.isfile(path) and EnvUtils._in_temp(path)):
+                continue
+            if ptk.FileUtils.is_under(path, project):
+                continue
+            key = os.path.normcase(os.path.realpath(path))
+            target = copied.get(key)
+            if target is None:
+                os.makedirs(media_home, exist_ok=True)
+                stem, ext = os.path.splitext(os.path.basename(path))
+                target = os.path.join(media_home, stem + ext)
+                if os.path.isfile(target) and not ptk.FileUtils.has_same_content(
+                    path, target
+                ):
+                    target = ptk.FileUtils.unique_path(
+                        media_home, stem, ext, claims=os.listdir(media_home)
+                    )
+                if not os.path.isfile(target):
+                    shutil.copy2(path, target)
+                copied[key] = target
+            # Maya's own spelling: forward slashes, a quote MEL-escaped.
+            spelled = target.replace("\\", "/").replace('"', '\\"')
+            lines[index] = (
+                match.group(1) + cls._ma_text(spelled, codec) + match.group(3)
+            )
+            changed += 1
+        if changed:
+            cls._write_ma_lines(baked_path, lines)
+        return changed
+
+    def rehome_bake(
+        self, baked_path: str, project: Optional[str] = None
+    ) -> Optional[str]:
+        """The project bake standing in for the bake *baked_path* that lives in
+        temp (a bake made before 2026-10-13), or None when it has no source.
+
+        The project's slot for its source when that already holds a bake, else
+        a copy of *baked_path* moved into the slot with its source recorded
+        (no key: the next bake of the source replaces it), every texture its
+        file nodes name in temp -- which the age sweep deletes -- copied to the
+        source's media folder (:meth:`_media_home`) and named there
+        (:meth:`_rehome_ma_media`). The caller repoints its reference there
+        (:meth:`ReferenceManager._follow_bake_sources`).
+        """
+        source = self.bake_source(baked_path)
+        if not source or not os.path.isfile(baked_path):
             return None
+        root = self._bake_project(project)
+
+        def _copy(baked: str, out: str, info: Dict[str, str]) -> None:
+            shutil.copyfile(baked, out)
+            self._rehome_ma_media(out, self._media_home(source, root), root)
+            self.stamp_bake_info(out, info)
+
+        return self._bakes().rehome(baked_path, root, _copy)
+
+    #: Scene types whose bytes can name a bake (the purge's scan).
+    _SCENE_SCAN_EXTENSIONS = (".ma", ".mb")
+
+    def purge_unused_bakes(
+        self, project: Optional[str] = None, dry_run: bool = False
+    ) -> List[str]:
+        """Remove the bakes in *project*'s bake cache that no scene references.
+
+        A bake is a project file a saved scene reads, so nothing ages it out;
+        a source dropped from every scene leaves its bake behind until this
+        runs. Every Maya scene in the project is scanned TEXTUALLY for the bake
+        file names (a ``.ma``'s header, an ``.mb``'s bytes -- no scene is
+        opened), and so is the open scene's live reference list; a bake any of
+        them names stays, with anything named for it. A scene that cannot be
+        scanned stops the purge (``ptk.BakeCache.purge``). Only *project*'s
+        own scenes are scanned: a scene in an unmarked folder outside it that
+        references one of its bakes is not seen (no panel runs the purge; a
+        caller scripting it across such folders checks them first).
+
+        Parameters:
+            project: The project root (default: the open scene's).
+            dry_run: Report what would go without removing it.
+
+        Returns:
+            The paths removed (or that would be).
+        """
+        root = self._bake_project(project)
+        try:
+            import maya.cmds as cmds
+
+            live = cmds.file(q=True, reference=True) or []
+        except Exception:  # noqa: BLE001 - no Maya (headless tooling)
+            live = []
+        return self._bakes().purge(
+            root, self._SCENE_SCAN_EXTENSIONS, live=live, dry_run=dry_run
+        )
 
     # ------------------------------------------------------------------ Maya side
     @staticmethod
@@ -2060,9 +2437,10 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         (the manifest apply needs the shading engines, not just transforms).
 
         Through :meth:`FbxUtils.import_scene`, so ALL of the file's animation
-        lands: a pushed scene carries its whole timeline as one take beside a
-        take per shot, and the importer alone plays the LAST take (a cube
-        keyed 1-100 with shots 1-30 / 50-70 arrived as 21 keys, 50-70).
+        lands: a multi-take file (a push before 2026-10-13 carried its whole
+        timeline beside a take per shot) plays only its LAST take through the
+        importer alone (a cube keyed 1-100 with shots 1-30 / 50-70 arrived as
+        21 keys, 50-70).
         Deterministic baseline first: the plugin's import options are global
         and sticky (the user's last interactive FBX import shapes this one),
         and the factory default mode "merge" can RETARGET animation onto

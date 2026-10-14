@@ -18,7 +18,6 @@ import maya.cmds as cmds
 
 # Handle lazy loading of RigUtils
 try:
-    import mayatk as mtk
     from mayatk.rig_utils._rig_utils import RigUtils
     from mayatk.rig_utils.telescope_rig import TelescopeRig
 except ImportError:
@@ -26,7 +25,6 @@ except ImportError:
     import os
 
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    import mayatk as mtk
     from mayatk.rig_utils._rig_utils import RigUtils
     from mayatk.rig_utils.telescope_rig import TelescopeRig
 
@@ -110,7 +108,7 @@ class TestRigUtils(MayaTkTestCase):
     def test_create_locator(self):
         """Test create_locator method."""
         # Test 1: Basic creation
-        loc = RigUtils.create_locator(name="basic_loc")
+        RigUtils.create_locator(name="basic_loc")
         self.assertNodeExists("basic_loc")
 
         # Test 2: Scale
@@ -307,7 +305,6 @@ class TestRigUtils(MayaTkTestCase):
 
         RigUtils.create_locator_at_object(grp)
 
-        loc = "rotated_group_LOC"
         # The locator (or its parent GRP) should reflect the 45° Y rotation
         grp_node = "rotated_group_GRP"
         grp_rot_result = cmds.xform(grp_node, q=True, ws=True, ro=True)
@@ -467,7 +464,7 @@ class TestRigUtils(MayaTkTestCase):
         pb = cmds.group(empty=True, name="LKDUP_B")
         a = cmds.parent(cmds.group(empty=True, name="DUPNODE"), pa)[0]
         b = cmds.parent(cmds.group(empty=True, name="DUPNODE"), pb)[0]
-        a, b = f"|LKDUP_A|DUPNODE", f"|LKDUP_B|DUPNODE"
+        a, b = "|LKDUP_A|DUPNODE", "|LKDUP_B|DUPNODE"
         self.assertEqual(a.rsplit("|", 1)[-1], b.rsplit("|", 1)[-1])  # same leaf
 
         cmds.setAttr(f"{a}.tx", lock=True)
@@ -978,6 +975,35 @@ class TestRigUtils(MayaTkTestCase):
         self.assertEqual(result["no_skin_cluster"], [])
         self.assertEqual(result["wrong_type"], [])
         self.assertEqual(result["failed"], [])
+
+    def test_rebind_skin_clusters_leaves_no_weight_files(self):
+        """The weights a rebind round-trips through are scratch: they go to a
+        scoped ``ptk.TempArtifacts`` folder removed when the rebind returns,
+        never a fixed ``<maya tmp>/skin_rebind_weights`` folder that kept every
+        mesh's XML forever. Added: 2026-10-13"""
+        import os
+
+        import pythontk as ptk
+
+        cmds.select(cl=True)
+        j1 = cmds.joint(p=(0, -1, 0))
+        j2 = cmds.joint(p=(0, 1, 0))
+        cmds.skinCluster(j1, j2, self.cube)
+        legacy = os.path.join(cmds.internalVar(userTmpDir=True), "skin_rebind_weights")
+        before = set(os.listdir(legacy)) if os.path.isdir(legacy) else set()
+
+        result = RigUtils.rebind_skin_clusters([self.cube])
+
+        self.assertEqual(result["rebound"], [self.cube])
+        after = set(os.listdir(legacy)) if os.path.isdir(legacy) else set()
+        self.assertEqual(after - before, set(), "weights left in Maya's tmp dir")
+        store = os.path.join(ptk.TempArtifacts.root(), "skin_rebind")
+        left = [
+            f
+            for f in (os.listdir(store) if os.path.isdir(store) else [])
+            if not f.startswith(".")
+        ]
+        self.assertEqual(left, [], "the scratch folder outlived the rebind")
 
     def test_rebind_skin_clusters_no_skin_cluster(self):
         """A mesh with no skinCluster is reported under 'no_skin_cluster'."""

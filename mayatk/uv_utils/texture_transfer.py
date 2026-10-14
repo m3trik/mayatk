@@ -637,9 +637,9 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
             supersample: See :meth:`pythontk.UvTransfer.build`.
             padding: Gutter in texels; ``-1`` fills all background.
             output_dir: Where the maps go, absolute or relative to the
-                project's ``sourceimages`` (see :meth:`resolve_output_dir`).
+                scene project's texture folder (see :meth:`resolve_output_dir`).
                 Default
-                ``<project>/sourceimages/uv_transfer``.
+                ``<scene project>/sourceimages/uv_transfer``.
             name_format: Filename stem; ``{material}`` / ``{channel}``.
                 Ignored when *output_name* is given.
             output_name: Base name for the whole result -- the assigned
@@ -934,24 +934,35 @@ class TextureTransfer(ptk.LoggingMixin, _TextureTransferInternal):
     # ----------------------------------------------------------- helpers
     @classmethod
     def default_output_dir(cls) -> str:
-        """Where the maps go when the caller names no directory."""
+        """Where the maps go when the caller names no directory: the scene
+        project's texture folder + ``uv_transfer`` (the same folder in both
+        DCCs). Never temp: the maps are wired into the scene's materials, and
+        a saved scene must not reference a file the temp sweep deletes.
+
+        Raises:
+            ValueError: The scene has no project to write into.
+        """
         base = cls.output_base_dir()
-        if base:
-            return os.path.join(base, "uv_transfer").replace("\\", "/")
-        return ptk.TempArtifacts("uv_transfer", policy="detached").dir_path()
+        if not base:
+            raise ValueError(
+                "No project to write the transferred maps into; save the scene, "
+                "set a project, or name an output folder."
+            )
+        return os.path.join(base, "uv_transfer").replace("\\", "/")
 
     @staticmethod
     def output_base_dir() -> Optional[str]:
         """The directory a RELATIVE output entry is resolved against.
 
-        The project's ``sourceimages``: the conventional home for
-        material-referenced textures, and the base that makes a stored setting
-        portable -- it survives the project being moved or copied. None when
-        there is no project.
+        The scene project's texture folder (``DataNodes.scene_source_images_dir``:
+        the project the scene is saved in, not merely the active one): the
+        conventional home for material-referenced textures, and the base that
+        makes a stored setting portable -- it survives the project being moved
+        or copied. None when there is no project. Twin of blendertk's.
         """
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
-        return EnvUtils.get_env_info("sourceimages") or None
+        return DataNodes.scene_source_images_dir().replace("\\", "/") or None
 
     @classmethod
     def resolve_output_dir(cls, entry: Optional[str] = None) -> str:

@@ -2446,6 +2446,14 @@ class GameShaderSlots(GameShader):
         the object will always be solid and not pick up the Transparent Color or density of the shader.</p>
     """
 
+    @property
+    def source_images_dir(self) -> str:
+        """Where Browse opens: the scene project's texture folder, resolved
+        when asked (the scene can change while the panel stays open)."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        return DataNodes.scene_source_images_dir()
+
     def __init__(self, switchboard):
         super().__init__()
 
@@ -2457,8 +2465,6 @@ class GameShaderSlots(GameShader):
         if hasattr(self.ui, "set_flags"):
             self.ui.set_flags(WindowStaysOnTopHint=False)
 
-        self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
-        self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
         self.last_created_shader = None
 

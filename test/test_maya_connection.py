@@ -7,6 +7,7 @@ Verifies the functionality of mayatk.env_utils.maya_connection
 """
 
 import unittest
+import os
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -443,6 +444,18 @@ class TestMayaConnectionMocked(unittest.TestCase):
             conn._launch_maya_gui(port=7002)
             # Verify executable name ('maya')
             self.assertEqual(MockAppLauncher.launch.call_args[0][0], "maya")
+            # A scratch working directory under the temp root, never the
+            # caller's (Maya drops mayaDiskCache_<pid> folders there).
+            import pythontk as ptk
+
+            cwd = MockAppLauncher.launch.call_args.kwargs.get("cwd")
+            self.assertTrue(cwd, "launched with the caller's working directory")
+            self.assertTrue(
+                os.path.normcase(os.path.realpath(cwd)).startswith(
+                    os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
+                ),
+                cwd,
+            )
 
             # Test specific path launch
             conn._launch_maya_gui(port=7002, app_path="/custom/path/to/maya.exe")

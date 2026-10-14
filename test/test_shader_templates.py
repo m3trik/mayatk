@@ -24,8 +24,130 @@ from mayatk.mat_utils.shader_templates._shader_templates import (
     GraphRestorer,
     ShaderTemplates,
 )
-from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
+
+
+class TestPanelTextureFolder(unittest.TestCase):
+    """The panel's Browse opens in the scene project's texture folder, not a
+    CWD-relative ``<project name>/sourceimages``. Added: 2026-10-13"""
+
+    def test_browse_starts_in_the_scene_projects_texture_folder(self):
+        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.mat_utils.shader_templates.shader_templates_slots import (
+            ShaderTemplatesSlots,
+        )
+
+        folder = ShaderTemplatesSlots.source_images_dir.fget(None)
+        self.assertTrue(os.path.isabs(folder), folder)
+        self.assertEqual(
+            os.path.normcase(folder),
+            os.path.normcase(EnvUtils.scene_source_images_dir()),
+        )
+
+
+class TestTemplateStore(unittest.TestCase):
+    """Saved templates live in the user tier of a ``ptk.PresetStore`` (like
+    blendertk's), the shipped ones in the read-only package tier: a template
+    saved into the INSTALLED package was lost on every upgrade. A template an
+    older version saved there moves to the user tier. Added: 2026-10-13"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="shader_tpl_store_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_the_store_saves_to_the_user_config_not_the_package(self):
+        import pythontk as ptk
+
+        store = ShaderTemplates.store()
+        root = os.path.normcase(
+            os.path.realpath(str(ptk.UserConfig.user_config_root()))
+        )
+        user = os.path.normcase(os.path.realpath(str(store.user_dir)))
+        self.assertTrue(user.startswith(root), user)
+        self.assertEqual(
+            os.path.normcase(os.path.realpath(str(store.builtin_dir))),
+            os.path.normcase(os.path.realpath(ShaderTemplates.BUILTIN_DIR)),
+        )
+        self.assertIn("glTF 2.0", store.list())
+        self.assertEqual(store.source("glTF 2.0"), "builtin")
+
+    def test_every_shipped_template_is_declared(self):
+        """The migration tells a user's file from a shipped one by name: a new
+        built-in must join SHIPPED_TEMPLATES or the first run moves it."""
+        shipped = {
+            os.path.splitext(f)[0]
+            for f in os.listdir(ShaderTemplates.BUILTIN_DIR)
+            if f.endswith(".yaml")
+        }
+        self.assertEqual(shipped - set(ShaderTemplates.SHIPPED_TEMPLATES), set())
+
+    def test_a_template_saved_into_the_package_moves_to_the_user_tier(self):
+        import pythontk as ptk
+
+        package = os.path.join(self.tmp, "package")
+        os.makedirs(package)
+        for name in ("glTF 2.0", "My Template"):
+            with open(os.path.join(package, f"{name}.yaml"), "w") as fh:
+                fh.write("node: {}\n")
+        store = ptk.PresetStore(
+            "shader_templates",
+            builtin_dir=package,
+            user_dir=os.path.join(self.tmp, "user"),
+            codec=ShaderTemplates.YAML_CODEC,
+        )
+        moved = ShaderTemplates.migrate_package_templates(store)
+        self.assertEqual(moved, ["My Template"])
+        self.assertEqual(store.source("My Template"), "user")
+        self.assertFalse(os.path.exists(os.path.join(package, "My Template.yaml")))
+        self.assertEqual(store.source("glTF 2.0"), "builtin", "shipped stays")
+        self.assertEqual(ShaderTemplates.migrate_package_templates(store), [])
+
+
+class TestPanelRename(unittest.TestCase):
+    """The panel renames a template through its store (``PresetStore.rename``):
+    a raw ``os.rename`` moved the file alone, so its sidecar (the id a
+    collection finds it by) and the active pointer kept the old name.
+    Added: 2026-10-13 (pre-release review)."""
+
+    def test_a_rename_takes_the_sidecar_and_the_active_pointer(self):
+        import logging
+
+        import pythontk as ptk
+        from mayatk.mat_utils.shader_templates.shader_templates_slots import (
+            ShaderTemplatesSlots,
+        )
+
+        tmp = tempfile.mkdtemp(prefix="shader_tpl_rename_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        store = ptk.PresetStore(
+            "shader_templates",
+            builtin_dir=os.path.join(tmp, "builtin"),
+            user_dir=os.path.join(tmp, "user"),
+            codec=ShaderTemplates.YAML_CODEC,
+        )
+        store.save("Mine", {"node": {}})
+        store.active = "Mine"
+        identity = store.info("Mine").get("id")
+
+        class _Combo:
+            def currentText(self):
+                return "Mine"
+
+            def currentData(self):
+                return str(store.path("Mine", "user"))
+
+            def init_slot(self):
+                pass
+
+        slots = ShaderTemplatesSlots.__new__(ShaderTemplatesSlots)
+        slots._store = store
+        slots.logger = logging.getLogger("test_panel_rename")
+        slots.rename_template_safe(_Combo(), "Ours")
+
+        self.assertEqual(store.source("Ours"), "user")
+        self.assertIsNone(store.source("Mine"))
+        self.assertEqual(store.info("Ours").get("id"), identity)
+        self.assertEqual(store.active, "Ours")
 
 
 class TestShaderTemplates(MayaTkTestCase):
@@ -417,7 +539,8 @@ class TestShaderTemplates(MayaTkTestCase):
             self.assertIsInstance(component, float)
 
     def test_list_attr_keyable_behavior(self):
-        """Verify if keyable=False excludes keyable attributes (utility check)."""
+        """listAttr without the ``keyable`` filter still lists a non-keyable child
+        (``colorR``) -- the attribute set ``NodeUtils.get_node_attributes`` reads."""
         node = cmds.createNode("lambert")
         cmds.setAttr(f"{node}.color", 0.5, 0.5, 0.5, type="double3")
         self.nodes_to_delete.append(node)
@@ -432,9 +555,6 @@ class TestShaderTemplates(MayaTkTestCase):
             "multi": True,
         }
 
-        attrs = cmds.listAttr(node, **kwargs)
-
-        # Check if we can get keyable attributes by removing the restriction
         kwargs.pop("keyable")
         attrs_all = cmds.listAttr(node, **kwargs)
 

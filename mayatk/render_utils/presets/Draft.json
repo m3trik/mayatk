@@ -1,0 +1,10 @@
+{
+    "_meta": {"version": 1, "description": "Arnold blocking: one camera sample, single bounces. Fastest feedback, visibly noisy."},
+    "camera_samples": 1,
+    "diffuse_samples": 1,
+    "specular_samples": 1,
+    "transmission_samples": 1,
+    "diffuse_depth": 1,
+    "specular_depth": 1,
+    "transmission_depth": 2
+}

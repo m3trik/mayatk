@@ -761,8 +761,6 @@ class _TaskChecksMixin(_TaskDataMixin):
         Returns:
             tuple: (status: bool, messages: list)
         """
-        import filecmp
-
         limit_bytes = ptk.ExportProfile.texture_size_limit_bytes(max_size_mb)
         if limit_bytes is None:
             if max_size_mb and str(max_size_mb).strip().upper() != "OFF":
@@ -827,8 +825,8 @@ class _TaskChecksMixin(_TaskDataMixin):
             name = os.path.basename(probe)
             same_key = groups.setdefault((name.lower(), size), [])
             for group in same_key:
-                if group["path"] == probe or filecmp.cmp(
-                    group["path"], probe, shallow=False
+                if group["path"] == probe or ptk.FileUtils.has_same_content(
+                    group["path"], probe
                 ):
                     group["nodes"].append(node)
                     break

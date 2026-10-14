@@ -2722,7 +2722,10 @@ class TestSceneExporter(MayaTkTestCase):
         """
         from unittest import mock
 
-        cache_root = os.path.join(self.temp_dir, "tmp")  # the cache's temp dir
+        # The cache's temp root: TempArtifacts reads $PYTHONTK_TEMP_ROOT first
+        # (the run's sandbox sets it), so patching tempfile.tempdir steered
+        # nothing.
+        cache_root = os.path.join(self.temp_dir, "tmp")
         os.makedirs(cache_root)
         tex = self._make_png("cache_src_Normal.png", mode="P")  # coerced to RGB
         file_node = self._assign_texture(self.cube, tex)
@@ -2735,7 +2738,9 @@ class TestSceneExporter(MayaTkTestCase):
         )
         runs = []
         try:
-            with mock.patch.object(tempfile, "tempdir", cache_root):
+            with mock.patch.dict(
+                os.environ, {ptk.TempArtifacts.ROOT_ENV_VAR: cache_root}
+            ):
                 for _ in range(2):
                     with mock.patch.object(
                         ptk.MapOptimizer,
@@ -2751,6 +2756,10 @@ class TestSceneExporter(MayaTkTestCase):
         finally:
             tm.run_deferred_restores()
         (first, first_path, first_bytes), (second, second_path, second_bytes) = runs
+        self.assertTrue(
+            any(n.startswith("map_optimizer") for n in os.listdir(cache_root)),
+            "the encode cache went to the steered root",
+        )
         self.assertEqual((first, second), (1, 0), "the second run encodes nothing")
         self.assertNotEqual(first_path, second_path, "each run stages its own")
         self.assertEqual(first_bytes, second_bytes)
@@ -4332,7 +4341,6 @@ class TestSceneExporter(MayaTkTestCase):
         """A failed check stashes the diff and reports to temp — the export
         folder stays clean (v3 single-file sidecar contract)."""
         import json
-        import tempfile
 
         export_path = os.path.join(self.temp_dir, "test.fbx")
         manifest_path = os.path.join(self.temp_dir, ".test.hierarchy.json")
@@ -4361,7 +4369,9 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertIn("ExportGroup|Gone", stash["missing"])
         # The human-readable report went to the temp artifact (deterministic
         # per-stem name: hierarchy_diff_<stem>.txt).
-        temp_report = os.path.join(tempfile.gettempdir(), "hierarchy_diff_test.txt")
+        temp_report = os.path.join(
+            ptk.TempArtifacts.root(), "hierarchy_diff", "hierarchy_diff_test.txt"
+        )
         self.assertTrue(os.path.exists(temp_report))
         with open(temp_report, encoding="utf-8") as f:
             self.assertIn("ExportGroup|Gone", f.read())

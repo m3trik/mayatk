@@ -63,6 +63,7 @@ if TYPE_CHECKING:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils._node_utils import NodeUtils
 
@@ -696,7 +697,7 @@ class LightmapRecords(ptk.LoggingMixin):
             if retired:
                 cls.logger.info(
                     "Set aside the superseded reflection probe %s -- in the "
-                    "Recycle Bin, or a _superseded folder beside it.",
+                    "Recycle Bin, or a temp folder kept 30 days.",
                     retired[0],
                 )
         cls._publish()
@@ -740,13 +741,13 @@ class LightmapRecords(ptk.LoggingMixin):
     @staticmethod
     def project_root() -> Optional[str]:
         """The project this scene's lightmaps belong to; ``None`` without one
-        (``EnvUtils.scene_project_root``: the scene file's own project -- a
+        (``DataNodes.scene_project_root``: the scene file's own project -- a
         foreign scene opened as new: its source's -- the session's while
         unsaved). A bake writes no map outside it
         (``LightmapBaker.beside_textures``) and sets none aside there
         (:meth:`superseding`).
         """
-        return EnvUtils.scene_project_root()
+        return DataNodes.scene_project_root()
 
     @classmethod
     @contextlib.contextmanager
@@ -763,7 +764,7 @@ class LightmapRecords(ptk.LoggingMixin):
         the next bake that returns to it writes ``_1``. The maps *objects*
         read on entry are set aside on a clean exit once no marker in the
         scene reads them (:meth:`ptk.FileDependencies.remove_superseded`): to
-        the Recycle Bin, else a ``_superseded`` folder beside them -- never
+        the Recycle Bin, else the ``superseded`` temp store -- never
         deleted, since no scene can see another file's reads. A block that
         raises moves nothing.
 
@@ -799,7 +800,7 @@ class LightmapRecords(ptk.LoggingMixin):
         if retired:
             cls.logger.info(
                 "Set aside %d superseded lightmap(s) nothing reads any more -- "
-                "in the Recycle Bin, or a _superseded folder beside them: %s",
+                "in the Recycle Bin, or a temp folder kept 30 days: %s",
                 len(retired),
                 ", ".join(os.path.basename(p) for p in retired),
             )

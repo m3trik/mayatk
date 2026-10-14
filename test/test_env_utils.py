@@ -748,6 +748,119 @@ class TestSavedScenePath(MayaTkTestCase):
             os.remove(raw)
 
 
+class TestSceneWorkspace(MayaTkTestCase):
+    """``scene_workspace`` / ``scene_source_images_dir``: the folders a tool's
+    permanent output for the open scene resolves through -- the SCENE's
+    project, not merely the active one. Twin of blendertk's. Added: 2026-10-13
+    """
+
+    def test_a_scene_in_another_project_resolves_that_projects_folders(self):
+        import shutil
+        import tempfile
+
+        import pythontk as ptk
+
+        root = os.path.realpath(tempfile.mkdtemp(prefix="scene_ws_test_"))
+        self.addCleanup(shutil.rmtree, root, True)
+        ptk.Workspace.create(root, create_dirs=False)
+        os.makedirs(os.path.join(root, "scenes"))
+        cmds.file(rename=os.path.join(root, "scenes", "shot.ma"))
+        active = os.path.normcase(os.path.normpath(cmds.workspace(q=True, rd=True)))
+        self.assertNotEqual(active, os.path.normcase(root))
+
+        ws = EnvUtils.scene_workspace()
+        self.assertEqual(os.path.normcase(ws.root), os.path.normcase(root))
+        folder = EnvUtils.scene_source_images_dir("baked", create=True)
+        self.assertEqual(
+            os.path.normcase(folder),
+            os.path.normcase(os.path.join(root, "sourceimages", "baked")),
+        )
+        self.assertTrue(os.path.isdir(folder))
+
+
+class TestSceneBackups(MayaTkTestCase):
+    """Backups land in the scene's own incremental-save folder
+    (``ptk.Workspace.backup_dir``: ``<scene dir>/incrementalSave/<file>/``),
+    where Maya's Increment & Save keeps them and the Reference Manager moves
+    them with the scene -- never beside the scene, never in the project root.
+
+    Regression (2026-10-13): ``save_scene_backup`` read the raw
+    ``cmds.file(q=True, sceneName=True)``, which in batch is a phantom
+    ``<active project>/untitled`` for an unsaved scene, so a pre-bake backup
+    of an unsaved scene was written as ``untitled_prebake.ma`` into the user's
+    default Maya project.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        self.tmp_dir = os.path.realpath(tempfile.mkdtemp(prefix="scene_backup_test_"))
+
+    def tearDown(self):
+        import shutil
+
+        cmds.file(new=True, force=True)
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+        super().tearDown()
+
+    def _save_scene(self, name="shot.ma"):
+        cmds.polyCube(name="backup_cube")
+        path = os.path.join(self.tmp_dir, name)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        return path
+
+    def test_an_unsaved_scene_writes_no_backup(self):
+        """Batch's phantom name, reproduced: an EXTENSIONLESS ``untitled``
+        in a project folder is what mayapy reports for a never-saved scene."""
+        cmds.file(new=True, force=True)
+        cmds.file(rename=os.path.join(self.tmp_dir, "untitled"))
+        raw = cmds.file(query=True, sceneName=True) or ""
+        self.assertFalse(os.path.splitext(raw)[1], raw)  # the phantom shape
+        self.assertIsNone(EnvUtils.save_scene_backup(suffix="_prebake"))
+        self.assertEqual(os.listdir(self.tmp_dir), [], "a backup was written")
+
+    def test_a_backup_lands_in_the_scenes_incremental_save_folder(self):
+        scene = self._save_scene()
+        backup = EnvUtils.save_scene_backup(suffix="_prebake")
+        expected = os.path.join(
+            self.tmp_dir, "incrementalSave", "shot.ma", "shot_prebake.ma"
+        )
+        self.assertEqual(os.path.normcase(backup), os.path.normcase(expected))
+        self.assertTrue(os.path.isfile(expected))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp_dir, "shot_prebake.ma")),
+            "a backup still lands beside the scene",
+        )
+        self.assertEqual(
+            os.path.normcase(EnvUtils.saved_scene_path()),
+            os.path.normcase(scene.replace("\\", "/")),
+            "the open scene keeps its own name",
+        )
+
+    def test_recovering_an_autosave_backs_the_original_up_beside_its_increments(
+        self,
+    ):
+        original = self._save_scene()
+        autosave = os.path.join(self.tmp_dir, "shot.0001.ma")
+        cmds.file(rename=autosave)
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+        EnvUtils.save_autosave_to_original(original_path=original)
+
+        folder = os.path.join(self.tmp_dir, "incrementalSave", "shot.ma")
+        self.assertTrue(os.path.isfile(os.path.join(folder, "shot.ma.bak")))
+        self.assertFalse(os.path.exists(original + ".bak"))
+        # A second recovery never overwrites the first backup.
+        cmds.file(rename=autosave)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        EnvUtils.save_autosave_to_original(original_path=original)
+        self.assertEqual(
+            len([f for f in os.listdir(folder) if f.endswith(".bak")]), 2
+        )
+
+
 class TestReferenceScene(MayaTkTestCase):
     """``reference_scene`` reads a USD layer the way the Reference Manager does:
     through mayaUsd's translator, NAMED -- Maya's extension guess references a keyed

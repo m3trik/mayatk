@@ -71,15 +71,16 @@ LAUNCH_ARGS = [
 # Multi-step JS body delivered to Painter after the project is open and
 # RPC is reachable. Quoting follows the convention:
 #  * User PARAMS arrive JS-quoted via :func:`uitk.bridge.js_literal`.
-#  * Internal tokens (``__OUTPUT_DIR__``) substitute raw, so the template
+#  * Internal tokens (``__TEXTURES_DIR__``) substitute raw, so the template
 #    body wraps them in manual double quotes.
 RPC_SCRIPT = """
 // 1. Pick Iray as the viewport renderer so the next render call uses it.
 alg.shaders.setCurrent("iray");
 
 // 2. Render the loaded scene to disk. The ``||`` fallback uses the
-//    bridge's output dir when PAINTER_RENDER_OUTPUT_PATH is empty.
-var bakePath = __PAINTER_RENDER_OUTPUT_PATH__ || ("__OUTPUT_DIR__" + "/baked_lighting.png");
+//    texture folder (the named Output Dir, else the scene project's
+//    sourceimages) when PAINTER_RENDER_OUTPUT_PATH is empty.
+var bakePath = __PAINTER_RENDER_OUTPUT_PATH__ || ("__TEXTURES_DIR__" + "/baked_lighting.png");
 alg.imageExporter.exportRenderImage({
     path: bakePath,
     width: __PAINTER_RENDER_WIDTH__,

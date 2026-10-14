@@ -190,6 +190,34 @@ class TestPreviewLifecycle(MayaTkTestCase):
         cmds.sets(self.plane, edit=True, forceElement=sg)
         return fx, sg, snapshot
 
+    def test_preview_files_cache_in_the_scene_project_not_beside_the_map(self):
+        """The effect file and the 16-bit texture are viewport-only: they go
+        to the scene project's ``cache/preview`` (``Workspace.cache_dir``),
+        never into the texture folder beside the map, where they read as
+        deliverable maps. Added: 2026-10-13"""
+        import shutil
+        import tempfile
+
+        root = os.path.realpath(tempfile.mkdtemp(prefix="shadow_preview_cache_"))
+        self.addCleanup(shutil.rmtree, root, True)
+        ptk.Workspace.create(root, create_dirs=False)
+        textures = os.path.join(root, "sourceimages")
+        os.makedirs(textures)
+        os.makedirs(os.path.join(root, "scenes"))
+        cmds.file(rename=os.path.join(root, "scenes", "shot.ma"))
+        png = os.path.join(textures, "Box_horizon.png")
+        shutil.copy2(self.rig.horizon_path, png)
+
+        texture = ShadowPreview._write_texture(png)
+        effect = ShadowPreview._write_effect(ShadowPreview.preview_dir(), "glsl")
+        cache = os.path.normcase(os.path.join(root, "cache", "preview"))
+        for path in (texture, effect):
+            self.assertTrue(os.path.isfile(path), path)
+            self.assertEqual(
+                os.path.normcase(os.path.dirname(os.path.normpath(path))), cache
+            )
+        self.assertEqual(os.listdir(textures), ["Box_horizon.png"])
+
     def test_headless_has_no_device_and_attach_refuses_with_the_reason(self):
         self.assertIsNone(ShadowPreview.device())
         language, refusal = ShadowPreview.language()
@@ -221,16 +249,38 @@ class TestPreviewLifecycle(MayaTkTestCase):
         self.assertEqual(ShadowPreview._write_effect(folder, "glsl"), path)
         self.assertEqual(os.path.getmtime(path), mtime, "rewritten unchanged")
 
-    def test_the_bound_texture_is_the_maps_16_bit_promotion_beside_it(self):
+    def test_same_named_maps_keep_their_own_promotions(self):
+        """Pre-release review 2026-10-13: the promotion was named by the map's
+        stem alone in one project folder, so two scenes' ``Box_horizon.png``
+        overwrote each other's -- each preview showed the other's shadow."""
+        with mock.patch.object(
+            ShadowPreview, "preview_dir", return_value="C:/proj/cache/preview"
+        ):
+            first = ShadowPreview.texture_path("C:/proj/sourceimages/a/Box_horizon.png")
+            second = ShadowPreview.texture_path(
+                "C:/proj/sourceimages/b/Box_horizon.png"
+            )
+            again = ShadowPreview.texture_path("C:/proj/sourceimages/a/Box_horizon.png")
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, again, "one map, one promotion")
+
+    def test_the_bound_texture_is_the_maps_16_bit_promotion(self):
         """VP2's OpenGL path sRGB-decodes an 8-bit texture a GLSLShader
         samples (measured by the device check: R came back as the sRGB decode
         of its byte, A untouched, and the floating layer vanished), so the
         preview binds a 16-bit promotion of the map instead -- every sample
-        the map's byte times 257 -- written once, refreshed after a re-bake."""
+        the map's byte times 257 -- written once, refreshed after a re-bake,
+        in the project's ``cache/preview`` (:meth:`ShadowPreview.texture_path`)."""
         png = self.rig.horizon_path
         path = ShadowPreview._write_texture(png)
         self._paths.append(path)
-        self.assertEqual(path, os.path.splitext(png)[0] + ShadowPreview.TEXTURE_SUFFIX)
+        self.assertEqual(path, ShadowPreview.texture_path(png))
+        self.assertRegex(
+            os.path.basename(path),
+            r"^Box_horizon_[0-9a-f]{8}"
+            + ShadowPreview.TEXTURE_SUFFIX.replace(".", r"\.")
+            + "$",
+        )
         with open(path, "rb") as fh:
             data = fh.read()
         width, height, depth, colour = struct.unpack(">IIBB", data[16:26])

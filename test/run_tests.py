@@ -358,6 +358,9 @@ class MayaTestRunner:
 
         self.test_dir = Path(__file__).parent
         self.temp_test_dir = self.test_dir / "temp_tests"
+        #: The mayapy chunks' working directory (:meth:`_child_cwd`).
+        self._cwd_store = None
+        self._cwd = None
         self.temp_test_dir.mkdir(exist_ok=True)
 
         # Scoped by port AND runner PID: two concurrent invocations would
@@ -703,6 +706,23 @@ except Exception as e:
         print(f"Temp: {root}")
         return root
 
+    def _child_cwd(self) -> str:
+        """The mayapy chunks' working directory: one scratch folder under the
+        temp root for the run, never the workspace root.
+
+        A Maya child leaves ``mayaDiskCache_<pid>`` folders in its working
+        directory, and launched from the workspace root they turned the root
+        guard red (FUTURE 2026-09-27). Nothing is imported from it: the
+        packages ride the pinned PYTHONPATH (:meth:`_child_env`) and the
+        driver its absolute path. Session-scoped: removed when the run ends.
+        """
+        if self._cwd is None or not os.path.isdir(self._cwd):
+            import pythontk as ptk
+
+            self._cwd_store = ptk.TempArtifacts("mayapy_cwd", policy="session")
+            self._cwd = self._cwd_store.dir_path()
+        return self._cwd
+
     def _child_env(self) -> dict:
         """Environment for mayapy children.
 
@@ -894,7 +914,7 @@ except Exception as e:
                         # exactly that, 2026-09-04). No suite may wait on a human.
                         stdin=subprocess.DEVNULL,
                         stderr=subprocess.STDOUT,
-                        cwd=str(SCRIPTS_ROOT),
+                        cwd=self._child_cwd(),
                         env=child_env,
                     )
                 except OSError as e:

@@ -986,6 +986,79 @@ class TestSteppedKeysRideTheManifest(MayaTkTestCase):
         self.assertFalse(os.path.exists(path))
 
 
+class TestHandoffShipsOneWholeTake(MayaTkTestCase):
+    """A DCC hand-off FBX carries the animation as ONE whole-timeline take.
+
+    Every importer plays one take (Maya the last, Blender the first per
+    object) and the receiver lands the shots from the manifest's ``shots``
+    section, so a per-shot split is nothing a DCC reads -- and an unresampled
+    split cuts each shot's channels at its window (a curve with no key inside
+    a shot contributes nothing to it), while the bake range shrinks to the
+    union of the shots, dropping every key outside them.
+    """
+
+    def setUp(self):
+        super().setUp()
+        tmp = ptk.TempArtifacts("mtk_bridge_whole_take", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.fbx = tmp.path(extension=".fbx")
+        self.addCleanup(self._drop_carrier)
+
+    @staticmethod
+    def _drop_carrier():
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        for node in cmds.ls(DataNodes.EXPORT, long=True) or []:
+            cmds.lockNode(node, lock=False, lockName=False)
+            cmds.delete(node)
+
+    def test_a_scene_with_shots_hands_off_one_take_holding_everything(self):
+        """Bug: the Blender bridge split the scene's declared shots into
+        per-shot takes beside a whole take bounded by the shots' union, so
+        keys outside every shot never shipped.
+        Fixed: 2026-10-13"""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds.currentUnit(time="film")
+        cmds.playbackOptions(animationStartTime=1, animationEndTime=100)
+        cube = cmds.ls(cmds.polyCube(name="whole_take_cube")[0], long=True)[0]
+        for frame, value in ((1, 0.0), (40, 4.0), (100, 10.0)):
+            cmds.setKeyframe(cube, attribute="translateX", t=frame, v=value)
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes,
+            {
+                "shots": [
+                    {"clip": "Shot_A", "start": 10, "end": 30, "objects": []},
+                    {"clip": "Shot_B", "start": 50, "end": 70, "objects": []},
+                ]
+            },
+        )
+        self.assertEqual(len(handoff_export.FbxUtils.declared_takes()), 2)
+
+        BlenderBridge()._export_fbx(
+            [cube], self.fbx, {"INCLUDE_ANIMATION": True, "INCLUDE_MATERIALS": True}
+        )
+
+        fbx = ptk.FbxFile.load(self.fbx, raw_payloads=False, span_arrays=("KeyTime",))
+        takes = fbx.take_names()
+        self.assertEqual(len(takes), 1, f"takes: {takes}")
+        first, last = fbx.take_spans()[takes[0]]
+        fps = 24.0  # film, set above
+        self.assertAlmostEqual(first * fps, 1.0, places=3)
+        self.assertAlmostEqual(last * fps, 100.0, places=3)
+
+    def test_the_takes_a_consumer_plays_still_split(self):
+        """The Unity bridge (clips built from the takes) and the WebXR
+        preview (one clip per take) keep the split; only the DCC hand-offs
+        drop it."""
+        from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        self.assertIs(BlenderBridge.split_takes, False)
+        self.assertIs(UnityBridge.split_takes, True)
+        self.assertIs(WebXrPreview.split_takes, True)
+
+
 class TestBridgeRebuildDeclaredOpacity(MayaTkTestCase):
     """A manifest-declared opacity must reach the shader that has a slot for it.
 
@@ -1240,9 +1313,10 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         """
         out = BlenderBridge.default_output_path("bake_lightmaps")
         self.assertTrue(out.endswith(BlenderBridge.RETURN_MANIFEST_SUFFIX), out)
+        # The store's own folder under the ecosystem temp root.
         self.assertEqual(
             os.path.normcase(os.path.dirname(out)),
-            os.path.normcase(tempfile.gettempdir()),
+            os.path.normcase(os.path.join(ptk.TempArtifacts.root(), "blender_bridge")),
             out,
         )
         project = BlenderBridge._default_lightmap_dir()

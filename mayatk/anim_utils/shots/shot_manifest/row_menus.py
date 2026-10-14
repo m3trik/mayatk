@@ -66,6 +66,7 @@ class RowMenusMixin:
         """Show a context menu for the clicked tree item."""
         from qtpy.QtCore import Qt
         from qtpy.QtWidgets import QMenu
+        from uitk import StyleSheet
 
         tree = self.ui.tbl_steps
         item = tree.itemAt(pos)
@@ -73,6 +74,7 @@ class RowMenusMixin:
         # Right-click on empty space -- Local Edits' Add Step / Show Hidden
         if item is None:
             menu = QMenu(tree)
+            StyleSheet.cast_shadow(menu)
             self._editor.add_menu_actions(menu, None)
             if any(not a.isSeparator() for a in menu.actions()):
                 menu.exec_(tree.viewport().mapToGlobal(pos))
@@ -109,6 +111,7 @@ class RowMenusMixin:
         any_built = bool(built_names)
 
         menu = QMenu(tree)
+        StyleSheet.cast_shadow(menu)
         menu.setToolTipsVisible(True)
         if not is_child:
             # Colour swatches: every selected step when the clicked one is
@@ -234,10 +237,12 @@ class RowMenusMixin:
         none -- or remove it."""
         from qtpy.QtCore import Qt
         from qtpy.QtWidgets import QMenu
+        from uitk import StyleSheet
 
         tree = self.ui.tbl_steps
         after = self._row_above(item)  # now: a redraw may delete the row
         menu = QMenu(tree)
+        StyleSheet.cast_shadow(menu)
         menu.setToolTipsVisible(True)
         name = shot.name
         menu.addAction(

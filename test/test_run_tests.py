@@ -219,6 +219,39 @@ class TestChunkChildStdin(unittest.TestCase):
         self.assertEqual(len(calls), 1, "one mayapy per chunk attempt")
         self.assertIs(calls[0][1].get("stdin"), rt.subprocess.DEVNULL)
 
+    def test_mayapy_chunk_runs_in_a_scratch_cwd_not_the_workspace_root(self):
+        """A Maya child drops ``mayaDiskCache_<pid>`` folders in its working
+        directory: launched from the workspace root, they turned the root
+        guard red. The chunk runs in a temp-root scratch folder instead (its
+        packages come from the pinned PYTHONPATH). Added: 2026-10-13"""
+        import pythontk as ptk
+
+        runner = rt.MayaTestRunner(port=7904)
+        self.addCleanup(runner.results_file.unlink, True)
+        runner.temp_test_dir.mkdir(exist_ok=True)
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append(kwargs)
+            raise OSError("launch refused by the test")
+
+        with mock.patch.object(rt.subprocess, "Popen", side_effect=fake_popen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                runner._run_chunk(
+                    "mayapy.exe", 0, 1, ["test_x"], {"test_x": "test_x.py"}, False
+                )
+        for stale in runner.temp_test_dir.glob(f"chunk_{os.getpid()}_00_*"):
+            self.addCleanup(stale.unlink, True)
+        cwd = os.path.normcase(os.path.realpath(calls[0]["cwd"]))
+        self.assertNotEqual(cwd, os.path.normcase(os.path.realpath(rt.SCRIPTS_ROOT)))
+        self.assertTrue(
+            cwd.startswith(
+                os.path.normcase(os.path.realpath(ptk.TempArtifacts.root()))
+            ),
+            cwd,
+        )
+        self.assertTrue(os.path.isdir(cwd))
+
     def test_the_chunk_command_line_carries_no_path(self):
         """mayapy decodes its command line in the ANSI code page (measured on Maya
         2025: "\\u00e9" arrived as the lone surrogate "\\udce9", Cyrillic as

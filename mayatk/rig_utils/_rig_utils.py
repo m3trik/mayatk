@@ -1573,7 +1573,8 @@ class RigUtils(ptk.HelpMixin):
 
         Parameters:
             meshes (List[str], optional): Mesh transform names to process. If None, all skinned meshes are used.
-            temp_dir (str, optional): Directory for exporting temporary weight files. Defaults to Maya temp.
+            temp_dir (str, optional): Directory for exporting temporary weight files.
+                Defaults to a scoped ``ptk.TempArtifacts`` folder removed on return.
             inherits_transform (bool or None, optional):
                 - True: explicitly sets inheritsTransform = True
                 - False: explicitly sets inheritsTransform = False
@@ -1586,12 +1587,23 @@ class RigUtils(ptk.HelpMixin):
                 - "wrong_type" (List[str]): inputs that weren't a mesh transform.
                 - "failed" (List[Tuple[str, str]]): (name, error) for objects that raised.
         """
+        if temp_dir is not None:
+            return cls._rebind_skin_clusters_via(meshes, temp_dir, inherits_transform)
+        with ptk.TempArtifacts.scoped("skin_rebind") as scratch:
+            return cls._rebind_skin_clusters_via(
+                meshes, scratch.dir_path(), inherits_transform
+            )
+
+    @classmethod
+    def _rebind_skin_clusters_via(
+        cls,
+        meshes: Optional[List[str]],
+        temp_dir: str,
+        inherits_transform: Optional[bool],
+    ) -> Dict[str, list]:
+        """:meth:`rebind_skin_clusters`, its weight files written in *temp_dir*."""
         import os
 
-        if temp_dir is None:
-            temp_dir = os.path.join(
-                cmds.internalVar(userTmpDir=True), "skin_rebind_weights"
-            )
         os.makedirs(temp_dir, exist_ok=True)
 
         result = {

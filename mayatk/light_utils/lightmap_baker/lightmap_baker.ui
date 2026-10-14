@@ -503,7 +503,7 @@ Absolute (e.g. 'D:/bakes') — used as-is.
 The folder is created if it doesn't exist. Browsing to a folder inside sourceimages stores it as a relative path. The image button saves each map beside its material's texture maps instead; this folder then takes only the objects whose material has none.</string>
            </property>
            <property name="placeholderText">
-            <string>sourceimages</string>
+            <string>(blank: sourceimages/lightmaps)</string>
            </property>
           </widget>
          </item>

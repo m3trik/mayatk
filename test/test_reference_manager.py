@@ -398,7 +398,7 @@ class TestForeignConversionProgress(unittest.TestCase):
         slots = self._slots()
         seen = {}
 
-        def stub(self, path, via=None, progress=None, rig_mode=None):
+        def stub(self, path, via=None, progress=None, rig_mode=None, project=None):
             seen["progress"] = progress
             if progress is not None:
                 progress(40, 100, "Blender: Writing the FBX")
@@ -423,7 +423,7 @@ class TestForeignConversionProgress(unittest.TestCase):
 
         slots = self._slots()
 
-        def stub(self, path, via=None, progress=None, rig_mode=None):
+        def stub(self, path, via=None, progress=None, rig_mode=None, project=None):
             if progress is not None:
                 progress(100, 100, "Maya: baked")
             return "C:/cache/mesh.ma"
@@ -1217,33 +1217,40 @@ class TestReferenceManager(unittest.TestCase):
 
         self.assertEqual(calls, ["follow", "list"])
 
-    def _bake_files(self):
-        """A source FBX and a bake of it on disk, the bake's files a week old."""
-        import time
-
+    def _bake_files(self, in_temp=False):
+        """A source FBX in a project and its bake: in the project's
+        ``cache/bridge`` (or, *in_temp*, where a bake made before 2026-10-13
+        lives)."""
         store = ptk.TempArtifacts("mtk_rm_fbx_follow", policy="scoped")
         self.addCleanup(store.cleanup)
-        root = store.dir_path()
-        source, bake = os.path.join(root, "shots.fbx"), os.path.join(root, "bake.ma")
-        for path in (source, bake, bake + ".source.json"):
+        root = tempfile.mkdtemp(prefix="mtk_rm_follow_proj_")
+        self.addCleanup(shutil.rmtree, root, True)
+        source = os.path.join(root, "scenes", "shots.fbx")
+        home = store.dir_path() if in_temp else os.path.join(root, "cache", "bridge")
+        bake = os.path.join(home, "mtk_bake_cache_shots_0123abcd.ma")
+        for path in (source, bake):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as fh:
                 fh.write("x")
-        week_ago = time.time() - 8 * 86400
-        os.utime(bake, (week_ago, week_ago))
-        os.utime(bake + ".source.json", (week_ago, week_ago))
         ref = MagicMock()
         ref.path, ref.namespace, ref._ref_node = bake, "shots", "shotsRN"
         return source, bake, ref
 
-    def _follow(self, ref, source, slot, loaded=True, bake=None):
+    def _follow(
+        self, ref, source, current, loaded=True, bake=None, key="v1", rehome=None
+    ):
+        """Run the refresh's follow with the project's bake of *source* holding
+        it (*current*: the slot) or not (None) at version *key*."""
         from mayatk.env_utils.blender_bridge import _scene_import as si
 
         rebaked = []
+        slot = ref.path
         self.slot._bake_foreign_path = bake or (lambda p: rebaked.append(p) or slot)
         with (
             patch.object(
                 ref_engine.cmds, "referenceQuery", create=True, return_value=loaded
             ),
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value=""),
             patch.object(
                 type(self.controller),
                 "current_references",
@@ -1255,35 +1262,43 @@ class TestReferenceManager(unittest.TestCase):
                 "_bake_source",
                 staticmethod(lambda p: source if p == ref.path else None),
             ),
-            patch.object(si.BlenderSceneImport, "_bake_slot", lambda src: slot),
+            patch.object(
+                si.BlenderSceneImport,
+                "_current_bake",
+                classmethod(lambda cls, src, *a, **k: current),
+            ),
+            patch.object(
+                si.BlenderSceneImport,
+                "_bake_key",
+                staticmethod(lambda src, *a, **k: key),
+            ),
+            patch.object(
+                si.BlenderSceneImport,
+                "rehome_bake",
+                rehome or (lambda self, path, project=None: None),
+            ),
         ):
             moved = self.controller._follow_bake_sources()
         return moved, rebaked
 
-    def test_a_current_bake_is_marked_in_use_and_left_alone(self):
-        """The cache's 7-day sweep goes by mtime: a bake a scene reads must look
-        fresh, or the next bake allocation collects it from under the scene."""
-        import time
-
+    def test_a_current_bake_is_left_alone(self):
         source, bake, ref = self._bake_files()
 
-        moved, rebaked = self._follow(ref, source, slot=bake)
+        moved, rebaked = self._follow(ref, source, current=bake)
 
         self.assertEqual((moved, rebaked), ([], []))
-        for path in (bake, bake + ".source.json"):
-            self.assertGreater(os.path.getmtime(path), time.time() - 60)
 
-    def test_a_bake_its_source_moved_past_is_baked_again_and_repointed(self):
+    def test_a_bake_its_source_moved_past_is_baked_again_and_reloaded(self):
+        """The re-bake replaces the one slot the reference reads: the reference
+        is reloaded in place (unloaded first, so the load reads the new file)."""
         source, bake, ref = self._bake_files()
-        new = os.path.join(os.path.dirname(bake), "bake_v2.ma")
 
-        moved, rebaked = self._follow(ref, source, slot=new)
+        moved, rebaked = self._follow(ref, source, current=None)
 
         self.assertEqual((moved, rebaked), ([ref], [source]))
-        self._mock_cmds_file.assert_any_call(new, loadReference="shotsRN")
-        self.assertNotIn(
-            call(unloadReference="shotsRN"),
-            self._mock_cmds_file.call_args_list,
+        self.assertEqual(
+            self._mock_cmds_file.call_args_list[-2:],
+            [call(unloadReference="shotsRN"), call(bake, loadReference="shotsRN")],
         )
 
     def test_a_bake_that_failed_is_not_retried_until_its_source_moves(self):
@@ -1291,13 +1306,11 @@ class TestReferenceManager(unittest.TestCase):
         stopped (Esc-hold) must not run again at each one -- minutes of child
         mayapy, or the prompt, every time. A newer source tries again."""
         source, bake, ref = self._bake_files()
-        v2 = os.path.join(os.path.dirname(bake), "bake_v2.ma")
-        v3 = os.path.join(os.path.dirname(bake), "bake_v3.ma")
         attempts = []
 
-        for slot in (v2, v2, v3):
+        for key in ("v2", "v2", "v3"):
             moved, _ = self._follow(
-                ref, source, slot=slot, bake=lambda p: attempts.append(p)
+                ref, source, current=None, key=key, bake=lambda p: attempts.append(p)
             )
             self.assertEqual(moved, [])
 
@@ -1305,18 +1318,79 @@ class TestReferenceManager(unittest.TestCase):
 
     def test_an_unloaded_reference_stays_unloaded_when_repointed(self):
         source, bake, ref = self._bake_files()
-        new = os.path.join(os.path.dirname(bake), "bake_v2.ma")
 
-        moved, _ = self._follow(ref, source, slot=new, loaded=False)
+        moved, _ = self._follow(ref, source, current=None, loaded=False)
 
         self.assertEqual(moved, [ref])
         self.assertEqual(
             self._mock_cmds_file.call_args_list[-2:],
             [
-                call(new, loadReference="shotsRN"),
+                call(bake, loadReference="shotsRN"),
                 call(unloadReference="shotsRN"),
             ],
         )
+
+    def test_a_reference_into_temp_is_rehomed_into_the_project(self):
+        """A scene saved before 2026-10-13 references a bake in temp, which the
+        age sweep reclaims: the refresh repoints it onto the project's bake."""
+        source, old, ref = self._bake_files(in_temp=True)
+        home = os.path.join(os.path.dirname(os.path.dirname(source)), "cache")
+        slot = os.path.join(home, "bridge", os.path.basename(old))
+        seen = []
+
+        def rehome(engine, path, project=None):
+            seen.append(path)
+            return slot
+
+        moved, rebaked = self._follow(ref, source, current=slot, rehome=rehome)
+
+        self.assertEqual((seen, moved, rebaked), ([old], [ref], []))
+        self._mock_cmds_file.assert_any_call(slot, loadReference="shotsRN")
+
+    def test_a_rehome_that_cannot_encode_the_bake_skips_it(self):
+        """Pre-release review 2026-10-13: a re-home's UnicodeEncodeError (a
+        ValueError) escaped the refresh, which caught only OSError and
+        RuntimeError -- the whole panel refresh failed on one old bake."""
+        source, old, ref = self._bake_files(in_temp=True)
+
+        def rehome(engine, path, project=None):
+            raise UnicodeEncodeError("utf-8", "\udce9", 0, 1, "surrogates")
+
+        moved, rebaked = self._follow(ref, source, current=old, rehome=rehome)
+
+        self.assertEqual((moved, rebaked), ([], []))
+
+    def test_a_bake_of_another_project_is_named_in_full(self):
+        """Pre-release review 2026-10-13: the spelling was relative to the
+        ACTIVE project whenever the bake lay under it, so a bake of a nested
+        project (the scene's own, inside a broad active one) was named from the
+        wrong root -- and resolved to nothing once that project was active."""
+        root = os.path.join(tempfile.gettempdir(), "mtk_rm_rel_broad")
+        nested = os.path.join(root, "room")
+        bake = os.path.join(nested, "cache", "bridge", "mtk_bake_cache_x_0123abcd.ma")
+        with (
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value=root),
+            patch.object(
+                ref_engine.EnvUtils, "scene_project_root", return_value=nested
+            ),
+        ):
+            self.assertEqual(self.controller._reference_spelling(bake), bake)
+
+    def test_a_bake_is_named_relative_to_the_project(self):
+        """Referenced through the project, so the scene keeps its bake when the
+        project moves or syncs elsewhere (Maya resolves it via the project)."""
+        root = os.path.join(tempfile.gettempdir(), "mtk_rm_rel_proj")
+        bake = os.path.join(root, "cache", "bridge", "mtk_bake_cache_x_0123abcd.ma")
+        with (
+            patch.object(ref_engine.cmds, "workspace", create=True, return_value=root),
+            patch.object(ref_engine.EnvUtils, "scene_project_root", return_value=root),
+        ):
+            self.assertEqual(
+                self.controller._reference_spelling(bake),
+                "cache/bridge/mtk_bake_cache_x_0123abcd.ma",
+            )
+            outside = os.path.join(tempfile.gettempdir(), "elsewhere", "b.ma")
+            self.assertEqual(self.controller._reference_spelling(outside), outside)
 
     def test_a_referenced_bake_is_listed_by_its_source_row(self):
         """The External rows matched a reference by its own path, so a referenced
@@ -2049,7 +2123,7 @@ class TestOpenSceneClearsModifiedFlag(unittest.TestCase):
 
 
 class TestForeignScratch(unittest.TestCase):
-    """Foreign rows open from ``<temp>/mtk_opened_<hash>/<stem>_<ext>.ma`` and the
+    """Foreign rows open from ``<temp root>/mtk_opened/mtk_opened_<hash>/<stem>_<ext>.ma`` and the
     untouched scratch is discarded on close (mirror of blendertk's tests)."""
 
     def test_scratch_name_carries_the_source_type_and_is_per_source(self):
@@ -2061,11 +2135,10 @@ class TestForeignScratch(unittest.TestCase):
         )
         self.assertEqual(os.path.basename(a), "shot_blend.ma")
         self.assertTrue(os.path.basename(os.path.dirname(a)).startswith("mtk_opened_"))
-        import tempfile
-
+        # The twins' store owns its own folder under the ecosystem temp root.
         self.assertEqual(
             os.path.normcase(os.path.dirname(os.path.dirname(a))),
-            os.path.normcase(tempfile.gettempdir()),
+            os.path.normcase(os.path.join(ptk.TempArtifacts.root(), "mtk_opened")),
         )
         self.assertNotEqual(os.path.dirname(a), os.path.dirname(b))
         self.assertEqual(
@@ -2098,7 +2171,7 @@ class TestForeignOpenStandsInForItsSource(unittest.TestCase):
         )
         controller.slot, controller.sb, controller.ui = slot, slot.sb, slot.ui
         controller.logger = MockLogger()
-        slot._bake_foreign_path = lambda path: "/cache/room.ma"
+        slot._bake_foreign_path = lambda path, project=None: "/cache/room.ma"
         source = "/proj/scenes/room.blend"
         scratch = "/temp/mtk_opened_0123456789/room_blend.ma"
         twins = MagicMock()
@@ -2114,6 +2187,57 @@ class TestForeignOpenStandsInForItsSource(unittest.TestCase):
         self.assertEqual(
             ref_ctrl.EnvUtils.scene_source(scratch), os.path.abspath(source)
         )
+
+    def _controller(self):
+        slot = MockSlot()
+        controller = ref_mgr.ReferenceManagerController.__new__(
+            ref_mgr.ReferenceManagerController
+        )
+        controller.slot, controller.sb, controller.ui = slot, slot.sb, slot.ui
+        controller.logger = MockLogger()
+        slot.sb.message_box = MagicMock()
+        return controller, slot
+
+    def test_a_foreign_row_bakes_into_its_sources_project(self):
+        """Pre-release review 2026-10-13: Open baked a foreign row into the
+        OPEN scene's project (the bake's default), so opening another
+        project's .blend left its bake -- a file the opened scene references --
+        in a project that scene never sees."""
+        controller, slot = self._controller()
+        proj = tempfile.mkdtemp(prefix="mtk_rm_open_proj_")
+        self.addCleanup(shutil.rmtree, proj, True)
+        ref_engine.ptk.Workspace.create(proj, create_dirs=False)
+        source = os.path.join(proj, "scenes", "room.blend")
+        os.makedirs(os.path.dirname(source))
+        with open(source, "wb") as fh:
+            fh.write(b"BLENDER")
+        seen = []
+        slot._bake_foreign_path = lambda path, project=None: seen.append(project)
+        controller.open_scene(source, set_workspace=False)
+        self.assertEqual(
+            [os.path.normcase(os.path.normpath(p or "")) for p in seen],
+            [os.path.normcase(os.path.normpath(proj))],
+        )
+
+    def test_a_scratch_copy_that_cannot_be_written_refuses_the_open(self):
+        """Pre-release review 2026-10-13: when the scratch copy failed, the
+        project's bake itself was opened -- and a save then wrote over the
+        file every scene referencing the row reads."""
+        controller, slot = self._controller()
+        slot._bake_foreign_path = lambda path, project=None: "/cache/room.ma"
+        twins = MagicMock()
+        twins.create.side_effect = OSError("disk full")
+        with (
+            patch.object(ref_ctrl, "_scratch_twins", return_value=twins),
+            patch.object(ref_engine.os.path, "exists", return_value=True),
+            patch.object(ref_engine.cmds, "file", create=True) as mock_file,
+        ):
+            self.assertFalse(
+                controller.open_scene("/proj/scenes/room.blend", set_workspace=False)
+            )
+        opened = [c for c in mock_file.call_args_list if c.kwargs.get("open")]
+        self.assertEqual(opened, [], "nothing was opened")
+        self.assertTrue(slot.sb.message_box.called, "the user is told why")
 
 
 class _FakeRef:
@@ -3043,6 +3167,17 @@ class TestCaseOnlyRename(_OnDiskRename, unittest.TestCase):
         self.assertEqual(self._listing(), ["Hero"])  # the folder too
         self.assertEqual(self._listing("Hero"), ["Hero_v01.ma"])
 
+    def test_a_renamed_scenes_note_follows_it(self):
+        """Notes are keyed by the scene's project-relative path: a rename (and
+        its folder's) carries the note to the new key."""
+        notes = ptk.SceneNotes(session_root=self.workspace)
+        notes.set(self.old, "lighting pass")
+        self._controller("villain").rename_scene()
+        renamed = os.path.join(self.scenes, "villain", "villain_v01.ma")
+        self.assertTrue(os.path.isfile(renamed))
+        self.assertEqual(notes.get(renamed), "lighting pass")
+        self.assertEqual(notes.get(self.old), "")
+
     def test_a_folder_differing_only_in_case_is_still_the_scenes_own(self):
         os.rename(os.path.join(self.scenes, "hero"), os.path.join(self.scenes, "Hero"))
         self.old = os.path.join(self.scenes, "Hero", "hero_v01.ma")
@@ -3184,6 +3319,13 @@ class TestDeleteRemovesOnlyWhatItNames(_OnDiskRename, unittest.TestCase):
         self.old = self._touch("scenes_final.ma")
         self._delete()
         self.assertTrue(os.path.isdir(self.scenes), "the scenes root was removed")
+
+    def test_the_deleted_scenes_note_goes_with_it(self):
+        self.old = self._touch("hero", "hero_v01.ma")
+        notes = ptk.SceneNotes(session_root=self.workspace)
+        notes.set(self.old, "gone soon")
+        self._delete()
+        self.assertEqual(notes.get(self.old), "")
 
 
 class TestDeleteGoesToTheTrash(_OnDiskRename, unittest.TestCase):
@@ -4226,6 +4368,10 @@ class TestFbxRowsAgainstRealMaya(unittest.TestCase):
         self.root = self._store.dir_path()
         self.manager = TestImportReferencesNamespaceModes._make_manager()
         self.addCleanup(self._store.cleanup)
+        # The bakes are project files: this test's project, never the user's.
+        cmds = ref_engine.cmds
+        self.addCleanup(cmds.workspace, cmds.workspace(q=True, rd=True), o=True)
+        cmds.workspace(self.root, openWorkspace=True)
         self.addCleanup(mel.eval, "FBXImportSetTake -ti -1")
         self.addCleanup(ref_engine.cmds.file, new=True, force=True)
 
@@ -4301,6 +4447,11 @@ class TestFbxRowsAgainstRealMaya(unittest.TestCase):
         cmds.file(unloadReference=ref._ref_node)
         cmds.file(loadReference=ref._ref_node)
         self._assert_plays(plug, expected)
+        # The bake is a project file, named through the project.
+        unresolved = cmds.referenceQuery(ref._ref_node, filename=True, un=True)
+        self.assertRegex(
+            unresolved, r"^cache/bridge/mtk_bake_cache_shots_[0-9a-f]{8}\.ma$"
+        )
         # The reference stands for the FBX: it maps back to the row, and adding
         # the FBX again adds nothing.
         self.assertEqual(self.manager._bake_source_key(ref.path), self._norm(path))

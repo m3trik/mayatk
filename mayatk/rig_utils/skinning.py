@@ -905,8 +905,9 @@ class SkinUtils(ptk.HelpMixin):
     def export_weights(cls, mesh, file_path: Optional[str] = None) -> str:
         """Export skin weights to XML (cmds.deformerWeights).
 
-        Default path: ``<maya user tmp>/skin_weights/<mesh>.xml``. Returns the
-        full file path.
+        Default path: ``<mesh>.xml`` in a fresh ``ptk.TempArtifacts``
+        folder (``skin_weights``; aged out by its sweep, so import it back
+        within the week or pass *file_path*). Returns the full file path.
 
         Note: RigUtils.rebind_skin_clusters uses the same mechanism and should
         delegate here eventually.
@@ -915,7 +916,7 @@ class SkinUtils(ptk.HelpMixin):
         if not skin_cluster:
             raise ValueError(f"No skinCluster on mesh: {mesh}")
         if file_path is None:
-            directory = os.path.join(cmds.internalVar(userTmpDir=True), "skin_weights")
+            directory = ptk.TempArtifacts("skin_weights").dir_path()
             file_path = os.path.join(directory, f"{CoreUtils.leaf_name(mesh)}.xml")
         directory, filename = os.path.split(file_path)
         os.makedirs(directory, exist_ok=True)

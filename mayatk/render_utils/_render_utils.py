@@ -7,13 +7,20 @@ declarative and the render plumbing has a single home (SSoT):
 
 * enumerate the renderers the user can pick (built-ins + installed plugins),
 * make one of them active (loading its plugin on demand),
-* drive the Render View — single render, smart redo, and IPR.
+* drive the Render View — single render, smart redo, and IPR,
+* read and write the key render settings, with named presets over them
+  (:meth:`RenderUtils.render_settings`, :meth:`RenderUtils.render_preset_store`),
+* ready a scene so Arnold renders what the viewport shows
+  (:meth:`RenderUtils.prepare_arnold_preview`).
 
-The Arnold preview *network* itself is a separate concern owned by
-:class:`mayatk.ArnoldBridge`; this module only selects/launches renderers.
+The Arnold preview *network* for a material is owned by
+:class:`mayatk.ArnoldBridge`; this module only decides when one is needed
+(``render_utils`` ranks above ``mat_utils`` in the package's layer order).
 """
 
-from typing import Dict, List, Optional
+import os
+import re
+from typing import Any, Dict, List, Optional
 
 try:
     import maya.cmds as cmds
@@ -22,7 +29,9 @@ except ImportError:
     pass
 import pythontk as ptk
 
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.plugins._plugins import Plugins
+from mayatk.mat_utils.arnold_bridge import ArnoldBridge
 
 
 class RenderUtils(ptk.HelpMixin):
@@ -113,6 +122,97 @@ class RenderUtils(ptk.HelpMixin):
         cls._ensure_plugin(name)
         cmds.setAttr("defaultRenderGlobals.currentRenderer", name, type="string")
 
+    # ------------------------------------------------------- render settings
+    #: Arnold's scene-wide render options node (one per scene, created by
+    #: :meth:`ensure_arnold_options`).
+    ARNOLD_OPTIONS = "defaultArnoldRenderOptions"
+
+    #: The key render settings, ``{key: plug}``. The keys are what a render
+    #: preset stores, so a preset never depends on a UI's widget names. A
+    #: setting whose node is absent (Arnold's, before Arnold is picked) is
+    #: simply not reported.
+    RENDER_SETTINGS = {
+        "width": "defaultResolution.width",
+        "height": "defaultResolution.height",
+        "camera_samples": f"{ARNOLD_OPTIONS}.AASamples",
+        "diffuse_samples": f"{ARNOLD_OPTIONS}.GIDiffuseSamples",
+        "specular_samples": f"{ARNOLD_OPTIONS}.GISpecularSamples",
+        "transmission_samples": f"{ARNOLD_OPTIONS}.GITransmissionSamples",
+        "diffuse_depth": f"{ARNOLD_OPTIONS}.GIDiffuseDepth",
+        "specular_depth": f"{ARNOLD_OPTIONS}.GISpecularDepth",
+        "transmission_depth": f"{ARNOLD_OPTIONS}.GITransmissionDepth",
+    }
+
+    @classmethod
+    def ensure_arnold_options(cls) -> str:
+        """Load mtoa and create the scene's Arnold options if missing.
+
+        What Maya's Render Settings does when Arnold is picked; MtoA's
+        ``createOptions`` is idempotent.
+
+        Returns:
+            The options node name.
+
+        Raises:
+            Plugins.LoadError: mtoa is not installed.
+        """
+        Plugins.load("mtoa")
+        if not cmds.objExists(cls.ARNOLD_OPTIONS):
+            import mtoa.core
+
+            mtoa.core.createOptions()
+        return cls.ARNOLD_OPTIONS
+
+    @classmethod
+    def render_settings(cls) -> Dict[str, Any]:
+        """The scene's current value of every :attr:`RENDER_SETTINGS` key.
+
+        Returns:
+            ``{key: value}`` for each setting whose node exists.
+        """
+        return {
+            key: cmds.getAttr(plug)
+            for key, plug in cls.RENDER_SETTINGS.items()
+            if cmds.objExists(plug)
+        }
+
+    @classmethod
+    @CoreUtils.undoable
+    def set_render_settings(cls, values: Dict[str, Any]) -> int:
+        """Write render settings to the scene.
+
+        Arnold's options are created first when *values* names one of them,
+        so a preset applies before the first Arnold render. Keys outside
+        :attr:`RENDER_SETTINGS` (a preset's ``_meta``, a retired setting) are
+        skipped.
+
+        Parameters:
+            values: ``{key: value}``, e.g. a loaded render preset.
+
+        Returns:
+            The number of settings written.
+        """
+        known = {k: v for k, v in values.items() if k in cls.RENDER_SETTINGS}
+        if any(
+            cls.RENDER_SETTINGS[k].startswith(f"{cls.ARNOLD_OPTIONS}.") for k in known
+        ):
+            cls.ensure_arnold_options()
+        for key, value in known.items():
+            cmds.setAttr(cls.RENDER_SETTINGS[key], value)
+        return len(known)
+
+    @staticmethod
+    def render_preset_store() -> "ptk.PresetStore":
+        """Named render-setting presets: shipped Arnold tiers + user presets.
+
+        A preset is a ``{key: value}`` dict of :attr:`RENDER_SETTINGS` keys,
+        applied with :meth:`set_render_settings`. Built-ins ship as JSON in
+        this subpackage's ``presets/`` dir; user presets live under the shared
+        config root, so a UI and a script resolve to one set.
+        """
+        builtin = os.path.join(os.path.dirname(__file__), "presets")
+        return ptk.PresetStore("render", package="mayatk", builtin_dir=builtin)
+
     # ----------------------------------------------------------- render view
     @staticmethod
     def render_camera(camera: str, render_mode: str = "render") -> None:
@@ -193,3 +293,103 @@ class RenderUtils(ptk.HelpMixin):
         height = int(cmds.getAttr("defaultResolution.height"))
         mel.eval(f'{proc} "renderView" {width} {height} "{camera}"')
         return True
+
+    # -------------------------------------------------------- arnold preview
+    #: ``aiUserOptions`` token that makes Arnold's CAMERA rays see a mesh
+    #: single-sided. ``sidedness`` is the mask of ray types that see both
+    #: sides: AI_RAY_ALL (255) minus AI_RAY_CAMERA (1). Shadow and bounce rays
+    #: stay double-sided, so a room lit from inside stays closed to its light.
+    ARNOLD_CAMERA_CULL = "sidedness 254"
+
+    #: ``fileInfo`` key holding the meshes (UUIDs, space-separated) whose
+    #: :attr:`ARNOLD_CAMERA_CULL` the sync added -- the only copies it ever
+    #: removes. Scene-level, so it saves with the scene and exports nowhere.
+    ARNOLD_CAMERA_CULL_RECORD = "mtk_arnold_camera_cull"
+
+    @classmethod
+    @CoreUtils.undoable
+    def prepare_arnold_preview(cls) -> Dict[str, List[str]]:
+        """Give Arnold what it needs to render what the viewport shows.
+
+        Two things the viewport draws that Arnold does not read:
+
+        * a material MtoA cannot translate (StingrayPBS / ShaderFX) renders
+          error magenta, so each gets its :class:`ArnoldBridge`;
+        * Viewport 2.0 backface culling is display-only, so a cutaway wall the
+          artist looks through renders its unlit back -- from outside, a lit
+          room is a black box. :meth:`sync_arnold_backface_culling` mirrors it.
+
+        Both are Arnold-only and left in place: IPR and every later Arnold
+        render read the same scene, and neither touches what exports.
+
+        Returns:
+            ``{"bridged": [...], "culled": [...]}`` -- the bridge nodes this
+            call created or extended, and every mesh now culled for Arnold
+            camera rays.
+        """
+        Plugins.load("mtoa")
+        materials = ArnoldBridge.unrenderable_materials()
+        bridged = ArnoldBridge().add(materials=materials) if materials else []
+        return {"bridged": bridged, "culled": cls.sync_arnold_backface_culling()}
+
+    @classmethod
+    @CoreUtils.undoable
+    def sync_arnold_backface_culling(cls) -> List[str]:
+        """Make Arnold camera rays cull the backfaces Viewport 2.0 culls.
+
+        Derived state, re-synced on every call: each double-sided mesh with
+        ``backfaceCulling`` on carries :attr:`ARNOLD_CAMERA_CULL` in its
+        ``aiUserOptions``, and the token this sync added leaves a mesh whose
+        culling was turned off. What it added is recorded with the scene
+        (:attr:`ARNOLD_CAMERA_CULL_RECORD`, by mesh UUID), so an option the
+        artist wrote -- the same token included -- is never removed. Composes
+        with whatever else the options hold; a mesh whose options already set
+        ``sidedness`` is the artist's call and is left alone. A single-sided
+        mesh is skipped -- Arnold already culls it for every ray. A duplicate
+        of a synced mesh carries a copy the record does not name, so that copy
+        stays as authored.
+
+        Returns:
+            Full paths of the meshes now culled for Arnold camera rays (empty
+            when mtoa is unloaded: ``aiUserOptions`` is an mtoa attribute).
+        """
+        if not Plugins.is_loaded("mtoa"):
+            return []
+        token = re.escape(cls.ARNOLD_CAMERA_CULL)
+        ours = re.compile(rf"(?:^|\s+){token}(?=\s|$)")
+        record = cls.ARNOLD_CAMERA_CULL_RECORD
+        added = set(" ".join(cmds.fileInfo(record, query=True) or []).split())
+        still_added = set()
+        culled: List[str] = []
+        for shape in cmds.ls(type="mesh", long=True, noIntermediate=True) or []:
+            plug = f"{shape}.aiUserOptions"
+            if not cmds.attributeQuery("aiUserOptions", node=shape, exists=True):
+                continue
+            uuid = (cmds.ls(shape, uuid=True) or [""])[0]
+            options = cmds.getAttr(plug) or ""
+            has = bool(ours.search(options))
+            mine = has and uuid in added
+            wanted = bool(cmds.getAttr(f"{shape}.backfaceCulling")) and bool(
+                cmds.getAttr(f"{shape}.doubleSided")
+            )
+            value = options
+            if wanted and not has and not re.search(r"\bsidedness\b", options):
+                value = f"{options.strip()} {cls.ARNOLD_CAMERA_CULL}".strip()
+            elif mine and not wanted:
+                value = ours.sub("", options).strip()
+            if value != options:
+                try:
+                    cmds.setAttr(plug, value, type="string")
+                except RuntimeError:  # locked, or a locked reference edit
+                    value = options
+            in_value = bool(ours.search(value))
+            if in_value and (mine or not has):  # recorded, or added just now
+                still_added.add(uuid)
+            if wanted and in_value:
+                culled.append(shape)
+        if still_added != added:
+            if still_added:
+                cmds.fileInfo(record, " ".join(sorted(still_added)))
+            else:
+                cmds.fileInfo(remove=record)
+        return culled
