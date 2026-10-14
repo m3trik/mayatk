@@ -49,18 +49,15 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     UI_NAME = "marmoset_bridge"
     PRESETS_ROOT = _PRESETS_ROOT
     LOG_TAG = "marmoset_bridge"
-    # Fall back to a self-cleaning temp folder when no scene/workspace dir resolves
-    # (unsaved scene) — the FBX is a transient hand-off artifact Toolbag reads once,
-    # so the user shouldn't be forced to pick a path. A bake roundtrip's MAPS are
-    # not transient, and do not land here — see the tooltip below.
-    TEMP_OUTPUT_FALLBACK = True
-    # A roundtrip runs Toolbag blocking and puts its only durable output (the
-    # maps) in the project's texture folder, so its hand-off artifacts are
-    # intermediates of the run itself. Left to the scene/workspace default
-    # they silted up the project beside the scene file; with the field blank
-    # the bridge stages them in a temp dir and removes it when the run
-    # succeeds. A folder named here still wins -- and is still kept.
-    TRANSIENT_OUTPUT_MODES = (ROUND_TRIP,)
+    # A blank field is never filled in by the panel: every mode's hand-off
+    # artifacts (FBX, manifests, rendered script) are intermediates, so the
+    # bridge stages them in a fresh temp folder per send -- removed when a
+    # roundtrip succeeds, aged out after a send_to's detached Toolbag has read
+    # them -- and puts what is kept in the scene's project (the maps in
+    # sourceimages/baked, a roundtrip's .tbscene in data/marmoset). Left to a
+    # scene-folder default they silted up the project. A folder named here
+    # still wins -- and is still kept.
+    TRANSIENT_OUTPUT_MODES = (SEND_TO, ROUND_TRIP)
 
     # The shared base tooltip promises the baked maps land in this folder too.
     # For a bake roundtrip they deliberately do not: they are production
@@ -71,11 +68,10 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     OUTPUT_DIR_TOOLTIP = (
         "Directory where the hand-off artifacts (FBX, material manifest,\n"
         "rendered script, saved .tbscene) land.\n\n"
-        "Leave blank and a Send To defaults to the current scene's directory\n"
-        "(or the active workspace if the scene hasn't been saved), while a\n"
-        "bake ROUNDTRIP stages them in a temp folder and removes it when the\n"
-        "bake succeeds -- they are intermediates it consumes itself. Name a\n"
-        "folder here and a roundtrip keeps its artifacts in it instead.\n\n"
+        "Leave blank and they go to a temp folder per send: removed when a\n"
+        "bake ROUNDTRIP succeeds, aged out after a Send To's Toolbag has\n"
+        "read them. A roundtrip's saved .tbscene goes to the scene project's\n"
+        "data/marmoset. Name a folder here and every artifact stays in it.\n\n"
         "A bake roundtrip's TEXTURE MAPS do NOT land here — they go to the\n"
         "project's sourceimages/baked, where the scene references its\n"
         "textures from, so no later pass has to copy or rename them."
@@ -93,8 +89,8 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
         "Toolbag runs the rendered template with your parameter values "
         "substituted in.",
         "steps": [
-            "Set the <b>Output Dir</b> (or leave blank to use the scene "
-            "directory; an unsaved scene falls back to a temp folder).",
+            "Set the <b>Output Dir</b> (or leave it blank: the hand-off "
+            "goes to a temp folder per send).",
             "Select one or more polygon transforms.",
             "Pick a <b>Template + Mode</b> from the dropdown.",
             "Tweak the template's exposed parameters.",

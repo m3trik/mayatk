@@ -639,6 +639,38 @@ class TestBakeLightingTemplateJs(unittest.TestCase):
         self.assertIn('"C:/bakes/baked.png"', rendered)
 
 
+class TestRenderOutputsGoToProjectFolders(unittest.TestCase):
+    """A render template's own output falls back to the scene project's
+    ``images`` folder, a lighting bake's (a texture Painter imports) to its
+    texture folder -- never the hand-off folder, which is scratch when the
+    Output Dir is blank. Added: 2026-10-13"""
+
+    def _render(self, stem, **dirs):
+        from pythontk import StrUtils as _StrUtils
+
+        bridge = SubstanceBridge()
+        path = next(p for p in SubstanceBridge.list_templates() if p.stem == stem)
+        meta = SubstanceBridge.parse_template(path)
+        _cli, js_ctx = bridge._build_contexts(
+            fbx_path="/tmp/x.fbx",
+            manifest_path="/tmp/x.materials.json",
+            output_dir="/tmp/handoff",
+            params=None,
+            **dirs,
+        )
+        return _StrUtils.replace_delimited(meta["RPC_SCRIPT"], js_ctx)
+
+    def test_render_falls_back_to_the_images_folder(self):
+        rendered = self._render("render", images_dir="/proj/images")
+        self.assertIn('"/proj/images" + "/painter_render.png"', rendered)
+        self.assertNotIn("/tmp/handoff", rendered)
+
+    def test_bake_lighting_falls_back_to_the_texture_folder(self):
+        rendered = self._render("bake_lighting", textures_dir="/proj/sourceimages")
+        self.assertIn('"/proj/sourceimages" + "/baked_lighting.png"', rendered)
+        self.assertNotIn("/tmp/handoff", rendered)
+
+
 class TestParamsPopulated(unittest.TestCase):
     """The infrastructure was previously scaffolded but PARAMS was empty.
     Guard against regressing back to an empty registry."""

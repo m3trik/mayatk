@@ -474,10 +474,17 @@ class SubstanceEngine(ptk.HandoffBridge):
         meta = request.extras["_meta"]
         template_path = request.extras["_template_path"]
 
-        # No Output Dir: the run's detached scratch in the ``payload_prefix``
-        # namespace. Painter reads the artifacts after we return, so allocation
-        # sweeps stale leftovers instead of deleting live ones.
-        output_dir = request.get("output_dir") or self._scratch_dir(request, "handoff")
+        # No Output Dir: the hand-off (manifest, staged texture copies) is the
+        # run's detached scratch in the ``payload_prefix`` namespace -- Painter
+        # reads it after we return, so allocation sweeps stale leftovers
+        # instead of deleting live ones -- while the MESH, which the Painter
+        # project is built from and a reimport overwrites, goes to the scene
+        # project's ``cache/substance`` (:meth:`_mesh_cache_dir`): a project
+        # pointing into temp loses its mesh to the sweep. A named Output Dir
+        # takes everything.
+        named_dir = request.get("output_dir")
+        output_dir = named_dir or self._scratch_dir(request, "handoff")
+        mesh_dir = named_dir or self._mesh_cache_dir() or output_dir
 
         # Reimport-style templates overwrite the exact file the open Painter
         # project was created from -- the path recorded on the scene by the
@@ -505,10 +512,15 @@ class SubstanceEngine(ptk.HandoffBridge):
                 )
             base = request.get("output_name") or self._scene_base_name()
             base = StrUtils.sanitize(base, preserve_case=True)
+            if mesh_dir != named_dir and not request.get("output_name"):
+                # One project cache holds every scene's mesh: named by the
+                # scene alone, two same-named scenes would share one file.
+                base = self._scene_keyed(base)
             fbx_path = os.path.join(
-                output_dir, f"{base}{self.payload_extension(request)}"
+                mesh_dir, f"{base}{self.payload_extension(request)}"
             )
         os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(fbx_path), exist_ok=True)
         manifest_path = os.path.join(output_dir, f"{base}.materials.json")
 
         # Which knobs this template claims, and their effective values. Read
@@ -547,7 +559,10 @@ class SubstanceEngine(ptk.HandoffBridge):
             )
             # Remember where this scene's mesh went so a later reimport --
             # even from a fresh host session -- overwrites the same file.
-            self._record_export_path(fbx_path)
+            # Never a temp mesh (no project to cache it in): the scene would
+            # then point a later reimport at a file the sweep deletes.
+            if not self._is_temp_path(fbx_path):
+                self._record_export_path(fbx_path)
 
             # -- Companion bake-source export --------------------------
             # A wholly separate pass over a wholly separate object set,
@@ -626,6 +641,12 @@ class SubstanceEngine(ptk.HandoffBridge):
                 "meta": meta,
                 "manifest_path": manifest_path,
                 "output_dir": output_dir,
+                # Where a template's OWN output falls back to: the named
+                # Output Dir, else the scene project's images / texture folder.
+                "images_dir": named_dir or self._project_dir("images") or output_dir,
+                "textures_dir": (
+                    named_dir or self._project_dir("textures") or output_dir
+                ),
                 "staged_textures": staged_textures,
                 "referenced": referenced,
                 "high_poly_path": high_poly_path,
@@ -656,6 +677,8 @@ class SubstanceEngine(ptk.HandoffBridge):
             output_dir=output_dir,
             params=request.params,
             high_poly_path=high_poly_path,
+            images_dir=payload.extras.get("images_dir"),
+            textures_dir=payload.extras.get("textures_dir"),
         )
         launch_args = self._render_launch_args(meta["LAUNCH_ARGS"], cli_ctx)
         # Dynamic argv extensions that don't fit the static __KEY__ shape:
@@ -1009,8 +1032,14 @@ class SubstanceEngine(ptk.HandoffBridge):
         output_dir: str,
         params: Optional[Dict[str, Any]],
         high_poly_path: Optional[str] = None,
+        images_dir: Optional[str] = None,
+        textures_dir: Optional[str] = None,
     ) -> Tuple[Dict[str, str], Dict[str, str]]:
         """Compose two placeholder contexts -- one CLI-raw, one JS-escaped.
+
+        ``IMAGES_DIR`` / ``TEXTURES_DIR`` are where a template's own output
+        falls back to (a render, a lighting bake); each defaults to
+        *output_dir*.
 
         ``LAUNCH_ARGS`` substitution wants raw values (no quoting --
         ``subprocess`` handles argv splitting). ``RPC_SCRIPT`` substitution
@@ -1031,6 +1060,8 @@ class SubstanceEngine(ptk.HandoffBridge):
             "HIGH_POLY_PATH": (high_poly_path or "").replace("\\", "/"),
             "MANIFEST_PATH": manifest_path.replace("\\", "/"),
             "OUTPUT_DIR": output_dir.replace("\\", "/"),
+            "IMAGES_DIR": (images_dir or output_dir).replace("\\", "/"),
+            "TEXTURES_DIR": (textures_dir or output_dir).replace("\\", "/"),
             "PAINTER_HELPERS_DIR": str(_PKG_DIR).replace("\\", "/"),
         }
 
@@ -1460,7 +1491,49 @@ class SubstanceEngine(ptk.HandoffBridge):
         """
         return SubstanceConnection.default_log_path()
 
+    # -- Project folders ---------------------------------------------------
+
+    #: The scene project's cache kind the mesh a Painter project is built
+    #: from lands in when no Output Dir is named (``<project>/cache/substance``).
+    MESH_CACHE_KIND = "substance"
+
+    def _mesh_cache_dir(self) -> Optional[str]:
+        """``<scene project>/cache/substance``, or ``None`` without a project."""
+        ws = self._scene_workspace()
+        return ws.cache_dir(self.MESH_CACHE_KIND) if ws is not None else None
+
+    def _scene_keyed(self, base: str) -> str:
+        """*base* plus a short key of the open scene's path (``<base>_<key8>``),
+        *base* alone while unsaved: the name a scene's mesh takes in the
+        project cache, which every scene of the project shares."""
+        scene = self._scene_path()
+        if not scene:
+            return base
+        key = ptk.CachedArtifact.key(os.path.normcase(os.path.abspath(scene)), length=8)
+        return f"{base}_{key}"
+
+    def _project_dir(self, kind: str) -> Optional[str]:
+        """The scene project's ``"images"`` or ``"textures"`` folder, or ``None``."""
+        ws = self._scene_workspace()
+        if ws is None:
+            return None
+        return ws.images_dir() if kind == "images" else ws.source_images_dir
+
+    @staticmethod
+    def _is_temp_path(path: str) -> bool:
+        """True when *path* is scratch ``ptk.TempArtifacts`` holds
+        (:meth:`ptk.TempArtifacts.contains`)."""
+        return ptk.TempArtifacts.contains(path)
+
     # -- DCC hooks (the scene I/O a subclass supplies) --------------------
+
+    def _scene_workspace(self) -> Optional["ptk.Workspace"]:
+        """The open scene's project (``ptk.Workspace``), or ``None``.
+
+        Where a send with no Output Dir keeps what outlives it (the mesh, a
+        render). The default -- no project -- keeps the whole send in scratch.
+        """
+        return None
 
     def _export_model_fbx(
         self,
@@ -1515,6 +1588,11 @@ class SubstanceEngine(ptk.HandoffBridge):
     def _scene_base_name() -> str:
         """The current scene's base name (no extension), or ``'untitled'``."""
         raise NotImplementedError
+
+    @staticmethod
+    def _scene_path() -> str:
+        """The open scene's file, ``""`` while unsaved (and in this base)."""
+        return ""
 
     @classmethod
     def _recorded_export_path(cls) -> Optional[str]:

@@ -254,7 +254,9 @@ class TestMaskBake(_GroupsCase):
         mask_path = os.path.join(self.tmp, "eg_EMask.png")
         manifest = EmissiveGroups.bake_mask(output_path=mask_path, resolution=64)
         self.assertTrue(os.path.isfile(mask_path))
-        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "eg_EMask.json")))
+        # The manifest is published through the scene records, never as a
+        # sidecar in the texture folder (pythontk RegionMaskPacker.write).
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "eg_EMask.json")))
         self.assertEqual(manifest["encoding"], "channels")
         self.assertEqual(manifest["mask"], "eg_EMask.png")
         self.assertEqual(manifest["resolution"], 64)
@@ -270,6 +272,25 @@ class TestMaskBake(_GroupsCase):
         # Export carrier now carries the channels manifest.
         payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
+
+    def test_default_mask_lands_in_the_scenes_project_texture_folder(self):
+        """No path: ``<scene project texture folder>/<scene>_EMask.png`` -- the
+        project the scene is saved in, not merely the active one (the same
+        folder blendertk writes for a file in that project). Added:
+        2026-10-13"""
+        self._add_two()
+        root = os.path.realpath(self.tmp)
+        ptk.Workspace.create(root, create_dirs=False)
+        os.makedirs(os.path.join(root, "scenes"))
+        cmds.file(rename=os.path.join(root, "scenes", "eg_scene.ma"))
+        self.assertNotEqual(
+            os.path.normcase(os.path.normpath(cmds.workspace(q=True, rd=True))),
+            os.path.normcase(root),
+        )
+        EmissiveGroups.bake_mask(resolution=32)
+        mask = os.path.join(root, "sourceimages", "eg_scene_EMask.png")
+        self.assertTrue(os.path.isfile(mask), os.listdir(root))
+        self.assertFalse(os.path.exists(os.path.splitext(mask)[0] + ".json"))
 
     def test_a_default_path_bake_stays_in_the_runs_sandbox(self):
         """The panel's button names no path: the mask goes to the current

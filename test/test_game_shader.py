@@ -2994,6 +2994,25 @@ class GameShaderTest(unittest.TestCase):
                 self.assertFalse(self._slot_sources(name, attr), attr)
 
 
+class GameShaderPanelFolderTest(unittest.TestCase):
+    """The panel's Browse opens in the scene project's texture folder.
+
+    Regression: it joined ``get_env_info("workspace_dir")`` -- the project
+    folder's NAME, as the HUD shows it -- with ``sourceimages``: a path
+    relative to Maya's working directory. Added: 2026-10-13
+    """
+
+    def test_browse_starts_in_the_scene_projects_texture_folder(self):
+        from mayatk.mat_utils.game_shader import GameShaderSlots
+
+        folder = GameShaderSlots.source_images_dir.fget(None)
+        self.assertTrue(os.path.isabs(folder), folder)
+        self.assertEqual(
+            os.path.normcase(folder),
+            os.path.normcase(mtk.EnvUtils.scene_source_images_dir()),
+        )
+
+
 class GameShaderFBXTest(QuickTestCase):
     """Tests for FBX export compatibility."""
 

@@ -21,7 +21,7 @@ import pythontk as ptk
 
 from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.mat_utils.bake_sets import LightmapBakeSet, LightmapExcludeSet
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 
 
@@ -989,7 +989,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _show_output_mode(self, beside: bool) -> None:
         """Say in the empty field where the maps will go."""
         self.ui.txt_output_dir.setPlaceholderText(
-            "beside textures, else sourceimages" if beside else "sourceimages"
+            "(blank: beside textures, else sourceimages/lightmaps)"
+            if beside
+            else "(blank: sourceimages/lightmaps)"
         )
 
     def _relativize_output_dir(self, path: str) -> None:
@@ -1009,23 +1011,30 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def _output_dir(self) -> Optional[str]:
         """The bake's output directory: the field, resolved against sourceimages.
 
-        Empty field -> the project's sourceimages (the conventional, portable
-        home for material-referenced textures). A subdirectory entry is joined
-        onto it so the setting survives a project move; a full path is taken
-        as-is. The directory itself is created by the bake.
+        Empty field -> the scene project's ``sourceimages/lightmaps``
+        (:attr:`LightmapBaker.OUTPUT_SUBDIR`): exactly where a scripted bake
+        lands on its own, and blendertk's -- one default. A subdirectory entry
+        is joined onto sourceimages (the conventional, portable home for
+        material-referenced textures) so the setting survives a project move;
+        a full path is taken as-is, with or without a project. The directory
+        itself is created by the bake.
 
-        Falls back to the base :meth:`TextureBaker.default_output_dir` would
-        pick when there is no project, rather than handing the workflow a
-        *relative* directory: ``os.makedirs`` would create that against the
-        process CWD, which in Maya is wherever the app was launched from.
+        ``None`` when a blank or subdirectory entry has no project to resolve
+        against, rather than handing the workflow a *relative* directory
+        (``os.makedirs`` would create that against the process CWD): the
+        workflow's own default decides, and refuses. Mirror of blendertk's.
         """
-        # "baked_lighting", not the signature default: that is the subdir the
-        # bake would have landed in on its own, so an empty field resolves to
-        # exactly where it used to.
-        base = self._sourceimages_dir() or TextureBaker.default_output_dir(
-            "baked_lighting"
-        )
-        return ptk.FileUtils.resolve_output_dir(self.ui.txt_output_dir.text(), base)
+        entry = self.ui.txt_output_dir.text()
+        if (entry or "").strip():
+            rooted = ptk.FileUtils.resolve_output_dir(entry, None)
+            if rooted:
+                return rooted
+        base = self._sourceimages_dir()
+        if not base:
+            return None
+        if not (entry or "").strip():
+            return os.path.normpath(os.path.join(base, LightmapBaker.OUTPUT_SUBDIR))
+        return ptk.FileUtils.resolve_output_dir(entry, base)
 
     def txt000_init(self, widget) -> None:
         """Add the Prefix / Suffix / Auto picker to the name-affix field."""
@@ -1069,11 +1078,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
         # Where the maps land: the Output Directory field resolved against the
-        # project's sourceimages, or against <scene>/baked_lighting when there
-        # is no project (see _output_dir -- resolved HERE, so the workflow is
-        # never handed a relative directory). With Beside Material Textures it
-        # takes only the objects whose material has no texture folder.
+        # scene project's sourceimages (empty: its lightmaps folder; see
+        # _output_dir -- resolved HERE, so the workflow is never handed a
+        # relative directory). With Beside Material Textures it takes only the
+        # objects whose material has no texture folder.
         src = self._output_dir()
+        if src is None:
+            self.ui.footer.setText(
+                "No project to bake into — save the scene or set a Maya project."
+            )
+            return
         # Name the output <object><affix> per the field (e.g. "<object>_Lightmap"),
         # following the texture-set convention; the shader inherits the name.
         # An empty field falls back to the placeholder default (the .ui's
@@ -1143,7 +1157,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             n = len(result.retired)
             notes.append(
                 f" Moved {n} superseded map{'s' if n != 1 else ''} nothing reads "
-                "any more to the Recycle Bin (or a _superseded folder beside them)."
+                "any more to the Recycle Bin (or a temp folder kept 30 days)."
             )
         if result.unbaked:
             notes.append(
@@ -1233,12 +1247,13 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     @staticmethod
     def _sourceimages_dir() -> Optional[str]:
-        """The project's sourceimages path, or None (no project / lookup failed).
+        """The scene project's sourceimages path, or None (no project / lookup
+        failed): the project the scene is saved in, not merely the active one.
 
         Returns the path even if the folder doesn't exist yet (the bake creates it).
         """
         try:
-            return EnvUtils.get_env_info("sourceimages") or None
+            return DataNodes.scene_source_images_dir() or None
         except Exception:
             return None
 

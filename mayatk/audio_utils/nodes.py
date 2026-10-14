@@ -16,7 +16,7 @@ from typing import Optional
 
 import pythontk as ptk
 
-from mayatk.audio_utils._audio_utils import MARKER_ATTR
+from mayatk.audio_utils._audio_utils import MARKER_ATTR, AudioUtils
 
 try:
     import maya.cmds as cmds
@@ -24,8 +24,6 @@ except ImportError:
     cmds = None
 
 logger = logging.getLogger(__name__)
-
-_CACHE_DIR_NAME = "_maya_audio_cache"
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +50,14 @@ class Nodes(_NodesInternal):
         audio_path: str,
         cache_dir: Optional[str] = None,
     ) -> Optional[str]:
-        """Return a Maya-playable path, converting to WAV via ``ptk.AudioUtils``."""
-        if cache_dir is None:
-            cache_dir = os.path.join(
-                os.path.dirname(audio_path), _CACHE_DIR_NAME
-            ).replace("\\", "/")
+        """Return a Maya-playable path, converting to WAV via ``ptk.AudioUtils``.
+
+        *cache_dir* defaults to the audio cache ``AudioUtils._cache_dirs_for``
+        names first: the source's project ``cache/audio``, else the open
+        scene's, else the per-user cache.
+        """
+        if cache_dir is None and audio_path:
+            cache_dir = AudioUtils._cache_dirs_for(audio_path)[0]
         return ptk.AudioUtils.resolve_playable_path(
             audio_path, cache_dir=cache_dir, logger=logger
         )

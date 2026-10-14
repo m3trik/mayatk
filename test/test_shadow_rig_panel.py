@@ -286,7 +286,7 @@ class TestRigType(_PanelCase):
         plane = "panel_cube_shadow"
         path = ShadowRig._plane_horizon_path(plane)
         self._textures.append(path)
-        self._textures.append(os.path.splitext(path)[0] + ShadowPreview.TEXTURE_SUFFIX)
+        self._textures.append(ShadowPreview.texture_path(path))
         self.assertTrue(box.isEnabled(), "a committed Horizon rig can be previewed")
         self.assertNotIn("No Horizon rig", box.toolTip())
         # A committed Horizon rig shows its live preview at once (the

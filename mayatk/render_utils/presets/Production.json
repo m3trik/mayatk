@@ -1,0 +1,10 @@
+{
+    "_meta": {"version": 1, "description": "Arnold client review: low noise, two diffuse and specular bounces."},
+    "camera_samples": 5,
+    "diffuse_samples": 3,
+    "specular_samples": 3,
+    "transmission_samples": 3,
+    "diffuse_depth": 2,
+    "specular_depth": 2,
+    "transmission_depth": 8
+}

@@ -353,7 +353,7 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                     "Click the row's <b>reference</b> icon to reference / un-reference, the <b>open</b> "
                     "icon to open the scene, the <b>display</b> icon to cycle Normal → Reference → Template.",
                     "<b>Double-click</b> the name to rename; right-click for the full action menu.",
-                    "<b>Double-click</b> the <b>Notes</b> column to annotate a file (saved as sidecar metadata).",
+                    "<b>Double-click</b> the <b>Notes</b> column to annotate a file (saved with the project).",
                 ],
                 sections=[
                     (
@@ -822,15 +822,14 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
                 return
 
             new_comments = item.text()
+            notes = self.controller.scene_notes
             try:
-                ptk.Metadata.enable_sidecar = True
-                ptk.Metadata.sidecar_only = True
-                ptk.Metadata.set(file_path, Comments=new_comments)
+                notes.set(file_path, new_comments)
                 self.logger.info(f"Updated comments for {file_path}")
             except PermissionError:
-                sidecar = file_path + ".metadata.json"
+                store = notes.store_path(file_path)
                 msg = (
-                    f"Cannot save notes — permission denied:\n{sidecar}\n\n"
+                    f"Cannot save notes — permission denied:\n{store}\n\n"
                     "The file or folder may be read-only (e.g. a shared team "
                     "folder on a synced drive with restricted permissions)."
                 )
@@ -1096,8 +1095,12 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         if footer is not None:
             footer.setText(text, level=level)
 
-    def _bake_foreign_path(self, path):
+    def _bake_foreign_path(self, path, project=None):
         """Bake the foreign scene at *path* to a cached .ma; return its path or None.
+
+        *project* is the project whose bake cache keeps it (``bake_scene``);
+        default the open scene's -- right for a reference, which the open
+        scene reads. An Open passes the SOURCE's: the opened scene reads it.
 
         For a .blend this bake is symmetry: both panels reference a cached NATIVE
         scene, so the referenced-file surface behaves identically no matter which DCC
@@ -1117,7 +1120,9 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
         name = os.path.basename(path)
         try:
             with self._conversion_progress(f"Converting {name}") as progress:
-                return BlenderSceneImport().bake_scene(path, progress=progress, **conv)
+                return BlenderSceneImport().bake_scene(
+                    path, progress=progress, project=project, **conv
+                )
         except ptk.OperationCancelled:
             self._footer_status(f"Stopped converting {name}.")
         except FileNotFoundError as e:

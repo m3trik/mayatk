@@ -26,6 +26,8 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
+from mayatk.audio_utils._audio_utils import LEGACY_CACHE_DIR_NAMES
+from mayatk.audio_utils import nodes as _nodes
 from mayatk.audio_utils.audio_clips._audio_clips import AudioClips
 
 
@@ -70,12 +72,14 @@ class ExportMixin:
             self.ui.footer.setText("Composite file not found on disk.")
             return
 
-        # Navigate up out of the cache directory so the dialog opens in
-        # the project's audio folder.
-        export_dir = os.path.dirname(comp_path)
-        _CACHE_DIRS = {"_audio_cache", "_maya_audio_cache"}
-        while os.path.basename(export_dir) in _CACHE_DIRS:
-            export_dir = os.path.dirname(export_dir)
+        # Open the dialog in the project's sound folder, never in the cache;
+        # an older scene's composite still sits in a legacy cache folder
+        # beside its sources -- step out of that one.
+        export_dir = _nodes.Nodes.workspace_sound_dir() or ""
+        if not export_dir:
+            export_dir = os.path.dirname(comp_path)
+            while os.path.basename(export_dir) in LEGACY_CACHE_DIR_NAMES:
+                export_dir = os.path.dirname(export_dir)
 
         dest = self.sb.save_file_dialog(
             file_types=["*.wav"],

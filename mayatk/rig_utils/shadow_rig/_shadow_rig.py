@@ -949,7 +949,8 @@ class ShadowRig(ptk.LoggingMixin):
                 the tip — shaped by ``falloff_power`` / ``vertical_weight``.
             blur_amount: Edge anti-aliasing (pixels). The penumbra a sized
                 source draws is separate and physical (see ``source_size``).
-            path: Write here instead of ``<workspace>/sourceimages/<base>_shadow.png``
+            path: Write here instead of ``<scene project texture folder>/<base>_shadow.png``
+                (:meth:`default_texture_dir`)
                 — :meth:`refresh_silhouette` overwrites a rig's existing file
                 in place so the file node and the engine join key stay valid.
             refit: Fit the canvas to the projected shadow and restamp the
@@ -971,8 +972,7 @@ class ShadowRig(ptk.LoggingMixin):
             self.texture_path = str(path)
             os.makedirs(os.path.dirname(self.texture_path) or ".", exist_ok=True)
         else:
-            workspace = cmds.workspace(q=True, rd=True)
-            output_dir = os.path.join(workspace, "sourceimages")
+            output_dir = self.default_texture_dir()
             os.makedirs(output_dir, exist_ok=True)
             self.texture_path = os.path.join(
                 output_dir, f"{self._name_base}_shadow.png"
@@ -1464,11 +1464,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         bound = (cmds.getAttr(f"{node}.fileTextureName") if node else None) or None
         own = cls._plane_attr(plane, cls._SILHOUETTE_ATTR, "")
         if own and cls.plane_is_atlased(plane):
-            folder = (
-                os.path.dirname(bound)
-                if bound
-                else os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
-            )
+            folder = os.path.dirname(bound) if bound else cls.default_texture_dir()
             return os.path.join(folder, own).replace("\\", "/")
         return bound
 
@@ -2306,7 +2302,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         if self.texture_path:
             folder = os.path.dirname(self.texture_path)
         else:
-            folder = os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
+            folder = self.default_texture_dir()
         return os.path.join(folder, f"{self._name_base}_horizon.png").replace("\\", "/")
 
     @staticmethod
@@ -2416,11 +2412,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         if not name:
             return None
         tex = cls._plane_texture_path(plane)
-        folder = (
-            os.path.dirname(tex)
-            if tex
-            else os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
-        )
+        folder = os.path.dirname(tex) if tex else cls.default_texture_dir()
         return os.path.join(folder, name).replace("\\", "/")
 
     @classmethod
@@ -2500,9 +2492,29 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                     pass
         return {}
 
+    @staticmethod
+    def default_texture_dir() -> str:
+        """Where a rig's maps go when no path names one: the open SCENE's
+        project texture folder (``EnvUtils.scene_source_images_dir``) -- the
+        project the scene is saved in, not merely the active one, which a
+        scene opened from elsewhere does not share. Mirror of blendertk's.
+
+        Raises:
+            ValueError: The scene has no project to write into.
+        """
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        folder = EnvUtils.scene_source_images_dir()
+        if not folder:
+            raise ValueError(
+                "ShadowRig: the scene has no project to write its maps into; "
+                "save the scene or set a project."
+            )
+        return folder.replace("\\", "/")
+
     @classmethod
     def _atlas_path(cls, kind, folder=None):
-        folder = folder or os.path.join(cmds.workspace(q=True, rd=True), "sourceimages")
+        folder = folder or cls.default_texture_dir()
         return os.path.join(folder, cls.ATLAS_BASENAMES[kind]).replace("\\", "/")
 
     @classmethod

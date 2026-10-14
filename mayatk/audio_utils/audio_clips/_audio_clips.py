@@ -41,7 +41,6 @@ except ImportError:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
 from mayatk.audio_utils import nodes as _nodes
-from mayatk.audio_utils.nodes import _CACHE_DIR_NAME
 
 
 class AudioClips(ptk.LoggingMixin):
@@ -61,7 +60,9 @@ class AudioClips(ptk.LoggingMixin):
     """Marker value identifying a composite as managed by this class."""
 
     COMPOSITE_FILENAME: str = "_composite.wav"
-    """Default filename for the composite WAV in the cache directory."""
+    """Suffix of the composite WAV's file name in the audio cache: the file is
+    ``<scene stem>_<scene path hash>_composite.wav`` (``untitled_composite.wav``
+    while unsaved), so scenes sharing one cache never play each other's mix."""
 
     MANIFEST_ATTR: str = ptk.SceneRecords.AUDIO.key
     """Wire-format string attr baked onto the carrier for FBX → game-engine
@@ -128,16 +129,15 @@ class AudioClips(ptk.LoggingMixin):
             Name of the composite DG node, or ``None`` when nothing is
             keyed / no valid file_map entries exist.
         """
-        events, audio_map, output_dir = cls._gather_composite_inputs()
-        if not events or not audio_map:
+        events, audio_map, cache_dir = cls._gather_composite_inputs()
+        if not events or not audio_map or not cache_dir:
             # Nothing to mix — also clean up any stale composite.
             cls._remove_composite_node()
             return None
 
         fps = _audio_utils.get_fps()
-        cache_dir = os.path.join(output_dir, _CACHE_DIR_NAME).replace("\\", "/")
         os.makedirs(cache_dir, exist_ok=True)
-        out_path = os.path.join(cache_dir, cls.COMPOSITE_FILENAME).replace("\\", "/")
+        out_path = os.path.join(cache_dir, cls._composite_filename()).replace("\\", "/")
 
         comp_path = ptk.AudioUtils.build_composite_wav(
             events=events,
@@ -286,9 +286,7 @@ class AudioClips(ptk.LoggingMixin):
         takes = (
             []
             if ctx.clip_mode == "full"
-            else ptk.SceneRecords.declared_takes(
-                lambda key: ctx.record(key, DataNodes)
-            )
+            else ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
         )
         usable = [
             t
@@ -549,7 +547,7 @@ class AudioClips(ptk.LoggingMixin):
         if (
             filepath
             and os.path.isfile(filepath)
-            and os.path.basename(filepath) == cls.COMPOSITE_FILENAME
+            and os.path.basename(filepath).endswith(cls.COMPOSITE_FILENAME)
         ):
             try:
                 os.remove(filepath)
@@ -558,16 +556,17 @@ class AudioClips(ptk.LoggingMixin):
 
     @classmethod
     def _gather_composite_inputs(cls):
-        """Return ``(events, audio_map, output_dir)`` for the composite build.
+        """Return ``(events, audio_map, cache_dir)`` for the composite build.
 
         - **events**: ``[(frame, track_id), ...]`` time-ordered, every
           start key (value ≥ 1) across every track.
         - **audio_map**: ``{track_id: playable_path}`` — keys are
           normalized (lowercase) track_ids; values are FFmpeg-converted
           WAVs when needed.
-        - **output_dir**: Directory to place the cache file.  Derived
-          from the first file_map entry; falls back to the workspace
-          ``sound/`` dir.
+        - **cache_dir**: Directory to place the composite in: the audio
+          cache of the first file_map entry (``AudioUtils._cache_dirs_for`` --
+          its project's ``cache/audio``, else the open scene's, else the
+          per-user cache), where its transcodes live too.
         """
         file_map = _audio_utils.load_file_map()
         if not file_map:
@@ -589,14 +588,18 @@ class AudioClips(ptk.LoggingMixin):
 
         events.sort(key=lambda e: e[0])
 
-        # Output dir: directory of the first source file.
-        first_path = next(iter(file_map.values()), None)
-        output_dir = (
-            os.path.dirname(first_path).replace("\\", "/") if first_path else ""
-        )
-        # Strip trailing cache dir so we don't nest caches.
-        while os.path.basename(output_dir) in {"_audio_cache", _CACHE_DIR_NAME}:
-            output_dir = os.path.dirname(output_dir)
-        if not output_dir:
-            output_dir = _nodes.Nodes.workspace_sound_dir() or ""
-        return events, audio_map, output_dir
+        first_path = next((p for p in file_map.values() if p), None)
+        cache_dir = _audio_utils._cache_dirs_for(first_path)[0] if first_path else ""
+        return events, audio_map, cache_dir
+
+    @classmethod
+    def _composite_filename(cls) -> str:
+        """The open scene's composite file name (:attr:`COMPOSITE_FILENAME`)."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        scene = DataNodes.scene_path()
+        if not scene:
+            return f"untitled{cls.COMPOSITE_FILENAME}"
+        stem = os.path.splitext(os.path.basename(scene))[0]
+        key = ptk.CachedArtifact.key(os.path.normcase(os.path.abspath(scene)), length=8)
+        return f"{stem}_{key}{cls.COMPOSITE_FILENAME}"

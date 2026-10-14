@@ -179,6 +179,30 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(rig.canvas, (u0, u1, w0, w1))
         self.assertTrue(rig.texture_path and os.path.exists(rig.texture_path))
 
+    def test_maps_land_in_the_scenes_project_not_the_active_one(self):
+        """A scene saved in project A while project B is active writes its
+        silhouette (and its horizon map) into A's texture folder: the maps
+        belong to the scene that samples them. Regression: the rig hard-coded
+        ``<active project>/sourceimages``, so mayapy runs littered the user's
+        default Maya project. Added: 2026-10-13"""
+        import shutil
+        import tempfile
+
+        project = os.path.realpath(tempfile.mkdtemp(prefix="shadow_rig_proj_"))
+        self.addCleanup(shutil.rmtree, project, True)
+        ptk.Workspace.create(project, create_dirs=False)
+        os.makedirs(os.path.join(project, "scenes"))
+        cmds.file(rename=os.path.join(project, "scenes", "shot.ma"))
+        active = os.path.normcase(os.path.normpath(cmds.workspace(q=True, rd=True)))
+        self.assertNotEqual(active, os.path.normcase(project))
+
+        rig = self._make(rig_type="horizon", horizon_size=32, horizon_spans=2)
+        folder = os.path.normcase(os.path.join(project, "sourceimages"))
+        for path in (rig.texture_path, rig.horizon_path):
+            self.assertEqual(
+                os.path.normcase(os.path.dirname(os.path.normpath(path))), folder
+            )
+
     def test_material_wiring(self):
         """standardSurface with the silhouette in baseColor and
         ``file alpha x plane.opacity`` into opacity — the one wiring VP2

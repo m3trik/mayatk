@@ -639,25 +639,33 @@ class MayaConnection:
         if extra_args:
             args.extend(extra_args)
 
+        # A scratch working directory, never the caller's: Maya leaves
+        # ``mayaDiskCache_<pid>`` folders in its CWD, and launched from a
+        # repo or workspace root they landed there. Detached: the folder
+        # outlives this call with the Maya using it; the age sweep reclaims it.
+        from pythontk import TempArtifacts
+
+        cwd = TempArtifacts("maya_cwd").dir_path()
+
         if app_path:
             print(
                 f"[MayaConnection] Launching specific Maya: {app_path} with args: {args}"
             )
-            process = AppLauncher.launch(app_path, args=args, detached=True)
+            process = AppLauncher.launch(app_path, args=args, cwd=cwd, detached=True)
         else:
             print(f"[MayaConnection] Launching Maya with args: {args}")
-            process = AppLauncher.launch("maya", args=args, detached=True)
+            process = AppLauncher.launch("maya", args=args, cwd=cwd, detached=True)
 
             if not process:
                 # 'maya' is on no PATH (a Linux RPM installs to
                 # /usr/autodesk/maya<ver>/bin): $MAYA_EXE, $MAYA_LOCATION, then
                 # the standard install roots, newest version first.
-                print(
-                    "[MayaConnection] 'maya' not found in path. Checking installs..."
-                )
+                print("[MayaConnection] 'maya' not found in path. Checking installs...")
                 found = AppLauncher.resolve_app_path(**self.MAYA_DISCOVERY)
                 if found:
-                    process = AppLauncher.launch(found, args=args, detached=True)
+                    process = AppLauncher.launch(
+                        found, args=args, cwd=cwd, detached=True
+                    )
 
         if not process:
             print("[MayaConnection] Failed to launch Maya executable.")

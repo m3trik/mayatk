@@ -163,8 +163,8 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         The :class:`pythontk.Payload` carries the FBX (``primary``) and the
         ``manifest`` / ``pairs`` sidecar paths in ``extras``; the orchestration
-        knobs (``output_dir`` / ``texture_dir`` / ``output_name`` /
-        ``toolbag_exe``) ride in :attr:`request.extras`.
+        knobs (``output_dir`` / ``texture_dir`` / ``scene_dir`` /
+        ``output_name`` / ``toolbag_exe``) ride in :attr:`request.extras`.
         """
         return self.send(
             model_path=payload.primary,
@@ -173,6 +173,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             source_model_path=payload.extras.get("source_model"),
             output_dir=request.get("output_dir"),
             texture_dir=request.get("texture_dir"),
+            scene_dir=request.get("scene_dir"),
             texture_set_aliases=request.get("texture_set_aliases"),
             output_name=request.get("output_name"),
             toolbag_exe=request.get("toolbag_exe"),
@@ -197,6 +198,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         template: str = "import",
         mode: str = SEND_TO,
         params: Optional[Dict[str, Any]] = None,
+        scene_dir: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Render *template* in *mode* against *model_path* and hand off to Toolbag.
 
@@ -214,7 +216,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 baker's High container -- explicit classification that
                 survives identical mesh names on both sides.
             output_dir: Directory for the rendered script and handoff
-                artifacts. Defaults to a swept ``<temp>`` handoff dir.
+                artifacts. Defaults to a fresh, swept ``<temp>`` handoff dir
+                per send (one shared folder let a second send rewrite the
+                files a launched Toolbag was still reading).
             texture_dir: Where a roundtrip's baked MAPS land. Defaults to
                 *output_dir*. A host with a project texture folder points this
                 at it (the Maya bridge: ``<sourceimages>/baked``) so the maps
@@ -235,6 +239,11 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 template's declared :data:`BRIDGE_MODES`.
             params: Plain ``{KEY: value}`` overrides merged on top of
                 :data:`template_params.DEFAULTS`.
+            scene_dir: Where a roundtrip saves its Toolbag scene
+                (``<output_name>.tbscene``), the one artifact of the run a user
+                opens again. Defaults to beside the model, in *output_dir*. A
+                host whose hand-off artifacts are scratch points this at a
+                project folder so the scene outlives the scratch.
 
         Returns:
             A result dict with ``script``, ``mode``, ``output_dir``, and --
@@ -270,7 +279,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             # leftovers of the same prefix instead (see ptk.TempArtifacts).
             output_dir = ptk.TempArtifacts(
                 "marmoset_bridge", policy="detached"
-            ).dir_path(name="handoff")
+            ).dir_path()
         os.makedirs(output_dir, exist_ok=True)
 
         base = output_name or os.path.splitext(os.path.basename(model_path))[0]
@@ -296,6 +305,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             source_model_path=source_model_path,
             output_dir=bake_dir,
             params=params,
+            save_dir=scene_dir,
         )
         if script is None:
             return None
@@ -459,6 +469,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         headless: Optional[bool] = None,
         pairs_path: Optional[str] = None,
         source_model_path: Optional[str] = None,
+        save_dir: Optional[str] = None,
     ) -> Optional[str]:
         """Return the rendered Toolbag Python script body, or *None* on miss.
 
@@ -468,7 +479,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
         *mode* drives whether Toolbag should save+quit (``roundtrip``) or stay
         open (``send_to``). The legacy ``headless`` kwarg still works -- if
-        passed, it overrides the mode-derived default.
+        passed, it overrides the mode-derived default. A headless run saves
+        its scene as ``<model stem>.tbscene`` in *save_dir* (created), else
+        beside the model.
         """
         template_path = _TEMPLATE_DIR / f"{template}.py"
         if not template_path.is_file():
@@ -503,6 +516,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         save_path = ""
         if headless:
             save_path = os.path.splitext(model_path)[0] + ".tbscene"
+            if save_dir:
+                os.makedirs(save_dir, exist_ok=True)
+                save_path = os.path.join(save_dir, os.path.basename(save_path))
 
         context = {
             "MODEL_PATH": model_path.replace("\\", "/"),
@@ -739,9 +755,7 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         one combo entry per (template, mode) pair without baking mode-awareness
         into the combo itself.
         """
-        return ptk.ScriptTemplate.list_template_modes(
-            _TEMPLATE_DIR, ".py", _MODES
-        )
+        return ptk.ScriptTemplate.list_template_modes(_TEMPLATE_DIR, ".py", _MODES)
 
 
 # -----------------------------------------------------------------------------

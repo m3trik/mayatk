@@ -46,6 +46,16 @@ import traceback
 SRC_FILE = r"__SRC_FILE__"
 OUT_MA = r"__OUT_MA__"
 EXTRA_SYS_PATH = __EXTRA_SYS_PATH__
+# Written into the bake as fileInfo records (the source it holds and that source
+# version's content key): the parent reads them back from the .ma header without
+# opening it -- BlenderSceneImport.bake_info.
+BAKE_INFO = __BAKE_INFO__
+# Where the textures the import reads from temp are copied ("" = leave them).
+MEDIA_HOME = r"__MEDIA_HOME__"
+# The host scene's project, opened before the import ("" = the default one):
+# what the import resolves from "the scene's project" (an FBX's embedded media
+# it cannot extract beside the source) lands in the project the bake serves.
+PROJECT = r"__PROJECT__"
 
 USD_EXTENSIONS = (".usd", ".usda", ".usdc", ".usdz")
 
@@ -217,6 +227,8 @@ def main():
     import maya.cmds as cmds
 
     _extend_sys_path()
+    if PROJECT and os.path.isdir(PROJECT):
+        cmds.workspace(PROJECT, openWorkspace=True)
     cmds.file(new=True, force=True)
     engine = _engine()
     _progress(1, 4, "Importing the intermediate")
@@ -231,6 +243,7 @@ def main():
             via="usd" if usd else "fbx",
             adopt_scene=True,
             step=lambda done, total, text: _progress(1 + 2 * done // total, 4, text),
+            media_home=MEDIA_HOME or None,
         )
     else:
         imported = import_source(cmds)
@@ -241,6 +254,8 @@ def main():
     # mayaAscii: a referenced .ma is diffable/greppable and survives a version bump that
     # would make a .mb unreadable -- the right trade for a disposable cache artifact.
     _progress(3, 4, "Saving the .ma")
+    for key, value in (BAKE_INFO or {}).items():
+        cmds.fileInfo(key, value)
     cmds.file(rename=OUT_MA)
     cmds.file(save=True, type="mayaAscii", force=True)
     print("Baked {} node(s) into {}".format(len(imported), OUT_MA))

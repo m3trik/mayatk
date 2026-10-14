@@ -881,6 +881,17 @@ class TestProjectRelativePaths(MayaTkTestCase):
         of a saved scene must not leave it asking to be saved."""
         spec = ptk.SceneRecords.LIGHTMAP_DIRS
         self._save_as(os.path.join(self.proj_a, "scenes", "shot.ma"))
+        # Maya's own answer first: with mayaUsdPlugin loaded (an earlier module
+        # of the chunk loads it), ANY Export All marks the scene modified --
+        # measured 2026-10-13 with no record and no mayatk callback involved.
+        cmds.file(
+            os.path.join(self.proj_a, "scenes", "control.ma"),
+            exportAll=True,
+            type="mayaAscii",
+            force=True,
+        )
+        if cmds.file(query=True, modified=True):
+            self.skipTest("this Maya marks a scene modified on any Export All")
         spec.save(DataNodes, {"in.exr": "sourceimages/lm"})
         cmds.file(save=True, force=True)
         self.assertFalse(cmds.file(query=True, modified=True))

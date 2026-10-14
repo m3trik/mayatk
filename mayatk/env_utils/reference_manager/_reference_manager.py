@@ -164,16 +164,6 @@ class AssemblyManager:
 class _ReferenceManagerInternal(object):
     """Internal helpers for ReferenceManager."""
 
-    @staticmethod
-    def _increments_dir(path):
-        """Maya's Incremental Save folder for *path* — ``<scene dir>/incrementalSave/<filename>``
-        (may not exist). Mirrors Maya's own ``incrementalSaveProcessPath.mel``, which roots the
-        folder at the scene's directory and names it after the scene's full filename.
-        """
-        return os.path.join(
-            os.path.dirname(path), "incrementalSave", os.path.basename(path)
-        )
-
     @classmethod
     def _holds_other_scenes(cls, folder, scene_path) -> bool:
         """True if *folder* holds a Maya scene, at any depth, other than *scene_path*
@@ -184,9 +174,7 @@ class _ReferenceManagerInternal(object):
         inspected alone, as Delete does. A folder that does not exist holds nothing.
         """
         scene = os.path.normcase(os.path.normpath(scene_path))
-        own_increments = os.path.normcase(
-            os.path.normpath(cls._increments_dir(scene_path))
-        )
+        own_increments = os.path.normcase(ptk.Workspace.backup_dir(scene_path))
 
         def _unreadable(error):
             if not isinstance(error, FileNotFoundError):
@@ -647,6 +635,10 @@ class ReferenceManager(
         # Sanitize the namespace to ensure it contains only valid characters
         sanitized_namespace = self.sanitize_namespace(namespace)
 
+        # A bake (a foreign row's, a multi-take FBX's) is a project file: named
+        # through the project, so the scene keeps it when the project moves.
+        if self._bake_source(target):
+            target = self._reference_spelling(target)
         try:
             cmds.file(target, reference=True, namespace=sanitized_namespace, **read)
             # Validate that a reference node was actually created
@@ -692,23 +684,46 @@ class ReferenceManager(
 
     @staticmethod
     def _has_current_bake(file_path: str) -> bool:
-        """True when a bake of the FBX *file_path* as it is now is cached."""
+        """True when the project's bake of the FBX *file_path* holds it as it is now."""
         from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
 
-        slot = BlenderSceneImport._bake_slot(file_path)
-        return os.path.isfile(slot) and os.path.getsize(slot) > 0
+        return BlenderSceneImport._current_bake(file_path) is not None
+
+    @staticmethod
+    def _reference_spelling(path: str) -> str:
+        """*path* as a bake reference names it: relative to the project root
+        when the bake's project -- the open scene's, where ``bake_scene`` keeps
+        it -- IS the active one and holds it (Maya resolves a relative
+        reference through the ACTIVE project, so the scene survives its project
+        being moved or synced elsewhere), else as given. Spelled from another
+        root, it would resolve to nothing once its own project is active."""
+        try:
+            root = cmds.workspace(q=True, rd=True) or ""
+        except Exception:  # noqa: BLE001 - no Maya (mock tests)
+            root = ""
+        project = EnvUtils.scene_project_root() or ""
+        if (
+            root
+            and project
+            and ptk.FileUtils.is_same_file(root, project)
+            and ptk.FileUtils.is_under(path, root)
+        ):
+            return os.path.relpath(path, root).replace("\\", "/")
+        return path
 
     def _follow_bake_sources(self) -> list:
-        """Keep every bake-backed reference on its source as the source is NOW.
+        """Keep every bake-backed reference in its project, on its source as the
+        source is NOW.
 
         A native reference re-reads its file at every load; a baked one reads its
-        cached .ma. So a reference whose FBX has been re-exported (or whose bake
-        an older take engine made, ``BlenderSceneImport._bake_slot``) is baked
-        again -- a cache hit when that version was baked before -- and repointed
-        IN PLACE (``file -loadReference``), keeping its reference edits. Every
-        bake still read is marked in use first (``_touch_bake``), so the cache's
-        age sweep never collects a bake a scene reads. A foreign (.blend) row's
-        bake is only marked: following it means a Blender conversion.
+        project bake. So a reference whose FBX has been re-exported (or whose bake
+        an older bake format made, ``BlenderSceneImport._current_bake``) is baked
+        again -- into the same slot -- and reloaded IN PLACE
+        (``file -loadReference``), keeping its reference edits. A reference to
+        a bake in temp (made before 2026-10-13, which the temp sweep reclaims)
+        is re-homed first: repointed onto the project's bake of its source
+        (``BlenderSceneImport.rehome_bake``). A foreign (.blend) row's bake is
+        only re-homed: following it means a Blender conversion.
 
         Returns:
             (list): The references repointed.
@@ -723,44 +738,74 @@ class ReferenceManager(
                 continue
             source = self._bake_source(path)
             if source:
-                # All marked before the first slot lookup sweeps the cache.
-                BlenderSceneImport._touch_bake(path)
                 baked_refs.append((ref, path, source))
-        # Slots a refresh failed or was stopped on: retried once the source
-        # moves, never at every list rebuild.
+        # Source versions a refresh failed or was stopped on: retried once the
+        # source moves, never at every list rebuild.
         unfollowed = self.__dict__.setdefault("_unfollowed_bakes", set())
+        engine = BlenderSceneImport() if baked_refs else None
         moved = []
         for ref, path, source in baked_refs:
-            if not (self._is_fbx(source) and os.path.isfile(source)):
+            target = None
+            if EnvUtils._in_temp(path):
+                try:
+                    home = engine.rehome_bake(path)
+                except (OSError, RuntimeError, ValueError) as e:
+                    # ValueError: a file the re-home cannot read or write in its
+                    # codeset (UnicodeError) -- one old bake, never the refresh.
+                    home = None
+                    self.logger.warning(
+                        f"Could not move the bake '{ref.label}' reads out of temp: {e}"
+                    )
+                # A project that itself lies in temp already reads its own slot.
+                if home and not ptk.FileUtils.is_same_file(home, path):
+                    target = home
+            if self._is_fbx(source) and os.path.isfile(source):
+                if BlenderSceneImport._current_bake(source) is None:
+                    version = (
+                        os.path.normcase(source),
+                        BlenderSceneImport._bake_key(source),
+                    )
+                    if version not in unfollowed:
+                        self.logger.info(
+                            f"{os.path.basename(source)} changed since its "
+                            "reference was baked: baking it again."
+                        )
+                        baked = self._bake_for_reference(source)
+                        if baked:
+                            target = baked
+                        else:
+                            # Failed or stopped (already reported): this version
+                            # is not baked again at the next refresh.
+                            unfollowed.add(version)
+            if not target:
                 continue
-            slot = BlenderSceneImport._bake_slot(source)
-            if slot in unfollowed or (
-                os.path.isfile(slot)
-                and os.path.isfile(path)
-                and os.path.samefile(slot, path)
-            ):
-                continue
-            self.logger.info(
-                f"{os.path.basename(source)} changed since its reference was baked: "
-                "baking it again."
-            )
-            baked = self._bake_for_reference(source)
-            if not baked:
-                # Failed or stopped (already reported): this version is not
-                # baked again at the next refresh; a newer source is.
-                unfollowed.add(slot)
-                continue
+            spelled = self._reference_spelling(target)
+            same = ptk.FileUtils.is_same_file(target, path)
             try:
                 # Repointing loads it; one the user had unloaded stays unloaded.
+                # A re-bake replaced the file it already reads: unloaded first,
+                # so the load reads the new content.
                 loaded = cmds.referenceQuery(ref._ref_node, isLoaded=True)
-                cmds.file(baked, loadReference=ref._ref_node)
+                if loaded and same:
+                    cmds.file(unloadReference=ref._ref_node)
+                cmds.file(spelled, loadReference=ref._ref_node)
                 if not loaded:
                     cmds.file(unloadReference=ref._ref_node)
             except RuntimeError as e:
-                self.logger.warning(f"Could not repoint '{ref.label}' to {baked}: {e}")
+                self.logger.warning(
+                    f"Could not repoint '{ref.label}' to {spelled}: {e}"
+                )
                 continue
             moved.append(ref)
         return moved
+
+    def purge_unused_bakes(self, dry_run: bool = False) -> list:
+        """Remove the bakes in the open scene's project that no scene references
+        (``BlenderSceneImport.purge_unused_bakes``: the project's scenes are
+        scanned as text, none is opened). Returns the paths removed."""
+        from mayatk.env_utils.blender_bridge._scene_import import BlenderSceneImport
+
+        return BlenderSceneImport().purge_unused_bakes(dry_run=dry_run)
 
     def _bake_for_reference(self, file_path: str) -> Optional[str]:
         """The cached ``.ma`` a reference reads in place of the FBX *file_path*,

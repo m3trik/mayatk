@@ -28,10 +28,10 @@ files and is replayed through the ONE existing applier,
 template->paired-engine contract. Without blendertk importable in the child, the FBX's
 classic-model materials are kept and a console line says so.
 
-Known limit (shared with the interactive send): with ``EMBED_TEXTURES`` on, images the
-manifest does NOT cover stay unpacked in the FBX's temp ``.fbm`` sidecar dir, which is
-swept eventually -- ``make_paths_absolute`` below keeps them resolvable until then, and
-the manifest is what makes the textured materials permanent.
+With ``EMBED_TEXTURES`` on, images the manifest does NOT cover are read from the FBX's
+``.fbm`` sidecar dir beside the TEMP payload, which is swept: the saved file would point
+into temp. :func:`pack_payload_images` packs every such image into the ``.blend``, so the
+file is whole wherever it is opened (the interactive send leaves the session to save).
 
 Underscore-prefixed: hidden from the bridge panel's template list (this is not a
 user-pickable send recipe; it belongs to ``BlenderBridge.save_as``).
@@ -114,6 +114,27 @@ def import_payload():
     )
 
 
+def pack_payload_images():
+    """Pack every image still read from beside the temp payload into the .blend.
+
+    The FBX importer extracts embedded media into ``<payload>.fbm`` next to the
+    payload, in TEMP; a .blend saved pointing there loses its textures to the temp
+    sweep. Images anywhere else (the manifest's ORIGINAL files) stay linked.
+    """
+    payload_dir = os.path.normcase(os.path.dirname(os.path.abspath(FBX_PATH)))
+    for image in list(bpy.data.images):
+        if image.packed_file is not None or image.source != "FILE":
+            continue
+        path = os.path.normcase(os.path.abspath(bpy.path.abspath(image.filepath)))
+        if not (path.startswith(payload_dir + os.sep) and os.path.isfile(path)):
+            continue
+        try:
+            image.pack()
+        except Exception:
+            print("Could not pack {}:".format(image.filepath))
+            traceback.print_exc()
+
+
 def main():
     # Empty scene: the factory startup cube/camera/light must not enter the saved file.
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -127,6 +148,7 @@ def main():
     except Exception:
         print("make_paths_absolute skipped:")
         traceback.print_exc()
+    pack_payload_images()
 
     bpy.ops.wm.save_as_mainfile(
         filepath=OUT_FILE, check_existing=False, relative_remap=False

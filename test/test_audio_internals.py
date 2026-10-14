@@ -37,6 +37,128 @@ class TestAudioNodesPaths(MayaTkTestCase):
         self.assertTrue(result is None or isinstance(result, str))
 
 
+class TestAudioCacheLocation(MayaTkTestCase):
+    """Transcodes cache where ``ptk.AudioUtils.cache_dir_for`` says -- the
+    source's project ``cache/audio``, else the per-user cache -- never in a
+    ``_maya_audio_cache`` folder written beside the source; a saved scene's
+    old ``_maya_audio_cache`` / ``_audio_cache`` transcodes still read.
+    Added: 2026-10-13"""
+
+    def setUp(self):
+        super().setUp()
+        import os
+
+        import pythontk as ptk
+
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="audio_cache_loc_"))
+        ptk.Workspace.create(self.tmp, create_dirs=False)
+        self.sound = os.path.join(self.tmp, "sound")
+        os.makedirs(self.sound)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        super().tearDown()
+
+    def _wav_at(self, folder, name):
+        import os
+
+        from base_test import make_temp_wav
+
+        os.makedirs(folder, exist_ok=True)
+        dest = os.path.join(folder, name)
+        shutil.copy2(make_temp_wav("cache_loc_src", duration_sec=0.5), dest)
+        return dest
+
+    def test_the_default_cache_is_the_shared_one_not_beside_the_source(self):
+        import os
+        from unittest import mock
+
+        import pythontk as ptk
+
+        source = os.path.join(self.sound, "clip.mp3")
+        with mock.patch.object(
+            ptk.AudioUtils, "resolve_playable_path", return_value=None
+        ) as resolve:
+            nodes.Nodes.resolve_playable_path(source)
+        cache_dir = resolve.call_args.kwargs.get("cache_dir")
+        expected = ptk.AudioUtils.cache_dir_for(source)
+        self.assertIn(
+            cache_dir,
+            (None, expected),
+            f"transcodes go to {cache_dir!r}, not the shared cache {expected!r}",
+        )
+
+    def _outside_source(self):
+        """A source in a folder no marked project holds, with the scene saved
+        into this case's project."""
+        import os
+
+        import pythontk as ptk
+
+        outside = os.path.realpath(tempfile.mkdtemp(prefix="audio_outside_"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        source = os.path.join(outside, "clip.mp3")
+        if ptk.Workspace.find_containing(source) is not None:
+            self.skipTest("the temp dir lies inside a marked project here")
+        scenes = os.path.join(self.tmp, "scenes")
+        os.makedirs(scenes, exist_ok=True)
+        cmds.file(rename=os.path.join(scenes, "shot.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+        return source
+
+    def test_a_source_outside_any_project_caches_in_the_scenes_project(self):
+        """Pre-release review 2026-10-13: a clip from outside every project
+        transcoded into the per-user cache, so the saved scene named a path
+        only this user's machine has. With a scene project, it caches there."""
+        import os
+        from unittest import mock
+
+        import pythontk as ptk
+
+        source = self._outside_source()
+        with mock.patch.object(
+            ptk.AudioUtils, "resolve_playable_path", return_value=None
+        ) as resolve:
+            nodes.Nodes.resolve_playable_path(source)
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(resolve.call_args.kwargs["cache_dir"])),
+            os.path.normcase(os.path.join(self.tmp, "cache", "audio")),
+        )
+
+    def test_duration_reads_a_transcode_in_the_project_cache(self):
+        import os
+
+        import pythontk as ptk
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        source = os.path.join(self.sound, "clip.mp3")
+        cache = ptk.AudioUtils.cache_dir_for(source)
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(cache)),
+            os.path.normcase(os.path.join(self.tmp, "cache", "audio")),
+        )
+        cached = self._wav_at(cache, "clip_0123abcd.wav")
+        frames, resolved = AudioUtils._read_duration_frames(source, 24.0)
+        self.assertAlmostEqual(frames, 12.0, places=1)
+        self.assertEqual(os.path.normcase(resolved), os.path.normcase(cached))
+
+    def test_duration_still_reads_a_legacy_cache_beside_the_source(self):
+        import os
+
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        source = os.path.join(self.sound, "old.mp3")
+        for legacy in ("_maya_audio_cache", "_audio_cache"):
+            folder = os.path.join(self.sound, legacy)
+            cached = self._wav_at(folder, "old.wav")
+            frames, resolved = AudioUtils._read_duration_frames(source, 24.0)
+            self.assertAlmostEqual(frames, 12.0, places=1, msg=legacy)
+            self.assertEqual(
+                os.path.normcase(resolved), os.path.normcase(cached), legacy
+            )
+            shutil.rmtree(folder)
+
+
 class TestAudioNodesLifecycle(MayaTkTestCase):
     """create_dg / configure_dg / query_duration."""
 

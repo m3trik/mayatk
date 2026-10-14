@@ -345,6 +345,17 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         QtCore.QTimer.singleShot(0, _bind)
 
     @property
+    def scene_notes(self) -> "ptk.SceneNotes":
+        """The Notes column's store (:class:`pythontk.SceneNotes`: one file per
+        project, shared with blendertk's panel), its unmarked projects resolved
+        under the workspace being browsed."""
+        notes = self.__dict__.get("_scene_notes")
+        if notes is None:
+            notes = self._scene_notes = ptk.SceneNotes()
+        notes.session_root = self._current_working_dir
+        return notes
+
+    @property
     def current_working_dir(self):
         # Use the parent class implementation but add logging
         working_dir = super().current_working_dir
@@ -1258,14 +1269,11 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                 # Store file path in notes item too for easy access during edit
                 item_notes.setData(self.sb.QtCore.Qt.UserRole, file_path)
 
-                try:  # Fetch metadata (Comments)
-                    ptk.Metadata.enable_sidecar = True
-                    ptk.Metadata.sidecar_only = True
-                    metadata = ptk.Metadata.get(file_path, "Comments")
-                    comments = metadata.get("Comments") or ""
+                try:  # The project's note for the scene (ptk.SceneNotes)
+                    comments = self.scene_notes.get(file_path)
                     if item_notes.text() != comments:
                         item_notes.setText(comments)
-                except Exception:
+                except Exception:  # noqa: BLE001 - a note never fails the listing
                     pass
 
             # Apply table formatting
@@ -1385,18 +1393,31 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # the link icon's bake-and-reference, and the mirror of blendertk's _open_foreign_as_new.
         # The scratch copy keeps the cached bake (reused for referencing) unedited.
         if self._is_foreign(file_path):
+            # Baked into the SOURCE's project, not the open scene's: the scene
+            # opened next is the one that reads it (the panel's folder decides
+            # an unmarked source's, as it does the notes').
+            home = ptk.Workspace.for_scene(
+                file_path,
+                session_root=getattr(self, "_current_working_dir", None) or None,
+            )
             baked = self.slot._bake_foreign_path(
-                file_path
+                file_path, project=home.root if home is not None else None
             )  # cached .ma (or None + its own error)
             if not baked:
                 return False
             # Deterministic scratch twin so a second Open click resolves this row as
-            # 'current' and closes it (see the slot's _is_current / _foreign_scratch_path);
-            # the cached bake itself is opened only when the copy can't be written.
+            # 'current' and closes it (see the slot's _is_current / _foreign_scratch_path).
+            # Never the bake itself: a save would write over the file every scene
+            # referencing this row reads.
             try:
                 scratch = _scratch_twins().create(file_path, baked)
-            except OSError:
-                scratch = baked
+            except OSError as e:
+                self.logger.error(f"Could not copy {baked} to open it: {e}")
+                self.sb.message_box(
+                    f"Could not open {os.path.basename(file_path)}: the working copy "
+                    f"of its bake could not be written.<br><br>Error:<br>{e}"
+                )
+                return False
             # The scratch lives in temp, but the SCENE belongs to the source's project: set
             # the workspace from the source path (mirror of blendertk's pin), so textures /
             # scene dir / Save Scene resolve as the Blender coworker's do — not to temp.
@@ -1815,9 +1836,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
         # Maya's Incremental Save keeps its versions in a folder beside the scene, keyed by the
         # scene's FILENAME. Left behind it detaches from the scene it belongs to — and a later
         # scene that reuses the old name silently inherits that history — so it moves along.
-        old_increments = self._increments_dir(old_path)
+        old_increments = ptk.Workspace.backup_dir(old_path)
         if os.path.isdir(old_increments):
-            new_increments = self._increments_dir(new_path)
+            new_increments = ptk.Workspace.backup_dir(new_path)
             try:
                 os.rename(old_increments, new_increments)
                 self.logger.info(
@@ -1870,6 +1891,9 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                     f"Folder '{parent_dir_name}' is not '{old_base}''s alone (named "
                     "for another scene, or holds others); skipping its rename"
                 )
+
+        # The note is keyed by the scene's project-relative path: it follows.
+        self.scene_notes.move(old_path, final_path)
 
         if is_open:
             # Re-open last, after any folder move, so the session lands on the final path.
@@ -2072,6 +2096,7 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
                         )
                 except OSError as e:
                     self.logger.warning(f"Could not remove sidecar {sidecar}: {e}")
+            self.scene_notes.remove(path)
 
             if use_folder:
                 parent_dir = os.path.dirname(path)

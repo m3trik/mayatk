@@ -25,6 +25,7 @@ import pythontk as ptk
 
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.core_utils._core_utils import CoreUtils
 
 
@@ -1196,7 +1197,7 @@ class _TextureFilesInternal:
             raise ValueError(f"Not a usable base name: {base!r}.")
         workspace = EnvUtils.get_env_info("workspace") or ""
         sourceimages = EnvUtils.get_env_info("sourceimages") or ""
-        project = EnvUtils.scene_project_root()
+        project = DataNodes.scene_project_root()
         plan = {
             "material": None,
             "companions": [],

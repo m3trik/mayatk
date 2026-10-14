@@ -9,7 +9,6 @@ except ImportError:  # the surface must import without Maya (registry, docs tool
 import os
 import time
 import contextlib
-import shutil
 import logging
 from typing import List, Dict, Optional, Callable, Union, Any
 
@@ -512,8 +511,10 @@ class SceneExporter(ptk.SceneExporterBase):
             # rewritten in place, the 230 MB production FBX refused the rig
             # pass's swap ("Access is denied") and shipped every rig helper it
             # was meant to drop (2026-10-08). For GLB-only the staged FBX is
-            # thrown away. USD writes straight to its destination.
-            stage_dir = None
+            # thrown away. USD writes straight to its destination. A scoped
+            # store: the stage goes when the run ends, unless it holds the only
+            # copy of a deliverable whose placement failed (``keep``).
+            stage_store = stage_raw = stage_dir = None
             # The export bracket stages the scene (the curve-proxy transport
             # nodes; a preview standing down) for the write and undoes it in the
             # ``finally`` below, AFTER the GLB conversion has read the scene;
@@ -541,9 +542,9 @@ class SceneExporter(ptk.SceneExporterBase):
                     # Spelled for the ANSI code page Maya writes through: under
                     # a %TEMP% it cannot hold (Cyrillic on cp1252) ``cmds.file``
                     # refuses the path, and every FBX run now writes here.
-                    stage_dir = ptk.AppLauncher.ansi_safe_path(
-                        ptk.TempArtifacts("scene_exporter_stage").dir_path()
-                    )
+                    stage_store = ptk.TempArtifacts.scoped("scene_exporter_stage")
+                    stage_raw = stage_store.dir_path()
+                    stage_dir = ptk.AppLauncher.ansi_safe_path(stage_raw)
                     fbx_write_path = os.path.join(
                         stage_dir, os.path.basename(self.export_path)
                     )
@@ -609,7 +610,7 @@ class SceneExporter(ptk.SceneExporterBase):
                     placed = self._deliver(glb_path, deliverable_path)
                     if placed != deliverable_path:
                         if placed == glb_path:
-                            stage_dir = None  # the stage holds the only copy
+                            stage_store.keep(stage_raw)  # the only copy
                         export_succeeded = False
                         return False
                     self.logger.success(f"GLB created: {deliverable_path}")
@@ -680,14 +681,14 @@ class SceneExporter(ptk.SceneExporterBase):
                     placed = self._deliver(fbx_write_path, self.export_path)
                     if placed != self.export_path:
                         if placed == fbx_write_path:
-                            stage_dir = None  # the stage holds the only copy
+                            stage_store.keep(stage_raw)  # the only copy
                         export_succeeded = False
                         return False
                     if glb_alongside:
                         placed_glb = os.path.splitext(self.export_path)[0] + ".glb"
                         landed = self._deliver(glb_alongside, placed_glb)
                         if landed == glb_alongside:
-                            stage_dir = None  # the stage holds the only copy
+                            stage_store.keep(stage_raw)  # the only copy
                         if landed == placed_glb:
                             glb_alongside = placed_glb
                             self.logger.success(f"GLB created: {glb_alongside}")
@@ -735,8 +736,8 @@ class SceneExporter(ptk.SceneExporterBase):
                 raise RuntimeError(f"Failed to export objects: {e}")
             finally:
                 _FbxUtils.end_export()
-                if stage_dir:
-                    shutil.rmtree(stage_dir, ignore_errors=True)
+                if stage_store is not None:
+                    stage_store.cleanup()
         except ptk.OperationCancelled as e:
             # The progress callback asked to stop (Esc held over the panel's
             # footer; a headless caller's own gate). Only reachable before the

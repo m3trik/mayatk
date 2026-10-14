@@ -634,6 +634,9 @@ class TestPlayblastExporter(MayaTkTestCase):
         with (
             patch(f"{pe_path}.arnoldRender", create=True, side_effect=fake_render),
             patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(
+                "mayatk.anim_utils.playblast_exporter.RenderUtils.prepare_arnold_preview"
+            ),
             patch(f"{pe_path}.workspace", return_value="images"),
             patch(f"{pe_path}.setAttr"),
             patch(f"{pe_path}.getAttr", side_effect=fake_getattr),
@@ -648,6 +651,43 @@ class TestPlayblastExporter(MayaTkTestCase):
 
         basenames = sorted(os.path.basename(f) for f in frames)
         self.assertEqual(basenames, ["shot.0001.exr", "shot.0002.exr"])
+
+    def test_render_with_arnold_prepares_the_scene_first(self):
+        """An Arnold sequence renders what the viewport shows: game shaders
+        bridged and viewport culling mirrored BEFORE the first frame (was:
+        StingrayPBS rendered error magenta, cutaway walls black)."""
+        out_dir = os.path.join(self.tmp, "arnold_prep")
+        order = []
+        exporter = PlayblastExporter()
+        pe_path = "mayatk.anim_utils.playblast_exporter"
+        with (
+            patch(
+                f"{pe_path}.RenderUtils.prepare_arnold_preview",
+                side_effect=lambda: order.append("prepare"),
+            ),
+            patch(
+                f"{pe_path}.cmds.arnoldRender",
+                create=True,
+                side_effect=lambda **kw: order.append("render"),
+            ),
+            patch("mayatk.core_utils.plugins._plugins.Plugins.load"),
+            patch(f"{pe_path}.cmds.workspace", return_value="images"),
+            patch(f"{pe_path}.cmds.setAttr"),
+            patch(
+                f"{pe_path}.cmds.getAttr",
+                side_effect=lambda attr, *a, **k: (
+                    "exr" if attr.endswith("ai_translator") else 0
+                ),
+            ),
+            patch(
+                f"{pe_path}.cmds.editRenderLayerGlobals",
+                create=True,
+                return_value="defaultRenderLayer",
+            ),
+            patch.object(exporter, "_resolve_camera_shape", return_value="perspShape"),
+        ):
+            exporter.render_with_arnold(out_dir, start=1, end=1, prefix="shot")
+        self.assertEqual(order, ["prepare", "render"])
 
     def test_import_guard_nulls_names_without_maya(self):
         """The ImportError guard must null cmds, mel AND om — not just cmds."""

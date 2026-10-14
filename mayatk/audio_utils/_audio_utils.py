@@ -72,6 +72,11 @@ FILE_MAP_ATTR: str = ptk.SceneRecords.AUDIO_FILE_MAP.key
 MARKER_ATTR: str = "audio_node_source"
 """String attr stamped on compositor-produced DG audio nodes; value = track_id."""
 
+LEGACY_CACHE_DIR_NAMES: Tuple[str, ...] = ("_maya_audio_cache", "_audio_cache")
+"""Folders transcodes were cached in BESIDE their source before the one audio
+cache (``ptk.AudioUtils.cache_dir_for``). Never written now; recognised so a
+saved scene that still points into one keeps reading."""
+
 RESERVED_TRACK_IDS: FrozenSet[str] = frozenset({"off", "none", ""})
 """Track IDs forbidden by design (clash with enum ``off`` value or empty)."""
 
@@ -97,6 +102,29 @@ class AudioUtils(ptk.HelpMixin):
     FILE_MAP_ATTR = FILE_MAP_ATTR
     MARKER_ATTR = MARKER_ATTR
     RESERVED_TRACK_IDS = RESERVED_TRACK_IDS
+
+    # ------------------------------------------------------------------
+    # The audio cache
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cache_dirs_for(audio_path: str) -> List[str]:
+        """Where a playable transcode of *audio_path* is cached, the folder
+        new transcodes go first: ``ptk.AudioUtils.cache_dir_for`` -- the
+        source's project ``cache/audio`` -- except that a source no marked
+        project holds caches in the open SCENE's project (``cache/audio`` of
+        ``DataNodes.scene_workspace``) when it has one, since the saved scene
+        names the transcode: the per-user cache would be a path only this
+        machine has. The per-user cache follows as a place to READ an older
+        transcode, and is the one folder without a scene project.
+        """
+        default = _PtkAudioUtils.cache_dir_for(audio_path)
+        if ptk.Workspace.find_containing(audio_path) is None:
+            workspace = DataNodes.scene_workspace()
+            if workspace is not None:
+                scene = workspace.cache_dir("audio").replace("\\", "/")
+                return [scene, default]
+        return [default]
 
     # ------------------------------------------------------------------
     # Global settings
@@ -425,8 +453,10 @@ class AudioUtils(ptk.HelpMixin):
     def audio_duration_frames(file_path: str, fps: float) -> Tuple[float, str]:
         """Return ``(duration_in_frames, resolved_wav_path)`` for *file_path*.
 
-        Non-WAV sources are resolved against a sibling ``_maya_audio_cache``
-        directory.  Returns ``(0.0, file_path)`` when no readable audio is
+        Non-WAV sources are resolved against their transcode in the audio
+        cache (:meth:`_cache_dirs_for`), then a legacy
+        ``_maya_audio_cache`` / ``_audio_cache`` folder beside the source (an
+        older scene's).  Returns ``(0.0, file_path)`` when no readable audio is
         found.  Read once per file as it is on disk
         (``pythontk.AudioUtils.memo_duration``: a replaced file reads again).
         """
@@ -440,21 +470,26 @@ class AudioUtils(ptk.HelpMixin):
         p = Path(file_path)
         wav_path = file_path
         if p.suffix.lower() not in (".wav", ".aif", ".aiff"):
-            cache_dir = p.parent / "_maya_audio_cache"
             cached = None
-            exact = cache_dir / (p.stem + ".wav")
-            if exact.exists():
-                cached = exact
-            elif cache_dir.exists():
-                candidates = list(cache_dir.glob(f"{p.stem}_*.wav"))
-                if len(candidates) > 1:
-                    logger.warning(
-                        "Multiple cache hits for %s: %s — using first",
-                        p.stem,
-                        [c.name for c in candidates],
-                    )
-                if candidates:
-                    cached = candidates[0]
+            for cache_dir in (
+                *(Path(folder) for folder in AudioUtils._cache_dirs_for(file_path)),
+                *(p.parent / name for name in LEGACY_CACHE_DIR_NAMES),
+            ):
+                exact = cache_dir / (p.stem + ".wav")
+                if exact.exists():
+                    cached = exact
+                elif cache_dir.exists():
+                    candidates = sorted(cache_dir.glob(f"{p.stem}_*.wav"))
+                    if len(candidates) > 1:
+                        logger.warning(
+                            "Multiple cache hits for %s: %s — using first",
+                            p.stem,
+                            [c.name for c in candidates],
+                        )
+                    if candidates:
+                        cached = candidates[0]
+                if cached:
+                    break
             if cached:
                 wav_path = str(cached)
             else:

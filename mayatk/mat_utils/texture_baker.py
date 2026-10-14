@@ -719,22 +719,29 @@ class TextureBaker(ptk.LoggingMixin):
     _PLACE_ATTEMPTS: int = 5
 
     @staticmethod
-    def default_output_dir(subdir: str = "baked_textures") -> str:
-        """``<subdir>`` next to the saved scene, else under the workspace root.
+    def default_output_dir(subdir: str = "baked") -> str:
+        """Where a bake writes when no ``output_dir`` is given: *subdir* in the
+        open scene's project texture folder (``DataNodes.scene_source_images_dir``:
+        the project the scene is saved in, not merely the active one) -- one
+        folder per output kind (``"baked"`` textures, ``"lightmaps"``), the same
+        folder in both DCCs.
 
-        The base :meth:`bake` writes to when no ``output_dir`` is given, exposed
-        so a caller resolving a user-entered *subdirectory* has the same
+        Exposed so a caller resolving a user-entered *subdirectory* has the same
         absolute base to join onto instead of handing on a relative path
-        (``os.makedirs`` would create that against the process CWD -- in Maya,
-        wherever the app was launched from). Mirrors blendertk's twin.
+        (``os.makedirs`` would create that against the process CWD). Mirrors blendertk's twin.
+
+        Raises:
+            ValueError: The scene has no project to write into.
         """
-        scene = cmds.file(query=True, sceneName=True)
-        root = (
-            os.path.dirname(scene)
-            if scene
-            else cmds.workspace(query=True, rootDirectory=True)
-        )
-        return os.path.join(root, subdir)
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        folder = DataNodes.scene_source_images_dir(subdir)
+        if not folder:
+            raise ValueError(
+                "No project to bake into; save the scene, set a project, or "
+                "pass output_dir."
+            )
+        return folder
 
     @staticmethod
     def resolve_meshes(objects=None, descendants: bool = False) -> List[str]:
@@ -844,7 +851,8 @@ class TextureBaker(ptk.LoggingMixin):
                 (lights, locators, empty groups) are dropped rather than
                 handed to a renderer that cannot bake them.
             output_dir: Where the baked files go. Created if missing.
-                Defaults to ``<scene_dir>/baked_lighting``.
+                Defaults to :meth:`default_output_dir` (``<scene project
+                texture folder>/baked``).
             prefix: Filename prefix wrapped around the output stem.
             suffix: Filename suffix. Final name is ``{prefix}{stem}{suffix}.{fmt}``
                 (applied idempotently via ``StrUtils.apply_affix``), so callers
@@ -971,7 +979,7 @@ class TextureBaker(ptk.LoggingMixin):
             return {}
 
         if output_dir is None:
-            output_dir = self.default_output_dir("baked_lighting")
+            output_dir = self.default_output_dir()
         os.makedirs(output_dir, exist_ok=True)
 
         backend = self._resolve_backend(backend)

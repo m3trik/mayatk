@@ -71,6 +71,41 @@ def _make_slots():
     return slots
 
 
+class TestCompositeCacheLocation(MayaTkTestCase):
+    """The composite lands in the scene's project cache when its first clip
+    lies outside every project (pre-release review 2026-10-13: it went to the
+    per-user cache, which the saved scene then named)."""
+
+    def test_a_clip_outside_any_project_mixes_into_the_scenes_project(self):
+        import shutil
+        import tempfile
+
+        import pythontk as ptk
+
+        project = os.path.realpath(tempfile.mkdtemp(prefix="composite_proj_"))
+        outside = os.path.realpath(tempfile.mkdtemp(prefix="composite_outside_"))
+        for folder in (project, outside):
+            self.addCleanup(shutil.rmtree, folder, True)
+        ptk.Workspace.create(project, create_dirs=False)
+        source = os.path.join(outside, "clip.mp3")
+        if ptk.Workspace.find_containing(source) is not None:
+            self.skipTest("the temp dir lies inside a marked project here")
+        os.makedirs(os.path.join(project, "scenes"))
+        cmds.file(rename=os.path.join(project, "scenes", "shot.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+        with (
+            patch.object(audio_utils, "load_file_map", return_value={"clip": source}),
+            patch.object(audio_utils, "list_tracks", return_value=[]),
+        ):
+            _, _, cache_dir = AudioClips._gather_composite_inputs()
+
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(cache_dir)),
+            os.path.normcase(os.path.join(project, "cache", "audio")),
+        )
+
+
 class TestLoadTracks(MayaTkTestCase):
     def test_registers_tracks_and_paths(self):
         wav_a = _make_wav("load_a")
@@ -130,6 +165,34 @@ class TestSync(MayaTkTestCase):
         self.assertIsNotNone(comp)
         path = cmds.getAttr(f"{comp}.filename")
         self.assertTrue(path and os.path.isfile(path))
+
+    def test_composite_caches_in_the_shared_audio_cache_named_for_the_scene(self):
+        """The composite the scene's sound node plays sits in the one audio
+        cache (``AudioUtils._cache_dirs_for``: the source's project
+        ``cache/audio``, else the open scene's, else the per-user cache) --
+        never a
+        ``_maya_audio_cache`` folder beside the first source -- under a name
+        of its own scene, so two scenes sharing a cache never play each
+        other's mix. Added: 2026-10-13"""
+        wav = _make_wav("comp_loc", duration_sec=0.3)
+        AudioClips.load_tracks([wav])
+        audio_utils.write_key("comp_loc", frame=0, value=1)
+        AudioClips.sync()
+        path = cmds.getAttr(f"{AudioClips._find_composite_node()}.filename")
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(os.path.dirname(path))),
+            os.path.normcase(os.path.normpath(audio_utils._cache_dirs_for(wav)[0])),
+        )
+        self.assertFalse(
+            os.path.isdir(os.path.join(os.path.dirname(wav), "_maya_audio_cache")),
+            "a cache folder was written beside the source",
+        )
+        self.assertTrue(os.path.basename(path).startswith("untitled_"), path)
+        self.assertTrue(path.endswith(AudioClips.COMPOSITE_FILENAME), path)
+
+        # Removing the composite still deletes its scene-named file.
+        AudioClips._remove_composite_node()
+        self.assertFalse(os.path.exists(path))
 
     def test_sync_no_keys_no_composite(self):
         wav = _make_wav("nokey")

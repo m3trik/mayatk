@@ -582,12 +582,15 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
         """Rasterize membership into an ``_EMask`` RGBA texture (channels encoding).
 
         Harvests each group's UV triangles and packs them through
-        :class:`ptk.RegionMaskPacker`; the manifest sidecar lands next to the
-        mask and is also published to the FBX carrier.
+        :class:`ptk.RegionMaskPacker`; the manifest is published to the FBX
+        carrier only -- no sidecar beside the mask.
 
         Parameters:
             output_path: Mask image path. Defaults to
-                ``<workspace sourceimages>/<scene>_EMask.png``.
+                ``<scene project texture folder>/<scene>_EMask.png``
+                (``DataNodes.scene_source_images_dir``: the project the scene
+                is saved in, not merely the active one -- the folder
+                blendertk writes for a file in that project).
             resolution: Mask resolution (masks are chunky; 512 usually
                 suffices — decoupled from the emissive map's resolution).
             padding_px: Edge padding; keep >= the emissive bake's padding.
@@ -602,11 +605,17 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
         if not groups:
             raise ValueError("No emissive groups to bake.")
         if output_path is None:
-            root = cmds.workspace(q=True, rootDirectory=True) or ""
-            rule = cmds.workspace(fileRuleEntry="sourceImages") or "sourceimages"
-            scene = cmds.file(q=True, sceneName=True, shortName=True) or ""
-            stem = os.path.splitext(scene)[0] or "untitled"
-            output_path = os.path.join(root, rule, f"{stem}_EMask.png")
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            folder = DataNodes.scene_source_images_dir()
+            if not folder:
+                raise ValueError(
+                    "No project to write the mask into; save the scene, set a "
+                    "project, or pass output_path."
+                )
+            scene = DataNodes.scene_path()
+            stem = os.path.splitext(os.path.basename(scene))[0] or "untitled"
+            output_path = os.path.join(folder, f"{stem}_EMask.png")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         packer = ptk.RegionMaskPacker(resolution=resolution, padding_px=padding_px)
@@ -634,7 +643,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
                 attr=entry.get("attr"),
             )
         packer.validate()
-        manifest = packer.write(output_path)
+        manifest = packer.write(output_path, write_manifest=False)
 
         registry.set_encoding(
             "channels",

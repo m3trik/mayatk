@@ -5228,7 +5228,10 @@ class TestSupersededMaps(MayaTkTestCase):
         """BACKLOG 2026-09-23, decided 2026-09-27: no scene can see another
         scene file's reads -- a Save As copy's source, an Explorer copy -- so
         what a re-bake retires must stay one restore away: the Recycle Bin,
-        else a ``_superseded`` folder beside the map (pinned here)."""
+        else the ``superseded`` temp store, kept a month (pinned here) --
+        never a ``_superseded`` folder left in the project (2026-10-13)."""
+        import glob
+
         cube = self._cube("supAside")
         old = self._bake([cube]).maps[cube]
         with open(old, "rb") as fh:
@@ -5236,10 +5239,20 @@ class TestSupersededMaps(MayaTkTestCase):
 
         self._bake([cube], suffix="_LM")
 
-        aside = os.path.join(
-            os.path.dirname(old),
-            ptk.FileDependencies.SUPERSEDED_DIR,
-            os.path.basename(old),
+        found = glob.glob(
+            os.path.join(
+                ptk.TempArtifacts.root(),
+                ptk.FileDependencies.SUPERSEDED_STORE,
+                "*",
+                os.path.basename(old),
+            )
+        )
+        self.assertTrue(found, "set aside into the temp store")
+        aside = max(found, key=os.path.getmtime)
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(os.path.dirname(old), ptk.FileDependencies.SUPERSEDED_DIR)
+            )
         )
         self.assertFalse(os.path.exists(old))
         with open(aside, "rb") as fh:
@@ -5388,12 +5401,17 @@ class TestSupersededMaps(MayaTkTestCase):
         self.assertEqual(os.path.basename(old), os.path.basename(new))
         self.assertTrue(os.path.isfile(new))
         self.assertFalse(os.path.exists(old), "the old probe stayed behind")
-        aside = os.path.join(
-            os.path.dirname(old),
-            ptk.FileDependencies.SUPERSEDED_DIR,
-            os.path.basename(old),
+        import glob
+
+        aside = glob.glob(
+            os.path.join(
+                ptk.TempArtifacts.root(),
+                ptk.FileDependencies.SUPERSEDED_STORE,
+                "*",
+                os.path.basename(old),
+            )
         )
-        self.assertTrue(os.path.isfile(aside), "set aside, never deleted")
+        self.assertTrue(aside, "set aside, never deleted")
 
     def test_a_same_place_rebake_keeps_the_probe(self):
         cube = self._cube("supProbeSame")
@@ -5759,7 +5777,7 @@ class _SlotUi:
         self.txt000 = _LineEdit(affix)
         # Optional output-dir field: empty means "the project's sourceimages".
         self.txt_output_dir = _LineEdit(
-            output_dir, placeholder="sourceimages", switch=beside
+            output_dir, placeholder="(blank: sourceimages/lightmaps)", switch=beside
         )
         self.cmb002 = _PackingCombo(packing, probe=probe)
         self.cmb_scope = _ScopeCombo(scope, environment=environment)
@@ -5776,6 +5794,9 @@ class _FakeWorkflow:
     """
 
     instances: list = []
+
+    #: The engine's default kind folder, which the panel reads off the class.
+    OUTPUT_SUBDIR = LightmapBaker.OUTPUT_SUBDIR
 
     #: What baked_objects() reports (None = every node it is given).
     baked = None
@@ -6085,9 +6106,15 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertEqual(baker.resolution, 2048)  # dials drive the workflow
         self.assertEqual(baker.samples, 8)
         self.assertEqual(baker.calls, [("bake", (long,), "per_object")])
-        # The bake is directed at the project's sourceimages (or the workflow
-        # default when there's no project) -- same resolver the slot uses.
-        self.assertEqual(baker.bake_output_dir, LightmapBakerSlots._sourceimages_dir())
+        # The bake is directed at the scene project's sourceimages/lightmaps
+        # (the workflow's own default, LightmapBaker.OUTPUT_SUBDIR) -- the
+        # same resolver the slot uses.
+        self.assertEqual(
+            baker.bake_output_dir,
+            os.path.join(
+                LightmapBakerSlots._sourceimages_dir(), LightmapBaker.OUTPUT_SUBDIR
+            ),
+        )
         self.assertIn("Baked", ui.footer.text)
 
     def test_b000_saves_the_bake_objects_as_the_bake_set_when_asked(self):
@@ -6228,11 +6255,12 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s._sourceimages_dir = lambda: src
         return s
 
-    def test_output_dir_empty_uses_sourceimages(self):
-        # The default: an untouched field bakes into the project's sourceimages
-        # (the conventional home for material-referenced textures).
+    def test_output_dir_empty_uses_the_lightmaps_folder(self):
+        # The default: an untouched field bakes into the scene project's
+        # sourceimages/lightmaps -- the ONE default a scripted bake lands in
+        # too (LightmapBaker.OUTPUT_SUBDIR), and blendertk's. Added: 2026-10-13
         s = self._slots_with_src(_SlotUi(output_dir=""))
-        self.assertEqual(s._output_dir(), self._SRC)
+        self.assertEqual(s._output_dir(), os.path.join(self._SRC, "lightmaps"))
 
     def test_output_dir_relative_resolves_under_sourceimages(self):
         # THE feature: a relative entry is joined onto sourceimages, so the
@@ -6270,24 +6298,86 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         )
 
     def test_output_dir_without_a_project_never_returns_a_relative_path(self):
-        # No sourceimages -> the base the bake itself would have used, NOT the
-        # bare entry: os.makedirs would create that against the process CWD,
-        # which for Maya is wherever the app was launched from.
-        fallback = os.path.normpath(r"C:/scenes/baked_lighting")
-        with mock.patch.object(
-            lmb_module.TextureBaker, "default_output_dir", return_value=fallback
-        ):
-            s = self._slots_with_src(_SlotUi(output_dir="lightmaps"), src=None)
-            self.assertEqual(s._output_dir(), os.path.join(fallback, "lightmaps"))
-            s.ui.txt_output_dir.setText("")
-            self.assertEqual(s._output_dir(), fallback)
+        # No sourceimages -> no folder of the panel's own (None: the workflow's
+        # default decides, and refuses without a project), NOT the bare entry:
+        # os.makedirs would create that against the process CWD, which for
+        # Maya is wherever the app was launched from.
+        s = self._slots_with_src(_SlotUi(output_dir="lightmaps"), src=None)
+        self.assertIsNone(s._output_dir())
+        s.ui.txt_output_dir.setText("")
+        self.assertIsNone(s._output_dir())
+
+    def test_output_dir_a_full_path_needs_no_project(self):
+        """Pre-release review 2026-10-13: a typed full path was refused while
+        no project resolved -- the panel asked for a project to resolve an
+        entry that needs none (blendertk's twin the same)."""
+        s = self._slots_with_src(_SlotUi(output_dir=r"D:/bakes/lm"), src=None)
+        self.assertEqual(s._output_dir(), os.path.normpath(r"D:/bakes/lm"))
+
+    def test_the_empty_field_says_where_the_maps_go(self):
+        """A blank field means ``sourceimages/lightmaps`` (the placeholder
+        said ``sourceimages``); worded as blendertk's twin."""
+        s = self._slots_with_src(_SlotUi(output_dir=""))
+        s._show_output_mode(False)
+        self.assertEqual(
+            s.ui.txt_output_dir.placeholderText(), "(blank: sourceimages/lightmaps)"
+        )
+        s._show_output_mode(True)
+        self.assertEqual(
+            s.ui.txt_output_dir.placeholderText(),
+            "(blank: beside textures, else sourceimages/lightmaps)",
+        )
+
+    def test_the_ui_default_placeholder_names_the_lightmaps_folder(self):
+        import xml.etree.ElementTree as ET
+
+        from mayatk.light_utils.lightmap_baker import lightmap_baker_slots
+
+        ui = os.path.join(
+            os.path.dirname(lightmap_baker_slots.__file__), "lightmap_baker.ui"
+        )
+        field = next(
+            w for w in ET.parse(ui).iter("widget") if w.get("name") == "txt_output_dir"
+        )
+        placeholder = next(
+            p.find("string").text
+            for p in field.findall("property")
+            if p.get("name") == "placeholderText"
+        )
+        self.assertEqual(placeholder, "(blank: sourceimages/lightmaps)")
 
     def test_texture_baker_default_output_dir_is_absolute(self):
         # The slot leans on it as a base, so a relative return would reintroduce
         # the CWD bug one level up.
-        out = lmb_module.TextureBaker.default_output_dir("baked_lighting")
+        out = lmb_module.TextureBaker.default_output_dir("lightmaps")
         self.assertTrue(os.path.isabs(out), out)
-        self.assertEqual(os.path.basename(out), "baked_lighting")
+        self.assertEqual(os.path.basename(out), "lightmaps")
+
+    def test_the_default_folders_follow_the_scenes_project_not_the_active_one(self):
+        """A scene saved in project A while B is active bakes into A's
+        sourceimages (its ``lightmaps`` / ``baked`` subfolder): the maps belong
+        to the scene that references them. Regression: the bake defaulted to
+        ``<scene dir>/baked_lighting`` and the panel to the ACTIVE project's
+        sourceimages -- two places, neither the scene project's texture
+        folder. Added: 2026-10-13"""
+        import shutil
+        import tempfile
+
+        root = os.path.realpath(tempfile.mkdtemp(prefix="lm_scene_proj_"))
+        self.addCleanup(shutil.rmtree, root, True)
+        ptk.Workspace.create(root, create_dirs=False)
+        os.makedirs(os.path.join(root, "scenes"))
+        cmds.file(rename=os.path.join(root, "scenes", "room.ma"))
+        textures = os.path.join(root, "sourceimages")
+        for subdir in ("lightmaps", "baked"):
+            self.assertEqual(
+                os.path.normcase(lmb_module.TextureBaker.default_output_dir(subdir)),
+                os.path.normcase(os.path.join(textures, subdir)),
+            )
+        self.assertEqual(
+            os.path.normcase(LightmapBakerSlots._sourceimages_dir()),
+            os.path.normcase(textures),
+        )
 
     def test_b000_bakes_into_the_resolved_output_dir(self):
         # The resolved dir -- not bare sourceimages -- is what reaches the bake.

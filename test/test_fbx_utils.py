@@ -1101,6 +1101,44 @@ class TestImportSceneKeepsAMergedImportsFiles(_TakeFilesCase):
         self.assertEqual(self._texture_paths(), [os.path.normcase(expected)])
         self.assertTrue(os.path.isfile(expected))
 
+    def test_media_that_cannot_land_beside_the_source_goes_to_the_project(self):
+        """A read-only delivery folder: the media went to a temp folder the
+        sweep reclaims, and a saved scene's file nodes named it (TEMP-REF,
+        file-handling audit 2026-10-13). It goes to the open scene's project,
+        ``<sourceimages>/<source stem>`` -- the one folder a source's media
+        takes (``FbxUtils._source_media_dir``)."""
+        from unittest import mock
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cube = self._textured_cube(self.TEXTURE)
+        src = os.path.join(self.folder, "src")
+        os.makedirs(src)
+        path = self._write(
+            "textured",
+            [cube],
+            self.EARLY_LATE,
+            folder=src,
+            FBXExportEmbeddedTextures=True,
+        )
+        # A FILE where the media folder would go: it cannot be written there.
+        with open(os.path.join(src, "textured.fbm"), "w") as fh:
+            fh.write("in the way")
+        project = os.path.join(self.folder, "project")
+        os.makedirs(project)
+        cmds.file(new=True, force=True)
+
+        with mock.patch.object(
+            DataNodes, "scene_workspace", return_value=ptk.Workspace.load(project)
+        ):
+            FbxUtils.import_scene(path)
+
+        expected = os.path.join(
+            project, "sourceimages", "textured", os.path.basename(self.TEXTURE)
+        )
+        self.assertEqual(self._texture_paths(), [os.path.normcase(expected)])
+        self.assertTrue(os.path.isfile(expected))
+
     def test_a_relative_texture_resolves_against_the_source_folder(self):
         src = os.path.join(self.folder, "src")
         os.makedirs(os.path.join(src, "textures"))

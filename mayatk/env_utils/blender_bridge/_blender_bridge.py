@@ -217,6 +217,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     # state, not a mesh file -- GLB and every other deliverable come from the
     # exporters, which read the committed bake on their own.
     save_extensions = (".blend", ".json")
+    # One whole take, never a per-shot split: Blender's importer plays one
+    # take, and the shots cross as manifest data (the ``shots`` section) that
+    # blendertk lands in the Shot Sequencer.
+    split_takes = False
 
     def __init__(self, blender_path: Optional[str] = None):
         super().__init__(app_path=blender_path)

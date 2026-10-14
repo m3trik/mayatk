@@ -50,9 +50,10 @@ class BluePencilMixin(object):
             return []
 
         import zipfile
-        import shutil
 
-        temp_dir = ptk.TempArtifacts("mtk_blue_pencil").dir_path()
+        # Scoped: the archive and its frames are read here and never again.
+        scratch = ptk.TempArtifacts.scoped("mtk_blue_pencil")
+        temp_dir = scratch.dir_path()
         zip_path = os.path.join(temp_dir, "bp_export.zip").replace("\\", "/")
 
         created_curves = []
@@ -100,11 +101,7 @@ class BluePencilMixin(object):
         except Exception as e:
             cmds.warning("Failed to trace Blue Pencil frames: {}".format(e))
         finally:
-            # Cleanup
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
+            scratch.cleanup()
 
         # Return the created curve transforms
         return created_curves

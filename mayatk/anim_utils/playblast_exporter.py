@@ -54,6 +54,7 @@ import pythontk as ptk
 from pythontk import CaptureResult, ExportResult, ExportTarget  # noqa: F401
 
 from mayatk.core_utils.plugins._plugins import Plugins
+from mayatk.render_utils._render_utils import RenderUtils
 
 
 class PlayblastExporter(ptk.SequenceExporter):
@@ -467,7 +468,10 @@ class PlayblastExporter(ptk.SequenceExporter):
     ) -> List[str]:
         """Render a frame range with Arnold; returns the files this run wrote.
 
-        Render globals touched for the run are restored afterward.
+        The scene is first readied to render what the viewport shows
+        (:meth:`RenderUtils.prepare_arnold_preview`: game shaders bridged,
+        viewport backface culling mirrored); that setup is Arnold-only and
+        stays. Render globals touched for the run are restored afterward.
         """
         output_dir = ptk.format_path(os.path.abspath(output_dir))
         os.makedirs(output_dir, exist_ok=True)
@@ -477,6 +481,7 @@ class PlayblastExporter(ptk.SequenceExporter):
         camera_shape = self._resolve_camera_shape(camera or self.camera)
         if not camera_shape:
             raise ValueError("Could not resolve a valid camera for Arnold rendering.")
+        RenderUtils.prepare_arnold_preview()  # only once the render will run
 
         prefix = prefix or self.scene_name()
         start, end = self.resolve_frame_range("playback", start, end)

@@ -23,7 +23,9 @@ the opacity chain, the rebuild's shader sniff) keeps resolving through the
 stored snapshot. Nothing about it is exported -- the ``"shadow"`` export
 preparer detaches every preview before an FBX is written and republishes the
 metadata afterwards -- and a scene reopened with a preview on rebinds the
-effect from the file beside the horizon PNG.
+effect from its file in the scene project's ``cache/preview`` folder
+(:meth:`ShadowPreview.preview_dir`), where the 16-bit texture lives too:
+viewport-only files never sit in the texture folder beside the maps.
 
 **Two devices, one body.** Viewport 2.0 runs DirectX 11 or OpenGL Core Profile
 per the user's preference (``MAYA_VP2_DEVICE_OVERRIDE`` per process). A
@@ -308,12 +310,13 @@ class _ShadowPreviewInternal:
     #: fetch and bit tests, and the device fails it silently (measured:
     #: ``techniques == []`` with no error).
     LANGUAGE_BY_DEVICE: Dict[str, str] = {"dx11": "hlsl", "glcore": "glsl"}
-    #: The effect's file stem, beside the horizon PNG. One file per folder per
+    #: The effect's file stem, in :meth:`preview_dir`. One file per folder per
     #: language: every plane's effect is the same text, only its uniforms
     #: differ, and a file the scene can find again on reopen is what lets a
     #: saved preview come back instead of rendering a broken shader.
     EFFECT_STEM = "shadow_horizon_preview"
-    #: The texture the preview binds: the map promoted to 16 bits, beside it.
+    #: The texture the preview binds: the map promoted to 16 bits, in
+    #: :meth:`preview_dir` under the map's own stem.
     #: VP2's OpenGL path sRGB-decodes any 8-bit texture a ``GLSLShader``
     #: samples -- whatever the file node's colour space, colour management on
     #: or off, ``MayaGammaCorrection`` either way (measured: R came back as
@@ -490,7 +493,7 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
 
         if cls.is_attached(plane):
             cls.detach(plane)
-        effect = cls._write_effect(os.path.dirname(png), language)
+        effect = cls._write_effect(cls.preview_dir(png), language)
         snapshot = MatUtils.get_shading_assignments(plane)
 
         base = CoreUtils.leaf_name(plane)
@@ -657,6 +660,23 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
         FbxUtils.enable_export_producer(ptk.SceneRecords.SHADOWS)
 
     # --------------------------------------------------------------- building
+    @staticmethod
+    def preview_dir(png: Optional[str] = None) -> str:
+        """Where the preview's viewport-only files go: the open scene's
+        project ``cache/preview`` (``ptk.Workspace.cache_dir``) -- never the
+        texture folder, where an effect file and a 16-bit copy of the map
+        read as deliverable maps. Without a scene project, the project of
+        *png* (the map the preview binds).
+        """
+        from mayatk.env_utils._env_utils import EnvUtils
+
+        ws = EnvUtils.scene_workspace()
+        if ws is None and png:
+            ws = ptk.Workspace.for_path(png)
+        if ws is None:
+            raise ValueError("No project to keep the shadow preview's files in.")
+        return ws.cache_dir("preview").replace("\\", "/")
+
     @classmethod
     def _write_effect(cls, folder: str, language: str) -> str:
         """The effect file for *language* in *folder*, current with the SSoT.
@@ -677,16 +697,30 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
 
     @classmethod
     def _write_texture(cls, png: str) -> str:
-        """The map *png* promoted to 16 bits, beside it (:attr:`TEXTURE_SUFFIX`).
-        Rewritten only when missing or older than the map, so an untouched
-        file keeps its mtime and VP2 keeps its upload."""
-        path = os.path.splitext(png)[0] + cls.TEXTURE_SUFFIX
+        """The map *png* promoted to 16 bits, in :meth:`preview_dir`
+        (:attr:`TEXTURE_SUFFIX`). Rewritten only when missing or older than
+        the map, so an untouched file keeps its mtime and VP2 keeps its
+        upload."""
+        path = cls.texture_path(png)
         if not (
             os.path.exists(path) and os.path.getmtime(path) >= os.path.getmtime(png)
         ):
             image = ptk.ImgUtils.load_image(png).convert("RGBA")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             ptk.ImgUtils.save_image(image, path, bit_depth=16)
         return path
+
+    @classmethod
+    def texture_path(cls, png: str) -> str:
+        """Where :meth:`_write_texture` keeps the 16-bit promotion of *png*:
+        ``<stem>_<hash of its path><TEXTURE_SUFFIX>`` in :meth:`preview_dir`,
+        so two maps of one name (two scenes' ``Box_horizon.png``) never share
+        one promotion in the project's one folder."""
+        stem = os.path.splitext(os.path.basename(png))[0]
+        key = ptk.CachedArtifact.key(os.path.normcase(os.path.abspath(png)), length=8)
+        return os.path.join(
+            cls.preview_dir(png), f"{stem}_{key}{cls.TEXTURE_SUFFIX}"
+        ).replace("\\", "/")
 
     @classmethod
     def _bind(cls, plane, fx: str, png: str) -> None:

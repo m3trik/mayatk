@@ -20,23 +20,30 @@ import pythontk as ptk
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.plugins._plugins import Plugins
 from mayatk.mat_utils._mat_utils import MatUtils
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils.shader_templates._shader_templates import ShaderTemplates
 
 
 class ShaderTemplatesSlots(ptk.LoggingMixin):
     # INFO (not WARNING): the logger is redirected into the panel's txt001,
     # so info-level lines ARE the user feedback ("COMPLETED.", saved paths).
+    @property
+    def source_images_dir(self) -> str:
+        """Where Browse opens: the scene project's texture folder, resolved
+        when asked (the scene can change while the panel stays open)."""
+        return DataNodes.scene_source_images_dir()
+
     def __init__(self, switchboard, log_level="INFO"):
         super().__init__()
 
         self.sb = switchboard
         self.ui = self.sb.loaded_ui.shader_templates
 
-        self.workspace_dir = EnvUtils.get_env_info("workspace_dir")
-        self.source_images_dir = os.path.join(self.workspace_dir, "sourceimages")
         self.image_files = None
         self.last_restored_nodes = None
+        # Shipped templates read-only, the user's in the per-user config (an
+        # upgrade replaces the package folder) -- blendertk's store shape.
+        self._store = ShaderTemplates.store()
 
         # Setup logging
         self.logger.setLevel(log_level)
@@ -110,9 +117,8 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             cmds.warning("No material has been restored yet.")
 
     def lbl_open_templates_dir(self):
-        """Open the shader templates directory in file explorer."""
-        template_directory = os.path.join(os.path.dirname(__file__), "templates")
-        ptk.open_explorer(template_directory, create_dir=True)
+        """Open the user's shader templates directory in file explorer."""
+        ptk.open_explorer(str(self._store.user_dir), create_dir=True)
 
     def cmb002_init(self, widget):
         """Initialize the ComboBox for shader templates."""
@@ -147,19 +153,26 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         self.refresh_templates(widget)
 
     def refresh_templates(self, widget):
-        """Refresh the list of templates."""
-        template_directory = os.path.join(os.path.dirname(__file__), "templates")
-        if not os.path.exists(template_directory):
-            os.makedirs(template_directory)
-
-        yaml_files = [f for f in os.listdir(template_directory) if f.endswith(".yaml")]
-        items = {
-            os.path.splitext(f)[0]: os.path.join(template_directory, f)
-            for f in yaml_files
-        }
+        """Refresh the list of templates: shipped and user (a user template
+        shadows a shipped one of the same name)."""
         widget.clear()
-        for label, path in items.items():
-            widget.addItem(label, path)
+        for name in self._store.list():
+            widget.addItem(name, str(self._store.path(name, self._store.source(name))))
+
+    def _user_template(self, widget) -> str:
+        """The selected template's name when it is the user's, else ''
+        (logged): the shipped templates are read-only."""
+        name = widget.currentText()
+        if not name or widget.currentData() is None:
+            self.logger.error("No template selected or data is missing.")
+            return ""
+        if self._store.source(name) != "user":
+            self.logger.error(
+                f"'{name}' is a shipped template and read-only; save a copy "
+                "under another name to change it."
+            )
+            return ""
+        return name
 
     @staticmethod
     def _sanitize_name(name) -> str:
@@ -168,25 +181,25 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
 
     def rename_template_safe(self, widget, new_name):
         """Safe rename that checks for None."""
-        current_path = widget.currentData()
-        if current_path is None:
-            self.logger.error("No template selected or data is missing.")
+        current = self._user_template(widget)
+        if not current:
             return
 
         new_name = self._sanitize_name(new_name)
         if not new_name:
             self.logger.error("Invalid template name.")
             return
-
-        new_path = os.path.join(os.path.dirname(current_path), new_name + ".yaml")
-        if os.path.normcase(new_path) == os.path.normcase(current_path):
+        if new_name == current:
             return  # name unchanged: no-op
-        if os.path.exists(new_path):
-            self.logger.error("File with new name already exists.")
+        if self._store.exists(new_name):
+            self.logger.error("A template with that name already exists.")
             return
 
-        os.rename(current_path, new_path)
-        self.logger.info(f"Template renamed to: {new_path}")
+        # The store's own rename: its sidecar and active pointer follow.
+        if not self._store.rename(current, new_name):
+            self.logger.error(f"Template '{current}' could not be renamed.")
+            return
+        self.logger.info(f"Template renamed to: {self._store.path(new_name, 'user')}")
         widget.init_slot()
 
     def lbl000(self):
@@ -195,13 +208,12 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
         self.ui.cmb002.menu.hide()
 
     def lbl001(self):
-        """Delete the selected template."""
-        template_path = self.ui.cmb002.currentData()
-        if not template_path:
-            self.logger.error("No template selected.")
+        """Delete the selected (user) template."""
+        name = self._user_template(self.ui.cmb002)
+        if not name:
             return
-        if os.path.exists(template_path):
-            os.remove(template_path)
+        template_path = self._store.path(name, "user")
+        if self._store.delete(name):
             self.logger.info(f"Template deleted: {template_path}")
         self.ui.cmb002.init_slot()
 
@@ -299,9 +311,6 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.error("Select a material to save its network.")
             return
 
-        template_directory = os.path.join(os.path.dirname(__file__), "templates")
-        os.makedirs(template_directory, exist_ok=True)
-
         # The panel has no name field — prompt, defaulting to the selected
         # material's name. (This replaced a hardcoded "test" placeholder that
         # could only ever write test.yaml once.)
@@ -315,8 +324,9 @@ class ShaderTemplatesSlots(ptk.LoggingMixin):
             self.logger.info("Save cancelled.")
             return
 
-        file_path = os.path.join(template_directory, f"{name}.yaml")
-        if os.path.exists(file_path):
+        file_path = str(self._store.path(name, "user"))
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        if self._store.exists(name):
             self.logger.error(
                 f"Template '{name}' already exists — pick another name, or "
                 "rename/delete the existing one from the template dropdown's menu."

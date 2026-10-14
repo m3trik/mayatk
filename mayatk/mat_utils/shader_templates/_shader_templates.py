@@ -532,7 +532,88 @@ class ShaderTemplates:
     """
     Facade class for managing shader templates.
     Provides high-level methods to save and restore shader graphs.
+
+    Templates live in a ``ptk.PresetStore`` (:meth:`store`, as blendertk's
+    do): the shipped ones in the package's read-only ``templates/`` folder,
+    the user's in the per-user config, where an upgrade cannot remove them.
     """
+
+    #: The shipped, read-only templates (the store's built-in tier).
+    BUILTIN_DIR: str = os.path.join(os.path.dirname(__file__), "templates")
+
+    #: The names mayatk ships in :attr:`BUILTIN_DIR`. Any other ``.yaml`` there
+    #: was saved into the installed package by an older version, and
+    #: :meth:`migrate_package_templates` moves it to the user tier -- so a new
+    #: built-in must be added here (a test holds the folder to this list).
+    SHIPPED_TEMPLATES = (
+        "Godot",
+        "PBR Metallic Roughness",
+        "Unity HDRP Lit",
+        "Unity URP Lit",
+        "Unreal Engine ORM",
+        "glTF 2.0",
+    )
+
+    #: Templates are YAML (``GraphSaver.save_graph``'s format).
+    YAML_CODEC = ptk.Codec(
+        ext=".yaml",
+        load=yaml.safe_load,
+        dump=lambda data: yaml.dump(data, default_flow_style=False),
+    )
+
+    @classmethod
+    def store(cls) -> "ptk.PresetStore":
+        """The template store: shipped templates read-only, the user's in
+        ``<user config>/mayatk/shader_templates/``. A template an older
+        version saved into the package moves there first
+        (:meth:`migrate_package_templates`)."""
+        store = ptk.PresetStore(
+            "shader_templates",
+            package="mayatk",
+            builtin_dir=cls.BUILTIN_DIR,
+            codec=cls.YAML_CODEC,
+        )
+        cls.migrate_package_templates(store)
+        return store
+
+    @classmethod
+    def migrate_package_templates(cls, store: "ptk.PresetStore") -> List[str]:
+        """Move user templates out of *store*'s built-in folder into its user
+        tier: every ``.yaml`` not in :attr:`SHIPPED_TEMPLATES` (one an older
+        version saved into the installed package). A name the user tier holds
+        already is left where it is. Copies instead when the package folder
+        is read-only (the install dir of a system-wide Maya).
+
+        Returns:
+            The names moved (or copied).
+        """
+        import shutil
+
+        package = store.builtin_dir
+        if not package or not os.path.isdir(package):
+            return []
+        moved = []
+        for name in sorted(store.list(tier="builtin")):
+            if name in cls.SHIPPED_TEMPLATES or store.source(name) == "user":
+                continue
+            src = str(store.path(name, "builtin"))
+            dst = str(store.path(name, "user"))
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                try:
+                    shutil.move(src, dst)
+                except PermissionError:
+                    shutil.copy2(src, dst)
+            except OSError as e:
+                _LOGGER.warning(f"Could not move template {src!r} to {dst!r}: {e}")
+                continue
+            moved.append(name)
+        if moved:
+            _LOGGER.info(
+                f"Moved {len(moved)} saved template(s) to {store.user_dir}: "
+                + ", ".join(moved)
+            )
+        return moved
 
     @staticmethod
     def save_template(nodes, file_path, exclude_types=None, logger=None):

@@ -50,7 +50,7 @@ from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (  # noqa: F401
 from . import template_params
 
 from mayatk.core_utils.components import Components
-from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.node_utils._node_utils import NodeUtils
@@ -418,6 +418,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         names on both sides. Without the set, the legacy single-file
         suffix-pairing flow applies.
         """
+        self._produce_scene_dir(request)
         output_dir = request.get("output_dir")
         if not output_dir:
             output_dir = self._scratch_dir(request, "handoff")
@@ -739,7 +740,7 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
 
     @classmethod
     def baked_texture_dir(cls) -> str:
-        """``<project>/sourceimages/baked`` -- where a roundtrip's maps land.
+        """``<scene project>/sourceimages/baked`` -- where a roundtrip's maps land.
 
         Baked maps are production textures: the scene's materials reference
         them, so they belong under the project's texture folder, the one place
@@ -749,14 +750,45 @@ class MarmosetBridge(ptk.HandoffBridge, _MarmosetBridgeInternal):
         from, and get renamed to ``<name>_1``, ``<name>_2``, ... rather than
         overwrite it.
 
-        Returns ``""`` when no workspace resolves (unsaved/no project); the
-        engine then falls back to the run's ``output_dir``, since there is no
-        project texture folder to prefer.
+        The SCENE's project (``DataNodes.scene_source_images_dir``), not merely
+        the active one; blendertk resolves the same folder for a file in that
+        project. Returns ``""`` when no project resolves; the engine then
+        falls back to the run's ``output_dir``, since there is no project
+        texture folder to prefer.
         """
-        src = EnvUtils.get_env_info("sourceimages")
-        if not src:
+        return DataNodes.scene_source_images_dir(cls.BAKED_TEXTURE_SUBDIR).replace(
+            "\\", "/"
+        )
+
+    #: The folder, under the scene project's export rule (``data/``), where a
+    #: roundtrip with no Output Dir saves its Toolbag scene.
+    TOOLBAG_SCENE_SUBDIR = "marmoset"
+
+    @classmethod
+    def toolbag_scene_dir(cls) -> str:
+        """``<scene project>/data/marmoset`` -- where a roundtrip's ``.tbscene``
+        goes when its hand-off is scratch: the one artifact of the run a user
+        opens again (``ptk.Workspace.export_dir``: Maya's ``FBX export`` /
+        ``FBX`` rule, else ``data``). ``""`` without a project (the scene then
+        stays beside the hand-off). Mirror of blendertk's."""
+        ws = DataNodes.scene_workspace()
+        if ws is None:
             return ""
-        return os.path.join(src, cls.BAKED_TEXTURE_SUBDIR).replace("\\", "/")
+        return os.path.join(ws.export_dir(), cls.TOOLBAG_SCENE_SUBDIR).replace(
+            "\\", "/"
+        )
+
+    def _produce_scene_dir(self, request) -> None:
+        """Point a roundtrip whose hand-off is scratch (no Output Dir named) at
+        :meth:`toolbag_scene_dir` for its saved Toolbag scene -- the one
+        artifact of the run a user opens again, which the scratch cleanup
+        would otherwise take. A send_to saves no scene. Mirror of blendertk's."""
+        if (
+            request.mode == ROUND_TRIP
+            and not request.get("output_dir")
+            and not request.get("scene_dir")
+        ):
+            request.extras["scene_dir"] = self.toolbag_scene_dir() or None
 
     @classmethod
     def source_material_name(cls, mat_name: str) -> str:

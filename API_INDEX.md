@@ -261,7 +261,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: sample_locals, bake_node, similarity_ancestors, flatten_target, flatten, prepare, apply, restore_node, restore, ik_handles_touching
 
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
-- constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, RESERVED_TRACK_IDS
+- constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, LEGACY_CACHE_DIR_NAMES, RESERVED_TRACK_IDS
 - `class TrackEvent`
 - `class AudioUtils(pythontk.HelpMixin)`
   - methods: get_snap_frames, set_snap_frames, validate_track_id, normalize_track_id, attr_for, track_id_from_attr, find_carriers, list_track_attrs, load_file_map, track_files, add_clip, set_path, get_path, remove_path, get_fps, cached_waveform, clear_waveform_cache, audio_duration_frames, ensure_track_attr, has_track, is_registered, list_tracks, read_keys, pair_on_off_events, read_events, read_all_events, write_key, key_clip, track_curve, clip_length_frames, remove_key, clear_keys, shift_keys_in_range, tracks_on_at_frame, bake_events, delete_track, rename_track, show_track_attrs, hide_track_attrs, sync, find_dg_node_for_track, is_managed_dg, batch, detect_legacy, migrate_legacy_triggers
@@ -553,7 +553,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, scene_source, scene_project_root, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -561,9 +561,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: blender_path, params_defaults, render_context, bake_lightmaps, default_output_path, reassemble_lightmaps, list_templates, template_modes, list_template_modes, template_path, template_output_ext, template_output_mode, template_timeout
 
 ### `env_utils/blender_bridge/_scene_import.py` — Import a Blender scene (.blend) or a glTF container (.glb/.gltf) into Maya via a
-- constants: SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
+- constants: BAKE_CACHE_KIND, BAKE_INFO_SOURCE, BAKE_INFO_KEY, SUPPORTED_EXTENSIONS, GLTF_EXTENSIONS, CONVERTIBLE_EXTENSIONS, BAKE_SOURCE_EXTENSIONS, BAKE_SOURCE_SUFFIX, USD_EXTENSIONS
 - `class BlenderSceneImport(pythontk.LoggingMixin, _BlenderSceneImportInternal)`
-  - methods: blender_path, require_blender, find_scenes, scene_has_complex_animation, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_source, collapse_nested_levels
+  - methods: blender_path, require_blender, find_scenes, scene_has_complex_animation, render_script, convert, import_scene, import_payload, mayapy_path, require_mayapy, render_bake_script, bake, bake_scene, bake_dir, bake_slot, bake_info, bake_source, stamp_bake_info, rehome_bake, purge_unused_bakes, collapse_nested_levels
 
 ### `env_utils/blender_bridge/blender_bridge_slots.py` — Slots for the Blender bridge panel.
 - `class BlenderBridgeSlots(MayaBridgeSlotsBase)`
@@ -580,7 +580,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `restore_usd_locators(cmds, new_nodes)`
 - `apply_instances()`
 - `main()`
-- constants: SRC_FILE, OUT_MA, EXTRA_SYS_PATH, USD_EXTENSIONS, USD_IMPORT_OPTIONS
+- constants: SRC_FILE, OUT_MA, EXTRA_SYS_PATH, BAKE_INFO, MEDIA_HOME, PROJECT, USD_EXTENSIONS, USD_IMPORT_OPTIONS
 
 ### `env_utils/blender_bridge/templates/_import_scene.py` — Open a .blend / glTF headlessly (blender --background) and export it as FBX for a Maya import.
 - `open_source(bpy)`
@@ -623,6 +623,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/blender_bridge/templates/_save_scene.py` — Import the bridged FBX into a headless Blender and save it as a ``.blend``.
 - `import_payload()`
+- `pack_payload_images()`
 - `main()`
 - constants: BRIDGE_MODES, FBX_PATH, USD_EXTENSIONS, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, INCLUDE_ANIMATION, SEND_FBX_OPTIONS
 
@@ -713,11 +714,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class AssemblyManager`
   - methods: current_references, create_assembly_definition, set_active_representation, convert_references_to_assemblies
 - `class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`
-  - methods: current_references, sanitize_namespace, add_reference, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references
+  - methods: current_references, sanitize_namespace, add_reference, purge_unused_bakes, import_references, update_references, get_reference_top_transforms, get_reference_display_mode, set_reference_display_mode, remove_references
 
 ### `env_utils/reference_manager/reference_manager_controller.py` — Reference Manager controller — the panel-facing layer over the engine.
 - `class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`
-  - methods: current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, set_maya_project, refresh_file_list, update_table, open_scene, new_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
+  - methods: scene_notes, current_working_dir, block_table_selection_method, prepare_item_for_edit, restore_item_display, is_item_being_edited, handle_item_selection, sync_selection_to_references, update_current_dir, set_workspace, set_maya_project, refresh_file_list, update_table, open_scene, new_scene, unreference_all, unlink_all, unlink_references, convert_to_assembly, save_scene, rename_scene, delete_scene
 
 ### `env_utils/reference_manager/reference_manager_slots.py` — Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 - `class ReferenceManagerSlots(pythontk.HelpMixin, pythontk.LoggingMixin)`
@@ -836,7 +837,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`
   - methods: create_network, resolve_opacity_sources, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
 - `class GameShaderSlots(GameShader)`
-  - methods: header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, opacity_mode, cmb002_init, cmb003_init, txt000_init, txt002_init, b000
+  - methods: source_images_dir, header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, opacity_mode, cmb002_init, cmb003_init, txt000_init, txt002_init, b000
 
 ### `mat_utils/image_to_plane/_image_to_plane.py` — Map image files to textured polygon planes in Maya.
 - `class ImageToPlane(pythontk.LoggingMixin)`
@@ -848,7 +849,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/marmoset_bridge/_marmoset_bridge.py` — Maya-side glue for the Marmoset Toolbag engine.
 - `class MarmosetBridge(pythontk.HandoffBridge, _MarmosetBridgeInternal)`
-  - methods: toolbag_path, params_defaults, render_template, source_model_path_for, baked_texture_dir, source_material_name, baked_material_name, texture_set_aliases, build_bake_pairs_manifest
+  - methods: toolbag_path, params_defaults, render_template, source_model_path_for, baked_texture_dir, toolbag_scene_dir, source_material_name, baked_material_name, texture_set_aliases, build_bake_pairs_manifest
 
 ### `mat_utils/marmoset_bridge/_marmoset_engine.py` — Drive Marmoset Toolbag from the outside -- launch + templated automation.
 - constants: APP, SEND_TO, ROUND_TRIP
@@ -976,11 +977,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GraphRestorer(_ShaderTemplatesInternal)`
   - methods: load_yaml, restore_graph, restore_connections
 - `class ShaderTemplates`
-  - methods: save_template, restore_template
+  - methods: store, migrate_package_templates, save_template, restore_template
 
 ### `mat_utils/shader_templates/shader_templates_slots.py` — Shader Templates panel — the Switchboard slots for ``shader_templates.ui``.
 - `class ShaderTemplatesSlots(pythontk.LoggingMixin)`
-  - methods: header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
+  - methods: source_images_dir, header_init, lbl_graph_material, lbl_open_templates_dir, cmb002_init, refresh_templates, rename_template_safe, lbl000, lbl001, lbl002, b000, b001, b002
 
 ### `mat_utils/substance_bridge/_substance_bridge.py` — Substance 3D Painter bridge -- export Maya selection and hand off to Painter.
 - constants: SEND_TO, ROUND_TRIP, TARGET_AUTO, TARGET_NEW, TARGET_CURRENT
@@ -1090,7 +1091,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py` — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - `class DataNodes(pythontk.SceneStoreBase)`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, scene_path, install_path_rebase, ensure_path_rebase, remove_path_rebase
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, values, dump_export_nodes, carriers_in, scene_path, set_scene_source, scene_source, scene_workspace, scene_project_root, scene_source_images_dir, install_path_rebase, ensure_path_rebase, remove_path_rebase
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(pythontk.HelpMixin)`
@@ -1112,7 +1113,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `render_utils/_render_utils.py` — Render-control helpers.
 - `class RenderUtils(pythontk.HelpMixin)`
-  - methods: get_available_renderers, current_renderer, set_renderer, render_camera, redo_previous_render, supports_ipr, start_ipr
+  - methods: get_available_renderers, current_renderer, set_renderer, ensure_arnold_options, render_settings, set_render_settings, render_preset_store, render_camera, redo_previous_render, supports_ipr, start_ipr, prepare_arnold_preview, sync_arnold_backface_culling
 
 ### `rig_utils/_rig_utils.py`
 - `class RigUtils(pythontk.HelpMixin)`
@@ -1149,11 +1150,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/shadow_rig/_shadow_rig.py` — Shadow Rig engine — a projected-shadow rig for engine export.
 - `class ShadowRig(pythontk.LoggingMixin)`
-  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, create, create_for_sources, create_horizon_for_sources, create_per_object
+  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, default_texture_dir, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, create, create_for_sources, create_horizon_for_sources, create_per_object
 
 ### `rig_utils/shadow_rig/shadow_preview.py` — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 - `class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`
-  - methods: device, language, shader_node, is_attached, attached_planes, restore_snapshot, attach, detach, toggle, detach_all, prepare_for_export, classify_device, effect_text, refusal
+  - methods: device, language, shader_node, is_attached, attached_planes, restore_snapshot, attach, detach, toggle, detach_all, prepare_for_export, preview_dir, texture_path, classify_device, effect_text, refusal
 
 ### `rig_utils/shadow_rig/shadow_rig_slots.py` — Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.
 - `class ShadowRigSlots`
@@ -1229,7 +1230,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
-  - methods: default_output_dir, live_param_tooltip_blocks, resolve_scope_objects
+  - methods: live_param_tooltip_blocks, resolve_scope_objects
 
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(pythontk.LoggingMixin)`

@@ -1,0 +1,10 @@
+{
+    "_meta": {"version": 1, "description": "Arnold final frames: high camera samples for clean edges, motion and depth of field. Slow."},
+    "camera_samples": 8,
+    "diffuse_samples": 3,
+    "specular_samples": 3,
+    "transmission_samples": 3,
+    "diffuse_depth": 3,
+    "specular_depth": 3,
+    "transmission_depth": 10
+}

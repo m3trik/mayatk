@@ -4,15 +4,19 @@
 
 The DCC-agnostic base lives upstream in :mod:`uitk.bridge.slots`
 (re-exported through :mod:`uitk.bridge`). This thin subclass injects
-the one piece every Maya bridge needs: a sensible Output Dir fallback
-sourced from :class:`mayatk.env_utils.EnvUtils` (scene dir, then
-workspace) when the user leaves the field blank.
+what every Maya bridge shares: the Scope resolution and the live Bake
+Source tooltip.
+
+A blank Output Dir means "the bridge's own rule" (uitk's own
+``default_output_dir``, ``""``, which this keeps): hand-off intermediates go to a ``TempArtifacts`` scratch per
+send, and what is kept goes to a folder of the SCENE's project (a bake's
+maps to ``sourceimages/baked``, a mesh Painter re-reads to ``cache/substance``,
+a saved Toolbag scene to ``data/marmoset``) -- never the scene folder, where
+the hand-off silted up the project. blendertk's base means the same.
 
 The Marmoset, Substance, Rizom, Blender, and Unity bridge slots all
 subclass this instead of inheriting from ``BridgeSlotsBase`` directly,
-so the fallback lives in one place (Unity opts back out by overriding
-``default_output_dir`` to return ``""`` — a Maya scene dir isn't a
-Unity project).
+so the rule lives in one place.
 """
 
 from __future__ import annotations
@@ -20,16 +24,10 @@ from __future__ import annotations
 from uitk.bridge import BridgeSlotsBase
 from pythontk import HandoffScope, TooltipFormat
 
-from mayatk.env_utils._env_utils import EnvUtils
-
 
 class MayaBridgeSlotsBase(BridgeSlotsBase):
-    """Adds a Maya-flavored ``default_output_dir`` + Scope resolution to
+    """Adds the Maya-side Scope resolution and live tooltips to
     :class:`BridgeSlotsBase`."""
-
-    def default_output_dir(self) -> str:
-        """Scene-dir then workspace fallback for an empty Output Dir field."""
-        return EnvUtils.default_artifact_dir()
 
     # ------------------------------------------------- live row tooltips
     #: Row every bridge that consumes :class:`mayatk.mat_utils.BakeSourceSet`

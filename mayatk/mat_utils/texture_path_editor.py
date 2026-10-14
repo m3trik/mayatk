@@ -19,6 +19,7 @@ from uitk.widgets.footer import FooterStatusController
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -3873,7 +3874,7 @@ class TexturePathEditorSlots:
         Same folder, another name, the old file on disk and the new one not:
         there is nothing to point at, so the edit means "call it this". A typed
         path naming a file that exists stays a repoint, and so does an edit of
-        a file outside the scene's project (``EnvUtils.scene_project_root``,
+        a file outside the scene's project (``DataNodes.scene_project_root``,
         the boundary Keep Names In Sync keeps) -- another project may read it,
         so a path edit must not rename a shared library texture; the warning
         says so. Rename File, which asks for the rename, still renames it.
@@ -3890,7 +3891,7 @@ class TexturePathEditorSlots:
             and not self._texture_on_disk(new)
         ):
             return False
-        project = EnvUtils.scene_project_root()
+        project = DataNodes.scene_project_root()
         if project and FileUtils.is_under(os.path.abspath(old), project):
             return True
         cmds.warning(

@@ -225,5 +225,106 @@ class TestHighPolyExport(MayaTkTestCase):
         self.assertFalse(any(self.high in node for node in visible))
 
 
+class TestHandoffLocations(MayaTkTestCase):
+    """Where a send with a blank Output Dir puts things: the mesh Painter's
+    project is built from (and a reimport overwrites) in the scene project's
+    ``cache/substance``; the manifest and staged copies in temp scratch --
+    never the scene folder, and never a temp mesh recorded on the scene.
+    Added: 2026-10-13"""
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        # Outside the temp root (the run's sandbox puts tempfile's folder
+        # under it), as a real project is: a mesh under the temp root is
+        # never recorded on the scene.
+        os.makedirs(self.TEMP_TESTS, exist_ok=True)
+        self.root = os.path.realpath(
+            tempfile.mkdtemp(prefix="substance_proj_", dir=self.TEMP_TESTS)
+        )
+        ptk.Workspace.create(self.root, create_dirs=False)
+        os.makedirs(os.path.join(self.root, "scenes"))
+        cmds.file(rename=os.path.join(self.root, "scenes", "shot.ma"))
+        self.mesh = cmds.polyCube(name="paint_me")[0]
+        self.bridge = SubstanceBridge()
+        self.bridge.logger.setLevel("CRITICAL")
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.root, ignore_errors=True)
+        super().tearDown()
+
+    def _produce(self, output_name="shot"):
+        extras = {"painter_exe": None, "target": TARGET_AUTO}
+        if output_name:
+            extras["output_name"] = output_name
+        request = ptk.HandoffRequest(
+            template="import", mode=SEND_TO, params={}, extras=extras
+        )
+        self.assertTrue(self.bridge._preflight([self.mesh], request))
+        payload = self.bridge._produce([self.mesh], request)
+        self.assertIsNotNone(payload)
+        return payload
+
+    def _under(self, path, folder):
+        return os.path.normcase(os.path.realpath(path)).startswith(
+            os.path.normcase(os.path.realpath(folder))
+        )
+
+    def test_the_mesh_goes_to_the_project_cache_and_the_rest_to_temp(self):
+        payload = self._produce()
+        cache = os.path.join(self.root, "cache", "substance")
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(os.path.realpath(payload.primary))),
+            os.path.normcase(cache),
+        )
+        self.assertTrue(
+            self._under(payload.extras["manifest_path"], ptk.TempArtifacts.root()),
+            payload.extras["manifest_path"],
+        )
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(SubstanceBridge._recorded_export_path())),
+            os.path.normcase(os.path.normpath(payload.primary)),
+        )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(self.root, "scenes"))),
+            [],
+            "nothing lands beside the scene",
+        )
+
+    def test_two_same_named_scenes_keep_their_own_cached_mesh(self):
+        """Pre-release review 2026-10-13: ``cache/substance/<scene>.fbx`` was
+        keyed by the scene's NAME, so ``scenes/a/shot.ma`` and
+        ``scenes/b/shot.ma`` overwrote the mesh each other's Painter project
+        is built from."""
+        first = self._produce(output_name=None).primary
+        os.makedirs(os.path.join(self.root, "scenes", "b"))
+        cmds.file(rename=os.path.join(self.root, "scenes", "b", "shot.ma"))
+        second = self._produce(output_name=None).primary
+
+        self.assertNotEqual(os.path.normcase(first), os.path.normcase(second))
+        for path in (first, second):
+            self.assertRegex(os.path.basename(path), r"^shot_[0-9a-f]{8}\.\w+$")
+        cmds.file(rename=os.path.join(self.root, "scenes", "shot.ma"))
+        self.assertEqual(
+            os.path.normcase(self._produce(output_name=None).primary),
+            os.path.normcase(first),
+            "one scene, one cached mesh",
+        )
+
+    def test_with_no_project_the_temp_mesh_is_never_recorded(self):
+        from unittest import mock
+
+        cmds.fileInfo(SubstanceBridge.EXPORT_RECORD_KEY, "")
+        with mock.patch.object(
+            type(self.bridge), "_scene_workspace", return_value=None
+        ):
+            payload = self._produce()
+        self.assertTrue(self._under(payload.primary, ptk.TempArtifacts.root()))
+        self.assertIsNone(SubstanceBridge._recorded_export_path())
+
+
 if __name__ == "__main__":
     unittest.main()

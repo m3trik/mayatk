@@ -11,6 +11,7 @@ except ImportError:
 
 from qtpy import QtCore, QtWidgets
 from uitk.managers.field_visibility import FieldVisibility
+from uitk import StyleSheet
 from mayatk.anim_utils.blendshape_animator._blendshape_animator import (
     BlendshapeAnimator,
 )
@@ -880,6 +881,7 @@ class BlendshapeAnimatorSlots(BlendshapeAnimator):
         single = tweens[0]
 
         menu = QtWidgets.QMenu(tree)
+        StyleSheet.cast_shadow(menu)
         act_select = menu.addAction(
             f"Select {len(tweens)} in Maya" if multi else "Select in Maya"
         )

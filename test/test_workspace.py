@@ -356,6 +356,130 @@ class TestSceneProjectRoot(MayaTkTestCase):
         cmds.workspace(broad, openWorkspace=True)
         self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(mine))
 
+    def test_an_unmarked_scene_in_the_active_project_is_that_projects(self):
+        """``ptk.Workspace.for_scene``, the one rule both DCCs share: with no
+        marker above it, a scene inside the active project belongs to that
+        project -- not to its own ``scenes/`` folder, which named a second,
+        accidental project (a bake landed in ``scenes/cache/bridge``)."""
+        proj = os.path.join(self.tmp, "unmarked")
+        self._save_scene(os.path.join(proj, "scenes", "shots", "room.ma"))
+        cmds.workspace(proj, openWorkspace=True)
+        self.assertFalse(os.path.isfile(os.path.join(proj, "workspace.mel")))
+        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+
+    def test_an_unsaved_scene_belongs_to_the_active_project(self):
+        proj = _make_workspace_dir(self.tmp, "active")
+        cmds.file(new=True, force=True)
+        cmds.workspace(proj, openWorkspace=True)
+        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+
+
+class TestTwinSaveGoesToTheProject(MayaTkTestCase):
+    """A foreign scene the Reference Manager opens as new is a scratch twin in
+    temp; Ctrl+S saved real work there, which the age sweep reclaims (30 days).
+    The maintainer's default (2026-10-13): the FIRST save of a twin is a Save As
+    into its source's project scenes folder, named ``<stem>_<ext>.ma``."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="ws_twin_save_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        previous = cmds.workspace(q=True, rd=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
+        self.proj = _make_workspace_dir(self.tmp, "proj")
+        self.source = os.path.join(self.proj, "scenes", "room.blend")
+        with open(self.source, "w") as f:
+            f.write("")
+        self.store = ptk.TempArtifacts("mtk_twin_save_test", policy="scoped")
+        self.addCleanup(self.store.cleanup)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)
+        super().tearDown()
+
+    def _open_twin(self):
+        twin = os.path.join(self.store.dir_path(), "room_blend.ma")
+        cmds.file(new=True, force=True)
+        cmds.polyCube(name="work")
+        cmds.file(rename=twin)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        stamp = os.path.getmtime(twin)
+        EnvUtils.set_scene_source(twin, self.source)
+        self.addCleanup(EnvUtils.set_scene_source, twin, None)
+        return twin, stamp
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(os.path.normpath(path or ""))
+
+    def test_the_first_save_lands_in_the_sources_scenes_folder(self):
+        twin, stamp = self._open_twin()
+        cmds.polySphere(name="more_work")
+
+        cmds.file(save=True, type="mayaAscii")
+
+        target = os.path.join(self.proj, "scenes", "room_blend.ma")
+        self.assertEqual(self._norm(EnvUtils.saved_scene_path()), self._norm(target))
+        self.assertTrue(os.path.isfile(target))
+        with open(target) as f:
+            self.assertIn("more_work", f.read())
+        self.assertEqual(os.path.getmtime(twin), stamp, "the twin was written")
+        self.assertIsNone(EnvUtils.scene_source(target))
+
+    def test_an_existing_scene_of_that_name_is_never_overwritten(self):
+        taken = os.path.join(self.proj, "scenes", "room_blend.ma")
+        with open(taken, "w") as f:
+            f.write("// someone else's scene\n")
+        self._open_twin()
+
+        cmds.file(save=True, type="mayaAscii")
+
+        with open(taken) as f:
+            self.assertEqual(f.read(), "// someone else's scene\n")
+        saved = EnvUtils.saved_scene_path()
+        self.assertEqual(
+            self._norm(os.path.dirname(saved)),
+            self._norm(os.path.join(self.proj, "scenes")),
+        )
+        self.assertNotEqual(self._norm(saved), self._norm(taken))
+
+    def test_a_save_that_fails_keeps_the_twin_standing_in(self):
+        """Pre-release review 2026-10-13: the redirect forgot the twin's source
+        BEFORE Maya wrote anything, so a save that failed left a scene in temp
+        that no longer knew its project. Forgotten only once written."""
+        import stat
+        from unittest import mock
+
+        twin, _ = self._open_twin()
+        blocked = os.path.join(self.proj, "scenes", "blocked.ma")
+        with open(blocked, "w") as f:
+            f.write("// read-only\n")
+        os.chmod(blocked, stat.S_IREAD)
+        self.addCleanup(os.chmod, blocked, stat.S_IREAD | stat.S_IWRITE)
+        with mock.patch.object(EnvUtils, "twin_save_target", return_value=blocked):
+            with self.assertRaises(RuntimeError):
+                cmds.file(save=True, type="mayaAscii")
+        with open(blocked) as f:
+            self.assertEqual(f.read(), "// read-only\n", "the save did not fail")
+        self.assertEqual(
+            self._norm(EnvUtils.scene_source(twin)), self._norm(self.source)
+        )
+
+    def test_a_scene_outside_temp_saves_where_it_is(self):
+        # Under the test folder, not the (sandboxed) temp dir every other path is in.
+        here = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "temp_tests", "twin_save_mine"
+        )
+        self.addCleanup(shutil.rmtree, here, True)
+        mine = os.path.join(here, "room_blend.ma")
+        os.makedirs(here, exist_ok=True)
+        cmds.file(rename=mine)
+        EnvUtils.set_scene_source(mine, self.source)
+        self.addCleanup(EnvUtils.set_scene_source, mine, None)
+        self.assertIsNone(EnvUtils.twin_save_target(mine))
+        cmds.file(save=True, type="mayaAscii")
+        self.assertEqual(self._norm(EnvUtils.saved_scene_path()), self._norm(mine))
+
 
 class TestWorkspaceManagerDefaults(QuickTestCase):
     """Property defaults and accessors."""
