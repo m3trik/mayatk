@@ -53,9 +53,6 @@ class _TaskDefinitionsMixin:
     _glb_key_reduction_options: Dict[str, Any] = (
         ptk.ExportProfile.GLB_KEY_REDUCTION_OPTIONS
     )
-    _baked_reflections_options: Dict[str, Any] = (
-        ptk.ExportProfile.BAKED_REFLECTIONS_OPTIONS
-    )
 
     @property
     def task_definitions(self) -> Dict[str, Dict[str, Any]]:
@@ -227,8 +224,8 @@ class _TaskDefinitionsMixin:
                         "Only verified duplicates are merged — the merge deletes "
                         "what it collapses, so the verification is what makes it "
                         "safe.",
-                        "Reports the same materials as <b>Check For Duplicate "
-                        "Materials</b>.",
+                        "Checked after it runs: a verified duplicate still in the "
+                        "export set fails the export.",
                         "Permanent scene change — not reverted after export.",
                     ],
                 ),
@@ -536,45 +533,6 @@ class _TaskDefinitionsMixin:
                 "restore_by": "text",
                 "add": self._uastc_rdo_options,
             },
-            "baked_reflections": {
-                "widget_type": "ComboBox",
-                "group": "Lighting",
-                "set_row_label": "Baked Reflections",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Baked Reflections",
-                    body="How strongly a lightmapped material reflects the "
-                    "viewer's environment. Published in the deliverable's "
-                    "lighting recipe, so any reader -- the WebXR preview "
-                    "included -- lights it the way it was approved.",
-                    bullets=[
-                        "<b>Off (Pure Bake)</b> — the bake alone: no "
-                        "reflection or gloss on a baked surface.",
-                        "<b>Quarter / Half</b> — weaker reflections "
-                        "everywhere, for a deliberately matte look.",
-                        "<b>Full</b> — the default: lit surfaces reflect "
-                        "fully, shadows stay dark.",
-                    ],
-                    notes=[
-                        "A lightmap already holds the surface's diffuse "
-                        "light, so a baked material only ever takes the "
-                        "environment's specular; this sets how much. The "
-                        "viewer's environment is a bright studio, not the room "
-                        "the bake lit, so each texel's reflection is first "
-                        "scaled by how lit its bake is: a shadow reflects next "
-                        "to nothing at any level.",
-                        "Only lightmapped materials; everything else takes the "
-                        "environment whole.",
-                        "Decided here and carried by the deliverable (GLB and "
-                        "FBX alike): the WebXR Preview's Baked Reflections row "
-                        "is this row, and nothing it does is read back.",
-                    ],
-                ),
-                "restore_by": "text",
-                "add": self._baked_reflections_options,
-                "setCurrentIndex": list(self._baked_reflections_options.values()).index(
-                    ptk.ExportProfile.baked_reflections_default()
-                ),
-            },
             # -- Animation group: the Animation Output gate FIRST, then the
             # rows it governs, the same way the Textures group reads.
             "animation_write_back": {
@@ -621,13 +579,19 @@ class _TaskDefinitionsMixin:
                         "world scale, so world matrices look clean while the "
                         "matrices BETWEEN joints skew. Measured: 47% stretch "
                         "put a chain's end 7.5 cm off in the deliverable.",
-                        "Live, not baked: each flagged joint is reparented "
-                        "under its nearest clean ancestor with its "
-                        "offsetParentMatrix rewrapped, so the rig's drivers "
-                        "keep working and worlds are preserved exactly.",
+                        "World-fitted: each flagged node is keyed under its "
+                        "nearest clean ancestor with the world matrices "
+                        "sampled from the untouched scene, so worlds are "
+                        "preserved exactly at every frame.",
+                        "Also a node that ignores its parent (inheritsTransform "
+                        "off, e.g. a rig's pinned skinned mesh): FBX has no "
+                        "such flag, and Maya writes it as though it inherited "
+                        "-- production wire looms shipped 118-419 cm off.",
                         "The hierarchy and wiring are restored after the write.",
-                        "<b>Check For Sheared Local Transforms</b> verifies "
-                        "the result.",
+                        "Checked after it runs: a node it could not re-anchor "
+                        "(no clean ancestor, or locked or referenced) fails the "
+                        "export, naming its rig — reduce the stretch at the "
+                        "source.",
                     ],
                 ),
                 "setChecked": True,
@@ -755,7 +719,10 @@ class _TaskDefinitionsMixin:
                     "the whole export set, on every channel that is already "
                     "animated, so no animated channel stops short of the range.",
                     notes=[
-                        "Fixes what <b>Check For Untied Keyframes</b> reports.",
+                        "Checked after it runs: a channel still short of its "
+                        "object's own keyed range fails the export. Set-driven-key "
+                        "curves are left alone — their key 'times' are driver "
+                        "values, not frames.",
                         "Tangents on the neighboring keys are frozen first, so the "
                         "inserted keys do not reshape the curve.",
                         "Whether the scene keeps this is <b>Animation Output</b>'s "
@@ -773,16 +740,16 @@ class _TaskDefinitionsMixin:
                 "setToolTip": TooltipFormat.fmt(
                     title="Snap Keys To Frame",
                     body="Round every key on the exported objects to the nearest "
-                    "whole frame.",
+                    "whole frame — the fractional key times retiming, scaling, or "
+                    "an import at a different rate leave behind.",
                     notes=[
-                        "Fixes what <b>Check For Floating Point Keys</b> reports — "
-                        "fractional key times left behind by retiming, scaling, or "
-                        "an import at a different rate.",
+                        "Checked after it runs: a key still off a whole frame "
+                        "fails the export.",
                         "Whether the scene keeps this is <b>Animation Output</b>'s "
                         "call; by default the curves are restored after the write.",
                     ],
                 ),
-                "setChecked": False,
+                "setChecked": True,
             },
             "set_bake_animation_range": {
                 "widget_type": "ComboBox",
@@ -909,11 +876,12 @@ class _TaskDefinitionsMixin:
                         "Runs of three or more underscores",
                     ],
                     notes=[
-                        "Clears the <b>Check For Mangled Names</b> failure.",
+                        "Checked after it runs: a name it could not repair fails "
+                        "the export.",
                         "Permanent scene change — not reverted after export.",
                     ],
                 ),
-                "setChecked": False,
+                "setChecked": True,
             },
             "ignore_groups": {
                 "widget_type": "QLineEdit",
@@ -960,25 +928,6 @@ class _TaskDefinitionsMixin:
                     notes=[
                         "Scans the whole scene, not just the export set.",
                         "Import the reference (or remove it) to pass.",
-                    ],
-                ),
-                "setChecked": True,
-            },
-            "check_output_writable": {
-                "widget_type": "QCheckBox",
-                "group": "General",
-                "setText": "Check Output File Is Writable",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check Output File Is Writable",
-                    body="Fails the export when a file it is about to write is "
-                    "held open by another process.",
-                    notes=[
-                        "Windows will not let anything replace a file while a "
-                        "viewer, a preview or an engine has it open.",
-                        "Runs before the first scene change, so a locked "
-                        "destination costs milliseconds instead of the whole "
-                        "pipeline — the write is the LAST thing an export does.",
-                        "Names the process to close whenever Windows will say.",
                     ],
                 ),
                 "setChecked": True,
@@ -1035,24 +984,6 @@ class _TaskDefinitionsMixin:
                 # scope the check shipped with as a plain checkbox.
                 "setCurrentIndex": 1,
             },
-            "check_mangled_names": {
-                "widget_type": "QCheckBox",
-                "group": "Hierarchy & Naming",
-                "setText": "Check For Mangled Names",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Mangled Names",
-                    body="Fails the export when any node in the set — shapes "
-                    "included — carries a scratch or mangled name.",
-                    bullets=[
-                        "Accumulated '__uninst_tmp' scratch tokens",
-                        "'__RZTMP' Rizom round-trip suffixes",
-                        "'FBXASC###' import escapes",
-                        "Runs of three or more underscores",
-                    ],
-                    notes=["Repair with the <b>Fix Mangled Names</b> task."],
-                ),
-                "setChecked": True,
-            },
             "check_root_default_transforms": {
                 "widget_type": "QCheckBox",
                 "group": "Hierarchy & Naming",
@@ -1068,31 +999,6 @@ class _TaskDefinitionsMixin:
                         "information and do not fail the check — as the scene "
                         "stands it really is at identity, which is what the "
                         "exporter needs."
-                    ],
-                ),
-                "setChecked": True,
-            },
-            "check_sheared_local_transforms": {
-                "widget_type": "QCheckBox",
-                "group": "Hierarchy & Naming",
-                "setText": "Check For Sheared Local Transforms",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Sheared Local Transforms",
-                    body="Fails the export when a node's local matrix is "
-                    "sheared. FBX and glTF store animated nodes as "
-                    "translate/rotate/scale, which cannot represent shear, so "
-                    "it is silently dropped.",
-                    notes=[
-                        "Needs no authored shear: a squash/stretch joint chain "
-                        "gives every joint the same non-uniform world scale, "
-                        "and the LOCAL matrix between two differently-oriented "
-                        "joints is then sheared. World matrices look clean.",
-                        "The residual compounds down a chain. Measured on a "
-                        "wire-loom rig: 47% stretch put the last joint 7.5 cm "
-                        "off; 11% stayed within 0.5 cm.",
-                        "The <b>Flatten Sheared Chains</b> task re-anchors "
-                        "the flagged joints automatically; otherwise reduce "
-                        "the stretch at the source.",
                     ],
                 ),
                 "setChecked": True,
@@ -1206,24 +1112,6 @@ class _TaskDefinitionsMixin:
                 ),
                 "setChecked": True,
             },
-            "check_duplicate_materials": {
-                "widget_type": "QCheckBox",
-                "group": "Materials & Paths",
-                "setText": "Check For Duplicate Materials",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Duplicate Materials",
-                    body="Fails the export when two of the export materials are "
-                    "verified duplicates of each other.",
-                    notes=[
-                        "Same texture set, placement, color space and texture "
-                        "content — near-misses like same-name-different-content "
-                        "are not reported.",
-                        "The <b>Reassign Duplicate Materials</b> task merges "
-                        "exactly what this reports.",
-                    ],
-                ),
-                "setChecked": True,
-            },
             "check_path_length": {
                 # A character budget is a bounded number, so it gets a spin box
                 # (same rationale as the texture size limit): the default is
@@ -1316,37 +1204,6 @@ class _TaskDefinitionsMixin:
                     ],
                 ),
                 "add": self._frame_rate_options,
-            },
-            "check_untied_keyframes": {
-                "widget_type": "QCheckBox",
-                "group": "Animation",
-                "setText": "Check For Untied Keyframes",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Untied Keyframes",
-                    body="Fails the export when an object has an animated channel "
-                    "whose keys stop short of that object's own keyed range.",
-                    notes=[
-                        "The <b>Tie All Keyframes</b> task inserts the missing "
-                        "bookend keys.",
-                        "Set-driven-key curves are ignored — their key 'times' are "
-                        "driver values, not frames.",
-                    ],
-                ),
-                "setChecked": True,
-            },
-            "check_floating_point_keys": {
-                "widget_type": "QCheckBox",
-                "group": "Animation",
-                "setText": "Check For Floating Point Keys",
-                "setToolTip": TooltipFormat.fmt(
-                    title="Check For Floating Point Keys",
-                    body="Fails the export when a key sits on a fractional frame.",
-                    notes=[
-                        "The <b>Snap Keys To Frame</b> task rounds them to whole "
-                        "frames."
-                    ],
-                ),
-                "setChecked": True,
             },
             # Not a pipeline check: the pop in ``SceneExporter.perform_export``
             # turns this row into the flag that arms the POST-write pass

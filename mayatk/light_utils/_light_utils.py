@@ -2,7 +2,7 @@
 # coding=utf-8
 """Light utilities — building real scene lights from the geometry that represents them."""
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 try:
     from maya import cmds
@@ -375,6 +375,210 @@ class LightUtils(_LightUtilsInternal, ptk.HelpMixin):
             return float(cmds.getAttr(f"{shape}.intensity")) != 0.0
         except (RuntimeError, ValueError, TypeError):
             return True
+
+    #: Light types the lightmap manifest carries for their highlights, and the
+    #: kind each is to a reader (a quad ``aiAreaLight`` only).
+    SPECULAR_KINDS = {
+        "spotLight": "spot",
+        "pointLight": "point",
+        "areaLight": "rect",
+        "aiAreaLight": "rect",
+    }
+
+    @staticmethod
+    def _light_value(shape: str, names: Sequence[str], default: Any) -> Any:
+        """The first of *names* the light carries (Maya's lights spell Arnold's
+        controls ``ai*``; Arnold's own lights may not), else *default*."""
+        for name in names:
+            if cmds.attributeQuery(name, node=shape, exists=True):
+                return cmds.getAttr(f"{shape}.{name}")
+        return default
+
+    @classmethod
+    def specular_lights(
+        cls,
+        shapes: Optional[Sequence[str]] = None,
+        limit: Optional[int] = None,
+        near: Optional[Sequence[float]] = None,
+        lit: Optional[Iterable[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """The lights, as the lightmap manifest carries them for their highlights.
+
+        A lightmap holds each light's diffuse and no direction, so no
+        highlight: Arnold draws a light's highlight on a metal directly, and a
+        reflection probe that sees a light hanging inside the room reads it as
+        if it hung on the wall behind. Measured on a production table
+        (2026-10-17): with every light's specular off, Arnold's render matched
+        the WebXR viewer's dark tray rims. The GLB build draws these lights
+        into copies of the bake's probe, placed for each group of receivers
+        (``ptk.MeshConvert.highlight_probe_layers``) -- never as lights a
+        viewer pays for. The record's form is
+        ``ptk.SceneRecords.LIGHTMAPS``' ``lights``: the working unit -- the one
+        an export writes the file in, since the Scene Exporter switches to
+        its target (``set_linear_unit``) before the records are produced --
+        with ``unit_scale`` (metres per unit) beside it, each value converted
+        by the kind of query that read it (``mtk.Units``). Measured before:
+        a metre export labelled every centimetre position metres.
+
+        * **Which.** Spot, point, Maya area and quad ``aiAreaLight`` shapes that
+          contribute (:meth:`light_contributes`), or that *lit* names, with a
+          non-zero intensity and ``aiSpecular``. None for a Z-up scene: its
+          readers take Y-up (the probe's rule).
+        * **Power.** Arnold's point and spot lights fall off quadratically
+          whatever ``decayRate`` says, so ``intensity`` x 2^``aiExposure`` is
+          the irradiance at one centimetre, shipped as the irradiance at one
+          unit of the record (divided by that unit's centimetres, squared); a
+          rect's is its radiance -- divided by its
+          area in centimetres when normalized, Arnold's own number, which no
+          length unit changes -- derived from Arnold's definition, not yet
+          measured. Times ``aiSpecular``, the light's own share of the
+          highlights.
+        * **Colour.** The light's colour (times its colour temperature's tint
+          at unit luminance), from the rendering space to linear Rec.709.
+
+        Parameters:
+            shapes: The light shapes to read (default: every light,
+                :meth:`all_lights`).
+            limit: Keep at most this many -- the strongest at *near* (each is
+                drawn into every probe copy a GLB build makes).
+            near: The world point the limit ranks by (the working unit, as
+                ``exactWorldBoundingBox`` answers; default the origin).
+            lit: Lights (shapes or transforms) to read as switched on whatever
+                they show now -- the hidden ones a bake switched on
+                (``ptk.BakeBaseline.lights_used``). A dark one still ships
+                nothing. Default: none; every light is judged by
+                :meth:`light_contributes`.
+
+        Returns:
+            list: ``{name, type, position, direction, color, intensity,
+            unit_scale}``, plus ``angle`` / ``penumbra`` / ``radius`` (spot),
+            ``radius`` (point), ``right`` / ``width`` / ``height`` (rect).
+        """
+        import math
+
+        import numpy as np
+
+        if cmds is None or str(cmds.upAxis(query=True, axis=True)).lower() != "y":
+            return []
+        from mayatk.core_utils.units import Units
+
+        unit = Units.metres_per("working")  # the file's: see above
+        space = None
+        if cmds.colorManagementPrefs(query=True, cmEnabled=True):
+            space = cmds.colorManagementPrefs(query=True, renderingSpaceName=True)
+        named = list(lit or ())
+        lit_ids = set(cmds.ls(named, long=True) or ()) if named else set()
+
+        def switched_on(shape: str) -> bool:
+            if lit_ids and lit_ids.intersection(
+                (cmds.ls(shape, long=True) or [])
+                + (cmds.listRelatives(shape, parent=True, fullPath=True) or [])
+            ):
+                return True
+            return cls.light_contributes(shape)
+
+        out: List[Dict[str, Any]] = []
+        for shape in shapes if shapes is not None else cls.all_lights():
+            kind = cls.SPECULAR_KINDS.get(cmds.nodeType(shape))
+            if kind is None or not switched_on(shape):
+                continue
+            if (
+                cmds.nodeType(shape) == "aiAreaLight"
+                and (cls._light_value(shape, ("aiTranslator",), "quad") or "quad")
+                != "quad"
+            ):
+                continue
+            specular = float(cls._light_value(shape, ("aiSpecular", "specular"), 1.0))
+            exposure = float(cls._light_value(shape, ("aiExposure", "exposure"), 0.0))
+            power = float(cmds.getAttr(f"{shape}.intensity")) * 2.0**exposure * specular
+            if power <= 0.0:
+                continue
+            transform = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+            m = cmds.xform(transform, query=True, worldSpace=True, matrix=True)
+            x_axis, y_axis, z_axis = m[0:3], m[4:7], m[8:11]
+
+            def unit_vector(v):
+                n = math.sqrt(sum(c * c for c in v)) or 1.0
+                return [c / n for c in v]
+
+            colour = list(cmds.getAttr(f"{shape}.color")[0])
+            if cls._light_value(
+                shape, ("aiUseColorTemperature", "useColorTemperature"), False
+            ):
+                kelvin = float(
+                    cls._light_value(
+                        shape, ("aiColorTemperature", "colorTemperature"), 6500.0
+                    )
+                )
+                tint = ptk.ImgUtils.kelvin_tint(kelvin)
+                colour = [c * float(t) for c, t in zip(colour, tint)]
+            if space:
+                try:
+                    colour = [
+                        float(c)
+                        for c in ptk.ImgUtils.convert_scene_linear(
+                            np.array([[colour]], np.float32), space
+                        )[0, 0]
+                    ]
+                except KeyError:  # a space no matrix reaches: carried as authored
+                    pass
+            light: Dict[str, Any] = {
+                "name": transform.split("|")[-1],
+                "type": kind,
+                "position": Units.convert(m[12:15], "internal", "working"),
+                "direction": unit_vector([-c for c in z_axis]),
+                "color": colour,
+                "intensity": power * (Units.INTERNAL_M / unit) ** 2,
+                "unit_scale": unit,
+            }
+            if kind == "spot":
+                cone = Units.angle(cmds.getAttr(f"{shape}.coneAngle"), target="rad") / 2.0
+                penumbra = Units.angle(
+                    cmds.getAttr(f"{shape}.penumbraAngle"), target="rad"
+                )
+                angle = min(cone + max(penumbra, 0.0), math.pi / 2.0)
+                light["angle"] = angle
+                light["penumbra"] = min(abs(penumbra) / angle, 1.0) if angle else 0.0
+            if kind in ("spot", "point"):
+                # A plain float Arnold reads in scene units: centimetres.
+                light["radius"] = Units.convert(
+                    cls._light_value(shape, ("aiRadius",), 0.0), "internal", "working"
+                )
+            if kind == "rect":
+                width = 2.0 * math.sqrt(sum(c * c for c in x_axis))
+                height = 2.0 * math.sqrt(sum(c * c for c in y_axis))
+                light.update(
+                    right=unit_vector(x_axis),
+                    width=Units.convert(width, "internal", "working"),
+                    height=Units.convert(height, "internal", "working"),
+                    intensity=power,
+                )
+                if cls._light_value(shape, ("aiNormalize", "normalize"), True):
+                    light["intensity"] = power / max(width * height, 1e-12)
+            out.append(light)
+        if limit is not None and len(out) > limit:
+            point = [float(c) for c in near or (0.0, 0.0, 0.0)]  # working, as above
+            out = sorted(out, key=lambda light: -cls._specular_reach(light, point))[
+                :limit
+            ]
+        return out
+
+    @staticmethod
+    def _specular_reach(light: Dict[str, Any], point: Sequence[float]) -> float:
+        """A light's irradiance at *point*, roughly: what ranks it for a limit."""
+        import math
+
+        d = [p - q for p, q in zip(point, light["position"])]
+        dist2 = max(sum(c * c for c in d), 1e-6)
+        if light["type"] == "rect":  # radiance x solid angle, facing aside
+            area = light.get("width", 1.0) * light.get("height", 1.0)
+            return light["intensity"] * area / dist2
+        if light["type"] == "spot":
+            n = math.sqrt(dist2)
+            cos = sum(a * b / n for a, b in zip(d, light["direction"]))
+            if cos < math.cos(light.get("angle", math.pi / 2.0)):
+                return 0.0
+        return light["intensity"] / dist2
 
     @classmethod
     def lights_from_geometry(

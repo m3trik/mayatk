@@ -36,7 +36,6 @@ flips. Every shell's solve is validated against a residual tolerance
 reports and stays put.
 """
 
-import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
@@ -271,57 +270,23 @@ class _UvPackInternal:
         )
 
     @staticmethod
-    def _solve_similarity(old: np.ndarray, new: np.ndarray):
-        """Least-squares 2D similarity (reflection-aware) mapping *old* -> *new*.
-
-        xatlas mirrors charts where that packs tighter (verified: a mirrored
-        chart comes back as a perfect *reflected* similarity, det < 0 — the
-        same liberty u3dLayout takes), so both the proper and the U-flipped
-        solve are tried and the better fit wins.
-
-        Returns ``(scale, angle_degrees, mirrored, c0, c1, residual)``: flip U
-        about centroid ``c0`` when *mirrored*, rotate+scale about ``c0``, then
-        translate ``c1 - c0``. Residual is the max abs error over the shell.
-        """
-        c0, c1 = old.mean(axis=0), new.mean(axis=0)
-        d0, d1 = old - c0, new - c1
-        denom = float((d0 * d0).sum())
-        if denom < 1e-20:  # single-point / degenerate shell: translate only
-            return 1.0, 0.0, False, c0, c1, float(np.abs(d1).max(initial=0.0))
-
-        def _solve(source: np.ndarray):
-            a = float((source * d1).sum())
-            b = float((source[:, 0] * d1[:, 1] - source[:, 1] * d1[:, 0]).sum())
-            scale = math.hypot(a, b) / denom
-            angle = math.atan2(b, a)
-            cos_a, sin_a = math.cos(angle), math.sin(angle)
-            rebuilt = np.column_stack(
-                [
-                    scale * (source[:, 0] * cos_a - source[:, 1] * sin_a),
-                    scale * (source[:, 0] * sin_a + source[:, 1] * cos_a),
-                ]
-            )
-            return scale, angle, float(np.abs(rebuilt - d1).max())
-
-        scale, angle, residual = _solve(d0)
-        scale_m, angle_m, residual_m = _solve(d0 * np.array([-1.0, 1.0]))
-        if residual_m < residual:
-            return scale_m, math.degrees(angle_m), True, c0, c1, residual_m
-        return scale, math.degrees(angle), False, c0, c1, residual
-
-    @staticmethod
-    def _component_ranges(mesh: str, indices: np.ndarray) -> List[str]:
-        """Sorted UV indices to compact ``mesh.map[a:b]`` component strings."""
+    def _component_ranges(
+        mesh: str, indices: np.ndarray, kind: str = "map"
+    ) -> List[str]:
+        """Sorted indices to compact ``mesh.<kind>[a:b]`` component strings
+        (UVs by default; ``"f"`` for faces)."""
         comps = []
+        if not len(indices):
+            return comps
         run_start = prev = int(indices[0])
         for idx in indices[1:]:
             idx = int(idx)
             if idx == prev + 1:
                 prev = idx
                 continue
-            comps.append(f"{mesh}.map[{run_start}:{prev}]")
+            comps.append(f"{mesh}.{kind}[{run_start}:{prev}]")
             run_start = prev = idx
-        comps.append(f"{mesh}.map[{run_start}:{prev}]")
+        comps.append(f"{mesh}.{kind}[{run_start}:{prev}]")
         return comps
 
     @classmethod
@@ -362,10 +327,10 @@ class _UvPackInternal:
             if not len(fit_on):
                 # The engine placed none of this shell's UVs, so there is no
                 # transform to recover — leave it where it is. (A single placed
-                # UV is still usable: _solve_similarity degenerates to a pure
+                # UV is still usable: the solve degenerates to a pure
                 # translation, which is exactly right for a lone point.)
                 continue
-            scale, angle, mirrored, c0, c1, residual = cls._solve_similarity(
+            scale, angle, mirrored, c0, c1, residual = ptk.UvPack.solve_similarity(
                 old_uvs[fit_on], new_uvs[fit_on]
             )
             if residual > RESIDUAL_TOLERANCE:

@@ -98,6 +98,30 @@ class TestMatUtilsExtended(MayaTkTestCase):
         assigned = MatUtils.get_mats(cube)
         self.assertEqual(assigned[0], mat1)
 
+    def test_bridged_materials_sharing_their_maps_are_still_duplicates(self):
+        """An Arnold bridge's emission follows its material's weight through a
+        connection out of the material: the bridge's file is none of its textures."""
+        try:
+            if not cmds.pluginInfo("mtoa", q=True, loaded=True):
+                cmds.loadPlugin("mtoa")
+        except RuntimeError:
+            self.skipTest("mtoa unavailable")
+        from mayatk.mat_utils.arnold_bridge import ArnoldBridge
+
+        path = os.path.join(self.temp_dir, "panel_Emissive.png").replace("\\", "/")
+        shutil.copy(self.tex1, path)
+        shared = cmds.shadingNode("file", asTexture=True, name="panel_file")
+        cmds.setAttr(f"{shared}.fileTextureName", path, type="string")
+        mats = []
+        for name in ("panelA", "panelB"):
+            mat = cmds.shadingNode("standardSurface", asShader=True, name=name)
+            cmds.connectAttr(f"{shared}.outColor", f"{mat}.emissionColor")
+            MatUtils.assign_mat(cmds.polyCube(name=f"{name}_geo")[0], mat)
+            mats.append(mat)
+        self.assertTrue(MatUtils.is_duplicate_material(*mats))
+        ArnoldBridge().add(materials=mats)
+        self.assertTrue(MatUtils.is_duplicate_material(*mats))
+
     def test_different_attr_same_texture_not_duplicate(self):
         """Verify materials using the same texture on different attributes
         are NOT flagged as duplicates.

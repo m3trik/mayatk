@@ -33,6 +33,7 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.core_utils.plugins._plugins import Plugins
+from mayatk.core_utils.units import Units
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +151,6 @@ class UsdUtils(ptk.HelpMixin):
     #: The ``cmds.file`` translator mayaUsd registers for READING a layer: an import,
     #: a reference and an open all go through it (:meth:`file_options`).
     IMPORT_TRANSLATOR = "USD Import"
-
-    #: Metres per Maya's INTERNAL linear unit, the centimetre, whatever unit the
-    #: scene works in: what mayaUsd writes every distance it reads in, and so
-    #: what :meth:`stage_conform` measures a stage against.
-    _INTERNAL_METRES_PER_UNIT: float = 0.01
 
     #: Node types whose motion is not derivable from key times: their presence
     #: makes :meth:`sampling_frame_range` fall back to the full playback range.
@@ -1298,7 +1294,9 @@ class UsdUtils(ptk.HelpMixin):
         if stage is None:
             return None
         stage_mpu = UsdGeom.GetStageMetersPerUnit(stage) or 0.01
-        scale = stage_mpu / cls._INTERNAL_METRES_PER_UNIT
+        # mayaUsd writes every distance it reads in Maya's INTERNAL unit, the
+        # centimetre, whatever unit the scene works in.
+        scale = stage_mpu / Units.INTERNAL_M
         stage_up = str(UsdGeom.GetStageUpAxis(stage)).upper()
         scene_up = str(cmds.upAxis(query=True, axis=True)).upper()
         rotate_x = 0.0

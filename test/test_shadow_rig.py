@@ -1003,6 +1003,37 @@ class TestShadowRig(MayaTkTestCase):
             [p["name"] for p in whole.payload["planes"]],
         )
 
+    def test_the_export_unit_switch_moves_no_plane(self):
+        """The Scene Exporter switches to metres before it bakes and writes:
+        the plane's expression keeps the units it was made in, so the plane
+        lies where it did -- and the rig's unit is the one it was built in.
+        Added: 2026-10-17"""
+        rig = self._make()
+        before = cmds.xform(rig.shadow_plane, query=True, worldSpace=True, matrix=True)
+        cmds.currentUnit(linear="m")
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        cmds.dgdirty(allPlugs=True)
+        after = cmds.xform(rig.shadow_plane, query=True, worldSpace=True, matrix=True)
+        for got, want in zip(after, before):
+            self.assertAlmostEqual(got, want, places=6)
+        self.assertEqual(ShadowRig.rig_unit(rig.shadow_plane), "cm")
+
+    def test_an_older_rig_unit_is_read_off_its_expression(self):
+        """A rig built before its unit was stamped: one made in metres reads
+        its world inputs through a ``unitConversion``, one made in
+        centimetres through none. Added: 2026-10-17"""
+        for unit in ("m", "cm"):
+            cmds.file(new=True, force=True)
+            cmds.currentUnit(linear=unit)
+            self.addCleanup(cmds.currentUnit, linear="cm")
+            cube = cmds.polyCube(name="Box", width=2, height=2, depth=2)[0]
+            rig = ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=16)
+            if rig.texture_path:
+                self._textures.append(rig.texture_path)
+            cmds.deleteAttr(f"{rig.shadow_plane}.{ShadowRig._UNIT_ATTR}")
+            cmds.currentUnit(linear="cm" if unit == "m" else "m")
+            self.assertEqual(ShadowRig.rig_unit(rig.shadow_plane), unit)
+
     # ------------------------------------------------------------------ export metadata
     def test_export_metadata(self):
         """create()/bake() publish the shadow_metadata channel on the
@@ -1417,6 +1448,237 @@ class TestShadowRig(MayaTkTestCase):
         FbxUtils.publish()
         payload = ptk.SceneRecords.SHADOWS.load(DataNodes)
         self.assertEqual(len(payload["planes"]), 1)
+
+
+class TestDetachPlanes(MayaTkTestCase):
+    """``ShadowRig.detach_planes``: a rig becomes a plain unlit textured plane.
+
+    For a shadow whose links were broken on purpose (a static prop's, the
+    production SOL_REPLACE_ASSEMBLY floor shadow, 2026-10-15): one quad, one
+    ``surfaceShader``, one PNG with the fade multiplied in -- no expression,
+    no drivers, no stamps for an exporter to carry.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="DetBox", width=2, height=2, depth=2)[0]
+        self.rig = ShadowRig.create([self.cube], light_pos=(5, 10, 5), texture_res=64)
+        self.plane = self.rig.shadow_plane
+        self.addCleanup(self._remove, self.rig.texture_path)
+
+    @staticmethod
+    def _remove(path):
+        for candidate in (path, os.path.splitext(path)[0] + "_plane.png"):
+            if candidate and os.path.exists(candidate):
+                os.remove(candidate)
+
+    def test_a_plane_with_a_dead_expression_is_not_live(self):
+        """The member manifest links the expression by message; that is no
+        drive. A rig whose expression lost its outputs read as live."""
+        expr = cmds.ls(type="expression")[0]
+        for plug in (
+            cmds.listConnections(
+                expr, source=False, destination=True, plugs=True, connections=True
+            )
+            or []
+        )[::2]:
+            for dst in (
+                cmds.listConnections(plug, source=False, destination=True, plugs=True)
+                or []
+            ):
+                if dst.startswith(f"{self.plane}."):
+                    cmds.disconnectAttr(plug, dst)
+        self.assertFalse(ShadowRig.plane_is_live(self.plane))
+
+    def test_detach_leaves_a_plain_unlit_textured_plane(self):
+        from PIL import Image
+
+        # Its links broken by hand, as on the production plane: the fade
+        # holds a value of its own.
+        fade = f"{self.plane}.opacity"
+        for src in (
+            cmds.listConnections(fade, source=True, destination=False, plugs=True) or []
+        ):
+            cmds.disconnectAttr(src, fade)
+        cmds.setKeyframe(fade, time=1, value=0.5)
+        moved = cmds.xform(self.plane, query=True, worldSpace=True, matrix=True)
+        source = self.rig.texture_path
+        with Image.open(source) as image:
+            peak = max(image.convert("RGBA").getchannel("A").getdata())
+
+        result = ShadowRig.detach_planes([self.plane])
+
+        self.assertEqual(list(result), [self.plane])
+        path = result[self.plane]
+        with Image.open(path) as image:
+            alpha = image.convert("RGBA").getchannel("A")
+        self.assertAlmostEqual(max(alpha.getdata()), round(peak * 0.5), delta=1)
+        # Nothing of the rig is left on or around it.
+        self.assertEqual(ShadowRig.find_shadow_planes(), [])
+        self.assertEqual(cmds.ls(type="expression"), [])
+        self.assertEqual(
+            cmds.listAttr(self.plane, userDefined=True) or [], [], "no stamps"
+        )
+        self.assertEqual(cmds.ls(type="multiplyDivide"), [])
+        self.assertEqual(cmds.ls(type="animCurve"), [], "no orphaned fade keys")
+        self.assertEqual(
+            cmds.xform(self.plane, query=True, worldSpace=True, matrix=True), moved
+        )
+        # One unlit material showing the new PNG, colour and transparency.
+        shape = cmds.listRelatives(self.plane, shapes=True, fullPath=True)[0]
+        sg = cmds.listConnections(shape, type="shadingEngine")[0]
+        shader = cmds.listConnections(f"{sg}.surfaceShader")[0]
+        self.assertEqual(cmds.nodeType(shader), "surfaceShader")
+        tex = cmds.listConnections(f"{shader}.outTransparency", type="file")[0]
+        self.assertEqual(cmds.listConnections(f"{shader}.outColor", type="file"), [tex])
+        self.assertEqual(cmds.getAttr(f"{tex}.fileTextureName"), path)
+        self.assertTrue(cmds.polyEvaluate(self.plane, face=True))
+
+    def test_detach_is_one_undo_step(self):
+        was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+        self.addCleanup(cmds.undoInfo, state=was)
+        ShadowRig.detach_planes([self.plane])
+        cmds.undo()
+        self.assertEqual(ShadowRig.find_shadow_planes(), cmds.ls(self.plane))
+
+
+class TestUnlitSection(MayaTkTestCase):
+    """What the GLB writes ``KHR_materials_unlit`` (``SceneState._read_unlit``).
+
+    A shadow plane reached WebXR as lit PBR: the environment's specular made
+    it brighter than the floor under it (production, 2026-10-15).
+    """
+
+    def test_a_shadow_planes_material_and_a_surface_shader_read_unlit(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube = cmds.polyCube(name="UnlitBox")[0]
+        rig = ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=64)
+        self.addCleanup(os.remove, rig.texture_path)
+        decal = cmds.polyPlane(name="UnlitDecal")[0]
+        flat = cmds.shadingNode("surfaceShader", asShader=True, name="flatMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{flat}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(decal, forceElement=sg)
+
+        unlit = SceneState.read([cube, rig.shadow_plane, decal]).get("unlit") or {}
+
+        self.assertEqual(set(unlit), {rig.shader, flat})
+        self.assertNotIn("lambert1", unlit)
+
+    def test_a_surface_shaders_texture_alpha_is_blend(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        decal = cmds.polyPlane(name="BlendDecal")[0]
+        flat = cmds.shadingNode("surfaceShader", asShader=True, name="blendFlat")
+        tex = cmds.shadingNode("file", asTexture=True, name="blendFlatTex")
+        cmds.connectAttr(f"{tex}.outTransparency", f"{flat}.outTransparency")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{flat}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(decal, forceElement=sg)
+
+        modes = SceneState.read([decal], include_textures=False).get("alpha_mode")
+
+        self.assertEqual((modes or {}).get(flat), {"mode": "BLEND"})
+
+
+class TestIntensityAndGround(MayaTkTestCase):
+    """``ShadowRig.set_intensity`` / ``set_ground_height``: the overall darkness
+    and the floor's height, on a plane whatever drives it.
+
+    A live rig's expression reads both stamps. A plane it no longer drives --
+    baked to keys, or its links broken on purpose (the production
+    SOL_REPLACE_ASSEMBLY floor shadow, 2026-10-15) -- carries its fade and
+    its height itself, so the change is carried into those: the fade
+    rescaled (it already holds the old intensity), the height moved.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="DialBox", width=2, height=2, depth=2)[0]
+        self.rig = ShadowRig.create([self.cube], light_pos=(5, 10, 5), texture_res=64)
+        self.plane = self.rig.shadow_plane
+        self.addCleanup(os.remove, self.rig.texture_path)
+
+    def _cut(self, channel):
+        """Break the expression's drive on one channel, as by hand."""
+        plug = f"{self.plane}.{channel}"
+        for src in (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+        ):
+            cmds.disconnectAttr(src, plug)
+
+    def _get(self, attr):
+        return cmds.getAttr(f"{self.plane}.{attr}")
+
+    def test_a_live_rig_takes_the_dial_through_its_expression(self):
+        before = self._get("opacity")
+        changed = ShadowRig.set_intensity([self.plane], 0.5)
+        self.assertEqual(changed, [self.plane])
+        self.assertAlmostEqual(self._get("shadowIntensity"), 0.5)
+        self.assertAlmostEqual(self._get("opacity"), before * 0.5, places=4)
+        record = ShadowRig.plane_record(self.plane)
+        self.assertAlmostEqual(record["intensity"], 0.5)
+
+    def test_a_static_fade_is_rescaled(self):
+        self._cut("opacity")
+        cmds.setAttr(f"{self.plane}.opacity", 0.8)
+        ShadowRig.set_intensity([self.plane], 0.5)
+        self.assertAlmostEqual(self._get("opacity"), 0.4, places=5)
+        ShadowRig.set_intensity([self.plane], 1.0)
+        self.assertAlmostEqual(self._get("opacity"), 0.8, places=5)
+
+    def test_a_keyed_fade_keeps_its_shape(self):
+        self._cut("opacity")
+        cmds.setKeyframe(self.plane, attribute="opacity", time=1, value=0.8)
+        cmds.setKeyframe(self.plane, attribute="opacity", time=10, value=0.4)
+        ShadowRig.set_intensity([self.plane], 0.5)
+        values = cmds.keyframe(
+            self.plane, attribute="opacity", query=True, valueChange=True
+        )
+        for got, want in zip(values, (0.4, 0.2)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_a_live_rig_lies_on_the_new_ground(self):
+        ShadowRig.set_ground_height([self.plane], 2.0)
+        self.assertAlmostEqual(self._get("groundHeight"), 2.0)
+        self.assertAlmostEqual(
+            self._get("translateY"), 2.0 + ShadowRig.GROUND_OFFSET, places=5
+        )
+        self.assertAlmostEqual(ShadowRig.plane_record(self.plane)["ground"], 2.0)
+
+    def test_a_static_plane_is_laid_on_the_ground(self):
+        """Absolute: a plane moved by hand has a stale stamp (the production
+        plane sat at 1.85 over a stamp of 0), so a difference would miss."""
+        self._cut("translateY")
+        cmds.setAttr(f"{self.plane}.translateY", 0.25)
+        ShadowRig.set_ground_height([self.plane], 1.5)
+        self.assertAlmostEqual(
+            self._get("translateY"), 1.5 + ShadowRig.GROUND_OFFSET, places=5
+        )
+
+    def test_keyed_heights_shift(self):
+        self._cut("translateY")
+        cmds.setKeyframe(self.plane, attribute="translateY", time=1, value=0.0)
+        cmds.setKeyframe(self.plane, attribute="translateY", time=10, value=1.0)
+        ShadowRig.set_ground_height([self.plane], -0.5)
+        values = cmds.keyframe(
+            self.plane, attribute="translateY", query=True, valueChange=True
+        )
+        for got, want in zip(values, (-0.5, 0.5)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_one_undo_step(self):
+        self._cut("opacity")
+        cmds.setAttr(f"{self.plane}.opacity", 0.8)
+        was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+        self.addCleanup(cmds.undoInfo, state=was)
+        ShadowRig.set_intensity([self.plane], 0.25)
+        cmds.undo()
+        self.assertAlmostEqual(self._get("opacity"), 0.8, places=5)
+        self.assertAlmostEqual(self._get("shadowIntensity"), 1.0)
 
 
 if __name__ == "__main__":

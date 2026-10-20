@@ -31,7 +31,9 @@ every edit after the build -- a joint inserted, removed or retyped, the end
 control added or dropped -- is an edit of that plan and a rebuild that carries
 the animation across (:meth:`ArticulatedRig.rebuild`). A joint inserted at 0
 changes no pose, so the keys already made stay valid
-(:meth:`ArticulatedRig.insert_joint`).
+(:meth:`ArticulatedRig.insert_joint`). The plan's host-free half -- its
+checks, rest frames, record, end-control placement and edits -- is
+``ptk.ArticulationPlan``; this engine measures the scene and builds.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ except ImportError:  # the surface imports without Maya (registry, docs, mock te
 import pythontk as ptk
 
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.units import Units
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 from mayatk.rig_utils.articulated_rig._solver_expression import SolverExpression
@@ -119,63 +122,6 @@ class _ArticulatedRigInternal:
         if not node:
             return om.MMatrix()
         return om.MMatrix(cmds.getAttr(f"{node}.worldMatrix[0]"))
-
-    @staticmethod
-    def _frame(position, aim, normal) -> "om.MMatrix":
-        """A rest frame: X along *aim*, Z the *normal* made perpendicular to
-        it, Y completing a right-handed set, at *position* (Maya's row
-        vectors: the rows are the axes, then the position).
-
-        Raises:
-            ValueError: *normal* runs along *aim* (no hinge axis left).
-        """
-        x = om.MVector(*aim)
-        if x.length() < 1.0e-9:
-            raise ValueError(f"Joint at {list(position)} has no aim.")
-        x.normalize()
-        z = om.MVector(*normal)
-        z = z - x * (z * x)
-        if z.length() < 1.0e-9:
-            raise ValueError(
-                f"Joint normal {list(normal)} runs along its aim {list(aim)}."
-            )
-        z.normalize()
-        y = z ^ x
-        return om.MMatrix(
-            [
-                x.x,
-                x.y,
-                x.z,
-                0.0,
-                y.x,
-                y.y,
-                y.z,
-                0.0,
-                z.x,
-                z.y,
-                z.z,
-                0.0,
-                float(position[0]),
-                float(position[1]),
-                float(position[2]),
-                1.0,
-            ]
-        )
-
-    @staticmethod
-    def _decompose(m: "om.MMatrix") -> Tuple[List[float], List[float], List[float]]:
-        """``(translation, joint orient xyz degrees, rotation xyzw)`` of a
-        rigid matrix."""
-        xf = om.MTransformationMatrix(m)
-        t = xf.translation(om.MSpace.kTransform)
-        e = xf.rotation(asQuaternion=False)
-        e.reorderIt(om.MEulerRotation.kXYZ)
-        q = xf.rotation(asQuaternion=True)
-        return (
-            [t.x, t.y, t.z],
-            [om.MAngle(v).asDegrees() for v in (e.x, e.y, e.z)],
-            [q.x, q.y, q.z, q.w],
-        )
 
     @staticmethod
     def _shells(node: str) -> List[List[Tuple[float, float, float]]]:
@@ -357,6 +303,12 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     :meth:`analyze` unless given); find one again with :meth:`for_node` or
     :meth:`scene_rigs`.
 
+    The plan, the record and every value a method takes or returns are in
+    centimetres and degrees, whatever units the scene works in: each method
+    that moves a number between the plan and Maya runs under them
+    (``Units.working_as``), and so does the solver it writes -- an expression
+    keeps the units it was made in.
+
     Parameters:
         group: The rig group (``<name>_RIG``) carrying :attr:`DATA_ATTR`.
 
@@ -386,10 +338,11 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     BLEND_ATTR = "ikBlend"
     FOLLOW_ATTR = "followRotation"
     #: The parked-animation key of the end control's channels (a joint id is
-    #: a node name, which never holds ``<``).
-    END_KEY = "<end>"
-    #: The plan's schema.
-    VERSION = 1
+    #: a node name, which never holds ``<``) -- and its pivot handle's.
+    END_KEY = ptk.ArticulationPlan.END_KEY
+    #: The plan's schema (``ptk.ArticulationPlan``, the host-free half of
+    #: this engine: the plan's checks, frames, record and edits).
+    VERSION = ptk.ArticulationPlan.VERSION
     JOINT_TYPES = ptk.ArticulationAnalysis.JOINT_TYPES
     #: Control preset and its normal axis per joint type: a hinge's ring lies
     #: in the plane it turns in, a swivel's around the link, a slide's arrow
@@ -444,7 +397,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     HANDLE_SCALE = 2.0
     #: A handle closer than this to where it started moved nothing (a length
     #: in the rig's units, or an axis component).
-    ADJUST_EPS = 1.0e-6
+    ADJUST_EPS = ptk.ArticulationPlan.ADJUST_EPS
 
     def __init__(self, group: str):
         path = self._long(group)
@@ -583,6 +536,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
 
     # ============================================================== analysis
     @classmethod
+    @Units.working_as()
     def analyze(cls, nodes, root=None, ordered: bool = False) -> Dict[str, Any]:
         """Propose a rig for *nodes*: one link per part, and how and where
         each joins the next.
@@ -630,31 +584,12 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             if cmds.upAxis(query=True, axis=True) == "z"
             else (0.0, 1.0, 0.0),
         )
-        at = {part: i for i, part in enumerate(proposal["order"])}
-        joints = []
-        for joint in proposal["joints"]:
-            joints.append(
-                {
-                    "link": at[joint["part"]],
-                    "parent": at[joint["parent"]],
-                    "type": joint["type"],
-                    "position": joint["position"],
-                    "aim": joint["aim"],
-                    "normal": joint["normal"],
-                    "limits": joint["limits"],
-                    "size": cls.CONTROL_SCALE * joint["radius"],
-                    "reason": joint["reason"],
-                }
-            )
-        return {
-            "links": [list(links[i]) for i in proposal["order"]],
-            "joints": joints,
-            "unreached": [links[i][0] for i in proposal["unreached"]],
-        }
+        return ptk.ArticulationPlan.from_proposal(proposal, links, cls.CONTROL_SCALE)
 
     # ================================================================= build
     @classmethod
     @CoreUtils.undoable(name="Articulated Rig: Build", suspend_refresh=True)
+    @Units.working_as()
     def create(
         cls,
         links: Sequence[Any],
@@ -711,7 +646,12 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
                 [{"uuid": cls._uuid(n), "name": cls._leaf(n)} for n in link]
                 for link in links
             ],
-            "joints": [cls._plan_joint(j, links, inverse) for j in joints],
+            "joints": [
+                ptk.ArticulationPlan.plan_joint(
+                    j, cls._leaf(links[j["link"]][0]), list(inverse)
+                )
+                for j in joints
+            ],
         }
         cls._check(spec)
         if end_control:
@@ -731,59 +671,16 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return name
 
     @classmethod
-    def _plan_joint(
-        cls,
-        joint: Dict[str, Any],
-        links: Sequence[Sequence[str]],
-        inverse: "om.MMatrix",
-    ) -> Dict[str, Any]:
-        """One world-space joint moved into the rig group's space (*inverse*:
-        world to group). A slide's travel and a control's size scale by what
-        the group's space does to a length (the prop's own scale)."""
-        kind = joint.get("type", "hinge")
-        if kind not in cls.JOINT_TYPES or kind == "fixed":
-            raise ValueError(f"Unknown or fixed joint type {kind!r}.")
-        channels, _order = cls.JOINT_TYPES[kind]
-        position = om.MPoint(*joint["position"]) * inverse
-        aim = om.MVector(*joint["aim"]).normal() * inverse
-        normal = om.MVector(*joint["normal"]) * inverse
-        scale = aim.length()
-        limits = {}
-        for channel in channels:
-            bounds = (joint.get("limits") or {}).get(channel)
-            if bounds is None:
-                continue
-            lo, hi = bounds
-            if channel.startswith("t"):
-                lo = None if lo is None else lo * scale
-                hi = None if hi is None else hi * scale
-            limits[channel] = [lo, hi]
-        return {
-            "id": cls._leaf(links[joint["link"]][0]),
-            "link": int(joint["link"]),
-            "parent": int(joint["parent"]),
-            "type": kind,
-            "position": [position.x, position.y, position.z],
-            "aim": list(aim.normal()),
-            "normal": list(normal.normal()),
-            "limits": limits,
-            "weights": {
-                k: float(v)
-                for k, v in (joint.get("weights") or {}).items()
-                if k in channels
-            },
-            "size": float(joint.get("size") or 0.0) * scale,
-            "reason": str(joint.get("reason") or "as planned"),
-        }
-
-    @classmethod
     def _check(cls, spec: Dict[str, Any]) -> None:
         """Refuse a plan the build cannot keep: a part named twice or gone, a
         part something already drives, a link without exactly one joint, a
-        joint the root does not reach. Orders the joints parent first."""
-        uuids = [m["uuid"] for link in spec["links"] for m in link]
-        if len(set(uuids)) != len(uuids):
-            raise ValueError("A part is named in two links.")
+        joint the root does not reach. Orders the joints parent first
+        (``ptk.ArticulationPlan.check``, the scene's parts checked here)."""
+        ptk.ArticulationPlan.check(spec, parts=cls._check_parts)
+
+    @classmethod
+    def _check_parts(cls, spec: Dict[str, Any]) -> None:
+        """Refuse a plan whose parts are gone from the scene or driven."""
         lost = [
             m["name"]
             for link in spec["links"]
@@ -800,82 +697,6 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
                         f"{member['name']} is driven ({', '.join(driven)}): a rigged part "
                         "is moved by its joint alone. Bake or remove its animation first."
                     )
-        # Ids unique in the caller's order: a joint already stamped (listed
-        # first by every edit) keeps its id -- the key its parked animation is
-        # filed under -- and a newcomer repeating a part name is numbered.
-        seen: set = set()
-        for joint in spec["joints"]:
-            stem, n = joint["id"], joint["link"]
-            while joint["id"] in seen:
-                joint["id"] = f"{stem}_{n}"
-                n += 1
-            seen.add(joint["id"])
-        count = len(spec["links"])
-        by_link: Dict[int, Dict[str, Any]] = {}
-        for joint in spec["joints"]:
-            if not 0 < joint["link"] < count or joint["link"] in by_link:
-                raise ValueError(f"Link {joint['link']} has no single joint slot.")
-            by_link[joint["link"]] = joint
-        missing = [i for i in range(1, count) if i not in by_link]
-        if missing:
-            raise ValueError(f"Links {missing} have no joint.")
-        ordered, placed = [], {0}
-        while len(ordered) < len(by_link):
-            ready = sorted(
-                (
-                    j
-                    for j in by_link.values()
-                    if j not in ordered and j["parent"] in placed
-                ),
-                key=lambda j: j["link"],
-            )
-            if not ready:
-                raise ValueError("The joints do not join every link to the root.")
-            for joint in ready:
-                ordered.append(joint)
-                placed.add(joint["link"])
-        spec["joints"] = ordered
-        cls._rest(spec)  # a frame with no aim, or a normal along it, fails HERE
-
-    @classmethod
-    def _rest(cls, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Each planned joint's rest in its parent's space, parent first:
-        ``{"t", "jo" (degrees, xyz), "q" (xyzw), "parent" (index or None),
-        "axes" (its X, Y and Z in the parent's space -- the lines a slide
-        travels)}`` -- what the build sets and the record ships, from one
-        computation."""
-        frames = cls._frames(spec)
-        index: Dict[int, int] = {}
-        out = []
-        for i, joint in enumerate(spec["joints"]):
-            local = frames[joint["link"]] * frames[joint["parent"]].inverse()
-            t, jo, q = cls._decompose(local)
-            axes = [
-                list(om.MVector(*unit) * local)
-                for unit in ((1, 0, 0), (0, 1, 0), (0, 0, 1))
-            ]
-            out.append(
-                {
-                    "t": t,
-                    "jo": jo,
-                    "q": q,
-                    "parent": index.get(joint["parent"]),
-                    "axes": axes,
-                }
-            )
-            index[joint["link"]] = i
-        return out
-
-    @classmethod
-    def _frames(cls, spec: Dict[str, Any]) -> Dict[int, "om.MMatrix"]:
-        """Each link's rest frame in the group's space: its joint's (the fixed
-        root link's is the group's own)."""
-        frames = {0: om.MMatrix()}
-        for joint in spec["joints"]:
-            frames[joint["link"]] = cls._frame(
-                joint["position"], joint["aim"], joint["normal"]
-            )
-        return frames
 
     @classmethod
     def _default_end(
@@ -889,7 +710,8 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         default the link at the end of the longest chain -- aligned with that
         link's joint and centred on its geometry (the magnifier's lens).
         ``{"part": uuid, "frame": [16 floats]}``, the frame in group space;
-        None for a part of the fixed root link (nothing to solve).
+        None for a part of the fixed root link (nothing to solve). See
+        ``ptk.ArticulationPlan.default_end``.
 
         Parameters:
             links: The plan's nodes, per link.
@@ -899,56 +721,14 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         Raises:
             ValueError: *part* is not in the plan.
         """
-        joints = {j["link"]: j for j in spec["joints"]}
+        link = None
         if part is not None:
-            uuid = cls._uuid(part)
-            link = next(
-                (
-                    i
-                    for i, members in enumerate(spec["links"])
-                    if any(m["uuid"] == uuid for m in members)
-                ),
-                None,
-            )
+            link = ptk.ArticulationPlan.link_of(spec, cls._uuid(part))
             if link is None:
                 raise ValueError(f"{part} is not a part of rig {spec['name']!r}.")
-        else:
-
-            def depth(i: int) -> int:
-                return 0 if i not in joints else 1 + depth(joints[i]["parent"])
-
-            parents = {j["parent"] for j in spec["joints"]}
-            leaves = [i for i in joints if i not in parents]
-            link = max(leaves, key=lambda i: (depth(i), i)) if leaves else None
-        joint = joints.get(link)
-        if joint is None:
-            return None
-        frame = cls._frame(joint["position"], joint["aim"], joint["normal"])
-        to_frame = inverse * frame.inverse()
-        points = [om.MPoint(*p) * to_frame for p in cls._points(links[link])]
-        centre = om.MPoint(
-            *[
-                0.5 * (min(p[i] for p in points) + max(p[i] for p in points))
-                for i in range(3)
-            ]
+        return ptk.ArticulationPlan.default_end(
+            spec, list(inverse), lambda i: cls._points(links[i]), link=link
         )
-        at = centre * frame
-        placed = [frame.getElement(r, c) for r in range(4) for c in range(4)]
-        placed[12:15] = [at.x, at.y, at.z]
-        return {"part": spec["links"][link][0]["uuid"], "frame": placed}
-
-    @staticmethod
-    def _end_of(spec: Dict[str, Any]) -> Optional[int]:
-        """The model index of the joint the end control holds -- the joint of
-        the link its part rides -- or None (no end control, or its part is
-        in the fixed root link)."""
-        end = spec.get("end")
-        if not end:
-            return None
-        for index, joint in enumerate(spec.get("joints", [])):
-            if any(m["uuid"] == end["part"] for m in spec["links"][joint["link"]]):
-                return index
-        return None
 
     @classmethod
     def _link_nodes(cls, spec: Dict[str, Any], link: int) -> List[str]:
@@ -973,7 +753,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         controls_grp = cls._long(
             cmds.createNode("transform", name=f"{name}_controls_GRP", parent=group)
         )
-        rest = cls._rest(spec)
+        rest = ptk.ArticulationPlan.rest(spec)
 
         joints: Dict[int, str] = {}
         for joint, pose in zip(spec["joints"], rest):
@@ -1012,7 +792,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
                 with Attributes.temporarily_unlock(node, list(cls.MOVED_ATTRS)):
                     cmds.parent(node, joints[joint["link"]])
 
-        end_index = cls._end_of(spec)
+        end_index = ptk.ArticulationPlan.end_joint(spec)
         if spec.get("end") and end_index is None:
             cls.logger.warning(
                 "The end control's part rides no joint (the fixed root link?): "
@@ -1274,15 +1054,6 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return ctrl
 
     @classmethod
-    def _end_offset(cls, spec: Dict[str, Any], end_index: int) -> "om.MMatrix":
-        """The end link's rest frame in the end control's rest frame: the
-        link rides the control as it did at rest (row vectors: ``link =
-        offset * control``)."""
-        joint = spec["joints"][end_index]
-        link = cls._frame(joint["position"], joint["aim"], joint["normal"])
-        return link * om.MMatrix(spec["end"]["frame"]).inverse()
-
-    @classmethod
     def _make_solver(
         cls,
         spec: Dict[str, Any],
@@ -1326,13 +1097,10 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     ) -> str:
         """The solver's MEL: the rig's joints as the record ships them, the
         end control's pivot on the end link and the link's turn in the control
-        (:meth:`_end_offset`), the end control in rig space (*local*, its
-        ``decomposeMatrix``), and each slot's FK channel and offset plugs."""
-        offset = cls._end_offset(spec, end_index)
-        turn = om.MTransformationMatrix(offset).rotation(asQuaternion=True)
-        pivot = om.MTransformationMatrix(offset.inverse()).translation(
-            om.MSpace.kTransform
-        )
+        (``ptk.ArticulationPlan.end_pivot_turn``), the end control in rig
+        space (*local*, its ``decomposeMatrix``), and each slot's FK channel
+        and offset plugs."""
+        pivot, turn = ptk.ArticulationPlan.end_pivot_turn(spec, end_index)
 
         def plug(node: str, attr: str) -> str:
             # The shortest unique name: an expression re-spells it on a rename.
@@ -1348,10 +1116,10 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             )
         follow = cmds.attributeQuery(cls.FOLLOW_ATTR, node=end, exists=True)
         return SolverExpression.text_for(
-            {"name": spec["name"], "joints": cls._joint_records(spec)},
+            {"name": spec["name"], "joints": ptk.ArticulationPlan.joint_records(spec)},
             end_index,
-            (pivot.x, pivot.y, pivot.z),
-            (turn.x, turn.y, turn.z, turn.w),
+            pivot,
+            turn,
             {
                 "translate": [plug(local, f"outputTranslate{a}") for a in "XYZ"],
                 "quat": [plug(local, f"outputQuat{a}") for a in "XYZW"],
@@ -1370,6 +1138,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
 
     # ================================================================ solver
     @classmethod
+    @Units.working_as()
     def repair_scene(cls) -> int:
         """Give every rig whose end control has no solve -- built by an earlier
         mayatk, whose plug-in node this replaces -- its solve back (see
@@ -1381,6 +1150,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         with CoreUtils.undo_disabled():
             return sum(1 for rig in broken if rig.ensure_solver())
 
+    @Units.working_as()
     def ensure_solver(self) -> bool:
         """Make the end control live: build its solve from the plan when the
         rig has none -- an earlier build solved it with a plug-in node
@@ -1392,7 +1162,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             Whether the rig has a working end control.
         """
         spec = self.spec
-        index = self._end_of(spec)
+        index = ptk.ArticulationPlan.end_joint(spec)
         end = self.end_control
         if index is None or end is None:
             return False
@@ -1469,7 +1239,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         -- whose values its text inlines (no rebuild)."""
         solver = self.solver
         end = self.end_control
-        index = self._end_of(spec)
+        index = ptk.ArticulationPlan.end_joint(spec)
         if not solver or not end or index is None:
             return
         local = cmds.listConnections(
@@ -1482,6 +1252,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
 
     # ============================================================= lifecycle
     @CoreUtils.undoable(name="Articulated Rig: Remove", suspend_refresh=True)
+    @Units.working_as()
     def teardown(self) -> None:
         """Remove the rig and hand every part back exactly as it was: its
         original parent and its own channel values (captured at the build).
@@ -1518,6 +1289,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             cmds.delete(group)
 
     @CoreUtils.undoable(name="Articulated Rig: Rebuild", suspend_refresh=True)
+    @Units.working_as()
     def rebuild(self, spec: Optional[Dict[str, Any]] = None) -> "ArticulatedRig":
         """Build the rig again from *spec* (default: its own plan), carrying
         the animation across: whatever drove each control channel -- a curve,
@@ -1666,6 +1438,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
 
     # ============================================================ post-rig
     @CoreUtils.undoable(name="Articulated Rig: Insert Joint", suspend_refresh=True)
+    @Units.working_as()
     def insert_joint(
         self, members, joint_type: Optional[str] = None, **fields
     ) -> "ArticulatedRig":
@@ -1693,20 +1466,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         if missing:
             raise ValueError(f"Not in the scene: {missing}.")
         moved = {self._uuid(m) for m in names}
-        host = next(
-            (
-                i
-                for i, link in enumerate(spec["links"])
-                if moved <= {m["uuid"] for m in link}
-            ),
-            None,
-        )
-        if host is None or not moved:
-            raise ValueError("The members to split off are not all in one link.")
-        keep = [m for m in spec["links"][host] if m["uuid"] not in moved]
-        split = [m for m in spec["links"][host] if m["uuid"] in moved]
-        if not keep:
-            raise ValueError("Splitting off a whole link adds no joint.")
+        host, keep, split = ptk.ArticulationPlan.split_link(spec, moved)
 
         parked = self._park()
         try:
@@ -1719,11 +1479,11 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             proposal.update({k: v for k, v in fields.items() if v is not None})
             if joint_type:
                 proposal["type"] = joint_type
-            new_link = len(spec["links"])
-            proposal.update(link=new_link, parent=host)
+            proposal.update(link=len(spec["links"]), parent=host)
             world = self._matrix(self.group)
-            links = [[self._by_uuid(m["uuid"]) for m in link] for link in spec["links"]]
-            joint = self._plan_joint(proposal, links + [split_nodes], world.inverse())
+            joint = ptk.ArticulationPlan.plan_joint(
+                proposal, self._leaf(split_nodes[0]), list(world.inverse())
+            )
             if spec.get("end") and not fields.get("weights"):
                 # Free to move, the end control's solve would use the new
                 # joint and reshape every keyed IK pose: it joins the solve
@@ -1735,28 +1495,24 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
                     "control move it."
                 )
 
-            # The joints beyond the split that the split-off parts now carry.
-            near_keep = self._points(keep_nodes)
-            near_split = self._points(split_nodes)
-            for child in spec["joints"]:
-                if child["parent"] != host:
-                    continue
-                p = om.MPoint(*child["position"]) * world
-                d_keep = min((p - om.MPoint(*q)).length() for q in near_keep)
-                d_split = min((p - om.MPoint(*q)).length() for q in near_split)
-                if d_split < d_keep:
-                    child["parent"] = new_link
+            # The split, and the joints beyond it that the split-off parts
+            # now carry.
+            ptk.ArticulationPlan.insert_joint(
+                spec,
+                moved,
+                joint,
+                list(world),
+                self._points(keep_nodes),
+                self._points(split_nodes),
+            )
         except Exception:
             # Nothing torn down yet: the rig takes its animation back.
             self._unpark(parked)
             raise
-
-        spec["links"][host] = keep
-        spec["links"].append(split)
-        spec["joints"].append(joint)
         return self._replace(spec, parked)
 
     @CoreUtils.undoable(name="Articulated Rig: Remove Joint", suspend_refresh=True)
+    @Units.working_as()
     def remove_joint(self, joint_id: str) -> "ArticulatedRig":
         """Fold *joint_id*'s link back into the link it hangs off: its parts
         ride that joint again, the joints beyond it move up with them, and its
@@ -1765,73 +1521,23 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         Returns:
             This rig, rebuilt.
         """
-        spec = self.spec
-        joint = next((j for j in spec["joints"] if j["id"] == joint_id), None)
-        if joint is None:
-            raise KeyError(f"No joint {joint_id!r} in rig {self.name!r}.")
-        gone, into = joint["link"], joint["parent"]
-        spec["links"][into] += spec["links"][gone]
-        del spec["links"][gone]
-
-        def renumber(link: int) -> int:
-            link = into if link == gone else link
-            return link - 1 if link > gone else link
-
-        joints = []
-        for other in spec["joints"]:
-            if other is joint:
-                continue
-            other["parent"] = renumber(other["parent"])
-            other["link"] = renumber(other["link"])
-            joints.append(other)
-        spec["joints"] = joints
-        return self.rebuild(spec)
+        return self.rebuild(ptk.ArticulationPlan.remove_joint(self.spec, joint_id))
 
     @CoreUtils.undoable(name="Articulated Rig: Edit Joint", suspend_refresh=True)
+    @Units.working_as()
     def edit_joint(self, joint_id: str, **fields) -> "ArticulatedRig":
         """Change a joint's ``type``, ``position``, ``aim`` or ``normal``
         (world space), or its ``limits`` / ``weights``, and rebuild with the
         animation carried across. A retyped joint keeps the curves of the
         channels both types share."""
         spec = self.spec
-        joint = next((j for j in spec["joints"] if j["id"] == joint_id), None)
-        if joint is None:
-            raise KeyError(f"No joint {joint_id!r} in rig {self.name!r}.")
-        world = self._matrix(self.group)
-        current = {
-            "type": joint["type"],
-            "link": joint["link"],
-            "parent": joint["parent"],
-            "position": list(om.MPoint(*joint["position"]) * world)[:3],
-            "aim": list(om.MVector(*joint["aim"]) * world),
-            "normal": list(om.MVector(*joint["normal"]) * world),
-            "limits": self._world_limits(joint, world),
-            "weights": joint.get("weights"),
-            "size": joint.get("size", 0.0)
-            * (om.MVector(*joint["aim"]) * world).length(),
-            "reason": joint.get("reason"),
-        }
-        current.update({k: v for k, v in fields.items() if v is not None})
-        links = [[m["name"] for m in link] for link in spec["links"]]
-        planned = self._plan_joint(current, links, world.inverse())
-        planned["id"] = joint["id"]
-        spec["joints"][spec["joints"].index(joint)] = planned
-        return self.rebuild(spec)
-
-    @staticmethod
-    def _world_limits(joint: Dict[str, Any], world: "om.MMatrix") -> Dict[str, Any]:
-        """A planned joint's limits back in world units (the inverse of
-        :meth:`_plan_joint`'s): a slide's travel grows by the prop's scale."""
-        scale = (om.MVector(*joint["aim"]) * world).length()
-        out = {}
-        for channel, (lo, hi) in (joint.get("limits") or {}).items():
-            if channel.startswith("t"):
-                lo = None if lo is None else lo * scale
-                hi = None if hi is None else hi * scale
-            out[channel] = [lo, hi]
-        return out
+        world = list(self._matrix(self.group))
+        return self.rebuild(
+            ptk.ArticulationPlan.edit_joint(spec, joint_id, world, **fields)
+        )
 
     @CoreUtils.undoable(name="Articulated Rig: End Control", suspend_refresh=True)
+    @Units.working_as()
     def set_end_control(
         self, enabled: bool = True, part: Optional[str] = None
     ) -> "ArticulatedRig":
@@ -1872,6 +1578,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return self._replace(spec, parked)
 
     @CoreUtils.undoable(name="Articulated Rig: Set Limits")
+    @Units.working_as()
     def set_limits(
         self,
         joint_id: str,
@@ -1883,35 +1590,29 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         None frees that side. No rebuild: the control, the solver and the
         record change in place."""
         spec = self.spec
-        joint = self._joint_entry(spec, joint_id)
-        if channel not in self.JOINT_TYPES[joint["type"]][0]:
-            raise KeyError(f"No channel {channel!r} on joint {joint_id!r}.")
-        if minimum is not None and maximum is not None and minimum > maximum:
-            raise ValueError(f"Limits [{minimum}, {maximum}] are reversed.")
-        joint.setdefault("limits", {})[channel] = [minimum, maximum]
+        joint = ptk.ArticulationPlan.set_limits(
+            spec, joint_id, channel, minimum, maximum
+        )
         self._stamp(spec)
         self._apply_limits(self.control(joint_id), joint["limits"], [channel])
         self._sync_solver(spec)
         self.refresh_export_metadata()
 
+    @Units.working_as()
     def set_limit_from_pose(self, joint_id: str, channel: str, side: str) -> float:
         """Take the channel's current value -- the pose as it stands, the end
         control's solve included -- as its *side* (``"min"`` or ``"max"``)
         limit: pose the part to where it physically stops, then call this.
         Returns the value taken."""
         value = self.channel_value(joint_id, channel)
-        joint = self._joint_entry(self.spec, joint_id)
-        lo, hi = (joint.get("limits") or {}).get(channel) or (None, None)
-        if side == "min":
-            lo = value
-        elif side == "max":
-            hi = value
-        else:
-            raise ValueError(f"side must be 'min' or 'max', not {side!r}.")
+        lo, hi = ptk.ArticulationPlan.side_limits(
+            self.spec, joint_id, channel, side, value
+        )
         self.set_limits(joint_id, channel, lo, hi)
         return value
 
     @CoreUtils.undoable(name="Articulated Rig: Set Weight")
+    @Units.working_as()
     def set_weight(
         self, joint_id: str, weight: float, channel: Optional[str] = None
     ) -> None:
@@ -1920,24 +1621,10 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         all -- every channel of the joint, or just *channel*. The runtimes'
         hand grab reads the same weights. No rebuild."""
         spec = self.spec
-        joint = self._joint_entry(spec, joint_id)
-        channels = self.JOINT_TYPES[joint["type"]][0]
-        if channel is not None and channel not in channels:
-            raise KeyError(f"No channel {channel!r} on joint {joint_id!r}.")
-        if weight < 0.0:
-            raise ValueError(f"A weight is never negative (got {weight}).")
-        weights = joint.setdefault("weights", {})
-        for c in [channel] if channel else channels:
-            weights[c] = float(weight)
+        ptk.ArticulationPlan.set_weight(spec, joint_id, weight, channel)
         self._stamp(spec)
         self._sync_solver(spec)
         self.refresh_export_metadata()
-
-    def _joint_entry(self, spec: Dict[str, Any], joint_id: str) -> Dict[str, Any]:
-        joint = next((j for j in spec.get("joints", []) if j["id"] == joint_id), None)
-        if joint is None:
-            raise KeyError(f"No joint {joint_id!r} in rig {self.name!r}.")
-        return joint
 
     # ================================================================ adjust
     @property
@@ -1960,6 +1647,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return out
 
     @CoreUtils.undoable(name="Articulated Rig: Adjust Pivots")
+    @Units.working_as()
     def begin_adjust(self) -> Dict[str, str]:
         """Put the rig's pivots out for adjusting: a handle where every joint
         turns -- its rest frame, X along the part, Z a hinge's axis -- riding
@@ -1982,18 +1670,18 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             )
         )
         cmds.connectAttr(f"{holder}.message", f"{group}.{self.ADJUST_ATTR}")
-        frames = self._frames(spec)
+        pivots = ptk.ArticulationPlan.pivots(spec)
         joints = {j["link"]: j for j in spec["joints"]}
         for joint in spec["joints"]:
             above = joints.get(joint["parent"])
             self._make_handle(
                 holder,
                 joint["id"],
-                frames[joint["link"]] * frames[joint["parent"]].inverse(),
+                om.MMatrix(pivots[joint["id"]]),
                 self.joint(above["id"]) if above else None,
                 self.HANDLE_SCALE * max(joint.get("size") or 1.0, 1.0e-3),
             )
-        index = self._end_of(spec)
+        index = ptk.ArticulationPlan.end_joint(spec)
         end = self.end_control
         if index is not None and end:
             joint = spec["joints"][index]
@@ -2001,7 +1689,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             self._make_handle(
                 holder,
                 self.END_KEY,
-                om.MMatrix(spec["end"]["frame"]) * frames[joint["link"]].inverse(),
+                om.MMatrix(pivots[self.END_KEY]),
                 self.joint(joint["id"]),
                 0.35 * math.dist(box[:3], box[3:]),
             )
@@ -2054,6 +1742,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return handle
 
     @CoreUtils.undoable(name="Articulated Rig: Apply Pivots", suspend_refresh=True)
+    @Units.working_as()
     def end_adjust(self, apply: bool = True) -> bool:
         """Lock the pivots again: the rig rebuilt with every joint turning
         where its handle stands and the end control where its handle put it,
@@ -2098,46 +1787,14 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
 
     def _adjusted(self, spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """*spec* with each joint's rest frame and the end control's where
-        the handles put them, or None when none moved. A handle rides what its
-        joint hangs off, so its local matrix is that joint's rest frame there
-        -- read against the frames as they WERE, so a child's pivot stays put
-        when its parent's moves."""
-        handles = self.adjust_handles()
-        frames = self._frames(spec)
-        out = copy.deepcopy(spec)
-        moved = False
-
-        def placed(key: str, under: "om.MMatrix") -> Optional["om.MMatrix"]:
-            handle = handles.get(key)
-            if not handle:
-                return None
-            return om.MMatrix(cmds.getAttr(f"{handle}.matrix")) * under
-
-        for joint in out["joints"]:
-            frame = placed(joint["id"], frames[joint["parent"]])
-            if frame is None:
-                continue
-            rows = [[frame.getElement(r, c) for c in range(3)] for r in range(4)]
-            before = frames[joint["link"]]
-            if any(
-                abs(frame.getElement(r, c) - before.getElement(r, c)) > self.ADJUST_EPS
-                for r in range(4)
-                for c in range(3)
-            ):
-                moved = True
-            joint.update(position=rows[3], aim=rows[0], normal=rows[2])
-        index = self._end_of(spec)
-        if index is not None and spec.get("end"):
-            frame = placed(self.END_KEY, frames[spec["joints"][index]["link"]])
-            if frame is not None:
-                values = [frame.getElement(r, c) for r in range(4) for c in range(4)]
-                if any(
-                    abs(a - b) > self.ADJUST_EPS
-                    for a, b in zip(values, spec["end"]["frame"])
-                ):
-                    moved = True
-                out["end"]["frame"] = values
-        return out if moved else None
+        the handles put them, or None when none moved
+        (``ptk.ArticulationPlan.adjusted``): a handle rides what its joint
+        hangs off, so its local matrix is that joint's rest frame there."""
+        handles = {
+            key: cmds.getAttr(f"{handle}.matrix")
+            for key, handle in self.adjust_handles().items()
+        }
+        return ptk.ArticulationPlan.adjusted(spec, handles, eps=self.ADJUST_EPS)
 
     # ============================================================== controls
     def joint_ids(self) -> List[str]:
@@ -2192,11 +1849,11 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     def _slots(self) -> List[Tuple[str, str]]:
         """``(control, channel)`` per state slot, in the model's order."""
         return [
-            (self.control(joint["id"]), channel)
-            for joint in self.spec.get("joints", [])
-            for channel in self.JOINT_TYPES[joint["type"]][0]
+            (self.control(joint_id), channel)
+            for joint_id, channel in ptk.ArticulationPlan.slots(self.spec)
         ]
 
+    @Units.working_as()
     def state(self, slots: Optional[Sequence[Tuple[str, str]]] = None) -> List[float]:
         """The rig's pose, in :meth:`model` state order: each channel's FK
         value plus what the end control's solve adds (the offset its
@@ -2211,18 +1868,21 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             out.append(value + (cmds.getAttr(f"{group}.{channel}") if group else 0.0))
         return out
 
+    @Units.working_as()
     def fk_state(
         self, slots: Optional[Sequence[Tuple[str, str]]] = None
     ) -> List[float]:
         """The FK controls' channel values, in :meth:`model` state order."""
         return [cmds.getAttr(f"{c}.{ch}") for c, ch in (slots or self._slots())]
 
+    @Units.working_as()
     def channel_value(self, joint_id: str, channel: str) -> float:
         """One channel as the pose stands (FK plus the end control's solve)."""
         slots = self._slots()
         index = slots.index((self.control(joint_id), channel))
         return self.state(slots)[index]
 
+    @Units.working_as()
     def set_state(
         self,
         values: Sequence[float],
@@ -2255,20 +1915,23 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             cmds.setKeyframe(end, attribute=attrs)
 
     @CoreUtils.undoable(name="Articulated Rig: Match End Control")
+    @Units.working_as()
     def match_end_control(self, key: Optional[bool] = None) -> None:
         """Put the end control where the end link is now -- after FK posing,
         or when it was left out of reach -- so nothing moves when the IK blend
         comes up. Keyed when *key* (default: Maya's auto key)."""
         end = self.end_control
         spec = self.spec
-        index = self._end_of(spec)
+        index = ptk.ArticulationPlan.end_joint(spec)
         if not end or index is None:
             raise RuntimeError(f"Rig {self.name!r} has no end control.")
         current = self._matrix(self.joint(spec["joints"][index]["id"]))
-        self._place(end, self._end_offset(spec, index).inverse() * current)
+        offset = om.MMatrix(ptk.ArticulationPlan.end_offset(spec, index))
+        self._place(end, offset.inverse() * current)
         self._key_end(key)
 
     @CoreUtils.undoable(name="Articulated Rig: Switch IK/FK")
+    @Units.working_as()
     def switch_ik(self, on: Optional[bool] = None, key: Optional[bool] = None) -> bool:
         """Switch the end control's solve on or off (default: flip it)
         without the pose jumping: on, the end control first moves to the end
@@ -2299,6 +1962,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return on
 
     @CoreUtils.undoable(name="Articulated Rig: Rest Pose")
+    @Units.working_as()
     def reset_pose(self, key: Optional[bool] = None) -> None:
         """Every control back to rest -- FK at 0, the end control on its rest
         frame -- keyed when *key* (default: Maya's auto key)."""
@@ -2310,52 +1974,14 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             self._key_end(True)
 
     # ================================================================ record
-    @classmethod
-    def _joint_records(cls, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """The record's joints: each one's rest (translate and joint orient in
-        its parent's space), rotate order and channels with their limits and
-        weights, parent first; ``parent`` an index into them."""
-        joints = []
-        for joint, pose in zip(spec.get("joints", []), cls._rest(spec)):
-            channels, order = cls.JOINT_TYPES[joint["type"]]
-            limits = joint.get("limits") or {}
-            weights = joint.get("weights") or {}
-            joints.append(
-                {
-                    "name": f"{spec['name']}_{joint['id']}_jnt",
-                    "parent": pose["parent"],
-                    "t": pose["t"],
-                    "q": pose["q"],
-                    "rotate_order": order,
-                    "channels": [
-                        {
-                            "channel": channel,
-                            "min": (limits.get(channel) or (None, None))[0],
-                            "max": (limits.get(channel) or (None, None))[1],
-                            "weight": float(weights.get(channel, 1.0)),
-                        }
-                        for channel in channels
-                    ],
-                }
-            )
-        return joints
-
     def record(self) -> Dict[str, Any]:
         """This rig's entry in the ``articulation`` record: its joints
-        (:meth:`_joint_records`) and the parts a hand grabs."""
-        spec = self.spec
-        grab = []
-        for index, joint in enumerate(spec["joints"]):
-            # The part's name NOW (a runtime binds by it): a rename after the
-            # build must not leave the record naming a node that is gone.
-            grab += [
-                {
-                    "node": self._leaf(self._by_uuid(m["uuid"]) or m["name"]),
-                    "joint": index,
-                }
-                for m in spec["links"][joint["link"]]
-            ]
-        return {"name": spec["name"], "joints": self._joint_records(spec), "grab": grab}
+        (``ptk.ArticulationPlan.joint_records``) and the parts a hand grabs."""
+        # The part's name NOW (a runtime binds by it): a rename after the
+        # build must not leave the record naming a node that is gone.
+        return ptk.ArticulationPlan.record(
+            self.spec, lambda m: self._leaf(self._by_uuid(m["uuid"]) or m["name"])
+        )
 
     def model(self) -> "ptk.ArticulationModel":
         """The runtime model of this rig -- what the engines pose."""
@@ -2367,19 +1993,34 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         rig -- the ``ptk.SceneRecords.ARTICULATION`` producer
         (``FbxUtils.PRODUCERS``). Pure: reads the rigs' plans, never writes.
 
-        ``{"version": 1, "rigs": [...]}``, one :meth:`record` per rig. No
-        ``unit_scale``: a runtime measures its own units against the rest
-        pose (``ptk.ArticulationModel.scale_of``), which covers a scaled prop
-        and an FBX unit conversion alike.
+        ``{"version": 1, "rigs": [...]}``, one :meth:`record` per rig, its
+        lengths in the working unit (:meth:`_in_working_unit`) -- the one an
+        export writes the file in. No ``unit_scale``: a runtime measures its
+        scale against the rest pose (``ptk.ArticulationModel.scale_of``),
+        which also covers a scaled prop.
 
         Parameters:
             ctx (ptk.ExportContext): The export's decisions (unused: the
                 record is a function of the rigs alone).
         """
-        rigs = [rig.record() for rig in cls.scene_rigs()]
+        rigs = [cls._in_working_unit(rig.record()) for rig in cls.scene_rigs()]
         if not rigs:
             return None
         return ptk.SceneRecords.ARTICULATION.make({"rigs": rigs})
+
+    @staticmethod
+    def _in_working_unit(entry: Dict[str, Any]) -> Dict[str, Any]:
+        """*entry* (:meth:`record`, in the plan's centimetres) with its
+        lengths in the working unit: each rest translate and each slide's
+        limits."""
+        out = copy.deepcopy(entry)
+        for joint in out["joints"]:
+            joint["t"] = Units.convert(joint["t"], "internal", "working")
+            for channel in joint["channels"]:
+                if channel["channel"].startswith("t"):
+                    channel["min"] = Units.convert(channel["min"], "internal", "working")
+                    channel["max"] = Units.convert(channel["max"], "internal", "working")
+        return out
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
@@ -2406,12 +2047,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
     def _joint_of(self, node) -> int:
         """The model index of the joint *node* rides -- a part, or anything
         under one."""
-        spec = self.spec
-        riders = {
-            m["uuid"]: i
-            for i, joint in enumerate(spec["joints"])
-            for m in spec["links"][joint["link"]]
-        }
+        riders = ptk.ArticulationPlan.riders(self.spec)
         path = self._long(node)
         while path:
             index = riders.get(self._uuid(path))
@@ -2422,6 +2058,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             f"{node} rides no joint of rig {self.name!r} (the root link stays put)."
         )
 
+    @Units.working_as()
     def grab_begin(self, node, point: Sequence[float]) -> Dict[str, Any]:
         """Take hold of *node* (a part, or anything under one) at the world
         *point*.
@@ -2450,7 +2087,11 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             "slots": slots,
         }
         end = self.end_control
-        if end and self.ik_blend() >= 0.5 and joint == self._end_of(self.spec):
+        if (
+            end
+            and self.ik_blend() >= 0.5
+            and joint == ptk.ArticulationPlan.end_joint(self.spec)
+        ):
             taken = self._matrix(end)
             hold["end"] = {
                 "control": end,
@@ -2459,6 +2100,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
             }
         return hold
 
+    @Units.working_as()
     def held_point(self, hold: Dict[str, Any]) -> Tuple[float, float, float]:
         """Where a hold's point is now, in world space."""
         state = self.state(hold["slots"])
@@ -2468,6 +2110,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         return (p.x, p.y, p.z)
 
     @CoreUtils.undoable(name="Articulated Rig: Pose To")
+    @Units.working_as()
     def pose_to(
         self,
         node,
@@ -2499,6 +2142,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
         self.key_hold(hold, key)
         return left
 
+    @Units.working_as()
     def grab_to(
         self,
         hold: Dict[str, Any],
@@ -2595,6 +2239,7 @@ class ArticulatedRig(ptk.LoggingMixin, _ArticulatedRigInternal):
                 return
             miss = after
 
+    @Units.working_as()
     def key_hold(self, hold: Dict[str, Any], key: Optional[bool] = None) -> None:
         """Key what a hold moved -- the end control it dragged, else the FK
         controls -- when *key* (default: Maya's auto key)."""

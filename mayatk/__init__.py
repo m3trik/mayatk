@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -34,6 +34,9 @@ DEFAULT_INCLUDE = {
     "ui_utils._ui_utils": "*",
     "uv_utils._uv_utils": "*",
     "uv_utils.texture_transfer": "TextureTransfer",
+    # Texture Combine engine; its co-located ``TextureCombineSlots`` panel is
+    # discovered by ``MayaUiHandler``.
+    "uv_utils.texture_combine.texture_combine": ["TextureCombine", "CombineInputs"],
     "xform_utils._xform_utils": "*",
     "nurbs_utils._nurbs_utils": "*",
     "light_utils._light_utils": "*",
@@ -77,6 +80,8 @@ DEFAULT_INCLUDE = {
     "core_utils.script_job_manager": "ScriptJobManager",
     # OpenMaya edits as one ordinary undo step (Maya's own ufeCmd carries them).
     "core_utils.undo_recorder": "UndoRecorder",
+    # Lengths and angles by the kind of query that read them (internal vs working).
+    "core_utils.units": "Units",
     "core_utils.diagnostics->Diagnostics": "*",
     "core_utils.diagnostics.scene_diag": "SceneDiagnostics",
     "core_utils.diagnostics.mesh_diag": "MeshDiagnostics",
@@ -207,10 +212,12 @@ DEFAULT_INCLUDE = {
     "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
-    # Light utils. The Lightmap Baker panel (``LightmapBakerSlots``) is
-    # discovered by MayaUiHandler, not registered here.
+    # Light utils. The Lightmap Baker and Light Rigs panels (``LightmapBakerSlots``,
+    # ``LightRigSlots``) are discovered by MayaUiHandler, not registered here.
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     "light_utils.lightmap_baker.lightmap_records": "LightmapRecords",
+    "light_utils.light_rig": "LightRig",
+    "light_utils.light_layer_baker": "LightLayerBaker",
     # UI utils
     "ui_utils.cancel_provider": "MayaCancelProvider",
     "ui_utils.channel_box": "ChannelBox",

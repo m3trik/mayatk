@@ -7,7 +7,8 @@ and marmoset bridges: regression coverage for the promotion out of
 ``substance_bridge`` and the source/target rename -- canonical set naming plus
 transparent adoption of BOTH legacy sets older scenes carry
 (``bakeBridge_highPoly``, ``substanceBridge_highPoly``).
-:class:`LightmapExcludeSet` is the lightmap baker's Exclude set.
+:class:`LightmapExcludeSet` is the lightmap baker's Exclude set, and
+:class:`LightmapIsolateSet` its Isolate set.
 """
 
 import unittest
@@ -21,6 +22,7 @@ from mayatk.mat_utils.bake_sets import (
     BakeSourceSet,
     LightmapBakeSet,
     LightmapExcludeSet,
+    LightmapIsolateSet,
 )
 
 from base_test import MayaTkTestCase
@@ -163,6 +165,35 @@ class TestLightmapExcludeSet(MayaTkTestCase):
     def test_no_set_means_no_meshes(self):
         self.assertFalse(LightmapExcludeSet.exists())
         self.assertEqual(LightmapExcludeSet.meshes(), [])
+
+
+class TestLightmapIsolateSet(MayaTkTestCase):
+    """The lightmap Isolate set: what lies under each member moves together."""
+
+    def tearDown(self):
+        LightmapIsolateSet.clear()
+        super().tearDown()
+
+    @staticmethod
+    def _cube(name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    def test_groups_keep_each_member_with_the_meshes_under_it(self):
+        door = self._cube("isoSetDoor")
+        glass = cmds.ls(cmds.parent(self._cube("isoSetGlass"), door)[0], long=True)[0]
+        lid = self._cube("isoSetLid")
+        LightmapIsolateSet.define([door, lid, glass])
+        # The glass counts with the door, the outermost member it lies under.
+        self.assertEqual(
+            sorted(sorted(g) for g in LightmapIsolateSet.groups()),
+            [sorted([door, glass]), [lid]],
+        )
+        self.assertEqual(
+            sorted(LightmapIsolateSet.meshes()), sorted([door, glass, lid])
+        )
+
+    def test_no_set_means_no_groups(self):
+        self.assertEqual(LightmapIsolateSet.groups(), [])
 
 
 class TestLightmapBakeSet(MayaTkTestCase):

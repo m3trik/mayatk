@@ -306,17 +306,14 @@ class MayaScenePersistence:
 
     def _on_time_unit_changed(self) -> None:
         """Rescale the store's timings when the scene framerate changes."""
-        try:
-            import maya.api.OpenMaya as om
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
 
-            # During a file read Maya can fire timeUnitChanged before
-            # the SceneOpened invalidation — rescaling the OLD scene's
-            # still-active store here would mark it dirty and flush its
-            # data onto the NEW scene's carrier node.
-            if om.MFileIO.isReadingFile():
-                return
-        except Exception:
-            pass
+        # During a file read Maya can fire timeUnitChanged before the
+        # SceneOpened invalidation — rescaling the OLD scene's still-active
+        # store here would mark it dirty and flush its data onto the NEW
+        # scene's carrier node.
+        if ScriptJobManager.is_reading_file():
+            return
         store = self.store_cls._active
         if store is None or store.is_empty():
             return

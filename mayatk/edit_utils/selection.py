@@ -12,6 +12,7 @@ except ImportError:
 import pythontk as ptk
 
 # From this package
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.node_utils.attributes._attributes import Attributes
 
@@ -370,6 +371,94 @@ class Selection(ptk.LoggingMixin, ptk.HelpMixin):
             cmds.select(objs, deselect=True)
         else:  # replace
             cmds.select(objs, replace=True)
+
+    # ------------------------------------------------------------------
+    # Rig selection mode
+    # ------------------------------------------------------------------
+
+    RIG_SELECTION_MODES = ("rig", "normal", "meshes_only")
+    _CONTROL_SELECT_TYPES = ("nurbsCurve", "joint")
+
+    @staticmethod
+    def rig_locked_meshes() -> List[str]:
+        """Mesh shapes a rig makes unpickable: their display type is DRIVEN
+        (a rig control's display switch, e.g. the tube rig's ``meshDisplay``),
+        not set by hand -- so an artist's own reference-locked mesh is never
+        touched.
+
+        One query for the whole scene: the Selection panel re-reads the mode
+        each time it shows.
+        """
+        shapes = cmds.ls(type="mesh", noIntermediate=True, long=True) or []
+        if not shapes:
+            return []
+        pairs = (
+            cmds.listConnections(
+                [f"{s}.overrideDisplayType" for s in shapes],
+                source=True,
+                destination=False,
+                connections=True,
+            )
+            or []
+        )
+        # connections=True: (queried plug, source) pairs, the plug's node
+        # named as the ls of it would be, not necessarily long.
+        driven = set(
+            cmds.ls([p.split(".", 1)[0] for p in pairs[0::2]], long=True) or []
+        )
+        return [s for s in shapes if s in driven]
+
+    @classmethod
+    def get_rig_selection_mode(cls) -> str:
+        """The live mode (see :meth:`set_rig_selection_mode`); ``"rig"`` when
+        the scene holds no rig-locked mesh."""
+        # selectType is a GUI-session preference: batch Maya answers None.
+        if all(
+            cmds.selectType(query=True, **{flag: True}) is False
+            for flag in cls._CONTROL_SELECT_TYPES
+        ):
+            return "meshes_only"
+        locked = cls.rig_locked_meshes()
+        if locked and not any(cmds.getAttr(f"{s}.overrideEnabled") for s in locked):
+            return "normal"
+        return "rig"
+
+    @classmethod
+    @CoreUtils.undoable
+    def set_rig_selection_mode(cls, mode: str) -> List[str]:
+        """How object picking treats rigged parts.
+
+        Parameters:
+            mode (str): ``"rig"`` -- as the rigs author it: rigged meshes are
+                display-locked so a click or marquee grabs their controls.
+                ``"normal"`` -- rigged meshes pick like any mesh.
+                ``"meshes_only"`` -- as normal, and control curves and joints
+                are masked out of picking (Maya's global ``selectType``).
+
+        The lock is scene state (saved with the file; one undo step puts every
+        mesh's back) and a rig re-locks its mesh when it re-binds; the curve /
+        joint mask is a session preference.
+
+        Returns:
+            (list) The rig-locked mesh shapes the mode was applied to.
+
+        Raises:
+            ValueError: Unknown *mode*.
+        """
+        if mode not in cls.RIG_SELECTION_MODES:
+            raise ValueError(
+                f"Invalid mode: {mode!r}. Expected one of {cls.RIG_SELECTION_MODES}."
+            )
+        locked = cls.rig_locked_meshes()
+        for shape in locked:
+            try:
+                cmds.setAttr(f"{shape}.overrideEnabled", mode == "rig")
+            except RuntimeError:  # locked or driven: leave it as authored
+                cls.logger.warning(f"Could not change the display lock on {shape}.")
+        cmds.selectType(
+            **{flag: mode != "meshes_only" for flag in cls._CONTROL_SELECT_TYPES}
+        )
+        return locked
 
     @staticmethod
     def get_available_selection_types() -> List[str]:

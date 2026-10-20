@@ -313,7 +313,10 @@ class TestBlenderBridgeSend(MayaTkTestCase):
         opts = m_export.call_args.kwargs["options"]
         self.assertTrue(opts["FBXExportEmbeddedTextures"])
         self.assertTrue(opts["FBXExportTriangulate"])
-        self.assertFalse(opts["FBXExportBakeComplexAnimation"])
+        # The bake belongs to the write plan, applied flag-then-range -- never
+        # to the option pins, whose flag write reset the range a split set.
+        self.assertNotIn("FBXExportBakeComplexAnimation", opts)
+        self.assertFalse(m_export.call_args.kwargs["plan"].bakes)
         args = m_launch.call_args.kwargs.get("args") or m_launch.call_args.args[1]
         self.assertEqual(args[0], "--python")
         script = result["script"]
@@ -2693,6 +2696,245 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.assertNotIn(copy, got)
 
 
+class TestBridgeAtlasCells(MayaTkTestCase):
+    """A bridge-baked atlas records its cells, so a partial re-bake goes in place.
+
+    The template hands back where in its atlas each object was written
+    (``bake_atlased``: blendertk's ``_bake_atlas``), and the return leg records
+    it in the bake baseline (``LightmapRecords.commit(cells=)``) with the extent
+    measured HERE -- what a later bake measures against before writing a cell
+    back in place (Blender's is in its own scene's units). Before, the bridge
+    passed no cells, and every partial re-bake of a bridge-baked atlas
+    re-packed its whole group.
+    """
+
+    ATLAS = "Crate_Lightmap.exr"
+    RES = 64
+    CELLS = {
+        "bbc_a": [0.25, 0.25, 0.0625, 0.0625],
+        "bbc_b": [0.25, 0.25, 0.375, 0.0625],
+        "bbc_c": [0.25, 0.25, 0.6875, 0.0625],
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.store = self.enterContext(ptk.TempArtifacts("bb_cells", policy="scoped"))
+        self.dir = self.store.dir_path(name="maps")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        mat = cmds.shadingNode("lambert", asShader=True, name="bbcCrateMat")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name="bbcCrateFile")
+        cmds.setAttr(
+            f"{fn}.fileTextureName", "C:/tex/Crate_BaseColor.png", type="string"
+        )
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.color", force=True)
+        self.cubes = {}
+        for i, name in enumerate(self.CELLS):
+            cube = cmds.polyCube(name=name)[0]
+            cmds.move(i * 10.0, 0, 0, cube)
+            shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+            cmds.sets(shape, edit=True, forceElement=sg)
+            self.cubes[name] = cmds.ls(cube, long=True)[0]
+
+    def _cell_rows(self, name):
+        return ptk.ImgUtils.atlas_pixel_rects([self.CELLS[name]], self.RES)[0]
+
+    def _write_atlas(self):
+        """The atlas a bridge bake returns: each cube's cell one flat value."""
+        import cv2
+        import numpy as np
+
+        img = np.zeros((self.RES, self.RES, 3), np.float32)
+        for value, name in enumerate(self.CELLS, start=1):
+            row0, row1, col0, col1 = self._cell_rows(name)
+            img[row0:row1, col0:col1] = float(value)
+        path = os.path.join(self.dir, self.ATLAS)
+        cv2.imwrite(path, img)
+        return path
+
+    def _manifest(self, cells=True):
+        atlas = self._write_atlas()
+        meshes, objects = {}, {}
+        for name, node in self.cubes.items():
+            shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+            meshes[name] = TestBridgePerInstanceLightmaps._layout_from(shape)
+            entry = {"map": atlas, "mesh": name, "rect": list(self.CELLS[name])}
+            if cells:
+                # Blender's extent is in ITS units: deliberately not Maya's.
+                entry.update(
+                    cell=list(self.CELLS[name]),
+                    extent=[999.0, 999.0],
+                    size=self.RES,
+                    packing="atlas",
+                )
+            objects[name] = entry
+        path = os.path.join(self.store.dir_path(), "bb_cells.lightmaps.json")
+        Path(path).write_text(
+            json.dumps(
+                {
+                    "version": BlenderBridge.RETURN_MANIFEST_VERSION,
+                    "mode": "separated",
+                    "lighting": {},
+                    "meshes": meshes,
+                    "objects": objects,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_the_return_leg_records_each_cell_with_the_extent_measured_here(self):
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        wired = BlenderBridge().reassemble_lightmaps(
+            self._manifest(), list(self.cubes.values())
+        )
+        self.assertEqual(set(wired), set(self.cubes.values()))
+        state = LightmapRecords.bake_state()["objects"]
+        for name, node in self.cubes.items():
+            entry = state[node]
+            self.assertEqual(entry["cell"], self.CELLS[name])
+            self.assertEqual((entry["size"], entry["packing"]), (self.RES, "atlas"))
+            self.assertEqual(entry["map"], self.ATLAS.lower())
+            for got, want in zip(entry["extent"], LightmapBaker()._atlas_extent(node)):
+                self.assertAlmostEqual(got, want, places=5)
+
+    def test_a_partial_rebake_of_a_bridge_baked_atlas_goes_in_place(self):
+        import cv2
+        import numpy as np
+
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        BlenderBridge().reassemble_lightmaps(
+            self._manifest(), list(self.cubes.values())
+        )
+        atlas = os.path.join(self.dir, self.ATLAS)
+        before = cv2.imread(atlas, cv2.IMREAD_UNCHANGED)
+        a = self.cubes["bbc_a"]
+
+        class _FlatBaker:
+            """A bake backend rendering one flat 5.0 per object."""
+
+            def bake(self, objects, output_dir=None, prefix="", suffix="", **_kw):
+                out = {}
+                for obj in objects:
+                    long_name = cmds.ls(obj, long=True)[0]
+                    leaf = long_name.rsplit("|", 1)[-1]
+                    img = np.full((16, 16, 4), 5.0, np.float32)
+                    path = os.path.join(output_dir, f"{prefix}{leaf}{suffix}.exr")
+                    cv2.imwrite(path, img)
+                    out[long_name] = path
+                return out
+
+        result = LightmapBaker(
+            resolution=self.RES, baker=_FlatBaker(), reflection_probe=False
+        ).bake([a], packing="atlas", output_dir=self.dir)
+        after = cv2.imread(atlas, cv2.IMREAD_UNCHANGED)
+        self.assertEqual(result.in_place, [a], result.repacked)
+        self.assertEqual(
+            sorted(f for f in os.listdir(self.dir) if f.endswith(".exr")),
+            [self.ATLAS],
+            "no _1 atlas",
+        )
+        for name in ("bbc_b", "bbc_c"):
+            row0, row1, col0, col1 = self._cell_rows(name)
+            self.assertTrue(
+                np.array_equal(
+                    after[row0:row1, col0:col1], before[row0:row1, col0:col1]
+                ),
+                f"{name}'s cell changed",
+            )
+        row0, row1, col0, col1 = self._cell_rows("bbc_a")
+        self.assertTrue(np.allclose(after[row0:row1, col0:col1], 5.0, atol=1e-3))
+
+    def test_an_older_blendertk_records_no_cells_and_says_what_that_costs(self):
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        bridge = BlenderBridge()
+        with mock.patch.object(bridge.logger, "info") as info:
+            bridge.reassemble_lightmaps(
+                self._manifest(cells=False), list(self.cubes.values())
+            )
+        state = LightmapRecords.bake_state()["objects"]
+        self.assertTrue(all(state[n]["cell"] is None for n in self.cubes.values()))
+        said = " ".join(str(c.args[0]) for c in info.call_args_list)
+        self.assertIn("carry no atlas cell", said)
+        self.assertIn("re-packs its whole group", said)
+
+    def test_the_template_ships_the_cells_its_blendertk_returns(self):
+        """The Blender half, on stand-ins for bpy and blendertk: a blendertk with
+        ``_bake_atlas`` hands back the cells and each manifest entry carries
+        them; an older one bakes through ``bake_atlas`` alone and says so."""
+        import ast
+        import io
+        from contextlib import redirect_stdout
+
+        source = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        nodes = [
+            n
+            for n in ast.parse(source).body
+            if isinstance(n, ast.FunctionDef)
+            and n.name in ("bake_atlased", "write_return_manifest")
+        ]
+        code = compile(ast.Module(nodes, type_ignores=[]), "template", "exec")
+        out_file = os.path.join(self.store.dir_path(), "t.lightmaps.json")
+        obj = types.SimpleNamespace(
+            data=types.SimpleNamespace(name="CrateMesh"),
+            matrix_world=types.SimpleNamespace(translation=(1.0, 2.0, 3.0)),
+        )
+        bpy = types.SimpleNamespace(data=types.SimpleNamespace(objects={"crate": obj}))
+        uv_module = types.ModuleType("_uv_utils")
+        uv_module.UvUtils = types.SimpleNamespace(
+            export_uv_layout=lambda objs: {"crate": {"uvs": ""}}
+        )
+        namespace = {
+            "bpy": bpy,
+            "os": os,
+            "json": json,
+            "OUT_FILE": out_file,
+            "RETURN_MANIFEST_VERSION": BlenderBridge.RETURN_MANIFEST_VERSION,
+        }
+        exec(code, namespace)
+        cell = {"cell": [0.5, 0.5, 0.0, 0.0], "extent": [2.0, 1.0]}
+        cell.update(size=64, packing="atlas")
+        packed = {"crate": ("C:/maps/Crate_Lightmap.exr", [0.5, 0.5, 0.0, 0.0])}
+
+        class _NewBaker:
+            def _bake_atlas(self, meshes, **kwargs):
+                self.kwargs = kwargs
+                return types.SimpleNamespace(packed=packed, cells={"crate": cell})
+
+        class _OldBaker:
+            def bake_atlas(self, meshes, **kwargs):
+                self.kwargs = kwargs
+                return packed
+
+        new = _NewBaker()
+        got_packed, got_cells = namespace["bake_atlased"](
+            new, ["crate"], "C:/maps", "", "_Lightmap", {"x.exr": ["y"]}
+        )
+        self.assertEqual((got_packed, got_cells), (packed, {"crate": cell}))
+        self.assertEqual(new.kwargs["claims"], {"x.exr": ["y"]})
+        with (
+            mock.patch.dict(sys.modules, {"blendertk.uv_utils._uv_utils": uv_module}),
+            redirect_stdout(io.StringIO()),
+        ):
+            namespace["write_return_manifest"](got_packed, {}, None, got_cells)
+        entry = json.loads(Path(out_file).read_text(encoding="utf-8"))["objects"][
+            "crate"
+        ]
+        self.assertEqual({k: entry[k] for k in cell}, cell)
+
+        printed = io.StringIO()
+        with redirect_stdout(printed):
+            old_packed, old_cells = namespace["bake_atlased"](
+                _OldBaker(), ["crate"], "C:/maps", "", "_Lightmap", None
+            )
+        self.assertEqual((old_packed, old_cells), (packed, {}))
+        self.assertIn("returns no atlas cells", printed.getvalue())
+
+
 class TestBridgeLightManifest(MayaTkTestCase):
     """``_manifest_lights`` -- the only carrier of a light's PHYSICS across the bridge.
 
@@ -2960,6 +3202,221 @@ class TestBridgeLightManifest(MayaTkTestCase):
         self.assertIs(self._record(transform)["cast_shadow"], True)
 
 
+class TestBridgeSceneLighting(MayaTkTestCase):
+    """The bake's lights: the Lightmap Baker panels' three switches, same meaning.
+
+    * ``INCLUDE_SCENE_LIGHTS`` (on): every scene light crosses, one outside the
+      send on a null of its own at its world matrix -- exporting the light's own
+      transform would ship its ancestors' geometry too (probed) -- gone again once
+      the payload is written. Off: only the lights inside the send (the
+      2026-08-09 behaviour).
+    * ``INCLUDE_HIDDEN_LIGHTS`` (off): a hidden light crosses switched on, on a
+      null of its own -- its own null arrives hidden, and Blender never evaluates
+      a hidden object, so it would be placed at the origin (probed).
+
+    The export is stubbed; the manifest is written for real and read back.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.bridge = BlenderBridge(blender_path="C:/fake/blender.exe")
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("bb_scene_lights", policy="scoped")
+        ).dir_path()
+
+    @staticmethod
+    def _light(name, parent=None, at=(0.0, 0.0, 0.0), intensity=2.0):
+        transform = cmds.listRelatives(
+            cmds.pointLight(name=name, intensity=intensity), parent=True, fullPath=True
+        )[0]
+        if parent:
+            transform = cmds.parent(transform, parent)[0]
+        transform = cmds.ls(transform, long=True)[0]
+        cmds.xform(transform, worldSpace=True, translation=at)
+        return transform
+
+    def _send(self, objects, template=None, **params):
+        """``_produce`` with the FBX export stubbed: ``(manifest lights, exported)``.
+
+        *exported* maps each node the export was handed to its world translation
+        AT export time (a null made for the send is gone afterwards)."""
+        template = template or BlenderBridge._LIGHTMAP_TEMPLATE
+        fbx = os.path.join(self.tmp, f"send{len(os.listdir(self.tmp))}.fbx")
+        exported = {}
+
+        def export(_self, objs, _request):
+            for node in objs:
+                exported[cmds.ls(node, long=True)[0]] = [
+                    round(v, 4)
+                    for v in cmds.xform(node, q=True, worldSpace=True, translation=True)
+                ]
+            return types.SimpleNamespace(primary=fbx)
+
+        request = types.SimpleNamespace(
+            template=template, params=dict(params, LIGHTMAP_DIR=self.tmp)
+        )
+        with mock.patch.object(
+            handoff_export.MayaExportMixin,
+            "_produce",
+            autospec=True,
+            side_effect=export,
+        ):
+            self.bridge._produce(objects, request)
+        manifest = Path(fbx + ".manifest.json")
+        lights = (
+            json.loads(manifest.read_text(encoding="utf-8")).get("lights") or []
+            if manifest.exists()
+            else []
+        )
+        return {record["name"]: record for record in lights}, exported
+
+    def _module(self):
+        group = cmds.group(empty=True, name="bbsl_module")
+        cmds.parent(cmds.polyCube(name="bbsl_floor")[0], group)
+        return cmds.ls(group, long=True)[0]
+
+    def test_the_switches_have_rows_and_defaults(self):
+        self.assertIs(BlenderBridge().params_defaults()["INCLUDE_SCENE_LIGHTS"], True)
+        self.assertIs(BlenderBridge().params_defaults()["INCLUDE_HIDDEN_LIGHTS"], False)
+        bake = params.Parameters.referenced_keys(
+            (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        )
+        keys = list(params.PARAMS)
+        for key in ("INCLUDE_SCENE_LIGHTS", "INCLUDE_HIDDEN_LIGHTS"):
+            self.assertIn(key, bake, f"{key} is not shown with the bake")
+        # In the panel's order: Include Scene Lighting, the HDRI, Hidden Lights.
+        self.assertEqual(
+            keys.index("INCLUDE_ENVIRONMENT") - 1, keys.index("INCLUDE_SCENE_LIGHTS")
+        )
+        self.assertEqual(
+            keys.index("INCLUDE_ENVIRONMENT") + 1, keys.index("INCLUDE_HIDDEN_LIGHTS")
+        )
+
+    def test_every_scene_light_crosses_on_a_null_placed_where_it_is(self):
+        module = self._module()
+        rig = cmds.group(empty=True, name="bbsl_rig")
+        cmds.setAttr(f"{rig}.rotateY", 30)
+        outside = self._light("bbsl_out", parent=rig, at=(120.0, 50.0, -30.0))
+        before = set(cmds.ls(assemblies=True, long=True))
+
+        lights, exported = self._send([module])
+
+        self.assertIn("bbsl_out", lights, "the light outside the send crossed")
+        self.assertNotIn("hidden", lights["bbsl_out"])
+        self.assertIn("|bbsl_out", exported, "its null rode the export")
+        self.assertEqual(exported["|bbsl_out"], [120.0, 50.0, -30.0])
+        self.assertNotIn(outside, exported, "never the light's own branch")
+        self.assertNotIn(cmds.ls(rig, long=True)[0], exported)
+        self.assertEqual(
+            set(cmds.ls(assemblies=True, long=True)), before, "the null is gone"
+        )
+
+    def test_with_the_master_off_only_the_sends_lights_cross(self):
+        module = self._module()
+        self._light("bbsl_in", parent=module, at=(0.0, 100.0, 0.0))
+        self._light("bbsl_away", at=(500.0, 100.0, 0.0))
+        lights, exported = self._send([module], INCLUDE_SCENE_LIGHTS=False)
+        self.assertEqual(set(lights), {"bbsl_in"})
+        self.assertEqual(list(exported), [module])
+
+    def test_a_hidden_light_crosses_switched_on_only_when_asked(self):
+        module = self._module()
+        hidden = self._light("bbsl_hid", parent=module, at=(10.0, 200.0, 5.0))
+        cmds.setAttr(f"{hidden}.visibility", False)
+        self._light("bbsl_zero", parent=module, intensity=0.0)
+
+        lights, _exported = self._send([module])
+        self.assertEqual(lights, {}, "hidden and zero lights stay out by default")
+
+        lights, exported = self._send([module], INCLUDE_HIDDEN_LIGHTS=True)
+        # Its own null arrives hidden (Blender would place it at the origin), so
+        # it rides one of its own, named apart from it.
+        name = "bbsl_hid" + BlenderBridge._LIGHT_PROXY_SUFFIX
+        self.assertEqual(set(lights), {name}, "the zero-intensity one lights nothing")
+        self.assertNotIn("hidden", lights[name], "it crosses switched ON")
+        self.assertEqual(exported[f"|{name}"], [10.0, 200.0, 5.0])
+        self.assertFalse(cmds.getAttr(f"{hidden}.visibility"), "Maya is untouched")
+        self.assertFalse(cmds.objExists(f"|{name}"))
+
+    def test_a_plain_send_carries_the_send_alone(self):
+        """The switches are the bake's: a send to Blender is authored content."""
+        module = self._module()
+        self._light("bbsl_elsewhere", at=(0.0, 300.0, 0.0))
+        lights, exported = self._send([module], template="import")
+        self.assertEqual(lights, {})
+        self.assertEqual(list(exported), [module])
+
+    def test_the_blender_baker_renders_what_crossed(self):
+        """The child's baker is pinned to every light, the world and no hidden one:
+        the Maya side chose what crossed, and a saved preset of the same name must
+        not switch off a lamp on a null of its own (it sits under no baked mesh)
+        nor detach the world the template built."""
+        import ast
+        import sys
+
+        source = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        node = next(
+            n
+            for n in ast.parse(source).body
+            if isinstance(n, ast.FunctionDef) and n.name == "make_baker"
+        )
+        code = compile(ast.Module([node], type_ignores=[]), "template", "exec")
+        asked = {}
+
+        class _Baker:
+            resolution = samples = bounces = 1
+            denoise = adaptive = beside_textures = False
+            device = "CPU"
+
+            @classmethod
+            def from_preset(cls, name, **kwargs):
+                asked.update(kwargs)
+                return cls()
+
+        module = types.ModuleType("lightmap_baker")
+        module.LightmapBaker = _Baker
+        namespace = {
+            "LIGHTMAP_RESOLUTION": 0,
+            "LIGHTMAP_SAMPLES": 0,
+            "LIGHTMAP_BOUNCES": -1,
+            "LIGHTMAP_QUALITY": "mobile",
+            "LIGHTMAP_DENOISE": True,
+            "LIGHTMAP_ADAPTIVE": True,
+            "LIGHTMAP_BESIDE_TEXTURES": False,
+            "LIGHTMAP_REFLECTION_PROBE": False,
+            "LIGHTMAP_DEVICE": "AUTO",
+        }
+        exec(code, namespace)
+        with mock.patch.dict(
+            sys.modules,
+            {"blendertk.light_utils.lightmap_baker.lightmap_baker": module},
+        ):
+            namespace["make_baker"]()
+        self.assertEqual(
+            (
+                asked.get("include_scene_lights"),
+                asked.get("include_environment"),
+                asked.get("include_hidden_lights"),
+            ),
+            (True, True, False),
+        )
+        # The row's own value reaches the baker's switch (Added: 2026-10-17).
+        self.assertIs(asked.get("reflection_probe"), False)
+
+    def test_the_nulls_never_reach_the_undo_queue(self):
+        module = self._module()
+        self._light("bbsl_undo", at=(0.0, 300.0, 0.0))
+        cmds.flushUndo()
+        cmds.undoInfo(state=True)
+        cmds.polyCube(name="bbsl_last_edit")
+        self._send([module])
+        self.assertTrue(cmds.objExists("bbsl_last_edit"))
+        cmds.undo()
+        self.assertFalse(
+            cmds.objExists("bbsl_last_edit"), "one undo takes the artist's own edit"
+        )
+
+
 class TestBridgeSkyDomeWorld(MayaTkTestCase):
     """``_manifest_world`` -- the scene's sky dome, sent as the bake's world.
 
@@ -3168,6 +3625,7 @@ class TestBridgeSkyDomeWorld(MayaTkTestCase):
                 "EMISSION_STRENGTH": 1.0,
                 "SCENE_LIGHT_STRENGTH": 1.0,
                 "__INCLUDE_LIGHTS__": False,
+                "INCLUDE_SCENE_LIGHTS": True,
                 "rebuild_scene_lights": lambda: None,
                 "emissive_material_count": lambda: 0,
             }
@@ -3695,9 +4153,12 @@ class TestBridgeMirrorsTheBlenderBaker(unittest.TestCase):
         "samples": "LIGHTMAP_SAMPLES",
         "bounces": "LIGHTMAP_BOUNCES",
         "adaptive": "LIGHTMAP_ADAPTIVE",
+        "include_scene_lights": "INCLUDE_SCENE_LIGHTS",
         "include_environment": "INCLUDE_ENVIRONMENT",
+        "include_hidden_lights": "INCLUDE_HIDDEN_LIGHTS",
         "denoise": "LIGHTMAP_DENOISE",
         "beside_textures": "LIGHTMAP_BESIDE_TEXTURES",
+        "reflection_probe": "LIGHTMAP_REFLECTION_PROBE",
     }
 
     def setUp(self):
@@ -3741,6 +4202,169 @@ class TestBridgeMirrorsTheBlenderBaker(unittest.TestCase):
                 tip,
                 tier,
             )
+
+
+class TestBridgeReflectionProbe(MayaTkTestCase):
+    """A Blender bake's reflection probe comes home recorded in Maya's own space.
+
+    blendertk's bake captures the room it lit (``LightmapBaker.bake_probe``) and
+    the template ships its point and box in the Blender probe record's frame,
+    with ANCHORS -- vertices of baked meshes in that frame. The return leg reads
+    the same vertices here and measures the crossing (no axis or unit convention
+    written down), then records the probe as Maya's own bake does. Added:
+    2026-10-17
+    """
+
+    #: The crossing the fixture simulates: the Blender record is in metres, Maya
+    #: in centimetres -- what the template's FBX import makes of a Maya scene.
+    _SCALE = 0.01
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("bridge_probe", policy="scoped")
+        ).dir_path()
+        self.cube = cmds.ls(
+            cmds.polyCube(name="bbProbeRoom", width=600, height=300, depth=400)[0],
+            long=True,
+        )[0]
+        cmds.move(50, 150, -20, self.cube)
+
+    def _probe(self, name="untitled_Probe.exr", turn=False, anchors=None):
+        """The template's ``probe`` entry for the fixture room, its file written."""
+        path = os.path.join(self.tmp, name)
+        with open(path, "wb") as fh:
+            fh.write(b"probe")
+
+        def record_frame(point):
+            x, y, z = (c * self._SCALE for c in point)
+            # A turned crossing: a quarter about the up axis.
+            return [z, y, -x] if turn else [x, y, z]
+
+        if anchors is None:
+            anchors = [
+                {
+                    "object": "bbProbeRoom",
+                    "vertex": i,
+                    "point": record_frame(
+                        cmds.pointPosition(f"{self.cube}.vtx[{i}]", world=True)
+                    ),
+                }
+                for i in range(8)
+            ]
+        return {
+            "map": path,
+            "position": record_frame((50.0, 150.0, -20.0)),
+            "box": [record_frame((-250, 0, -220)), record_frame((350, 300, 180))],
+            "anchors": anchors,
+        }
+
+    def _commit(self, probe):
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        path = BlenderBridge()._commit_returned_probe(probe, {"bbProbeRoom": self.cube})
+        return path, LightmapRecords.probe()
+
+    def test_the_probe_is_recorded_in_this_scenes_space_and_name(self):
+        path, record = self._commit(self._probe(name="other_Probe.exr"))
+        self.assertEqual(os.path.basename(path), "untitled_Probe.exr")
+        self.assertTrue(os.path.isfile(path), "renamed as Maya's own bake names it")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "other_Probe.exr")))
+        self.assertEqual(record["map"], "untitled_Probe.exr")
+        for got, want in zip(record["position"], (50.0, 150.0, -20.0)):
+            self.assertAlmostEqual(got, want, delta=1e-3)
+        for corner, wanted in zip(record["box"], ((-250, 0, -220), (350, 300, 180))):
+            for got, want in zip(corner, wanted):
+                self.assertAlmostEqual(got, want, delta=1e-3)
+
+    def test_a_turned_crossing_records_no_probe(self):
+        """The panorama is laid out in the record frame's axes: mapped through a
+        turn, it would reflect the room on its side."""
+        with self.assertLogs(BlenderBridge.logger, level="WARNING") as caught:
+            path, record = self._commit(self._probe(turn=True))
+        self.assertIsNone(path)
+        self.assertIsNone(record)
+        self.assertTrue(any("turned" in line for line in caught.output), caught.output)
+
+    def test_too_few_anchors_record_no_probe(self):
+        probe = self._probe()
+        probe["anchors"] = probe["anchors"][:2]
+        with self.assertLogs(BlenderBridge.logger, level="WARNING"):
+            path, record = self._commit(probe)
+        self.assertIsNone(path)
+        self.assertIsNone(record)
+
+    def test_an_anchor_off_the_crossing_records_no_probe(self):
+        """A mesh edited since the hand-off: its vertices no longer describe one
+        crossing, and a probe placed through them would stand somewhere else."""
+        probe = self._probe()
+        # Moved straight out from the room's middle: the crossing stays unturned,
+        # so only the fit's residual can refuse it.
+        points = [a["point"] for a in probe["anchors"]]
+        middle = [sum(p[i] for p in points) / len(points) for i in range(3)]
+        probe["anchors"][0]["point"] = [
+            m + (c - m) * 1.05 for c, m in zip(points[0], middle)
+        ]
+        with self.assertLogs(BlenderBridge.logger, level="WARNING"):
+            path, record = self._commit(probe)
+        self.assertIsNone(path)
+        self.assertIsNone(record)
+
+    def test_a_return_manifest_without_a_probe_records_none(self):
+        self.assertEqual(self._commit(None), (None, None))
+
+    def test_the_template_ships_its_anchors_in_the_probe_records_frame(self):
+        """The Blender half (``capture_probe``): the probe's point and box come
+        from blendertk's record -- Blender's Z-up axes read as ``(x, z, -y)`` --
+        so the anchors must be in that frame too, or the measured crossing turns
+        and no probe is recorded. Run on stand-ins for bpy and blendertk."""
+        import ast
+
+        source = (_TEMPLATE_DIR / "bake_lightmaps.py").read_text(encoding="utf-8")
+        nodes = [
+            n
+            for n in ast.parse(source).body
+            if (isinstance(n, ast.FunctionDef) and n.name == "capture_probe")
+            or (
+                isinstance(n, ast.Assign)
+                and getattr(n.targets[0], "id", "") == "PROBE_ANCHOR_OBJECTS"
+            )
+        ]
+        code = compile(ast.Module(nodes, type_ignores=[]), "template", "exec")
+
+        class _Identity:
+            def __matmul__(self, co):
+                return co
+
+        verts = [(1.0, 2.0, 9.0), (-1.0, 5.0, 0.5), (4.0, -2.0, 7.0)]
+        obj = types.SimpleNamespace(
+            type="MESH",
+            matrix_world=_Identity(),
+            data=types.SimpleNamespace(
+                vertices=[types.SimpleNamespace(co=v) for v in verts]
+            ),
+        )
+        bpy = types.SimpleNamespace(data=types.SimpleNamespace(objects={"room": obj}))
+        record = {"position": [0.0, 1.5, -2.0], "box": None}
+        records = types.ModuleType("lightmap_records")
+        records.LightmapRecords = types.SimpleNamespace(probe=lambda: record)
+        baker = types.SimpleNamespace(bake_probe=lambda maps: "C:/maps/p.exr")
+        namespace = {"LIGHTMAP_REFLECTION_PROBE": True, "bpy": bpy, "os": os}
+        exec(code, namespace)
+        with mock.patch.dict(
+            sys.modules,
+            {"blendertk.light_utils.lightmap_baker.lightmap_records": records},
+        ):
+            shipped = namespace["capture_probe"](baker, {"room": ("m.exr", None)})
+        self.assertEqual(shipped["position"], record["position"])
+        points = {a["vertex"]: a["point"] for a in shipped["anchors"]}
+        self.assertEqual(sorted(points), [0, 1, 2], "each axis' extremes")
+        for index, (x, y, z) in enumerate(verts):
+            self.assertEqual(points[index], [x, z, -y])
+        namespace["LIGHTMAP_REFLECTION_PROBE"] = False
+        self.assertIsNone(namespace["capture_probe"](baker, {"room": ("m", None)}))
 
 
 class TestBridgeLightmapSceneRecords(MayaTkTestCase):
@@ -4011,3 +4635,180 @@ class TestBridgeLightmapSceneRecords(MayaTkTestCase):
                     any("Exclude set" in line for line in caught.output), seed
                 )
         self.assertEqual(LightmapRecords._marker_info(kept)["map"], "Old_Lightmap.exr")
+
+
+class TestHandoffWritePlan(MayaTkTestCase):
+    """A hand-off write ships every node where Maya plays it, and bakes over
+    the range its plan says (``MayaExportMixin._write_plan``).
+
+    A static hand-off -- the Blender bridge's and the WebXR preview's
+    default -- does not bake, and the plug-in drops every offsetParentMatrix
+    from such a write (measured on Maya 2025 / FBX 2020.3.6: a static
+    ``freeze_to_opm`` cube 3.0 off), so each offset is folded into its node
+    for the write; an animated one bakes, which folds it already. And the
+    bake flag is written BEFORE the range: written after, as the hand-off's
+    option pins did, it reset the shots' union to the whole animation range.
+    Added: 2026-10-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        tmp = ptk.TempArtifacts("mtk_handoff_write_plan", policy="scoped")
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.dir_path()
+        self.addCleanup(FbxUtils.reset_export)
+        self.addCleanup(TestHandoffShipsOneWholeTake._drop_carrier)
+        cmds.playbackOptions(min=1, max=100, ast=1, aet=100)
+
+    def _frozen(self):
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        cube = cmds.polyCube(name="handoff_frozen")[0]
+        cmds.xform(cube, worldSpace=True, translation=(3, 0, 1), rotation=(0, 30, 0))
+        XformUtils.freeze_to_opm([cube])
+        return cmds.ls(cube, long=True)[0]
+
+    def _shipped(self, path, leaf):
+        cmds.file(new=True, force=True)
+        cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+        (node,) = cmds.ls(leaf, long=True, type="transform")
+        return (
+            cmds.getAttr(f"{node}.worldMatrix[0]"),
+            cmds.keyframe(node, query=True, keyframeCount=True),
+        )
+
+    def test_a_static_handoff_ships_each_offset_exactly_and_keyless(self):
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+
+        for bridge in (BlenderBridge, WebXrPreview):
+            with self.subTest(bridge=bridge.__name__):
+                cmds.file(new=True, force=True)
+                cube = self._frozen()
+                world = cmds.getAttr(f"{cube}.worldMatrix[0]")
+                offset = cmds.getAttr(f"{cube}.offsetParentMatrix")
+                path = os.path.join(self.dir, f"{bridge.__name__}.fbx")
+
+                bridge()._export_fbx(
+                    [cube], path, {"INCLUDE_ANIMATION": False, "EMBED_TEXTURES": False}
+                )
+
+                self.assertEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), offset)
+                got, keys = self._shipped(path, "handoff_frozen")
+                self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-3)
+                self.assertFalse(keys, "a static hand-off keyed a static node")
+
+    def test_an_animated_unity_handoff_still_bakes(self):
+        """The Unity bridge carries animation: its write bakes, which folds
+        the offset itself -- nothing changes for it."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
+
+        cube = self._frozen()
+        world = cmds.getAttr(f"{cube}.worldMatrix[0]")
+        path = os.path.join(self.dir, "unity.fbx")
+        seen = {}
+        original = FbxUtils.offsets_folded.__func__
+
+        def spy(cls, objects=None, plan=None, logger=None):
+            seen["plan"] = plan
+            return original(cls, objects, plan, logger)
+
+        with mock.patch.object(FbxUtils, "offsets_folded", classmethod(spy)):
+            UnityBridge()._export_fbx([cube], path, {"EMBED_TEXTURES": False})
+
+        self.assertTrue(seen["plan"].bakes)
+        got, _ = self._shipped(path, "handoff_frozen")
+        self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-3)
+
+    def test_a_pinned_node_ships_where_maya_draws_it_through_each_handoff(self):
+        """A node that ignores its parent (``Matrices.pin_world_matrix``, every
+        channel locked) under an animated module: the Unity hand-off bakes,
+        the Blender one does not, and FBX has no "do not inherit" -- measured
+        2026-10-17, 121.6 cm off baked and 98.7 plain. Each re-imports where
+        Maya draws it, and the scene keeps its pin and locks."""
+        from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
+        from mayatk.xform_utils.matrices import Matrices
+
+        frames = (1, 30, 61, 100)
+        locked = [f"{a}{x}" for a in ("translate", "rotate", "scale") for x in "XYZ"]
+        for bridge, animated in ((UnityBridge, True), (BlenderBridge, False)):
+            with self.subTest(bridge=bridge.__name__):
+                cmds.file(new=True, force=True)
+                cmds.currentTime(1)
+                root = cmds.group(empty=True, name="handoff_module")
+                cube = cmds.polyCube(name="handoff_pinned")[0]
+                cube = cmds.ls(cmds.parent(cube, root)[0], long=True)[0]
+                cmds.xform(cube, translation=(3, 2, 1), rotation=(0, 20, 0))
+                self.assertTrue(Matrices.pin_world_matrix(cube))
+                for attr, (first, last) in (("tx", (50, 150)), ("ry", (30, 75))):
+                    cmds.setKeyframe(root, attribute=attr, time=1, value=first)
+                    cmds.setKeyframe(root, attribute=attr, time=100, value=last)
+                for attr in locked:
+                    cmds.setAttr(f"{cube}.{attr}", lock=True)
+                worlds = []
+                for frame in frames:
+                    cmds.currentTime(frame)
+                    worlds.append(cmds.getAttr(f"{cube}.worldMatrix[0]"))
+                path = os.path.join(self.dir, f"pinned_{bridge.__name__}.fbx")
+
+                bridge()._export_fbx(
+                    [root],
+                    path,
+                    {"INCLUDE_ANIMATION": animated, "EMBED_TEXTURES": False},
+                )
+
+                self.assertFalse(cmds.getAttr(f"{cube}.inheritsTransform"))
+                self.assertTrue(
+                    all(cmds.getAttr(f"{cube}.{a}", lock=True) for a in locked)
+                )
+                cmds.file(new=True, force=True)
+                cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+                (shipped,) = cmds.ls("handoff_pinned", long=True, type="transform")
+                for frame, world in zip(frames, worlds):
+                    cmds.currentTime(frame)
+                    got = cmds.getAttr(f"{shipped}.worldMatrix[0]")
+                    self.assertLess(
+                        max(abs(a - b) for a, b in zip(world, got)), 1e-3, frame
+                    )
+
+    def test_a_split_handoff_bakes_the_shots_union(self):
+        """Bug: the hand-off pinned the bake flag after its take split set the
+        shots' union, and the flag write reset the range -- the write baked
+        the scene's animation range (1-100) instead of the union (10-70), and
+        the whole take was resampled over all of it."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+        from mayatk.env_utils.unity_bridge._unity_bridge import UnityBridge
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds.currentUnit(time="film")
+        cube = cmds.ls(cmds.polyCube(name="split_cube")[0], long=True)[0]
+        for frame, value in ((1, 0.0), (40, 4.0), (100, 10.0)):
+            cmds.setKeyframe(cube, attribute="translateX", t=frame, v=value)
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes,
+            {
+                "shots": [
+                    {"clip": "Shot_A", "start": 10, "end": 30, "objects": []},
+                    {"clip": "Shot_B", "start": 50, "end": 70, "objects": []},
+                ]
+            },
+        )
+        path = os.path.join(self.dir, "split.fbx")
+        seen = {}
+        real = cmds.file
+
+        def writing(*args, **kwargs):
+            if kwargs.get("exportSelected"):
+                seen["range"] = FbxUtils.bake_range()
+            return real(*args, **kwargs)
+
+        with mock.patch.object(cmds, "file", side_effect=writing):
+            UnityBridge()._export_fbx([cube], path, {"EMBED_TEXTURES": False})
+
+        self.assertEqual(seen["range"], (10.0, 70.0))
+        fbx = ptk.FbxFile.load(path, raw_payloads=False, span_arrays=("KeyTime",))
+        curves = fbx.take_curves()["Take 001"]
+        # Resampled over the union (61 frames) beside the keys outside it.
+        self.assertEqual(curves[("split_cube", "Lcl Translation", "d|X")][2], 61 + 2)

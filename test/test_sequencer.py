@@ -1072,6 +1072,34 @@ class TestMayaScenePersistenceRoundTrip(unittest.TestCase):
         # Fresh scene — no storage node yet.
         self.assertIsNone(MayaScenePersistence().load())
 
+    def test_a_time_unit_change_during_a_file_read_rescales_nothing(self):
+        """The read guard called ``om.MFileIO`` on API 2.0, which has none: the
+        AttributeError was swallowed and the OLD scene's store was rescaled
+        (and dirtied) mid-read anyway.  Out of a read it still rescales.
+        Added: 2026-10-14
+        """
+        from unittest import mock
+        from mayatk.anim_utils.shots import _shots
+        from mayatk.core_utils import script_job_manager as sjm
+
+        persistence = _shots.MayaScenePersistence()
+        self.addCleanup(persistence.remove_callbacks)
+        store = mock.Mock(scene_fps=24.0)
+        store.is_empty.return_value = False
+        with (
+            mock.patch.object(persistence.store_cls, "_active", store),
+            mock.patch.object(
+                _shots._ShotStoreInternal, "_get_scene_fps", return_value=30.0
+            ),
+            mock.patch.object(sjm, "MFileIO") as file_io,
+        ):
+            file_io.isReadingFile.return_value = True
+            persistence._on_time_unit_changed()
+            store.rescale_to_fps.assert_not_called()
+            file_io.isReadingFile.return_value = False
+            persistence._on_time_unit_changed()
+        store.rescale_to_fps.assert_called_once_with(30.0)
+
     def test_load_migrates_legacy_shotstore_node(self):
         """A pre-consolidation ``shotStore`` node is folded into data_internal."""
         import json
@@ -15275,6 +15303,74 @@ class TestResolveFullName(unittest.TestCase):
         self.assertEqual(labels["|grp|nut"], "nut")
         for obj in objects:
             self.assertEqual(ctrl._resolve_full_name(labels[obj]), obj)
+
+
+class TestSwapAndCopyShotKeys(unittest.TestCase):
+    """The Shots window's Swap With, keys and all (2026-10-14: a production
+    assembly's wrench tightening and loosening ran the wrong way round --
+    swapped, names and descriptions kept in place, and the second tightening
+    copied over).  A [0, 20], B [30, 50], C [60, 90], one keyed cube each,
+    plus a manifest member of A that nothing keys."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        keys = {"sw_a": (0, 10, 20), "sw_b": (30, 40, 50), "sw_c": (60, 75, 90)}
+        for name, times in keys.items():
+            cube = cmds.polyCube(name=name)[0]
+            for t, v in zip(times, (0.0, 5.0, 0.0)):
+                cmds.setKeyframe(cube, at="translateX", t=t, v=v)
+        cmds.polyCube(name="doc_a")
+        self.seq = ShotSequencer(
+            [
+                ShotBlock(0, "A", 0, 20, ["sw_a", "doc_a"], metadata={"step": "1"}),
+                ShotBlock(1, "B", 30, 50, ["sw_b"]),
+                ShotBlock(2, "C", 60, 90, ["sw_c"], metadata={"step": "3"}),
+            ]
+        )
+        self.seq.store.gap = 10.0
+
+    def keys(self, cube, lo=-1e6, hi=1e6):
+        times = cmds.keyframe(cube, q=True, at="translateX") or []
+        values = cmds.keyframe(cube, q=True, at="translateX", valueChange=True) or []
+        return [
+            (round(t, 3), round(v, 3))
+            for t, v in zip(times, values)
+            if lo - 1e-3 <= t <= hi + 1e-3
+        ]
+
+    def layout(self):
+        return [(s.name, s.start, s.end) for s in self.seq.sorted_shots()]
+
+    def test_a_swap_trades_the_keys_and_leaves_the_retained_fields(self):
+        self.seq.swap_shots(0, 2, retain=("name", "metadata"))
+        self.assertEqual(self.layout(), [("A", 0, 30), ("B", 40, 60), ("C", 70, 90)])
+        self.assertEqual(self.keys("sw_c"), [(0, 0), (15, 5), (30, 0)])
+        self.assertEqual(self.keys("sw_b"), [(40, 0), (50, 5), (60, 0)])
+        self.assertEqual(self.keys("sw_a"), [(70, 0), (80, 5), (90, 0)])
+        first, last = self.seq.sorted_shots()[0], self.seq.sorted_shots()[-1]
+        # The animated member travelled; the manifest's stayed with the step.
+        self.assertEqual(
+            (first.objects, first.metadata), (["doc_a", "sw_c"], {"step": "1"})
+        )
+        self.assertEqual((last.objects, last.metadata), (["sw_a"], {"step": "3"}))
+
+    def test_a_copy_replaces_the_destinations_keys(self):
+        self.assertEqual(self.seq.copy_shot_content(2, 0), 1)
+        self.assertEqual(self.layout(), [("A", 0, 30), ("B", 40, 60), ("C", 70, 100)])
+        # The cut pins B's bounds so B plays as it did (sw_a holds its pose on
+        # B's start, 40): judge A's own frames.
+        self.assertEqual(self.keys("sw_a", 0, 30), [], "A's own keys are cut")
+        self.assertEqual(self.keys("sw_c", 0, 30), [(0, 0), (15, 5), (30, 0)])
+        self.assertEqual(
+            self.keys("sw_c", 70, 100),
+            [(70, 0), (85, 5), (100, 0)],
+            "the source where the ripple left it",
+        )
+        self.assertEqual(self.keys("sw_b", 40, 60), [(40, 0), (50, 5), (60, 0)])
+        a = self.seq.shot_by_id(0)
+        self.assertEqual(
+            (a.name, a.metadata, a.objects), ("A", {"step": "1"}, ["doc_a", "sw_c"])
+        )
 
 
 if __name__ == "__main__":

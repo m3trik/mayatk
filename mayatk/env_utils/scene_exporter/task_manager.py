@@ -121,8 +121,8 @@ class TaskManager(
             lambda: SceneState.read(self._live_objects()),
             source=SceneState.source(),
             asset=os.path.basename(src),
-            # The lighting recipe with this run's choices (Baked Reflections):
-            # decided by the export, carried by the deliverable.
+            # The run's overrides over the lighting recipe: none from a panel
+            # since Baked Reflections retired, so the recipe ships as declared.
             rendering=self.run.rendering,
             logger=self.logger,
         )

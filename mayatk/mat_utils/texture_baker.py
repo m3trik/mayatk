@@ -1024,6 +1024,10 @@ class TextureBaker(ptk.LoggingMixin):
                 "batch=True requires the Arnold backend; using per-object bakes."
             )
             batch = False
+        if backend == "arnold":
+            objects = self._writable_by_arnold(objects, output_dir, fmt)
+            if not objects:
+                return {}
         batch_objects, per_object = self._route(objects, batch, shader)
         self.logger.info(
             "Baking %d object(s) -> %s (backend=%s, %s)",
@@ -1373,6 +1377,54 @@ class TextureBaker(ptk.LoggingMixin):
         if (u0, v0, u1, v1) == (0.0, 0.0, 1.0, 1.0):
             return None
         return (u0, v0, u1, v1)
+
+    #: The longest path Arnold's RTT writes on Windows: ``MAX_PATH``. Neither
+    #: Maya nor Arnold is long-path aware, so ``LongPathsEnabled`` -- which
+    #: lifts ``ptk.FileUtils.path_length_limit`` to 32767 -- does not lift it.
+    _ARNOLD_MAX_PATH: int = 260
+
+    def _writable_by_arnold(
+        self, objects: List[str], output_dir: str, fmt: str
+    ) -> List[str]:
+        """*objects* whose maps Arnold can write into *output_dir*; the rest
+        named, with why, and left out.
+
+        RTT names a map after its shape (:meth:`_rtt_stem`), and neither Maya
+        nor Arnold is long-path aware: past ``ptk.FileUtils.path_length_limit``
+        -- and on Windows past :attr:`_ARNOLD_MAX_PATH`, whatever
+        ``LongPathsEnabled`` says -- the render returns with nothing written,
+        which a bake reads as the artist's cancel and stops on. A production
+        soldering room's two trays (a 174-character name, 265 with the staging
+        folder) left 49 of its 53 objects unbaked that way (2026-10-15).
+        Predicted here, the object is left out before anything renders and the
+        rest bake.
+        """
+        limit = ptk.FileUtils.path_length_limit()
+        if os.name == "nt":
+            limit = min(limit, self._ARNOLD_MAX_PATH)
+        folder = os.path.abspath(output_dir)
+        kept, refused = [], []
+        for obj in objects:
+            long_name = (cmds.ls(obj, long=True) or [obj])[0]
+            shapes = cmds.listRelatives(
+                long_name, shapes=True, fullPath=True, noIntermediate=True, type="mesh"
+            ) or [long_name]
+            longest = max(
+                len(os.path.join(folder, f"{self._rtt_stem(long_name, s)}.{fmt}"))
+                for s in shapes
+            )
+            (refused if longest >= limit else kept).append((obj, longest))
+        if refused:
+            self.logger.warning(
+                "%d object(s) cannot bake: Arnold names a map after its shape's "
+                "DAG path, and theirs would pass the %d-character path limit "
+                "Maya and Arnold keep to (shorten their group or node names): %s",
+                len(refused),
+                limit,
+                ", ".join(f"{o.rsplit('|', 1)[-1]} ({n})" for o, n in refused[:8])
+                + (" ..." if len(refused) > 8 else ""),
+            )
+        return [o for o, _n in kept]
 
     @staticmethod
     def _rtt_stem(long_name: str, shape: str) -> str:

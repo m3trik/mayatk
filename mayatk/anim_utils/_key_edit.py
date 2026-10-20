@@ -435,8 +435,17 @@ class _KeyEditInternal:
                         )
                     except RuntimeError:
                         continue
+                # Curve by curve, as the unscoped branch below: a compound
+                # (translate) thinned as one plug took its children's shared
+                # range -- cutting a child's own first and last key -- and
+                # reported every frame against its first child's curve.
+                curves = []
                 for attr in cls._filter_attributes_by_ignore(obj_attrs, ignore):
-                    keys_removed += _strip_intermediate(f"{obj}.{attr}")
+                    curves.extend(
+                        cmds.keyframe(f"{obj}.{attr}", query=True, name=True) or []
+                    )
+                for curve in dict.fromkeys(curves):
+                    keys_removed += _strip_intermediate(curve)
             else:
                 # All keyed curves on the object, minus ignored ones
                 keyed_curves = cmds.keyframe(obj, query=True, name=True)

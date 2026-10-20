@@ -481,6 +481,33 @@ Shrink &amp; Extend: resize to fit contents exactly.</string>
         </widget>
        </item>
        <item>
+        <widget class="PushButton" name="btn_swap_shot">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Trade timeline places with another shot, keys and all -- or copy
+this shot's animation over it.
+Option box ▸ for the mode, the shot, and what stays in place.</string>
+         </property>
+         <property name="text">
+          <string>Swap With</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="SpinBox" name="spn_space">
          <property name="enabled">
           <bool>false</bool>

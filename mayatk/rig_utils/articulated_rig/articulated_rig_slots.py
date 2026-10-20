@@ -20,7 +20,6 @@ control (before the build, its part).
 """
 
 import contextlib
-import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
 try:
@@ -53,6 +52,8 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
     TYPE_COLUMN, LIMITS_COLUMN, GIVE_COLUMN = 1, 3, 4
     #: A give's wheel step (Shift: ten of them).
     GIVE_STEP = 0.1
+    #: The tool's full reference, linked at the foot of the panel's help card.
+    HELP_URL = "https://github.com/m3trik/mayatk/blob/main/docs/articulated_rig.md"
 
     def __init__(self, switchboard, log_level="WARNING"):
         super().__init__()
@@ -156,7 +157,8 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
                     "them.",
                     "Every build and edit is one undo step.",
                 ],
-            )
+            ),
+            url=self.HELP_URL,
         )
 
     def btn_ik_fk_init(self, widget):
@@ -336,7 +338,7 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
                     "type": j["type"],
                     "parent": CoreUtils.leaf_name(links[j["parent"]][0]),
                     "limits": j.get("limits") or {},
-                    "give": self._give_of(j),
+                    "give": ptk.ArticulationPlan.give_of(j),
                     "why": j.get("reason", ""),
                 }
                 for i, j in enumerate(self.plan["joints"])
@@ -352,7 +354,7 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
                     "type": j["type"],
                     "parent": links[j["parent"]][0]["name"],
                     "limits": j.get("limits") or {},
-                    "give": self._give_of(j),
+                    "give": ptk.ArticulationPlan.give_of(j),
                     "why": j.get("reason", ""),
                 }
                 for i, j in enumerate(spec["joints"])
@@ -360,66 +362,20 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
         return []
 
     @staticmethod
-    def _give_of(joint: dict) -> float:
-        """A joint's give: its channels' weight (the stiffest, when they
-        differ -- the UI sets them together)."""
-        channels = ArticulatedRig.JOINT_TYPES[joint["type"]][0]
-        weights = joint.get("weights") or {}
-        return min(float(weights.get(c, 1.0)) for c in channels)
-
-    @staticmethod
-    def _limits_text(limits) -> str:
-        fmt = lambda v: "-" if v is None else f"{v:.3g}"  # noqa: E731
-        return (
-            ", ".join(
-                f"{c} {fmt(lo)}..{fmt(hi)}" for c, (lo, hi) in (limits or {}).items()
-            )
-            or "free"
-        )
-
-    @staticmethod
     def parse_limits(
         text: str, channels: Sequence[str]
     ) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
-        """The limits typed into a Limits cell: ``rz -30..95`` per channel,
-        commas between (a one-channel joint may drop the name: ``-30..95``),
-        ``-`` or nothing for a free side, ``free`` (or nothing) for none.
-        Every channel of *channels* gets an entry; one not named is free.
+        """The limits typed into a Limits cell (``ptk.ArticulationPlan.
+        parse_limits``): ``rz -30..95`` per channel, commas between (a
+        one-channel joint may drop the name: ``-30..95``), ``-`` or nothing
+        for a free side, ``free`` (or nothing) for none. Every channel of
+        *channels* gets an entry; one not named is free.
 
         Raises:
             ValueError: A channel the joint lacks, or a part that is no
                 ``min..max``.
         """
-        out = {c: (None, None) for c in channels}
-        text = (text or "").strip()
-        if not text or text.lower() == "free":
-            return out
-        bound = r"(-?\d*\.?\d+(?:[eE][-+]?\d+)?|-)?"
-        pattern = re.compile(rf"^(?:([rt][xyz])\s*:?\s*)?{bound}\s*\.\.\s*{bound}$")
-        for piece in re.split(r"[,;]", text):
-            piece = piece.strip()
-            if not piece:
-                continue
-            match = pattern.match(piece)
-            if match is None:
-                raise ValueError(f"{piece!r} is not 'channel min..max'.")
-            channel, lo, hi = match.groups()
-            if channel is None:
-                if len(channels) != 1:
-                    raise ValueError(
-                        f"{piece!r}: name the channel ({', '.join(channels)})."
-                    )
-                channel = channels[0]
-            if channel not in out:
-                raise ValueError(
-                    f"This joint has no {channel} ({', '.join(channels)})."
-                )
-            value = lambda s: None if s in (None, "", "-") else float(s)  # noqa: E731
-            lo, hi = value(lo), value(hi)
-            if lo is not None and hi is not None and lo > hi:
-                raise ValueError(f"{piece!r}: the minimum is above the maximum.")
-            out[channel] = (lo, hi)
-        return out
+        return ptk.ArticulationPlan.parse_limits(text, channels)
 
     def refresh_table(self):
         table = self.ui.tbl_joints
@@ -439,7 +395,7 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
                         r["part"],
                         r["type"],
                         r["parent"],
-                        self._limits_text(r["limits"]),
+                        ptk.ArticulationPlan.limits_text(r["limits"]),
                         f"{r['give']:g}",
                         r["why"],
                     ]
@@ -490,15 +446,8 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
     def _retype(self, entry: dict, kind: str) -> None:
         with self._reporting(f"Retyping {entry['part']}"):
             if self.plan is not None:
-                joint = self.plan["joints"][entry["index"]]
-                joint["type"] = kind
                 # A type's own limits only: a slide's travel means nothing to a hinge.
-                channels = ArticulatedRig.JOINT_TYPES[kind][0]
-                joint["limits"] = {
-                    c: v
-                    for c, v in (joint.get("limits") or {}).items()
-                    if c in channels
-                }
+                ptk.ArticulationPlan.retype(self.plan["joints"][entry["index"]], kind)
                 self.logger.info(f"{entry['part']}: planned as a {kind}.")
             elif self.rig is not None:
                 self.rig.edit_joint(entry["id"], type=kind)
@@ -534,7 +483,9 @@ class ArticulatedRigSlots(ptk.LoggingMixin):
                 with CoreUtils.undo_chunk("Articulated Rig: Set Limits"):
                     for channel, (lo, hi) in limits.items():
                         self.rig.set_limits(entry["id"], channel, lo, hi)
-            self.logger.info(f"{entry['part']}: limits {self._limits_text(limits)}.")
+            self.logger.info(
+                f"{entry['part']}: limits {ptk.ArticulationPlan.limits_text(limits)}."
+            )
 
     def _set_give(self, entry: dict, give: float) -> None:
         give = max(0.0, give)

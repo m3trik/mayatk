@@ -36,6 +36,7 @@ BUTTONS = (
     "btn_trim_all_trailing",
     "btn_trim_all_both",
     "btn_move_shot",
+    "btn_swap_shot",
     "btn_trim_empty",
     "btn_trim_leading",
     "btn_trim_trailing",
@@ -204,6 +205,12 @@ class TestShotsPanel(MayaTkTestCase):
             "chk_override_locks",
             "cmb_delete_scope",
             "spn_shift_all",
+            "cmb_swap_mode",
+            "cmb_swap_with",
+            "chk_swap_retain_name",
+            "chk_swap_retain_description",
+            "chk_swap_retain_locked",
+            "chk_swap_retain_metadata",
         ) + BUTTONS
         missing = [n for n in expected if getattr(self.ui, n, None) is None]
         self.assertEqual(missing, [])
@@ -431,6 +438,78 @@ class TestShotsPanel(MayaTkTestCase):
             self.assertNotEqual(txt.property("actionState"), "invalid")
         finally:
             # Leave the store as the other cases expect it: empty, no active shot.
+            store.set_active_shot(None)
+            store.shots = []
+
+    def test_the_retain_options_are_the_engines_swap_fields(self):
+        """One checkbox per ``ShotSequencer.SWAP_FIELDS``: a field the engine
+        adds must not go missing from the option box."""
+        ctrl = self.slots.controller
+        self.assertEqual(
+            [field for field, _label, _tip in ctrl._SWAP_RETAIN],
+            list(ctrl._sequencer_cls().SWAP_FIELDS),
+        )
+
+    def test_swap_with_picks_the_next_shot_and_names_it(self):
+        """2026-10-14: "swap shot positions with a 'Swap With x' button" --
+        Apply Gap's shape: the other shot and the options in its option box,
+        the pick named on the button."""
+        store = self._three_shots()
+        ui = self.ui
+        try:
+            ui.cmb_swap_mode.setCurrentIndex(0)
+            self.assertTrue(ui.btn_swap_shot.isEnabled())
+            rows = [
+                ui.cmb_swap_with.itemData(i) for i in range(ui.cmb_swap_with.count())
+            ]
+            self.assertEqual(rows, [2, 3], "every shot but the selected one")
+            self.assertEqual(ui.cmb_swap_with.currentData(), 2, "the next shot")
+            self.assertEqual(ui.btn_swap_shot.text(), "Swap With: B")
+            store.set_active_shot(3)  # the last: the one before it
+            self.assertEqual(ui.cmb_swap_with.currentData(), 2)
+            ui.cmb_swap_with.setCurrentIndex(0)
+            self.assertEqual(ui.btn_swap_shot.text(), "Swap With: A")
+            ui.cmb_swap_mode.setCurrentIndex(1)
+            self.assertEqual(ui.btn_swap_shot.text(), "Copy To: A")
+            self.assertFalse(ui.chk_swap_retain_name.isEnabled(), "a swap's option")
+        finally:
+            ui.cmb_swap_mode.setCurrentIndex(0)
+            store.set_active_shot(None)
+            store.shots = []
+
+    def test_swap_with_trades_places_and_retains_the_checked_fields(self):
+        store = self._three_shots()
+        ui = self.ui
+        try:
+            ui.cmb_swap_mode.setCurrentIndex(0)
+            ui.cmb_swap_with.setCurrentIndex(1)  # C
+            ui.chk_swap_retain_name.setChecked(True)
+            self.slots.btn_swap_shot()
+            self.assertEqual(
+                [(s.shot_id, s.name) for s in store.sorted_shots()],
+                [(3, "A"), (2, "B"), (1, "C")],
+            )
+            self.assertEqual(store.active_shot_id, 1, "the selection rides along")
+        finally:
+            ui.chk_swap_retain_name.setChecked(False)
+            store.set_active_shot(None)
+            store.shots = []
+
+    def test_copy_over_takes_the_selected_shots_length(self):
+        store = self._three_shots()
+        store.update_shot(3, end=70)  # C: 10 frames
+        store.set_active_shot(3)
+        ui = self.ui
+        try:
+            ui.cmb_swap_mode.setCurrentIndex(1)
+            ui.cmb_swap_with.setCurrentIndex(0)  # A
+            self.slots.btn_swap_shot()
+            self.assertEqual(
+                [(s.name, s.start, s.end) for s in store.sorted_shots()],
+                [("A", 0, 10), ("B", 20, 40), ("C", 50, 60)],
+            )
+        finally:
+            ui.cmb_swap_mode.setCurrentIndex(0)
             store.set_active_shot(None)
             store.shots = []
 

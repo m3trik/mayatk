@@ -29,6 +29,7 @@ except ImportError:  # the surface imports without Maya (registry, docs, mock te
 
 import pythontk as ptk
 
+from mayatk.core_utils.units import Units
 from mayatk.rig_utils.articulated_rig._articulated_rig import ArticulatedRig
 
 
@@ -171,8 +172,12 @@ class ArticulatedRigGrab(ptk.LoggingMixin):
         return (eye.x, eye.y, eye.z), (direction.x, direction.y, direction.z)
 
     def _on_press(self, *_: Any) -> None:
-        point = cmds.draggerContext(self.CONTEXT, query=True, anchorPoint=True)
-        if not self.press(*self.ray(point)):
+        # The dragger's point and the camera's (API, centimetres) in one unit,
+        # the rig's: a scene working in metres otherwise aims the ray amiss.
+        with Units.working_as():
+            point = cmds.draggerContext(self.CONTEXT, query=True, anchorPoint=True)
+            taken = self.press(*self.ray(point))
+        if not taken:
             om.MGlobal.displayInfo(
                 "Articulated Rig Grab: nothing rigged under the cursor."
             )
@@ -180,8 +185,9 @@ class ArticulatedRigGrab(ptk.LoggingMixin):
     def _on_drag(self, *_: Any) -> None:
         if not self.hold:
             return
-        point = cmds.draggerContext(self.CONTEXT, query=True, dragPoint=True)
-        self.drag(*self.ray(point))
+        with Units.working_as():
+            point = cmds.draggerContext(self.CONTEXT, query=True, dragPoint=True)
+            self.drag(*self.ray(point))
         cmds.refresh(currentView=True)
 
     def _on_release(self, *_: Any) -> None:

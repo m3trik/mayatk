@@ -35,6 +35,8 @@ except ImportError:
     cmds = None
     mel = None
 
+from uitk.switchboard import Cancelable
+
 from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
@@ -193,6 +195,9 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
             "only those move -- the objects' other shells stay exactly where "
             "they are and are packed around. The other presets work on whole "
             "objects.",
+            "A round trip runs RizomUV hidden: <b>hold Esc</b> to cancel one, "
+            "or tick <b>Show App Window</b> to see (and answer) a dialog it "
+            "stops on.",
             "Add custom presets by dropping new <code>.lua</code> "
             "files into the scripts folder (use <code>__KEY__</code> "
             "tokens from <i>parameters.py</i> for tunable values), "
@@ -256,6 +261,10 @@ class RizomBridgeSlots(MayaBridgeSlotsBase):
     # islands (its shells, for a component selection) move.
     PACK_INTO_EXISTING_PRESET = "pack_into_existing"
 
+    # Inside the dispatcher's CancelScope: a round trip's hidden RizomUV polls
+    # it, so holding Esc (or the long-run dialog's Cancel) ends a run stuck on
+    # a dialog no one can see.
+    @Cancelable(120, message="RizomUV run")
     def b000(self):
         """Run the chosen preset: round-trip, or one-way send when ``send`` is picked."""
         # All operational diagnostics route through the in-window log

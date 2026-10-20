@@ -20,7 +20,11 @@ except ImportError:
 import pythontk as ptk
 
 from mayatk.mat_utils.texture_baker import TextureBaker
-from mayatk.mat_utils.bake_sets import LightmapBakeSet, LightmapExcludeSet
+from mayatk.mat_utils.bake_sets import (
+    LightmapBakeSet,
+    LightmapExcludeSet,
+    LightmapIsolateSet,
+)
 from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 
@@ -65,22 +69,29 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # Scope labels for the Scope combobox (cmb_scope): which objects b000 bakes.
     # Selected (index 0, default) preserves the prior selection-only behavior;
     # _scope() / _scope_objects() resolve it to the mesh transforms to bake.
-    _SCOPE_LABELS = ("Selected", "Visible", "Scene")
+    # Changed (LightmapBaker.rebake_changed: what changed since the last bake,
+    # and what that shades) is APPENDED: the combo persists by INDEX, so a
+    # saved choice of the first three reopens as itself.
+    _SCOPE_LABELS = ("Selected", "Visible", "Scene", "Changed")
 
     #: The panel's switches, ``{preset key: (field, default)}``. Each rides the
     #: option box of the field it QUALIFIES rather than a checkbox row of its
-    #: own: the environment is part of what Scope gathers, adaptive sampling is
-    #: how the Samples are spent, denoise is what the map ships at that
-    #: Resolution, Beside Material Textures redirects the Output Directory, and
-    #: the reflection probe is what the bake ships beside the maps Packing lays
-    #: out. So each reads as a qualifier on a control rather than a row that
-    #: happens to sit nearby, and the panel is five rows shorter.
+    #: own: the lights that light the bake are part of what Scope gathers --
+    #: every scene light or the Scope's own, the environment, the hidden ones
+    #: -- adaptive sampling is how the Samples are spent, denoise is what the
+    #: map ships at that Resolution, Beside Material Textures redirects the
+    #: Output Directory, and the reflection probe is what the bake ships beside
+    #: the maps Packing lays out. So each reads as a qualifier on a control
+    #: rather than a row that happens to sit nearby. A field carrying several
+    #: holds them in this order (:meth:`_toggle`).
     #:
     #: The keys are the preset store's (:attr:`LightmapBaker.PRESET_BOOL_KEYS`),
     #: so :meth:`_preset_fields` builds its entries straight from here and
     #: :meth:`_wire_toggle` derives each settings key from the same name.
     _TOGGLES: Dict[str, Tuple[str, bool]] = {
+        "include_scene_lights": ("cmb_scope", True),
         "include_environment": ("cmb_scope", True),
+        "include_hidden_lights": ("cmb_scope", False),
         "adaptive": ("spn_samples", True),
         "denoise": ("cmb_resolution", True),
         "beside_textures": ("txt_output_dir", False),
@@ -178,8 +189,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         self._refresh_scene_sets()
 
     def _refresh_scene_sets(self) -> None:
-        """Re-read both scene sets onto their labels (Exclude, Bake Set)."""
-        self._refresh_exclusions()
+        """Re-read the scene sets onto their labels (Exclude, Isolate, Bake Set)."""
+        for row in self._SET_ROWS:
+            self._refresh_set_row(row)
         self._refresh_bake_set()
 
     # ------------------------------------------------------------------
@@ -199,6 +211,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
         widget.menu.add(
             "QPushButton",
+            setText="List Changed Objects",
+            setObjectName="list_changed_objects",
+            setToolTip="Select what a Changed bake would re-bake, and list each "
+            "object with why (moved, deformed, a neighbour changed, the "
+            "lighting changed ...) in the Script Editor. Nothing is baked.",
+        )
+        widget.menu.add(
+            "QPushButton",
             setText="Open Sourceimages Folder",
             setObjectName="open_sourceimages",
             setToolTip="Open the folder the lightmaps are written to (the "
@@ -213,13 +233,23 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
                 "samples its lightmap on a second UV set, and the engine "
                 "multiplies it with the albedo.",
                 steps=[
-                    "<b>Scope</b>: the Selected meshes, every Visible one, or the "
-                    "whole Scene. Its button takes the HDRI environment in or out "
-                    "of the bake. <b>Exclude</b> keeps objects from getting a map "
+                    "<b>Scope</b>: the Selected meshes, every Visible one, the "
+                    "whole Scene, or what <b>Changed</b> since the last bake -- "
+                    "moved, deformed, re-lit, and the objects near enough to "
+                    "be shaded by it -- each written back into its own atlas "
+                    "cell (the footer says what, the menu lists it). Its "
+                    "buttons say what lights the bake: "
+                    "<b>Include Scene Lighting</b> (the light) bakes with every "
+                    "scene light, off only the Scope's own; the sphere takes the "
+                    "HDRI environment in or out; the eye switches hidden lights "
+                    "on for the bake. <b>Exclude</b> keeps objects from getting a map "
                     "of their own but leaves them in the render: they still cast "
                     "shadows and bounce light onto everything that bakes. Any "
                     "other mesh that is neither baked nor excluded moves, and "
-                    "stays out of the render.",
+                    "stays out of the render. <b>Isolate</b> is for moving parts "
+                    "that still get a map (a door on its cabinet): each bakes "
+                    "in a pass of its own and stays out of every other "
+                    "object's render, so it leaves no shadow behind.",
                     "<b>Bake Set</b>: with <i>Save After Bake</i> on, every bake "
                     "stores the objects it acted on as a set in the scene, so "
                     "selecting it re-runs that bake. Its tag button names the "
@@ -431,8 +461,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             icon: uitk icon name for the button.
             on: Tooltip while on -- what it is doing, then what a click does.
             off: Tooltip while off, the same way round.
-            kwargs: Forwarded to ``set_toggle`` (e.g. ``on_toggled``).
+            kwargs: Forwarded to ``set_toggle`` (e.g. ``on_toggled``,
+                ``icon_off``). A field's first switch replaces what it carried;
+                the next are added beside it, in :attr:`_TOGGLES` order.
         """
+        kwargs.setdefault("replace", self._field_switches(key)[0] == key)
         widget.option_box.set_toggle(
             icon=icon,
             tooltip_on=on,
@@ -443,17 +476,33 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             **kwargs,
         )
 
+    def _field_switches(self, key: str) -> List[str]:
+        """The :attr:`_TOGGLES` keys riding *key*'s field, in their order."""
+        field = self._TOGGLES[key][0]
+        return [k for k, (f, _default) in self._TOGGLES.items() if f == field]
+
     def _toggle(self, key: str):
         """The :attr:`_TOGGLES` switch *key*, or ``None`` before its field's
         ``_init`` has built it (the preset machinery reads this map while the
-        panel is still loading)."""
+        panel is still loading). A field carrying several switches (Scope's
+        three) holds them in :attr:`_TOGGLES` order, so each is read by its
+        place among the field's switches -- options with an on/off state."""
         from uitk.widgets.optionBox.options.toggle import ToggleOption
 
         widget = getattr(self.ui, self._TOGGLES[key][0], None)
+        shared = self._field_switches(key)
         try:
-            return widget.option_box.find_option(ToggleOption)
+            if len(shared) == 1:
+                return widget.option_box.find_option(ToggleOption)
+            switches = [
+                option
+                for option in widget.option_box.get_options()
+                if hasattr(option, "is_on")
+            ]
         except Exception:  # noqa: BLE001 -- no option box on a bare widget
             return None
+        index = shared.index(key)
+        return switches[index] if index < len(switches) else None
 
     def _toggle_state(self, key: str) -> bool:
         """Whether the *key* switch is on (its shipped default until wired)."""
@@ -515,31 +564,79 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     def cmb_scope_init(self, widget) -> None:
         """Populate the Scope combobox (Selected is the default) and hang the
-        Include Environment switch off it.
+        three lighting switches off it. Changed, last, is what changed since
+        the last bake (:meth:`cmb_scope` says what in the footer).
 
-        Scope is what the bake gathers, and the environment is part of that:
-        the HDRI skydome either lights the bake or it doesn't. Off mutes the
-        domes for the run (:meth:`LightmapBaker._muted_environment`).
+        Scope is what the bake gathers, and what lights it is part of that
+        (:meth:`LightmapBaker._bake_lights`): **Include Scene Lighting** --
+        every scene light, or only the Scope's own -- **Include Environment**
+        -- the HDRI skydome, by its own switch whatever the first says -- and
+        **Include Hidden Lights** -- the hidden ones of that set switched on
+        for the run. Each answers alone, so none greys another out.
         """
         widget.clear()
         widget.addItems(self._SCOPE_LABELS)
         widget.setCurrentIndex(0)  # Selected — the prior selection-only behavior
         self._wire_toggle(
             widget,
-            "include_environment",
+            "include_scene_lights",
             icon="light",
+            on="Include Scene Lighting: every light in the scene lights the "
+            "bake, wherever it sits. Click to bake with only the lights in the "
+            "Scope (selected, or under what is selected).",
+            off="Scope lighting only: the lights in the Scope -- selected, or "
+            "under what is selected -- light the bake; every other scene light "
+            "is switched off for it and back on after. The HDRI has its own "
+            "button. Click to bake with every scene light.",
+        )
+        self._wire_toggle(
+            widget,
+            "include_environment",
+            icon="theme",
             on="Include environment: the scene's HDRI skydome lights the bake "
-            "along with its lights. Click to bake the room's own lights only.",
+            "along with its lights, in the Scope or not. Click to bake the "
+            "room's own lights only.",
             off="Environment excluded: the aiSkyDomeLight is hidden for the "
             "bake and restored afterwards. An HDRI is often a backdrop or a "
             "look-dev convenience rather than the room's real lighting, and "
             "baking it in is a flat ambient lift that cannot be taken back "
             "out of the map. Click to bake it in.",
         )
+        self._wire_toggle(
+            widget,
+            "include_hidden_lights",
+            icon="eye",
+            icon_off="eye_off",
+            on="Include Hidden Lights: the hidden lights the bake uses are "
+            "switched on for it -- under a hidden group too, without showing "
+            "anything else the group hides -- and hidden again after. Click to "
+            "leave hidden lights off.",
+            off="Hidden lights stay off: a light hidden by its own flag or a "
+            "parent group's does not light the bake. Click to switch them on "
+            "for the bake.",
+        )
 
     def _scope(self) -> str:
-        """``"selected"`` (default), ``"visible"`` or ``"scene"`` from cmb_scope."""
+        """``"selected"`` (default), ``"visible"``, ``"scene"`` or ``"changed"``
+        from cmb_scope."""
         return (self.ui.cmb_scope.currentText() or "Selected").split()[0].lower()
+
+    def cmb_scope(self, index) -> None:
+        """Choosing Changed says what a bake would redo, in the footer.
+
+        The dry run (:meth:`LightmapBaker.stale_report`, built with the
+        panel's dials -- :meth:`_make_baker` -- so it reads the lights the
+        bake would): nothing is baked. The other scopes say nothing here.
+        """
+        if self._scope() != "changed":
+            return
+        try:
+            report = self._make_baker().stale_report()
+        except Exception as error:  # noqa: BLE001 -- a combo change never raises
+            self.logger.warning(f"Could not read what changed: {error}")
+            self.ui.footer.setText("Could not read what changed (see Script Editor).")
+            return
+        self.ui.footer.setText(report.summary())
 
     def _scope_objects(self) -> List[str]:
         """The mesh transforms the current Scope names (before the Exclude set).
@@ -559,8 +656,13 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
         The words and their precedence are :class:`pythontk.HandoffScope`'s
         (``scene`` is its synonym for ``all``; anything unknown bakes the
-        selection); this supplies only the scene reads.
+        selection); this supplies only the scene reads. ``changed`` is the
+        panel's own word, answered first: what
+        :meth:`LightmapBaker.stale_report` names -- which Bake hands
+        :meth:`LightmapBaker.rebake_changed` rather than a list.
         """
+        if self._scope() == "changed":
+            return list(self._make_baker().stale_report().targets)
 
         def scene_meshes():
             # Every DAG PATH of every mesh: an instanced shape is ONE node
@@ -589,103 +691,202 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
         return TextureBaker.resolve_meshes(pool or [], descendants=True)
 
-    def set_exclusions_init(self, widget) -> None:
-        """Hang Select / Clear off the Exclude row, and make its hover live.
+    def _scope_lights(self) -> List[str]:
+        """The light shapes the current Scope holds -- what lights a bake with
+        Include Scene Lighting off.
+
+        The bake's targets are meshes (:meth:`_scope_objects`), so its lights
+        are handed to it beside them: the lights selected or under the
+        selection (:meth:`LightmapBaker._scope_lights`), every visible one, or
+        every one in the scene -- the same words, read for lights.
+        """
+        from mayatk.display_utils._display_utils import DisplayUtils
+        from mayatk.light_utils._light_utils import LightUtils
+
+        return list(
+            ptk.HandoffScope.resolve(
+                self._scope(),
+                selected=lambda: LightmapBaker._scope_lights(None),
+                all=LightUtils.all_lights,
+                visible=lambda: [
+                    light
+                    for light in LightUtils.all_lights()
+                    if DisplayUtils.is_visible(light, consider_templated_visible=True)
+                ],
+            )
+            or []
+        )
+
+    #: The panel's scene-set rows -- Exclude and Isolate -- by button: a label,
+    #: one Set From Selection button, Select / Clear on its option box, and a
+    #: live hover. One implementation (:meth:`_init_set_row` and the
+    #: ``_*_set_row`` methods); a row is its set and its words.
+    _SET_ROWS: Dict[str, Dict[str, Any]] = {
+        "set_exclusions": dict(
+            scene_set=LightmapExcludeSet,
+            label="lbl_exclude",
+            title="Exclude",
+            verb="excluded",
+            effect="they still light the rest.",
+            clear_tip="Clear the Exclude set: every object in Scope bakes again. "
+            "The objects themselves are untouched.",
+            cleared="Exclude set cleared — every object in Scope bakes.",
+        ),
+        "set_isolation": dict(
+            scene_set=LightmapIsolateSet,
+            label="lbl_isolate",
+            title="Isolate",
+            verb="isolated",
+            effect="each bakes alone, out of every other object's render.",
+            clear_tip="Clear the Isolate set: every object bakes in one pass, "
+            "each in the others' render. The objects themselves are untouched.",
+            cleared="Isolate set cleared — every object bakes in one pass.",
+        ),
+    }
+
+    def _init_set_row(self, widget, row: str) -> None:
+        """Hang Select / Clear off a scene-set row's button, and make its hover live.
 
         The row mirrors the Marmoset bridge's Bake Source row: Set From
         Selection is the button, Select and Clear its option-box icons. The set
         lives in the scene, so the hover lists its CURRENT members instead of
         the ones the panel opened on; it wraps each widget's own help text.
         """
+        spec = self._SET_ROWS[row]
         widget.option_box.add_action(
-            callback=self.select_exclusions,
+            callback=lambda: self._select_set_row(row),
             icon="select",
-            tooltip="Select the excluded objects (hidden ones included).",
+            tooltip=f"Select the {spec['verb']} objects (hidden ones included).",
             settings_key=False,
         )
         widget.option_box.add_action(
-            callback=self.clear_exclusions,
+            callback=lambda: self._clear_set_row(row),
             icon="clear",
-            tooltip="Clear the Exclude set: every object in Scope bakes again. "
-            "The objects themselves are untouched.",
+            tooltip=spec["clear_tip"],
             settings_key=False,
         )
-        for target in (widget, self.ui.lbl_exclude):
+        for target in (widget, getattr(self.ui, spec["label"])):
             help_text = target.toolTip()
             self.sb.tooltip.bind(
-                target, lambda text=help_text: self._exclusions_tooltip(text)
+                target, lambda text=help_text: self._set_row_tooltip(row, text)
             )
 
-    def _exclusions_tooltip(self, help_text: str) -> str:
-        """*help_text* over the meshes the Exclude set keeps from baking, live.
+    def _set_row_tooltip(self, row: str, help_text: str) -> str:
+        """*help_text* over the meshes a row's set holds, live.
 
         The meshes, not the set's members: a group stored in the set reads as
-        what the bake will actually skip -- the same count the label shows.
+        what the bake will actually act on -- the same count the label shows.
         """
+        spec = self._SET_ROWS[row]
         try:
-            meshes = LightmapExcludeSet.meshes() if cmds is not None else []
+            meshes = spec["scene_set"].meshes() if cmds is not None else []
         except Exception:  # noqa: BLE001 -- a tooltip must never raise into Qt
             return help_text
         return self.sb.tooltip.stored_items(
             meshes,
             body=help_text.replace("\n", "<br>"),
             formatter=lambda n: n.rsplit("|", 1)[-1],
-            noun="mesh(es) excluded in this scene",
-            empty_text="Nothing is excluded in this scene.",
+            noun=f"mesh(es) {spec['verb']} in this scene",
+            empty_text=f"Nothing is {spec['verb']} in this scene.",
         )
 
-    def _refresh_exclusions(self) -> None:
-        """Show the Exclude set's mesh count on its label (``Exclude (3):``).
+    def _refresh_set_row(self, row: str) -> None:
+        """Show a row's set's mesh count on its label (``Exclude (3):``).
 
-        The count is of MESHES -- what the bake skips -- so a group reads as
+        The count is of MESHES -- what the bake acts on -- so a group reads as
         everything under it. Runs on the panel's own edits and on scene
         open / new / undo / redo (see :meth:`_initialize_ui`).
         """
-        label = getattr(self.ui, "lbl_exclude", None)
+        spec = self._SET_ROWS[row]
+        label = getattr(self.ui, spec["label"], None)
         if label is None or cmds is None:
             return
         try:
-            count = len(LightmapExcludeSet.meshes())
+            count = len(spec["scene_set"].meshes())
         except Exception:  # noqa: BLE001 -- a label refresh must never raise
             count = 0
-        label.setText(f"Exclude ({count}):" if count else "Exclude:")
+        title = spec["title"]
+        label.setText(f"{title} ({count}):" if count else f"{title}:")
 
-    def set_exclusions(self) -> None:
-        """Make the selection the Exclude set; an empty selection clears it."""
-        members = LightmapExcludeSet.define()
-        self._refresh_exclusions()
+    def _define_set_row(self, row: str) -> None:
+        """Make the selection a row's set; an empty selection clears it."""
+        spec = self._SET_ROWS[row]
+        members = spec["scene_set"].define()
+        self._refresh_set_row(row)
         if not members:
-            self.ui.footer.setText("Nothing selected — the Exclude set is cleared.")
+            self.ui.footer.setText(
+                f"Nothing selected — the {spec['title']} set is cleared."
+            )
             return
-        count = len(LightmapExcludeSet.meshes())
+        count = len(spec["scene_set"].meshes())
         self.ui.footer.setText(
-            f"{count} mesh{'es' if count != 1 else ''} excluded; "
-            "they still light the rest."
+            f"{count} mesh{'es' if count != 1 else ''} {spec['verb']}; {spec['effect']}"
             if count
-            else "Exclude set stored, but it holds no meshes -- nothing is excluded."
+            else f"{spec['title']} set stored, but it holds no meshes -- nothing "
+            f"is {spec['verb']}."
         )
 
-    def select_exclusions(self) -> None:
-        """Select the Exclude set's members, hidden ones included."""
-        members = LightmapExcludeSet.members()
-        self._refresh_exclusions()
+    def _select_set_row(self, row: str) -> None:
+        """Select a row's set's members, hidden ones included."""
+        spec = self._SET_ROWS[row]
+        members = spec["scene_set"].members()
+        self._refresh_set_row(row)
         if not members:
-            self.ui.footer.setText("Nothing is excluded in this scene.")
+            self.ui.footer.setText(f"Nothing is {spec['verb']} in this scene.")
             return
         cmds.select(members, replace=True)
         self.ui.footer.setText(
-            f"Selected {len(members)} excluded object"
+            f"Selected {len(members)} {spec['verb']} object"
             f"{'s' if len(members) != 1 else ''}."
         )
 
+    def _clear_set_row(self, row: str) -> None:
+        """Delete a row's set; its objects are left untouched."""
+        spec = self._SET_ROWS[row]
+        if not spec["scene_set"].exists():
+            self.ui.footer.setText(f"Nothing is {spec['verb']} in this scene.")
+            return
+        spec["scene_set"].clear()
+        self._refresh_set_row(row)
+        self.ui.footer.setText(spec["cleared"])
+
+    # Exclude: no map of their own, still in the render (LightmapExcludeSet).
+    def set_exclusions_init(self, widget) -> None:
+        """Hang Select / Clear off the Exclude row (:meth:`_init_set_row`)."""
+        self._init_set_row(widget, "set_exclusions")
+
+    def set_exclusions(self) -> None:
+        """Make the selection the Exclude set; an empty selection clears it."""
+        self._define_set_row("set_exclusions")
+
+    def select_exclusions(self) -> None:
+        """Select the Exclude set's members, hidden ones included."""
+        self._select_set_row("set_exclusions")
+
     def clear_exclusions(self) -> None:
         """Delete the Exclude set; its objects are left untouched."""
-        if not LightmapExcludeSet.exists():
-            self.ui.footer.setText("Nothing is excluded in this scene.")
-            return
-        LightmapExcludeSet.clear()
-        self._refresh_exclusions()
-        self.ui.footer.setText("Exclude set cleared — every object in Scope bakes.")
+        self._clear_set_row("set_exclusions")
+
+    def _exclusions_tooltip(self, help_text: str) -> str:
+        """*help_text* over the meshes the Exclude set keeps from baking, live."""
+        return self._set_row_tooltip("set_exclusions", help_text)
+
+    # Isolate: each bakes alone, out of every other's render (LightmapIsolateSet).
+    def set_isolation_init(self, widget) -> None:
+        """Hang Select / Clear off the Isolate row (:meth:`_init_set_row`)."""
+        self._init_set_row(widget, "set_isolation")
+
+    def set_isolation(self) -> None:
+        """Make the selection the Isolate set; an empty selection clears it."""
+        self._define_set_row("set_isolation")
+
+    def select_isolation(self) -> None:
+        """Select the Isolate set's members, hidden ones included."""
+        self._select_set_row("set_isolation")
+
+    def clear_isolation(self) -> None:
+        """Delete the Isolate set; its objects are left untouched."""
+        self._clear_set_row("set_isolation")
 
     # ------------------------------------------------------------------
     # Bake Set
@@ -936,8 +1137,16 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         return self._toggle_state("adaptive")
 
     def _include_environment(self) -> bool:
-        """Whether the bake keeps the scene's environment (the Scope switch)."""
+        """Whether the bake keeps the scene's environment (a Scope switch)."""
         return self._toggle_state("include_environment")
+
+    def _include_scene_lights(self) -> bool:
+        """Whether every scene light lights the bake, or only the Scope's (a Scope switch)."""
+        return self._toggle_state("include_scene_lights")
+
+    def _include_hidden_lights(self) -> bool:
+        """Whether the bake switches the hidden lights on (a Scope switch)."""
+        return self._toggle_state("include_hidden_lights")
 
     def _denoise(self) -> bool:
         """Whether the maps are denoised where they ship (the Resolution switch)."""
@@ -1053,18 +1262,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # Actions
     # ------------------------------------------------------------------
 
-    def b000(self) -> None:
-        """Bake lightmaps for the Scope, minus the Exclude set (:meth:`LightmapBaker.bake`)."""
-        scoped = self._scope_objects()
-        if not scoped:
-            self.ui.footer.setText(
-                "Select one or more mesh objects to bake."
-                if self._scope() == "selected"
-                else f"No meshes found for scope '{self._scope()}'."
-            )
-            return
-
-        self._baker = LightmapBaker(
+    def _make_baker(self) -> LightmapBaker:
+        """A :class:`LightmapBaker` built from the panel's dials and switches --
+        the one every action builds, so the Changed dry run reads the lights,
+        resolution and switches the bake will."""
+        return LightmapBaker(
             resolution=self._resolution(),
             samples=self.ui.spn_samples.value(),
             gi_depth=self.ui.spn_bounces.value(),
@@ -1072,10 +1274,31 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             device=self._device(),
             adaptive=self._adaptive(),
             include_environment=self._include_environment(),
+            include_scene_lights=self._include_scene_lights(),
+            include_hidden_lights=self._include_hidden_lights(),
             denoise=self._denoise(),
             beside_textures=self._beside_textures(),
             reflection_probe=self._reflection_probe(),
         )
+
+    def b000(self) -> None:
+        """Bake lightmaps for the Scope, minus the Exclude set (:meth:`LightmapBaker.bake`).
+
+        Under Changed, re-bake what changed since the last bake and what it
+        shades (:meth:`LightmapBaker.rebake_changed`), each object the way it
+        was baked -- written back into its own atlas cell where it fits.
+        """
+        changed = self._scope() == "changed"
+        scoped = [] if changed else self._scope_objects()
+        if not changed and not scoped:
+            self.ui.footer.setText(
+                "Select one or more mesh objects to bake."
+                if self._scope() == "selected"
+                else f"No meshes found for scope '{self._scope()}'."
+            )
+            return
+
+        self._baker = self._make_baker()
 
         # Where the maps land: the Output Directory field resolved against the
         # scene project's sourceimages (empty: its lightmaps folder; see
@@ -1096,25 +1319,40 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         field = self.ui.txt000
         affix = field.text().strip() or field.placeholderText()
         prefix, suffix = field.option_box.resolve_affix(affix, default="suffix")
+
         # Indeterminate marquee + per-object text in OUR footer. Deliberately not a
         # determinate 0..100% bar: a single Arnold bake is one opaque blocking call
         # with no sub-progress, so a percentage would sit at 0 and jump -- which is
         # exactly what mtoa's own popup does. The text still reports object i / N,
         # which is the part that tells the artist the run is alive and how far in.
-        with self.ui.footer.progress(text="Baking lightmaps…") as update:
-            result = self._baker.bake(
-                scoped,
-                packing=self._packing(),
-                output_dir=src,
-                prefix=prefix,
-                suffix=suffix,
-                on_progress=lambda done, total, name: update(
-                    None,
-                    f"Baking {name}…  ({min(done + 1, total)}/{total})"
-                    if done < total
-                    else f"Baked {total} object{'s' if total != 1 else ''}.",
-                ),
+        def progress(done, total, name):
+            return update(
+                None,
+                f"Baking {name}…  ({min(done + 1, total)}/{total})"
+                if done < total
+                else f"Baked {total} object{'s' if total != 1 else ''}.",
             )
+
+        with self.ui.footer.progress(text="Baking lightmaps…") as update:
+            if changed:
+                # Each the way it was baked (its recorded packing), so the
+                # Packing row does not apply; the dials do.
+                result = self._baker.rebake_changed(
+                    output_dir=src, prefix=prefix, suffix=suffix, on_progress=progress
+                )
+            else:
+                result = self._baker.bake(
+                    # The Scope's lights ride beside its meshes: what lights
+                    # the bake with Include Scene Lighting off (the bake's
+                    # targets stay the meshes).
+                    scoped
+                    + [light for light in self._scope_lights() if light not in scoped],
+                    packing=self._packing(),
+                    output_dir=src,
+                    prefix=prefix,
+                    suffix=suffix,
+                    on_progress=progress,
+                )
         self.ui.footer.setText(
             self._bake_report(result) + self._record_bake_set(result)
         )
@@ -1139,7 +1377,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             if len(folders) == 1
             else f"{len(folders)} folders (beside their textures)"
         )
-        if self._packing() == "atlas":
+        if result.in_place or result.repacked or self._packing() == "atlas":
             n = len(result.files)
             tail = (
                 f"Consolidated into {n} atlas map{'s' if n != 1 else ''}; each "
@@ -1149,6 +1387,19 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             tail = self._LIGHTING_ONLY_TAIL
         count = len(result.maps)
         notes = [f"Baked {count} object{'s' if count != 1 else ''} → {where}. {tail}"]
+        if result.in_place:
+            n = len(result.in_place)
+            notes.append(
+                f" {n} written back into {'its' if n == 1 else 'their'} atlas "
+                f"cell{'s' if n != 1 else ''} in place; every other object's "
+                "texels kept."
+            )
+        if result.repacked:
+            notes.append(
+                " Re-packed whole: "
+                + "; ".join(f"{name} ({why})" for name, why in result.repacked.items())
+                + "."
+            )
         if result.excluded:
             notes.append(f" {len(result.excluded)} excluded.")
         if result.hidden:
@@ -1221,6 +1472,29 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
         else:
             self.ui.footer.setText("No baked objects to revert.")
+
+    def list_changed_objects(self) -> None:
+        """Select what a Changed bake would re-bake, and list each with why.
+
+        The dry run (:meth:`LightmapBaker.stale_report`, the panel's dials):
+        one line per object in the Script Editor -- its own change, or the
+        neighbour whose change reaches it -- then the lighting, the atlases
+        that re-pack whole, what cannot bake and what has no baseline. The
+        footer carries the one-line summary. Nothing is baked.
+        """
+        try:
+            report = self._make_baker().stale_report()
+        except Exception as error:  # noqa: BLE001 -- a menu item never raises
+            self.logger.warning(f"Could not read what changed: {error}")
+            self.ui.footer.setText("Could not read what changed (see Script Editor).")
+            return
+        summary = report.summary()
+        lines = report.lines()
+        if lines:
+            self.logger.log_group(summary, lines)
+        if report.targets and cmds is not None:
+            cmds.select(list(report.targets), replace=True)
+        self.ui.footer.setText(summary)
 
     def open_sourceimages(self) -> None:
         """Open the bake's output folder in the file manager.

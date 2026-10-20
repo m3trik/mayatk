@@ -1102,15 +1102,23 @@ class MayaConnection:
         """
         Execute Python code in Maya.
 
+        In port mode the code runs exactly once, in Maya's ``__main__`` as one
+        namespace (the Script Editor's semantics), whatever its size.
+
         Parameters:
             code: Python code to execute
             timeout: Timeout in seconds (for port mode)
             capture_output: Whether to capture stdout/stderr and return it
-            wait_for_response: Whether to wait for and return the result of the last expression (if capture_output is False)
+            wait_for_response: Whether to wait for and return the result: the
+                value of *code* when it is one expression, ``'None'`` for
+                statements, the error text if it raised (if capture_output is False)
             output_callback: Optional function to call with the captured output
 
         Returns:
-            Output from execution (if capture_output is True) or result of last expression (if wait_for_response is True) or None
+            Output from execution (if capture_output is True) or the result (if
+            wait_for_response is True) or None. Port mode: None also when no
+            reply arrives within *timeout* -- a busy Maya QUEUES the command and
+            still runs it later, so re-sending it runs it twice.
         """
         if not self.is_connected:
             raise RuntimeError("Not connected to Maya. Call connect() first.")
@@ -1337,32 +1345,80 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
     #: Maya reads the first buffer, fails to parse it, and returns nothing.
     PORT_BUFFER = 4096
 
+    #: Defined in Maya's ``__main__`` by every payload (see :meth:`_port_payload`):
+    #: runs the code once, in ``__main__`` as ONE namespace, and always returns
+    #: a string -- the expression's value, ``'None'`` for statements, or the
+    #: error text (traceback to the Script Editor), as Maya's port replies.
+    _PORT_RUNNER = (
+        "def _mayatk_port_run(src, path=None):\n"
+        "    import __main__, traceback\n"
+        "    if path is not None:\n"
+        "        with open(path, encoding='utf-8') as fh:\n"
+        "            src = fh.read()\n"
+        "    name, ns = path or '<mayatk port>', __main__.__dict__\n"
+        "    try:\n"
+        "        try:\n"
+        "            code = compile(src, name, 'eval')\n"
+        "        except SyntaxError:\n"
+        "            exec(compile(src, name, 'exec'), ns)\n"
+        "            return 'None'\n"
+        "        return str(eval(code, ns))\n"
+        "    except Exception as e:\n"
+        "        traceback.print_exc()\n"
+        "        return str(e)\n"
+    )
+
+    @classmethod
+    def _port_payload(cls, code: str) -> str:
+        """The one line to send so Maya runs *code* exactly once.
+
+        Maya's python port handler (``maya/app/general/CommandPort.py``,
+        ``TpythonCommandHandler._languageExecute``) evals a ONE-line message
+        and, when that returns None or raises, execs the same text AGAIN: an
+        ``exec(open(script).read())`` dispatch ran its script twice, back to
+        back (measured 4/4 in a fresh GUI Maya). Multi-line text it execs
+        once, but with the port module's globals and a throwaway locals dict,
+        so a function the script defines cannot see the script's own
+        top-level names (NameError on its first call). The payload is one
+        expression that always evaluates to a string, so the handler never
+        reaches its exec fallback, and the code runs in ``__main__`` -- the
+        Script Editor's namespace -- whatever its size.
+
+        Code the port's buffer cannot hold goes to a temp file the runner
+        reads (measured: a 5 KB message sent whole ran nothing).
+        """
+        src = code.strip()  # as Maya strips a message
+
+        def wrap(args: str) -> str:
+            return (
+                f"(lambda ns: (exec({cls._PORT_RUNNER!r}, ns), "
+                f"ns['_mayatk_port_run']({args}))[1])"
+                "(__import__('__main__').__dict__)"
+            )
+
+        payload = wrap(repr(src))
+        if len(payload.encode("utf-8")) > cls.PORT_BUFFER - 256:
+            from pythontk import TempArtifacts
+
+            path = TempArtifacts("mayatk_port_exec").path(extension=".py")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(src)
+            payload = wrap(f"None, {path!r}")
+        return payload
+
     def _execute_via_port(
         self, code: str, timeout: int, wait_for_response: bool = False
     ) -> Optional[str]:
-        """Execute code via command port.
+        """Execute code via command port, exactly once (:meth:`_port_payload`).
 
-        A payload the port's buffer cannot hold is written to a temp file and
-        replaced by a stub that execs it in ``__main__`` (measured: a 5 KB
-        script sent whole ran nothing and reported nothing). The stub's own
-        result is what *wait_for_response* returns, so a script that needs a
-        value back over that size must write it somewhere itself.
+        With *wait_for_response*, returns Maya's reply: the value of an
+        expression, ``'None'`` for statements, or the error text. Returns
+        None when no complete reply arrives within *timeout*: Maya's main
+        thread is busy (the port accepts and QUEUES the command, which still
+        runs once Maya is free -- re-sending it runs it twice) or Maya is gone.
         """
         try:
-            payload = code.encode("utf-8")
-            if len(payload) > self.PORT_BUFFER - 256:
-                from pythontk import TempArtifacts
-
-                path = TempArtifacts("mayatk_port_exec").path(extension=".py")
-                with open(path, "w", encoding="utf-8") as fh:
-                    fh.write(code)
-                stub = (
-                    "import __main__ as _m; _p = "
-                    + repr(path)
-                    + "; exec(compile(open(_p, encoding='utf-8').read(), _p, 'exec'), "
-                    "_m.__dict__)"
-                )
-                payload = stub.encode("utf-8")
+            payload = self._port_payload(code).encode("utf-8")
             client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client.settimeout(timeout)
             host = getattr(self, "host", "localhost")
@@ -1384,9 +1440,12 @@ _mayatk_main_mod._mayatk_last_captured_output = "".join(_mayatk_output_buffer)
                             break
                     except socket.timeout:
                         break
-                # The NUL first: stripped before it, the reply's trailing
-                # newline (shielded by the NUL) survived as "value\n".
-                response = response_bytes.decode("utf-8").replace("\x00", "").strip()
+                if b"\x00" in response_bytes:  # else: no (complete) reply -> None
+                    # The NUL first: stripped before it, the reply's trailing
+                    # newline (shielded by the NUL) survived as "value\n".
+                    response = (
+                        response_bytes.decode("utf-8").replace("\x00", "").strip()
+                    )
 
             client.close()
             return response

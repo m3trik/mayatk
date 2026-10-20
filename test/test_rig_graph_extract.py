@@ -117,6 +117,23 @@ class TestRigGraphExtractor(MayaTkTestCase):
         self.assertEqual(self.graph.validate(), [])
         self.assertEqual(self.data["source"]["app"], "maya")
 
+    def test_angles_are_degrees_whatever_the_scene_prefers(self):
+        """The source block declares degrees: a scene working in radians read
+        every rotation in radians under that label. Added: 2026-10-17"""
+        from mayatk.rig_utils.rig_graph_extract import RigGraphExtractor
+
+        turned = cmds.spaceLocator(name="turned")[0]
+        cmds.setAttr(f"{turned}.rotateY", 30.0)  # degrees, the default unit
+        follower = cmds.spaceLocator(name="follower")[0]
+        cmds.orientConstraint(turned, follower)  # a driver: the graph lists it
+        cmds.currentUnit(angle="rad")
+        self.addCleanup(cmds.currentUnit, angle="deg")
+        data = RigGraphExtractor().extract()
+        self.assertEqual(cmds.currentUnit(query=True, angle=True), "rad")
+        self.assertEqual(data["source"]["angular_unit"], "deg")
+        rest = next(n for n in data["nodes"] if n["path"].endswith("|turned"))["rest"]
+        self.assertAlmostEqual(rest["rotate"][1], 30.0, places=6)
+
     def test_every_driver_is_accounted_for(self):
         cov = self.graph.coverage()
         self.assertGreater(cov["seen"], 0)

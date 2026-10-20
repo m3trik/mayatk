@@ -329,7 +329,7 @@ class TestSceneImportRendering(unittest.TestCase):
         mat = SimpleNamespace(use_nodes=True, node_tree=tree)
         bpy = SimpleNamespace(path=SimpleNamespace(abspath=lambda p, library=None: p))
         wanted = {"_material_files", "_resolved_image_file", "_maya_openable"}
-        wanted |= {"_extend_sys_path"}
+        wanted |= {"_extend_sys_path", "_node_tree"}
         for template in (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD):
             tree = ast.parse(template.read_text(encoding="utf-8"))
             body = [
@@ -385,7 +385,11 @@ class TestPullManifestSlots(unittest.TestCase):
     The templates cannot import blendertk (the target's Blender may not have it),
     so they carry a dependency-free copy of ``MayaBridge._material_slots``; the
     drift guard below runs blendertk's own method -- lifted from its source by
-    AST -- and the copy over the same graphs.
+    AST -- and the copy over the same graphs. The node-tree gate rides along:
+    the method reaches the tree through ``cls._node_tree`` (blendertk's
+    ``MatUtils.get_node_tree``, lifted the same way), the copy through its
+    inlined ``_node_tree``, and the graphs include a 4.x material with nodes off
+    and a 6.0 one with no ``use_nodes`` at all.
     """
 
     TEMPLATES = (si._IMPORT_TEMPLATE, si._IMPORT_TEMPLATE_USD)
@@ -481,7 +485,21 @@ class TestPullManifestSlots(unittest.TestCase):
                 L(mix, "Result", bsdf, "Base Color"),
             ],
         )
-        return {k: self._material(*v) for k, v in cases.items()}, paths
+        graphs = {k: self._material(*v) for k, v in cases.items()}
+        # The gate's builds. 4.x declares a live ``use_nodes``, and a tree with
+        # nodes off renders nothing; 6.0 declares none, and the tree is the
+        # material's (a ``getattr(mat, "use_nodes", False)`` read skips it).
+        off = self._material(*cases["direct base color"])
+        off.use_nodes = False
+        off.bl_rna = SimpleNamespace(
+            properties={"use_nodes": SimpleNamespace(is_deprecated=False)}
+        )
+        graphs["4.x: nodes off"] = off
+        gone = self._material(*cases["direct base color"])
+        del gone.use_nodes
+        gone.bl_rna = SimpleNamespace(properties={})
+        graphs["6.0: no use_nodes"] = gone
+        return graphs, paths
 
     def setUp(self):
         import tempfile
@@ -503,6 +521,7 @@ class TestPullManifestSlots(unittest.TestCase):
             "_extend_sys_path",
             "_material_files",
             "_material_slots",
+            "_node_tree",
         }
         tree = ast.parse(template.read_text(encoding="utf-8"))
         body = [
@@ -522,9 +541,41 @@ class TestPullManifestSlots(unittest.TestCase):
         exec(compile(ast.Module(body, []), str(template), "exec"), ns)
         return ns
 
+    def _blendertk_gate(self):
+        """blendertk's ``MatUtils.get_node_tree`` (and the RNA probe it reads),
+        lifted from its source -- blendertk is not importable here."""
+        source = self.BTK_BRIDGE.parents[2] / "mat_utils" / "_mat_utils.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        picked = {}
+        for cls_name, fn_name in (
+            ("_MatUtilsInternal", "_nodes_always_on"),
+            ("MatUtils", "get_node_tree"),
+        ):
+            cls_node = next(
+                n
+                for n in tree.body
+                if isinstance(n, ast.ClassDef) and n.name == cls_name
+            )
+            fn = next(
+                n
+                for n in cls_node.body
+                if isinstance(n, ast.FunctionDef) and n.name == fn_name
+            )
+            fn.decorator_list = []
+            picked[fn_name] = fn
+        ns = {}
+        exec(compile(ast.Module(list(picked.values()), []), str(source), "exec"), ns)
+        ns["_MatUtilsInternal"] = type(
+            "_MatUtilsInternal",
+            (),
+            {"_nodes_always_on": staticmethod(ns["_nodes_always_on"])},
+        )
+        return ns["get_node_tree"]
+
     def _blendertk_slots(self):
         """blendertk's ``MayaBridge._material_slots`` + its channel table, lifted
-        from its source (the method is exec'd against a stub ``cls``)."""
+        from its source (the method is exec'd against a stub ``cls`` whose
+        ``_node_tree`` is blendertk's own gate, lifted the same way)."""
         if not self.BTK_BRIDGE.is_file():
             self.skipTest("blendertk source not beside mayatk")
         from typing import Dict, List
@@ -560,6 +611,7 @@ class TestPullManifestSlots(unittest.TestCase):
                 "_resolved_image_file": staticmethod(
                     lambda image: image.filepath if image else None
                 ),
+                "_node_tree": staticmethod(self._blendertk_gate()),
             },
         )
         channels = ns["_PRINCIPLED_CHANNELS"]
@@ -5017,6 +5069,7 @@ class TestUsdPullRouteContracts(unittest.TestCase):
             "_maya_openable",
             "_material_files",
             "_material_slots",
+            "_node_tree",
             "collect_texture_manifest",
         ):
             self.assertEqual(dump(text, name), dump(fbx_text, name), name)

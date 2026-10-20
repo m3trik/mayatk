@@ -27,6 +27,7 @@ it predates curve support and keeps its name for compatibility.
 
 import os
 import bisect
+from contextlib import contextmanager
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 try:
@@ -85,12 +86,27 @@ class CurveWeights(ptk.HelpMixin):
 
     @staticmethod
     def _geometry_dag(geometry) -> "om.MDagPath":
-        """DAG path of *geometry*'s deformable shape (mesh or NURBS curve)."""
+        """DAG path of *geometry*'s deformable shape (mesh or NURBS curve):
+        the shape itself, or a transform's first VISIBLE one.
+
+        Never the transform's own path: ``MDagPath.hasFn(kMesh)`` answers True
+        for a mesh's transform, and a function set on that path can resolve to
+        its intermediate orig shape instead of the deformed one.
+        """
         sel = om.MSelectionList()
         sel.add(str(geometry))
         dag = sel.getDagPath(0)
-        if not (dag.hasFn(om.MFn.kMesh) or dag.hasFn(om.MFn.kNurbsCurve)):
-            dag.extendToShape()
+        if dag.node().hasFn(om.MFn.kShape):
+            return dag
+        for i in range(dag.childCount()):
+            child = dag.child(i)
+            if (
+                child.hasFn(om.MFn.kMesh) or child.hasFn(om.MFn.kNurbsCurve)
+            ) and not om.MFnDagNode(child).isIntermediateObject:
+                shape = om.MDagPath(dag)
+                shape.push(child)
+                return shape
+        dag.extendToShape()  # raises: no deformable shape
         return dag
 
     @classmethod
@@ -302,6 +318,127 @@ class CurveWeights(ptk.HelpMixin):
         return weights, joints
 
 
+class _BindPoses:
+    """dagPose bookkeeping around ``cmds.skinCluster``: package-internal,
+    shared by ``SkinUtils.bind`` and ``RigUtils.rebind_skin_clusters``.
+
+    A skinCluster deforms from its ``bindPreMatrix``; its dagPose
+    (``bindPose`` plug) records the same bind for Go to Bind Pose and the FBX
+    exporter, which writes one BindPose per cluster from it. The two must
+    agree, cluster by cluster.
+    """
+
+    @staticmethod
+    def of(skin_cluster) -> Optional[str]:
+        """The dagPose *skin_cluster* records its bind in, or None."""
+        poses = cmds.listConnections(
+            f"{skin_cluster}.bindPose", source=True, destination=False
+        )
+        return poses[0] if poses else None
+
+    @staticmethod
+    @contextmanager
+    def kept(joints, also: Sequence[str] = ()):
+        """Around a ``cmds.skinCluster`` on *joints*: keep every bind pose
+        another skin uses on them (and the poses in *also*) exactly as it
+        is, and let the new cluster record its own at the pose it binds at.
+
+        Left alone, Maya decides from the joints' LOCAL transforms whether
+        they still stand at an existing bind pose; when they do, it deletes
+        that pose and hands every cluster on it one new pose. At rest that
+        loses only the old pose's node and name (a named bind then renames
+        the OTHER skin's pose), but once an ANCESTOR has moved the skeleton
+        (a rig riding its module) the shared pose keeps the old joint world
+        matrices beside the ancestor's new one: the new cluster's pose
+        disagrees with its bindPreMatrix (58.7 units on a production plug
+        rig) and Go to Bind Pose no longer returns the old skin to its bind.
+
+        The kept poses are hidden from the bind (``dagPose.bindPose`` off),
+        so Maya records a fresh pose, as it already does for joints posed
+        away from the old one. It also rewrites each joint's ``bindPose``
+        matrix, which feeds the kept poses' ``worldMatrix`` entries live:
+        the new pose's entries are frozen at what it recorded, then the
+        joints' values are put back -- the layout Maya builds itself for a
+        second bind pose on a skeleton.
+
+        Parameters:
+            joints (list): The influences the bind is about to use.
+            also (list): Poses to keep although no skin reads them now (a
+                rebind's own pose, between deleting its cluster and making
+                the new one).
+        """
+
+        def _plug(plug):
+            node, attr = plug.split(".", 1)
+            return f"{(cmds.ls(node, long=True) or [node])[0]}.{attr}"
+
+        def _feeds(pose):
+            links = (
+                cmds.listConnections(
+                    f"{pose}.worldMatrix",
+                    connections=True,
+                    plugs=True,
+                    source=True,
+                    destination=False,
+                )
+                or []
+            )
+            return list(zip(links[::2], links[1::2]))
+
+        kept = {pose for pose in also if pose and cmds.objExists(pose)}
+        for joint in joints:
+            for pose in cmds.dagPose(joint, query=True, bindPose=True) or []:
+                if cmds.listConnections(
+                    f"{pose}.message", type="skinCluster", source=False
+                ):
+                    kept.add(pose)
+        if not kept:
+            yield
+            return
+        bind_matrices = {
+            _plug(src): cmds.getAttr(src) for pose in kept for _, src in _feeds(pose)
+        }
+        before = set(cmds.ls(type="dagPose"))
+        for pose in kept:
+            cmds.setAttr(f"{pose}.bindPose", False)
+        try:
+            yield
+        finally:
+            for pose in kept:
+                if cmds.objExists(pose):
+                    cmds.setAttr(f"{pose}.bindPose", True)
+            for pose in set(cmds.ls(type="dagPose")) - before:
+                for dst, src in _feeds(pose):
+                    if _plug(src) in bind_matrices:
+                        recorded = cmds.getAttr(dst)
+                        cmds.disconnectAttr(src, dst)
+                        cmds.setAttr(dst, recorded, type="matrix")
+            for plug, matrix in bind_matrices.items():
+                cmds.setAttr(plug, matrix, type="matrix")
+
+    @classmethod
+    def reattach(cls, skin_cluster, pose: Optional[str]) -> None:
+        """Make *pose* the dagPose *skin_cluster* records its bind in (None:
+        none); the pose it holds now is deleted unless another cluster reads
+        it.
+
+        For a cluster whose ``bindPreMatrix`` was written back from an older
+        bind (a rebind): ``cmds.skinCluster`` recorded the CURRENT pose, the
+        older bind's own pose is the one that agrees.
+        """
+        fresh = cls.of(skin_cluster)
+        if fresh == pose:
+            return
+        if fresh:
+            cmds.disconnectAttr(f"{fresh}.message", f"{skin_cluster}.bindPose")
+            if not cmds.listConnections(
+                f"{fresh}.message", type="skinCluster", source=False
+            ):
+                cmds.delete(fresh)
+        if pose and cmds.objExists(pose):
+            cmds.connectAttr(f"{pose}.message", f"{skin_cluster}.bindPose")
+
+
 class SkinUtils(ptk.HelpMixin):
     """Skinning: binding, batch weight I/O, transfer, falloffs, delta mush."""
 
@@ -313,6 +450,15 @@ class SkinUtils(ptk.HelpMixin):
         "dual_quaternion": 1,
         "blended": 2,
     }
+    #: The deformation settings a cluster rebuilt on the same influences
+    #: carries over (``_bind_like``, ``RigUtils.rebind_skin_clusters``).
+    _CLUSTER_SETTINGS = (
+        "skinningMethod",
+        "maxInfluences",
+        "maintainMaxInfluences",
+        "normalizeWeights",
+        "dqsSupportNonRigid",
+    )
 
     # ------------------------------------------------------------------
     # Resolution
@@ -418,6 +564,10 @@ class SkinUtils(ptk.HelpMixin):
     ) -> str:
         """Smooth-bind *mesh* to *joints* with the full skinCluster arg surface.
 
+        The bind is recorded at the joints' CURRENT pose, in a dagPose of the
+        cluster's own; a bind pose another skin already uses on *joints* is
+        left exactly as it is (see ``_BindPoses.kept``).
+
         Parameters:
             mesh (str/obj): Mesh transform or shape to bind.
             joints (str/list): Influence joints.
@@ -481,21 +631,22 @@ class SkinUtils(ptk.HelpMixin):
         if bind_method == "heatmap":
             kwargs["heatmapFalloff"] = heatmap_falloff
 
-        try:
-            result = cmds.skinCluster(joints, mesh, **kwargs)
-        except RuntimeError as e:
-            if not (bind_fallback and bind_method in ("heatmap", "geodesic")):
-                raise
-            om.MGlobal.displayWarning(
-                f"{bind_method} bind failed ({e}); falling back to closest-distance."
-            )
-            # A failed bind attempt may leave a partial cluster behind.
-            partial = cls.get_skin_cluster(mesh)
-            if partial:
-                cmds.delete(partial)
-            kwargs["bindMethod"] = cls.BIND_METHODS["closest"]
-            kwargs.pop("heatmapFalloff", None)
-            result = cmds.skinCluster(joints, mesh, **kwargs)
+        with _BindPoses.kept(joints):
+            try:
+                result = cmds.skinCluster(joints, mesh, **kwargs)
+            except RuntimeError as e:
+                if not (bind_fallback and bind_method in ("heatmap", "geodesic")):
+                    raise
+                om.MGlobal.displayWarning(
+                    f"{bind_method} bind failed ({e}); falling back to closest-distance."
+                )
+                # A failed bind attempt may leave a partial cluster behind.
+                partial = cls.get_skin_cluster(mesh)
+                if partial:
+                    cmds.delete(partial)
+                kwargs["bindMethod"] = cls.BIND_METHODS["closest"]
+                kwargs.pop("heatmapFalloff", None)
+                result = cmds.skinCluster(joints, mesh, **kwargs)
         skin_cluster = result[0] if isinstance(result, (list, tuple)) else result
         if support_non_rigid:
             cls.set_dqs_support_non_rigid(skin_cluster, True)
@@ -514,15 +665,8 @@ class SkinUtils(ptk.HelpMixin):
         Returns:
             (str) The new pose name, or None when the cluster has no pose.
         """
-        poses = (
-            cmds.listConnections(
-                f"{skin_cluster}.bindPose", source=True, destination=False
-            )
-            or []
-        )
-        if not poses:
-            return None
-        return cmds.rename(poses[0], name)
+        pose = _BindPoses.of(skin_cluster)
+        return cmds.rename(pose, name) if pose else None
 
     @classmethod
     @CoreUtils.undoable
@@ -896,6 +1040,467 @@ class SkinUtils(ptk.HelpMixin):
             surfaceAssociation=surface_association,
             influenceAssociation=list(influence_association),
         )
+
+    # ------------------------------------------------------------------
+    # Adding geometry to a bound mesh
+    # ------------------------------------------------------------------
+
+    @classmethod
+    @CoreUtils.undoable
+    def add_to_skin(
+        cls,
+        target,
+        meshes,
+        combine: bool = True,
+        rigid: bool = False,
+        delete_sources: bool = True,
+        tolerance: float = 1e-4,
+        max_iterations: int = 10,
+    ) -> List[str]:
+        """Skin extra geometry to *target*'s skin, exactly where it sits now.
+
+        The add-a-part workflow for a mesh that is already bound: a connector
+        modeled inside a plug, a strap on a deforming hose. Each new vertex
+        takes its weights from the closest point on *target*'s deformed
+        surface and is then UN-POSED through the skin, so it lands under the
+        cluster's existing bind pose: the rig may stand at any pose (bind
+        pose not required), and the result shows the geometry where it was
+        modeled. *target*'s own weights, influences and bind pose are kept.
+
+        Parameters:
+            target (str/obj): The skinned mesh (transform or shape).
+            meshes (str/obj/list): Mesh(es) to add, modeled in place at the
+                rig's CURRENT pose.
+            combine (bool): True merges them into *target* (one mesh, one
+                skinCluster; UVs, normals and per-face materials kept). False
+                binds each as its own mesh to *target*'s influences, sharing
+                its bind pose (one dagPose for the exporter).
+            rigid (bool): True gives every vertex of a source mesh the SAME
+                weights (the mean of its samples), so it rides as a solid
+                insert; False samples per vertex, so it bends with the surface.
+            delete_sources (bool): combine only: delete the source meshes.
+            tolerance (float): Un-pose convergence, world units.
+            max_iterations (int): Un-pose refinement cap.
+
+        Returns:
+            (list) combine: ``[target]``; otherwise the newly bound meshes.
+
+        Raises:
+            ValueError: *target* is not skinned, a source is not a mesh (or is
+                *target*), or (combine) another deformer sits between the
+                skinCluster and *target*'s original shape.
+        """
+        target = cls._mesh_transform(target)
+        skin_cluster = cls.get_skin_cluster(target) if target else None
+        if not skin_cluster:
+            raise ValueError(f"Not a skinned mesh: {target}")
+        if not isinstance(meshes, (list, tuple, set)):
+            meshes = [meshes]
+        sources = []
+        for mesh in meshes:
+            transform = cls._mesh_transform(mesh)
+            if not transform:
+                raise ValueError(f"Not a mesh: {mesh}")
+            if transform == target:
+                raise ValueError(f"Cannot add {target} to its own skin.")
+            if transform not in sources:
+                sources.append(transform)
+        if not sources:
+            return [target] if combine else []
+
+        max_influences = 0
+        if cmds.getAttr(f"{skin_cluster}.maintainMaxInfluences"):
+            max_influences = cmds.getAttr(f"{skin_cluster}.maxInfluences")
+        samples = []
+        for source in sources:
+            points = cls._world_points(source)
+            rows = cls._sample_surface_weights(skin_cluster, points, max_influences)
+            if rigid:
+                mean = [sum(col) / len(rows) for col in zip(*rows)]
+                rows = [cls._limit_row(mean, max_influences)] * len(rows)
+            samples.append((source, points, rows))
+
+        if combine:
+            cls._combine_into_skin(
+                target, skin_cluster, samples, tolerance, max_iterations
+            )
+            if delete_sources:
+                for source, _, _ in samples:
+                    # A transform that parents other nodes keeps them: only
+                    # its geometry was merged.
+                    shapes = cmds.listRelatives(source, shapes=True, fullPath=True)
+                    children = cmds.listRelatives(source, children=True, fullPath=True)
+                    cmds.delete(
+                        shapes if set(children or []) - set(shapes or []) else source
+                    )
+            return [target]
+        return [
+            cls._bind_like(
+                skin_cluster, source, points, rows, tolerance, max_iterations
+            )
+            for source, points, rows in samples
+        ]
+
+    @staticmethod
+    def _mesh_transform(node) -> Optional[str]:
+        """Long name of the mesh transform for *node* (transform or shape)."""
+        node = str(node)
+        if not cmds.objExists(node):
+            return None
+        if cmds.nodeType(node) == "mesh":
+            node = cmds.listRelatives(node, parent=True, fullPath=True)[0]
+        shapes = cmds.listRelatives(
+            node, shapes=True, noIntermediate=True, fullPath=True
+        )
+        if not cmds.ls(shapes or [], type="mesh"):
+            return None
+        return cmds.ls(node, long=True)[0]
+
+    @staticmethod
+    def _world_points(mesh) -> List["om.MPoint"]:
+        """The visible (deformed) shape's points in world space.
+
+        Copied point by point: ``list(MPointArray)`` holds references into
+        the array's memory, which dangle once the array is collected.
+        """
+        dag = CurveWeights._geometry_dag(mesh)
+        points = om.MFnMesh(dag).getPoints(om.MSpace.kWorld)
+        return [om.MPoint(p) for p in points]
+
+    @staticmethod
+    def _limit_row(row: Sequence[float], max_influences: int) -> List[float]:
+        """Keep the *max_influences* largest weights (0 = all); sum to 1."""
+        row = list(row)
+        if max_influences and sum(1 for w in row if w > 0) > max_influences:
+            ranked = sorted(range(len(row)), key=lambda i: -row[i])
+            keep = set(ranked[:max_influences])
+            row = [w if i in keep else 0.0 for i, w in enumerate(row)]
+        total = sum(row)
+        return [w / total for w in row] if total > 0 else row
+
+    @classmethod
+    def _sample_surface_weights(
+        cls, skin_cluster, world_points, max_influences: int = 0
+    ) -> List[List[float]]:
+        """Weight rows (physical influence order) interpolated at the closest
+        points of *skin_cluster*'s deformed surface to *world_points*."""
+        dag = CurveWeights._geometry_dag(cls._resolve_geometry(skin_cluster))
+        fn_mesh = om.MFnMesh(dag)
+        to_local = dag.inclusiveMatrixInverse()
+        flat, influences = cls.get_weights(skin_cluster)
+        n_inf = len(influences)
+        intersector = om.MMeshIntersector()
+        intersector.create(dag.node(), om.MMatrix())
+        rows = []
+        for point in world_points:
+            hit = intersector.getClosestPoint(om.MPoint(point) * to_local)
+            tri = fn_mesh.getPolygonTriangleVertices(hit.face, hit.triangle)
+            corners = [fn_mesh.getPoint(v, om.MSpace.kObject) for v in tri]
+            row = [0.0] * n_inf
+            for v, b in zip(tri, cls._barycentric(hit.point, corners)):
+                for i, w in enumerate(flat[v * n_inf : (v + 1) * n_inf]):
+                    row[i] += b * w
+            rows.append(cls._limit_row(row, max_influences))
+        return rows
+
+    @staticmethod
+    def _barycentric(point, corners) -> Tuple[float, float, float]:
+        """Clamped barycentric coordinates of *point* in triangle *corners*."""
+        a, b, c = (om.MVector(p) for p in corners)
+        p = om.MVector(point)
+        v0, v1, v2 = b - a, c - a, p - a
+        d00, d01, d11 = v0 * v0, v0 * v1, v1 * v1
+        d20, d21 = v2 * v0, v2 * v1
+        denom = d00 * d11 - d01 * d01
+        if abs(denom) < 1e-12:  # degenerate triangle: its first corner
+            return 1.0, 0.0, 0.0
+        v = (d11 * d20 - d01 * d21) / denom
+        w = (d00 * d21 - d01 * d20) / denom
+        coords = [max(0.0, 1.0 - v - w), max(0.0, v), max(0.0, w)]
+        total = sum(coords) or 1.0
+        return tuple(c / total for c in coords)
+
+    @classmethod
+    def _skin_orig_shape(cls, skin_cluster, exclusive: bool = False) -> str:
+        """The intermediate shape holding *skin_cluster*'s bind-space input
+        (``originalGeometry[0]``).
+
+        Parameters:
+            exclusive (bool): Also require the skin to be the shape's ONLY
+                deformer: fed straight from it and feeding the output shape.
+
+        Raises:
+            ValueError: No original mesh shape, or *exclusive* and another
+                node sits between it, the cluster and the output.
+        """
+        sources = cmds.listConnections(
+            f"{skin_cluster}.originalGeometry[0]",
+            source=True,
+            destination=False,
+            shapes=True,
+        )
+        orig = cmds.ls(sources or [], type="mesh", long=True)
+        if not orig:
+            raise ValueError(f"{skin_cluster} has no original mesh shape.")
+        if exclusive:
+            fed = cmds.ls(
+                cmds.listConnections(
+                    f"{skin_cluster}.input[0].inputGeometry",
+                    source=True,
+                    destination=False,
+                    shapes=True,
+                )
+                or [],
+                long=True,
+            )
+            output = cls._resolve_geometry(skin_cluster)
+            feeds = cmds.listConnections(
+                f"{output}.inMesh", source=True, destination=False
+            )
+            if fed != orig or feeds != [skin_cluster]:
+                raise ValueError(
+                    f"{skin_cluster} is not the only deformer on {output}; "
+                    "use combine=False."
+                )
+        return orig[0]
+
+    @classmethod
+    def _combine_into_skin(
+        cls, target, skin_cluster, samples, tolerance, max_iterations
+    ) -> None:
+        """Append *samples*' geometry to *skin_cluster*'s original shape."""
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        orig = cls._skin_orig_shape(skin_cluster, exclusive=True)
+        output = cls._resolve_geometry(skin_cluster)
+        assignments = MatUtils.get_shading_assignments(target)
+        face_offset = cmds.polyEvaluate(output, face=True)
+        merged: Dict[str, List[int]] = {
+            sg: list(range(face_offset)) if faces is None else list(faces)
+            for sg, faces in assignments.items()
+        }
+        for source, _, _ in samples:
+            n_faces = cmds.polyEvaluate(source, face=True)
+            for sg, faces in MatUtils.get_shading_assignments(source).items():
+                faces = range(n_faces) if faces is None else faces
+                merged.setdefault(sg, []).extend(face_offset + f for f in faces)
+            face_offset += n_faces
+
+        # Merge in object space, every piece under an identity transform; the
+        # sources' points are placeholders the solve below overwrites with
+        # their bind-space positions. The merged mesh REPLACES the orig's input, so its
+        # old modeling history (which would re-apply its edits to the new
+        # topology) is cut off and swept once the swap is done.
+        feeds = cmds.listConnections(f"{orig}.inMesh", source=True, destination=False)
+        history = cmds.listHistory(feeds[0]) if feeds else []
+        base_count = om.MFnMesh(CurveWeights._geometry_dag(orig)).numVertices
+        out_count = om.MFnMesh(CurveWeights._geometry_dag(output)).numVertices
+        if base_count != out_count:
+            raise ValueError(
+                f"{orig} ({base_count} vertices) does not match {output} "
+                f"({out_count}); the bind's input topology is out of sync."
+            )
+        pieces = [cls._copy_mesh(orig)]
+        new_points, new_rows = [], []
+        for source, points, rows in samples:
+            pieces.append(cls._copy_mesh(source))
+            new_points.extend(points)
+            new_rows.extend(rows)
+        united = cmds.polyUnite(pieces, constructionHistory=False, mergeUVSets=1)[0]
+        leftovers = [piece for piece in pieces if cmds.objExists(piece)]
+        if leftovers:
+            cmds.delete(leftovers)
+        united_shape = cmds.listRelatives(united, shapes=True, fullPath=True)[0]
+        cmds.connectAttr(f"{united_shape}.outMesh", f"{orig}.inMesh", force=True)
+        cmds.dgeval(f"{orig}.outMesh")
+        cmds.disconnectAttr(f"{united_shape}.outMesh", f"{orig}.inMesh")
+        cmds.delete(united)
+        stale = [node for node in history if cls._is_orphaned_history(node)]
+        if stale:
+            cmds.delete(stale)
+
+        vertex_ids = list(range(base_count, base_count + len(new_points)))
+        cls.set_weights(
+            skin_cluster,
+            [w for row in new_rows for w in row],
+            vertices=vertex_ids,
+            normalize=False,
+        )
+        cls._solve_bind_points(
+            skin_cluster, vertex_ids, new_points, new_rows, tolerance, max_iterations
+        )
+        if len(merged) > 1 or set(merged) != set(assignments):
+            MatUtils.apply_shading_assignments(target, merged)
+
+    @staticmethod
+    def _is_orphaned_history(node) -> bool:
+        """True when *node* is mesh construction history (a poly node or an
+        intermediate mesh shape) that no longer feeds any visible shape.
+
+        The type gate matters: ``listHistory`` also walks non-geometry inputs
+        (a poly node's ``manipMatrix`` reaches the shape's world matrix, and
+        from there the rig and its animation), none of which is ever swept.
+        """
+        if not cmds.objExists(node):
+            return False
+        if cmds.nodeType(node) == "mesh":
+            if not cmds.getAttr(f"{node}.intermediateObject"):
+                return False
+        elif "polyBase" not in (cmds.nodeType(node, inherited=True) or []):
+            return False
+        future = cmds.listHistory(node, future=True) or []
+        return not any(
+            not cmds.getAttr(f"{shape}.intermediateObject")
+            for shape in cmds.ls(future, shapes=True)
+        )
+
+    @staticmethod
+    def _copy_mesh(mesh) -> str:
+        """*mesh*'s geometry copied under a new identity transform."""
+        dag = CurveWeights._geometry_dag(mesh)
+        transform = cmds.ls(
+            cmds.createNode("transform", name="addToSkin_tmp"), long=True
+        )[0]
+        parent = om.MSelectionList().add(transform).getDependNode(0)
+        om.MFnMesh().copy(dag.node(), parent)
+        return transform
+
+    @classmethod
+    def _unpose_inverses(cls, skin_cluster, rows) -> List["om.MMatrix"]:
+        """Per weight row, the inverse of the LINEAR skin transform
+        ``world = p * G * sum(w * BPM * M) * G^-1 * W_out`` (bind -> world)."""
+        fn = cls._skin_fn(skin_cluster)
+        skin = []
+        for path in fn.influenceObjects():
+            # Logical index: the bindPreMatrix[] / matrix[] plug slot.
+            i = fn.indexForInfluenceObject(path)
+            bind = om.MMatrix(cmds.getAttr(f"{skin_cluster}.bindPreMatrix[{i}]"))
+            pose = om.MMatrix(cmds.getAttr(f"{skin_cluster}.matrix[{i}]"))
+            skin.append(bind * pose)
+        geom = om.MMatrix(cmds.getAttr(f"{skin_cluster}.geomMatrix"))
+        out_dag = CurveWeights._geometry_dag(cls._resolve_geometry(skin_cluster))
+        to_world = geom.inverse() * out_dag.inclusiveMatrix()
+        inverses = []
+        for row in rows:
+            blend = om.MMatrix([0.0] * 16)
+            for w, m in zip(row, skin):
+                if w:
+                    blend += m * w
+            inverses.append((geom * blend * to_world).inverse())
+        return inverses
+
+    @classmethod
+    def _solve_bind_points(
+        cls, skin_cluster, vertex_ids, world_points, rows, tolerance, max_iterations
+    ) -> float:
+        """Move *vertex_ids* of the cluster's original shape until the skinned
+        output lands on *world_points*; exact under any skinning method.
+
+        Starts from the linear inverse and corrects by the measured residual
+        (the real deformer evaluates each pass), so dual-quaternion and
+        blended skins converge too.
+
+        Returns:
+            (float) The final max world-space error.
+        """
+        from mayatk.core_utils.undo_recorder import UndoRecorder
+
+        orig = cls._skin_orig_shape(skin_cluster)
+        orig_fn = om.MFnMesh(CurveWeights._geometry_dag(orig))
+        output = cls._resolve_geometry(skin_cluster)
+        out_fn = om.MFnMesh(CurveWeights._geometry_dag(output))
+        inverses = cls._unpose_inverses(skin_cluster, rows)
+        before = orig_fn.getPoints(om.MSpace.kObject)
+        points = om.MPointArray(before)
+        for v, p, inv in zip(vertex_ids, world_points, inverses):
+            points[v] = om.MPoint(p) * inv
+        error = float("inf")
+        with UndoRecorder.record() as recorder:
+            for _ in range(max(1, max_iterations)):
+                orig_fn.setPoints(points, om.MSpace.kObject)
+                current = out_fn.getPoints(om.MSpace.kWorld)
+                error = 0.0
+                for v, p, inv in zip(vertex_ids, world_points, inverses):
+                    delta = om.MPoint(p) - current[v]
+                    error = max(error, delta.length())
+                    points[v] += delta * inv
+                if error <= tolerance:
+                    break
+            final = orig_fn.getPoints(om.MSpace.kObject)
+            recorder.snapshot(
+                undo=lambda: orig_fn.setPoints(before, om.MSpace.kObject),
+                redo=lambda: orig_fn.setPoints(final, om.MSpace.kObject),
+            )
+        if error > tolerance:
+            om.MGlobal.displayWarning(
+                f"add_to_skin: {skin_cluster} un-pose stopped {error:.4g} from "
+                "the modeled position (raise max_iterations)."
+            )
+        return error
+
+    @classmethod
+    def _bind_like(
+        cls, skin_cluster, source, world_points, rows, tolerance, max_iterations
+    ) -> str:
+        """Bind *source* to *skin_cluster*'s influences under ITS bind pose."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        if cls.get_skin_cluster(source):
+            cls.unbind(source)
+        cmds.delete(source, constructionHistory=True)
+        # The skin alone must carry it: a transform that also follows an
+        # animated parent would move twice.
+        if cmds.listRelatives(source, parent=True):
+            Matrices.pin_world_matrix(source)
+        # Wired by hand, not ``cmds.skinCluster`` (``bind``): that records the
+        # bind at the joints' CURRENT pose, while this part joins the
+        # existing skin's bind -- same bindPreMatrix per influence, same
+        # dagPose -- so it is un-posed into that bind's space below.
+        new_cluster = cmds.deformer(
+            source,
+            type="skinCluster",
+            name=f"{CoreUtils.leaf_name(source)}_skinCluster",
+        )[0]
+        src_fn = cls._skin_fn(skin_cluster)
+        for slot, path in enumerate(src_fn.influenceObjects()):
+            joint = path.fullPathName()
+            i = src_fn.indexForInfluenceObject(path)
+            cmds.connectAttr(f"{joint}.worldMatrix[0]", f"{new_cluster}.matrix[{slot}]")
+            cmds.setAttr(
+                f"{new_cluster}.bindPreMatrix[{slot}]",
+                cmds.getAttr(f"{skin_cluster}.bindPreMatrix[{i}]"),
+                type="matrix",
+            )
+            for src_attr, dst_attr in (
+                ("lockInfluenceWeights", "lockWeights"),
+                ("objectColorRGB", "influenceColor"),
+            ):
+                if cmds.attributeQuery(src_attr, node=joint, exists=True):
+                    cmds.connectAttr(
+                        f"{joint}.{src_attr}", f"{new_cluster}.{dst_attr}[{slot}]"
+                    )
+        for attr in cls._CLUSTER_SETTINGS:
+            cmds.setAttr(
+                f"{new_cluster}.{attr}", cmds.getAttr(f"{skin_cluster}.{attr}")
+            )
+        cmds.setAttr(
+            f"{new_cluster}.geomMatrix",
+            cmds.getAttr(f"{source}.worldMatrix[0]"),
+            type="matrix",
+        )
+        shared = _BindPoses.of(skin_cluster)
+        if shared:
+            cmds.connectAttr(f"{shared}.message", f"{new_cluster}.bindPose")
+        cls.set_weights(new_cluster, [w for row in rows for w in row], normalize=False)
+        cls._solve_bind_points(
+            new_cluster,
+            list(range(len(world_points))),
+            world_points,
+            rows,
+            tolerance,
+            max_iterations,
+        )
+        return source
 
     # ------------------------------------------------------------------
     # Persistence

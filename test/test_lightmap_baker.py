@@ -35,7 +35,7 @@ from mayatk.light_utils.lightmap_baker._probe_placement import ProbePlacement
 from mayatk.light_utils._light_utils import LightUtils
 from mayatk.uv_utils._uv_utils import UvUtils
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
-from mayatk.mat_utils.bake_sets import LightmapExcludeSet
+from mayatk.mat_utils.bake_sets import LightmapExcludeSet, LightmapIsolateSet
 
 
 def _cv2():
@@ -114,6 +114,14 @@ class _FakeBaker:
         self.card_diffuse = None
         self.called_panorama = None
         self.hidden_at_bake = None
+        # The lights switched on as the bake rendered (LightUtils.contributing_lights).
+        self.lit_at_bake = None
+        # Called with no arguments as the bake renders; what it returns is kept
+        # (a test reads the scene mid-bake through it).
+        self.at_bake = None
+        self.seen_at_bake = None
+        # One (objects, hidden meshes) per call: an isolated object's own pass.
+        self.passes = []
 
     def render_panorama(self, position, path, width=1024, hide=None, lights=None):
         """A panorama as ``TextureBaker.render_panorama`` writes one: 2:1, every
@@ -159,6 +167,12 @@ class _FakeBaker:
         self.called_shader = shader
         self.called_batch = batch
         self.hidden_at_bake = _hidden_meshes()
+        self.lit_at_bake = LightUtils.contributing_lights()
+        if self.at_bake is not None:
+            self.seen_at_bake = self.at_bake()
+        self.passes.append(
+            (sorted(cmds.ls(objects, long=True) or []), self.hidden_at_bake)
+        )
         self.card_seen_at_bake = bool(shader) and cmds.objExists(shader)
         if self.card_seen_at_bake:
             self.card_color = cmds.getAttr(f"{shader}.color")[0]
@@ -2348,6 +2362,65 @@ class TestPackAtlas(MayaTkTestCase):
         for src in mapping.values():
             self.assertTrue(os.path.exists(src))
 
+    def test_a_failed_group_keeps_its_maps_in_the_output_folder_on_their_regions(self):
+        """A group that cannot be packed falls back to its per-object maps:
+        each lands in the output folder (copied, with keep_sources), so it
+        outlives the caller's staging, and is bound through its region -- a
+        map cut from part of a layout (Texture Combine's re-pack) is sampled
+        there, not across the whole layout. Both were handed back as they
+        came: a path into a folder swept on exit, with the identity rect."""
+        cv2, np = _cv2()
+        sg, _ = self._make_sg("failGroup")
+        a = self._cube_on_sg("failGroupA", sg)
+        b = self._cube_on_sg("failGroupB", sg)
+        dest = os.path.join(self.tmp, "out")
+        regions = {a: (0.0, 0.0, 0.5, 0.5), b: (0.25, 0.5, 1.25, 1.0)}
+        baker = LightmapBaker(resolution=32)
+        with ptk.TempArtifacts("lm_fail_group", policy="scoped") as staging:
+            mapping = {}
+            for obj, value in ((a, 0.5), (b, 0.25)):
+                path = staging.path(extension=".exr")
+                cv2.imwrite(path, np.full((8, 8, 3), value, np.float32))
+                mapping[obj] = path
+            with mock.patch.object(
+                LightmapBaker, "_pack_group", side_effect=RuntimeError("boom")
+            ):
+                out = baker.pack_atlas(
+                    mapping, output_dir=dest, keep_sources=True, regions=regions
+                )
+        self.assertEqual(set(out), {a, b})
+        for obj, (path, rect) in out.items():
+            self.assertTrue(os.path.isfile(path), f"{obj}: {path} was swept")
+            self.assertEqual(
+                os.path.normcase(os.path.dirname(path)), os.path.normcase(dest)
+            )
+            # The region's corners land on the map's own 0-1 corners.
+            u0, v0, u1, v1 = regions[obj]
+            sx, sy, ox, oy = rect
+            for got, want in (
+                (u0 * sx + ox, 0.0),
+                (u1 * sx + ox, 1.0),
+                (v0 * sy + oy, 0.0),
+                (v1 * sy + oy, 1.0),
+            ):
+                self.assertAlmostEqual(got, want, places=6, msg=f"{obj} {rect}")
+        # Without keep_sources the map is moved -- once, for every object
+        # reading it -- and a map with no region keeps the identity rect.
+        src = self._solid_exr("failGroupMoved.exr", 0.5)
+        with mock.patch.object(
+            LightmapBaker, "_pack_group", side_effect=RuntimeError("boom")
+        ):
+            out = baker.pack_atlas({a: src, b: src}, output_dir=dest)
+        self.assertEqual(set(out), {a, b})
+        self.assertEqual(out[a][0], out[b][0])
+        path, rect = out[a]
+        self.assertEqual(
+            os.path.normcase(os.path.dirname(path)), os.path.normcase(dest)
+        )
+        self.assertTrue(os.path.isfile(path))
+        self.assertFalse(os.path.exists(src))
+        self.assertEqual(rect, [1.0, 1.0, 0.0, 0.0])
+
     def test_surface_area_and_primary_material(self):
         sg, _ = self._make_sg("Area")
         a = self._cube_on_sg("areaCube", sg)
@@ -2894,6 +2967,352 @@ class TestIncludeEnvironment(MayaTkTestCase):
         self.assertEqual(baker.baker.device, "CPU")
 
 
+class TestIncludeSceneLighting(MayaTkTestCase):
+    """Which of the scene's lights light a bake -- the same three switches in
+    mayatk, blendertk and the Blender bridge's bake.
+
+    * **Include Scene Lighting** (on): every scene light, wherever it sits.
+      Off: only the lights in the objects handed to the bake or under them;
+      the rest are switched off for the bake and handed back as found.
+    * **Include Environment** (the HDRI, on): the sky dome, by its own switch
+      alone -- outside the Scope or not, it is the world.
+    * **Include Hidden Lights** (off): the hidden lights of that set are
+      switched on for the bake -- a light under a hidden group too, without
+      showing anything else the group hides -- and switched back off after.
+
+    The fake backend records the lights that were ON as it rendered: an Arnold
+    bake in mayapy renders a watermark, so the lights at render time, not the
+    pixels, are what is measured here. Twin of blendertk's.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("lm_scene_lights", policy="scoped")
+        ).dir_path()
+
+    @staticmethod
+    def _light(name, parent=None, intensity=10.0):
+        """A point light named *name* (under *parent*): ``(transform, shape)``."""
+        transform = cmds.listRelatives(
+            cmds.pointLight(name=name), parent=True, fullPath=True
+        )[0]
+        if parent:
+            transform = cmds.parent(transform, parent)[0]
+        transform = cmds.ls(transform, long=True)[0]
+        shape = cmds.listRelatives(transform, shapes=True, fullPath=True)[0]
+        cmds.setAttr(f"{shape}.intensity", intensity)
+        return transform, shape
+
+    @staticmethod
+    def _module(name):
+        """A group holding a cube: ``(group, cube)`` long names."""
+        group = cmds.group(empty=True, name=name)
+        cube = cmds.parent(cmds.polyCube(name=f"{name}Cube")[0], group)[0]
+        return cmds.ls(group, long=True)[0], cmds.ls(cube, long=True)[0]
+
+    def _bake(self, objects, fake=None, **switches):
+        fake = fake or _FakeBaker()
+        baker = LightmapBaker(
+            resolution=32, baker=fake, reflection_probe=False, **switches
+        )
+        result = baker.bake(objects, packing="per_object", output_dir=self.tmp)
+        return result, fake
+
+    def test_the_switches_default_to_every_light_and_no_hidden_one(self):
+        baker = LightmapBaker()
+        self.assertIs(baker.include_scene_lights, True)
+        self.assertIs(baker.include_hidden_lights, False)
+        self.assertIs(baker.include_environment, True)
+
+    def test_every_scene_light_lights_the_bake_by_default(self):
+        _group, cube = self._module("slDefault")
+        _t, outside = self._light("slOutside")
+        result, fake = self._bake([cube])
+        self.assertTrue(result)
+        self.assertIn(outside, fake.lit_at_bake)
+
+    def test_off_switches_a_light_outside_the_scope_off_and_restores_it(self):
+        group, _cube = self._module("slModule")
+        _t, inside = self._light("slInside", parent=group)
+        out_t, outside = self._light("slOutsideOff")
+        result, fake = self._bake([group], include_scene_lights=False)
+        self.assertTrue(result)
+        self.assertIn(inside, fake.lit_at_bake, "the Scope's own light")
+        self.assertNotIn(outside, fake.lit_at_bake, "switched off for the bake")
+        self.assertTrue(cmds.getAttr(f"{out_t}.visibility"), "handed back as found")
+
+    def test_a_light_handed_to_the_bake_is_in_its_scope(self):
+        """``TextureBaker.resolve_meshes`` drops lights from the targets, so the
+        Scope's lights are read off what the bake was HANDED, not its meshes."""
+        _group, cube = self._module("slHanded")
+        light_t, handed = self._light("slHandedLight")
+        _o, other = self._light("slNotHanded")
+        _result, fake = self._bake([cube, light_t], include_scene_lights=False)
+        self.assertIn(handed, fake.lit_at_bake)
+        self.assertNotIn(other, fake.lit_at_bake)
+
+    @unittest.skipUnless(_arnold_loadable(), "mtoa unavailable")
+    def test_the_environment_answers_only_to_its_own_switch(self):
+        _group, cube = self._module("slWorld")
+        dome = cmds.ls(
+            cmds.createNode("aiSkyDomeLight", name="slDomeShape"), long=True
+        )[0]
+        _r, fake = self._bake([cube], include_scene_lights=False)
+        self.assertIn(dome, fake.lit_at_bake, "outside the Scope, still the world")
+        _r, fake = self._bake([cube], include_environment=False)
+        self.assertNotIn(dome, fake.lit_at_bake)
+
+    def test_hidden_lights_are_switched_on_for_the_bake_and_back_off_after(self):
+        """Its own flag, or a hidden group's: visibility is INHERITED. The group
+        is shown for the bake, so what else it hides is switched off with it."""
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        _group, cube = self._module("slHidden")
+        own_t, own = self._light("slOwnHidden")
+        cmds.setAttr(f"{own_t}.visibility", False)
+        rig = cmds.ls(cmds.group(empty=True, name="slHiddenRig"), long=True)[0]
+        _g, grouped = self._light("slGrouped", parent=rig)
+        prop = cmds.ls(
+            cmds.parent(cmds.polyCube(name="slRigProp")[0], rig)[0], long=True
+        )[0]
+        cmds.setAttr(f"{rig}.visibility", False)
+        fake = _FakeBaker()
+        fake.at_bake = lambda: DisplayUtils.is_visible(prop)
+
+        result, fake = self._bake([cube], fake=fake, include_hidden_lights=True)
+
+        self.assertTrue(result, "not refused: the hidden lights light it")
+        self.assertIn(own, fake.lit_at_bake)
+        self.assertIn(grouped, fake.lit_at_bake)
+        self.assertFalse(fake.seen_at_bake, "what the group hides stays hidden")
+        self.assertFalse(cmds.getAttr(f"{own_t}.visibility"), "handed back hidden")
+        self.assertFalse(cmds.getAttr(f"{rig}.visibility"))
+        self.assertTrue(cmds.getAttr(f"{prop}.visibility"), "its own flag untouched")
+
+    def test_hidden_lights_stay_off_by_default(self):
+        _group, cube = self._module("slStaysOff")
+        _v, visible = self._light("slVisible")
+        hidden_t, hidden = self._light("slStaysHidden")
+        cmds.setAttr(f"{hidden_t}.visibility", False)
+        _result, fake = self._bake([cube])
+        self.assertIn(visible, fake.lit_at_bake)
+        self.assertNotIn(hidden, fake.lit_at_bake)
+
+    def test_only_the_scopes_hidden_lights_are_switched_on_with_the_master_off(self):
+        group, _cube = self._module("slScopeHidden")
+        in_t, inside = self._light("slScopeHiddenIn", parent=group)
+        cmds.setAttr(f"{in_t}.visibility", False)
+        out_t, outside = self._light("slScopeHiddenOut")
+        cmds.setAttr(f"{out_t}.visibility", False)
+        _r, fake = self._bake(
+            [group], include_scene_lights=False, include_hidden_lights=True
+        )
+        self.assertIn(inside, fake.lit_at_bake)
+        self.assertNotIn(outside, fake.lit_at_bake)
+
+    def test_every_light_hidden_bakes_when_hidden_lights_are_on(self):
+        """The refusal reads the set the bake renders: a hidden light it will
+        switch on is a light."""
+        light_t, _shape = self._light("slOnlyHidden")
+        cmds.setAttr(f"{light_t}.visibility", False)
+        refused = LightmapBaker(baker=_FakeBaker()).preflight()
+        self.assertIn("hidden", (refused or "").lower())
+        self.assertIsNone(
+            LightmapBaker(baker=_FakeBaker(), include_hidden_lights=True).preflight()
+        )
+
+    def test_with_the_master_off_the_refusal_reads_the_scopes_lights(self):
+        """A visible light outside the Scope is switched off for the bake, so it
+        cannot stand in for the Scope's hidden one -- and with the master on it
+        does light the bake."""
+        group, _cube = self._module("slRefuse")
+        in_t, _inside = self._light("slRefuseIn", parent=group)
+        cmds.setAttr(f"{in_t}.visibility", False)
+        self._light("slRefuseOut")
+        self.assertIsNone(LightmapBaker(baker=_FakeBaker()).preflight([group]))
+        off = LightmapBaker(baker=_FakeBaker(), include_scene_lights=False)
+        with self.assertLogs(off.logger, level="WARNING") as caught:
+            refused = off.preflight([group])
+        self.assertIn("hidden", (refused or "").lower())
+        audit = "\n".join(caught.output)
+        self.assertIn("slRefuseIn:", audit, "the audit lists the bake's lights")
+        self.assertNotIn("slRefuseOut:", audit, "not the ones it leaves out")
+
+    def test_a_hidden_light_that_cannot_be_switched_on_is_named_and_left(self):
+        _group, cube = self._module("slLocked")
+        self._light("slLockedLit")
+        locked_t, locked = self._light("slLockedLight")
+        cmds.setAttr(f"{locked_t}.visibility", False, lock=True)
+        fake = _FakeBaker()
+        baker = LightmapBaker(
+            resolution=32,
+            baker=fake,
+            reflection_probe=False,
+            include_hidden_lights=True,
+        )
+        with self.assertLogs(baker.logger, level="WARNING") as caught:
+            result = baker.bake([cube], packing="per_object", output_dir=self.tmp)
+        self.assertTrue(result, "a light it cannot switch on never fails the bake")
+        self.assertNotIn(locked, fake.lit_at_bake)
+        self.assertIn("slLockedLight", "\n".join(caught.output))
+        self.assertFalse(cmds.getAttr(f"{locked_t}.visibility"))
+
+    def test_a_light_its_group_cannot_open_for_switches_nothing_else_off(self):
+        """A hidden group holding a child whose visibility is locked is never
+        opened for its light -- and then nothing else in it is switched off
+        either: the children the opening would have hidden were, for a light
+        left off."""
+        _group, cube = self._module("slBlocked")
+        self._light("slBlockedLit")
+        rig = cmds.ls(cmds.group(empty=True, name="slBlockedRig"), long=True)[0]
+        _g, grouped = self._light("slBlockedGrouped", parent=rig)
+        locked = cmds.ls(
+            cmds.parent(cmds.polyCube(name="slBlockedLocked")[0], rig)[0], long=True
+        )[0]
+        cmds.setAttr(f"{locked}.visibility", lock=True)
+        free = cmds.ls(
+            cmds.parent(cmds.polyCube(name="slBlockedFree")[0], rig)[0], long=True
+        )[0]
+        cmds.setAttr(f"{rig}.visibility", False)
+        fake = _FakeBaker()
+        fake.at_bake = lambda: cmds.getAttr(f"{free}.visibility")
+
+        result, fake = self._bake([cube], fake=fake, include_hidden_lights=True)
+
+        self.assertTrue(result)
+        self.assertNotIn(grouped, fake.lit_at_bake)
+        self.assertTrue(fake.seen_at_bake, "switched off for a light left off")
+
+    def test_a_failed_bake_hands_every_light_back(self):
+        class _Boom(_FakeBaker):
+            def bake(self, *args, **kwargs):
+                raise RuntimeError("bake blew up")
+
+        group, _cube = self._module("slBoom")
+        out_t, _outside = self._light("slBoomOut")
+        hid_t, _hidden = self._light("slBoomHidden", parent=group)
+        cmds.setAttr(f"{hid_t}.visibility", False)
+        with self.assertRaises(RuntimeError):
+            self._bake(
+                [group],
+                fake=_Boom(),
+                include_scene_lights=False,
+                include_hidden_lights=True,
+            )
+        self.assertTrue(cmds.getAttr(f"{out_t}.visibility"))
+        self.assertFalse(cmds.getAttr(f"{hid_t}.visibility"))
+
+    @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+    def test_the_reflection_probe_renders_the_bakes_lights(self):
+        room, table, _prop = TestReflectionProbe._room(self)
+        group = cmds.ls(cmds.group(room, table, name="slProbeRoom"), long=True)[0]
+        _i, inside = self._light("slProbeIn", parent=group)
+        _o, outside = self._light("slProbeOut")
+        fake = _FakeBaker()
+        LightmapBaker(resolution=1024, baker=fake, include_scene_lights=False).bake(
+            [group], packing="per_object", output_dir=self.tmp
+        )
+        self.assertIsNotNone(fake.called_panorama, "the bake captured no probe")
+        self.assertIn(inside, fake.called_panorama["lit"])
+        self.assertNotIn(outside, fake.called_panorama["lit"])
+
+    # -- a bake re-bakes and ships the way it was lit ------------------------
+    def _scoped(self, fake):
+        """A Scope-lit baker (Include Scene Lighting off) over *fake*."""
+        return LightmapBaker(
+            resolution=32,
+            baker=fake,
+            reflection_probe=False,
+            include_scene_lights=False,
+        )
+
+    def test_changed_relights_the_way_the_bake_lit_and_settles(self):
+        """A loose light handed beside the cubes is the Scope's own. The dry
+        run reads that light -- not the lights under what is baked -- a
+        Changed re-bake of one cube is lit by it alone, and a second Changed
+        finds nothing. Before, the dry run called the room's lighting changed
+        straight after the bake, and the re-bake lit by the lights under its
+        targets: none."""
+        _ga, cube_a = self._module("slSettleA")
+        gb, cube_b = self._module("slSettleB")
+        cmds.move(10, 0, 0, gb)
+        lamp_t, lamp = self._light("slSettleLamp")
+        _o, other = self._light("slSettleOther")
+        fake = _FakeBaker()
+        baker = self._scoped(fake)
+        baker.bake([cube_a, cube_b, lamp_t], packing="per_object", output_dir=self.tmp)
+        rule = next(iter(LightmapRecords.bake_state()["lightings"].values()))["@rule"]
+        self.assertEqual(
+            rule,
+            {
+                "include_scene_lights": False,
+                "include_environment": True,
+                "include_hidden_lights": False,
+                "scope": [lamp_t],
+            },
+            "the rule the bake lit by (blendertk records the same shape)",
+        )
+        report = baker.stale_report()
+        self.assertEqual(report.targets, (), report.lines())
+
+        # Changed from a panel whose switch was flipped since: the recorded
+        # rule lights the re-bake, not the baker's own switches.
+        changed = LightmapBaker(resolution=32, baker=fake, reflection_probe=False)
+        self.assertEqual(changed.stale_report().targets, ())
+        cmds.move(0, 0.5, 0, cube_a, relative=True)
+        first = changed.rebake_changed(output_dir=self.tmp)
+        self.assertEqual(list(first.maps), [cube_a], first.refused)
+        self.assertIn(lamp, fake.lit_at_bake, "re-lit by the light the bake used")
+        self.assertNotIn(other, fake.lit_at_bake)
+        self.assertIs(changed.include_scene_lights, True, "its switch handed back")
+        second = changed.rebake_changed(output_dir=self.tmp)
+        self.assertEqual(second.maps, {}, second.report.lines())
+        self.assertEqual(baker.stale_report().targets, ())
+
+    def test_changed_reads_each_bakes_own_lights(self):
+        """Two modules baked apart, each lit by its own lamp: a change to one
+        lamp is a lighting change for what it lit alone, and so is a rename
+        (the rule names its lights)."""
+        ga, cube_a = self._module("slOwnA")
+        gb, cube_b = self._module("slOwnB")
+        cmds.move(10, 0, 0, gb)
+        _ta, lamp_a = self._light("slOwnLampA", parent=ga)
+        tb, _lamp_b = self._light("slOwnLampB", parent=gb)
+        baker = self._scoped(_FakeBaker())
+        baker.bake([ga], packing="per_object", output_dir=self.tmp)
+        baker.bake([gb], packing="per_object", output_dir=self.tmp)
+        self.assertEqual(baker.stale_report().targets, ())
+        cmds.setAttr(f"{lamp_a}.intensity", 20.0)
+        report = baker.stale_report()
+        self.assertEqual(report.targets, (cube_a,), report.lines())
+        cmds.setAttr(f"{lamp_a}.intensity", 10.0)
+        cmds.rename(tb, "slOwnLampB2")
+        report = baker.stale_report()
+        self.assertEqual(report.targets, (cube_b,), report.lines())
+
+    def test_the_manifest_ships_the_lights_the_bake_used(self):
+        """Its ``lights`` (drawn into the GLB's probe copies as highlights) are
+        exactly the bake's: not a light outside the Scope, and a hidden light
+        Include Hidden Lights switched on for the bake -- hidden again when the
+        manifest is written."""
+        group, _cube = self._module("slShips")
+        in_t, _inside = self._light("slShipsIn", parent=group)
+        hid_t, _hidden = self._light("slShipsHidden", parent=group)
+        cmds.setAttr(f"{hid_t}.visibility", False)
+        _o, _outside = self._light("slShipsOut")
+        result, _fake = self._bake(
+            [group], include_scene_lights=False, include_hidden_lights=True
+        )
+        self.assertTrue(result.maps, result.refused)
+        shipped = LightmapRecords._record().payload.get("lights", [])
+        self.assertEqual(
+            sorted(light["name"] for light in shipped),
+            sorted(t.rsplit("|", 1)[-1] for t in (in_t, hid_t)),
+        )
+        self.assertFalse(cmds.getAttr(f"{hid_t}.visibility"), "handed back hidden")
+
+
 class TestAtlasPlanFirst(MayaTkTestCase):
     """The atlas layout is decided BEFORE the bake, and sizes the bake.
 
@@ -3360,6 +3779,44 @@ class TestAtlasPlanFirst(MayaTkTestCase):
             self.assertTrue(os.path.exists(path))
             self.assertEqual(rect, [1.0, 1.0, 0.0, 0.0])
 
+    def test_an_unpacked_region_tile_is_bound_through_its_region(self):
+        # A tile rendered over only its island's region (_plan_regions) maps
+        # that REGION onto its 0-1; kept as it is when the pack fails, its
+        # binding must say so, or the engine samples it across the whole
+        # layout.
+        sg = self._sg("drainRegion")
+        a = self._cube("drainRegionA", sg)
+        b = self._cube("drainRegionB", sg)
+        baker = LightmapBaker(resolution=64)
+        work = tempfile.mkdtemp(prefix="lm_work_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+
+        def fake_bake(_self, objects, output_dir=None, **kwargs):
+            out = {}
+            for o in objects:
+                path = os.path.join(work, f"{o.rsplit('|', 1)[-1]}.exr")
+                with open(path, "wb") as fh:
+                    fh.write(b"x")
+                out[o] = path
+            return out
+
+        with (
+            mock.patch.object(LightmapBaker, "_bake_white_card", fake_bake),
+            mock.patch.object(
+                LightmapBaker, "pack_atlas", side_effect=ImportError("no cv2")
+            ),
+            mock.patch.object(
+                LightmapBaker,
+                "_plan_regions",
+                lambda _self, sizes: {a: (0.0, 0.0, 0.5, 0.25)},
+            ),
+            mock.patch.object(UvUtils, "create_lightmap_uvs", return_value={}),
+        ):
+            out = baker.bake_atlas([a, b], output_dir=self.tmp)
+
+        self.assertEqual(out[a][1], [2.0, 4.0, 0.0, 0.0])
+        self.assertEqual(out[b][1], [1.0, 1.0, 0.0, 0.0])
+
 
 class TestLightmapPresets(unittest.TestCase):
     """Quality-tier presets via pythontk PresetStore (no Maya/Arnold needed)."""
@@ -3493,6 +3950,29 @@ class TestLightmapPresets(unittest.TestCase):
         # The device names one machine's hardware; a preset never picks it --
         # the baker keeps its own default.
         self.assertEqual(baker.device, LightmapBaker().device)
+
+    def test_the_lighting_switches_round_trip_through_a_preset(self):
+        """Include Scene Lighting and Include Hidden Lights are switches a
+        preset stores, like Include Environment -- and a preset saved before
+        they existed builds the defaults (every light, no hidden one)."""
+        self.assertIn("include_scene_lights", LightmapBaker.PRESET_BOOL_KEYS)
+        self.assertIn("include_hidden_lights", LightmapBaker.PRESET_BOOL_KEYS)
+        self._store_with(
+            "lightPass",
+            {
+                **self._PANEL_PRESET,
+                "include_scene_lights": False,
+                "include_hidden_lights": True,
+            },
+        )
+        baker = LightmapBaker.from_preset("lightPass")
+        self.assertIs(baker.include_scene_lights, False)
+        self.assertIs(baker.include_hidden_lights, True)
+
+        self._store_with("olderPass", dict(self._PANEL_PRESET))
+        older = LightmapBaker.from_preset("olderPass")
+        self.assertIs(older.include_scene_lights, True)
+        self.assertIs(older.include_hidden_lights, False)
 
     def test_from_preset_overrides_still_win_over_saved_switches(self):
         self._store_with("roomPass", self._PANEL_PRESET)
@@ -3741,6 +4221,106 @@ class TestWhatMovesIsOutOfTheRender(MayaTkTestCase):
                 [floor], packing="per_object", output_dir=self.tmp
             )
         self.assertFalse(_hidden_meshes(), f"{prop} left hidden")
+
+
+class TestIsolatedObjectsBakeAlone(MayaTkTestCase):
+    """The Isolate set: a part that moves against what is baked around it (a
+    locker door on its cabinet, production 2026-10-15) bakes in a pass of its
+    own -- the static scene in its render, every other isolated part out --
+    and is out of every other pass's render, so the cabinet keeps no
+    door-shaped shadow. A member brings the meshes under it (a door's glass,
+    in the door's pass whether or not it bakes).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = self.enterContext(
+            ptk.TempArtifacts("lm_isolate", policy="scoped")
+        ).dir_path()
+        self.addCleanup(LightmapIsolateSet.clear)
+
+    @staticmethod
+    def _cube(name):
+        return cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+
+    @staticmethod
+    def _shapes(*nodes):
+        return {
+            s for n in nodes for s in cmds.listRelatives(n, shapes=True, fullPath=True)
+        }
+
+    def _bake(self, objects, packing="per_object"):
+        fake = _FakeBaker()
+        result = LightmapBaker(resolution=64, baker=fake).bake(
+            objects, packing=packing, output_dir=self.tmp
+        )
+        self.assertTrue(result.maps, result.refused)
+        return fake, result
+
+    def _scene(self):
+        cabinet, door, lid = (
+            self._cube("isoCabinet"),
+            self._cube("isoDoor"),
+            self._cube("isoLid"),
+        )
+        glass = cmds.ls(cmds.parent(self._cube("isoGlass"), door)[0], long=True)[0]
+        LightmapIsolateSet.define([door, lid])
+        return cabinet, door, glass, lid
+
+    def test_each_member_bakes_alone_and_out_of_the_others_render(self):
+        cabinet, door, glass, lid = self._scene()
+
+        fake, result = self._bake([cabinet, door, lid])
+
+        self.assertEqual(
+            fake.passes,
+            [
+                ([cabinet], self._shapes(door, glass, lid)),
+                ([door], self._shapes(lid)),
+                ([lid], self._shapes(door, glass)),
+            ],
+        )
+        self.assertEqual(set(result.maps), {cabinet, door, lid})
+        self.assertFalse(_hidden_meshes(), "every mesh is handed back as found")
+
+    def test_an_atlas_bake_isolates_the_same_way(self):
+        cabinet, door, glass, lid = self._scene()
+
+        fake, _result = self._bake([cabinet, door], packing="atlas")
+
+        self.assertEqual(
+            [objects for objects, _hidden in fake.passes],
+            [[cabinet], [door]],
+        )
+        self.assertEqual(fake.passes[0][1], self._shapes(door, glass, lid))
+
+    def test_a_member_baked_before_stays_out_of_a_later_bake(self):
+        """A map recorded earlier makes the door static to the other bakes'
+        render rule -- the Isolate set must still take it out."""
+        cabinet, door, glass, lid = self._scene()
+        self._bake([door])
+
+        fake, _result = self._bake([cabinet])
+
+        self.assertEqual(fake.passes, [([cabinet], self._shapes(door, glass, lid))])
+
+    def test_a_later_pass_never_takes_an_earlier_passs_map_name(self):
+        """A door sharing its cabinet's texture set is named like the cabinet:
+        one call keeps names apart, two passes must too (blendertk found it)."""
+        cabinet, door, _glass, _lid = self._scene()
+
+        fake, result = self._bake([cabinet, door])
+
+        cabinet_map = os.path.basename(result.maps[cabinet]).lower()
+        self.assertIn(cabinet, fake.called_claims.get(cabinet_map, ()))
+
+    def test_no_isolated_target_is_one_pass_as_before(self):
+        cabinet = self._cube("isoAlone")
+        prop = self._cube("isoProp")
+
+        fake, _result = self._bake([cabinet])
+
+        self.assertEqual(fake.passes, [([cabinet], self._shapes(prop))])
 
 
 class TestBesideTextures(MayaTkTestCase):
@@ -4370,6 +4950,18 @@ class TestBakeWorkflow(MayaTkTestCase):
         self.assertIn("hidden", result.refused.lower())
         self.assertIsNone(fake.called_uv_set, "never spent a bake")
 
+    def test_a_bake_meant_to_be_lit_by_emission_alone_is_not_refused(self):
+        """refuse_unlit=False: the caller says every light off is intended -- an
+        emission-only light layer (mayatk's LightLayerBaker) switches every
+        light to 0 on purpose, and the guard refused it."""
+        _shape, transform = self._make_light(intensity=0)
+        fake = _FakeBaker()
+        result = LightmapBaker(resolution=64, baker=fake, refuse_unlit=False).bake(
+            [self._cube()], packing="per_object", output_dir=self.tmp
+        )
+        self.assertIsNone(result.refused)
+        self.assertIsNotNone(fake.called_uv_set, "the bake ran")
+
     def test_a_contributing_light_bakes(self):
         self._make_light(intensity=110)
         result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
@@ -4579,6 +5171,26 @@ class TestReflectionProbe(MayaTkTestCase):
         )
         return result, fake
 
+    def test_the_manifest_carries_the_lights_for_their_highlights(self):
+        """A lightmap holds no highlight: the bake's lights ride the manifest so
+        a reader lights their specular (Arnold's look on a metal), in the
+        file's unit beside unit_scale."""
+        room, table, _prop = self._room()
+        spot = cmds.spotLight(intensity=3.0, coneAngle=50.0)
+        cmds.xform(
+            cmds.listRelatives(spot, parent=True)[0],
+            ws=True,
+            t=(0, 380, 0),
+            ro=(-90, 0, 0),
+        )
+        self._bake([room, table])
+        manifest = json.loads(LightmapRecords._record().text)
+        (light,) = manifest["lights"]
+        self.assertEqual(light["type"], "spot")
+        self.assertEqual(light["unit_scale"], 0.01)
+        self.assertAlmostEqual(light["position"][1], 380.0, places=3)
+        self.assertAlmostEqual(light["direction"][1], -1.0, places=5)
+
     def test_a_bake_captures_the_room_over_what_moves_and_records_it(self):
         room, table, prop = self._room()
         result, fake = self._bake([room, table])
@@ -4706,6 +5318,31 @@ class TestReflectionProbe(MayaTkTestCase):
             os.path.normcase(os.path.dirname(deps[name]["path"])),
             os.path.normcase(moved),
         )
+
+    def test_an_export_of_baked_objects_reads_the_probe_it_ships(self):
+        """The manifest carries the probe whenever it carries a baked object,
+        so a read scoped to an export set must list it too. Scoped reads left
+        it out: the exporter's path check never saw it, and the folders its
+        FBX embed and GLB build join names against lacked the probe's own --
+        on a production module whose probe sat apart from its maps, the FBX
+        shipped without it. Added: 2026-10-14"""
+        room, table, prop = self._room()
+        result, _fake = self._bake([room, table])
+        name = os.path.basename(result.probe)
+        apart = os.path.join(self.tmp, "apart")
+        os.makedirs(apart)
+        shutil.move(result.probe, os.path.join(apart, name))
+        LightmapRecords.repath_lightmaps({name.lower(): apart}, [])
+
+        scoped = {d["map"]: d for d in LightmapRecords.lightmap_dependencies([table])}
+        self.assertIn(name, scoped, "the export set ships it")
+        self.assertTrue(scoped[name]["path"])
+        self.assertIn(
+            os.path.normcase(apart),
+            [os.path.normcase(d) for d in LightmapRecords.search_dirs([table])],
+        )
+        # A set with nothing baked ships no manifest, so no probe either.
+        self.assertEqual(LightmapRecords.lightmap_dependencies([prop]), [])
 
     def test_a_renamed_map_is_followed_by_its_markers_and_the_probe(self):
         """A lightmap is bound by its FILE NAME -- the markers, the folder and
@@ -5024,6 +5661,33 @@ class TestProbePlacement(MayaTkTestCase):
         self.assertEqual(site.notes, [])
         self.assertBox(site.box, [[-300, 0, -300], [300, 300, 300]])
 
+    def test_an_open_cupboard_over_what_moves_is_left_through_its_opening(self):
+        """A cabinet with its front open and the parts that move inside it: over
+        what moves at eye level is inside the cabinet, and the room's lights
+        show through the opening, so it read as lit open air -- the production
+        probe (SOL_REPLACE_ASSEMBLY, 2026-10-15) was two-thirds cabinet
+        interior, and every unbaked metal in the scene reflected it dark. It
+        leaves by the opening, never through a wall."""
+        room = self._cube("ppRoom", 1000, 400, 1000, (0, 200, 0), inward=True)
+        slabs = [
+            self._cube("ppBack", 120, 215, 3, (0, 107.5, -43.5)),
+            self._cube("ppLeft", 3, 215, 90, (-58.5, 107.5, 0)),
+            self._cube("ppRight", 3, 215, 90, (58.5, 107.5, 0)),
+            self._cube("ppTop", 120, 3, 90, (0, 213.5, 0)),
+            self._cube("ppBottom", 120, 3, 90, (0, 1.5, 0)),
+        ]
+        cabinet = cmds.ls(
+            cmds.polyUnite(slabs, name="ppCabinet", constructionHistory=False)[0],
+            long=True,
+        )[0]
+        prop = self._cube("ppPart", 20, 20, 20, (0, 100, 0))
+        self._light("pointLight", (0, 300, 450))  # in view through the opening
+        site = self._site([room, cabinet], [prop])
+        self.assertEqual(site.reason, "over what moves")
+        self.assertClearOf(site.position, cabinet)
+        self.assertGreater(site.position[2], 45.0, "out the open front, not the back")
+        self.assertTrue(any("ppCabinet" in note for note in site.notes), site.notes)
+
     def test_a_tall_hall_keeps_the_probe_at_eye_level(self):
         hall = self._cube("ppHall", 2000, 1200, 2000, (0, 600, 0), inward=True)
         table = self._cube("ppTable", 240, 90, 100, (200, 45, 100))
@@ -5338,6 +6002,65 @@ class TestSupersededMaps(MayaTkTestCase):
 
         self.assertTrue(os.path.exists(old))
 
+    def test_a_save_as_copys_bake_never_writes_over_the_maps_its_source_reads(self):
+        """A copy carries its source's markers, so they name the source's maps
+        as its own objects' -- a re-bake into the same folder replaced the
+        file the source still reads, which then showed the copy's lighting.
+        The writer record says the source wrote it: every naming path -- a
+        render's name, a placed map, an atlas cell written in place -- keeps
+        off it. (The fake renderer names files without the claims, so each
+        path is asked directly.)"""
+        cube = self._cube("supCopyWrite")
+        self._save_as("source.ma")
+        old = self._bake([cube]).maps[cube]
+        with open(old, "rb") as fh:
+            before = fh.read()
+        self._save_as("copy.ma", write=False)
+        claims = LightmapRecords.claims()
+        folder, name = os.path.split(old)
+
+        self.assertTrue(claims[name.lower()] - {cube}, "nothing claims it for the source")
+        named = ptk.FileUtils.unique_path(
+            folder, os.path.splitext(name)[0], ".exr", claims=claims, owners=[cube]
+        )
+        self.assertNotEqual(os.path.normcase(named), os.path.normcase(old))
+        work = os.path.join(self.tmp, "work")
+        os.makedirs(work)
+        staged = os.path.join(work, name)
+        with open(staged, "wb") as fh:
+            fh.write(b"copy")
+        placed = LightmapBaker()._place_unpacked({cube: (staged, None)}, folder, claims=claims)
+        self.assertNotEqual(os.path.normcase(placed[cube][0]), os.path.normcase(old))
+        with open(old, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the source's map was written over")
+        self.assertIn(
+            "written by",
+            LightmapBaker()._in_place_refusal(old, [cube], [cube], {}, {}, None, None),
+        )
+
+    def test_a_measurement_bake_leaves_the_scene_and_its_maps_as_they_were(self):
+        """``record=False`` (light layers, a portability check): the maps land
+        in the given folder and nothing else changes -- no marker re-pointed,
+        no map of the scene set aside. A layer bake recorded itself, and its
+        commit set the scene's real lightmaps aside as superseded (2026-10-17)."""
+        cube = self._cube("supMeasure")
+        self._save_as("scene.ma")
+        old = self._bake([cube]).maps[cube]
+        marker = LightmapRecords._marker_info(cube)
+        stage = os.path.join(self.tmp, "stage")
+        os.makedirs(stage)
+
+        result = LightmapBaker(resolution=64, baker=_FakeBaker(), record=False).bake(
+            [cube], packing="per_object", output_dir=stage
+        )
+
+        self.assertTrue(os.path.exists(old), "the scene's map was set aside")
+        self.assertEqual(result.retired, [])
+        self.assertTrue(
+            os.path.normcase(result.maps[cube]).startswith(os.path.normcase(stage))
+        )
+        self.assertEqual(LightmapRecords._marker_info(cube), marker)
+
     def test_a_renamed_scenes_own_maps_are_still_its_own(self):
         """Saved under a new name with the old file gone: nothing else can
         open it to read the maps it wrote."""
@@ -5499,24 +6222,42 @@ class _SwitchBox:
 
     The panel's switches ride the option box of the field they qualify
     (``LightmapBakerSlots._TOGGLES``) and are read back by type, so a stub
-    field answers ``find_option`` with the one toggle it carries -- or with
+    field answers ``find_option`` with the first toggle it carries -- or with
     ``None``, which is the before-the-panel-is-wired case the readers fall
-    back to their shipped default for.
+    back to their shipped default for -- and ``get_options`` with all of them,
+    in the order they were added (the Scope field carries three).
     """
 
-    def __init__(self, on=None):
-        self.toggle = None if on is None else _Toggle(on)
+    def __init__(self, *on):
+        self.toggles = [_Toggle(state) for state in on if state is not None]
         self.wired = None
+        self.wired_all = []
+
+    @property
+    def toggle(self):
+        return self.toggles[0] if self.toggles else None
+
+    @toggle.setter
+    def toggle(self, value):
+        self.toggles = [] if value is None else [value]
 
     def find_option(self, _option_type):
         return self.toggle
 
-    def set_toggle(self, *, initial=True, **kwargs):
-        """Mirror ``OptionBoxManager.set_toggle``: replace the field's toggle,
-        which starts at *initial*. The arguments are kept so a test can read
-        back what the panel asked for."""
-        self.toggle = _Toggle(initial)
+    def get_options(self):
+        return list(self.toggles)
+
+    def set_toggle(self, *, initial=True, replace=True, **kwargs):
+        """Mirror ``OptionBoxManager.set_toggle``: replace the field's toggles
+        (or, with ``replace=False``, add one beside them), starting at
+        *initial*. The arguments are kept so a test can read back what the
+        panel asked for."""
+        if replace:
+            self.toggles = []
+            self.wired_all = []
+        self.toggles.append(_Toggle(initial))
         self.wired = dict(kwargs, initial=initial)
+        self.wired_all.append(self.wired)
         return self
 
 
@@ -5593,11 +6334,14 @@ class _PackingCombo:
 class _ScopeCombo:
     """Scope combobox stub: defaults to Selected, matching cmb_scope_init's
     setCurrentIndex(0) (the prior selection-only behavior). Carries the
-    Include Environment switch, as the real one does."""
+    lighting switches in the order the real one does: Include Scene Lighting,
+    Include Environment, Include Hidden Lights."""
 
-    def __init__(self, text="Selected", environment=True):
+    def __init__(
+        self, text="Selected", environment=True, scene_lights=True, hidden_lights=False
+    ):
         self._text = text
-        self.option_box = _SwitchBox(environment)
+        self.option_box = _SwitchBox(scene_lights, environment, hidden_lights)
 
     def currentText(self):
         return self._text
@@ -5702,7 +6446,7 @@ class _DeviceCombo:
 
 
 class _Label:
-    """Enough of QLabel for the Exclude row's live count."""
+    """Enough of QLabel for a set row's live count."""
 
     def __init__(self, text="Exclude:"):
         self._text = text
@@ -5763,6 +6507,8 @@ class _SlotUi:
         probe=True,
         save_set=False,
         set_convention=False,
+        scene_lights=True,
+        hidden_lights=False,
     ):
         self.footer = _Footer()
         self.cmb_device = _DeviceCombo(device)
@@ -5780,8 +6526,14 @@ class _SlotUi:
             output_dir, placeholder="(blank: sourceimages/lightmaps)", switch=beside
         )
         self.cmb002 = _PackingCombo(packing, probe=probe)
-        self.cmb_scope = _ScopeCombo(scope, environment=environment)
+        self.cmb_scope = _ScopeCombo(
+            scope,
+            environment=environment,
+            scene_lights=scene_lights,
+            hidden_lights=hidden_lights,
+        )
         self.lbl_exclude = _Label()
+        self.lbl_isolate = _Label("Isolate:")
 
 
 class _FakeWorkflow:
@@ -5819,12 +6571,16 @@ class _FakeWorkflow:
         adaptive=None,
         beside_textures=False,
         reflection_probe=True,
+        include_scene_lights=True,
+        include_hidden_lights=False,
         **kwargs,
     ):
         self.resolution = resolution
         self.samples = samples
         self.device = device
         self.include_environment = include_environment
+        self.include_scene_lights = include_scene_lights
+        self.include_hidden_lights = include_hidden_lights
         self.denoise = denoise
         self.gi_depth = gi_depth
         self.gi_samples = gi_samples
@@ -5837,8 +6593,10 @@ class _FakeWorkflow:
 
     # The REAL exclusion filter: it only reads the scene's set, and the panel's
     # promise -- an excluded object is neither touched nor baked -- is only
-    # worth pinning against the definition the workflow itself uses.
+    # worth pinning against the definition the workflow itself uses. The same
+    # for the Scope's lights the panel hands the bake.
     bake_targets = staticmethod(LightmapBaker.bake_targets)
+    _scope_lights = staticmethod(LightmapBaker._scope_lights)
 
     def baked_objects(self, objects=None):
         self.calls.append(("baked_objects", tuple(objects) if objects else None))
@@ -5850,6 +6608,38 @@ class _FakeWorkflow:
         self.calls.append(("revert", tuple(objects) if objects else None))
         return list(objects) if objects else []
 
+    #: What stale_report() says changed, and rebake_changed() re-bakes
+    #: (``None``: nothing changed).
+    report = None
+
+    def stale_report(self, objects=None, reach=None):
+        self.calls.append(("stale_report",))
+        return self.report or ptk.StaleReport()
+
+    def rebake_changed(
+        self, packing=None, reach=None, lighting=True, on_progress=None, **kwargs
+    ):
+        """The engine's contract: nothing to do is a refusal saying so; else
+        each target lands in one atlas, written in place as the report says."""
+        report = self.report or ptk.StaleReport()
+        self.calls.append(("rebake_changed",))
+        self.rebake_kwargs = kwargs
+        result = lmb_module.LightmapBakeResult(report=report)
+        self.last_result = result
+        if not report.targets:
+            result.refused = report.summary()
+            return result
+        atlas = os.path.join(
+            kwargs.get("output_dir") or "C:/out",
+            f"Mat{kwargs.get('suffix', '_Lightmap')}.exr",
+        )
+        for o in report.targets:
+            result.maps[o] = atlas
+            result.rects[o] = [1.0, 1.0, 0.0, 0.0]
+        result.in_place = list(report.in_place)
+        result.repacked = dict(report.repack)
+        return result
+
     def bake(
         self,
         objects,
@@ -5860,8 +6650,12 @@ class _FakeWorkflow:
         on_progress=None,
         **kwargs,
     ):
-        # The engine's own sort and refusal, as bake() applies them.
-        targets, hidden, excluded = LightmapBaker._partition(objects)
+        # The engine's own sort and refusal, as bake() applies them: what it
+        # is handed resolves to meshes first (the Scope's lights ride along).
+        self.bake_objects = list(objects)
+        targets, hidden, excluded = LightmapBaker._partition(
+            lmb_module.TextureBaker.resolve_meshes(objects, descendants=True)
+        )
         result = lmb_module.LightmapBakeResult(excluded=excluded, hidden=hidden)
         self.calls.append(("bake", tuple(targets), packing))
         self.bake_output_dir = output_dir
@@ -5929,6 +6723,8 @@ class TestPresetTemplate(unittest.TestCase):
             packing="Atlas by Material (shared map)",
             beside=True,
             probe=False,
+            scene_lights=False,
+            hidden_lights=True,
         )
         self.assertEqual(
             self._slots(ui)._preset_values(),
@@ -5939,7 +6735,9 @@ class TestPresetTemplate(unittest.TestCase):
                 "gi_samples": 5,
                 "gi_depth": 3,
                 "adaptive": False,
+                "include_scene_lights": False,
                 "include_environment": False,
+                "include_hidden_lights": True,
                 "denoise": False,
                 "beside_textures": True,
                 "reflection_probe": False,
@@ -5959,6 +6757,8 @@ class TestPresetTemplate(unittest.TestCase):
                 packing="Atlas by Material (shared map)",
                 beside=True,
                 probe=False,
+                scene_lights=False,
+                hidden_lights=True,
             )
         )._preset_values()
         target = self._slots(_SlotUi())  # the panel's defaults
@@ -6004,6 +6804,17 @@ class TestPresetTemplate(unittest.TestCase):
                 values["reflection_probe"],
             ),
             (False, False, False, "atlas", True, False),
+        )
+
+    def test_a_shipped_tier_leaves_the_lighting_switches_too(self):
+        """A built-in names no light switch, so picking one keeps every scene
+        light / hidden light choice the artist made."""
+        s = self._slots(_SlotUi(scene_lights=False, hidden_lights=True))
+        s._apply_preset_values(LightmapBaker.preset_store().load("desktop"))
+        values = s._preset_values()
+        self.assertEqual(
+            (values["include_scene_lights"], values["include_hidden_lights"]),
+            (False, True),
         )
 
     def test_every_key_the_panel_saves_is_one_the_headless_path_reads(self):
@@ -6092,6 +6903,45 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertTrue(default.include_environment)
         self.assertTrue(default.denoise)
         self.assertTrue(default.reflection_probe)
+
+    def test_b000_carries_the_lighting_switches_to_the_bake(self):
+        self._select_cube()
+        self._slots(_SlotUi(scene_lights=False, hidden_lights=True)).b000()
+        baker = _FakeWorkflow.instances[-1]
+        self.assertIs(baker.include_scene_lights, False)
+        self.assertIs(baker.include_hidden_lights, True)
+
+        self._slots(_SlotUi()).b000()  # the panel's defaults
+        default = _FakeWorkflow.instances[-1]
+        self.assertIs(default.include_scene_lights, True)
+        self.assertIs(default.include_hidden_lights, False)
+
+    def test_b000_hands_the_bake_the_lights_its_scope_holds(self):
+        """The bake's targets are meshes, so the Scope's LIGHTS are handed to it
+        beside them -- what Include Scene Lighting off bakes with: the selected
+        group's light under Selected, every scene light under Scene."""
+        group = cmds.group(empty=True, name="slotModule")
+        cmds.parent(cmds.polyCube(name="slotModuleCube")[0], group)
+        _shape, inside = self._make_light()
+        inside = cmds.ls(cmds.parent(inside, group)[0], long=True)[0]
+        _other_shape, outside = self._make_light()
+        cmds.select(group, replace=True)
+
+        self._slots(_SlotUi(scene_lights=False)).b000()
+        handed = cmds.ls(_FakeWorkflow.instances[-1].bake_objects, long=True)
+        inside_shape = cmds.listRelatives(inside, shapes=True, fullPath=True)[0]
+        self.assertTrue({inside, inside_shape} & set(handed), handed)
+        self.assertNotIn(outside, handed)
+        self.assertEqual(
+            _FakeWorkflow.instances[-1].calls[-1][1],
+            ("|slotModule|slotModuleCube",),
+            "the targets are the meshes alone",
+        )
+
+        self._slots(_SlotUi(scope="Scene", scene_lights=False)).b000()
+        handed = set(cmds.ls(_FakeWorkflow.instances[-1].bake_objects, long=True))
+        for light in LightUtils.all_lights():
+            self.assertIn(light, handed)
 
     def test_b000_hands_the_scope_and_dials_to_bake_and_reverts_nothing(self):
         # ONE call: the engine checks the scene, bakes and records. Nothing is
@@ -6693,6 +7543,29 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         s.set_exclusions()
         self.assertEqual(ui.lbl_exclude.text(), "Exclude:")
         self.assertIn("holds no meshes", ui.footer.text)
+
+    def test_isolate_row_sets_selects_and_clears_the_scene_set(self):
+        """The Isolate row is the Exclude row's twin over its own set."""
+        door = cmds.polyCube(name="isoRowDoor")[0]
+        cmds.parent(cmds.polyCube(name="isoRowGlass")[0], door)
+        ui = _SlotUi()
+        s = self._slots(ui)
+
+        cmds.select(door, replace=True)
+        s.set_isolation()
+        # The door brings the glass under it: they move together.
+        self.assertEqual(ui.lbl_isolate.text(), "Isolate (2):")
+        self.assertIn("2 meshes isolated", ui.footer.text)
+        self.assertEqual(ui.lbl_exclude.text(), "Exclude:", "Exclude is untouched")
+
+        cmds.select(clear=True)
+        s.select_isolation()
+        self.assertEqual(cmds.ls(selection=True, long=True), cmds.ls(door, long=True))
+
+        s.clear_isolation()
+        self.assertFalse(LightmapIsolateSet.exists())
+        self.assertEqual(ui.lbl_isolate.text(), "Isolate:")
+        self.assertIn("one pass", ui.footer.text)
 
     def test_exclude_hover_lists_the_meshes_the_label_counts(self):
         """A group in the set must read as the meshes it keeps from baking --
@@ -7306,6 +8179,55 @@ class TestPanelSwitches(unittest.TestCase):
         self.assertEqual(s._scope(), "selected")
         self.assertTrue(s._include_environment())
 
+    def test_the_scope_carries_the_three_lighting_switches_in_order(self):
+        """Include Scene Lighting, Include Environment (the HDRI), Include
+        Hidden Lights -- what lights the bake is part of what Scope gathers.
+        Each is read from its own button, so flipping one never reads as
+        another; none greys out another (the HDRI and the hidden lights mean
+        the same with the master on or off)."""
+        s = self._slots()
+        s.ui.cmb_scope = _ItemCombo()
+        s.cmb_scope_init(s.ui.cmb_scope)
+        wired = s.ui.cmb_scope.option_box.wired_all
+        self.assertEqual(
+            [w["settings_key"] for w in wired],
+            [
+                "lightmap_baker_include_scene_lights",
+                "lightmap_baker_include_environment",
+                "lightmap_baker_include_hidden_lights",
+            ],
+        )
+        self.assertEqual([w["initial"] for w in wired], [True, True, False])
+        self.assertTrue(s._include_scene_lights())
+        self.assertTrue(s._include_environment())
+        self.assertFalse(s._include_hidden_lights())
+        for w in wired:
+            self.assertNotIn("gated_widgets", w)
+        # Every icon is one uitk ships: a bad name draws an empty button.
+        icons = os.path.join(os.path.dirname(__import__("uitk").__file__), "icons")
+        for w in wired:
+            for key in ("icon", "icon_off"):
+                if w.get(key):
+                    self.assertTrue(
+                        os.path.isfile(os.path.join(icons, f"{w[key]}.svg")), w[key]
+                    )
+
+        s.ui.cmb_scope.option_box.toggles[0].set_on(False)
+        s.ui.cmb_scope.option_box.toggles[2].set_on(True)
+        self.assertFalse(s._include_scene_lights())
+        self.assertTrue(s._include_environment(), "its own switch")
+        self.assertTrue(s._include_hidden_lights())
+
+    def test_a_preset_load_writes_the_lighting_switches(self):
+        s = self._slots(scene_lights=True, hidden_lights=False)
+        applied = s._apply_preset_values(
+            {"include_scene_lights": False, "include_hidden_lights": True}
+        )
+        self.assertEqual(applied, 2)
+        self.assertFalse(s._include_scene_lights())
+        self.assertTrue(s._include_hidden_lights())
+        self.assertTrue(s._include_environment(), "a key the preset lacks stays")
+
     def test_a_field_wires_its_own_switch_when_it_initialises(self):
         """``<field>_init`` is where each switch is hung, under a panel-scoped
         settings key -- the auto-derived one is the field's bare objectName,
@@ -7357,6 +8279,7 @@ class TestPanelLayout(unittest.TestCase):
                 "header",
                 "cmb_scope",
                 "exclude_layout",
+                "isolate_layout",
                 "bake_set_layout",
                 "cmb002",
                 "cmb_device",
@@ -7387,6 +8310,10 @@ class TestPanelLayout(unittest.TestCase):
             if w.get("class") in ("QCheckBox", "CheckBox")  # uitk's counts too
         ]
         self.assertEqual(boxes, [], "every switch rides its field's option box")
+
+    def test_the_isolate_row_mirrors_the_exclude_row(self):
+        row = [child.get("name") for child in self._items("isolate_layout")]
+        self.assertEqual(row, ["lbl_isolate", "set_isolation"])
 
     def test_the_bake_set_row_mirrors_the_exclude_row(self):
         """A label and one button; Save After Bake and the naming switch ride
@@ -7696,6 +8623,518 @@ class TestLightmapFolderHints(MayaTkTestCase):
             self._found_by(), [("fh_ref_LightMap.exr", LightmapRecords.FOUND_BY_HINT)]
         )
         self.assertEqual(LightmapRecords._folder_hints(), {}, "the host's own record")
+
+
+class _ValueBaker(_FakeBaker):
+    """A fake bake whose every map is ONE flat value, its island wholly covered.
+
+    What a cell holds after the pack is then known exactly: a test tells a
+    cell written in place from one left as it was. *values* maps an object's
+    leaf name to its value (1.0 by default); change it between bakes.
+    """
+
+    def __init__(self, values=None):
+        super().__init__()
+        self.values = dict(values or {})
+        self.baked = []
+
+    def bake(self, objects, output_dir=None, prefix="", suffix="", **_kwargs):
+        cv2, np = _cv2()
+        out = {}
+        for obj in objects:
+            long_name = cmds.ls(obj, long=True)[0]
+            leaf = long_name.rsplit("|", 1)[-1]
+            img = np.full((16, 16, 4), float(self.values.get(leaf, 1.0)), np.float32)
+            img[..., 3] = 1.0
+            path = os.path.join(output_dir, f"{prefix}{leaf}{suffix}.exr")
+            cv2.imwrite(path, img)
+            out[long_name] = path
+            self.baked.append(long_name)
+        return out
+
+
+@unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
+class TestRebakeChanged(MayaTkTestCase):
+    """Re-bake Changed: what a map was baked against is recorded, so a re-bake
+    redoes only what changed and what it shades -- and writes those back into
+    the cells they own in their atlas, each material keeping ONE atlas.
+
+    Before it, a partial re-bake of an atlas group packed the subset into an
+    atlas of its own (``_1``) at another texel density, and nothing said what
+    had changed since the last bake. A fake bake renders a flat value per
+    object, so a cell written in place is told from one left as it was.
+    """
+
+    ATLAS = "Crate_Lightmap.exr"
+
+    def setUp(self):
+        super().setUp()
+        self.store = self.enterContext(ptk.TempArtifacts("lm_rebake", policy="scoped"))
+        self.out = self.store.dir_path(name="maps")
+        self.fake = _ValueBaker()
+        self.addCleanup(LightmapExcludeSet.clear)
+
+    # -- fixtures ---------------------------------------------------------
+    @staticmethod
+    def _crate_sg(name="rcCrate", texture="Crate"):
+        """A material whose texture set names its atlas ``<texture>_Lightmap``."""
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        mat = cmds.shadingNode("lambert", asShader=True, name=f"{name}Mat")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        fn = cmds.shadingNode("file", asTexture=True, name=f"{name}File")
+        cmds.setAttr(
+            f"{fn}.fileTextureName", f"C:/tex/{texture}_BaseColor.png", type="string"
+        )
+        cmds.connectAttr(f"{fn}.outColor", f"{mat}.color", force=True)
+        return sg
+
+    def _crates(self, names=("rcA", "rcB", "rcC"), spacing=10.0, sg=None):
+        """Cubes on one material, *spacing* apart: far enough that a change to
+        one reaches none of the others."""
+        sg = sg or self._crate_sg()
+        out = []
+        for i, name in enumerate(names):
+            cube = cmds.polyCube(name=name)[0]
+            cmds.move(i * spacing, 0, 0, cube)
+            shape = cmds.listRelatives(cube, shapes=True, fullPath=True)[0]
+            cmds.sets(shape, edit=True, forceElement=sg)
+            out.append(cmds.ls(cube, long=True)[0])
+        return out
+
+    def _baker(self, **kwargs):
+        return LightmapBaker(
+            resolution=64, baker=self.fake, reflection_probe=False, **kwargs
+        )
+
+    def _bake(self, objects, **kwargs):
+        result = self._baker().bake(
+            objects, packing="atlas", output_dir=self.out, **kwargs
+        )
+        self.assertTrue(result.maps, result.refused)
+        return result
+
+    def _rebake(self, **kwargs):
+        return self._baker().rebake_changed(output_dir=self.out, **kwargs)
+
+    def _report(self, **kwargs):
+        return self._baker().stale_report(**kwargs)
+
+    def _atlas(self, name=None):
+        return _read(os.path.join(self.out, name or self.ATLAS))[..., :3]
+
+    @staticmethod
+    def _cell(atlas, obj, size=64):
+        """*obj*'s cell in *atlas*, by the cell the record holds for it."""
+        cell = LightmapRecords.bake_state()["objects"][obj]["cell"]
+        row0, row1, col0, col1 = ptk.ImgUtils.atlas_pixel_rects([cell], size)[0]
+        return atlas[row0:row1, col0:col1]
+
+    def _files(self):
+        return sorted(f for f in os.listdir(self.out) if f.lower().endswith(".exr"))
+
+    # -- what is stale ------------------------------------------------------
+    def test_nothing_is_stale_after_a_bake_or_a_save_and_reopen(self):
+        """A save keeps ~7 digits of each float: a fingerprint that flipped on
+        it would call the whole room changed after every reopen."""
+        objects = self._crates()
+        self._bake(objects)
+        self.assertEqual(self._report().targets, ())
+        for ext, kind in ((".ma", "mayaAscii"), (".mb", "mayaBinary")):
+            with self.subTest(kind=kind):
+                path = self.store.path(ext, name=f"rebake_room{ext.replace('.', '_')}")
+                cmds.file(rename=path)
+                cmds.file(save=True, type=kind, force=True)
+                cmds.file(new=True, force=True)
+                cmds.file(path, open=True, force=True)
+                report = self._report()
+                self.assertEqual(report.targets, (), report.lines())
+                self.assertEqual(report.untracked, ())
+                self.assertEqual(
+                    report.summary(), "Nothing changed since the last bake."
+                )
+
+    def test_a_moved_object_is_stale_and_its_far_neighbours_are_not(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.move(0, 0.5, 0, a, relative=True)
+        report = self._report()
+        self.assertEqual(report.targets, (a,))
+        self.assertEqual(report.stale[a], (ptk.BakeBaseline.Reason.MOVED,))
+
+    def test_a_deformed_object_is_stale(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.move(0, 0.4, 0, f"{a}.vtx[0:3]", relative=True)
+        report = self._report()
+        self.assertEqual(report.targets, (a,))
+        self.assertIn(ptk.BakeBaseline.Reason.DEFORMED, report.stale[a])
+
+    def test_a_missing_map_stales_its_readers(self):
+        objects = self._crates()
+        self._bake(objects)
+        os.remove(os.path.join(self.out, self.ATLAS))
+        report = self._report()
+        self.assertEqual(report.targets, tuple(sorted(objects)))
+        for obj in objects:
+            self.assertIn(ptk.BakeBaseline.Reason.MISSING_MAP, report.stale[obj])
+
+    def test_a_hidden_object_is_stale_but_cannot_bake(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.setAttr(f"{a}.visibility", 0)
+        report = self._report()
+        self.assertEqual(report.unbakeable, (a,))
+        self.assertEqual(report.targets, ())
+        self.assertIn(ptk.BakeBaseline.Reason.VISIBILITY, report.stale[a])
+
+    def test_an_object_added_to_the_exclude_set_stales_its_neighbour(self):
+        """An excluded mesh is in every bake's render: one arriving next to B
+        shadows it, though it gets no map of its own."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        stool = cmds.polyCube(name="rcStool")[0]
+        cmds.move(11.2, 0, 0, stool)
+        stool = cmds.ls(stool, long=True)[0]
+        LightmapExcludeSet.define([stool])
+        report = self._report()
+        self.assertEqual(report.targets, (b,))
+        self.assertEqual(report.neighbours[b], (stool,))
+
+    def test_a_changed_light_stales_the_whole_room(self):
+        light = cmds.pointLight(intensity=1.0)
+        transform = cmds.ls(
+            cmds.listRelatives(light, parent=True, fullPath=True)[0], long=True
+        )[0]
+        objects = self._crates()
+        self._bake(objects)
+        self.assertEqual(self._report().targets, ())
+        cmds.setAttr(f"{light}.intensity", 5.0)
+        report = self._report()
+        self.assertEqual(report.lighting, (transform,))
+        self.assertEqual(report.targets, tuple(sorted(objects)))
+        self.assertIn("the whole room", report.summary())
+        self.assertEqual(
+            self._baker().stale_report(), report, "the dry run is repeatable"
+        )
+        # Opted out, the lighting is not compared.
+        self.assertEqual(self._rebake(lighting=False).maps, {})
+
+    # -- written back in place ------------------------------------------------
+    def test_rebake_writes_the_changed_cell_in_place_and_leaves_the_others_byte_identical(
+        self,
+    ):
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0}
+        self._bake([a, b, c])
+        before = self._atlas()
+        self.fake.values["rcA"] = 5.0
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        result = self._rebake()
+
+        self.assertEqual(result.in_place, [a])
+        self.assertEqual(result.repacked, {})
+        self.assertEqual(list(result.maps), [a])
+        self.assertEqual(self._files(), [self.ATLAS], "no _1 atlas")
+        after = self._atlas()
+        for obj in (b, c):
+            self.assertTrue(
+                np.array_equal(self._cell(after, obj), self._cell(before, obj)),
+                f"{obj}'s cell changed",
+            )
+        self.assertTrue(np.allclose(self._cell(after, a), 5.0, atol=1e-3))
+        self.assertEqual(self._report().targets, ())
+        # One map per material in what ships.
+        maps = {e["map"] for e in LightmapRecords._record().payload["objects"]}
+        self.assertEqual(maps, {self.ATLAS})
+        self.assertEqual(result.report.in_place, (a,))
+
+    def test_a_measurements_pack_never_writes_the_scenes_atlas(self):
+        """``record=False`` writes no file the scene reads -- its two-call
+        pack too (``bake_separated``, then ``pack_atlas``), which wrote the
+        measurement's maps into the cells the scene's atlas holds."""
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0}
+        self._bake([a, b, c])
+        before = self._atlas()
+        self.fake.values["rcA"] = 5.0
+        measure = self._baker(record=False)
+        tiles = measure.bake_separated(
+            [a], output_dir=self.store.dir_path(name="tiles")
+        )
+        measure.pack_atlas(tiles, output_dir=self.store.dir_path(name="measured"))
+        self.assertTrue(
+            np.array_equal(self._atlas(), before), "the scene's atlas was written"
+        )
+
+    def test_intensity_is_applied_once_to_a_cell_written_in_place(self):
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0}
+        self._bake([a, b, c], intensity=np.pi)
+        before = self._atlas()
+        self.assertTrue(np.allclose(self._cell(before, b), 2.0 * np.pi, rtol=1e-3))
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        result = self._rebake(intensity=np.pi)
+
+        self.assertEqual(result.in_place, [a])
+        after = self._atlas()
+        self.assertTrue(np.allclose(self._cell(after, a), np.pi, rtol=1e-3))
+        self.assertTrue(np.array_equal(self._cell(after, b), self._cell(before, b)))
+
+    def test_a_cell_that_no_longer_fits_repacks_its_whole_group(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.scale(2, 2, 2, a)
+
+        with mock.patch.object(LightmapBaker.logger, "info") as info:
+            result = self._rebake()
+
+        self.assertEqual(result.in_place, [])
+        self.assertEqual(sorted(result.maps), sorted([a, b, c]))
+        self.assertEqual(list(result.repacked), [self.ATLAS])
+        why = result.repacked[self.ATLAS]
+        self.assertIn("no longer fits", why)
+        self.assertIn("2 other members re-bake with it", why)
+        self.assertEqual(self._files(), [self.ATLAS], "the group keeps its one atlas")
+        self.assertTrue(any(why in m for m in _rendered_warnings(info)))
+        self.assertEqual(self._report().targets, ())
+
+    def test_a_legacy_atlas_repacks_whole_once_then_goes_in_place(self):
+        """An atlas baked before change tracking holds no cells: re-baking one
+        member expands to its whole group once -- which also heals a legacy
+        split -- and records them, so the next is written in place."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        ptk.SceneRecords.LIGHTMAP_BAKE_STATE.clear(
+            lmb_module.LightmapRecords._data_nodes()
+        )
+
+        first = self._bake([a])
+
+        self.assertEqual(sorted(first.maps), sorted([a, b, c]))
+        self.assertIn("no recorded cell", first.repacked[self.ATLAS])
+        self.assertEqual(self._files(), [self.ATLAS])
+
+        second = self._bake([a])
+
+        self.assertEqual(second.in_place, [a])
+        self.assertEqual(list(second.maps), [a])
+        maps = {e["map"] for e in LightmapRecords._record().payload["objects"]}
+        self.assertEqual(maps, {self.ATLAS})
+
+    def test_a_member_that_cannot_bake_keeps_its_atlas_and_the_group_takes_the_next_name(
+        self,
+    ):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.scale(2, 2, 2, a)
+        LightmapExcludeSet.define([c])
+
+        with mock.patch.object(LightmapBaker.logger, "warning") as warn:
+            result = self._rebake()
+
+        self.assertEqual(sorted(result.maps), sorted([a, b]))
+        self.assertEqual(
+            {os.path.basename(p) for p in result.maps.values()},
+            {"Crate_Lightmap_1.exr"},
+        )
+        self.assertEqual(LightmapRecords._marker_info(c)["map"], self.ATLAS)
+        self.assertTrue(
+            any("rcC" in m and "cannot bake" in m for m in _rendered_warnings(warn)),
+            _rendered_warnings(warn),
+        )
+
+    def test_a_cell_written_in_place_meets_its_held_neighbour_one_sided(self):
+        """Two coplanar panels share an edge: the one re-baked is stitched to
+        the one left as it was -- the free side moves the whole way, and the
+        held cell keeps every texel."""
+        np = _cv2()[1]
+        sg = self._crate_sg("rcPanel")
+        panels = [TestPackAtlas._panel(f"rcPanel{i}", sg, i * 3.94) for i in range(2)]
+        self.fake.values = {"rcPanel0": 1.0, "rcPanel1": 2.0}
+        self._bake(panels)
+        before = self._atlas()
+        self.fake.values["rcPanel1"] = 3.0
+
+        result = self._bake([panels[1]])
+
+        self.assertEqual(result.in_place, [panels[1]])
+        after = self._atlas()
+        self.assertTrue(
+            np.array_equal(self._cell(after, panels[0]), self._cell(before, panels[0]))
+        )
+        held = self._cell(after, panels[0])
+        free = self._cell(after, panels[1])
+        # The free cell's edge column meets the held cell's level ...
+        rect0 = LightmapRecords._marker_info(panels[0])["scaleOffset"]
+        rect1 = LightmapRecords._marker_info(panels[1])["scaleOffset"]
+        pairs = LightmapBaker(resolution=64)._seam_pairs(
+            [(panels[0], rect0), (panels[1], rect1)], 64
+        )
+        self.assertTrue(len(pairs))
+
+        def read(image, x, y):
+            full = image[..., 0].astype(np.float64)
+            x0, y0 = int(np.floor(x)), int(np.floor(y))
+            fx, fy = x - x0, y - y0
+            return (
+                full[y0, x0] * (1 - fx) * (1 - fy)
+                + full[y0, x0 + 1] * fx * (1 - fy)
+                + full[y0 + 1, x0] * (1 - fx) * fy
+                + full[y0 + 1, x0 + 1] * fx * fy
+            )
+
+        for xa, ya, xb, yb in pairs:
+            # ... the whole way: the held side reads what it read before
+            # (stitched halfway at the first bake), the free side meets it.
+            self.assertAlmostEqual(read(after, xa, ya), read(before, xa, ya), places=6)
+            self.assertAlmostEqual(read(after, xb, yb), read(after, xa, ya), delta=0.02)
+        # ... and its interior keeps its own.
+        self.assertAlmostEqual(float(np.median(free)), 3.0, delta=1e-3)
+        self.assertAlmostEqual(float(np.median(held)), 1.0, delta=1e-3)
+
+    def test_a_scene_bake_prunes_what_left(self):
+        """A participant that leaves stales its neighbours, and is remembered
+        until every map within its reach was baked after it left."""
+        a, b, c = self._crates(spacing=1.5)
+        far = self._crates(names=("rcFar",), sg=self._crate_sg("rcFarMat", "Far"))[0]
+        cmds.move(40, 0, 0, far)
+        self._bake([a, b, c, far])
+        cmds.delete(c)
+
+        report = self._report()
+        self.assertEqual(report.targets, (b,))
+        self.assertEqual(report.neighbours[b], (c,))
+
+        self._bake([far])
+        state = LightmapRecords.bake_state()["objects"]
+        self.assertIsNotNone(state[c]["removed_at"], "b still holds its shadow")
+        self.assertEqual(self._report().targets, (b,))
+
+        self._bake([a, b, far])
+        self.assertNotIn(c, LightmapRecords.bake_state()["objects"])
+        self.assertEqual(self._report().targets, ())
+
+    def test_nothing_changed_bakes_nothing(self):
+        objects = self._crates()
+        self._bake(objects)
+        result = self._rebake()
+        self.assertEqual(result.maps, {})
+        self.assertEqual(result.refused, "Nothing changed since the last bake.")
+        self.assertEqual(self.fake.baked, sorted(objects), "no render for nothing")
+
+    def test_a_whole_scene_revert_clears_the_record(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        LightmapRecords.revert([a])
+        self.assertIn(a, LightmapRecords.bake_state()["objects"])
+        LightmapRecords.revert()
+        self.assertEqual(LightmapRecords.bake_state()["objects"], {})
+
+    def test_a_transferred_lightmap_inherits_its_sources_bake(self):
+        """A target bound to its source's map and rect was baked when its
+        source was, in the cell its source owns."""
+        a, b = self._crates(names=("rcA", "rcB"))
+        self._bake([a, b])
+        twin = cmds.ls(cmds.duplicate(a, name="rcTwin")[0], long=True)[0]
+        LightmapRecords.transfer_lightmaps([twin], a)
+        state = LightmapRecords.bake_state()["objects"]
+        for key in ("baked_at", "cell", "lighting", "packing"):
+            self.assertEqual(state[twin][key], state[a][key], key)
+
+
+class TestChangedScope(MayaTkTestCase):
+    """The panel's half of Re-bake Changed: a fourth Scope, Changed, whose
+    choice says what a bake would redo, and whose Bake re-bakes exactly that
+    (:meth:`LightmapBaker.rebake_changed`) with the panel's dials."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_cls = slots_module.LightmapBaker
+        slots_module.LightmapBaker = _FakeWorkflow
+        _FakeWorkflow.instances = []
+        self.addCleanup(setattr, slots_module, "LightmapBaker", self._orig_cls)
+        for knob in ("report", "refusal"):
+            self.addCleanup(setattr, _FakeWorkflow, knob, getattr(_FakeWorkflow, knob))
+        self.cube = cmds.ls(cmds.polyCube(name="csCube")[0], long=True)[0]
+        _FakeWorkflow.report = ptk.StaleReport(
+            targets=(self.cube,),
+            stale={self.cube: (ptk.BakeBaseline.Reason.MOVED,)},
+            in_place=(self.cube,),
+        )
+
+    def _slots(self, ui):
+        s = LightmapBakerSlots.__new__(LightmapBakerSlots)
+        s.ui = ui
+        s._last_output_dir = None
+        s._baker = None
+        return s
+
+    def test_changed_is_the_fourth_scope_and_reads_back(self):
+        """The combo persists by INDEX: Changed is appended, so a saved
+        Selected / Visible / Scene choice reopens as itself."""
+        self.assertEqual(
+            LightmapBakerSlots._SCOPE_LABELS,
+            ("Selected", "Visible", "Scene", "Changed"),
+        )
+        combo = _ItemCombo()
+        s = self._slots(_SlotUi())
+        s.ui.cmb_scope = combo
+        s.cmb_scope_init(combo)
+        combo.setCurrentIndex(3)
+        self.assertEqual(s._scope(), "changed")
+
+    def test_choosing_changed_writes_the_dry_run_to_the_footer(self):
+        s = self._slots(_SlotUi(scope="Changed", res=2048))
+        s.cmb_scope(3)
+        self.assertEqual(s.ui.footer.text, _FakeWorkflow.report.summary())
+        baker = _FakeWorkflow.instances[-1]
+        self.assertEqual(baker.resolution, 2048, "the dry run uses the panel's dials")
+        self.assertEqual(baker.calls, [("stale_report",)])
+
+        _FakeWorkflow.instances.clear()
+        self._slots(_SlotUi(scope="Scene")).cmb_scope(2)
+        self.assertEqual(_FakeWorkflow.instances, [], "only Changed reads the scene")
+
+    def test_b000_under_changed_rebakes_the_changed_with_the_panels_dials(self):
+        cmds.select(clear=True)  # Changed needs no selection
+        s = self._slots(_SlotUi(scope="Changed", res=512))
+        s.b000()
+        baker = _FakeWorkflow.instances[-1]
+        self.assertEqual(baker.resolution, 512)
+        self.assertEqual([c[0] for c in baker.calls], ["rebake_changed"])
+        self.assertEqual(baker.rebake_kwargs["suffix"], "_Lightmap")
+        self.assertIn("1 written back into its atlas cell", s.ui.footer.text)
+
+    def test_b000_under_changed_with_nothing_changed_says_so(self):
+        _FakeWorkflow.report = ptk.StaleReport()
+        s = self._slots(_SlotUi(scope="Changed"))
+        s.b000()
+        self.assertEqual(s.ui.footer.text, "Nothing changed since the last bake.")
+
+    def test_the_report_names_the_atlases_repacked_and_why(self):
+        result = lmb_module.LightmapBakeResult(
+            maps={self.cube: "C:/out/Crate_Lightmap.exr"},
+            rects={self.cube: [1.0, 1.0, 0.0, 0.0]},
+            repacked={"Crate_Lightmap.exr": "rcA: its cell no longer fits"},
+        )
+        s = self._slots(_SlotUi(packing="Atlas by Material (shared map)"))
+        text = s._bake_report(result)
+        self.assertIn("Crate_Lightmap.exr", text)
+        self.assertIn("its cell no longer fits", text)
+
+    def test_list_changed_objects_logs_the_lines_and_selects_the_targets(self):
+        s = self._slots(_SlotUi())
+        with mock.patch.object(s.logger, "log_group") as group:
+            s.list_changed_objects()
+        self.assertEqual(cmds.ls(selection=True, long=True), [self.cube])
+        title, lines = group.call_args.args[:2]
+        self.assertEqual(lines, _FakeWorkflow.report.lines())
+        self.assertEqual(s.ui.footer.text, _FakeWorkflow.report.summary())
 
 
 if __name__ == "__main__":

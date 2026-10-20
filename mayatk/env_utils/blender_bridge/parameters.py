@@ -76,11 +76,11 @@ PARAMS: "dict[str, AttributeSpec]" = {
         kind="bool",
         default=DEFAULTS["INCLUDE_LIGHTS"],
         tooltip=(
-            "Send the Maya lights in the sent selection so Blender can rebuild them.\n\n"
+            "Send the Maya lights so Blender can rebuild them.\n\n"
             "On for the lightmap bake, which needs the scene's own illumination — with it\n"
             "off, a scene lit by ordinary point/spot/directional/area lights bakes BLACK.\n"
-            "Only lights INSIDE the sent hierarchy travel: a light grouped elsewhere in\n"
-            "the scene does not cross, so keep module lights parented with their module.\n"
+            "A send carries the lights INSIDE the sent hierarchy; the bake carries every\n"
+            "scene light while Include Scene Lighting is on.\n"
             "Turn it off for a pure asset hand-off where Blender does its own lighting.\n\n"
             "The lights travel as DATA beside the FBX, not inside it: an FBX light crashes\n"
             "Blender 5.1's importer outright, and FBX cannot represent Arnold lights at\n"
@@ -229,6 +229,21 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "object."
         ),
     ),
+    "LIGHTMAP_REFLECTION_PROBE": AttributeSpec(
+        key="LIGHTMAP_REFLECTION_PROBE",
+        label="Reflection Probe",
+        kind="bool",
+        default=DEFAULTS["LIGHTMAP_REFLECTION_PROBE"],
+        inline=True,
+        tooltip=(
+            "Also capture the room the bake lit as an HDR from one point -- the\n"
+            "Lightmap Baker panel's camera switch on Packing. A lightmap holds no\n"
+            "reflections, so a baked metal shows only what it reflects: the WebXR\n"
+            "preview and the GLB light it from this probe. Cycles renders it as it\n"
+            "lit the maps; it comes back beside them as <scene>_Probe.exr and is\n"
+            "recorded in this scene, as the Maya bake's own probe is."
+        ),
+    ),
     "LIGHTMAP_DEVICE": AttributeSpec(
         key="LIGHTMAP_DEVICE",
         label="Processor",
@@ -339,6 +354,23 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "so a number carried over from the Maya panel is not the same light."
         ),
     ),
+    # The Lightmap Baker panels' three lighting switches (the Scope field's), one
+    # for one and in their order; ``TestBridgeMirrorsTheBlenderBaker`` derives them
+    # from the baker's preset keys.
+    "INCLUDE_SCENE_LIGHTS": AttributeSpec(
+        key="INCLUDE_SCENE_LIGHTS",
+        label="Include Scene Lighting",
+        kind="bool",
+        default=DEFAULTS["INCLUDE_SCENE_LIGHTS"],
+        tooltip=(
+            "Bake with every light in the scene, wherever it sits — a light outside\n"
+            "the send crosses on a null of its own, placed where the light is. Off\n"
+            "bakes with only the lights inside the sent hierarchy. The Lightmap Baker\n"
+            "panel's Include Scene Lighting, same meaning.\n\n"
+            "Needs Include Lights on. The sky dome answers to Include Environment\n"
+            "alone."
+        ),
+    ),
     "INCLUDE_ENVIRONMENT": AttributeSpec(
         key="INCLUDE_ENVIRONMENT",
         label="Include Environment",
@@ -349,8 +381,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
             "its HDR image or flat colour, at the level Arnold renders it, turned the way\n"
             "the dome is. Off bakes the room's own lights without the world — the\n"
             "Lightmap Baker panel's Include Environment, same meaning.\n\n"
-            "An Environment HDRI below wins over the dome. A hidden dome, or one whose\n"
-            "image is not a latlong panorama, is named in the log and not used."
+            "An Environment HDRI below wins over the dome. A hidden dome (unless\n"
+            "Include Hidden Lights is on), or one whose image is not a latlong\n"
+            "panorama, is named in the log and not used."
+        ),
+    ),
+    "INCLUDE_HIDDEN_LIGHTS": AttributeSpec(
+        key="INCLUDE_HIDDEN_LIGHTS",
+        label="Include Hidden Lights",
+        kind="bool",
+        default=DEFAULTS["INCLUDE_HIDDEN_LIGHTS"],
+        tooltip=(
+            "Bake with the hidden lights too — hidden by their own flag or a parent\n"
+            "group's — switched on in Blender (the Maya scene is not touched). Off\n"
+            "leaves them out, named in the log. The Lightmap Baker panel's Include\n"
+            "Hidden Lights, same meaning. A light at intensity 0 lights nothing\n"
+            "either way."
         ),
     ),
     "ENVIRONMENT_HDR": AttributeSpec(

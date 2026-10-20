@@ -57,8 +57,16 @@ class _FileRef:
         except RuntimeError:
             return self._ref_node
 
-    def remove(self):
+    def remove(self) -> list:
+        """Remove the reference, and the foster parent it would leave behind.
+
+        Returns:
+            (list): What :meth:`EnvUtils.clear_orphan_foster_parents` moved to the
+                world -- this reference's fostered nodes, and any an earlier
+                removal left.
+        """
         cmds.file(removeReference=True, referenceNode=self._ref_node)
+        return EnvUtils.clear_orphan_foster_parents()
 
     def load(self):
         # An FBX (this one, or one this scene references) re-reads under the
@@ -1228,13 +1236,19 @@ class ReferenceManager(
             except RuntimeError:
                 namespace = ""
             try:
-                ref.remove()
+                released = ref.remove()
             except RuntimeError as e:
                 self.logger.warning(
                     f"Failed to remove reference '{ref._ref_node}': {e}"
                 )
                 failed.append(ref)
                 continue
+            if released:
+                self.logger.info(
+                    f"Removing '{namespace or ref._ref_node}' moved local node(s) "
+                    f"out of an orphaned foster parent to the world: "
+                    f"{', '.join(released)}"
+                )
             # The host-side group a USD reference was conformed under
             # (add_reference) goes with it once it holds nothing.
             group = f"{str(namespace).strip(':')}_conform"

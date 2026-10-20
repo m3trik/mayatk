@@ -19,6 +19,7 @@ size, and each answers a question an artist would actually ask:
 - :meth:`TubeRigMetrics.bone_lengths`  "did posing stretch bones rotation never should?"
 - :meth:`TubeRigMetrics.ring_twist`    "do neighbouring rings stay rotationally aligned?"
 - :meth:`TubeRigMetrics.end_roll`      "did the end ring roll away from its control?"
+- :meth:`BindPoseMetrics.error`        "does a skin's dagPose record the bind it deforms from?"
 
 Test-side only (``mayatk/test/``): these read a built rig and return numbers,
 so they belong with the assertions rather than in the shipped package.
@@ -29,6 +30,7 @@ from typing import Dict, List, Sequence
 
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
+import maya.api.OpenMayaAnim as oma
 
 from mayatk.rig_utils.tube_rig.tube_path import TubePath
 
@@ -463,3 +465,60 @@ class TubeRigMetrics(_TubeRigMetricsInternal):
         here)."""
         ps = [om.MVector(*cmds.xform(str(j), q=True, ws=True, t=True)) for j in joints]
         return [(b - a).length() for a, b in zip(ps, ps[1:])]
+
+
+class BindPoseMetrics(object):
+    """Does a skinCluster's dagPose record the bind its bindPreMatrix holds?
+
+    The skin deforms from ``bindPreMatrix``; Go to Bind Pose and the FBX
+    BindPose (one per cluster) read the dagPose. A pose that disagrees sends
+    both somewhere else while the viewport looks right.
+    """
+
+    @staticmethod
+    def pose(skin_cluster):
+        """The dagPose *skin_cluster* reads its bind from, or None."""
+        poses = cmds.listConnections(
+            f"{skin_cluster}.bindPose", source=True, destination=False
+        )
+        return poses[0] if poses else None
+
+    @staticmethod
+    def record(pose) -> Dict:
+        """``{member long name: (world, local)}`` as *pose* stores them."""
+        links = (
+            cmds.listConnections(
+                f"{pose}.members",
+                connections=True,
+                plugs=True,
+                source=True,
+                destination=False,
+            )
+            or []
+        )
+        record = {}
+        for dst, src in zip(links[::2], links[1::2]):
+            i = dst[dst.rindex("[") + 1 : -1]
+            record[cmds.ls(src.split(".")[0], long=True)[0]] = (
+                cmds.getAttr(f"{pose}.worldMatrix[{i}]"),
+                cmds.getAttr(f"{pose}.xformMatrix[{i}]"),
+            )
+        return record
+
+    @classmethod
+    def error(cls, skin_cluster) -> float:
+        """Max ``|stored world - bindPreMatrix^-1|`` element over the
+        cluster's influences (0 = the pose records exactly its bind)."""
+        record = cls.record(cls.pose(skin_cluster))
+        sel = om.MSelectionList()
+        sel.add(str(skin_cluster))
+        fn = oma.MFnSkinCluster(sel.getDependNode(0))
+        worst = 0.0
+        for path in fn.influenceObjects():
+            i = fn.indexForInfluenceObject(path)
+            stored = record[path.fullPathName()][0]
+            bind = om.MMatrix(cmds.getAttr(f"{skin_cluster}.bindPreMatrix[{i}]"))
+            worst = max(
+                worst, max(abs(a - b) for a, b in zip(stored, list(bind.inverse())))
+            )
+        return worst

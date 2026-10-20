@@ -113,6 +113,10 @@ class ShadowRigSlots:
                     "source (world units; a directional light: degrees). It "
                     "lives on the source, so every rig it lights, Unity and "
                     "the viewer share one penumbra; 0 is sharp.",
+                    "<b>Intensity</b> (overall darkness, 0-1) and <b>Ground "
+                    "Y</b> (the floor's height, when it is not at 0) build "
+                    "into a new rig, and apply at once to the rig(s) the "
+                    "selection touches -- a baked or unlinked plane too.",
                     "A committed <b>Horizon</b> rig shows its live preview at "
                     "once, so its outline morphs as the light moves; the "
                     "<b>Live Horizon Preview</b> box mirrors what stands.",
@@ -163,13 +167,14 @@ class ShadowRigSlots:
                         "Plane attributes",
                         [
                             "<b>shadowIntensity</b> / <b>falloffPower</b> — overall "
-                            "strength and how fast an elongated shadow lightens.",
+                            "strength (the panel's Intensity) and how fast an "
+                            "elongated shadow lightens.",
                             "<b>maxStretch</b> — cap on the shadow's reach, in "
                             "object heights.",
                             "<b>fadeHeight</b> — rise off the ground at which the "
                             "shadow has fully faded.",
                             "<b>groundHeight</b> — world Y of the ground the "
-                            "shadow lies on.",
+                            "shadow lies on (the panel's Ground Y).",
                         ],
                     ),
                 ],
@@ -392,7 +397,8 @@ class ShadowRigSlots:
                 title="Delete Rig",
                 body="Tears down the rig(s) the selection touches — plane, "
                 "group, expression, material and contact locator. The targets "
-                "and the source are kept.",
+                "and the source are kept. Its option box holds <b>Detach to "
+                "Plane</b>: keep the plane, drop the rig.",
             )
         )
 
@@ -509,6 +515,30 @@ class ShadowRigSlots:
                         body="Un-bakes the rig(s) the selection touches: removes the "
                         "baked keys and rebuilds the live expression from the rig's "
                         "stamped source and targets.",
+                    ),
+                ),
+            ],
+        )
+
+    def b009_init(self, widget):
+        """Delete Rig's option box: Detach to Plane, the teardown that keeps
+        the plane."""
+        self._add_option_actions(
+            widget,
+            "Delete",
+            [
+                (
+                    "btn_detach",
+                    "Detach to Plane",
+                    self.detach_to_plane,
+                    self.sb.tooltip.fmt(
+                        title="Detach to Plane",
+                        body="Turns the rig(s) the selection touches into plain "
+                        "textured planes where they stand: one unlit material "
+                        "and one PNG (the current fade baked into its alpha). "
+                        "The expression, drivers, contact locator and every "
+                        "rig attribute go, so nothing extra exports -- for a "
+                        "shadow that no longer moves. Exports unlit to WebXR.",
                     ),
                 ),
             ],
@@ -800,6 +830,32 @@ class ShadowRigSlots:
             )
         )
 
+    @CoreUtils.undoable(name="Shadow Rig: Intensity", suspend_refresh=True)
+    def s002(self, value):
+        """Intensity: the overall darkness a new rig builds with, applied at
+        once to the rig(s) the selection touches (:meth:`ShadowRig.set_intensity`
+        -- a baked or unlinked plane's own fade is rescaled). Under Preview it
+        rebuilds the previewed rig instead."""
+        self._retune_selected(ShadowRig.set_intensity, value)
+
+    @CoreUtils.undoable(name="Shadow Rig: Ground Y", suspend_refresh=True)
+    def s003(self, value):
+        """Ground Y: the floor's world height a new rig builds on, applied at
+        once to the rig(s) the selection touches
+        (:meth:`ShadowRig.set_ground_height`)."""
+        self._retune_selected(ShadowRig.set_ground_height, value)
+
+    def _retune_selected(self, setter, value):
+        """Hand *value* to *setter* for the selection's planes; with nothing
+        selected (or no rig in it) the box is only the next build's value."""
+        if self.preview.enabled:
+            self.preview.refresh()
+            return
+        sel = cmds.ls(selection=True, long=True) or []
+        planes = ShadowRig.planes_for_nodes(sel) if sel else []
+        if planes:
+            setter(planes, value)
+
     def chk_horizon_preview_init(self, widget):
         """The box mirrors the SCENE, never a saved setting: checked while a
         preview stands, enabled only where one can stand -- a Horizon rig in
@@ -1081,6 +1137,24 @@ class ShadowRigSlots:
         self._sync_preview_box()
         self.sb.message_box(f"Deleted {len(deleted)} shadow rig(s).")
 
+    def detach_to_plane(self):
+        """Detach to Plane (Delete Rig's option box): the rig(s) the selection
+        touches become plain textured planes (:meth:`ShadowRig.detach_planes`,
+        one undo step of its own)."""
+        planes = self._selected_planes("detach")
+        if not planes:
+            return
+        done = ShadowRig.detach_planes(planes)
+        self._sync_preview_box()
+        left = [CoreUtils.leaf_name(p) for p in planes if p not in done]
+        self.sb.message_box(
+            self._summary(
+                "Detached to plane",
+                [CoreUtils.leaf_name(p) for p in done],
+                [f"{n}: no silhouette on disk" for n in left],
+            )
+        )
+
     @CoreUtils.undoable(name="Shadow Rig: Pack Atlas", suspend_refresh=True)
     def b010(self):
         """Pack Atlas: pack or repack every shadow rig's tiles into the
@@ -1157,8 +1231,16 @@ class ShadowRigSlots:
         for group in groups:
             rigs.extend(
                 builder(
-                    group, names, texture_res=self._resolution(), recursive=recursive
+                    group,
+                    names,
+                    texture_res=self._resolution(),
+                    recursive=recursive,
+                    ground_height=self.ui.s003.value(),
                 )
+            )
+        if self.ui.s002.value() < 1.0:
+            ShadowRig.set_intensity(
+                [rig.shadow_plane for rig in rigs], self.ui.s002.value()
             )
         self._built_sources = names
         if contract is None:

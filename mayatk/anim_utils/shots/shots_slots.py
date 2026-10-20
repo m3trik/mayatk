@@ -106,6 +106,7 @@ class ShotsController(ptk.LoggingMixin):
         # Apply Gap's options, and the sync fills it.
         self._setup_delete_menu()
         self._setup_move_menu()
+        self._setup_swap_menu()
         self._setup_trim_menu()
         self._setup_space_menu()
         self._setup_gap_menu()
@@ -447,6 +448,11 @@ class ShotsController(ptk.LoggingMixin):
             spn_space = getattr(self.ui, "spn_space", None)
             if spn_space is not None:
                 spn_space.setEnabled(has_shot)
+            btn_swap = getattr(self.ui, "btn_swap_shot", None)
+            if btn_swap is not None:
+                # Trading places needs a second shot.
+                btn_swap.setEnabled(has_shot and cmb is not None and cmb.count() > 1)
+            self._populate_swap_targets(store, shot)
             if spn_move is not None:
                 spn_move.setEnabled(has_shot and has_any_shots)
                 # Set the ceiling BEFORE the no-active-shot early return
@@ -1012,6 +1018,138 @@ class ShotsController(ptk.LoggingMixin):
             setToolTip="Move the selected shot to the specified position.",
         )
 
+    def _setup_swap_menu(self) -> None:
+        """Fill Swap With's option box: the mode (:attr:`SWAP_MODES`), the
+        other shot, then one Retain checkbox per field a swap can leave in
+        place (``ShotSequencer.SWAP_FIELDS``).  The mode and the picked shot
+        are named on the button (:meth:`label_swap_shot`)."""
+        btn = getattr(self.ui, "btn_swap_shot", None)
+        if btn is None:
+            return
+        from uitk.widgets.widgetComboBox import WidgetComboBox
+
+        menu = btn.option_box.menu
+        cmb_mode = menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_swap_mode",
+            setToolTip=(
+                "Swap -- the two shots trade timeline places, each taking its\n"
+                "keys along.\n"
+                "Copy Over -- the picked shot's animation is replaced by a copy\n"
+                "of the selected shot's (it takes the selected shot's length);\n"
+                "its name, description, lock, metadata and the members it\n"
+                "does not animate stay."
+            ),
+        )
+        for label, mode, _verb in self.SWAP_MODES:
+            cmb_mode.addItem(label, mode)
+        cmb = menu.add(
+            WidgetComboBox,
+            setObjectName="cmb_swap_with",
+            setToolTip="The other shot: the one swapped with, or copied over.",
+        )
+        cmb.restore_state = False  # this scene's shots, filled by the sync
+        for field, label, tip in self._SWAP_RETAIN:
+            menu.add(
+                "QCheckBox",
+                setText=f"Retain {label}",
+                setObjectName=f"chk_swap_retain_{field}",
+                setChecked=False,
+                setToolTip=tip,
+            )
+        self.label_swap_shot()
+
+    #: Swap With's modes as ``(menu label, mode, button verb)``.
+    SWAP_MODES = (("Swap", "swap", "Swap With"), ("Copy Over", "copy", "Copy To"))
+
+    #: Swap With's Retain options as ``(field, label, tooltip)``, one per
+    #: ``ShotSequencer.SWAP_FIELDS``.
+    _SWAP_RETAIN = (
+        (
+            "name",
+            "Name",
+            "On: the names stay in timeline order -- each shot takes the\n"
+            "name of the place it lands in.  Off: a shot keeps its name.",
+        ),
+        (
+            "description",
+            "Description",
+            "On: the descriptions stay in place.  Off: they travel.",
+        ),
+        (
+            "locked",
+            "Lock",
+            "On: each place keeps its lock (a locked shot is final for the\n"
+            "Shot Manifest's Build).  Off: the lock travels with the shot.",
+        ),
+        (
+            "metadata",
+            "Metadata",
+            "On: the manifest step each place pairs with -- its behaviors,\n"
+            "assessment and the members its shot does not animate -- stays in\n"
+            "place; animated members travel with their keys.  Off: it travels.",
+        ),
+    )
+
+    def swap_mode(self) -> str:
+        """Swap With's mode: ``"swap"`` (until one is picked) or ``"copy"``."""
+        cmb = getattr(self.ui, "cmb_swap_mode", None)
+        mode = cmb.currentData() if cmb is not None else None
+        return mode if mode in {m for _l, m, _v in self.SWAP_MODES} else "swap"
+
+    def swap_target(self):
+        """The other shot's id -- swapped with, or copied over -- or ``None``."""
+        cmb = getattr(self.ui, "cmb_swap_with", None)
+        return cmb.currentData() if cmb is not None and cmb.count() else None
+
+    def swap_retain(self) -> list:
+        """The fields Swap With leaves in place: its checked Retain options."""
+        return [
+            field
+            for field, _label, _tip in self._SWAP_RETAIN
+            if self._option_checked(f"chk_swap_retain_{field}", False)
+        ]
+
+    def label_swap_shot(self, *_args) -> None:
+        """Name the mode and the picked shot on Swap With: "Swap With: Shot_3",
+        "Copy To: Shot_3".  Retain is a swap's: Copy Over keeps every field."""
+        mode = self.swap_mode()
+        for field, _label, _tip in self._SWAP_RETAIN:
+            chk = getattr(self.ui, f"chk_swap_retain_{field}", None)
+            if chk is not None:
+                chk.setEnabled(mode == "swap")
+        btn = getattr(self.ui, "btn_swap_shot", None)
+        if btn is None:
+            return
+        verb = next(v for _l, m, v in self.SWAP_MODES if m == mode)
+        target = self.swap_target()
+        store = self._active_store() if target is not None else None
+        shot = store.shot_by_id(target) if store is not None else None
+        btn.setText(f"{verb}: {shot.name}" if shot is not None else verb)
+
+    def _populate_swap_targets(self, store, active) -> None:
+        """List every shot but *active* in Swap With's picker, keeping the
+        pick while it is listed, else the shot after *active* (before it,
+        for the last)."""
+        cmb = getattr(self.ui, "cmb_swap_with", None)
+        if cmb is None:
+            return
+        picked = self.swap_target()
+        shots = store.sorted_shots() if store is not None else []
+        ids = [s.shot_id for s in shots]
+        cmb.blockSignals(True)
+        cmb.clear()
+        if active is not None and active.shot_id in ids and len(ids) > 1:
+            for shot in shots:
+                if shot.shot_id != active.shot_id:
+                    cmb.addItem(self.shot_label(shot), shot.shot_id)
+            if picked == active.shot_id or picked not in ids:
+                at = ids.index(active.shot_id)
+                picked = ids[at + 1] if at + 1 < len(ids) else ids[at - 1]
+            cmb.setCurrentIndex(max(self._shot_row(cmb, picked), 0))
+        cmb.blockSignals(False)
+        self.label_swap_shot()
+
     def _setup_trim_menu(self) -> None:
         """Attach the per-edge trim actions to both trim buttons."""
         for name, prefix, what in (
@@ -1299,6 +1437,38 @@ class ShotsController(ptk.LoggingMixin):
         # combobox; a direct _populate call here doubled the rebuild.
         store.notify_settings_changed()
 
+    def on_swap_shot(self) -> None:
+        """Swap With, in the mode its option box picks: trade the active
+        shot's timeline place with the picked shot, leaving the checked Retain
+        fields in place, or copy the active shot's animation over it."""
+        store = self._active_store()
+        if store is None or store.active_shot_id is None:
+            return
+        shot = store.shot_by_id(store.active_shot_id)
+        target = self.swap_target()
+        other = store.shot_by_id(target) if target is not None else None
+        if shot is None or other is None or other is shot:
+            return
+        names = (shot.name, other.name)
+        seq = self._sequencer_cls()(store=store)
+        if self.swap_mode() == "copy":
+            if not self._boundary_edit(
+                store, "copyover", seq.copy_shot_content, shot.shot_id, target
+            ):
+                return
+            self._set_footer(f"Copied {names[0]}'s animation over {names[1]}")
+            store.notify_settings_changed()
+            return
+
+        retain = self.swap_retain()
+        if not self._boundary_edit(
+            store, "swapshots", seq.swap_shots, shot.shot_id, target, retain=retain
+        ):
+            return
+        kept = f" \u00b7 kept in place: {', '.join(retain)}" if retain else ""
+        self._set_footer(f"Swapped {names[0]} and {names[1]}{kept}")
+        store.notify_settings_changed()
+
     def _report_deltas(self, label: str, deltas: list, store) -> None:
         """Footer + dead-restore-point handling shared by every trim / pad."""
         if not ptk.ShotReport.moved(deltas):
@@ -1456,6 +1626,7 @@ class ShotsSlots(ptk.LoggingMixin):
                             "<b>Start / End</b> \u2014 Frame range (syncs with Sequencer).",
                             "<b>Description</b> \u2014 Free-text notes.",
                             "<b>Move To</b> \u2014 Set position; click option box \u25b8 to reorder.",
+                            "<b>Swap With</b> \u2014 Trades timeline places with the shot picked in the option box \u25b8 (named on the button), each taking its keys along. <b>Retain</b> options leave a name, description, lock or metadata in place instead, so the animation changes places under them. Mode <b>Copy Over</b> instead replaces the picked shot's animation with a copy of the selected shot's (its length too); the picked shot keeps its name, description, lock and metadata.",
                             "<b>Add Space</b> \u2014 Frames of empty room; option box \u25b8 to add it at the head or the tail. The shot's start never moves: leading room pushes the shot's content and everything after it later. A negative value removes room.",
                             "<b>Trim Empty</b> \u2014 Trim both ends; option box \u25b8 for leading / trailing only.",
                             "<b>Delete</b> \u2014 Removes the shot, its keys, and the space it occupied; option box \u25b8 to keep either.",
@@ -1537,6 +1708,18 @@ class ShotsSlots(ptk.LoggingMixin):
     def btn_move_shot(self):
         """Move shot to the position in spn_move_to."""
         self.controller.on_move_shot()
+
+    def btn_swap_shot(self):
+        """Swap with, or copy over, the shot picked in the option box."""
+        self.controller.on_swap_shot()
+
+    def cmb_swap_with(self, index):
+        """A shot was picked: the button names what a click swaps with."""
+        self.controller.label_swap_shot()
+
+    def cmb_swap_mode(self, index):
+        """A mode was picked: the button says what a click now does."""
+        self.controller.label_swap_shot()
 
     def btn_apply_gap(self):
         """Apply gap value with the scope selected in the option box."""

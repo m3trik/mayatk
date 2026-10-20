@@ -295,6 +295,16 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
         failures are logged when *verbose* but never raised, so one bad field
         doesn't abort the whole pass.
         """
+        if not manifest_path:
+            # A model file sent on its own (the standalone panel): nothing was
+            # meant to be wired, so this is no fault to report.
+            if verbose:
+                ToolbagHelpers.log(
+                    "[toolbag_helpers] No material manifest; the materials are "
+                    "what Toolbag's import of the model gives."
+                )
+            return 0
+
         if mset is None:
             if verbose:
                 ToolbagHelpers.log(
@@ -309,7 +319,8 @@ class ToolbagHelpers(_ToolbagHelpersInternal):
                     f"[toolbag_helpers] Manifest empty or missing at: {manifest_path}"
                 )
                 ToolbagHelpers.log(
-                    "[toolbag_helpers] Nothing to wire -- check Maya-side MatManifest.build()."
+                    "[toolbag_helpers] Nothing to wire -- check the sending "
+                    "bridge's MatManifest.build()."
                 )
             return 0
 

@@ -245,6 +245,16 @@ class ArnoldBridgeTest(unittest.TestCase):
         self.assertEqual(self._slot(legs), own)
         self.assertIsNotNone(self._slot(top), "the open group was left magenta")
 
+    def test_add_leaves_an_authored_bridge_without_an_emission(self):
+        """An authored bridge may be any shader: re-adding read its
+        ``emission`` to link the material's weight, and one without that
+        attribute raised out of the add."""
+        shader, top, _ = self._make_base_material("matA", ["model_BaseColor.png"])
+        own = cmds.shadingNode("lambert", asShader=True, name="top_own")
+        cmds.connectAttr(f"{own}.outColor", f"{top}.aiSurfaceShader", force=True)
+        self.assertEqual(self.bridge.add(materials=shader), [])
+        self.assertEqual(self._slot(top), own)
+
     def test_remove_clears_every_group(self):
         """Remove leaves no Arnold override on any of the material's groups,
         not only on the first one's."""
@@ -931,6 +941,95 @@ class UnrenderableMaterialsTest(unittest.TestCase):
         self._group(rack, "rackLegs")
         ArnoldBridge().add(materials=rack)
         self.assertEqual(ArnoldBridge.unrenderable_materials(), [])
+
+
+class EmissiveIntensityTest(unittest.TestCase):
+    """A bridged StingrayPBS emits at its ``emissive_intensity``, as it displays:
+    the bridge wired the emissive map at full strength, so a bake lit by a
+    dimmed fixture came out at the map's full glow."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not (_mtoa_available() and _stingray_loadable()):
+            raise unittest.SkipTest("mtoa + shaderFXPlugin required")
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+        import pythontk as ptk
+
+        self.tmp = ptk.TempArtifacts("bridge_emissive", policy="scoped")
+        self.addCleanup(self.tmp.cleanup)
+
+    def _panel(self, intensity):
+        from PIL import Image
+
+        path = self.tmp.path(name="panel_Emissive", extension=".png")
+        Image.new("RGB", (8, 8), (255, 240, 200)).save(path)
+        mat = MatUtils.create_stingray_shader("panel_srp")
+        if not cmds.attributeQuery("emissive_intensity", node=mat, exists=True):
+            self.skipTest("this StingrayPBS graph has no emissive_intensity")
+        f = cmds.shadingNode("file", asTexture=True, name="panel_emissive_file")
+        cmds.setAttr(f"{f}.fileTextureName", path, type="string")
+        cmds.connectAttr(f"{f}.outColor", f"{mat}.TEX_emissive_map", force=True)
+        cmds.setAttr(f"{mat}.use_emissive_map", 1)
+        cmds.setAttr(f"{mat}.emissive_intensity", intensity)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="panelSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cmds.polyCube(name="panel_geo")[0], edit=True, forceElement=sg)
+        return mat
+
+    @staticmethod
+    def _emission(ai):
+        """The emission the bridged shader renders: its weight times its source's alpha gain."""
+        src = cmds.listConnections(f"{ai}.emission", source=True, destination=False, plugs=True) or []
+        if not src:
+            return cmds.getAttr(f"{ai}.emission")
+        node = src[0].split(".")[0]
+        return cmds.getAttr(f"{node}.alphaGain") if cmds.objExists(f"{node}.alphaGain") else 1.0
+
+    def test_a_dimmed_fixture_bakes_dimmed(self):
+        ai = mtk.ArnoldBridge().add(materials=self._panel(0.3))[0]
+        self.assertAlmostEqual(self._emission(ai), 0.3, places=5)
+
+    def test_a_full_fixture_is_unchanged(self):
+        ai = mtk.ArnoldBridge().add(materials=self._panel(1.0))[0]
+        self.assertAlmostEqual(self._emission(ai), 1.0, places=5)
+
+    # The exported material is the one truth and the bridge follows it, live
+    # (2026-10-18: a MOODY room baked its panels' light while its four GLBs
+    # shipped them dark -- a copy of the weight on the bridge had gone its own way).
+    def test_a_fixture_dimmed_after_its_bridge_bakes_at_its_new_level(self):
+        mat = self._panel(1.0)
+        ai = mtk.ArnoldBridge().add(materials=mat)[0]
+        cmds.setAttr(f"{mat}.emissive_intensity", 0.3)
+        self.assertAlmostEqual(self._emission(ai), 0.3, places=5)
+
+    def test_adding_again_links_a_bridge_built_before_the_link(self):
+        mat = self._panel(1.0)
+        ai = mtk.ArnoldBridge().add(materials=mat)[0]
+        gain = cmds.listConnections(f"{ai}.emission", source=True)[0] + ".alphaGain"
+        for src in cmds.listConnections(gain, source=True, plugs=True) or []:
+            cmds.disconnectAttr(src, gain)  # as an older build left it: a copy
+        cmds.setAttr(f"{mat}.emissive_intensity", 0.3)
+        mtk.ArnoldBridge().add(materials=mat)
+        self.assertAlmostEqual(self._emission(ai), 0.3, places=5)
+        mtk.ArnoldBridge().add(materials=mat)  # and again: idempotent
+        self.assertEqual(
+            cmds.listConnections(gain, source=True, plugs=True),
+            [f"{mat}.emissive_intensity"],
+        )
+
+    def test_a_bridges_emission_is_authored_on_its_material(self):
+        mat = self._panel(0.5)
+        ai = mtk.ArnoldBridge().add(materials=mat)[0]
+        authored = mtk.ArnoldBridge.authored_plug
+        self.assertEqual(authored(f"{ai}.emission"), f"{mat}.emissive_intensity")
+        self.assertEqual(authored(f"{ai}.base"), f"{ai}.base")
+        self.assertEqual(authored(f"{mat}.emissive_intensity"), f"{mat}.emissive_intensity")
+        gain = cmds.listConnections(f"{ai}.emission", source=True)[0] + ".alphaGain"
+        cmds.disconnectAttr(f"{mat}.emissive_intensity", gain)
+        cmds.setKeyframe(gain, value=0.5)  # keys drive it: no material to land on
+        self.assertEqual(authored(f"{ai}.emission"), f"{ai}.emission")
 
 
 class ArnoldBridgeSlotsTest(unittest.TestCase):

@@ -54,6 +54,7 @@ class SceneState:
         "emissive": "_read_emissive",
         "metallic_roughness": "_read_metallic_roughness",
         "alpha_mode": "_read_alpha_mode",
+        "unlit": "_read_unlit",
     }
 
     # Maya's own legacy shading models — the only ones its FBX exporter maps.
@@ -61,6 +62,12 @@ class SceneState:
     # so the sidecar leaves them alone rather than re-asserting a raw value that
     # would preview brighter than the FBX intends.
     FBX_NATIVE_SHADERS = frozenset({"lambert", "blinn", "phong", "phongE"})
+
+    # Maya's unlit shading model. The FBX makes it lit PBR like any other
+    # shader; the ``unlit`` section says otherwise (:meth:`_read_unlit`), and
+    # its ``outTransparency`` is a transparency channel like the legacy
+    # models' (:meth:`_read_alpha_mode`).
+    UNLIT_SHADERS = frozenset({"surfaceShader"})
 
     # Shaders whose transparency is a plain ``opacity`` colour rather than a
     # graph: a driven or non-opaque channel IS alpha blend, and the FBX
@@ -192,6 +199,10 @@ class SceneState:
                 if cls._channel_is_driven(mat, "transparency", clear=0.0):
                     result[mat] = {"mode": "BLEND"}
                 continue
+            if node_type in cls.UNLIT_SHADERS:
+                if cls._channel_is_driven(mat, "outTransparency", clear=0.0):
+                    result[mat] = {"mode": "BLEND"}
+                continue
             if node_type != "StingrayPBS":
                 continue
             mode = MatUtils.get_stingray_opacity_mode(mat)
@@ -204,6 +215,39 @@ class SceneState:
                 result[mat] = entry
             elif mode == "transparent":
                 result[mat] = {"mode": "BLEND"}
+        return result
+
+    @classmethod
+    def _read_unlit(
+        cls, materials: List[str], textures: Dict[str, Dict[str, str]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """``{material: {}}`` for the *materials* the scene shades unlit.
+
+        Two kinds: Maya's own unlit model (:attr:`UNLIT_SHADERS`), and the
+        material of every projected shadow plane (:class:`ShadowRig`),
+        whatever shader it wears -- a shadow is darkness laid over what is
+        under it, never a surface the environment lights. The FBX cannot say
+        either: FBX2glTF makes each one lit PBR, and a shadow plane in WebXR
+        took the environment's specular and read BRIGHTER than the floor it
+        lay on (2026-10-15; its viewer script, which shades it unlit, runs
+        only when the scene carries a shadow record). Applied as
+        ``KHR_materials_unlit`` (``MeshConvert.set_glb_unlit``).
+        """
+        result: Dict[str, Dict[str, Any]] = {}
+        for mat in materials:
+            if cmds.objExists(mat) and cmds.nodeType(mat) in cls.UNLIT_SHADERS:
+                result[mat] = {}
+        try:
+            from mayatk.rig_utils.shadow_rig._shadow_rig import ShadowRig
+
+            wanted = set(materials)
+            for shader in ShadowRig.plane_materials():
+                if shader in wanted:
+                    result[shader] = {}
+        except Exception as error:  # noqa: BLE001 -- a section never fails a push
+            import logging
+
+            logging.getLogger(__name__).debug("Shadow planes unread: %s", error)
         return result
 
     @classmethod
@@ -254,6 +298,9 @@ class SceneState:
         (:meth:`ShaderAttributeMap.base_weight`: ``base`` x ``baseColor``, the
         albedo it renders), and rides as the factor over a texture -- as
         unitytk's importer folds it, so the two deliverables agree.
+
+        Its opacity's scalar part rides as ``alpha`` (:meth:`_opacity_factor`),
+        the factor glTF multiplies into the texture's alpha.
         """
         result: Dict[str, Dict[str, Any]] = {}
 
@@ -272,19 +319,87 @@ class SceneState:
                 if abs(weight - 1.0) > 1e-6:
                     entry["color"] = [weight] * 3
 
-            mapping = ShaderAttributeMap.get_attr(node_type, "baseColor")
-            if mapping and not texture:
+            # The VALUE's attribute, never the slot: StingrayPBS keeps its
+            # colour in ``base_color``, and its ``TEX_color_map`` sampler reads
+            # (0, 0, 0) -- a grey metal lock reached WebXR black (2026-10-15).
+            attr = ShaderAttributeMap.constant_attr(node_type, "baseColor")
+            if attr and not texture:
                 try:
                     entry["color"] = [
-                        c * weight
-                        for c in list(cmds.getAttr(f"{mat}.{mapping[0]}")[0])[:3]
+                        c * weight for c in list(cmds.getAttr(f"{mat}.{attr}")[0])[:3]
                     ]
                 except (RuntimeError, ValueError, TypeError, IndexError):
                     pass
 
+            alpha = cls._opacity_factor(mat, node_type)
+            if alpha is not None:
+                entry["alpha"] = alpha
+
             if entry:
                 result[mat] = entry
         return result
+
+    @classmethod
+    def _opacity_factor(cls, mat: str, node_type: str) -> Optional[float]:
+        """The scalar part of a :attr:`SURFACE_OPACITY_SHADERS` opacity --
+        what glTF states as ``baseColorFactor[3]`` -- or None at 1.0.
+
+        Two shapes carry one: a bare constant (a tint), and a texture's alpha
+        times a scalar through a ``multiplyDivide`` -- the shadow rig's
+        silhouette x its plane's ``opacity`` fade, read at the current frame
+        (a keyed fade also ships as a fade track, which drives the same
+        factor). A texture alone states nothing: its alpha rides the base
+        colour texture. The FBX carries neither: a shadow plane held at 0.836
+        reached WebXR at alpha 1.0, solid black where VP2 drew it
+        half-transparent (2026-10-15).
+        """
+        if node_type not in cls.SURFACE_OPACITY_SHADERS:
+            return None
+        slot = ShaderAttributeMap.get_attr(node_type, "opacity")
+        plug = f"{mat}.{slot[0]}" if slot else None
+        if not plug or not cmds.objExists(plug):
+            return None
+        sources = (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+        )
+        try:
+            if not sources:
+                value = ShaderAttributeMap.read_constant(mat, "opacity", node_type)
+                if not value:
+                    return None
+                factor = sum(value) / len(value)
+            else:
+                node = sources[0].split(".")[0]
+                if cmds.nodeType(node) != "multiplyDivide" or (
+                    cmds.getAttr(f"{node}.operation") != 1
+                ):
+                    return None
+                factor = None
+                for texture_in, scalar_in in (
+                    ("input1X", "input2X"),
+                    ("input2X", "input1X"),
+                ):
+                    upstream = (
+                        cmds.listConnections(
+                            f"{node}.{texture_in}", source=True, destination=False
+                        )
+                        or []
+                    )
+                    if (
+                        upstream
+                        and "texture"
+                        in (cmds.getClassification(cmds.nodeType(upstream[0])) or [""])[
+                            0
+                        ]
+                    ):
+                        factor = float(cmds.getAttr(f"{node}.{scalar_in}"))
+                        break
+                if factor is None:
+                    return None
+        except (RuntimeError, ValueError, TypeError, IndexError):
+            return None
+        factor = min(1.0, max(0.0, factor))
+        return factor if factor < 1.0 - 1e-4 else None
 
     @classmethod
     def _read_emissive(
@@ -318,14 +433,15 @@ class SceneState:
             texture = (textures.get(mat) or {}).get("emission")
             weight = cls.emission_weight(mat)
 
-            # Weight 0 means the shader emits nothing, so there is nothing to
-            # carry -- and claiming otherwise is worse than silence. With a map
-            # connected, a 0 factor multiplies it to black in glTF while the
-            # panel reports a successful transfer; the colour-only branch below
-            # already skipped this case, so the two disagreed. Omitting the
-            # material makes the panel say "nothing to carry", which points at
-            # the emission weight instead of at the preview.
+            # Weight 0: the shader emits nothing. With a map connected that is
+            # still something to carry -- the FBX hands the map on, and the
+            # converter glows it at 1.0 unless the factor says 0 (a production
+            # room's ceiling panels, emissive_intensity 0, lit WebXR at full,
+            # 2026-10-17). A colour-only one is left out: there is no map to
+            # switch off, and an unlit scene keeps an empty section.
             if weight == 0.0:
+                if texture:
+                    result[mat] = {"texture": texture, "color": [0.0, 0.0, 0.0]}
                 continue
 
             if texture:
@@ -337,13 +453,13 @@ class SceneState:
                 if weight != 1.0:
                     entry["color"] = [weight, weight, weight]
             else:
-                mapping = ShaderAttributeMap.get_attr(cmds.nodeType(mat), "emission")
+                # The value's attribute (StingrayPBS: ``emissive``), never its
+                # ``TEX_emissive_map`` sampler, whose literal reads black.
+                attr = ShaderAttributeMap.constant_attr(cmds.nodeType(mat), "emission")
                 color = None
-                if mapping:
-                    # StingrayPBS names a *map* slot here, which is a texture
-                    # plug rather than a colour -- a failed read is normal.
+                if attr:
                     try:
-                        color = list(cmds.getAttr(f"{mat}.{mapping[0]}")[0])[:3]
+                        color = list(cmds.getAttr(f"{mat}.{attr}")[0])[:3]
                     except (RuntimeError, ValueError, TypeError, IndexError):
                         color = None
                 if color and any(c > 0.0 for c in color):

@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mayatk"
 dynamic = ["version", "readme"]
-description = "A comprehensive toolkit for Autodesk Maya providing utilities for modeling, animation, rigging, and UI management."
+description = "Python toolkit for Autodesk Maya: modeling, UV, materials, animation, rigging, lighting and scene-export utilities."
+keywords = ["m3trik", "maya", "autodesk-maya", "maya-python", "rigging", "animation-tools", "technical-art", "dcc"]
 authors = [{name = "Ryan Simpson", email = "m3trik@outlook.com"}]
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -14,6 +15,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 # Dependencies - exclude optional system deps (qtpy)
@@ -21,11 +25,11 @@ dependencies = [
     # 0.9.25 floor: task_manager.py reads MapOptimizer.SIZE_CLAMP_TEMPLATE in a
     # CLASS BODY, so an older pythontk is an AttributeError at import, not at
     # first use. Also AppSpec.path/.available and the HandoffBridge scratch trio.
-    "pythontk>=0.15.0",
+    "pythontk>=0.16.0",
     # 1.5.3 floor: every panel's Reset attaches ResetGesture(button) with no
     # state= (older uitk requires it); the Marmoset panel's require_output_dir(mode)
     # has needed >=1.3.85 since before.
-    "uitk>=1.7.4",
+    "uitk>=1.7.5",
 ]
 
 # unitytk is OPTIONAL: it only backs the Unity Bridge panel, for users who take
@@ -41,6 +45,8 @@ unity = ["unitytk>=0.1.0"]
 [project.urls]
 Homepage = "https://github.com/m3trik/mayatk"
 Repository = "https://github.com/m3trik/mayatk"
+Changelog = "https://github.com/m3trik/mayatk/blob/main/CHANGELOG.md"
+Issues = "https://github.com/m3trik/mayatk/issues"
 
 [tool.setuptools.dynamic]
 version = {attr = "mayatk.__version__"}
@@ -88,6 +94,9 @@ ignore = ["E402"]  # house pattern: try-guarded DCC imports precede the other im
 # part or any part below it; "a | b" makes peers of one rank. Checked by
 # m3trik/scripts/check_layers.py against a frozen baseline of today's exceptions.
 order = [
+    # Texture Combine composes TextureTransfer, the lightmap re-pack and the
+    # UV diagnostics: a tool above every domain it reads, imported by none.
+    "uv_utils/texture_combine",
     "core_utils/diagnostics",
     "core_utils/auto_instancer",
     "anim_utils",

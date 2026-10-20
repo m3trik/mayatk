@@ -1132,8 +1132,47 @@ class EnvUtils(ptk.HelpMixin):
             rn = cmds.file(file_path, q=True, referenceNode=True)
             if rn:
                 cmds.file(file_path, removeReference=True)
+                EnvUtils.clear_orphan_foster_parents()
         except RuntimeError:
             pass
+
+    @staticmethod
+    def clear_orphan_foster_parents() -> list:
+        """Dissolve the foster parents no reference owns any more.
+
+        When a reference unloads or is removed, Maya moves the local nodes parented
+        under its nodes into a ``<RN>fosterParent#`` node, linked from
+        ``<RN>.fosterParent``. Removing the reference drops the link but keeps the
+        foster parent, with the user's nodes inside it. Each orphan is dissolved:
+        its transforms are parented to the world, keeping their world position, and
+        its shapes are deleted with it. Those shapes are local deformed copies of
+        geometry whose transform left with the reference. A foster parent that a
+        reference still owns (one that is unloaded) is kept, because a reload
+        puts its nodes back. So is one whose transforms cannot all be moved (a
+        locked node): deleting it would delete them, and raising would make the
+        removal that called this look failed.
+
+        Returns:
+            (list): The transforms moved to the world, by their new names.
+        """
+        released = []
+        for fp in cmds.ls(type="fosterParent") or []:
+            if cmds.listConnections(f"{fp}.message", type="reference"):
+                continue  # an unloaded reference's: the reload needs it
+            stuck = []
+            for kid in (
+                cmds.listRelatives(fp, children=True, type="transform", fullPath=True)
+                or []
+            ):
+                try:
+                    released += cmds.parent(kid, world=True)
+                except RuntimeError as e:
+                    stuck.append(f"{kid}: {e}")
+            if stuck:
+                cmds.warning(f"Kept foster parent '{fp}': {'; '.join(stuck)}")
+            else:
+                cmds.delete(fp)
+        return released
 
     @staticmethod
     def is_referenced(file_path):
@@ -1247,6 +1286,9 @@ class EnvUtils(ptk.HelpMixin):
     ) -> None:
         """Export the Maya scene as an FBX file with flexible MEL command options.
 
+        Every node ships where Maya draws it, as through
+        :meth:`FbxUtils.export`: the write runs :meth:`FbxUtils.offsets_folded`.
+
         Parameters:
             file_path (str): The path where the FBX file will be saved. If None, uses the current scene name.
             selection_only (bool): If True, only the current selection is exported
@@ -1327,10 +1369,14 @@ class EnvUtils(ptk.HelpMixin):
         mel_path = file_path.replace("\\", "/")
         # Write from the workspace root when embedding media (the default
         # here) — the fbxmaya plugin locates textures against the process
-        # CWD, never the workspace; see FbxUtils.embed_media_write_cwd.
+        # CWD, never the workspace; see FbxUtils.embed_media_write_cwd. And
+        # through the fold every FBX write runs (FbxUtils.offsets_folded): the
+        # offsets the plug-in would drop, and the nodes that ignore their
+        # parent, shipped where Maya draws them -- put back after the write.
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        with FbxUtils.embed_media_write_cwd():
+        roots = None if selection_only else cmds.ls(assemblies=True, long=True) or []
+        with FbxUtils.embed_media_write_cwd(), FbxUtils.offsets_folded(roots):
             mel.eval(f'FBXExport -f "{mel_path}"{flag_s}')
         print(f"Scene successfully exported as FBX to {mel_path}")
 

@@ -2546,19 +2546,48 @@ class TestAnimUtils(MayaTkTestCase):
         self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 12.0)])
         self.assertEqual(log, [("replace", crv, [10.0]), ("move", crv, [(12.0, 20.0)])])
 
-    def test_move_curve_keys_reports_a_nudged_key_where_it_landed(self):
-        """Without ``allow_merge`` a taken frame nudges the mover past it: the
-        move reported is where the key went, and nothing is replaced."""
-        _obj, crv = self._keyed_tx("mck_nudge", [(0, 0), (10, 10), (20, 20)])
+    def test_move_curve_keys_replaces_an_unmoved_key_without_merge(self):
+        """Without ``allow_merge`` a key the call does not move is still
+        replaced when a mover lands on it -- it was nudged 0.001 past it, two
+        keys on one frame (Scale Keys' Snap: None)."""
+        _obj, crv = self._keyed_tx("mck_unmoved", [(0, 0), (10, 10), (20, 20)])
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
         AnimUtils._move_curve_keys(crv, [(10.0, 20.0)], **hooks)
 
+        self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(log, [("replace", crv, [20.0]), ("move", crv, [(10.0, 20.0)])])
+
+    def test_move_curve_keys_nudges_movers_apart_without_merge(self):
+        """Without ``allow_merge`` two MOVED keys landing on one frame keep
+        both: the second is nudged past the first, and reported where it
+        landed."""
+        _obj, crv = self._keyed_tx("mck_nudge", [(0, 0), (10, 10), (12, 12)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._move_curve_keys(crv, [(10.0, 20.0), (12.0, 20.0)], **hooks)
+
         self.assertEqual(
-            self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0), (20.001, 10.0)]
+            self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0), (20.001, 12.0)]
         )
-        self.assertEqual(log, [("move", crv, [(10.0, 20.001)])])
+        self.assertEqual(log, [("move", crv, [(10.0, 20.0), (12.0, 20.001)])])
+
+    def test_move_curve_keys_merge_keeps_the_mover_nearest_its_ideal(self):
+        """With ``allow_merge`` and each move's ideal time given (a snapped
+        scale: its exact scaled time), of movers landing together the one
+        that moved least off its ideal stays, whatever the order."""
+        _obj, crv = self._keyed_tx("mck_ideal", [(3, 3), (4, 4)])
+        log, hooks = self._edit_log()
+        del hooks["on_delete"]
+
+        AnimUtils._move_curve_keys(
+            crv, [(3.0, 1.0, 0.9), (4.0, 1.0, 1.2)], allow_merge=True, **hooks
+        )
+
+        self.assertEqual(self._curve_pairs(crv), [(1.0, 3.0)])
+        self.assertEqual(log, [("replace", crv, [4.0]), ("move", crv, [(3.0, 1.0)])])
 
     def test_shift_ranges_trades_two_ranges_of_one_curve(self):
         """Two ranges of one curve that trade places each land where their own
@@ -2658,6 +2687,27 @@ class TestAnimUtils(MayaTkTestCase):
 
         self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 20.0)])
         self.assertEqual(log, [("delete", crv, [10.0])])
+
+    def test_remove_intermediate_keys_thins_each_curve_of_a_compound(self):
+        """A compound attribute (``translate``) is thinned curve by curve:
+        each child keeps its OWN first and last key, and each curve's removed
+        keys are reported against it. The compound's overall range cut
+        translateY's own ends -- every key, so the curve went -- and every
+        frame was reported against translateX (measured 2026-10-16)."""
+        obj, tx = self._keyed_tx("thin_compound", [(0, 0), (5, 5), (10, 10)])
+        for t, v in ((2, 2), (5, 7), (8, 8)):
+            cmds.setKeyframe(obj, attribute="translateY", time=t, value=v)
+        ty = cmds.keyframe(obj, attribute="translateY", query=True, name=True)[0]
+        log, hooks = self._edit_log()
+
+        removed = AnimUtils.remove_intermediate_keys(
+            [obj], attributes="translate", on_delete=hooks["on_delete"]
+        )
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(self._curve_pairs(tx), [(0.0, 0.0), (10.0, 10.0)])
+        self.assertEqual(self._curve_pairs(ty), [(2.0, 2.0), (8.0, 8.0)])
+        self.assertEqual(sorted(log), [("delete", tx, [5.0]), ("delete", ty, [5.0])])
 
     def test_simplify_curve_reports_the_keys_it_deletes(self):
         _obj, crv = self._keyed_tx("simplify_keys", [(0, 0), (10, 10), (20, 20)])

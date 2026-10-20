@@ -537,7 +537,10 @@ class TestChannelBoxSJM(ScriptJobManagerTestCase):
 
     def test_unwatch_last_removes_subscription(self):
         """Removing all watchers unsubscribes from SJM."""
-        cb = lambda attrs: None
+
+        def cb(attrs):
+            return None
+
         self.ChannelBox.watch_selection(cb)
         self.ChannelBox.unwatch_selection(cb)
         subs = [s for s in self.mgr._subs.values() if s.owner is self.ChannelBox]
@@ -553,6 +556,42 @@ class TestChannelBoxSJM(ScriptJobManagerTestCase):
         self.assertIsNone(self.ChannelBox._selection_token)
         subs = [s for s in self.mgr._subs.values() if s.owner is self.ChannelBox]
         self.assertEqual(len(subs), 0)
+
+
+# ===========================================================================
+# OpenMaya callbacks during a file read
+# ===========================================================================
+
+
+class TestOMCallbackFileRead(ScriptJobManagerTestCase):
+    """An OM callback never runs while Maya reads a file: Maya's Secure Python
+    Import hook vets every ``import`` statement executed during a load, so a
+    handler's function-level import raised its Untrusted Module prompt."""
+
+    def _register(self, *args):
+        register_fn = MagicMock(return_value=7)
+        self.mgr.add_om_callback(register_fn, *args, owner=self)
+        return register_fn.call_args.args
+
+    def test_callback_skipped_while_reading_file(self):
+        from mayatk.core_utils import script_job_manager as sjm
+
+        handler = MagicMock()
+        (guarded,) = self._register(handler)
+        with patch.object(sjm, "MFileIO", create=True) as file_io:
+            file_io.isReadingFile.return_value = True
+            guarded("msg", "plug")
+            handler.assert_not_called()
+            file_io.isReadingFile.return_value = False
+            guarded("msg", "plug")
+        handler.assert_called_once_with("msg", "plug")
+
+    def test_non_callable_args_pass_through(self):
+        node = object()
+        handler = MagicMock()
+        passed_node, guarded = self._register(node, handler)
+        self.assertIs(passed_node, node)
+        self.assertTrue(callable(guarded))
 
 
 if __name__ == "__main__":

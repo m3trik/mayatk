@@ -41,6 +41,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # Shared across every hand-off bridge (uitk owns the one spec);
     # resolved by the DCC bridge-slots base.
     "SCOPE": _BridgeParams.scope_spec(),
+    # Host-side run option, read by the bridge (never RizomUV): echoed in
+    # every round-trip preset so the panel shows it, and not in send.lua,
+    # whose detached RizomUV always shows.
+    "SHOW_APP_WINDOW": AttributeSpec(
+        key="SHOW_APP_WINDOW",
+        label="Show App Window",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Show RizomUV's window while a round trip runs.\n"
+            "Off (default): it runs hidden, out of your way. A hidden RizomUV\n"
+            "that stops on a dialog (a license prompt, a missing file) can't be\n"
+            "answered: the run waits out its timeout unless you hold Esc to\n"
+            "cancel it. Show the window to see the dialog and answer it."
+        ),
+    ),
     # ------------------------------------------------------------------
     # Pack-time parameters (ZomPack)
     # ------------------------------------------------------------------

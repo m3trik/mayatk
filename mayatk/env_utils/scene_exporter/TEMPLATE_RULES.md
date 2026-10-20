@@ -46,7 +46,7 @@ Save — never from a hand-maintained list that can drift.
 
 | Control | Value in the template | Examples |
 |---|---|---|
-| Checkbox (most tasks/checks) | `true` / `false` | `"smart_bake": true`, `"check_duplicate_materials": true` |
+| Checkbox (most tasks/checks) | `true` / `false` | `"smart_bake": true`, `"check_hidden_geometry": true` |
 | **FBX preset** (`cmb000`) | the preset **name** (filename, no extension) | `"cmb000": "unity_animation"` |
 | Text field (`txt002` regex) | a string | `"txt002": "_module->"` |
 | Numeric field (`check_texture_file_size` max size in MB) | a number; `0` disables the check | `"check_texture_file_size": 16` |
@@ -83,6 +83,18 @@ Save — never from a hand-maintained list that can drift.
 > carrying either key loads with that key ignored, and picking it in the panel
 > warns and names the spelling that replaces it.
 
+> Retired 2026-10-19: `check_mangled_names`, `check_sheared_local_transforms`,
+> `check_duplicate_materials`, `check_untied_keyframes` and
+> `check_floating_point_keys` -- each check now runs after its fix row
+> (`conform_shape_names`, `flatten_sheared_chains`,
+> `reassign_duplicate_materials`, `tie_all_keyframes`, `snap_keys_to_frame`)
+> whenever that fix is on; `check_output_writable` runs on every export; and
+> `baked_reflections` is gone (the deliverable publishes the lighting recipe's
+> own level). A template carrying any of them loads with the key ignored, and
+> picking it in the panel says what changed: a check it asked for whose fix
+> it leaves off (turn the fix on to keep the check), a fix whose check it left
+> off (now checked), a Baked Reflections level other than the recipe's own.
+
 > Dropdowns other than the FBX preset are stored by position, not label — so the
 > reliable way to set them is in the panel, then Save (Rule 0). (If these read as
 > opaque, ask for the "dropdowns by name" change — it makes every dropdown value a
@@ -107,8 +119,8 @@ Save your own for the exact, complete key set — this just shows the shape:
   "smart_bake": true,
   "optimize_level": 2,
   "bake_range": 1,
-  "check_duplicate_materials": true,
   "check_hidden_geometry": true,
+  "check_valid_paths": true,
   "cmb004": 0,
   "txt002": "_module->"
 }

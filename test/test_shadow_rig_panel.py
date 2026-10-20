@@ -124,6 +124,8 @@ class TestPanelSurface(_PanelCase):
             "txt_source",
             "s000",
             "s001",
+            "s002",
+            "s003",
             "chk_follow",
             "b000",
             "b001",
@@ -175,6 +177,8 @@ class TestPanelSurface(_PanelCase):
         self.assertIsNotNone(getattr(update, "btn_rebuild", None))
         bake = self._option_menu(self.ui.b002)
         self.assertIsNotNone(getattr(bake, "btn_restore", None))
+        delete = self._option_menu(self.ui.b009)
+        self.assertIsNotNone(getattr(delete, "btn_detach", None))
         before = len(update.findChildren(type(update.btn_rebuild)))
         self.slots.b003_init(self.ui.b003)
         self.assertEqual(len(update.findChildren(type(update.btn_rebuild))), before)
@@ -637,6 +641,60 @@ class TestPreviewFailure(_PanelCase):
         self.assertFalse(self.slots.preview.enabled)
         self.assertFalse(self.ui.chk_preview.isChecked())
         self.assertTrue(any("not_a_mesh" in m for m in self.messages), self.messages)
+
+
+class TestIntensityAndGroundBoxes(_PanelCase):
+    """Intensity and Ground Y build into a new rig and retune the rig(s) the
+    selection touches at once (``ShadowRig.set_intensity`` /
+    ``set_ground_height``); with no rig selected they only set the next
+    build's values."""
+
+    _settle = staticmethod(TestFollowAndSoftness._settle)
+
+    def setUp(self):
+        super().setUp()
+        self._set(1.0, 0.0)
+        self.addCleanup(self._set, 1.0, 0.0)
+
+    def _set(self, intensity, ground):
+        for box, value in ((self.ui.s002, intensity), (self.ui.s003, ground)):
+            box.blockSignals(True)
+            box.setValue(value)
+            box.blockSignals(False)
+
+    def _commit(self):
+        self._enable(self.cube)
+        self.slots.preview.finalize_changes()
+        return "panel_cube_shadow"
+
+    def test_a_new_rig_builds_with_both(self):
+        self._set(0.5, 1.25)
+        plane = self._commit()
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.shadowIntensity"), 0.5)
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.groundHeight"), 1.25)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{plane}.translateY"),
+            1.25 + ShadowRig.GROUND_OFFSET,
+            places=5,
+        )
+
+    def test_a_change_retunes_the_selected_rig(self):
+        plane = self._commit()
+        cmds.select(self.cube, replace=True)  # a target reaches its rig
+        self.ui.s002.setValue(0.4)  # auto-wired, debounced
+        self.ui.s003.setValue(2.0)
+        self._settle()
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.shadowIntensity"), 0.4)
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.groundHeight"), 2.0)
+        self.assertEqual(self.messages, [])
+
+    def test_with_no_rig_selected_only_the_setting_changes(self):
+        plane = self._commit()
+        cmds.select(clear=True)
+        self.ui.s002.setValue(0.3)
+        self._settle()
+        self.assertAlmostEqual(cmds.getAttr(f"{plane}.shadowIntensity"), 1.0)
+        self.assertEqual(self.messages, [], "no rig selected is not an error")
 
 
 class TestUtility(_PanelCase):

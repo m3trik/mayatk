@@ -18,7 +18,7 @@ except ImportError:
 import os
 import base64
 import html
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 
 import pythontk as ptk
 
@@ -29,14 +29,7 @@ from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 
 
 class SceneExporterSlots(SceneExporter):
-    _log_level_options: Dict[str, Any] = {
-        "Log Level: DEBUG": 10,
-        "Log Level: INFO": 20,
-        "Log Level: WARNING": 30,
-        "Log Level: ERROR": 40,
-    }
-
-    def __init__(self, switchboard, log_level="WARNING"):
+    def __init__(self, switchboard, log_level="INFO"):
         # Initialize the parent SceneExporter class first
         super().__init__(log_level=log_level)
 
@@ -58,6 +51,19 @@ class SceneExporterSlots(SceneExporter):
         # Connect clickable log links (action:// URIs in QTextBrowser)
         if hasattr(self.ui.txt003, "anchorClicked"):
             self.ui.txt003.anchorClicked.connect(self._on_log_link_clicked)
+
+        # What the saved state asked of a row since retired, said once (the
+        # restore skips a key no widget takes; a preset pick says the same
+        # through _warn_retired_naming_keys).
+        self._note_retired_panel_state(self.ui.settings)
+        # A saved RegEx field (retired) folds into the Output Filename's SAVED
+        # pattern here, before the switchboard restores the field over it.
+        out_name = self.ui.txt001
+        self._migrate_legacy_regex(
+            self.ui.settings,
+            out_name.objectName(),
+            lambda pattern: self.ui.state.save(out_name, pattern),
+        )
 
     @staticmethod
     def _init_override_button(widget) -> None:
@@ -199,22 +205,11 @@ class SceneExporterSlots(SceneExporter):
         return workspace_path
 
     def header_init(self, widget):
-        """Initialize the header widget (log options; the export preset lives
-        in the panel as ``cmb007``)."""
-        widget.menu.add(
-            "QCheckBox",
-            setText="Create Log File",
-            setObjectName="b011",
-            setChecked=False,
-            setToolTip="Export a log file along with the fbx.",
-        )
-        widget.menu.add(
-            self.sb.registered_widgets.ComboBox,
-            setObjectName="cmb003",  # Renamed from cmb001 to avoid collision
-            add=self._log_level_options,
-            setCurrentIndex=1,  # Default to INFO
-            setToolTip="Set the log level.",
-        )
+        """Initialize the header widget (its help; the export preset lives in
+        the panel as ``cmb007``). Logging takes no option: the panel shows the
+        run at INFO and every export appends its full detail, down to DEBUG,
+        to the scene's run log (``SceneExporter.log_file_path``), linked on
+        the run's last line."""
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Scene Exporter",
@@ -231,12 +226,14 @@ class SceneExporterSlots(SceneExporter):
                 ],
                 sections=[
                     (
-                        "Header menu",
+                        "Log",
                         [
-                            "<b>Create Log File</b> — write a sidecar log next to "
-                            "each FBX.",
-                            "<b>Log Level</b> — DEBUG / INFO / WARNING / ERROR / "
-                            "CRITICAL output verbosity.",
+                            "The panel shows each run's progress; every export "
+                            "also appends its full detail to the scene's own "
+                            "log file (in your user cache, never beside the "
+                            "FBX), linked at the run's end -- and a run that "
+                            "ships a GLB ends with a link that opens it in the "
+                            "WebXR preview.",
                         ],
                     ),
                 ],
@@ -410,31 +407,6 @@ class SceneExporterSlots(SceneExporter):
             ],
         )
 
-    def _migrate_legacy_regex(self, widget) -> None:
-        """Fold a saved RegEx field into the Output Filename, once.
-
-        The field is retired: the regex is an inline modifier on the name token
-        now (``{scene:PATTERN->REPLACEMENT}``). Its widget is gone, so its saved
-        value would be orphaned in QSettings and the user's naming rule would
-        quietly stop applying -- the one outcome retiring a field must not have.
-        This reads it, folds it into the pattern through the SAME call the
-        export makes (``ExportProfile.fold_legacy_naming``), writes the result
-        back into the field that now states the whole rule, and clears the key
-        so the migration cannot run twice.
-        """
-        saved = self.ui.settings.value("txt002", "") or ""
-        if not str(saved).strip():
-            return
-        folded = ptk.ExportProfile.fold_legacy_naming(
-            widget.text(), name_regex=str(saved)
-        )
-        widget.setText(folded or "")
-        self.ui.settings.remove("txt002")
-        self.logger.info(
-            "The Output Filename's RegEx field is retired: its pattern is now "
-            f"part of the name itself &mdash; {folded!r}."
-        )
-
     def txt001_init(self, widget) -> None:
         """Init Output Name"""
         widget.tooltip.bind(self.output_name_preview)
@@ -455,8 +427,8 @@ class SceneExporterSlots(SceneExporter):
         # No RegEx lineedit: the regex is part of the name now
         # (``{scene:PATTERN->REPLACEMENT}``), so the whole naming rule is ONE
         # string -- which is also what lets the recent-filenames history below
-        # recall it intact. A saved one folds in via ``_migrate_legacy_regex``.
-        self._migrate_legacy_regex(widget)
+        # recall it intact. A saved one folds in at ``__init__``
+        # (``_migrate_legacy_regex``), before this field's restore.
 
         # Recent output filenames — option box button with history popup
         from uitk.widgets.optionBox.options.recent_values import RecentValuesOption
@@ -641,7 +613,9 @@ class SceneExporterSlots(SceneExporter):
 
         The manager skips a key no widget takes, and the Output Filename is not
         part of a preset, so a preset that versioned or stamped its exports
-        would load and stop doing so without a word.
+        would load and stop doing so without a word. The rows retired
+        2026-10-19 (a check its fix now arms, Baked Reflections) are said by
+        the shared :meth:`_note_retired_preset_rows`.
         """
         stored = (self.ui.presets.read(name) if name else None) or {}
         spellings = [
@@ -655,6 +629,7 @@ class SceneExporterSlots(SceneExporter):
                 "settings, which no longer apply: write them into the Output "
                 f"Filename instead ({', '.join(spellings)})."
             )
+        self._note_retired_preset_rows(name, stored)
 
     def cmb008_init(self, widget) -> None:
         """Settings — what is written and from what (the scene-prep steps are
@@ -884,8 +859,7 @@ class SceneExporterSlots(SceneExporter):
                 preset_file=self.ui.cmb000.currentData(),
                 export_visible=config["export_visible"],
                 output_name=self.ui.txt001.text(),
-                create_log_file=self.ui.b011.isChecked(),
-                log_level=self.ui.cmb003.currentData(),  # Updated from cmb001 to cmb003
+                create_log_file=True,
                 tasks=export_tasks,
                 progress_callback=self.sb.progress_adapter(update),
             )

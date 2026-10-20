@@ -495,23 +495,24 @@ class ReferenceManagerSlots(ptk.HelpMixin, ptk.LoggingMixin):
             widget.setHorizontalHeaderLabels(["FILES:", "", "", "", "NOTES:"])
 
             # Column layout: FILES on the left, NOTES in the middle, the three
-            # icon action columns (Reference / Open / Display) pinned to the
+            # icon action columns (Display / Reference / Open) pinned to the
             # right. FILES stretches to fill (and NOTES shares the free space
             # when shown), so resizing the window grows a real column instead of
             # leaving dead space beside the fixed-width icon columns.
             #
-            # ``moveSection`` is VISUAL-only: it shifts NOTES (logical col 4) to
-            # visual position 1 without changing any logical index, so every
-            # column reference in this module (actions on 1/2/3, NOTES on 4)
-            # stays valid. The icon columns keep their Fixed square sizing
-            # (applied by ``TableActions``); a hidden NOTES contributes no width,
-            # so FILES simply takes the whole remainder.
+            # ``moveSection`` is VISUAL-only: it reorders the sections without
+            # changing any logical index, so every column reference in this
+            # module (actions on 1/2/3, NOTES on 4) stays valid. The icon columns
+            # keep their Fixed square sizing (applied by ``TableActions``); a
+            # hidden NOTES contributes no width, so FILES takes the remainder.
             header = widget.horizontalHeader()
             QHeaderView = self.sb.QtWidgets.QHeaderView
             header.setStretchLastSection(False)
             header.setSectionResizeMode(0, QHeaderView.Stretch)
             header.setSectionResizeMode(4, QHeaderView.Stretch)
-            header.moveSection(header.visualIndex(4), 1)
+            # Visual order by logical index: FILES, NOTES, Display, Reference, Open.
+            for visual, logical in enumerate((0, 4, 3, 1, 2)):
+                header.moveSection(header.visualIndex(logical), visual)
 
             # Use NoEditTriggers and handle editing manually to prevent conflicts with double-click
             widget.setEditTriggers(self.sb.QtWidgets.QAbstractItemView.NoEditTriggers)

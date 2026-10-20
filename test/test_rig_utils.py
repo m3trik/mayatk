@@ -20,6 +20,7 @@ import maya.cmds as cmds
 try:
     from mayatk.rig_utils._rig_utils import RigUtils
     from mayatk.rig_utils.telescope_rig import TelescopeRig
+    from mayatk.xform_utils._xform_utils import XformUtils
 except ImportError:
     import sys
     import os
@@ -27,6 +28,7 @@ except ImportError:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from mayatk.rig_utils._rig_utils import RigUtils
     from mayatk.rig_utils.telescope_rig import TelescopeRig
+    from mayatk.xform_utils._xform_utils import XformUtils
 
 from base_test import MayaTkTestCase
 
@@ -314,6 +316,385 @@ class TestRigUtils(MayaTkTestCase):
             places=1,
             msg=f"Locator rig Y rotation should be ~45°, got {grp_rot_result[1]}",
         )
+
+    # -- A driven object's motion survives its rig (BACKLOG 2026-10-10) -----
+
+    _RIG_AFFIXES = dict(grp_suffix="_GRP", loc_suffix="_LOC", obj_suffix="_GEO")
+
+    @staticmethod
+    def _world_samples(uuid, frames=(1, 4, 7, 10)):
+        """``{frame: world matrix}`` of the node *uuid* names, wherever it is."""
+        out = {}
+        for frame in frames:
+            cmds.currentTime(frame, edit=True)
+            node = cmds.ls(uuid, long=True)[0]
+            out[frame] = cmds.xform(node, query=True, worldSpace=True, matrix=True)
+        cmds.currentTime(frames[0], edit=True)
+        return out
+
+    def assertWorldMotionKept(self, uuid, before, places=4):
+        after = self._world_samples(uuid, tuple(before))
+        for frame, matrix in before.items():
+            for a, b in zip(matrix, after[frame]):
+                self.assertAlmostEqual(
+                    a,
+                    b,
+                    places=places,
+                    msg=f"world moved at frame {frame}: {matrix} -> {after[frame]}",
+                )
+
+    def _keyed_cube(self, name="keyed_cube"):
+        """A cube keyed tx 5 (f1) / 15 (f10) -- the entry's repro."""
+        cube = self.create_test_cube(name)
+        cmds.setKeyframe(cube, attribute="translateX", time=1, value=5)
+        cmds.setKeyframe(cube, attribute="translateX", time=10, value=15)
+        cmds.currentTime(1, edit=True)
+        return cube
+
+    def test_create_locator_at_object_keeps_a_keyed_objects_motion(self):
+        """A keyed object plays where it played before it was rigged.
+
+        Bug: the rig froze the object while its curves still drove its
+        channels, under a GRP holding the frame-1 pose -- measured in a fresh
+        mayapy, a cube keyed tx 5 (f1) / 15 (f10) played at world x 10 / 20.
+        Its channels are its animation, so they are kept, and its
+        offsetParentMatrix cancels the pose the rig took -- blendertk's twin
+        cancels it in the parent-inverse.
+        Fixed: 2026-10-17
+        """
+        cube = self._keyed_cube()
+        uuid = cmds.ls(cube, uuid=True)[0]
+        before = self._world_samples(uuid)
+
+        RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+
+        self.assertWorldMotionKept(uuid, before)
+        geo = cmds.ls(uuid, long=True)[0]
+        self.assertEqual(geo, "|keyed_cube_GRP|keyed_cube_LOC|keyed_cube_GEO")
+        # The curve still drives the channel it was keyed on.
+        self.assertAlmostEqual(cmds.getAttr(f"{geo}.translateX", time=10), 15.0)
+        # The rig still rigs: the locator sits zeroed on the object and
+        # carries it.
+        loc = "keyed_cube_LOC"
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{loc}.translate")[0]], [0.0] * 3
+        )
+        self.assertAlmostEqual(
+            cmds.xform(loc, query=True, worldSpace=True, translation=True)[0], 5.0
+        )
+        cmds.setAttr(f"{loc}.translateY", 3)
+        self.assertAlmostEqual(
+            cmds.xform(geo, query=True, worldSpace=True, translation=True)[1], 3.0
+        )
+
+    def test_create_locator_at_object_keeps_a_keyed_rotation_inside_a_parent(self):
+        """Rotate keys, a pivot off the origin and a static scale, under a
+        turned, scaled parent: every frame's world matrix is unchanged, the
+        GRP takes the object's place under that parent, and the locator sits
+        on the pivot. ``bake_pivot`` used to write the keyed channels too (and
+        move the points under them): the pivot alone shifted the cube 0.5.
+        Fixed: 2026-10-17
+        """
+        cube = self.create_test_cube("spun_cube")
+        cmds.setAttr(f"{cube}.rotatePivot", 0.5, 0.5, 0.5)
+        cmds.setAttr(f"{cube}.scalePivot", 0.5, 0.5, 0.5)
+        cmds.setAttr(f"{cube}.scale", 2, 1, 1)
+        cmds.setAttr(f"{cube}.translate", 3, 2, 1)
+        cmds.setKeyframe(cube, attribute="rotateY", time=1, value=30)
+        cmds.setKeyframe(cube, attribute="rotateY", time=10, value=120)
+        outer = cmds.group(cube, name="outer")
+        cmds.setAttr(f"{outer}.translate", 0, 4, 0)
+        cmds.setAttr(f"{outer}.rotate", 0, 45, 20)
+        cmds.setAttr(f"{outer}.scale", 2, 2, 2)
+        cmds.currentTime(1, edit=True)
+        uuid = cmds.ls(cube, uuid=True)[0]
+        before = self._world_samples(uuid)
+        pivot = cmds.xform(
+            cmds.ls(uuid, long=True)[0], query=True, worldSpace=True, rotatePivot=True
+        )
+
+        RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+
+        self.assertWorldMotionKept(uuid, before)
+        self.assertEqual(
+            cmds.ls(uuid, long=True)[0],
+            "|outer|spun_cube_GRP|spun_cube_LOC|spun_cube_GEO",
+        )
+        loc = cmds.xform("spun_cube_LOC", query=True, worldSpace=True, translation=True)
+        for a, b in zip(loc, pivot):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_create_locator_at_object_places_the_locator_in_a_metre_scene(self):
+        """In a scene working in metres a keyed object's locator sits on its
+        pivot, and a group's on its contents' centre: the pivot and the box
+        are read in the working unit, the matrix placing the locator is in
+        the internal centimetre -- mixed, the locator landed at 1/100 of the
+        distance. Fixed: 2026-10-19
+        """
+        cmds.currentUnit(linear="m")
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        cube = self._keyed_cube("metre_cube")
+        cmds.setAttr(f"{cube}.rotatePivot", 0.5, 0.5, 0.5)
+        uuid = cmds.ls(cube, uuid=True)[0]
+        before = self._world_samples(uuid)
+        pivot = cmds.xform(cube, query=True, worldSpace=True, rotatePivot=True)
+
+        RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+
+        self.assertWorldMotionKept(uuid, before)
+        loc = cmds.xform(
+            "metre_cube_LOC", query=True, worldSpace=True, translation=True
+        )
+        for a, b in zip(loc, pivot):
+            self.assertAlmostEqual(a, b, places=4)
+
+        child = self.create_test_cube("metre_child")
+        cmds.setAttr(f"{child}.translate", 2, 1, 0)
+        grp = cmds.group(child, name="metre_group")
+        bb = cmds.exactWorldBoundingBox(child)
+        centre = [(bb[i] + bb[i + 3]) / 2.0 for i in range(3)]
+
+        RigUtils.create_locator_at_object(grp)
+
+        loc = cmds.xform(
+            "metre_group_LOC", query=True, worldSpace=True, translation=True
+        )
+        for a, b in zip(loc, centre):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def _restore_frozen_rig(self, name, unit, pivot_source):
+        """A rig built at (10, 5, 0) cm in a container 300 cm off the origin,
+        frozen (the container not), its anchor restored twice with the working
+        unit set to *unit*. Read back in centimetres: the GRP's and LOC's world
+        rotate pivots, how far any geo vertex moved, what each restore returned.
+        """
+        container = cmds.group(empty=True, name=f"{name}_container", world=True)
+        cmds.setAttr(f"{container}.translate", 0, 0, 300, type="double3")
+        cube = cmds.polyCube(name=name)[0]
+        cmds.move(10, 5, 0, cube, absolute=True)
+        RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+        cmds.parent(f"{name}_GRP", container)
+        grp = f"|{container}|{name}_GRP"
+        loc = f"{grp}|{name}_LOC"
+        mesh = cmds.listRelatives(
+            f"{loc}|{name}_GEO", shapes=True, type="mesh", fullPath=True
+        )[0]
+        before = cmds.xform(f"{mesh}.vtx[*]", query=True, worldSpace=True, t=True)
+        XformUtils.freeze_transforms(grp, freeze_children=True)
+        cmds.currentUnit(linear=unit)
+        try:
+            restored = [
+                RigUtils.restore_rig_anchors(container, pivot_source=pivot_source)
+                for _ in range(2)
+            ]
+        finally:
+            cmds.currentUnit(linear="cm")
+        after = cmds.xform(f"{mesh}.vtx[*]", query=True, worldSpace=True, t=True)
+        return {
+            "restored": restored,
+            "grp_rp": cmds.xform(grp, query=True, worldSpace=True, rotatePivot=True),
+            "loc_rp": cmds.xform(loc, query=True, worldSpace=True, rotatePivot=True),
+            "moved": max(abs(a - b) for a, b in zip(before, after)),
+        }
+
+    def test_restore_rig_anchors_restores_in_a_metre_scene(self):
+        """In a scene working in metres a frozen rig's anchor comes back where
+        it was, as it does in centimetres: the anchor and the pivots are read
+        and written in the working unit, the GRP's world position off its
+        matrix in the internal centimetre -- mixed, a rig in a container 3 m
+        off the origin was thrown ~300 m, and a second restore moved it again.
+        Fixed: 2026-10-19
+        """
+        for source in ("bbox", "rp"):
+            with self.subTest(pivot_source=source):
+                cm = self._restore_frozen_rig(f"cm_{source}", "cm", source)
+                m = self._restore_frozen_rig(f"m_{source}", "m", source)
+                self.assertEqual(cm["restored"], [[f"cm_{source}_GRP"], []])
+                self.assertEqual(m["restored"], [[f"m_{source}_GRP"], []])
+                for key in ("grp_rp", "loc_rp"):
+                    for got, ref, want in zip(m[key], cm[key], (10.0, 5.0, 0.0)):
+                        self.assertAlmostEqual(ref, want, places=3, msg=key)
+                        self.assertAlmostEqual(got, ref, places=3, msg=key)
+                self.assertLess(cm["moved"], 1e-3)
+                self.assertLess(m["moved"], 1e-3)
+
+    def test_create_locator_at_object_keeps_a_constrained_object_in_place(self):
+        """A constraint re-solves under its new parent: pinned, it already did."""
+        driver = cmds.spaceLocator(name="driver")[0]
+        cmds.setKeyframe(driver, attribute="translateZ", time=1, value=2)
+        cmds.setKeyframe(driver, attribute="translateZ", time=10, value=-8)
+        cmds.setKeyframe(driver, attribute="rotateX", time=1, value=10)
+        cmds.setKeyframe(driver, attribute="rotateX", time=10, value=80)
+        cmds.setAttr(f"{self.cube}.translate", 3, 1, 0)
+        cmds.parentConstraint(driver, self.cube, maintainOffset=True)
+        cmds.currentTime(1, edit=True)
+        uuid = cmds.ls(self.cube, uuid=True)[0]
+        before = self._world_samples(uuid)
+
+        RigUtils.create_locator_at_object(self.cube, **self._RIG_AFFIXES)
+
+        self.assertWorldMotionKept(uuid, before)
+
+    def test_create_locator_at_keyed_group_keeps_its_contents_motion(self):
+        """A keyed GROUP keeps its channels, and its contents are not flattened.
+        Fixed: 2026-10-17
+        """
+        child = self.create_test_cube("riding_cube")
+        cmds.setAttr(f"{child}.translate", 2, 0, 0)
+        grp = cmds.group(child, name="moving_group")
+        cmds.setAttr(f"{grp}.rotateY", 30)
+        cmds.setKeyframe(grp, attribute="translateY", time=1, value=1)
+        cmds.setKeyframe(grp, attribute="translateY", time=10, value=6)
+        cmds.currentTime(1, edit=True)
+        uuids = [cmds.ls(n, uuid=True)[0] for n in (child, grp)]
+        before = [self._world_samples(u) for u in uuids]
+
+        RigUtils.create_locator_at_object(grp, **self._RIG_AFFIXES)
+
+        for uuid, samples in zip(uuids, before):
+            self.assertWorldMotionKept(uuid, samples)
+        child_path = cmds.ls(uuids[0], long=True)[0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{child_path}.translate")[0]],
+            [2.0, 0.0, 0.0],
+        )
+
+    def test_create_locator_at_group_flattens_as_before(self):
+        """Pinned: what a group's rig flattens is unchanged. Undriven contents
+        flatten -- the group's channels and its child's zero, the points
+        taking their places; with a KEYED child inside, nothing flattens
+        (makeIdentity refuses the subtree), nothing moves, and the curves
+        still drive.
+        """
+        still = self.create_test_cube("still_cube")
+        cmds.setAttr(f"{still}.translate", -3, 1, 0)
+        grp = cmds.group(still, name="still_group")
+        cmds.setAttr(f"{grp}.translate", 1, 2, 3)
+        cmds.setAttr(f"{grp}.rotateY", 30)
+        uuids = [cmds.ls(n, uuid=True)[0] for n in (still, grp)]
+        bbox = cmds.exactWorldBoundingBox(still)
+
+        RigUtils.create_locator_at_object(grp, **self._RIG_AFFIXES)
+
+        # Flattened: the transforms zero and the points take their places.
+        flat = cmds.exactWorldBoundingBox(cmds.ls(uuids[0], long=True)[0])
+        for a, b in zip(bbox, flat):
+            self.assertAlmostEqual(a, b, places=4)
+        for uuid in uuids:
+            node = cmds.ls(uuid, long=True)[0]
+            for attr in ("translate", "rotate"):
+                self.assertEqual(
+                    [round(v, 6) for v in cmds.getAttr(f"{node}.{attr}")[0]],
+                    [0.0] * 3,
+                    f"{node}.{attr} was not flattened",
+                )
+
+        keyed = self._keyed_cube("rider")
+        static = self.create_test_cube("sitter")
+        cmds.setAttr(f"{static}.translate", -3, 1, 0)
+        grp = cmds.group(keyed, static, name="mixed_group")
+        cmds.setAttr(f"{grp}.translate", 1, 2, 3)
+        uuids = [cmds.ls(n, uuid=True)[0] for n in (keyed, static, grp)]
+        before = [self._world_samples(u) for u in uuids]
+
+        RigUtils.create_locator_at_object(grp, **self._RIG_AFFIXES)
+
+        for uuid, samples in zip(uuids, before):
+            self.assertWorldMotionKept(uuid, samples)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{cmds.ls(uuids[0], long=True)[0]}.translateX", time=10),
+            15.0,
+        )
+
+    def test_create_locator_at_object_still_freezes_a_static_object(self):
+        """Pinned: an undriven object is frozen as before -- channels zeroed,
+        no offsetParentMatrix, nothing moved."""
+        cmds.setAttr(f"{self.cube}.translate", 4, 1, 2)
+        cmds.setAttr(f"{self.cube}.rotate", 10, 20, 30)
+        uuid = cmds.ls(self.cube, uuid=True)[0]
+        bbox = cmds.exactWorldBoundingBox(self.cube)
+
+        RigUtils.create_locator_at_object(self.cube, **self._RIG_AFFIXES)
+
+        geo = cmds.ls(uuid, long=True)[0]
+        for attr in ("translate", "rotate"):
+            self.assertEqual(
+                [round(v, 6) for v in cmds.getAttr(f"{geo}.{attr}")[0]], [0.0] * 3
+            )
+        identity = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{geo}.offsetParentMatrix")],
+            identity,
+        )
+        for a, b in zip(bbox, cmds.exactWorldBoundingBox(geo)):
+            self.assertAlmostEqual(a, b, places=4)
+
+    def test_remove_locator_hands_a_keyed_object_back_unmoved(self):
+        """Rig then un-rig a keyed object: it plays as authored, under its own
+        parent again, its offsetParentMatrix back where it was."""
+        cube = self._keyed_cube()
+        outer = cmds.group(cube, name="outer")
+        cmds.setAttr(f"{outer}.rotateZ", 25)
+        cmds.currentTime(1, edit=True)
+        uuid = cmds.ls(cube, uuid=True)[0]
+        before = self._world_samples(uuid)
+        opm = cmds.getAttr(f"{cmds.ls(uuid, long=True)[0]}.offsetParentMatrix")
+
+        locs = RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+        RigUtils.remove_locator(locs)
+
+        self.assertWorldMotionKept(uuid, before)
+        geo = cmds.ls(uuid, long=True)[0]
+        self.assertEqual(geo, "|outer|keyed_cube_GEO")
+        for a, b in zip(opm, cmds.getAttr(f"{geo}.offsetParentMatrix")):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_create_locator_at_object_keyed_rig_ships_through_a_baking_fbx(self):
+        """The deliverable carries the rigged motion: an FBX written with Bake
+        Animation on -- the Scene Exporter's take path, the bridges' sends --
+        folds the offsetParentMatrix into the baked channels (measured: exact,
+        Resample All on or off; a raw-curve write drops it).
+        Fixed: 2026-10-17
+        """
+        import os
+
+        import maya.mel as mel
+
+        try:
+            cmds.loadPlugin("fbxmaya", quiet=True)
+        except RuntimeError:
+            self.skipTest("fbxmaya plugin not available")
+        cube = self._keyed_cube()
+        cmds.setKeyframe(cube, attribute="rotateY", time=1, value=30)
+        cmds.setKeyframe(cube, attribute="rotateY", time=10, value=120)
+        cmds.currentTime(1, edit=True)
+        frames = (1, 4, 7, 10)
+        authored = self._world_samples(cmds.ls(cube, uuid=True)[0], frames)
+
+        locs = RigUtils.create_locator_at_object(cube, **self._RIG_AFFIXES)
+
+        fbx = self.temp_path(f"loc_rig_keyed_{os.getpid()}.fbx")
+        mel_path = fbx.replace("\\", "/")
+        try:
+            cmds.select(
+                cmds.ls(locs[0], long=True)[0].rsplit("|", 1)[0], hierarchy=True
+            )
+            mel.eval("FBXResetExport")
+            mel.eval("FBXExportBakeComplexAnimation -v true")
+            mel.eval("FBXExportBakeComplexStart -v 1")
+            mel.eval("FBXExportBakeComplexEnd -v 10")
+            mel.eval(f'FBXExport -f "{mel_path}" -s')
+            cmds.file(new=True, force=True)
+            mel.eval("FBXResetImport")
+            mel.eval("FBXImportMode -v add")
+            mel.eval("FBXImportSetTake -ti -1")
+            cmds.file(fbx, i=True, type="FBX", ignoreVersion=True)
+        finally:
+            if os.path.isfile(fbx):
+                os.remove(fbx)
+        imported = cmds.ls("keyed_cube_GEO", long=True)
+        self.assertEqual(len(imported), 1)
+        self.assertWorldMotionKept(cmds.ls(imported[0], uuid=True)[0], authored)
 
     def test_remove_locator(self):
         """Test remove_locator method."""
@@ -1005,6 +1386,28 @@ class TestRigUtils(MayaTkTestCase):
         ]
         self.assertEqual(left, [], "the scratch folder outlived the rebind")
 
+    def test_rebind_skin_clusters_keeps_the_skinning_settings(self):
+        """A dual-quaternion skin rebinds dual-quaternion, its non-rigid
+        support and influence cap kept. Bug: the cluster was rebuilt with
+        ``skinMethod=0`` and the defaults, so a DQS skin came back classic
+        linear and every bent vertex moved. Fixed: 2026-10-19"""
+        cmds.select(cl=True)
+        j1 = cmds.joint(p=(0, -1, 0))
+        j2 = cmds.joint(p=(0, 1, 0))
+        skin = cmds.skinCluster(j1, j2, self.cube, skinMethod=1)[0]
+        cmds.setAttr(f"{skin}.dqsSupportNonRigid", True)
+        cmds.setAttr(f"{skin}.maxInfluences", 2)
+        cmds.setAttr(f"{skin}.maintainMaxInfluences", True)
+
+        result = RigUtils.rebind_skin_clusters([self.cube])
+
+        self.assertEqual(result["rebound"], [self.cube])
+        new_skin = cmds.ls(cmds.listHistory(self.cube), type="skinCluster")[0]
+        self.assertEqual(cmds.getAttr(f"{new_skin}.skinningMethod"), 1)
+        self.assertTrue(cmds.getAttr(f"{new_skin}.dqsSupportNonRigid"))
+        self.assertEqual(cmds.getAttr(f"{new_skin}.maxInfluences"), 2)
+        self.assertTrue(cmds.getAttr(f"{new_skin}.maintainMaxInfluences"))
+
     def test_rebind_skin_clusters_no_skin_cluster(self):
         """A mesh with no skinCluster is reported under 'no_skin_cluster'."""
         result = RigUtils.rebind_skin_clusters([self.sphere])
@@ -1021,6 +1424,59 @@ class TestRigUtils(MayaTkTestCase):
         self.assertEqual(result["no_skin_cluster"], [])
         self.assertEqual(result["wrong_type"], [loc])
         self.assertEqual(result["failed"], [])
+
+
+class TestRebindKeepsBindPoses(MayaTkTestCase):
+    """A rebind restores the cluster's ORIGINAL bindPreMatrix, so it must keep
+    the dagPose that records that bind, and leave the poses of other skins on
+    the joints alone. Recreated by ``cmds.skinCluster``, the cluster got a
+    fresh pose at the CURRENT pose instead: 2.87 units off its restored
+    bindPreMatrix with a joint posed, and the original pose left orphaned.
+    Added: 2026-10-17"""
+
+    def _rebind(self, how):
+        from mayatk.rig_utils.skinning import SkinUtils
+        from rig_metrics import BindPoseMetrics
+
+        module = cmds.createNode("transform", name="rebind_GRP")
+        cmds.select(clear=True)
+        joints = [
+            cmds.joint(p=p, name=f"rebindJnt{i + 1}")
+            for i, p in enumerate([(-5, 0, 0), (0, 0, 0), (5, 0, 0)])
+        ]
+        cmds.parent(joints[0], module)
+        skins = {}
+        for name, z in (("rebindA", 0), ("rebindB", 3)):
+            mesh = cmds.polyCylinder(name=name, h=10, sx=8, sy=6, ax=(1, 0, 0))[0]
+            cmds.move(0, 0, z, mesh)
+            skins[name] = SkinUtils.bind(mesh, joints, name=f"{name}_skin")
+        if how == "module":
+            cmds.setAttr(f"{module}.translateY", 2)
+            cmds.setAttr(f"{module}.rotateZ", 20)
+        elif how == "joint":
+            cmds.setAttr(f"{joints[1]}.rotateZ", 35)
+        other = BindPoseMetrics.record("rebindB_skin_pose")
+
+        result = RigUtils.rebind_skin_clusters(["rebindA"])
+
+        self.assertEqual(result["rebound"], ["rebindA"])
+        rebound = SkinUtils.get_skin_cluster("rebindA")
+        self.assertEqual(BindPoseMetrics.pose(rebound), "rebindA_skin_pose")
+        self.assertLess(BindPoseMetrics.error(rebound), 1e-6)
+        self.assertEqual(BindPoseMetrics.pose(skins["rebindB"]), "rebindB_skin_pose")
+        self.assertEqual(BindPoseMetrics.record("rebindB_skin_pose"), other)
+        self.assertEqual(
+            sorted(cmds.ls(type="dagPose")), ["rebindA_skin_pose", "rebindB_skin_pose"]
+        )
+
+    def test_a_posed_joint_rebinds_into_the_original_bind_pose(self):
+        self._rebind("joint")
+
+    def test_a_moved_module_rebinds_into_the_original_bind_pose(self):
+        self._rebind("module")
+
+    def test_at_rest_the_rebind_keeps_the_original_bind_pose(self):
+        self._rebind("rest")
 
 
 if __name__ == "__main__":

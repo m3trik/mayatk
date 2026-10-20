@@ -51,10 +51,13 @@ travels separately, per instance.
 
 **Lighting -- two composable sources, both under the artist's control.**
 
-1. ``INCLUDE_LIGHTS`` (default on) brings the **Maya lights inside the sent
-   selection** across, so the bake is of the lighting the artist actually built.
-   Selection-scoped by design -- a light grouped outside the sent hierarchy does
-   not travel, exactly like a mesh outside it. The lights that cross travel as
+1. ``INCLUDE_LIGHTS`` (default on) brings the **Maya scene's lights** across, so
+   the bake is of the lighting the artist actually built -- the Lightmap Baker
+   panels' switches, same meaning: ``INCLUDE_SCENE_LIGHTS`` (on) every light in the
+   scene, one outside the send on a null of its own (off: only the lights inside
+   the sent hierarchy, like meshes), and ``INCLUDE_HIDDEN_LIGHTS`` (off) the hidden
+   ones too, switched on. The Maya side decides which records it writes; this side
+   rebuilds whatever arrives. The lights that cross travel as
    manifest DATA rather than as FBX lights -- see :func:`rebuild_scene_lights`, which also
    explains why the light's aim has to travel with it -- and their power is
    rebalanced by ``SCENE_LIGHT_STRENGTH``, because Maya intensity is unitless and no
@@ -163,6 +166,10 @@ LIGHTMAP_BOUNCES = __LIGHTMAP_BOUNCES__
 LIGHTMAP_DENOISE = __LIGHTMAP_DENOISE__
 LIGHTMAP_ADAPTIVE = __LIGHTMAP_ADAPTIVE__
 LIGHTMAP_BESIDE_TEXTURES = __LIGHTMAP_BESIDE_TEXTURES__
+# The Packing field's camera switch: also capture the room the bake lit as a
+# reflection probe (blendertk ``LightmapBaker.bake_probe``), shipped home beside the
+# maps -- see ``capture_probe``.
+LIGHTMAP_REFLECTION_PROBE = __LIGHTMAP_REFLECTION_PROBE__
 LIGHTMAP_DEVICE = __LIGHTMAP_DEVICE__
 # "atlas" (one shared map per material, each object given a rect) or "per_object".
 # Chosen BEFORE the bake, not after: the atlas path plans its layout up front and bakes
@@ -186,6 +193,11 @@ EMISSION_STRENGTH = __EMISSION_STRENGTH__
 # The scene's own Maya lights: sidecarred = __INCLUDE_LIGHTS__ (the Maya side decides
 # whether to WRITE the records; this side rebuilds them and rebalances the result).
 SCENE_LIGHT_STRENGTH = __SCENE_LIGHT_STRENGTH__
+# Which of them: every scene light, or only the send's (Include Scene Lighting), and
+# the hidden ones switched on (Include Hidden Lights). Decided Maya-side as well --
+# here they only word the report.
+INCLUDE_SCENE_LIGHTS = __INCLUDE_SCENE_LIGHTS__
+INCLUDE_HIDDEN_LIGHTS = __INCLUDE_HIDDEN_LIGHTS__
 
 # Where the FINISHED HDR (EXR) lightmaps land. Empty -> next to the manifest. The bridge
 # points this at the Maya project's sourceimages so the returned maps live where that
@@ -450,11 +462,19 @@ def light_scene():
         # baking rather than discovered afterwards.
         warnings.append(
             "No scene lights, no HDRI and no sky dome -- the bake will be BLACK. Turn on Include "
-            "Lights and make sure the lights are INSIDE the sent selection -- only "
-            "lights under the exported hierarchy travel, and Maya's default viewport "
-            "lighting is not one. Or set an Environment HDRI, or author lights from "
-            "the fixture geometry first -- mayatk's LightUtils.lights_from_geometry "
-            "(tentacle Lighting panel) -- and send them with the bake."
+            "Lights"
+            + (
+                " (every scene light travels with Include Scene Lighting on; a hidden "
+                "one needs Include Hidden Lights)"
+                if INCLUDE_SCENE_LIGHTS
+                else " and Include Scene Lighting, or put the lights INSIDE the sent "
+                "selection -- with it off only lights under the exported hierarchy "
+                "travel"
+            )
+            + ". Maya's default viewport lighting is not a light. Or set an "
+            "Environment HDRI, or author lights from the fixture geometry first -- "
+            "mayatk's LightUtils.lights_from_geometry (tentacle Lighting panel) -- "
+            "and send them with the bake."
         )
     for text in warnings:
         print("WARNING: %s" % text)
@@ -534,6 +554,16 @@ def make_baker():
         adaptive=LIGHTMAP_ADAPTIVE,
         beside_textures=LIGHTMAP_BESIDE_TEXTURES,
         device=LIGHTMAP_DEVICE or None,
+        # The Maya side already chose the lights and the world that crossed (the
+        # Include Scene Lighting / Environment / Hidden Lights rows); this baker
+        # renders exactly what arrived, whatever a saved preset of the same name
+        # says -- a lamp on a null of its own sits under no baked mesh, and the
+        # world is the one light_scene() built. (An older blendertk ignores the
+        # keys it does not know.)
+        include_scene_lights=True,
+        include_environment=True,
+        include_hidden_lights=False,
+        reflection_probe=LIGHTMAP_REFLECTION_PROBE,
         **overrides,
     )
     print(
@@ -556,7 +586,92 @@ def make_baker():
     return baker
 
 
-def write_return_manifest(packed, lighting):
+#: How many baked objects lend the probe its anchors, and the vertices each lends
+#: (its extremes along the three axes): enough points, spread wide, to fix the map
+#: from this scene's space onto Maya's.
+PROBE_ANCHOR_OBJECTS = 3
+
+
+def capture_probe(baker, packed):
+    """The room this bake lit as a reflection probe, for the return manifest, or ``None``.
+
+    blendertk's own capture (``LightmapBaker.bake_probe``): placed by the shared
+    ``ptk.ProbePlacement``, rendered by Cycles as the maps were lit, written beside
+    them -- the record Maya's own Arnold bake leaves. Its point and box come back in
+    the probe record's frame (``LightmapRecords.probe``: Blender's Z-up axes read as
+    Y-up, ``(x, z, -y)``, in this scene's units), with ANCHORS -- vertices of baked
+    meshes in that same frame -- so the Maya side MEASURES the map onto its own space
+    from points it holds too (``BlenderBridge._commit_returned_probe``) rather than
+    assuming the crossing's axes and units. A probe that fails costs the probe, never
+    the bake: logged, ``None``.
+    """
+    if not LIGHTMAP_REFLECTION_PROBE or not hasattr(baker, "bake_probe"):
+        return None
+    from blendertk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+    maps = {name: path for name, (path, _rect) in packed.items()}
+    try:
+        path = baker.bake_probe(maps)
+    except Exception as e:  # noqa: BLE001 -- the maps are what the run is for
+        print("WARNING: Reflection probe not captured: %s" % e)
+        return None
+    record = LightmapRecords.probe() if path else None
+    if not record:
+        print("No reflection probe captured.")
+        return None
+
+    def record_frame(point):
+        x, y, z = (float(c) for c in point)
+        return [x, z, 0.0 - y]
+
+    anchors = []
+    for name in sorted(maps)[:PROBE_ANCHOR_OBJECTS]:
+        obj = bpy.data.objects.get(name)
+        if obj is None or obj.type != "MESH" or not obj.data.vertices:
+            continue
+        world = [obj.matrix_world @ v.co for v in obj.data.vertices]
+        picked = set()
+        for axis in range(3):
+            picked.add(min(range(len(world)), key=lambda i: world[i][axis]))
+            picked.add(max(range(len(world)), key=lambda i: world[i][axis]))
+        for index in sorted(picked):
+            anchors.append(
+                {"object": name, "vertex": index, "point": record_frame(world[index])}
+            )
+    print("Reflection probe: %s (%d anchor(s))" % (path, len(anchors)))
+    return {
+        "map": os.path.abspath(path),
+        "position": record["position"],
+        "box": record["box"],
+        "anchors": anchors,
+    }
+
+
+def bake_atlased(baker, meshes, out_dir, prefix, suffix, claims):
+    """``(packed, cells)``: the atlas bake, and where in its atlas each object went.
+
+    blendertk's ``_bake_atlas`` hands back, beside the maps, each object's ``cell``,
+    ``extent``, ``size`` and ``packing`` -- what the Maya side records in its bake
+    baseline (``LightmapRecords.commit(cells=)``) so a later re-bake of PART of the
+    atlas writes back into those cells rather than re-packing the whole group. This
+    script runs against whatever blendertk the Blender side has installed: one older
+    than that hands back the maps alone (``bake_atlas``, whose signature is the stable
+    contract), and the bake goes on without cells -- said here and again in Maya.
+    """
+    bake = getattr(baker, "_bake_atlas", None)
+    kwargs = dict(output_dir=out_dir, prefix=prefix, suffix=suffix, claims=claims)
+    if bake is None:
+        print(
+            "NOTE: this blendertk returns no atlas cells; Maya records the maps "
+            "without them, and a later partial re-bake of these atlases re-packs "
+            "their whole group."
+        )
+        return baker.bake_atlas(meshes, **kwargs), {}
+    done = bake(meshes, **kwargs)
+    return dict(done.packed), dict(getattr(done, "cells", None) or {})
+
+
+def write_return_manifest(packed, lighting, probe=None, cells=None):
     """Write the artifact Maya reads to reassemble this bake into its own scene.
 
     ``packed`` is ``{object_name: (exr_path, rect_or_None)}``. Carries, per object, the
@@ -565,6 +680,9 @@ def write_return_manifest(packed, lighting):
     object references by ``mesh`` -- instances share a layout, so shipping it per copy
     would multiply the manifest for no data. EXRs, never web PNGs: the host's lightmap
     pipeline is float end to end, and platform encodes happen at each exporter, not here.
+    ``cells`` (``{object_name: {"cell", "extent", "size", "packing"}}``, see
+    :func:`bake_atlased`) rides each entry when known: optional keys, so a Maya side
+    older than them ignores them.
 
     Keyed by the name Blender holds -- the FBX short name, possibly with a ``.001``
     collision suffix -- the same convention every other replay in this bridge matches on,
@@ -598,6 +716,13 @@ def write_return_manifest(packed, lighting):
         entry["location"] = [float(v) for v in obj.matrix_world.translation]
         if rect is not None and [float(v) for v in rect] != identity:
             entry["rect"] = [float(v) for v in rect]
+        # Where in its map the object was written (``bake_atlased``): what lets a
+        # later partial re-bake of the atlas go back into the cells. The extent is
+        # in this scene's units; Maya re-measures its own.
+        for key in ("cell", "extent", "size", "packing"):
+            value = (cells or {}).get(name, {}).get(key)
+            if value is not None:
+                entry[key] = value
         objects[name] = entry
 
     missing = sorted(set(packed) - set(objects))
@@ -622,6 +747,10 @@ def write_return_manifest(packed, lighting):
         "meshes": meshes,
         "objects": objects,
     }
+    if probe:
+        # Optional, like ``location``: an older Maya side ignores it, and the probe
+        # file simply stays beside the maps.
+        payload["probe"] = probe
     os.makedirs(os.path.dirname(OUT_FILE) or ".", exist_ok=True)
     with open(OUT_FILE, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
@@ -719,10 +848,12 @@ def main():
                 meshes, output_dir=out_dir, prefix=prefix, suffix=suffix, claims=claims
             ).items()
         }
+        cells = {
+            name: {"packing": "per_object", "size": int(baker.resolution)}
+            for name in packed
+        }
     else:
-        packed = baker.bake_atlas(
-            meshes, output_dir=out_dir, prefix=prefix, suffix=suffix, claims=claims
-        )
+        packed, cells = bake_atlased(baker, meshes, out_dir, prefix, suffix, claims)
     if not packed:
         raise RuntimeError("Bake produced no lightmaps; no manifest written.")
 
@@ -735,7 +866,7 @@ def main():
     for text in check_bake_level(packed):
         print("WARNING: %s" % text)
         lighting["warnings"].append(text)
-    write_return_manifest(packed, lighting)
+    write_return_manifest(packed, lighting, capture_probe(baker, packed), cells)
 
 
 try:

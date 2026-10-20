@@ -231,9 +231,9 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/shots/shots_slots.py` — Switchboard slots for the Shots settings UI.
 - `class ShotsController(pythontk.LoggingMixin)`
-  - methods: remove_callbacks, refresh_state, shot_label, on_navigate_shot, on_new_shot, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, scope_label, scope_count, delete_scope, label_delete_shots, label_shift_all, label_apply_gap, on_delete_shot, confirm_removal, confirm_stale_removal, on_delete_shots, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
+  - methods: remove_callbacks, refresh_state, shot_label, on_navigate_shot, on_new_shot, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, scope_label, scope_count, delete_scope, label_delete_shots, swap_mode, swap_target, swap_retain, label_swap_shot, label_shift_all, label_apply_gap, on_delete_shot, confirm_removal, confirm_stale_removal, on_delete_shots, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_swap_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
 - `class ShotsSlots(pythontk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_shots, cmb_delete_scope, btn_move_shot, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
+  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_shots, cmb_delete_scope, btn_move_shot, btn_swap_shot, cmb_swap_with, cmb_swap_mode, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
@@ -241,7 +241,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BakeResult`
   - methods: skip, declined, baked_count, success
 - `class SmartBake(_SmartBakeInternal)`
-  - methods: analyze, get_time_range, get_object_time_ranges, bake, execute, list_sessions, restore, restore_matrix_wiring, session, run
+  - methods: analyze, get_time_range, get_object_time_ranges, bake, execute, list_sessions, restore, restore_matrix_wiring, fold_offsets, session, run
 
 ### `anim_utils/smart_bake/bake_session.py` — Persistence and restore engine for SmartBake's nondestructive manifest.
 - `class BakeSessionStore(_BakeSessionStoreInternal)`
@@ -258,7 +258,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/world_fit_bake.py` — World-fitted transform bake: reparent nodes under a chosen target and key the
 - `class WorldFitBake`
-  - methods: sample_locals, bake_node, similarity_ancestors, flatten_target, flatten, prepare, apply, restore_node, restore, ik_handles_touching
+  - methods: sample_locals, bake_node, non_inheriting, similarity_ancestors, flatten_target, flatten, prepare, apply, restore_node, restore, ik_handles_touching
 
 ### `audio_utils/_audio_utils.py` — Unified audio system for Maya scenes.
 - constants: CARRIER_NODE, ATTR_PREFIX, FILE_MAP_ATTR, MARKER_ATTR, LEGACY_CACHE_DIR_NAMES, RESERVED_TRACK_IDS
@@ -415,11 +415,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `core_utils/script_job_manager.py` — Centralized Maya event subscription manager.
 - `class ScriptJobManager`
-  - methods: instance, reset, subscribe, add_om_callback, unsubscribe, unsubscribe_all, connect_cleanup, suppress, resume, suppressed, status, print_status, teardown
+  - methods: instance, reset, is_reading_file, subscribe, add_om_callback, unsubscribe, unsubscribe_all, connect_cleanup, suppress, resume, suppressed, status, print_status, teardown
 
 ### `core_utils/undo_recorder.py` — Put OpenMaya edits on Maya's undo queue, as one ordinary undo step.
 - `class UndoRecorder`
   - methods: record
+
+### `core_utils/units.py` — Maya's lengths and angles, converted by the kind of query that read them.
+- `class Units(pythontk.HelpMixin)`
+  - methods: working_as, working, metres_per, convert, angle
 
 ### `display_utils/_display_utils.py`
 - `class DisplayUtils(pythontk.HelpMixin)`
@@ -543,7 +547,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/selection.py`
 - `class Selection(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: select_by_type, select_children, select_hierarchy_above, select_hierarchy_below, get_available_selection_types, get_selection_categories
+  - methods: select_by_type, select_children, select_hierarchy_above, select_hierarchy_below, rig_locked_meshes, get_rig_selection_mode, set_rig_selection_mode, get_available_selection_types, get_selection_categories
 
 ### `edit_utils/snap.py`
 - `class Snap(pythontk.HelpMixin)`
@@ -553,7 +557,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, clear_orphan_foster_parents, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -636,9 +640,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `light_scene()`
 - `check_bake_level(packed)`
 - `make_baker()`
-- `write_return_manifest(packed, lighting)`
+- `capture_probe(baker, packed)`
+- `bake_atlased(baker, meshes, out_dir, prefix, suffix, claims)`
+- `write_return_manifest(packed, lighting, probe=None, cells=None)`
 - `main()`
-- constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_BOUNCES, LIGHTMAP_DENOISE, LIGHTMAP_ADAPTIVE, LIGHTMAP_BESIDE_TEXTURES, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PACKING_MODES
+- constants: BRIDGE_MODES, BRIDGE_OUTPUT_EXT, BRIDGE_OUTPUT, BRIDGE_TIMEOUT, FBX_PATH, OUT_FILE, EXTRA_SYS_PATH, APPLY_UNIT_SCALE, LIGHTMAP_QUALITY, LIGHTMAP_RESOLUTION, LIGHTMAP_SAMPLES, LIGHTMAP_BOUNCES, LIGHTMAP_DENOISE, LIGHTMAP_ADAPTIVE, LIGHTMAP_BESIDE_TEXTURES, LIGHTMAP_REFLECTION_PROBE, LIGHTMAP_DEVICE, LIGHTMAP_PACKING, LIGHTMAP_AFFIX, LIGHTMAP_PREFIX, LIGHTMAP_SUFFIX, ENVIRONMENT_HDR, WORLD_STRENGTH, EMISSION_STRENGTH, SCENE_LIGHT_STRENGTH, INCLUDE_SCENE_LIGHTS, INCLUDE_HIDDEN_LIGHTS, LIGHTMAP_DIR, RETURN_MANIFEST_VERSION, PROBE_ANCHOR_OBJECTS, PACKING_MODES
 
 ### `env_utils/blender_bridge/templates/import.py` — Import the bridged payload (FBX or USD) into Blender, with optional clean-slate and
 - `import_payload()`
@@ -653,7 +659,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, animation_export_enabled, set_animation_export, reset_takes, apply_takes, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -734,7 +740,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/task_manager.py` — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
-  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, ship_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
+  - methods: run_tasks, objects, create_glb, write_scene_data_sidecar, verify_deliverables, set_workspace, set_linear_unit, conform_shape_names, flatten_sheared_chains, ignore_groups, exclude_hdr, export_path, begin_run, convert_to_relative_paths, optimize_textures, reassign_duplicate_materials, resolve_invalid_texture_paths, convert_textures, smart_bake, capture_write_baseline, write_plan, optimize_keys, set_bake_animation_range, tie_all_keyframes, snap_keys_to_frame, export_data_node, ensure_scene_records_published, apply_declared_takes, ship_declared_takes, check_geometry_lod_suffix, check_root_default_transforms, check_material_compatibility, check_texture_optimization, check_path_length, check_output_writable, check_valid_paths, check_texture_file_size, check_mangled_names, check_duplicate_names, check_duplicate_materials, check_default_materials, check_referenced_objects, check_framerate, check_objects_below_floor, check_overlapping_duplicate_mesh, check_hidden_geometry, check_uv_snapshots, check_untied_keyframes, check_sheared_local_transforms, check_floating_point_keys, check_hierarchy_vs_existing_fbx, task_definitions, check_definitions, definitions
 
 ### `env_utils/scene_state.py` — Read named sections of live-scene state for transport.
 - `class SceneState`
@@ -782,7 +788,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/_light_utils.py` — Light utilities — building real scene lights from the geometry that represents them.
 - `class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`
-  - methods: environment_lights, all_lights, contributing_lights, light_contributes, lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
+  - methods: environment_lights, all_lights, contributing_lights, light_contributes, specular_lights, lights_from_geometry, generated_lights, upgrade_authored_lights, remove_lights, sync_lights_from_geometry
 
 ### `light_utils/hdr_manager.py` — Arnold HDR environment manager.
 - `class HdrManager(pythontk.LoggingMixin, pythontk.HelpMixin)`
@@ -790,24 +796,32 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class HdrManagerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
   - methods: header_init, cmb000_init, hdr_map, hdr_map_visibility, hdr_map_preview, cmb000, slider000, spn_intensity, spn_exposure, spn_resolution, spn_samples, spn_diffuse, spn_specular, add_hdr, open_sourceimages, clear_network, ctx_select_skydome, ctx_select_transform, ctx_select_file_node, ctx_reveal_in_explorer
 
-### `light_utils/lightmap_baker/_probe_placement.py` — Where a lightmap bake's reflection probe stands, and the room it projects onto.
-- `class ProbeSite`
-- `class ProbePlacement`
-  - methods: place, room, faces
+### `light_utils/light_layer_baker.py` — Light layers: each light of a rig baked alone, the raw material of a look match.
+- `class LightLayerBaker(pythontk.LoggingMixin)`
+  - methods: layer_payload, emission_target, bake, panoramas, focal_length, beauty, serve, serve_gui, launch, cli
+
+### `light_utils/light_rig.py` — Light Rig manager: save, manage, swap and restore named light rigs.
+- `class LightRig(_LightRigInternal, pythontk.LoggingMixin)`
+  - methods: store, aim_rotation, normalize, fixture_overrides, diff, fingerprint, capture, applied, compare, scene_rigs, can_swap_back, remove, apply, swap_back, names, load, save, delete, rename, landed_overrides
+- `class LightRigSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
+  - methods: refresh, header_init, cmb000_init, cmb000, b000, b001, open_rig_folder, prompt_save
+
+### `light_utils/lightmap_baker/_probe_placement.py` — Where a lightmap bake's reflection probe stands -- Maya's scene for the placement.
+- `class ProbePlacement(pythontk.ProbePlacement)`
 
 ### `light_utils/lightmap_baker/lightmap_baker.py` — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 - `class LightmapBakeResult`
   - methods: files, folders
 - `class LightmapBaker(pythontk.LoggingMixin)`
-  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, normalize_lightmap_paths, export_record, refresh_export_metadata
+  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, stale_report, rebake_changed, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, lightmap_dependencies, search_dirs, heal_lightmap_paths, relocate_lightmaps, repath_lightmaps, normalize_lightmap_paths, export_record, refresh_export_metadata
 
 ### `light_utils/lightmap_baker/lightmap_baker_slots.py` — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - `class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, select_bake_set_init, select_bake_set, clear_bake_set, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, open_sourceimages
+  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, cmb_scope, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, set_isolation_init, set_isolation, select_isolation, clear_isolation, select_bake_set_init, select_bake_set, clear_bake_set, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, revert_to_source, list_changed_objects, open_sourceimages
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
-  - methods: baked_objects, lightmap_info, commit, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps, rename_lightmap, transfer_lightmaps
+  - methods: baked_objects, lightmap_info, commit, bake_state, scene_state, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, foreign_writer, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps, rename_lightmap, transfer_lightmaps
 
 ### `mat_utils/_mat_utils.py` — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - `class MatUtils(_MatUtilsInternal)`
@@ -815,7 +829,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/arnold_bridge.py` — Arnold render-bridge management.
 - `class ArnoldBridge(pythontk.LoggingMixin, _ArnoldBridgeInternal)`
-  - methods: add, remove, rebuild, temporary, get_bridge, has_bridge, unrenderable_materials
+  - methods: add, remove, rebuild, temporary, get_bridge, has_bridge, authored_plug, unrenderable_materials
 - `class ArnoldBridgeSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
   - methods: header_init, cmb000_init, b000, b001, select_bridged
 
@@ -825,6 +839,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BakeSourceSet(BakeSet)`
   - methods: companion_path
 - `class LightmapExcludeSet(BakeSet)`
+- `class LightmapIsolateSet(BakeSet)`
+  - methods: groups, meshes
 - `class LightmapBakeSet(BakeSet)`
 
 ### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
@@ -890,7 +906,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
   - methods: is_active, post, run
 - `class RpcPlugin(object)`
-  - methods: import_ops, port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
+  - methods: import_ops, port, is_hosted, is_running, address, start, serve, stop, autostart, autostart_safely
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/plugin_src/marmoset_rpc/ops/scene_ops.py` — Scene-inspection ops.
 - `summary()`
@@ -1032,7 +1048,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class MainThreadMarshaller(_MainThreadMarshallerInternal)`
   - methods: is_active, post, run
 - `class RpcPlugin(object)`
-  - methods: import_ops, port, is_hosted, is_running, address, start, stop, autostart, autostart_safely
+  - methods: import_ops, port, is_hosted, is_running, address, start, serve, stop, autostart, autostart_safely
 
 ### `mat_utils/substance_bridge/substance_rpc/plugin_src/substance_rpc/ops/project_ops.py` — Project-level ops: inspect the open project and reload its mesh.
 - `project_info()`
@@ -1150,7 +1166,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/shadow_rig/_shadow_rig.py` — Shadow Rig engine — a projected-shadow rig for engine export.
 - `class ShadowRig(pythontk.LoggingMixin)`
-  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, default_texture_dir, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, create, create_for_sources, create_horizon_for_sources, create_per_object
+  - methods: has_mesh_geometry, create_contact_locator, ensure_source, get_or_create_shadow_source, source_is_directional, source_size, source_softness, set_source_softness, planes_lit_by, create_shadow_plane, current_model, create_silhouette_texture, create_material, setup_expression, bake, plane_is_live, plane_is_baked, from_plane, planes_for_nodes, for_node, for_nodes, set_source, unbake_planes, rebuild, silhouette_is_stale, auto_recalculate, auto_recalculate_enabled, recalculate_stale, refresh_silhouette, export_record, refresh_export_metadata, unit_scale, rig_unit, plane_record, plane_type, horizon_output_path, bake_horizon, plane_is_atlased, default_texture_dir, pack_atlas, unpack_atlas, find_shadow_planes, bake_planes, delete, delete_rigs, plane_materials, set_intensity, set_ground_height, detach_planes, create, create_for_sources, create_horizon_for_sources, create_per_object
 
 ### `rig_utils/shadow_rig/shadow_preview.py` — A live Viewport 2.0 preview of a horizon rig: the artist drags the light
 - `class ShadowPreview(_ShadowPreviewInternal, pythontk.LoggingMixin)`
@@ -1158,13 +1174,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/shadow_rig/shadow_rig_slots.py` — Shadow Rig panel — the Switchboard slots for ``shadow_rig.ui``.
 - `class ShadowRigSlots`
-  - methods: header_init, cmb_type_init, txt_source_init, b003_init, b002_init, prepare_operation, b001_init, chk_follow_init, chk_follow, s001_init, s001, chk_horizon_preview_init, chk_horizon_preview, b002, b003, source_from_selection, reproject_sources, apply_source, rebuild_rig, restore_expression, b009, b010, perform_operation
+  - methods: header_init, cmb_type_init, txt_source_init, b003_init, b002_init, b009_init, prepare_operation, b001_init, chk_follow_init, chk_follow, s001_init, s001, s002, s003, chk_horizon_preview_init, chk_horizon_preview, b002, b003, source_from_selection, reproject_sources, apply_source, rebuild_rig, restore_expression, b009, detach_to_plane, b010, perform_operation
 
 ### `rig_utils/skinning.py` — Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
 - `class CurveWeights(pythontk.HelpMixin)`
   - methods: effective_degree, joint_stations, solve
 - `class SkinUtils(pythontk.HelpMixin)`
-  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, export_weights, import_weights, add_influence, apply_falloff, add_delta_mush, bind_to_curve, flatten_influences
+  - methods: get_skin_cluster, get_influences, bind, name_bind_pose, unbind, get_weights, set_weights, set_vertex_weights, prune_weights, normalize_weights, set_max_influences, set_skinning_method, set_dqs_support_non_rigid, copy_weights, mirror_weights, add_to_skin, export_weights, import_weights, add_influence, apply_falloff, add_delta_mush, bind_to_curve, flatten_influences
 
 ### `rig_utils/telescope_rig.py`
 - `class TelescopeRigBundle`
@@ -1287,6 +1303,15 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `uv_utils/shell_xform.py` — Dedicated UV shell-transform panel.
 - `class ShellXformSlots(pythontk.LoggingMixin)`
   - methods: header_init, cmb_move_scope_init, b023, b024, b025, b026, gather_to_udim, b034, b035, b036, b037, s041, tb005_init, tb005, tb006_init, tb006, tb008_init, tb008, align_u_min, align_u_avg, align_u_max, align_v_min, align_v_avg, align_v_max, linear_align, orient_shells, orient_edges, gather_shells, randomize_shells, open_uv_editor
+
+### `uv_utils/texture_combine/texture_combine.py` — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
+- `class CombineInputs`
+- `class TextureCombine(pythontk.LoggingMixin, _TextureCombineInternal)`
+  - methods: names, entry, members, owner, stale, gather, inputs_for, apply_rows, plan, default_name, combine, recombine, restore, update, forget, consolidate_lightmaps, resolve_meshes
+
+### `uv_utils/texture_combine/texture_combine_slots.py` — The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.
+- `class TextureCombineSlots(pythontk.LoggingMixin)`
+  - methods: header_init, cmb_mode_init, open_output_folder, cmb_set_init, select_set, recombine_set, restore_set, forget_set, tbl_sources_init, parse_scale, select_row_members, remove_override, reset_scales, b001, b002, cmb_sizing_init, cmb_normalize_init, cmb_atlas_init, s_spacing_init, chk_rotate_init, chk_lightmaps_init, cmb_tt_transfer_init, cmb_tt_source_init, cmb_tt_targets_init, cmb_tt_resolution_init, t_tt_dst_uvset_init, chk_tt_lightmaps_init, t_name_init, record_name, t_output_init, cmb_quality_init, s_padding_init, chk_assign_init, t_affix_init, material_affix, cmb_shader_init, overwrites_target, assign_options, sync_shared, status, b000, combine
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`

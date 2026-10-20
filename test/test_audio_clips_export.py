@@ -65,6 +65,9 @@ class TestAudioClipsExport(MayaTkTestCase):
         # Maya frames 10/24 shifted by playback_min=1.
         payload = json.loads(stored)
         self.assertEqual(payload["version"], AudioClips.MANIFEST_VERSION)
+        # The frames' rate travels with them (2026-10-17: frames alone left a
+        # reader to guess it).
+        self.assertEqual(payload["fps"], audio_utils.get_fps())
         self.assertEqual(
             _event_set(stored),
             {("", 9, "footstep"), ("", 23, "jump")},

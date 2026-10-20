@@ -217,6 +217,41 @@ class TestBuild(ArticulatedRigCase):
             cmds.listRelatives(rig.group, parent=True, fullPath=True)[0], self.arm
         )
 
+    def test_a_rig_built_in_metres_and_radians_is_the_rig_built_in_cm(self):
+        """The plan is in centimetres and degrees, and a build in a scene that
+        works in other units used to write those numbers as its units: the
+        joints would land 100x off in metres. Every method now runs in the
+        plan's units, so the build and its solved pose are the same.
+        Added: 2026-10-17"""
+        cmds.currentUnit(linear="m", angle="rad")
+        self.addCleanup(cmds.currentUnit, linear="cm", angle="deg")
+        rig = self.build()
+        self.assertEqual(cmds.currentUnit(query=True, linear=True), "m")
+        self.assertAtRest()
+        for joint_id in rig.joint_ids():
+            self.assertLess(
+                _mdiff(_world(rig.control(joint_id)), _world(rig.joint(joint_id))),
+                1e-5,
+                joint_id,
+            )
+        cmds.setAttr(f"{rig.end_control}.ikBlend", 0.0)  # FK alone round-trips
+        state = self.random_state(rig.model(), random.Random(5), spread=15)
+        rig.set_state(state, key=False)
+        for got, want in zip(rig.state(), state):
+            self.assertAlmostEqual(got, want, places=4)
+        cmds.setAttr(f"{rig.end_control}.ikBlend", 1.0)
+        rig.set_state(state, key=False)
+        model, group = rig.model(), _world(rig.group)
+        for index, (p, q) in enumerate(model.world(rig.state())):
+            xf = om.MTransformationMatrix(om.MQuaternion(*q).asMatrix())
+            xf.setTranslation(om.MVector(*p), om.MSpace.kTransform)
+            self.assertLess(
+                _mdiff(
+                    xf.asMatrix() * group, _world(rig.joint(rig.joint_ids()[index]))
+                ),
+                1e-5,
+            )
+
     def test_every_control_sits_on_its_joint(self):
         """Bug: each control sat on the joint ABOVE its own (``Controls``
         resolved a joint to its parent), so the telescope's arrow was buried

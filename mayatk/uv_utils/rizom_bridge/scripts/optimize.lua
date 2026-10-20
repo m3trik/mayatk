@@ -50,6 +50,8 @@
 --
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__
+-- Host-side run window (read by the bridge; echoed so the panel shows the toggle):
+-- show_window=__SHOW_APP_WINDOW__
 
 -- 1. Select every island, so the grouping + pack below have something to act
 -- on. Without this the whole tail silently no-ops (see above).

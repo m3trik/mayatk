@@ -1053,6 +1053,25 @@ def _maya_openable(path):
     return AppLauncher.ansi_safe_path(path)
 
 
+def _node_tree(mat):
+    """The node tree *mat* renders through, or None.
+
+    Dependency-free copy of blendertk's ``MatUtils.get_node_tree`` read (mayatk's
+    ``test_scene_import`` runs both over the same materials). ``use_nodes`` is
+    deprecated on Blender 5.x (pinned True; reading it warns) and gone in 6.0
+    (reading raises): where the RNA no longer declares it live the tree is always
+    used, and on 4.x a tree with nodes off renders nothing.
+    """
+    if mat is None:
+        return None
+    tree = getattr(mat, "node_tree", None)
+    rna = getattr(mat, "bl_rna", None)
+    prop = rna.properties.get("use_nodes") if rna is not None else None
+    if prop is None or getattr(prop, "is_deprecated", False):
+        return tree
+    return tree if tree is not None and mat.use_nodes else None
+
+
 def _material_files(bpy, mat):
     """(files, image_node_count) -- every image-texture file feeding *mat*.
 
@@ -1078,7 +1097,7 @@ def _material_files(bpy, mat):
             elif node.bl_idname == "ShaderNodeGroup":
                 walk(node.node_tree, seen)
 
-    walk(mat.node_tree if mat.use_nodes else None, set())
+    walk(_node_tree(mat), set())
     return files, node_count
 
 
@@ -1124,10 +1143,10 @@ def _material_slots(bpy, mat):
     identity lives in its filename. ``Normal`` counts only through a Normal Map
     (normal) or a Bump (bump) node. Node groups are not traced.
     """
-    if not getattr(mat, "use_nodes", False) or mat.node_tree is None:
+    tree = _node_tree(mat)
+    if tree is None:
         return {}
 
-    tree = mat.node_tree
     outgoing = {}
     by_socket = {}
     for link in tree.links:

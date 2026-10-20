@@ -42,6 +42,35 @@ class _DuplicatesInternal:
         "rotateFrame",
     )
 
+    #: Where each placement attr leaves a texture reading exactly where the
+    #: UVs put it. ``wrap`` is left out: it only matters outside 0-1.
+    _PLACE2D_IDENTITY = {
+        "repeatU": 1.0,
+        "repeatV": 1.0,
+        "offsetU": 0.0,
+        "offsetV": 0.0,
+        "rotateUV": 0.0,
+        "mirrorU": 0.0,
+        "mirrorV": 0.0,
+        "stagger": 0.0,
+        "coverageU": 1.0,
+        "coverageV": 1.0,
+        "translateFrameU": 0.0,
+        "translateFrameV": 0.0,
+        "rotateFrame": 0.0,
+    }
+
+    @classmethod
+    def _placement_is_identity(cls, file_node: str) -> bool:
+        """Whether *file_node* reads its image exactly where the UVs put it: no
+        tiling, offset, rotation, mirror, stagger or coverage from its
+        place2dTexture (none connected counts). An unreadable attr does not."""
+        sig = dict(zip(cls._PLACE2D_SIG_ATTRS, cls._placement_signature(file_node)))
+        return all(
+            sig.get(attr, default) == default
+            for attr, default in cls._PLACE2D_IDENTITY.items()
+        )
+
     @classmethod
     def _placement_signature(cls, file_node: str) -> tuple:
         """UV-placement signature of the place2dTexture feeding *file_node*.
@@ -129,10 +158,10 @@ class _DuplicatesInternal:
         """Body of :meth:`MatUtils.is_duplicate_material`."""
         material1 = str(material1)
         material2 = str(material2)
-        history1 = cmds.listHistory(material1) or []
-        history2 = cmds.listHistory(material2) or []
-        textures1 = set(cmds.listConnections(history1, type="file") or [])
-        textures2 = set(cmds.listConnections(history2, type="file") or [])
+        # The file nodes upstream of each: a connection out of a material (its
+        # Arnold bridge's emission follows its weight) feeds none of its textures.
+        textures1 = set(cmds.ls(cmds.listHistory(material1) or [], type="file"))
+        textures2 = set(cmds.ls(cmds.listHistory(material2) or [], type="file"))
         return textures1 == textures2
 
     @classmethod

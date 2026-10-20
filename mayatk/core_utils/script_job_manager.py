@@ -35,8 +35,17 @@ try:
     import maya.cmds as cmds
 except Exception:
     cmds = None
+try:
+    import maya.api.OpenMaya as om2
+except Exception:
+    om2 = None
+try:  # API 2.0 has no MFileIO
+    from maya.OpenMaya import MFileIO
+except Exception:
+    MFileIO = None
 
 import contextlib
+import functools
 import itertools
 import logging
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
@@ -110,6 +119,33 @@ class ScriptJobManager:
         if cls._instance is not None:
             cls._instance.teardown()
             cls._instance = None
+
+    @staticmethod
+    def is_reading_file() -> bool:
+        """Return True while Maya reads a file (an open, import or reference
+        load); False outside Maya.  Through API 1.0: 2.0 has no ``MFileIO``.
+        """
+        return MFileIO is not None and bool(MFileIO.isReadingFile())
+
+    @classmethod
+    def _skip_during_file_read(cls, callback: Callable) -> Callable:
+        """Wrap an OpenMaya *callback* so it never runs while Maya reads a file.
+
+        OpenMaya messages fire synchronously inside a read, and for the whole
+        read Maya's Secure Python Import hook vets every ``import`` statement
+        -- a handler's function-level import then halts the load on an
+        "Untrusted Python Module Import" prompt.  A read is not an edit:
+        owners resync on ``SceneOpened`` or their next refresh.  The guard
+        itself executes no import.
+        """
+
+        @functools.wraps(callback)
+        def guarded(*args):
+            if cls.is_reading_file():
+                return None
+            return callback(*args)
+
+        return guarded
 
     # ------------------------------------------------------------------ init
     def __init__(self):
@@ -211,7 +247,15 @@ class ScriptJobManager:
         int or None
             Opaque token for :meth:`unsubscribe`, or ``None`` if the
             registration failed.
+
+        Notes
+        -----
+        The callback is skipped while Maya reads a file (open, import,
+        reference load) -- see :meth:`_skip_during_file_read`.
         """
+        register_args = tuple(
+            self._skip_during_file_read(a) if callable(a) else a for a in register_args
+        )
         try:
             cb_id = register_fn(*register_args)
         except Exception:
@@ -467,8 +511,6 @@ class ScriptJobManager:
     def _remove_om_callback(self, cb_id: Any) -> None:
         """Remove a single OpenMaya callback by id (best effort)."""
         try:
-            import maya.api.OpenMaya as om2
-
             om2.MMessage.removeCallback(cb_id)
         except Exception as exc:
             logger.debug(

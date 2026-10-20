@@ -171,9 +171,6 @@ class SubstanceEngine(ptk.HandoffBridge):
     #: ``<Bridge>.APP.available`` and shows ``APP.not_found_message`` when unmet.
     APP = APP
 
-    # Default ceiling for roundtrip RPC calls.
-    ROUNDTRIP_TIMEOUT = 1800  # 30 minutes
-
     # Some templates (e.g. render-current-view) operate on an already-loaded
     # Painter project and export nothing -- so an empty selection is allowed.
     requires_objects = False

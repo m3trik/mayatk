@@ -15,15 +15,8 @@ import maya.cmds as cmds
 from base_test import MayaTkTestCase
 
 
-class TestAlphaModeSection(MayaTkTestCase):
-    """A StingrayPBS opacity graph is a glTF alphaMode the FBX cannot express.
-
-    FBX2glTF decides alphaMode from the base colour's alpha channel alone: an
-    RGBA base colour becomes BLEND, never MASK, so a masked Stingray material
-    (cutout, opaque queue -- the only single-material layout that survives a
-    solid body) lands in WebXR as alpha blend with the sorting artifacts that
-    implies. The section carries the graph's mode and its threshold.
-    """
+class _StingrayMixin:
+    """A StingrayPBS on a cube, its graph chosen by *opacity_mode*."""
 
     def _stingray(self, name, opacity_mode):
         from mayatk.mat_utils._mat_utils import MatUtils
@@ -39,6 +32,17 @@ class TestAlphaModeSection(MayaTkTestCase):
         cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
         cmds.sets(cube, edit=True, forceElement=sg)
         return cube, mat
+
+
+class TestAlphaModeSection(_StingrayMixin, MayaTkTestCase):
+    """A StingrayPBS opacity graph is a glTF alphaMode the FBX cannot express.
+
+    FBX2glTF decides alphaMode from the base colour's alpha channel alone: an
+    RGBA base colour becomes BLEND, never MASK, so a masked Stingray material
+    (cutout, opaque queue -- the only single-material layout that survives a
+    solid body) lands in WebXR as alpha blend with the sorting artifacts that
+    implies. The section carries the graph's mode and its threshold.
+    """
 
     def test_masked_carries_mask_and_its_threshold(self):
         from mayatk.env_utils.scene_state import SceneState
@@ -270,6 +274,37 @@ class TestMetallicRoughnessSection(MayaTkTestCase):
         )
 
 
+class TestStingrayConstants(_StingrayMixin, MayaTkTestCase):
+    """An untextured StingrayPBS keeps its colours in uniforms (``base_color``,
+    ``emissive``), apart from its ``TEX_*`` samplers -- whose own literal reads
+    (0, 0, 0). Read from the sampler, a light grey metal lock reached WebXR
+    with a BLACK base colour and rendered as a black hole (production
+    SOL_REPLACE_ASSEMBLY, 2026-10-15)."""
+
+    def test_base_color_is_the_uniform_not_the_sampler(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, mat = self._stingray("greyMetal", "none")
+        cmds.setAttr(f"{mat}.base_color", 0.5, 0.25, 0.75, type="double3")
+        entry = (SceneState.read([cube]).get("base_color") or {}).get("greyMetal")
+        for got, want in zip(entry["color"], (0.5, 0.25, 0.75)):
+            self.assertAlmostEqual(got, want, places=5)
+
+    def test_emission_is_the_uniform_not_the_sampler(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube, mat = self._stingray("glowPanel", "none")
+        if not cmds.attributeQuery("emissive", node=mat, exists=True):
+            self.skipTest("this StingrayPBS graph has no emissive uniform")
+        cmds.setAttr(f"{mat}.emissive", 0.2, 0.4, 0.6, type="double3")
+        if cmds.attributeQuery("emissive_intensity", node=mat, exists=True):
+            cmds.setAttr(f"{mat}.emissive_intensity", 1.0)
+        entry = (SceneState.read([cube]).get("emissive") or {}).get("glowPanel")
+        self.assertIsNotNone(entry, "a constant emissive must not be dropped")
+        for got, want in zip(entry["color"], (0.2, 0.4, 0.6)):
+            self.assertAlmostEqual(got, want, places=5)
+
+
 class TestEmissionWeight(MayaTkTestCase):
     """The emission weight is the SHADER map's: a material's constant emission
     (``ShaderAttributeMap.read_constant``) needs it too, below this layer."""
@@ -300,6 +335,34 @@ class TestEmissionWeight(MayaTkTestCase):
         self.assertEqual(
             SceneState.read([cube])["emissive"]["emitMat"]["color"], [0.5, 0.5, 0.5]
         )
+
+    def test_a_mapped_emission_switched_off_ships_off(self):
+        """The FBX carries the map, so the GLB glows unless told otherwise.
+
+        Omitted at weight 0, a production room's ceiling panels (StingrayPBS,
+        ``emissive_intensity`` 0) reached WebXR glowing at 1.0 -- the converter's
+        default -- while Maya showed them off (2026-10-17).
+        """
+        import pythontk as ptk
+
+        from mayatk.env_utils.scene_state import SceneState
+
+        cube = cmds.polyCube(name="panel_geo")[0]
+        mat = cmds.shadingNode("standardSurface", asShader=True, name="panelMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+        artifacts = ptk.TempArtifacts("scene_state_test", policy="scoped")
+        self.addCleanup(artifacts.cleanup)
+        path = os.path.join(artifacts.dir_path(), "panel_Emissive.png").replace("\\", "/")
+        node = cmds.shadingNode("file", asTexture=True, name="panel_emissive")
+        cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+        cmds.connectAttr(f"{node}.outColor", f"{mat}.emissionColor", force=True)
+        cmds.setAttr(f"{mat}.emission", 0.0)
+        entry = (SceneState.read([cube]).get("emissive") or {}).get("panelMat")
+        self.assertIsNotNone(entry, "a mapped emission at weight 0 must ship as off")
+        self.assertEqual(entry["color"], [0.0, 0.0, 0.0])
+        self.assertEqual(os.path.normpath(entry["texture"]), os.path.normpath(path))
 
 
 class TestBaseWeight(MayaTkTestCase):
@@ -346,6 +409,44 @@ class TestBaseWeight(MayaTkTestCase):
         ramp = cmds.shadingNode("ramp", asTexture=True)
         cmds.connectAttr(f"{ramp}.outAlpha", f"{mat}.base", force=True)
         self.assertEqual(ShaderAttributeMap.base_weight(mat), 1.0)
+
+
+class TestOpacityFactor(MayaTkTestCase):
+    """The base-colour section's ``alpha``: the scalar part of a modern
+    shader's opacity, which glTF states as ``baseColorFactor[3]`` and the FBX
+    drops. A shadow plane held at a static 0.836 fade (texture alpha x the
+    plane's ``opacity``) reached WebXR at alpha 1.0 -- solid black where VP2
+    drew it half-transparent (2026-10-15)."""
+
+    _standard_surface = TestAlphaModeSection._standard_surface
+
+    def _alpha(self, cube, mat):
+        from mayatk.env_utils.scene_state import SceneState
+
+        return (
+            (SceneState.read([cube]).get("base_color") or {}).get(mat, {}).get("alpha")
+        )
+
+    def test_texture_alpha_times_a_fade_carries_the_fade(self):
+        cube, mat = self._standard_surface("fadeMat", connect_alpha=True)
+        fader = cmds.createNode("transform", name="fader")
+        cmds.addAttr(fader, longName="opacity", attributeType="float", defaultValue=1)
+        cmds.setAttr(f"{fader}.opacity", 0.836)
+        cmds.connectAttr(f"{fader}.opacity", "fadeMat_mult.input2X")
+        self.assertAlmostEqual(self._alpha(cube, mat), 0.836, places=5)
+
+    def test_a_constant_opacity_carries_itself(self):
+        cube, mat = self._standard_surface("tint", opacity=(0.5, 0.5, 0.5))
+        self.assertAlmostEqual(self._alpha(cube, mat), 0.5, places=5)
+
+    def test_a_texture_alone_states_nothing(self):
+        """The texture's own alpha carries it; a factor of 1 is noise."""
+        cube, mat = self._standard_surface("bare", connect_alpha=True)
+        self.assertIsNone(self._alpha(cube, mat))
+
+    def test_an_opaque_shader_states_nothing(self):
+        cube, mat = self._standard_surface("solid")
+        self.assertIsNone(self._alpha(cube, mat))
 
 
 if __name__ == "__main__":
