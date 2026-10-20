@@ -14,6 +14,7 @@ import pythontk as ptk
 
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.units import Units
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.edit_utils.naming._naming import Naming
 from mayatk.node_utils._node_utils import NodeUtils
@@ -196,10 +197,23 @@ class RigUtils(ptk.HelpMixin):
     ) -> List[str]:
         """Rig object under a zeroed locator aligned to its manip pivot.
 
+        An object whose transform something drives -- keys, a constraint, an
+        expression -- keeps its channels: they ARE its animation, so neither
+        the pivot bake nor either freeze touches them, and its
+        ``offsetParentMatrix`` cancels the pose the rig took, so it plays
+        exactly where it played (blendertk's twin cancels it in the
+        parent-inverse). It joins the rig last, under the zeroed locator, so a
+        group's freeze never reaches it; a driven GROUP's contents are not
+        flattened. An FBX written with Bake Animation on folds the matrix into
+        the baked channels, and a USD export carries it as an xformOp; an FBX
+        written WITHOUT the bake drops it -- Maya's exporter drops every
+        offsetParentMatrix there -- and plays the object offset by the pose.
+
         Parameters:
             objects (str/obj/list): Objects to create locator rigs for.
             parent (bool): Whether to parent object under locator and locator under group.
-            freeze_object (bool): Freeze object transforms after setup.
+            freeze_object (bool): Freeze object transforms after setup (a
+                driven object's are kept either way).
             freeze_locator (bool): Freeze locator transforms after alignment.
             loc_scale (float): Size of the locator's display (its shape's
                 ``localScale``); its channels stay the rig's.
@@ -359,10 +373,27 @@ class RigUtils(ptk.HelpMixin):
                     # historical mesh affix rather than renaming it bare.
                     child_rule = ptk.NamingConvention.get("mesh")
 
-            if not is_group:
+            # Driven channels ARE the animation: the pivot bake and the freezes
+            # below would write them, and the drivers overwrite every write on
+            # the next evaluation -- a keyed cube played offset by the rig's
+            # pose. The pose is cancelled in its offsetParentMatrix instead.
+            driven = XformUtils._transform_is_driven(obj)
+
+            if not is_group and not driven:
                 XformUtils.bake_pivot(obj, position=True, orientation=True)
 
             matrix = XformUtils.get_manip_pivot_matrix(obj, ws=True)
+            if driven and not is_group:
+                # Where bake_pivot would have moved the transform -- its pivot
+                # -- read instead of baked. ``xform -rotatePivot`` answers in the
+                # working unit, the matrix in the internal one.
+                flat = [matrix.getElement(r, c) for r in range(4) for c in range(4)]
+                flat[12:15] = Units.convert(
+                    cmds.xform(obj, q=True, ws=True, rotatePivot=True),
+                    "working",
+                    "internal",
+                )
+                matrix = om.MMatrix(flat)
 
             # For groups, bake_pivot is skipped so the world matrix only
             # contains the group's own rotation — it misses any custom
@@ -376,11 +407,16 @@ class RigUtils(ptk.HelpMixin):
                     bb = cmds.exactWorldBoundingBox(
                         obj
                     )  # [xmin,ymin,zmin,xmax,ymax,zmax]
-                    center = [
-                        (bb[0] + bb[3]) / 2.0,
-                        (bb[1] + bb[4]) / 2.0,
-                        (bb[2] + bb[5]) / 2.0,
-                    ]
+                    # The box is in the working unit, the matrix in the internal one.
+                    center = Units.convert(
+                        [
+                            (bb[0] + bb[3]) / 2.0,
+                            (bb[1] + bb[4]) / 2.0,
+                            (bb[2] + bb[5]) / 2.0,
+                        ],
+                        "working",
+                        "internal",
+                    )
                     # Start with the world-matrix rotation as default — `matrix` is an
                     # om.MMatrix from XformUtils.get_manip_pivot_matrix. MMatrix supports
                     # row/col indexing via API 2.0 MMatrix
@@ -433,16 +469,26 @@ class RigUtils(ptk.HelpMixin):
                 grp = cmds.group(em=True)
                 cmds.delete(cmds.parentConstraint(loc, grp))
                 loc = cmds.parent(loc, grp)[0]
-                obj = cmds.parent(obj, loc)[0]
+                if not driven:
+                    obj = cmds.parent(obj, loc)[0]
 
                 if freeze_locator:
                     # store=False: rig construction. The LOC is already at
                     # identity here (the GRP was parent-constrained to it
                     # before the reparent), so this is a guard, not a move.
+                    # Its subtree flattens with it: a group's channels and its
+                    # contents' zero. A driven object has not joined yet.
                     XformUtils.freeze_transforms(loc, normal=True, store=False)
 
                 if orig_parent:
                     grp = cmds.parent(grp, orig_parent)[0]
+
+                if driven:
+                    # The rig is finished before a driven object joins it, so
+                    # no freeze reaches its channels or a driven group's
+                    # contents.
+                    XformUtils.freeze_transforms(grp, scale=True, store=False)
+                    obj = cls._parent_keeping_channels(obj, loc)
 
             if vertices and mesh_shape and vertex_count:
                 # Re-derive vertices from the shape's CURRENT path — earlier
@@ -457,7 +503,7 @@ class RigUtils(ptk.HelpMixin):
                         pass
 
             # Freeze object after hierarchy is set up (but not groups)
-            if freeze_object and not is_group:
+            if freeze_object and not is_group and not driven:
                 # store=False: rig construction, as above.
                 XformUtils.freeze_transforms(obj, normal=True, store=False)
 
@@ -477,7 +523,7 @@ class RigUtils(ptk.HelpMixin):
             if not is_group:
                 obj = rename_by_uuid(obj_uuid, child_rule.apply(base_name_stripped))
 
-            if parent and grp:
+            if parent and grp and not driven:  # a driven rig's ran above
                 # store=False: the GRP is created identity here, so its
                 # "pre-freeze" state is not something a user would unfreeze to.
                 XformUtils.freeze_transforms(grp, scale=True, store=False)
@@ -532,9 +578,16 @@ class RigUtils(ptk.HelpMixin):
                 # child whose name is not unique in the scene comes back as
                 # `LOC|CHILD` and that no longer resolves once it has been
                 # unparented. `cmds.parent` is absolute by default, so the
-                # world transform survives either way.
+                # world transform survives either way -- except a DRIVEN
+                # child's, whose drivers overwrite that compensating write: its
+                # offsetParentMatrix takes the move, handing back the matrix it
+                # held before create_locator_at_object rigged it.
                 children = NodeUtils.get_children(obj, full_path=True)
                 new_parent = grandparent or parent
+                driven = [c for c in children if XformUtils._transform_is_driven(c)]
+                for child in driven:
+                    cls._parent_keeping_channels(child, new_parent)
+                children = [c for c in children if c not in driven]
                 if children:
                     if new_parent:
                         cmds.parent(*children, new_parent)
@@ -553,6 +606,60 @@ class RigUtils(ptk.HelpMixin):
                 cmds.warning(f"Object '{obj}' is not a locator.")
 
         return objects
+
+    @staticmethod
+    def _parent_keeping_channels(node: str, parent: Optional[str]) -> str:
+        """Parent *node* under *parent* (``None``: the world) without writing
+        its channels; its ``offsetParentMatrix`` absorbs the move.
+
+        ``cmds.parent`` holds the world by rewriting the channels, and on a
+        driven node the drivers overwrite that write on the next evaluation.
+        Here the channels stay and ``OPM' = OPM x oldParentWorld x
+        newParentWorld^-1`` -- read now, set static -- holds the world: at
+        every frame while the new parent moves with the old one (a rig built
+        under the object's own parent), at this one otherwise, as
+        ``cmds.parent``. A node that ignores its parent (``inheritsTransform``
+        off) needs no compensation; one whose offsetParentMatrix is connected
+        cannot take it, and is parented the plain way, with a warning.
+
+        Returns:
+            str: The node's new long path.
+        """
+        node = (cmds.ls(str(node), long=True) or [str(node)])[0]
+        parent = (
+            (cmds.ls(str(parent), long=True) or [str(parent)])[0] if parent else None
+        )
+        opm_plug = f"{node}.offsetParentMatrix"
+        if cmds.listConnections(opm_plug, source=True, destination=False):
+            cmds.warning(
+                f"'{node}': its offsetParentMatrix is connected, so its "
+                "channels take the reparent, and its drivers may move it."
+            )
+            moved = (
+                cmds.parent(node, parent) if parent else cmds.parent(node, world=True)
+            )
+            return (cmds.ls(moved[0], long=True) or [moved[0]])[0]
+
+        def world(n: Optional[str]) -> "om.MMatrix":
+            return (
+                om.MMatrix(cmds.getAttr(f"{n}.worldMatrix[0]")) if n else om.MMatrix()
+            )
+
+        old_parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+        opm = (
+            om.MMatrix(cmds.getAttr(opm_plug))
+            * world(old_parent)
+            * world(parent).inverse()
+        )
+        moved = (
+            cmds.parent(node, parent, relative=True)
+            if parent
+            else cmds.parent(node, world=True, relative=True)
+        )
+        moved = (cmds.ls(moved[0], long=True) or [moved[0]])[0]
+        if cmds.getAttr(f"{moved}.inheritsTransform"):
+            cmds.setAttr(f"{moved}.offsetParentMatrix", list(opm), type="matrix")
+        return moved
 
     @staticmethod
     def _translate_is_driven(node: str) -> bool:
@@ -846,8 +953,12 @@ class RigUtils(ptk.HelpMixin):
             # origin), not ``xform -q -ws -t`` which returns the rotate
             # pivot's world position — they differ for nodes with non-zero
             # rotatePivot. The LOC child sees the world-matrix translation.
+            # The matrix answers in the internal centimetre; the anchor, and
+            # every pivot, vertex and ``translate`` written below, in the
+            # working unit -- so its translation joins them there. (A delta
+            # only ever meets the matrices' unitless 3x3 part below.)
             grp_world_mat = cmds.xform(grp, q=True, ws=True, matrix=True)
-            grp_world = (grp_world_mat[12], grp_world_mat[13], grp_world_mat[14])
+            grp_world = Units.convert(grp_world_mat[12:15], "internal", "working")
             delta_world = anchor - om.MVector(*grp_world)
             if delta_world.length() < 1e-5:
                 continue
@@ -1604,6 +1715,8 @@ class RigUtils(ptk.HelpMixin):
         """:meth:`rebind_skin_clusters`, its weight files written in *temp_dir*."""
         import os
 
+        from mayatk.rig_utils.skinning import SkinUtils, _BindPoses
+
         os.makedirs(temp_dir, exist_ok=True)
 
         result = {
@@ -1713,20 +1826,33 @@ class RigUtils(ptk.HelpMixin):
                     shape=shape,
                 )
 
-                # Delete original skinCluster
+                # Its deformation settings: rebuilt with the defaults, a
+                # dual-quaternion skin came back classic linear.
+                settings = {
+                    attr: cmds.getAttr(f"{skin_cluster}.{attr}")
+                    for attr in SkinUtils._CLUSTER_SETTINGS
+                    if cmds.attributeQuery(attr, node=skin_cluster, exists=True)
+                }
+
+                # Delete original skinCluster (its dagPose outlives it)
                 skin_cluster_name = CoreUtils.leaf_name(skin_cluster)
+                bind_pose = _BindPoses.of(skin_cluster)
                 cmds.delete(skin_cluster)
 
-                # Recreate skinCluster
-                new_skin_cluster = cmds.skinCluster(
-                    influences,
-                    transform,
-                    toSelectedBones=True,
-                    bindMethod=0,
-                    skinMethod=0,
-                    normalizeWeights=1,
-                    name=skin_cluster_name,
-                )[0]
+                # Recreate skinCluster. Its own old pose and every other
+                # skin's pose on these joints are kept as they are; the pose
+                # cmds.skinCluster records (the CURRENT pose) is swapped for
+                # the old one below, which agrees with the restored bind.
+                with _BindPoses.kept(influences, also=[bind_pose]):
+                    new_skin_cluster = cmds.skinCluster(
+                        influences,
+                        transform,
+                        toSelectedBones=True,
+                        bindMethod=0,
+                        skinMethod=0,
+                        normalizeWeights=1,
+                        name=skin_cluster_name,
+                    )[0]
 
                 # Restore bindPreMatrix
                 for jnt, mat in bind_pre_matrices.items():
@@ -1738,6 +1864,7 @@ class RigUtils(ptk.HelpMixin):
                         mat,
                         type="matrix",
                     )
+                _BindPoses.reattach(new_skin_cluster, bind_pose)
 
                 # Import weights
                 cmds.deformerWeights(
@@ -1748,6 +1875,8 @@ class RigUtils(ptk.HelpMixin):
                     path=temp_dir,
                     shape=shape,
                 )
+                for attr, value in settings.items():
+                    cmds.setAttr(f"{new_skin_cluster}.{attr}", value)
 
                 # Set or restore inheritsTransform
                 final_inherits = (

@@ -271,6 +271,98 @@
         </widget>
        </item>
        <item>
+        <widget class="DoubleSpinBox" name="s002">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>Overall darkness of the shadow, 0-1 (the plane's shadowIntensity). Used by Create; changing it applies to the selected rig(s) at once.</string>
+         </property>
+         <property name="buttonSymbols">
+          <enum>QAbstractSpinBox::NoButtons</enum>
+         </property>
+         <property name="keyboardTracking">
+          <bool>false</bool>
+         </property>
+         <property name="prefix">
+          <string>Intensity:	</string>
+         </property>
+         <property name="debounce" stdset="0">
+          <number>400</number>
+         </property>
+         <property name="decimals">
+          <number>2</number>
+         </property>
+         <property name="minimum">
+          <double>0.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>1.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>0.050000000000000</double>
+         </property>
+         <property name="value">
+          <double>1.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="DoubleSpinBox" name="s003">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>19</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>World Y of the floor the shadow lies on (the plane's groundHeight), for a floor that is not at 0. Used by Create; changing it applies to the selected rig(s) at once.</string>
+         </property>
+         <property name="buttonSymbols">
+          <enum>QAbstractSpinBox::NoButtons</enum>
+         </property>
+         <property name="keyboardTracking">
+          <bool>false</bool>
+         </property>
+         <property name="prefix">
+          <string>Ground Y:	</string>
+         </property>
+         <property name="debounce" stdset="0">
+          <number>400</number>
+         </property>
+         <property name="decimals">
+          <number>3</number>
+         </property>
+         <property name="minimum">
+          <double>-100000.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>100000.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>0.100000000000000</double>
+         </property>
+         <property name="value">
+          <double>0.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QComboBox" name="s000">
          <property name="minimumSize">
           <size>
@@ -459,7 +551,7 @@
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="b009">
+        <widget class="PushButton" name="b009">
          <property name="minimumSize">
           <size>
            <width>0</width>

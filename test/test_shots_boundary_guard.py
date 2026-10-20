@@ -43,6 +43,7 @@ REFUSING_CALLS = frozenset(
         "add_shot_space",
         "apply_gap",
         "copy_sequences_to_shot",
+        "copy_shot_content",
         "delete_shot",
         "expand_shot",
         "extend_shot_to_fit",
@@ -63,6 +64,7 @@ REFUSING_CALLS = frozenset(
         "set_shot_start",
         "slide_shot",
         "split_shot",
+        "swap_shots",
         "trim_shot_to_content",
     }
 )

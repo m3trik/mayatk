@@ -25,10 +25,9 @@ Covers gaps not exercised by test_material_updater.py:
 import os
 import shutil
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import maya.cmds as cmds
-import pythontk as ptk
 
 from base_test import MayaTkTestCase
 from mayatk.mat_utils.mat_updater import MatUpdater
@@ -409,7 +408,9 @@ class TestGloballyMovedDedup(MayaTkTestCase):
         self.out_dir = os.path.join(os.environ["TEMP"], "mat_upd_dedup_out")
         for d in (self.src_dir, self.out_dir):
             os.makedirs(d, exist_ok=True)
-        self.shared = os.path.join(self.src_dir, "shared.png")
+        # Typed: a material none of whose textures names a map type is left as
+        # authored, and never reaches the move.
+        self.shared = os.path.join(self.src_dir, "shared_BaseColor.png")
         with open(self.shared, "w") as f:
             f.write("dummy")
 
@@ -429,7 +430,7 @@ class TestGloballyMovedDedup(MayaTkTestCase):
     @patch("pythontk.FileUtils.move_file")
     def test_shared_texture_moved_once(self, mock_move, mock_prepare):
         mock_prepare.return_value = [self.shared]
-        mock_move.return_value = [os.path.join(self.out_dir, "shared.png")]
+        mock_move.return_value = [os.path.join(self.out_dir, "shared_BaseColor.png")]
 
         MatUpdater.update_materials(
             materials=[self.mat_a, self.mat_b],
@@ -508,7 +509,7 @@ class TestMoveFailureFallback(MayaTkTestCase):
         self.out_dir = os.path.join(os.environ["TEMP"], "mat_upd_movefail_out")
         for d in (self.src_dir, self.out_dir):
             os.makedirs(d, exist_ok=True)
-        self.tex = os.path.join(self.src_dir, "tex.png")
+        self.tex = os.path.join(self.src_dir, "tex_BaseColor.png")  # typed: see above
         with open(self.tex, "w") as f:
             f.write("dummy")
         self.mat = cmds.shadingNode("standardSurface", asShader=True, name="mf_mat")

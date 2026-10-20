@@ -21,6 +21,8 @@ try:
 except ImportError:
     cmds = None
 
+from uitk.switchboard import Cancelable
+
 from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 
 # From this package:
@@ -104,6 +106,9 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
                     "<b>roundtrip</b> — runs Toolbag headless, then "
                     "re-surfaces generated maps as clickable links in the "
                     "log panel below. Maya scene is left untouched.",
+                    "A roundtrip runs Toolbag hidden: <b>hold Esc</b> to "
+                    "cancel one, or tick <b>Show App Window</b> to see (and "
+                    "answer) a dialog it stops on.",
                 ],
             ),
         ],
@@ -235,6 +240,10 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     # b000 -- the per-bridge send action
     # ------------------------------------------------------------------
 
+    # Inside the dispatcher's CancelScope: a roundtrip's hidden Toolbag polls
+    # it, so holding Esc (or the long-run dialog's Cancel) ends a bake stuck on
+    # a dialog no one can see.
+    @Cancelable(300, message="Marmoset Toolbag run")
     def b000(self):
         """Process selected transforms with the chosen template + mode."""
         # All operational diagnostics route through the in-window log

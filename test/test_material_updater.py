@@ -33,7 +33,9 @@ class TestMatUpdater(MayaTkTestCase):
 
         # Create a dummy material and texture
         # We need a valid file path for os.path.exists check in MaterialUpdater
-        self.temp_tex = os.path.join(os.environ["TEMP"], "test_texture.png")
+        # Typed: a material none of whose textures names a map type is left
+        # as authored and never reaches the factory.
+        self.temp_tex = os.path.join(os.environ["TEMP"], "test_texture_BaseColor.png")
         with open(self.temp_tex, "w") as f:
             f.write("dummy")
 
@@ -508,7 +510,7 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
 
-        self.source_file = os.path.join(self.temp_dir, "source.png")
+        self.source_file = os.path.join(self.temp_dir, "source_BaseColor.png")
         with open(self.source_file, "w") as f:
             f.write("dummy")
 
@@ -548,12 +550,12 @@ class TestMaterialUpdaterMoveLogic(MayaTkTestCase):
         # Setup: processed file is in a different folder
         other_dir = os.path.join(self.temp_dir, "other")
         os.makedirs(other_dir, exist_ok=True)
-        other_file = os.path.join(other_dir, "other.png")
+        other_file = os.path.join(other_dir, "other_BaseColor.png")
         with open(other_file, "w") as f:
             f.write("dummy")
 
         mock_prepare.return_value = [other_file]
-        mock_move.return_value = [os.path.join(self.temp_dir, "other.png")]
+        mock_move.return_value = [os.path.join(self.temp_dir, "other_BaseColor.png")]
 
         # Config: move_to_folder is the temp dir
         config = {"move_to_folder": self.temp_dir, "copy_all": True}

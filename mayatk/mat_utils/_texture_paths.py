@@ -515,7 +515,12 @@ class _TexturePathsInternal:
         )
 
         for material in materials:
-            file_nodes = cmds.listConnections(material, type="file") or []
+            file_nodes = (
+                cmds.listConnections(
+                    material, type="file", source=True, destination=False
+                )
+                or []
+            )
             for attr in attributes:
                 for file_node in file_nodes:
                     if not cmds.attributeQuery(attr, node=file_node, exists=True):

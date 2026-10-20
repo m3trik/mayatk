@@ -91,6 +91,10 @@ DEFAULTS: Dict[str, Any] = {
     # DCC bridge writes the model in it; the ``carrier=__CARRIER__`` echo is what
     # surfaces the Format combo, so it must substitute rather than leak.
     "CARRIER": "fbx",
+    # Host-side: show Toolbag's window during a roundtrip -- same contract as
+    # SCOPE: the engine reads it before launch (``MarmosetEngine._run_roundtrip``);
+    # the ``show_window=__SHOW_APP_WINDOW__`` echo in bake.py surfaces the toggle.
+    "SHOW_APP_WINDOW": False,
 }
 
 

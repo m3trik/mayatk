@@ -163,14 +163,80 @@ class _AnimationTasksMixin(_TaskDataMixin):
         nodes x 40 frames, the frames the two exports disagree on most): with
         this skip the shipped worst-case orientation error is 1.35 deg against
         4.56 without it, and the sample is closer in 1040-1564 of every 1600 --
-        so the skip is the faithful path, not merely the smaller one."""
-        from mayatk.env_utils.fbx_utils import FbxUtils
+        so the skip is the faithful path, not merely the smaller one.
 
+        Read off :meth:`write_plan`, like every other question about this
+        run's write."""
         if self.run.usd or self.run.animation_write_back:
             return False
-        if self.run.splits_takes and FbxUtils.declared_takes():
-            return True
-        return FbxUtils.baking_enabled()
+        return self.write_plan().bakes
+
+    def capture_write_baseline(self) -> None:
+        """Read the FBX settings once, as the preset (or the default reset) left
+        them and before any task writes them -- the input :meth:`write_plan`
+        decides from. ``perform_export`` calls it once the options are in."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        self._write_baseline = None if self.run.usd else FbxUtils.write_plan()
+
+    def write_plan(self):
+        """THIS run's FBX write: whether it bakes, why, over what, resampled
+        (``FbxUtils.WritePlan``).
+
+        The one owner every predictor reads -- Smart Bake's optimization skip
+        (:meth:`_write_resamples_layers`), the clip origin
+        (:meth:`_write_resamples_curves`, :meth:`_predicted_bake_range`), the
+        range task's skip, the bracket's producers and the write's offset fold
+        -- built by :meth:`FbxUtils.write_plan` from the settings as the
+        preset left them (:meth:`capture_write_baseline`; read live when
+        nothing captured them), the takes the run splits
+        (:meth:`_planned_takes`) and the Bake Range row's reading. Nothing in
+        it reads a setting a task of this run has written: a take split turns
+        the bake on mid-run, and the range is set last.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        if self.run.usd:
+            return FbxUtils.write_plan(bakes=False, reason="a USD export writes no FBX")
+        base = self._write_baseline or FbxUtils.write_plan()
+        takes = self._planned_takes()
+        try:
+            mode = self._bake_range_token(self.run.bake_range_mode)
+        except ValueError:  # the range task raises it, naming the mode
+            mode = None
+        if mode is None:  # OFF: the range the settings hold, or the split's
+            span = takes or (base.range if base.bakes else None)
+        else:
+            spans = [s for s in (self._bake_range_for_mode(mode)[0], takes) if s]
+            span = (
+                (min(s[0] for s in spans), max(s[1] for s in spans)) if spans else None
+            )
+        if takes:
+            return FbxUtils.write_plan(
+                takes=takes, span=span, resample_all=not self.run.glb_only
+            )
+        if not base.bakes:
+            return base
+        return FbxUtils.write_plan(
+            bakes=True, reason=base.reason, span=span, resample_all=base.resample_all
+        )
+
+    def _planned_takes(self) -> Optional[Tuple[int, int]]:
+        """The span this run's take split covers, or None when it splits none.
+
+        What :meth:`apply_declared_takes` realized, once it ran; before that,
+        what it will: the shot store's shots (what the publish declares), else
+        the takes the carrier already declares (a legacy ``fbx_takes``).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        if self.run.usd or not self.run.splits_takes:
+            return None
+        if self._realized_takes is not None:
+            return self._realized_takes or None
+        return self._bake_range_from_shots() or FbxUtils.takes_span(
+            FbxUtils.declared_takes()
+        )
 
     def optimize_keys(self, level: Union[bool, str, None] = True):
         """Optimize baked animation keys at the requested level.
@@ -284,15 +350,13 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         Asked before the takes exist (the clip origin is published first), so
         the shots are read off the ShotStore, as the range task reads them, and
-        the flags off the plugin, where the preset left them.
+        the flags off the plugin, where the preset left them -- both through
+        :meth:`write_plan`.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
         if self.run.usd:
             return False
-        if self.run.splits_takes and self._bake_range_from_shots():
-            return not self.run.glb_only
-        return FbxUtils.baking_enabled() and FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+        plan = self.write_plan()
+        return plan.bakes and plan.resample_all
 
     def _clip_origin_span(self) -> Optional[Tuple[int, int]]:
         """The frames the whole-timeline take will carry -- the span every GLB
@@ -328,21 +392,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         split to the declared shots -- the union :meth:`apply_declared_takes`
         claims, and sets itself when the row is OFF. With the row OFF and
         nothing split, the range the plugin holds now -- the preset's -- is
-        the one written.
+        the one written. :meth:`write_plan`'s range.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
-        try:
-            mode = self._bake_range_token(self.run.bake_range_mode)
-        except ValueError:  # the range task raises it, naming the mode
-            mode = None
-        shots = self._bake_range_from_shots() if self.run.splits_takes else None
-        if mode is None:
-            return shots or FbxUtils.bake_range()
-        spans = [span for span in (self._bake_range_for_mode(mode)[0], shots) if span]
-        if not spans:
-            return None
-        return min(span[0] for span in spans), max(span[1] for span in spans)
+        return self.write_plan().range
 
     def _bake_range_from_scene(self) -> Tuple[int, int]:
         """The scene's authored animation range.
@@ -389,13 +441,11 @@ class _AnimationTasksMixin(_TaskDataMixin):
             an export left its measurement armed for every later export in the
             session, including hand-driven ones through Maya's own dialog.
         """
-        from mayatk.env_utils.fbx_utils import FbxUtils
-
         mode = self._bake_range_token(mode)
         if mode is None:  # OFF — as optimize_keys: the panel filters its own
             return  # OFF row out, so this is a headless caller's falsy value
 
-        if not FbxUtils.baking_enabled():
+        if not self.write_plan().bakes:
             self.logger.info(
                 "Baking complex animation is disabled. Skipping frame range setting."
             )
@@ -779,7 +829,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         # unless nothing reads the takes: a GLB-only run's clips are cut from
         # the whole-timeline take, kept as keyed whatever the preset says
         # (_write_resamples_curves).
-        count = FbxUtils.apply_takes_from_node(resample=not self.run.glb_only)
+        count = FbxUtils.apply_takes_from_node(resample=self.write_plan().resample_all)
+        self._realized_takes = ()
         if count:
             # The carrier ships WITH the clips, never instead of them: its
             # metadata names each shot by take name, so it is folded in only
@@ -802,6 +853,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
             # cannot disagree.
             realized = FbxUtils.bake_range()
             if realized:
+                self._realized_takes = tuple(realized)
                 self._require_range_coverage(*realized)
             self.logger.info(
                 f"Animation takes: {count} clip(s) realized from the declared "

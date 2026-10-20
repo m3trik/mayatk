@@ -11,8 +11,10 @@ import os
 import shutil
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 from base_test import MayaTkTestCase
+from rig_metrics import BindPoseMetrics
 
 from mayatk.rig_utils.skinning import CurveWeights, SkinUtils
 from mayatk.nurbs_utils._nurbs_utils import NurbsUtils
@@ -139,6 +141,94 @@ class TestSkinBind(MayaTkTestCase):
             [i.split("|")[-1] for i in influences],
             [j.split("|")[-1] for j in joints],
         )
+
+
+class TestBindKeepsOtherSkinsPose(MayaTkTestCase):
+    """A second skin bound to joints another skin already uses must leave that
+    skin's dagPose alone and record its own at the pose it binds at.
+
+    ``cmds.skinCluster`` decides from the joints' LOCAL transforms whether they
+    still stand at the existing bind pose. When they do it deletes that pose
+    and hands both clusters one new one: at rest only the first pose's node
+    and name are lost, but after the skeleton's ANCESTOR moved (a rig riding
+    its module) the shared pose keeps the old world matrices, so the new
+    cluster's pose disagrees with its bindPreMatrix (58.7 units on the
+    production plug rig) and Go to Bind Pose is wrong for it.
+    """
+
+    def _rig(self):
+        module = cmds.createNode("transform", name="module_GRP")
+        joints = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)], prefix="sharedJnt")
+        cmds.parent(joints[0], module)
+        first = _make_cylinder("firstMesh")
+        sc = SkinUtils.bind(first, joints, name="first_skin")
+        second = _make_cylinder("secondMesh")
+        cmds.move(0, 0, 3, second)
+        return module, joints, first, sc, second
+
+    @staticmethod
+    def _move(module, joints, how):
+        if how == "module":
+            cmds.setAttr(f"{module}.translateY", 2)
+            cmds.setAttr(f"{module}.rotateZ", 20)
+        elif how == "joint":
+            cmds.setAttr(f"{joints[1]}.rotateZ", 35)
+
+    @staticmethod
+    def _points(mesh):
+        return [om.MPoint(p) for p in SkinUtils._world_points(mesh)]
+
+    def _assert_both_poses_true(self, how, bind):
+        module, joints, first, sc, second = self._rig()
+        record = BindPoseMetrics.record("first_skin_pose")
+        self._move(module, joints, how)
+        sc2 = bind(second, joints)
+        self.assertEqual(BindPoseMetrics.pose(sc), "first_skin_pose")
+        self.assertEqual(BindPoseMetrics.record("first_skin_pose"), record)
+        self.assertNotIn(BindPoseMetrics.pose(sc2), (None, "first_skin_pose"))
+        self.assertLess(BindPoseMetrics.error(sc), 1e-6)
+        self.assertLess(BindPoseMetrics.error(sc2), 1e-6)
+        return sc2
+
+    def test_a_moved_module_keeps_the_first_pose_and_records_the_second(self):
+        self._assert_both_poses_true("module", SkinUtils.bind)
+
+    def test_a_posed_joint_keeps_the_first_pose_and_records_the_second(self):
+        self._assert_both_poses_true("joint", SkinUtils.bind)
+
+    def test_at_rest_each_skin_names_only_its_own_pose(self):
+        sc2 = self._assert_both_poses_true(
+            "rest", lambda mesh, joints: SkinUtils.bind(mesh, joints, name="second")
+        )
+        self.assertEqual(BindPoseMetrics.pose(sc2), "second_pose")
+
+    def test_copy_weights_bind_keeps_the_source_pose(self):
+        self._assert_both_poses_true(
+            "module", lambda mesh, joints: SkinUtils.copy_weights("firstMesh", mesh)
+        )
+
+    def test_go_to_bind_pose_restores_each_mesh_where_it_was_bound(self):
+        module, joints, first, sc, second = self._rig()
+        first_rest, second_rest = self._points(first), self._points(second)
+        self._move(module, joints, "module")
+        sc2 = SkinUtils.bind(second, joints)
+        for sc_, mesh, rest in ((sc2, second, second_rest), (sc, first, first_rest)):
+            cmds.dagPose(BindPoseMetrics.pose(sc_), restore=True, g=True)
+            worst = max(p.distanceTo(q) for p, q in zip(self._points(mesh), rest))
+            self.assertLess(worst, 1e-4, mesh)
+
+    def test_undo_restores_the_first_pose(self):
+        module, joints, _, sc, second = self._rig()
+        record = BindPoseMetrics.record("first_skin_pose")
+        self._move(module, joints, "module")
+        cmds.undoInfo(state=True, infinity=True)
+        cmds.flushUndo()
+        SkinUtils.bind(second, joints)
+        cmds.undo()
+        self.assertIsNone(SkinUtils.get_skin_cluster(second))
+        self.assertEqual(cmds.ls(type="dagPose"), ["first_skin_pose"])
+        self.assertEqual(BindPoseMetrics.pose(sc), "first_skin_pose")
+        self.assertEqual(BindPoseMetrics.record("first_skin_pose"), record)
 
 
 # ----------------------------------------------------------------------
@@ -975,12 +1065,6 @@ class TestDeltaMush(MayaTkTestCase):
         self.assertFalse(cmds.getAttr(f"{node}.pinBorderVertices"))
 
 
-if __name__ == "__main__":
-    import unittest
-
-    unittest.main(verbosity=2)
-
-
 # ----------------------------------------------------------------------
 # flatten_influences: one shear-free skeleton per skin, for export
 # ----------------------------------------------------------------------
@@ -1611,6 +1695,9 @@ class TestFlattenInfluences(MayaTkTestCase):
 
         def export(name):
             path = self.temp_path(name).replace("\\", "/")
+            # temp_path registers no cleanup: without this both stages
+            # outlived every run in test/temp_tests (CODE_STANDARD §9).
+            self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
             cmds.mayaUSDExport(
                 file=path,
                 exportSkels="auto",
@@ -1775,3 +1862,187 @@ class TestSampleLocalsReusesRepeatedMatrices(MayaTkTestCase):
             for a, b in zip(before[frame], now):
                 worst = max(worst, max(abs(x - y) for x, y in zip(a, b)))
         self.assertLess(worst, 1e-5)
+
+
+class TestGeometryDag(MayaTkTestCase):
+    def test_a_transform_resolves_to_its_visible_shape_not_the_orig(self):
+        """A bound mesh's transform also parents its intermediate orig; the
+        path must name the deformed shape (MDagPath.hasFn answered True for
+        the transform, so the transform's own path came back)."""
+        tube = _make_cylinder()
+        SkinUtils.bind(tube, _make_chain([(-5, 0, 0), (5, 0, 0)]))
+        dag = CurveWeights._geometry_dag(tube)
+        self.assertTrue(dag.node().hasFn(om.MFn.kMesh))
+        self.assertFalse(om.MFnDagNode(dag).isIntermediateObject)
+        self.assertEqual(
+            dag.fullPathName(),
+            cmds.listRelatives(tube, shapes=True, noIntermediate=True, fullPath=True)[
+                0
+            ],
+        )
+
+
+# ----------------------------------------------------------------------
+# add_to_skin: extra geometry onto an existing bind, at any pose
+# ----------------------------------------------------------------------
+
+
+class TestAddToSkin(MayaTkTestCase):
+    """A part modeled against a POSED rig joins the skin where it sits, under
+    the cluster's existing bind (the production case: a connector modeled
+    inside a tube-rigged plug while the rig stood away from its bind pose)."""
+
+    def _posed_rig(self, skinning_method="dqs"):
+        tube = _make_cylinder()
+        joints = _make_chain([(-5, 0, 0), (0, 0, 0), (5, 0, 0)])
+        sc = SkinUtils.bind(tube, joints, skinning_method=skinning_method)
+        # Move the rig off its bind pose before the part is modeled.
+        cmds.setAttr(f"{joints[1]}.rotateZ", 35)
+        cmds.setAttr(f"{joints[0]}.translateY", 2)
+        tip = cmds.xform(joints[2], q=True, ws=True, t=True)
+        insert = cmds.polyCube(name="insertGeo", w=0.6, h=0.6, d=0.6)[0]
+        cmds.xform(insert, ws=True, t=tip)
+        cmds.rotate(0, 0, 35, insert)
+        return tube, joints, sc, insert
+
+    @staticmethod
+    def _points(mesh):
+        return [om.MPoint(p) for p in SkinUtils._world_points(mesh)]
+
+    @staticmethod
+    def _worst(a, b):
+        return max((p - q).length() for p, q in zip(a, b))
+
+    @staticmethod
+    def _spans(points):
+        return [(a - b).length() for a in points for b in points]
+
+    def test_combine_lands_in_place_and_keeps_the_bind(self):
+        tube, joints, sc, insert = self._posed_rig()
+        base_before = self._points(tube)
+        insert_points = self._points(insert)
+        bind_before = [
+            cmds.getAttr(f"{sc}.bindPreMatrix[{i}]") for i in range(len(joints))
+        ]
+
+        result = SkinUtils.add_to_skin(tube, insert)
+
+        self.assertEqual(result, cmds.ls(tube, long=True))
+        self.assertFalse(cmds.objExists(insert))
+        self.assertEqual(SkinUtils.get_skin_cluster(tube), sc)
+        points = self._points(tube)
+        n = len(base_before)
+        self.assertEqual(len(points), n + len(insert_points))
+        self.assertLess(self._worst(points[:n], base_before), 1e-6)
+        self.assertLess(self._worst(points[n:], insert_points), 1e-3)
+        self.assertEqual(
+            [cmds.getAttr(f"{sc}.bindPreMatrix[{i}]") for i in range(len(joints))],
+            bind_before,
+        )
+        self.assertEqual(cmds.ls("addToSkin_tmp*"), [])
+
+    def test_combine_sweeps_only_the_cut_off_history(self):
+        tube, joints, sc, insert = self._posed_rig()
+        # The tube's polyCylinder still feeds the bind's original shape.
+        maker = cmds.listConnections(
+            f"{SkinUtils._skin_orig_shape(sc)}.inMesh", source=True
+        )
+        self.assertTrue(maker)
+        bystander = cmds.polySphere(name="bystander")[1]
+        key = cmds.setKeyframe(joints[0], attribute="rotateY", value=5)
+
+        SkinUtils.add_to_skin(tube, insert)
+
+        self.assertFalse(cmds.objExists(maker[0]))
+        self.assertTrue(cmds.objExists(bystander))
+        self.assertTrue(cmds.listConnections(f"{joints[0]}.rotateY", type="animCurve"))
+        self.assertEqual(key, 1)
+        self.assertEqual(SkinUtils.get_skin_cluster(tube), sc)
+
+    def test_combine_keeps_what_the_source_parents(self):
+        tube, _, _, insert = self._posed_rig()
+        child = cmds.spaceLocator(name="insertChild")[0]
+        cmds.parent(child, insert)
+        SkinUtils.add_to_skin(tube, insert)
+        self.assertTrue(cmds.objExists(child))
+        self.assertFalse(cmds.listRelatives(insert, shapes=True))
+
+    def test_rigid_insert_moves_as_a_solid(self):
+        tube, joints, sc, insert = self._posed_rig()
+        n = len(self._points(tube))
+        SkinUtils.add_to_skin(tube, insert, rigid=True)
+        placed = self._points(tube)[n:]
+        start = self._spans(placed)
+        cmds.setAttr(f"{joints[1]}.rotateZ", -20)
+        moved = self._points(tube)[n:]
+        self.assertGreater(moved[0].distanceTo(placed[0]), 1.0)  # it follows
+        worst = max(abs(a - b) for a, b in zip(self._spans(moved), start))
+        self.assertLess(worst, 1e-4)
+        weights, influences = SkinUtils.get_weights(sc, vertices=[n, n + 1])
+        k = len(influences)
+        self.assertEqual(weights[:k], weights[k:])
+
+    def test_combine_keeps_a_differing_material_per_face(self):
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        tube, _, _, insert = self._posed_rig()
+        faces = cmds.polyEvaluate(tube, face=True)
+        shader = cmds.shadingNode("lambert", asShader=True, name="insertMat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{shader}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(insert, edit=True, forceElement=sg)
+
+        SkinUtils.add_to_skin(tube, insert)
+
+        assignments = MatUtils.get_shading_assignments(tube)
+        self.assertEqual(sorted(assignments[sg]), list(range(faces, faces + 6)))
+        self.assertEqual(sorted(assignments["initialShadingGroup"]), list(range(faces)))
+
+    def test_separate_shares_the_bind_pose(self):
+        tube, joints, sc, insert = self._posed_rig(skinning_method="classic")
+        pose = cmds.listConnections(f"{sc}.bindPose", source=True)
+        insert_points = self._points(insert)
+
+        result = SkinUtils.add_to_skin(tube, insert, combine=False)
+
+        self.assertEqual(result, cmds.ls(insert, long=True))
+        new_sc = SkinUtils.get_skin_cluster(insert)
+        self.assertNotEqual(new_sc, sc)
+        # The existing pose survives (cmds.skinCluster would replace it) and
+        # is the new cluster's too; bindPreMatrix matches per influence.
+        self.assertEqual(cmds.listConnections(f"{sc}.bindPose", source=True), pose)
+        self.assertEqual(cmds.listConnections(f"{new_sc}.bindPose", source=True), pose)
+        self.assertEqual(SkinUtils.get_influences(new_sc), SkinUtils.get_influences(sc))
+        for i in range(len(joints)):
+            self.assertEqual(
+                cmds.getAttr(f"{new_sc}.bindPreMatrix[{i}]"),
+                cmds.getAttr(f"{sc}.bindPreMatrix[{i}]"),
+            )
+        self.assertLess(self._worst(self._points(insert), insert_points), 1e-3)
+
+    def test_undo_restores_both_meshes(self):
+        tube, _, _, insert = self._posed_rig()
+        n = len(self._points(tube))
+        cmds.undoInfo(state=True, infinity=True)
+        cmds.flushUndo()
+        SkinUtils.add_to_skin(tube, insert)
+        cmds.undo()
+        self.assertTrue(cmds.objExists(insert))
+        self.assertEqual(len(self._points(tube)), n)
+
+    def test_invalid_input_raises(self):
+        tube, _, _, insert = self._posed_rig()
+        with self.assertRaises(ValueError):
+            SkinUtils.add_to_skin(insert, tube)  # target not skinned
+        with self.assertRaises(ValueError):
+            SkinUtils.add_to_skin(tube, tube)
+        cmds.select(clear=True)
+        locator = cmds.spaceLocator()[0]
+        with self.assertRaises(ValueError):
+            SkinUtils.add_to_skin(tube, locator)
+
+
+if __name__ == "__main__":
+    import unittest
+
+    unittest.main(verbosity=2)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,8 +47,8 @@ APP = ptk.AppSpec(
     app_names=("toolbag", "Marmoset Toolbag 4", "Marmoset Toolbag 5"),
     scan_globs=(r"{program_files}\Marmoset\*\toolbag.exe",),
     not_found_msg=(
-        "Marmoset Toolbag not found. Install it, or set "
-        "MarmosetBridge().toolbag_path to the executable."
+        "Marmoset Toolbag not found on PATH or under Program Files\\Marmoset. "
+        "Install it, or set the engine's toolbag_path to toolbag.exe."
     ),
 )
 # Still a name of its own: the LAUNCH fallback below iterates the candidates and
@@ -98,6 +99,15 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
 
     # How long a roundtrip is allowed to take before we give up on Toolbag.
     ROUNDTRIP_TIMEOUT = 1800  # 30 minutes; bakes can be slow on big meshes.
+
+    # Toolbag has no headless mode: a roundtrip runs it where no one sees it
+    # (Windows: ``AppLauncher.run(hidden=True)``; its window placement is
+    # untouched). False shows it -- to watch a bake, or answer a dialog it waits on;
+    # a send's ``SHOW_APP_WINDOW`` param (a panel's Show App Window) shows it for
+    # that roundtrip alone. A hidden roundtrip is cancellable: under an active
+    # ``ptk.CancelScope`` (a panel's ``@Cancelable`` Send -- hold Esc) Toolbag is
+    # ended at once.
+    ROUNDTRIP_HIDDEN = True
 
     # Padding subtracted from ``time.time()`` before launching Toolbag so
     # files written within the first moments of the run survive the mtime
@@ -238,7 +248,9 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             mode: ``"send_to"`` or ``"round_trip"``. Must match one of the
                 template's declared :data:`BRIDGE_MODES`.
             params: Plain ``{KEY: value}`` overrides merged on top of
-                :data:`template_params.DEFAULTS`.
+                :data:`template_params.DEFAULTS`. A truthy ``SHOW_APP_WINDOW``
+                shows Toolbag during a roundtrip, as ``ROUNDTRIP_HIDDEN =
+                False`` does.
             scene_dir: Where a roundtrip saves its Toolbag scene
                 (``<output_name>.tbscene``), the one artifact of the run a user
                 opens again. Defaults to beside the model, in *output_dir*. A
@@ -249,6 +261,11 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             A result dict with ``script``, ``mode``, ``output_dir``, and --
             for roundtrip -- ``outputs`` (generated map paths). *None* on
             failure.
+
+        Raises:
+            pythontk.OperationCancelled: A hidden roundtrip's ambient
+                :class:`pythontk.CancelScope` was cancelled (Esc held under a
+                panel's Send): Toolbag was ended and nothing is collected.
         """
         template_path = _TEMPLATE_DIR / f"{template}.py"
         allowed_modes = (
@@ -333,10 +350,18 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         }
 
         if mode == ROUND_TRIP:
+            show_window = bool((params or {}).get("SHOW_APP_WINDOW"))
+            hides = self._roundtrip_hides(show_window)
+            # Esc reaches a hidden run through an active CancelScope (a panel's
+            # @Cancelable Send); say so only where it does.
+            esc = "; hold Esc to cancel" if hides and ptk.CancelScope.current() else ""
             self.logger.info(
-                f"Running Toolbag headless (timeout {self.ROUNDTRIP_TIMEOUT}s) ..."
+                f"Running Toolbag{' hidden' if hides else ''} "
+                f"(timeout {self.ROUNDTRIP_TIMEOUT}s{esc}) ..."
             )
-            outputs = self._run_roundtrip(script_path, bake_dir, toolbag_exe)
+            outputs = self._run_roundtrip(
+                script_path, bake_dir, toolbag_exe, show_window=show_window
+            )
             if outputs is None:
                 return None
             if bake_artifacts is not None:
@@ -543,8 +568,14 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
         script_path: str,
         output_dir: str,
         exe: Optional[str] = None,
+        show_window: bool = False,
     ) -> Optional[List[str]]:
-        """Run Toolbag blocking, then return the list of generated map paths."""
+        """Run Toolbag blocking, then return the list of generated map paths.
+
+        Hidden (:attr:`ROUNDTRIP_HIDDEN`) unless *show_window*. A cancel of the
+        ambient ``ptk.CancelScope`` ends a hidden Toolbag and re-raises
+        ``ptk.OperationCancelled``: the user's stop, never a failure to report.
+        """
         toolbag = exe or self.toolbag_path
         if not toolbag:
             self.logger.error("Marmoset Toolbag not found; cannot roundtrip.")
@@ -561,9 +592,22 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
                 toolbag,
                 args=["-run", script_path],
                 timeout=self.ROUNDTRIP_TIMEOUT,
+                hidden=self.ROUNDTRIP_HIDDEN and not show_window,
             )
+        except ptk.OperationCancelled:
+            self.logger.warning(
+                "Toolbag roundtrip cancelled: Toolbag was ended, no maps were collected."
+            )
+            raise
         except Exception as e:
-            self.logger.error(f"Toolbag roundtrip failed: {e}")
+            hint = (
+                " -- it ran hidden, so a dialog it may have opened waited unseen "
+                "(Show App Window, or MarmosetEngine.ROUNDTRIP_HIDDEN = False, shows it)."
+                if self._roundtrip_hides(show_window)
+                and isinstance(e, subprocess.TimeoutExpired)
+                else ""
+            )
+            self.logger.error(f"Toolbag roundtrip failed: {e}{hint}")
             return None
 
         # Replay Toolbag's stdout through the same classifier the send_to
@@ -579,6 +623,11 @@ class MarmosetEngine(ptk.Deliverer, ptk.LoggingMixin):
             )
 
         return sorted(self._snapshot_outputs(output_dir, since=mtime_floor))
+
+    def _roundtrip_hides(self, show_window: bool = False) -> bool:
+        """Whether a roundtrip really hides Toolbag (``ROUNDTRIP_HIDDEN`` and no
+        *show_window*, where pythontk can: elsewhere it shows)."""
+        return self.ROUNDTRIP_HIDDEN and not show_window and AppLauncher.can_hide()
 
     def _relocate_outputs(
         self,

@@ -24,8 +24,9 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 
 | Control | What it does |
 |:---|:---|
-| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included. Its **light** button is *Include Environment*: on, the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards. |
+| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included -- or what **Changed** since the last bake and what that shades ([Re-bake Changed](#re-bake-changed)); choosing Changed puts what in the footer. Its three buttons say what lights the bake (see [Which lights light the bake](#which-lights-light-the-bake)): the **light** is *Include Scene Lighting* (on: every scene light; off: only the Scope's own), the **sphere** is *Include Environment* (on: the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards), and the **eye** is *Include Hidden Lights* (off by default: on switches the hidden lights on for the bake). |
 | **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set): objects that get no map of their own but still cast shadows and bounce light onto everything that bakes. Its icons select the set or clear it. The label shows how many meshes are excluded. |
+| **Isolate** | *Set From Selection* makes the selection the scene's [Isolate set](#isolate-set): moving parts (a locker door, a lid) that bake in a pass of their own and stay out of every other object's render. Same icons and count as Exclude. |
 | **Bake Set** | *Select Bake Set* selects the objects of the last saved bake. Its **disk** button is *Save After Bake*: while on, every bake replaces the scene's [Bake set](#bake-set) with the objects it acted on. One setting for every scene. Its **tag** button names the set with the naming convention's Set suffix (`lightmapBaker_baked_SET`) instead of plain (`lightmapBaker_baked`); **clear** deletes it. The label shows how many objects it holds. |
 | **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). Its **camera** button is *Reflection Probe*: on (the default), the bake also captures the room it lit as an HDR, for what a lightmap cannot hold. See [Reflection probe](#reflection-probe). |
 | **Processor** | Which one Arnold renders the bake on. **Auto** uses the GPU wherever Arnold has one, else the CPU; **GPU** and **CPU** force it. A machine setting, so it sits above the Quality group and no preset stores it. |
@@ -40,7 +41,7 @@ Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
 | **Bake Lightmaps** | Runs the bake. See [What a bake does](#what-a-bake-does). |
 
 A switch rides the option box of the control it qualifies rather than a
-checkbox row of its own — the environment is part of what Scope gathers,
+checkbox row of its own — what lights the bake is part of what Scope gathers,
 adaptive sampling is how the Samples are spent, denoise is what the map ships
 at that Resolution, and the reflection probe is what the bake ships beside the
 maps Packing lays out. Click a button to flip it; its tooltip says what each state
@@ -57,6 +58,22 @@ panel ends with, so the two are worked the same way: pick a preset, then run.
 The header menu adds **Revert to Source** (see [Revert](#revert)) and
 **Open Sourceimages Folder**. The header's **?** holds a short version of this
 page.
+
+## Which lights light the bake
+
+Three switches on the Scope field, the same in the Arnold baker, the Cycles
+baker (blendertk) and the Blender bridge's bake:
+
+| Switch | Default | What it does |
+|:---|:---|:---|
+| **Include Scene Lighting** | on | Every light in the scene lights the bake, wherever it sits. Off: only the lights in the Scope — selected, under what is selected, every visible one (Visible), every one (Scene). The other lights are switched off for the bake (their transform's visibility) and switched back on after. |
+| **Include Environment** | on | The HDRI skydome (`aiSkyDomeLight`) lights the bake. It answers to this switch alone, in the Scope or not. |
+| **Include Hidden Lights** | off | The hidden lights of that set are switched on for the bake and hidden again after — a light under a hidden group too: the group is shown and everything else in it is switched off, so only the light joins the render. A light at intensity 0 stays out. One whose visibility is locked or driven (a display layer, an animation) is named in the Script Editor and left off. |
+
+The refusal for an all-lights-off scene and the light list the Script Editor
+prints read the same set: with Include Scene Lighting off, a light outside
+the Scope does not count; with Include Hidden Lights on, a hidden light the
+bake can switch on does. The reflection probe is lit the same way as the maps.
 
 ## What a bake does
 
@@ -76,6 +93,7 @@ same steps:
    are upgraded to per-area emission. A scene whose lights are all hidden or
    at intensity 0 is refused, and the Script Editor lists every light. A scene
    with no lights at all still bakes, because emissive materials can light it.
+   Both read the lights the bake renders with ([Which lights light the bake](#which-lights-light-the-bake)).
 3. Make sure each mesh has a lightmap UV set (`UvUtils.create_lightmap_uvs`).
    A valid existing set is reused under its own name (`UV2`, `lightmap`, …),
    never repacked. A marker from before atlases were bound by rect is
@@ -186,8 +204,9 @@ point with the bake's own settings, written beside the maps as
 `<scene>_Probe.exr`, half the Resolution wide (256-1024 px).
 
 - **Where it looks from.** Placed by `ProbePlacement`
-  (`light_utils/lightmap_baker/_probe_placement.py`) so it holds in any scene,
-  not only a furnished room:
+  (`light_utils/lightmap_baker/_probe_placement.py`, Maya's rays over the
+  host-free `ptk.ProbePlacement` blendertk's Cycles bake shares) so it holds
+  in any scene, not only a furnished room:
   - over the objects that move in the room -- the visible meshes no bake
     marks -- else the room's middle, else (an open scene: a ground, a
     courtyard) over the baked objects that are not its ground. What moves
@@ -199,7 +218,11 @@ point with the bake's own settings, written beside the maps as
     at the room's, a dark cabinet), and the probe steps out sideways (up only
     when no side lets out, never down) until the solid fills less than an
     eighth of its view. A lit room built inside out is still a room: a light
-    in view says so;
+    in view says so. A piece of furniture that fills half the view from
+    inside its own bounds holds the probe even with its front open and the
+    room's lights showing through (a cabinet over the parts that move in
+    it): the probe leaves by the opening -- never through a wall into the
+    gap behind -- and stands off the same way;
   - at least 0.3 m from any surface it sees (a shelf over the probe would
     otherwise fill the top of the panorama).
 
@@ -219,9 +242,10 @@ point with the bake's own settings, written beside the maps as
   every face open the probe is read as distant.
 - **What it renders.** Every light is visible to it -- an Arnold light too --
   and the scene's imagers (exposure, tonemap, denoise) are not applied: the
-  maps get none, and the probe is read beside them, at their level. With
-  **Include Environment** off, the sky dome is left out of it as it is out of
-  the maps. An unbaked instance of a baked mesh stays in its view: the render
+  maps get none, and the probe is read beside them, at their level. It is lit
+  as the maps are: with **Include Environment** off the sky dome is left out of
+  it, with **Include Scene Lighting** off so are the lights outside the Scope,
+  and **Include Hidden Lights** switches the hidden ones on for it too. An unbaked instance of a baked mesh stays in its view: the render
   can only hide a mesh, and with it every instance.
 - **Z-up scenes** get no probe (logged): its deliverables read it in Y-up
   axes.
@@ -236,6 +260,17 @@ point with the bake's own settings, written beside the maps as
   table against Arnold's render of it: a metal housing from 0.12 of Arnold's
   luminance to 0.62, its trays from 0.4 to 0.89-1.07, the unbaked magnifier's
   parts from up to 2.8x too bright to 0.65-1.45x.
+- **Highlights.** A light hanging inside the room (over a bench) reflects off
+  the probe as if it hung on the wall behind it, so its highlight misses the
+  metals. The GLB export draws the bake's lights into copies of the probe, each
+  placed for a group of receivers -- the room's shell keeps the probe as
+  captured -- and the lights themselves never ship
+  ([Highlights](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md#highlights-the-bakes-lights-drawn-into-the-probe)).
+  They are the lights the bake used, as the bake record holds them: a light
+  Include Scene Lighting left out gets no highlight, and a hidden one Include
+  Hidden Lights switched on keeps its highlight though it is hidden again.
+  An object baked before the record held its lights falls back to every
+  light that is on at export.
 
 Turn it off with the **camera** button on Packing (`reflection_probe=False`).
 To capture it again without re-baking, run
@@ -292,7 +327,9 @@ saved in the panel is also a headless bake recipe.
 | `gi_samples` | GI Samples | yes |
 | `gi_depth` | Bounces | yes |
 | `adaptive` | the Samples field's switch | — |
-| `include_environment` | the Scope field's switch | — |
+| `include_scene_lights` | the Scope field's light button | — |
+| `include_environment` | the Scope field's sphere button | — |
+| `include_hidden_lights` | the Scope field's eye button | — |
 | `denoise` | the Resolution field's switch | — |
 | `beside_textures` | the Output Directory's image toggle | — |
 | `reflection_probe` | the Packing field's camera toggle | — |
@@ -359,6 +396,21 @@ re-bake the room at **mobile**: the prop keeps its map.
 The row mirrors the Marmoset bridge's Bake Source row, and both sets share
 one base (`BakeSet`).
 
+## Isolate set
+
+The Isolate set is a plain `objectSet` named `lightmapBaker_isolate`
+(`mayatk.mat_utils.bake_sets.LightmapIsolateSet`), for parts that move against
+what is baked around them: a locker door on its cabinet, a lid, a drawer.
+
+An isolated object still gets a map, lit by the static scene at the pose it has
+when you bake. But it bakes in a pass of its own, and every other pass -- and
+the reflection probe -- renders without it, so the cabinet keeps no
+door-shaped shadow wherever the door swings. No isolated part shades another
+either. A member brings everything parented under it (the door's glass), and
+isolated objects still pack into their material's atlas. Taking a door out of
+the bake's scope is not the same thing: once it has a map it counts as static
+and shadows the rest, unless it is in this set.
+
 ## Bake set
 
 The Bake set holds the objects the last bake acted on: the Scope, minus the
@@ -384,6 +436,54 @@ result = mtk.LightmapBaker.from_preset("mobile").bake(objects)
 LightmapBakeSet.define(sorted(set(result.maps) | set(result.unbaked)), conventional=True)
 ```
 
+## Re-bake Changed
+
+Every bake records, per object, what its map was baked against: its world
+matrix and bounds, fingerprints of its points and of its lightmap UVs, its
+materials, whether it renders, its atlas cell, the lighting the bake
+rendered with, and the rule that chose those lights: the three light
+switches and, with Include Scene Lighting off, the Scope's lights by name.
+The record is the scene's own (`data_internal`), never on the marker that
+ships.
+
+The **Changed** Scope re-bakes from it (`LightmapBaker.rebake_changed`):
+
+- **Changed objects**: moved, deformed, remodelled, lightmap UVs re-laid,
+  material regrouped, shown or hidden, or the map missing.
+- **Neighbours**: every baked object near enough to be shaded by a change --
+  a changed object, or a static one that arrived, left or changed (the
+  Exclude set's included). Near enough is the changed object's own size, at
+  least 1% and at most 25% of the room's. An Isolate member's changes reach
+  no neighbour.
+- **The lighting**: each map's lights are read again by the rule its bake
+  recorded, so a light moved, re-coloured, dimmed, switched, renamed or
+  deleted, one added where the rule reaches (anywhere with Include Scene
+  Lighting on), the HDRI or the Bounces stales everything that light lit --
+  the whole room when every light lit it. A bake recorded before rules were
+  reads as a lighting change once.
+
+Choosing Changed puts the count and why in the footer; **List Changed
+Objects** (header menu) selects them and lists each with its reason in the
+Script Editor. Nothing bakes until Bake. Each object re-bakes the way it was
+baked -- atlas or per object, lit by the lights its bake used -- whatever
+Packing and the light switches say, so the next Changed finds nothing.
+
+An atlas re-bake writes the changed objects back into the cells they own in
+their material's atlas. Every other object's texels stay exactly as they
+were, the seams with them are matched from the new side, and each material
+keeps one atlas at one texel density. A Selected or Visible bake of part of
+an atlas group does the same. The whole group re-bakes into a fresh layout
+instead, once, when an object no longer fits its cell (it grew or shrank by
+more than 10% on an axis), joins the group, or when the atlas was baked
+before cells were recorded or split by an earlier partial bake; the footer
+names the atlas and why. A member that cannot bake now (hidden, excluded)
+keeps the old atlas, and the rest of its group takes the next free name. An
+atlas baked through the Blender bridge records its cells too; one baked by a
+Blender whose blendertk predates them re-packs its group the first time.
+
+Not seen: an emissive material's strength and an albedo change. Bake the
+Scene after those.
+
 ## Where the maps land
 
 A map is named after its material's **texture set**: the base name its
@@ -399,7 +499,20 @@ claims. So a re-bake overwrites its own earlier map, but never a map another
 object still uses. Re-baking one crate of ten that share a texture set, or a
 room around an excluded object that shares one, gives the new map the next
 free name (`_1`, `_2`, …) instead of writing over theirs. Both packings follow
-this rule.
+this rule. In an atlas, part of a group is written back into its own cells
+instead, so the material keeps one atlas ([Re-bake Changed](#re-bake-changed)).
+
+A scene saved from another (Save As) carries its source's markers, so they
+name the source's maps as this scene's own. The writer record says which
+scene file wrote each map (`SceneRecords.LIGHTMAP_WRITERS`): a map another
+scene file wrote is never written over -- the copy's map takes the next free
+name, and its atlas is never written in place -- so baking a moody copy
+cannot change what the original shows.
+
+A measurement bake (`LightmapBaker(record=False)`: light layers, a rig's
+portability check) writes its maps and probe into the folder it is given and
+records nothing: no marker re-pointed, no map set aside, no atlas cell
+written in place.
 
 - **Default**: every map goes to the Output Directory.
 - **Beside material textures** (the image toggle, `beside_textures=True`):
@@ -496,13 +609,23 @@ returns a `LightmapBakeResult`, the same shape in blendertk:
 | `retired` | Map files the bake superseded and set aside (the Recycle Bin, or a `_superseded` folder beside them). |
 | `refused` | Why nothing was baked, as a sentence, or `None`. |
 | `verdict` | A warning about the maps' level, or `None`. |
+| `in_place` | Objects written back into their own atlas cells; every other object's texels were kept. |
+| `repacked` | `{atlas file name: why}` for the atlases whose whole group re-baked into a fresh layout. |
+| `report` | For `rebake_changed`: what it found changed and why (`ptk.StaleReport`: `summary()`, `lines()`). |
 
 `files` and `folders` list the distinct maps and the folders they landed in.
+
+```python
+print(baker.stale_report().summary())  # what changed since the last bake; bakes nothing
+result = baker.rebake_changed(output_dir="D:/bakes")  # re-bake it, in place where it fits
+```
 The steps stay public for a custom flow: `bake_targets`, `preflight`,
 `bake_atlas` / `bake_separated`, `LightmapRecords.commit` and `bake_verdict`.
 
-Constructor switches mirror the panel: `adaptive`, `include_environment`,
-`denoise`, `beside_textures` and `reflection_probe`. `bake(..., intensity=math.pi)` writes a
+Constructor switches mirror the panel: `adaptive`, `include_scene_lights`,
+`include_environment`, `include_hidden_lights`, `denoise`, `beside_textures`
+and `reflection_probe`. With `include_scene_lights=False`, the lights in the
+objects handed to `bake` (or under them) are the Scope's. `bake(..., intensity=math.pi)` writes a
 Unity-native-light calibration into the texels, once. The default, 1.0,
 matches the Maya render.
 

@@ -570,7 +570,11 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
 - **Frame**: unchanged -- the contact node's local frame, origin at the node,
   up its local Y as exported, `frame_a` / `frame_b` in **FBX/glTF axes**
   (Maya `b = (0,0,1)`, Blender `b = (0,0,-1)`; its exporter maps local +Y to
-  FBX -Z). The bake runs in a **rigid** copy of that frame (axes normalised):
+  FBX -Z; that exporter turns only ROOT nodes upright, so a Blender contact
+  arrives in its own Z-up frame and every consumer reads it through the turn
+  back, +90 deg about X, told from the plane's quad lying in its local X/Y --
+  unitytk `ZUpFrameAxes`, the viewer's `Z_UP_FRAME`). The bake runs in a
+  **rigid** copy of that frame (axes normalised):
   the contact locator hangs under the target (or the targets' common
   parent) and inherits its scale,
   while every consumer normalises the axes -- measured, a target scaled x2
@@ -947,6 +951,21 @@ Softness box), Blender `test_shadow_rig` 276, uitk `test_switchboard` /
 live probe in a fresh GUI Maya (`test/temp_tests/_follow_source_gui_probe.py`):
 a target carried and turned under the light re-projects through the real
 idle loop, and the drawn feet sit on the contact afterwards.
+
+### Intensity, Ground Y, and a static fade that ships (2026-10-15)
+
+| Asked | Was | Now |
+|:---|:---|:---|
+| *"the shadow looks soft in Maya but way too heavy in WebXR"* (production SOL_REPLACE_ASSEMBLY, BODY_shadow, links broken on purpose) | the plane's fade held a static 0.836 that only a fade TRACK carries, and a held value writes none, so the GLB arrived at alpha 1.0: solid black | `SceneState._opacity_factor` reads an opacity's scalar part (a constant, or texture alpha x a scalar through a `multiplyDivide`) into the base-colour section's `alpha` → `baseColorFactor[3]` (`MeshConvert.set_glb_base_color`); a keyed fade still overrides it through its track |
+| *"an overall transparency param"* | `shadowIntensity` worked only through a live expression | **Intensity** (panel; `ShadowRig.set_intensity`): a live rig takes the stamp, a baked or unlinked plane's own fade is rescaled by new / old (its shape kept) |
+| *"a Y offset adjust, since sometimes the floor is not at Y 0"* | `groundHeight` was an attribute edit, live rigs only | **Ground Y** (panel; `ShadowRig.set_ground_height`): live, the stamp; a held height laid on the floor (absolute: the stamp may be stale); keys shifted by the difference |
+
+Measured in the real viewer (headless Edge, the exported GLB with the
+factor written): three.js blends in display space, so the darkest pixel is
+exactly `1 - alpha` (0.158 at 0.836, 0.395 at 0.6, 0.545 at 0.45). Maya's
+VP2 blends in linear, so the same 0.836 drew about 0.5 there: **one opacity
+reads about twice as dark in WebXR as in the viewport.** BODY_shadow ships
+at intensity 0.54 (opacity 0.45).
 
 ## Risks
 

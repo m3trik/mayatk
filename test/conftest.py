@@ -73,6 +73,7 @@ if not _HAVE_REAL_MAYA:
     sys.modules["maya.cmds"] = mock_cmds
     sys.modules.setdefault("maya.mel", MagicMock())
     sys.modules.setdefault("maya.OpenMaya", MagicMock())
+    sys.modules["maya.OpenMaya"].MFileIO.isReadingFile.return_value = False
     sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
 
     # Bind each injected submodule as an attribute on its parent package so

@@ -38,6 +38,7 @@ sys.modules.setdefault("maya.api.OpenMayaAnim", MagicMock())
 sys.modules["maya.cmds"] = mock_cmds
 sys.modules.setdefault("maya.mel", MagicMock())
 sys.modules.setdefault("maya.OpenMaya", MagicMock())
+sys.modules["maya.OpenMaya"].MFileIO.isReadingFile.return_value = False
 sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
 
 # Force-sync each submodule as an attribute of its parent package. Plain

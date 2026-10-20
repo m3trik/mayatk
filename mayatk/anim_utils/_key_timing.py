@@ -740,7 +740,7 @@ class _KeyTimingInternal:
     def _move_curve_keys(
         cls,
         curve: str,
-        time_pairs: List[Tuple[float, float]],
+        time_pairs: List[Tuple[float, ...]],
         tolerance: float = 1e-4,
         allow_merge: bool = False,
         on_replace=None,
@@ -752,14 +752,22 @@ class _KeyTimingInternal:
 
         Parameters:
             curve: The animation curve to modify.
-            time_pairs: List of (old_time, new_time) tuples.
+            time_pairs: List of ``(old_time, new_time)`` tuples, or ``(old_time,
+                new_time, ideal_time)`` -- *ideal_time* the frame the key was
+                meant for before rounding (a snapped scale: its exact scaled
+                time); default *new_time*.
             tolerance: Tolerance for floating point comparisons.
-            allow_merge: If True, keys moved to the same time will overwrite each other.
-                         If False (default), keys are nudged to avoid collision.
-            on_replace: ``on_replace(curve, frames)`` hears the keys a merge
-                overwrote: an unmoved key, at its frame, or an earlier moved
-                key, at its SOURCE frame -- where whatever is held on it still
-                is -- and that key is then no move.
+            allow_merge: How keys MOVED here that land on one frame resolve.
+                True: one is kept, the LEAST MOVED -- nearest its ideal time,
+                an exact tie going to the later source (blendertk's
+                ``AnimUtils._merge_landed``) -- and the others are replaced.
+                False (default): each is nudged past the others, so none is
+                lost.  Either way a key this call does not move is REPLACED
+                by a mover landing on it.
+            on_replace: ``on_replace(curve, frames)`` hears the keys replaced:
+                an unmoved key, at its frame, or a moved key that lost a
+                merge, at its SOURCE frame -- where whatever is held on it
+                still is -- and that key is then no move.
             on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames
                 of the keys moved, ``new`` being where each landed (a nudged
                 key's nudged frame). Called after ``on_replace``.
@@ -770,9 +778,12 @@ class _KeyTimingInternal:
 
         # 1. Collect data for all keys that need moving
         keys_to_move = []
-        for old_time, new_time in time_pairs:
+        ideal_of = {}  # source time -> the frame it was meant for
+        for pair in time_pairs:
+            old_time, new_time = pair[0], pair[1]
             if abs(new_time - old_time) <= tolerance:
                 continue
+            ideal_of[old_time] = float(pair[2]) if len(pair) > 2 else float(new_time)
 
             # Maya's keyframe query is most reliable when the time argument is a
             # (start, end) pair, even when targeting a single key time.  The
@@ -841,37 +852,48 @@ class _KeyTimingInternal:
             try:
                 candidate_time = float(new_time)
 
-                # Avoid collisions with existing keys and other moved keys.
-                # If the time is taken, nudge forward by a tiny epsilon until free.
-                # This preserves key count and prevents segments collapsing to 0 duration.
                 if not allow_merge:
+                    # Nudge past the frames other MOVED keys took, by a tiny
+                    # epsilon until free: no mover is lost, and a segment
+                    # never collapses to 0 duration.  An unmoved key is
+                    # replaced below -- nudging beside it left two keys on
+                    # one frame.
                     safety = 0
-                    while _is_time_taken(candidate_time, taken_times) and safety < 1000:
+                    while (
+                        _is_time_taken(candidate_time, [at for _s, at in landed])
+                        and safety < 1000
+                    ):
                         candidate_time += epsilon
                         safety += 1
-                else:
-                    hit = next(
+                hit = next(
+                    (t for t in taken_times if abs(candidate_time - t) <= tolerance),
+                    None,
+                )
+                if hit is not None:
+                    prior = next(
                         (
-                            t
-                            for t in taken_times
-                            if abs(candidate_time - t) <= tolerance
+                            i
+                            for i, (_src, at) in enumerate(landed)
+                            if abs(at - hit) <= tolerance
                         ),
                         None,
                     )
-                    if hit is not None:
-                        # The key there is overwritten -- cut first: setKeyframe
-                        # replaces only an exact time, a hair off it stacks.
-                        cmds.cutKey(curve, time=(hit, hit), clear=True)
-                        taken_times.remove(hit)
-                        prior = next(
-                            (
-                                i
-                                for i, (_src, at) in enumerate(landed)
-                                if abs(at - hit) <= tolerance
-                            ),
-                            None,
-                        )
-                        replaced.append(hit if prior is None else landed.pop(prior)[0])
+                    if prior is not None:
+                        # Two movers on one frame: the LEAST moved stays --
+                        # nearest its ideal time, an exact tie to the later
+                        # source (blendertk's ``_merge_landed`` rule).
+                        src = landed[prior][0]
+                        stays = (abs(hit - ideal_of[src]), -src)
+                        comes = (abs(candidate_time - ideal_of[old_time]), -old_time)
+                        if stays <= comes:
+                            replaced.append(old_time)  # its key was cut above
+                            moved_count += 1
+                            continue
+                    # The key there is overwritten -- cut first: setKeyframe
+                    # replaces only an exact time, a hair off it stacks.
+                    cmds.cutKey(curve, time=(hit, hit), clear=True)
+                    taken_times.remove(hit)
+                    replaced.append(hit if prior is None else landed.pop(prior)[0])
 
                 cmds.setKeyframe(curve, time=candidate_time, value=value)
                 if tangent_data:

@@ -179,7 +179,12 @@ class ImageToPlane(ptk.LoggingMixin):
                         shaders = cmds.listConnections(f"{sg}.surfaceShader") or []
                         for shader in shaders:
                             # File nodes upstream of the shader
-                            files = cmds.listConnections(shader, type="file") or []
+                            files = (
+                                cmds.listConnections(
+                                    shader, type="file", source=True, destination=False
+                                )
+                                or []
+                            )
                             for f in files:
                                 p2ds = (
                                     cmds.listConnections(f, type="place2dTexture") or []

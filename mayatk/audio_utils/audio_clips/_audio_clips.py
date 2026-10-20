@@ -257,8 +257,9 @@ class AudioClips(ptk.LoggingMixin):
                 one.
 
         Returns:
-            The record (``{"version", "events": [...]}``), or ``None`` when
-            the carrier is missing or no track has keys.
+            The record (``{"version", "events": [...], "fps"}``: the frames
+            count at the scene's rate, which travels with them), or ``None``
+            when the carrier is missing or no track has keys.
         """
         if cmds is None:
             return None
@@ -288,15 +289,12 @@ class AudioClips(ptk.LoggingMixin):
             if ctx.clip_mode == "full"
             else ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
         )
-        usable = [
-            t
-            for t in takes
-            if t.get("name") is not None
-            and t.get("start") is not None
-            and t.get("end") is not None
-        ]
-        scoped = cls._scope_events(events, usable, playback_min)
-        return ptk.SceneRecords.AUDIO.make({"events": scoped}) if scoped else None
+        scoped = cls._scope_events(events, takes, playback_min)
+        if not scoped:
+            return None
+        return ptk.SceneRecords.AUDIO.make(
+            {"events": scoped, "fps": _audio_utils.get_fps()}
+        )
 
     @classmethod
     @CoreUtils.undoable
@@ -362,40 +360,14 @@ class AudioClips(ptk.LoggingMixin):
     def _scope_events(cls, events: list, takes: list, playback_min: float) -> list:
         """Assign baked ``(frame, name)`` events to their shot takes.
 
-        With *takes*: an event lands in every take whose ``[start, end]``
-        range (inclusive) contains it, with ``frame`` rebased to that take's
-        start; events outside every take are dropped with a warning.  A take
-        missing its range is skipped — defaulting to ``(0, 0)`` would turn it
-        into a phantom take that swallows frame-0 events (:meth:`export_record`
-        already filters these; the skip here keeps direct callers safe too).
-        Without takes: events ship unscoped (``clip: ""``), rebased to
-        *playback_min*.
+        ``ptk.AudioUtils.scope_events`` -- the rule blendertk's producer ships
+        by too: an event lands in every take whose ``[start, end]`` range
+        (inclusive) contains it, its ``frame`` rebased to that take's start; a
+        take missing its name or range scopes nothing; with no usable take
+        events ship unscoped (``clip: ""``), rebased to *playback_min*.
+        Events outside every take are dropped with a warning.
         """
-        if not takes:
-            return [
-                {"clip": "", "frame": int(round(f - playback_min)), "name": name}
-                for f, name in events
-            ]
-
-        scoped: list = []
-        dropped: list = []
-        for f, name in events:
-            matched = False
-            for take in takes:
-                start, end = take.get("start"), take.get("end")
-                if start is None or end is None:
-                    continue  # range-less take can scope nothing
-                if start <= f <= end:
-                    scoped.append(
-                        {
-                            "clip": str(take["name"]),
-                            "frame": int(round(f - start)),
-                            "name": name,
-                        }
-                    )
-                    matched = True
-            if not matched:
-                dropped.append(f"{name}@{f}")
+        scoped, dropped = ptk.AudioUtils.scope_events(events, takes, playback_min)
         if dropped:
             cls.logger.warning(
                 "prepare_for_export: %d audio event(s) outside every shot "

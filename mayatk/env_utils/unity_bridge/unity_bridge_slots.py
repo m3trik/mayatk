@@ -90,7 +90,7 @@ class UnityBridgeSlots(UnityPanelMixin, MayaBridgeSlotsBase):
             "(the embedded <i>com.m3trik.unitytk</i> package). Check the "
             "scripts to act on — one row per import channel, all on by "
             "default; the shared core files ride along with any install. "
-            "Per-channel runtime toggles live in Unity under Project "
+            "Per-channel import toggles live in Unity under Edit ▸ Project "
             "Settings ▸ unitytk.",
         ],
     }

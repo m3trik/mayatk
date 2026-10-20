@@ -82,9 +82,9 @@ class TestBuild(MayaTkTestCase):
     def test_skips_unmapped_shader_types(self):
         """Shaders not in ShaderAttributeMap.SHADER_ATTRS should be skipped."""
         # Create a shader of an unmapped type.
-        # surfaceShader is a basic shader not in the SHADER_ATTRS mapping.
+        # useBackground is a basic shader not in the SHADER_ATTRS mapping.
         weird_mat = cmds.shadingNode(
-            "surfaceShader", asShader=True, name="mm_unknown_shader"
+            "useBackground", asShader=True, name="mm_unknown_shader"
         )
         weird_sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="mm_unknown_sg"
@@ -109,7 +109,7 @@ class TestProcessMaterial(MayaTkTestCase):
         self.mat = cmds.shadingNode("lambert", asShader=True, name="pm_lambert")
 
     def test_unmapped_shader_returns_empty(self):
-        weird = cmds.shadingNode("surfaceShader", asShader=True, name="pm_weird")
+        weird = cmds.shadingNode("useBackground", asShader=True, name="pm_weird")
         self.assertEqual(MatManifest._process_material(weird), {})
 
     def test_no_textures_connected_returns_empty(self):
@@ -145,7 +145,7 @@ class TestRestore(MayaTkTestCase):
 
     def test_restore_unmapped_shader_returns_zero(self):
         """Restore on a shader type not in the mapping returns 0 cleanly."""
-        weird = cmds.shadingNode("surfaceShader", asShader=True, name="rs_weird")
+        weird = cmds.shadingNode("useBackground", asShader=True, name="rs_weird")
         result = MatManifest.restore(
             weird, {"materials": {weird: {"baseColor": "x.png"}}}
         )
@@ -302,6 +302,38 @@ class TestRestoreOpacityWiring(MayaTkTestCase):
             opacity[0].split(".")[0],
             "baseColor and opacity must ride the same file node",
         )
+
+    def test_stingray_cutout_reads_the_colour_alpha_in_any_key_order(self):
+        """A transparent StingrayPBS takes the cutout off the colour map's ALPHA.
+
+        Its ``opacity`` is a scalar uniform, never a write target
+        (``ShaderAttributeMap.UNIFORM_SLOTS``); the per-pixel route is the
+        ``use_opacity_map`` selector at 1, which ``select_color_alpha`` sets only
+        once that file already drives ``TEX_color_map``. Key order is the
+        producer's -- the Blender send's slot trace keys a manifest by node
+        order -- so an ``opacity`` listed before ``baseColor`` found no colour
+        map yet, was refused on the uniform, and the cutout rendered opaque
+        while still in the transparent queue.
+        """
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        for order in (("baseColor", "opacity"), ("opacity", "baseColor")):
+            with self.subTest(order=order):
+                try:
+                    shader = MatUtils.create_stingray_shader(
+                        f"op_sr_{order[0]}", opacity_mode="transparent"
+                    )
+                except RuntimeError as error:  # no shaderFX plugin on this install
+                    self.skipTest(f"StingrayPBS unavailable: {error}")
+                restored = MatManifest.restore(
+                    shader,
+                    {"materials": {shader: {field: self.rgba for field in order}}},
+                )
+                self.assertEqual(restored, 2)
+                colour = self._driven_by(shader, "TEX_color_map")
+                self.assertEqual([p.split(".")[-1] for p in colour], ["outColor"])
+                self.assertEqual(cmds.getAttr(f"{shader}.use_opacity_map"), 1)
+                self.assertEqual(self._driven_by(shader, "opacity"), [])
 
     def test_grayscale_opacity_map_gets_alpha_is_luminance(self):
         """Without it ``outAlpha`` is a constant 1 and the map does NOTHING."""

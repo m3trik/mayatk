@@ -208,6 +208,13 @@ class SceneExporter(ptk.SceneExporterBase):
         since="2026-09-23",
         reason="Write '{scene:PATTERN->REPLACEMENT}' into output_name instead.",
     )
+    @ptk.Deprecation.parameter(
+        "hide_log_file",
+        drop=True,
+        remove_in="0.28.0",
+        since="2026-10-14",
+        reason="The run log lives in the per-user cache, never beside the export.",
+    )
     def perform_export(
         self,
         export_dir: str,
@@ -220,7 +227,6 @@ class SceneExporter(ptk.SceneExporterBase):
         timestamp: bool = False,
         name_regex: Optional[str] = None,
         log_level: Optional[str] = None,
-        hide_log_file: Optional[bool] = None,
         log_handler: Optional[object] = None,
         tasks: Optional[Dict[str, Any]] = None,
         usd_options: Optional[Dict[str, Any]] = None,
@@ -254,6 +260,14 @@ class SceneExporter(ptk.SceneExporterBase):
         ``mayaUSDExport`` instead of the FBX plugin. *usd_options* overrides
         :attr:`USD_EXPORT_OPTIONS` for that format (``convertMaterialsTo=["MaterialX"]``
         to ship a MaterialX network beside the UsdPreviewSurface default).
+
+        *create_log_file* appends the run to the SCENE's log -- one file per
+        scene in the per-user cache, its runs trimmed to the newest
+        (``ptk.SceneExporterBase.log_file_path``) -- never a file beside the
+        export, recording down to DEBUG whatever *log_level* shows; the
+        panel always sets it.
+        *hide_log_file* is retired
+        (warns; removed in 0.28.0): nothing lands in the export folder to hide.
 
         *timestamp*, *name_regex* and ``tasks["version"]`` are the retired
         naming inputs (each warns; removed in 0.20.0, ``tasks["version"]`` in
@@ -294,7 +308,6 @@ class SceneExporter(ptk.SceneExporterBase):
         self.preset_file = preset_file  # Ensure the setter is called
         self.output_name = output_name
         self.create_log_file = create_log_file
-        self.hide_log_file = hide_log_file
 
         # Every UI-only setting the export button's dict carries beside the
         # tasks -- output format, texture file type, the two write-back flags,
@@ -449,6 +462,9 @@ class SceneExporter(ptk.SceneExporterBase):
                     self._pin_glb_requirements()
             elif not usd:
                 self._apply_default_fbx_options(create_glb_enabled)
+            # The settings as the preset (or the reset) left them: what this
+            # run's write plan decides from, before any task writes them.
+            self.task_manager.capture_write_baseline()
 
             self._progress_note("Preparing export…")
             # Run tasks and checks. Each failed check is decided where it
@@ -528,7 +544,10 @@ class SceneExporter(ptk.SceneExporterBase):
             # before ``check_clip_origin`` named it).
             from mayatk.env_utils.fbx_utils import FbxUtils as _FbxUtils
 
-            _FbxUtils.begin_export()
+            # THE plan of this write -- the takes are realized and the range is
+            # set by now -- for the bracket's producers and the write alike.
+            write_plan = None if usd else self.task_manager.write_plan()
+            _FbxUtils.begin_export(plan=write_plan)
             try:
                 # A run with the carrier tasks off still publishes exactly once
                 # (an ``all``-mode export ships the carrier regardless). Inside
@@ -567,7 +586,17 @@ class SceneExporter(ptk.SceneExporterBase):
 
                     self._warn_if_animation_excluded()
                     self._pin_carrier_requirements()
-                    with FbxUtils.embed_media_write_cwd():
+                    # A write that does not bake ships each offsetParentMatrix
+                    # folded into its node's own channels, and any write a node
+                    # that ignores its parent re-anchored under it (none left
+                    # when Flatten Sheared Chains ran), put back after it.
+                    shipped = cmds.ls(selection=True, long=True) or []
+                    with (
+                        FbxUtils.embed_media_write_cwd(),
+                        FbxUtils.offsets_folded(
+                            shipped, write_plan, logger=self.logger
+                        ),
+                    ):
                         cmds.file(
                             fbx_write_path,
                             force=True,
@@ -613,7 +642,7 @@ class SceneExporter(ptk.SceneExporterBase):
                             stage_store.keep(stage_raw)  # the only copy
                         export_succeeded = False
                         return False
-                    self.logger.success(f"GLB created: {deliverable_path}")
+                    self._glb_created(deliverable_path)
 
                 # Build the single, consolidated success banner. Measure the
                 # duration here (vs. right after the FBX write) so GLB-only
@@ -664,13 +693,16 @@ class SceneExporter(ptk.SceneExporterBase):
                 # take Shots Only drops. A GLB-only run's FBX is not shipped.
                 if not glb_only and not usd:
                     self.task_manager.ship_declared_takes(fbx_write_path)
-                    # Every file the scene records name by file name (the
-                    # lightmaps, the reflection probe, the shadow maps) goes
-                    # INSIDE the FBX, so nothing ships beside it -- after the
-                    # GLB, which binds its own copies.
-                    _FbxUtils.embed_dependencies(
+                    # The FBX made to read as its GLB twin does -- each pivot
+                    # set its own mesh, the probe's highlight copies (the
+                    # GLB's) in, and every file the scene records name by
+                    # file name (the lightmaps, the reflection probe, the
+                    # shadow maps) INSIDE it, so nothing ships beside it --
+                    # after the GLB, which binds its own copies.
+                    _FbxUtils.finish_deliverable(
                         fbx_write_path,
-                        self.task_manager._lightmap_search_dirs(),
+                        glb=glb_alongside,
+                        search_dirs=self.task_manager._lightmap_search_dirs(),
                         logger=self.logger,
                     )
                     # The finished files, into place: the FBX is the
@@ -691,7 +723,7 @@ class SceneExporter(ptk.SceneExporterBase):
                             stage_store.keep(stage_raw)  # the only copy
                         if landed == placed_glb:
                             glb_alongside = placed_glb
-                            self.logger.success(f"GLB created: {glb_alongside}")
+                            self._glb_created(glb_alongside)
                         else:
                             glb_alongside = None
 
@@ -762,9 +794,8 @@ class SceneExporter(ptk.SceneExporterBase):
                 # override, an empty export set and an early cancel all return
                 # before the write and used to leave the run's .log handler open
                 # -- on exactly the paths a user then repeats. The restores
-                # above land in the log too.
-                if self.create_log_file:
-                    self.close_file_handlers()
+                # above land in the log too, and the footer says how it ended.
+                self._close_file_logging(export_succeeded)
             finally:
                 # Last, and unconditionally: a raising restore above must
                 # not leave an interactive viewport suspended, nor the

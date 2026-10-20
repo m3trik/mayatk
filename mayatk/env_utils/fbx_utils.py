@@ -5,7 +5,17 @@ import re
 import shutil
 import logging
 import contextlib
-from typing import Optional, Dict, Any, List, Iterable, Callable, Tuple, Set
+from typing import (
+    Optional,
+    Dict,
+    Any,
+    List,
+    Iterable,
+    Callable,
+    NamedTuple,
+    Tuple,
+    Set,
+)
 
 try:
     import maya.cmds as cmds
@@ -270,8 +280,14 @@ class FbxUtils(ptk.HelpMixin):
         preset_file: Optional[str] = None,
         options: Optional[Dict[str, Any]] = None,
         selection_only: bool = True,
+        plan: Optional["FbxUtils.WritePlan"] = None,
     ) -> str:
         """Export geometry to an FBX file.
+
+        A write that does not bake ships every ``offsetParentMatrix`` folded
+        into its node's own channels, and every write ships a node that
+        ignores its parent re-anchored under it (:meth:`offsets_folded`), put
+        back once the file is written.
 
         Parameters:
             file_path: Destination ``.fbx`` path (directories are created automatically).
@@ -279,6 +295,8 @@ class FbxUtils(ptk.HelpMixin):
             preset_file: Optional FBX export preset to load before exporting.
             options: Additional FBX MEL options applied *after* the preset.
             selection_only: If True export selected; if False export entire scene.
+            plan: The writer's :meth:`write_plan`, already applied; None reads
+                what the settings hold once *preset_file* and *options* are in.
 
         Returns:
             The absolute path of the exported file.
@@ -319,7 +337,8 @@ class FbxUtils(ptk.HelpMixin):
         # Write from the workspace root when embedding media, so
         # project-relative texture paths resolve exactly as Maya resolves
         # them (see embed_media_write_cwd).
-        with cls.embed_media_write_cwd():
+        shipped = None if selection_only else cmds.ls(assemblies=True, long=True) or []
+        with cls.embed_media_write_cwd(), cls.offsets_folded(shipped, plan):
             cmds.file(file_path, **kwargs)
         logger.info(f"Exported FBX: {file_path}")
         return file_path
@@ -401,6 +420,7 @@ class FbxUtils(ptk.HelpMixin):
         search_dirs: Optional[Iterable[str]] = None,
         files: Optional[Iterable[Any]] = None,
         logger: Optional[logging.Logger] = None,
+        walk_root: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Embed every file a written FBX's scene records name, in place.
 
@@ -412,10 +432,11 @@ class FbxUtils(ptk.HelpMixin):
         inside the file under its name, the form Unity's importer extracts,
         resolved where this scene keeps it: *search_dirs*, else
         :meth:`LightmapRecords.search_dirs` -- the folders the GLB build joins
-        the same names against. The audio the file's ``audio_manifest`` events
-        play rides in too, each track's file under its event's name
-        (:meth:`AudioUtils.track_files`). The Scene Exporter runs it on its
-        FBX after the GLB conversion, which binds its own copies.
+        the same names against; what those miss is looked for anywhere
+        under *walk_root*, the folder the exporter's path check walks. The
+        audio the file's ``audio_manifest`` events play rides in too, each
+        track's file under its event's name (:meth:`AudioUtils.track_files`).
+        The last of the passes :meth:`finish_deliverable` runs.
 
         Never raises -- a failure is a warning and the file stays as written.
         A file that is not a binary FBX (an ASCII preset, which ships no
@@ -425,6 +446,8 @@ class FbxUtils(ptk.HelpMixin):
             file_path: The FBX just written from this scene.
             search_dirs: Folders to resolve the names against, in priority
                 order; ``None`` asks the scene.
+            walk_root: Where a name they miss is searched for, recursively;
+                ``None`` takes the scene's texture root, ``""`` none.
             files: Further files to embed (paths or ``(name, path)`` pairs);
                 ``None`` takes the audio the file's events play.
             logger: Where the outcome is said; this module's otherwise.
@@ -438,16 +461,15 @@ class FbxUtils(ptk.HelpMixin):
         if not ptk.FbxFile.is_fbx(file_path):
             return None
         try:
-            if search_dirs is None:
-                from mayatk.light_utils.lightmap_baker.lightmap_records import (
-                    LightmapRecords,
-                )
-
-                search_dirs = LightmapRecords.search_dirs()
-            if files is None:
-                files = FbxUtils._shipped_audio(file_path, log)
+            search_dirs, walk_root, files = FbxUtils._dependency_inputs(
+                file_path, search_dirs, walk_root, files, log
+            )
             return ptk.FbxMedia.embed_dependencies(
-                file_path, search_dirs=list(search_dirs), files=files, logger=log
+                file_path,
+                search_dirs=search_dirs,
+                walk_root=walk_root,
+                files=files,
+                logger=log,
             )
         except Exception as error:  # noqa: BLE001 -- the deliverable already shipped
             log.warning(f"FBX dependencies: not embedded -- the pass failed: {error}")
@@ -455,29 +477,101 @@ class FbxUtils(ptk.HelpMixin):
             return None
 
     @staticmethod
+    def finish_deliverable(
+        file_path: str,
+        glb: Optional[str] = None,
+        search_dirs: Optional[Iterable[str]] = None,
+        logger: Optional[logging.Logger] = None,
+        walk_root: Optional[str] = None,
+        files: Optional[Iterable[Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """The passes a written FBX deliverable takes, in place.
+
+        What the Scene Exporter and the Unity bridge run on the FBX they ship,
+        after the GLB built from it (*glb*, whose highlight copies it then
+        shares; ``None`` builds them): an instance whose pivots differ from
+        its siblings' gets a mesh of its own -- Unity moved the shared one by
+        another instance's pivots -- StingrayPBS's environment maps leave the
+        file, the reflection probe's highlight copies go in, and every file
+        the records name is embedded (:meth:`embed_dependencies`'s folders
+        and audio). ``ptk.MeshConvert.finish_fbx_deliverable`` is the
+        sequence.
+
+        Never raises -- a pass that fails is a warning and the next still runs.
+
+        Parameters:
+            file_path: The FBX just written from this scene.
+            glb: The GLB this export built from it, if any.
+            search_dirs: Folders the records' files are resolved against;
+                ``None`` asks the scene.
+            walk_root: Where a name they miss is searched for, recursively;
+                ``None`` takes the scene's texture root, ``""`` none.
+            files: Further files to embed; ``None`` takes the events' audio.
+            logger: Where the outcome is said; this module's otherwise.
+
+        Returns:
+            ``ptk.MeshConvert.finish_fbx_deliverable``'s report, or ``None``
+            when the file is not a binary FBX. A scene that cannot say where
+            its files are is warned about, and the passes run on what was
+            given: the split, the copies and the drop need none of it.
+        """
+        log = logger or logging.getLogger(__name__)
+        if not ptk.FbxFile.is_fbx(file_path):
+            return None
+        try:
+            search_dirs, walk_root, files = FbxUtils._dependency_inputs(
+                file_path, search_dirs, walk_root, files, log
+            )
+        except Exception as error:  # noqa: BLE001 -- the deliverable already shipped
+            log.warning(
+                f"FBX deliverable: the scene's files not resolved ({error}); "
+                "finishing with the folders and files given."
+            )
+            log.debug("Deliverable inputs failed.", exc_info=True)
+            search_dirs, walk_root, files = list(search_dirs or ()), walk_root or "", files or ()
+        return ptk.MeshConvert.finish_fbx_deliverable(
+            file_path,
+            glb,
+            search_dirs=search_dirs,
+            walk_root=walk_root,
+            files=files,
+            logger=log,
+        )
+
+    @staticmethod
+    def _dependency_inputs(
+        file_path: str,
+        search_dirs: Optional[Iterable[str]],
+        walk_root: Optional[str],
+        files: Optional[Iterable[Any]],
+        log: logging.Logger,
+    ) -> Tuple[List[str], str, Iterable[Any]]:
+        """:meth:`embed_dependencies`'s inputs, each ``None`` asked of the scene."""
+        if search_dirs is None or walk_root is None:
+            from mayatk.light_utils.lightmap_baker.lightmap_records import (
+                LightmapRecords,
+            )
+
+            if search_dirs is None:
+                search_dirs = LightmapRecords.search_dirs()
+            if walk_root is None:
+                walk_root = LightmapRecords._walk_root()
+        if files is None:
+            files = FbxUtils._shipped_audio(file_path, log)
+        return list(search_dirs), walk_root, files
+
+    @staticmethod
     def _shipped_audio(file_path: str, log) -> List[Tuple[str, str]]:
         """``(file name, path)`` of the audio the FBX's events play.
 
         Read off the ``audio_manifest`` the file itself carries (each event
-        names its track), resolved through the scene's file map; a track whose
-        file is missing is said once and left out.
+        names its track: ``ptk.FbxMedia.audio_events``), resolved through the
+        scene's file map; a track whose file is missing is said once and left
+        out.
         """
-        import json
-
         from mayatk.audio_utils._audio_utils import AudioUtils
 
-        names: List[str] = []
-        fbx = ptk.FbxFile.load(file_path, raw_payloads=False)
-        for value in fbx.user_properties(ptk.SceneRecords.AUDIO.key):
-            try:
-                payload = json.loads(bytes(value).decode("utf-8"))
-            except (TypeError, ValueError, UnicodeDecodeError):
-                continue
-            events = payload.get("events") if isinstance(payload, dict) else None
-            for event in events or []:
-                name = str((event or {}).get("name") or "").strip()
-                if name and name.lower() != "none" and name not in names:
-                    names.append(name)
+        names = ptk.FbxMedia.audio_events(file_path)
         found = AudioUtils.track_files(names)
         missing = sorted(set(names) - {os.path.splitext(n)[0] for n, _ in found})
         if missing:
@@ -1320,6 +1414,297 @@ class FbxUtils(ptk.HelpMixin):
             logger.debug(f"Could not read the FBX bake range: {e}")
             return None
 
+    class WritePlan(NamedTuple):
+        """What ONE FBX write does with animation, decided before it.
+
+        :meth:`FbxUtils.write_plan` builds it, and every reader of "does this
+        write bake, over what, resampled?" reads it rather than the plugin's
+        live flags, which the write's own configuration moves part-way through
+        a run: a take split turns the bake on, and any write of the bake flag
+        resets the range (:meth:`FbxUtils.apply_write_plan`).
+        """
+
+        #: Whether the write bakes complex animation
+        #: (``FBXExportBakeComplexAnimation``).
+        bakes: bool
+        #: Why, in words a log line can carry.
+        reason: str = ""
+        #: The ``(start, end)`` frames it bakes over; None when it does not
+        #: bake, or sets no range of its own.
+        range: Optional[Tuple[float, float]] = None
+        #: Whether it keys every animated curve on every frame of the range
+        #: (:attr:`FbxUtils.RESAMPLE_ALL`).
+        resample_all: bool = False
+
+    @staticmethod
+    def write_plan(
+        bakes: Optional[bool] = None,
+        reason: str = "",
+        takes: Optional[Tuple[float, float]] = None,
+        span: Optional[Tuple[float, float]] = None,
+        resample_all: Optional[bool] = None,
+    ) -> "FbxUtils.WritePlan":
+        """THE plan of one FBX write: whether it bakes, why, over what, resampled.
+
+        A take split always bakes (:meth:`apply_takes`), over at least the
+        takes' union. Otherwise the writer says so (*bakes*), or, given None,
+        the FBX settings as they stand do -- a loaded preset's, or a reset's
+        factory OFF. The Scene Exporter builds one per run (its task manager's
+        ``write_plan``) and the hand-off writers one per send; both put the
+        settings in place from it and read it back, never the live flags.
+
+        Parameters:
+            bakes: Whether the writer bakes; None reads the current settings.
+            reason: Why, for the log; derived when empty.
+            takes: The ``(start, end)`` union a take split realizes, or None.
+            span: The range the writer sets -- its Bake Range reading, a
+                hand-off's scene range -- widened to cover *takes*. None keeps
+                what the settings hold when they decide, and sets no range when
+                *bakes* is given.
+            resample_all: Resample All for the write; None takes a split's
+                default (on: every take an exact slice) or the settings' value.
+
+        Returns:
+            FbxUtils.WritePlan
+        """
+        if takes:
+            start, end = takes
+            if span:
+                start, end = min(start, span[0]), max(end, span[1])
+            return FbxUtils.WritePlan(
+                True,
+                reason or "it splits the declared takes",
+                (start, end),
+                True if resample_all is None else bool(resample_all),
+            )
+        if bakes is None:
+            if not FbxUtils.baking_enabled():
+                return FbxUtils.WritePlan(
+                    False, reason or "the FBX settings do not bake"
+                )
+            return FbxUtils.WritePlan(
+                True,
+                reason or "the FBX settings bake",
+                span or FbxUtils.bake_range(),
+                FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL)
+                if resample_all is None
+                else bool(resample_all),
+            )
+        if not bakes:
+            return FbxUtils.WritePlan(False, reason or "the writer does not bake")
+        return FbxUtils.WritePlan(
+            True, reason or "the writer bakes", span, bool(resample_all)
+        )
+
+    @staticmethod
+    def apply_write_plan(plan: "FbxUtils.WritePlan") -> None:
+        """Put *plan* into the FBX settings: the bake flag FIRST, then its range.
+
+        The order is the point. Any write of ``FBXExportBakeComplexAnimation``
+        -- on, off, or the value it already holds -- resets the bake range to
+        the scene's animation range (measured on Maya 2025 / FBX 2020.3.6: a
+        7-9 range read 2-310 after it), so a range set before the flag is lost.
+        The hand-off pinned the flag after its take split had set the shots'
+        union, and every split hand-off baked its whole animation range.
+        """
+        FbxUtils.load_plugin()
+        mel.eval(
+            f"FBXExportBakeComplexAnimation -v {'true' if plan.bakes else 'false'}"
+        )
+        if not plan.bakes:
+            return
+        if plan.range:
+            mel.eval(f"FBXExportBakeComplexStart -v {plan.range[0]}")
+            mel.eval(f"FBXExportBakeComplexEnd -v {plan.range[1]}")
+        resample = "true" if plan.resample_all else "false"
+        mel.eval(f"{FbxUtils.RESAMPLE_ALL} -v {resample}")
+
+    @staticmethod
+    def planned_bake_range() -> Optional[Tuple[float, float]]:
+        """The range the write in progress bakes over: the open bracket's plan's
+        (:meth:`begin_export` *plan*), else the settings' (:meth:`bake_range`).
+
+        What a producer publishing inside the bracket reads: a hand-off's
+        bracket publishes before the write is configured, while the settings
+        still hold whatever ran last.
+        """
+        plan = FbxUtils._bracket_state().get("write_plan")
+        if plan is None:
+            return FbxUtils.bake_range()
+        return tuple(plan.range) if plan.bakes and plan.range else None
+
+    @classmethod
+    @contextlib.contextmanager
+    def offsets_folded(
+        cls,
+        objects: Optional[Iterable[str]] = None,
+        plan: Optional["FbxUtils.WritePlan"] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
+        """Around ONE FBX write: ship every node where Maya draws it.
+
+        The plug-in writes a node's TRS and never its offset. A write that
+        bakes folds the offset into the baked channels; one that does not
+        drops it, and the node ships displaced by it -- measured on Maya 2025 /
+        FBX 2020.3.6, a static translate-3 offset at world 0 and a keyed prop
+        under a driven-locator rig 3.3 units off. And FBX has no "do not
+        inherit": a node with ``inheritsTransform`` off ships as though it
+        inherited -- its world keyed as its local in a baking write, its TRS
+        alone in a plain one -- and lands its parent's world away (measured
+        2026-10-17 through the Unity, Blender and WebXR hand-offs: a pinned
+        rig mesh 98-161 cm off).
+
+        So for the write, and put back when the block exits (on an exception
+        too), :meth:`SmartBake.fold_offsets` re-anchors each node that ignores
+        a parent off the origin under it, inheriting, whatever *plan* (read
+        from the current settings when None) says; and when the write does not
+        bake it folds every other non-identity offset into its node's own
+        channels. A static node takes plain values, no key; a moving one is
+        keyed per frame. The bake flag and a loaded preset are never touched:
+        turning the bake on instead keys every static offset node on every
+        frame, and overrules a preset that chose not to bake. The scope is
+        what the plug-in writes: the export set's subtrees and the ancestors
+        it carries along. What cannot fold exactly is warned about by name: it
+        ships displaced. The Scene Exporter's Flatten Sheared Chains
+        re-anchors before its write, which leaves this nothing to do.
+
+        Undo is not recorded, and the selection (the export set), the current
+        frame and a held viewport are kept.
+
+        Parameters:
+            objects: The export set's roots; None reads the selection.
+            plan: This write's :meth:`write_plan`.
+            logger: Where the outcome is said; this module's otherwise.
+
+        Yields:
+            The nodes folded for the write.
+        """
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        log = logger or logging.getLogger(__name__)
+        plan = plan if plan is not None else cls.write_plan()
+        roots = cmds.ls(selection=True, long=True) if objects is None else objects
+        shipped = cls._shipped_transforms(roots) if roots else []
+        bake_range = None
+        if plan.bakes and shipped:
+            # The plug-in folds every offset itself: a node that ignores its
+            # parent is all a baking write can still ship displaced.
+            shipped = [
+                node
+                for node in shipped
+                if not cmds.getAttr(f"{node}.inheritsTransform")
+            ]
+            if shipped:
+                from mayatk.anim_utils._anim_utils import AnimUtils
+
+                bake_range = (
+                    plan.range or cls.bake_range() or AnimUtils.scene_animation_range()
+                )
+        restore = None
+        folded: List[str] = []
+        if shipped:
+            from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+            try:
+                with contextlib.ExitStack() as held:
+                    held.enter_context(CoreUtils.undo_disabled())
+                    held.enter_context(CoreUtils.preserved_selection())
+                    held.enter_context(CoreUtils.suspended_refresh())
+                    result, restore = SmartBake.fold_offsets(
+                        shipped, bake_range=bake_range
+                    )
+            except Exception as error:  # noqa: BLE001 -- the write still ships
+                log.warning(
+                    "offsetParentMatrix: the fold failed and was undone, so this "
+                    "write ships every offset and every node that ignores its "
+                    f"parent as the plug-in writes them ({error})."
+                )
+            else:
+                declined = result.declined
+                folded = [node for node in result.baked if node not in declined]
+                anchored = [node for node in folded if node in result.flattened]
+                if anchored:
+                    log.info(
+                        f"Re-anchored {len(anchored)} node(s) that ignore their "
+                        "parent (inheritsTransform off) under it for this write "
+                        "-- FBX has no 'do not inherit'; put back after it."
+                    )
+                if len(anchored) < len(folded):
+                    log.info(
+                        "Folded the offsetParentMatrix of "
+                        f"{len(folded) - len(anchored)} node(s) into their own "
+                        f"channels for this write -- it does not bake "
+                        f"({plan.reason}); put back after it."
+                    )
+                if declined:
+                    cls._warn_offsets_dropped(declined, plan, log)
+        try:
+            yield folded
+        finally:
+            if restore is not None:
+                try:
+                    with CoreUtils.undo_disabled(), CoreUtils.preserved_selection():
+                        for warning in restore():
+                            log.warning(f"offsetParentMatrix restore: {warning}")
+                except Exception as error:  # noqa: BLE001 -- never masks the write's
+                    log.error(f"offsetParentMatrix: the fold was not undone: {error}")
+
+    @staticmethod
+    def _shipped_transforms(roots: Iterable[str]) -> List[str]:
+        """Every transform a write of *roots* ships: their subtrees, and the
+        ancestors the plug-in carries along (measured on Maya 2025 / FBX
+        2020.3.6: a selected child shipped with its parent)."""
+        roots = cmds.ls(list(roots), long=True) or []
+        if not roots:
+            return []
+        above = {
+            "|".join(parts[:depth])
+            for parts in (path.split("|") for path in roots)
+            for depth in range(2, len(parts))
+        }
+        nodes = []
+        if above:  # handed nothing, ``ls`` reads the whole scene
+            nodes += cmds.ls(sorted(above), type="transform", long=True) or []
+        nodes += cmds.ls(roots, dag=True, type="transform", long=True) or []
+        return list(dict.fromkeys(nodes))
+
+    @staticmethod
+    def _warn_offsets_dropped(
+        declined: Dict[str, str], plan: "FbxUtils.WritePlan", log
+    ) -> None:
+        """Name each node the write ships displaced, and why: one that ignores
+        its parent, or one whose offset an unbaked write drops."""
+        link = getattr(log, "log_link", None)
+
+        def named(items: List[Tuple[str, str]]) -> str:
+            entries = []
+            for node, why in items[:10]:
+                leaf = node.rsplit("|", 1)[-1]
+                name = link(leaf, "select", node=node) if link else leaf
+                why = why.replace("matrix: ", "").replace("inheritance: ", "")
+                entries.append(f"{name} ({why})")
+            more = f" … and {len(items) - 10} more" if len(items) > 10 else ""
+            return f"{'; '.join(entries)}{more}"
+
+        loose = [(n, w) for n, w in declined.items() if w.startswith("inheritance:")]
+        offsets = [(n, w) for n, w in declined.items() if (n, w) not in loose]
+        if loose:
+            log.warning(
+                f"This export ships {len(loose)} node(s) that ignore their parent "
+                f"(inheritsTransform off) displaced -- {named(loose)}: FBX has no "
+                "'do not inherit', so each lands its parent's world away. Parent "
+                "it where it should ride, or export through the Scene Exporter "
+                "with Flatten Sheared Chains, which re-targets it."
+            )
+        if offsets:
+            log.warning(
+                f"This export drops the offsetParentMatrix of {len(offsets)} "
+                f"node(s) it could not fold exactly -- {named(offsets)}: the FBX "
+                f"write does not bake ({plan.reason}), so each ships displaced by "
+                "its offset. A preset with Bake Animation on folds it; a USD "
+                "export keeps it."
+            )
+
     #: The plugin property that decides whether an export carries ANY animation.
     #: It is not one of the ``FBXExport*`` commands -- it is the Include-group
     #: checkbox ("Animation" in the export dialog), reachable only through
@@ -1449,19 +1834,11 @@ class FbxUtils(ptk.HelpMixin):
         """
         FbxUtils.reset_takes()  # also ensures the fbxmaya plugin is loaded
 
-        norm = []
-        for t in takes or []:
-            if isinstance(t, dict):
-                name, start, end = t["name"], t["start"], t["end"]
-            else:
-                name, start, end = t
-            norm.append((str(name), int(round(start)), int(round(end))))
-
+        norm = FbxUtils._normalized_takes(takes)
         if not norm:
             return 0
 
-        union_start = min(s for _, s, _ in norm)
-        union_end = max(e for _, _, e in norm)
+        union_start, union_end = FbxUtils.takes_span(norm)
         # Capture the user's bake-complex settings once (reset_takes restores
         # them); reset_takes above already consumed any prior capture, so a
         # repeated apply never overwrites the true pre-takes state.
@@ -1513,6 +1890,33 @@ class FbxUtils(ptk.HelpMixin):
             f"Configured {len(norm)} FBX take(s); bake range {union_start}-{union_end}."
         )
         return len(norm)
+
+    @staticmethod
+    def _normalized_takes(takes: Iterable[Any]) -> List[Tuple[str, int, int]]:
+        """*takes* (``{"name","start","end"}`` mappings or ``(name, start,
+        end)`` tuples) as ``(name, start, end)`` on whole frames -- the form
+        :meth:`apply_takes` declares them in."""
+        norm = []
+        for take in takes or []:
+            if isinstance(take, dict):
+                name, start, end = take["name"], take["start"], take["end"]
+            else:
+                name, start, end = take
+            norm.append((str(name), int(round(start)), int(round(end))))
+        return norm
+
+    @staticmethod
+    def takes_span(takes: Iterable[Any]) -> Optional[Tuple[int, int]]:
+        """The ``(start, end)`` union of *takes* -- the bake range
+        :meth:`apply_takes` sets for them -- or None when there are none.
+
+        Parameters:
+            takes: What :meth:`apply_takes` takes (or its normalized triples).
+        """
+        norm = FbxUtils._normalized_takes(takes)
+        if not norm:
+            return None
+        return min(s for _, s, _ in norm), max(e for _, _, e in norm)
 
     @staticmethod
     def declared_takes() -> list:
@@ -1880,6 +2284,7 @@ class FbxUtils(ptk.HelpMixin):
         ctx: Optional[ptk.ExportContext] = None,
         only: Optional[Iterable[Any]] = None,
         stagers: Optional[Iterable[str]] = None,
+        plan: Optional["FbxUtils.WritePlan"] = None,
     ) -> Optional[ptk.ExportSnapshot]:
         """Open an export bracket (outermost only): stage the scene, then --
         when a *ctx* or *only* is given -- publish.
@@ -1898,11 +2303,17 @@ class FbxUtils(ptk.HelpMixin):
         which is what ``only`` meant before the bracket took a context.  Stager
         names belong in *stagers*, not here.
 
+        *plan* is the bracketed write's :meth:`write_plan`, set before the
+        publish so a producer reads the range the write will bake
+        (:meth:`planned_bake_range`) rather than what the settings held when
+        the bracket opened.
+
         Returns:
             The snapshot published here, or ``None``.
         """
         if cls._bracket_depth_add(1) != 1:
             return None
+        cls._bracket_state()["write_plan"] = plan
         try:
             if isinstance(ctx, (list, tuple, set, frozenset)):
                 ctx, only = None, ctx  # the pre-2026-09-18 positional ``only``
@@ -1916,6 +2327,7 @@ class FbxUtils(ptk.HelpMixin):
             # bracket fails to OPEN: finish what was staged and leave the
             # depth as it was found.
             cls._bracket_depth_add(-1)
+            cls._bracket_state().pop("write_plan", None)
             table = cls._bracket_state().pop("stager_table", None)
             if table is not None:
                 cls._run_stagers("finish", table)
@@ -1927,6 +2339,7 @@ class FbxUtils(ptk.HelpMixin):
         if cls._export_depth <= 0:
             return
         if cls._bracket_depth_add(-1) == 0:
+            cls._bracket_state().pop("write_plan", None)
             table = cls._bracket_state().pop("stager_table", None)
             cls._run_stagers("finish", table if table is not None else cls.stagers())
 
@@ -1937,14 +2350,15 @@ class FbxUtils(ptk.HelpMixin):
         ctx: Optional[ptk.ExportContext] = None,
         only: Optional[Iterable[Any]] = None,
         stagers: Optional[Iterable[str]] = None,
+        plan: Optional["FbxUtils.WritePlan"] = None,
     ):
         """Stage the scene (and publish, given a *ctx* or *only* -- see
-        :meth:`begin_export`) for an export; finish on exit -- AFTER
-        everything inside the block, so an FBX write followed by a GLB
-        conversion both see the staged scene.  Nested use is fine; the
+        :meth:`begin_export`, which takes *plan* too) for an export; finish on
+        exit -- AFTER everything inside the block, so an FBX write followed by
+        a GLB conversion both see the staged scene.  Nested use is fine; the
         outermost bracket owns the lifecycle.  Yields the snapshot
         :meth:`begin_export` published, or ``None``."""
-        snapshot = cls.begin_export(ctx, only, stagers)
+        snapshot = cls.begin_export(ctx, only, stagers, plan=plan)
         try:
             yield snapshot
         finally:

@@ -446,7 +446,7 @@ class TestRizomBridgeLogic(MayaTkTestCase):
 
         calls = []
 
-        def fake_run(exe, args=None, timeout=None):  # RizomUV that does nothing
+        def fake_run(exe, args=None, timeout=None, **kwargs):  # RizomUV that does nothing
             calls.append(args)
             return subprocess.CompletedProcess(args=[exe], returncode=0, stdout="")
 
@@ -460,6 +460,109 @@ class TestRizomBridgeLogic(MayaTkTestCase):
         self.assertIn(str(Path(self.bridge.script_path)), message)
         # The script it ran is the one we wrote, so no clobber must be claimed.
         self.assertNotIn("no longer matches", message)
+
+    def test_rizomuv_runs_hidden_unless_asked_to_show(self):
+        """RizomUV has no headless mode: a run goes where no one sees it
+        (``AppLauncher.run(hidden=True)``), and ``hidden=False`` shows it -- to
+        watch it work, or answer a dialog it waits on, which a timed-out hidden
+        run names -- only where it was hidden (``AppLauncher.can_hide``)."""
+        seen = []
+
+        def capture(exe, args=None, timeout=None, **kwargs):
+            seen.append(kwargs.get("hidden"))
+            raise subprocess.TimeoutExpired(exe, timeout)
+
+        shown = RizomUVBridge(rizom_path="not-used.exe", hidden=False)
+        self.addCleanup(shown._release_temp_payloads)
+        errors = []
+        # (bridge, whether this platform hides): hidden, shown, and hidden where
+        # it cannot be (it showed, so nothing waited unseen).
+        for bridge, hides in ((self.bridge, True), (shown, True), (self.bridge, False)):
+            bridge.export_path = str(Path(self.tmp_dir) / "hidden.fbx")
+            bridge.script_path = "ZomPack({})"
+            with mock.patch.object(
+                AppLauncher, "run", staticmethod(capture)
+            ), mock.patch.object(AppLauncher, "can_hide", staticmethod(lambda: hides)):
+                with self.assertRaises(RuntimeError) as ctx:
+                    bridge._execute_uv_script()
+            errors.append(str(ctx.exception))
+        self.assertEqual(seen, [True, False, True])
+        self.assertIn("hidden=False", errors[0])
+        self.assertNotIn("hidden", errors[1])
+        self.assertNotIn("hidden", errors[2])
+
+    def test_show_app_window_shows_rizomuv_for_the_run(self):
+        """The panel's Show App Window (``SHOW_APP_WINDOW``, off by default)
+        shows RizomUV for the run it rides in, as ``hidden=False`` does: a
+        hidden app waiting on a dialog can't be answered. Its row shows for
+        every round-trip preset and not for the one-way send, whose RizomUV
+        always shows; a timed-out hidden run names it. Added: 2026-10-19"""
+        spec = _params.PARAMS["SHOW_APP_WINDOW"]
+        self.assertEqual((spec.kind, spec.default), ("bool", False))
+        self.assertIn("dialog", spec.tooltip)
+        for path in sorted(_SCRIPT_DIR.glob("*.lua")):
+            keys = _params.Parameters.referenced_keys(path.read_text(encoding="utf-8"))
+            self.assertEqual("SHOW_APP_WINDOW" in keys, path.stem != "send", path.stem)
+
+        seen, errors = [], []
+
+        def capture(exe, args=None, timeout=None, **kwargs):
+            seen.append(kwargs.get("hidden"))
+            raise subprocess.TimeoutExpired(exe, timeout)
+
+        shown = RizomUVBridge(rizom_path="not-used.exe", hidden=False)
+        self.addCleanup(shown._release_temp_payloads)
+        for bridge, params in (
+            (self.bridge, {}),
+            (self.bridge, {"SHOW_APP_WINDOW": False}),
+            (self.bridge, {"SHOW_APP_WINDOW": True}),
+            (shown, {"SHOW_APP_WINDOW": False}),
+        ):
+            bridge._params = params
+            bridge.export_path = str(Path(self.tmp_dir) / "shown.fbx")
+            bridge.script_path = "ZomPack({})"
+            with mock.patch.object(
+                AppLauncher, "run", staticmethod(capture)
+            ), mock.patch.object(AppLauncher, "can_hide", staticmethod(lambda: True)):
+                with self.assertRaises(RuntimeError) as ctx:
+                    bridge._execute_uv_script()
+            errors.append(str(ctx.exception))
+        self.assertEqual(seen, [True, True, False, False])
+        self.assertIn("Show App Window", errors[0])
+        self.assertNotIn("Show App Window", errors[2])
+
+    def test_a_cancel_ends_the_run_and_says_so(self):
+        """Holding Esc during a hidden run (the ambient CancelScope a real run
+        polls) returns at once: the bridge logs that RizomUV was cancelled and
+        raises ``OperationCancelled`` -- never the ``RuntimeError`` a failure
+        becomes, which the panel would report as a crash. Added: 2026-10-19"""
+        import pythontk as ptk
+
+        def cancelled(exe, args=None, timeout=None, **kwargs):
+            ptk.CancelScope.check()  # the checkpoint a hidden run polls
+            raise AssertionError("the run never reached its checkpoint")
+
+        self.bridge.export_path = str(Path(self.tmp_dir) / "cancelled.fbx")
+        self.bridge.script_path = "ZomPack({})"
+        scope = ptk.CancelScope("RizomUV")
+        scope.cancel("escape")
+        with mock.patch.object(
+            AppLauncher, "run", staticmethod(cancelled)
+        ), mock.patch.object(self.bridge.logger, "warning") as warned:
+            with scope.activate(), self.assertRaises(ptk.OperationCancelled):
+                self.bridge._execute_uv_script()
+        logged = " ".join(str(call.args[0]) for call in warned.call_args_list)
+        self.assertIn("cancelled", logged)
+
+    def test_holding_esc_cancels_the_panels_process_button(self):
+        """The panel's Process (``b000``) runs inside the dispatcher's
+        CancelScope (``@Cancelable``) -- the scope a hidden run polls. Without
+        it nothing activates one, and Esc held over a stuck run did nothing.
+        Added: 2026-10-19"""
+        from mayatk.uv_utils.rizom_bridge.rizom_bridge_slots import RizomBridgeSlots
+
+        meta = getattr(RizomBridgeSlots.b000, "_cancelable_meta", None) or {}
+        self.assertGreater(meta.get("timeout") or 0, 0)
 
     def test_passthrough_script_still_substitutes_params(self):
         """A script with its own ZomLoad/ZomSave skips the wrapper but must
@@ -1013,7 +1116,7 @@ class _SubsetPayloadCase(MayaTkTestCase):
         returning what the run handed it: ``(script text, copy of the FBX)``."""
         seen = {}
 
-        def passthrough(exe, args=None, timeout=None):
+        def passthrough(exe, args=None, timeout=None, **kwargs):
             seen["script"] = Path(args[1]).read_text(encoding="utf-8")
             shutil.copy(self.bridge.export_path, self.tmp / "payload.fbx")
             stamp = os.path.getmtime(self.bridge.export_path) + 2
@@ -1335,7 +1438,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
             round(v, 4) for v in (cmds.polyEditUV(f"{node}.map[*]", query=True) or [])
         ]
 
-    def _fake_rizom(self, exe, args=None, timeout=None):
+    def _fake_rizom(self, exe, args=None, timeout=None, **kwargs):
         """Stand-in for the executable: rewrite the FBX with shifted UVs.
 
         Undo recording is toggled off by hand rather than through
@@ -1372,7 +1475,7 @@ class TestRizomBridgeUndo(MayaTkTestCase):
         with mock.patch.object(AppLauncher, "run", staticmethod(self._fake_rizom)):
             self.bridge.process_with_rizomuv(objects, uv_script="-- undo test")
 
-    def _passthrough_rizom(self, exe, args=None, timeout=None):
+    def _passthrough_rizom(self, exe, args=None, timeout=None, **kwargs):
         """Stand-in that leaves the bridge's OWN payload untouched.
 
         ``_fake_rizom`` re-exports a clean copy of the originals, which hides
@@ -1415,6 +1518,35 @@ class TestRizomBridgeUndo(MayaTkTestCase):
             set(),
             "the round-trip left new nodes behind",
         )
+
+    def test_a_cancelled_run_leaves_the_scene_as_it_was(self):
+        """Esc held during the hidden RizomUV run (the CancelScope the panel's
+        ``@Cancelable`` Process activates) ends the round trip before its
+        import: ``OperationCancelled`` reaches the caller, and the scene keeps
+        its nodes and its UVs. Added: 2026-10-19"""
+        import pythontk as ptk
+
+        flat, nested = self._build_scene()
+        uvs = (self._uvs(flat), self._uvs(nested))
+        before = set(cmds.ls(long=True))
+
+        def cancelled(exe, args=None, timeout=None, **kwargs):
+            ptk.CancelScope.check()  # the checkpoint a hidden run polls
+            raise AssertionError("the run never reached its checkpoint")
+
+        scope = ptk.CancelScope("RizomUV")
+        scope.cancel("escape")
+        with mock.patch.object(AppLauncher, "run", staticmethod(cancelled)):
+            with scope.activate(), self.assertRaises(ptk.OperationCancelled):
+                self.bridge.process_with_rizomuv(
+                    [flat, nested], uv_script="-- cancel test"
+                )
+        self.assertEqual(
+            set(cmds.ls(long=True)) - before,
+            set(),
+            "the cancelled run left new nodes behind",
+        )
+        self.assertEqual((self._uvs(flat), self._uvs(nested)), uvs)
 
     # -- tests ----------------------------------------------------------
 
@@ -1725,7 +1857,7 @@ class TestRizomBridgeUvIds(MayaTkTestCase):
         """Round-trip through a RizomUV stand-in that rewrites the payload with
         *edit* applied to each export copy (``None``: payload kept as-is)."""
 
-        def fake(exe, args=None, timeout=None):
+        def fake(exe, args=None, timeout=None, **kwargs):
             path = self.bridge.export_path
             if edit is not None:
                 prev = cmds.undoInfo(query=True, state=True)
@@ -1930,7 +2062,7 @@ class TestRizomBridgeNonAsciiPaths(MayaTkTestCase):
         """``-cfi`` gets a spelling the ANSI code page holds."""
         seen = {}
 
-        def capture(exe, args=None, timeout=None):
+        def capture(exe, args=None, timeout=None, **kwargs):
             seen["args"] = args
             raise RuntimeError("stop before RizomUV")
 

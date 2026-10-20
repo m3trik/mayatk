@@ -160,6 +160,12 @@ class TestSceneExporter(MayaTkTestCase):
                         create_log_file=True,
                     )
             self.assertEqual(file_handlers(), [], "the failed preset load left it open")
+            # The run log is the scene's, in the per-user cache (2026-10-13).
+            self.assertEqual(
+                [f for f in os.listdir(self.temp_dir) if f.endswith(".log")],
+                [],
+                "a log landed beside the export",
+            )
         finally:
             self.exporter.close_file_handlers()
 
@@ -1304,9 +1310,9 @@ class TestSceneExporter(MayaTkTestCase):
         """The WebXR preview offers these rows by the label and table pythontk
         declares (``ExportProfile.GLB_ROWS`` / the combo tables), so a row
         renamed or re-tabled here without it would leave the two panels naming
-        the same setting differently. Baked Reflections also starts where the
-        lighting recipe itself stands, so an untouched row publishes it
-        unchanged. Added: 2026-09-21
+        the same setting differently. Baked Reflections retired 2026-10-19:
+        the deliverable publishes the lighting recipe's own level, so no row
+        offers one. Added: 2026-09-21
         """
         defs = self.exporter.task_manager.task_definitions
         tables = {
@@ -1314,18 +1320,50 @@ class TestSceneExporter(MayaTkTestCase):
             "optimize_textures": ptk.ExportProfile.optimize_textures_options(),
             "secondary_max_size": ptk.ExportProfile.SECONDARY_MAX_SIZE_OPTIONS,
             "uastc_rdo": ptk.ExportProfile.UASTC_RDO_OPTIONS,
-            "baked_reflections": ptk.ExportProfile.BAKED_REFLECTIONS_OPTIONS,
         }
         self.assertEqual(set(tables), set(ptk.ExportProfile.GLB_ROWS))
         for row, label in ptk.ExportProfile.GLB_ROWS.items():
             with self.subTest(row=row):
                 self.assertEqual(defs[row]["set_row_label"], label)
                 self.assertEqual(defs[row]["add"], tables[row])
-        reflections = defs["baked_reflections"]
+        self.assertNotIn("baked_reflections", defs)
+
+    def test_each_fix_row_stands_in_for_the_check_that_verifies_it(self):
+        """A fix and its check were two rows for one concern. The panel offers
+        the fix alone and the export button arms the check after it, so what
+        the fix could not repair still stops the export. Each fix starts on,
+        as the check it replaces did. Added: 2026-10-19
+        """
+        tm = self.exporter.task_manager
+        fixes = {
+            fix: check
+            for fix, check in ptk.ExportProfile.VERIFYING_CHECKS.items()
+            if fix in tm.task_definitions
+            and fix not in ("convert_textures", "optimize_textures")
+        }
         self.assertEqual(
-            list(reflections["add"].values())[reflections["setCurrentIndex"]],
-            ptk.ExportProfile.baked_reflections_default(),
+            set(fixes),
+            {
+                "conform_shape_names",
+                "reassign_duplicate_materials",
+                "flatten_sheared_chains",
+                "snap_keys_to_frame",
+                "tie_all_keyframes",
+            },
         )
+        values = {
+            ptk.ExportProfile.widget_key(fix, tm.task_definitions[fix]): True
+            for fix in fixes
+        }
+        tasks = ptk.ExportProfile.run_config(
+            values, tm.task_definitions, tm.check_definitions
+        )["tasks"]
+        for fix, check in fixes.items():
+            with self.subTest(fix=fix):
+                self.assertNotIn(check, tm.check_definitions)
+                self.assertTrue(callable(getattr(tm, check)))
+                self.assertIs(tm.task_definitions[fix]["setChecked"], True)
+                self.assertTrue(tasks[check])
 
     def test_deleted_tasks_not_in_task_order(self):
         """Verify removed tasks are absent from TASK_ORDER.
@@ -1510,7 +1548,7 @@ class TestSceneExporter(MayaTkTestCase):
         labels = [label for _w, label in rows]
         seps = [w.attrs["title"] for w, _l in rows if isinstance(w, _Separator)]
         self.assertEqual(
-            seps, ["Materials", "Textures", "Lighting", "Animation", "Hierarchy"]
+            seps, ["Materials", "Textures", "Animation", "Hierarchy"]
         )
         self.assertEqual(labels[0], "Materials")  # a group opens with its caption
         self.assertNotIn("export_visible_objects", labels)  # settings-tagged
@@ -1665,6 +1703,12 @@ class TestSceneExporter(MayaTkTestCase):
         stored = {
             "legacy": {"version": "{stem}_v{n:03d}", "chk004": True, "cmb004": 1},
             "current": {"version": "", "chk004": False, "cmb004": 1},
+            # The released default for the pair retired 2026-10-19: the check
+            # row on, its fix off -- the check would go without a word.
+            "released": {
+                "snap_keys_to_frame": False,
+                "check_floating_point_keys": True,
+            },
         }
 
         class _Mgr:
@@ -1685,6 +1729,7 @@ class TestSceneExporter(MayaTkTestCase):
 
         slots = SceneExporterSlots.__new__(SceneExporterSlots)
         slots.ui = SimpleNamespace(presets=_Mgr())
+        slots.task_manager = self.exporter.task_manager
         combo = _StubPresetSelector(stored)
         slots.cmb007_init(combo)
         with self.assertLogs(slots.logger, level="WARNING") as caught:
@@ -1694,6 +1739,13 @@ class TestSceneExporter(MayaTkTestCase):
             self.assertIn(expected, said)
         with self.assertNoLogs(slots.logger, level="WARNING"):
             combo.activated.emit(1)
+        # A check row retired 2026-10-19 is said the same way (pythontk's
+        # ExportProfile._retired_row_notes), naming the fix to turn on.
+        with self.assertLogs(slots.logger, level="WARNING") as caught:
+            combo.activated.emit(2)
+        said = "\n".join(caught.output)
+        for expected in ("'released'", "Floating Point Keys", "Snap Keys To Frame"):
+            self.assertIn(expected, said)
 
     # ------------------------------------------------------------------
     # optimize_keys forwarding to SmartBake
@@ -5791,19 +5843,19 @@ class TestExcludeRigHelpersOption(MayaTkTestCase):
         from mayatk.env_utils.fbx_utils import FbxUtils
 
         seen = {}
-        real_drop, real_embed = FbxUtils.drop_rig_apparatus, FbxUtils.embed_dependencies
+        real_drop, real_finish = FbxUtils.drop_rig_apparatus, FbxUtils.finish_deliverable
 
         def drop(path, *args, **kwargs):
             seen["drop"] = path
             return real_drop(path, *args, **kwargs)
 
-        def embed(path, *args, **kwargs):
-            seen["embed"] = path
-            return real_embed(path, *args, **kwargs)
+        def finish(path, *args, **kwargs):
+            seen["finish"] = path
+            return real_finish(path, *args, **kwargs)
 
         with (
             patch.object(FbxUtils, "drop_rig_apparatus", staticmethod(drop)),
-            patch.object(FbxUtils, "embed_dependencies", staticmethod(embed)),
+            patch.object(FbxUtils, "finish_deliverable", staticmethod(finish)),
         ):
             dropped = self._export("staged", drop_rig_apparatus=True)
 
@@ -5814,7 +5866,7 @@ class TestExcludeRigHelpersOption(MayaTkTestCase):
                 out,
                 f"{name} rewrote the file in the output folder",
             )
-        self.assertEqual(set(seen), {"drop", "embed"})
+        self.assertEqual(set(seen), {"drop", "finish"})
         self.assertTrue({"rig", "ctrl"}.isdisjoint(dropped), sorted(dropped))
         self.assertFalse([n for n in os.listdir(self.temp_dir) if n.endswith(".part")])
 
@@ -6130,8 +6182,13 @@ class TestMangledNameGuards(MayaTkTestCase):
         ok, messages = self.tm.check_mangled_names()
         self.assertTrue(ok, messages)
 
-    def test_check_is_registered(self):
-        self.assertIn("check_mangled_names", self.tm.check_definitions)
+    def test_the_fix_row_arms_the_check(self):
+        """No row of its own since 2026-10-19: Fix Mangled Names arms it."""
+        self.assertNotIn("check_mangled_names", self.tm.check_definitions)
+        self.assertEqual(
+            ptk.ExportProfile.VERIFYING_CHECKS["conform_shape_names"],
+            "check_mangled_names",
+        )
 
     def test_conform_task_repairs_shape(self):
         self._mangle_shape("prop____Shape702__uninst_tmp____Shape")
@@ -7452,6 +7509,78 @@ class TestTexturePathPipeline(MayaTkTestCase):
             "failed GLB-only export must not roll the sidecar baseline forward",
         )
 
+    def test_a_glb_export_ends_with_a_link_that_opens_it_in_webxr(self):
+        """The run's last line opens the GLB it shipped in the WebXR preview,
+        and the folder it landed in, through the panel's own dispatcher.
+        Added: 2026-10-14 (folder link: 2026-10-19)"""
+        import html
+        import io
+        import logging
+        import re
+        from types import SimpleNamespace
+        from unittest import mock
+        from urllib.parse import urlsplit
+
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        def fake_glb(fbx_path, **_kw):
+            glb = os.path.splitext(fbx_path)[0] + ".glb"
+            with open(glb, "wb") as fh:
+                fh.write(b"glTF\x02\x00\x00\x00")
+            return glb
+
+        self.tm.create_glb = fake_glb
+        stream = io.StringIO()
+        panel = logging.StreamHandler(stream)
+        self.exporter.logger.addHandler(panel)
+        self.addCleanup(self.exporter.logger.removeHandler, panel)
+        result = self.exporter.perform_export(
+            export_dir=self.temp_dir,
+            objects=[self.cube],
+            file_format="FBX export",
+            tasks={"output_format": "glb"},
+        )
+        self.assertTrue(result)
+        last = stream.getvalue().strip().splitlines()[-1]
+        href = re.search(r'href="(action://preview[^"]+)"', last).group(1)
+        glb = os.path.splitext(self.exporter.export_path)[0] + ".glb"
+
+        parts = urlsplit(html.unescape(href))
+        url = SimpleNamespace(
+            scheme=lambda: parts.scheme,
+            host=lambda: parts.netloc,
+            query=lambda: parts.query,
+        )
+        with mock.patch.object(
+            WebXrPreview, "preview_file", return_value=True
+        ) as shown:
+            self.assertTrue(UiUtils.dispatch_log_link(url))
+        self.assertEqual(
+            os.path.normcase(shown.call_args.args[0]), os.path.normcase(glb)
+        )
+
+        href = re.search(r'href="(action://open[^"]+)"', last).group(1)
+        parts = urlsplit(html.unescape(href))
+        url = SimpleNamespace(
+            scheme=lambda: parts.scheme,
+            host=lambda: parts.netloc,
+            query=lambda: parts.query,
+        )
+        with mock.patch.object(
+            ptk.FileUtils, "open_explorer", return_value=True
+        ) as opened:
+            self.assertTrue(UiUtils.dispatch_log_link(url))
+        self.assertEqual(
+            os.path.normcase(opened.call_args.args[0]),
+            os.path.normcase(os.path.dirname(glb)),
+        )
+
     # -- USD output format ---------------------------------------------------
 
     def test_usd_output_format_writes_a_usd_layer_through_mayausd(self):
@@ -8521,6 +8650,307 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
         self.assertFalse(ptk.FbxFile.is_fbx(path), "an ASCII preset was overridden")
 
 
+class TestOffsetParentMatrixWrite(MayaTkTestCase):
+    """Every node ships where Maya plays it, whether or not the write bakes.
+
+    The FBX plug-in writes a node's TRS and never its ``offsetParentMatrix``;
+    only a baking write folds the matrix in. Measured on Maya 2025 / FBX
+    2020.3.6 (2026-10-17): through the preset-less default (no bake), a
+    static ``freeze_to_opm`` cube shipped 3.0 off and a keyed cube rigged by
+    ``RigUtils.create_locator_at_object`` 3.3 off, Smart Bake on or off --
+    while turning the bake on instead keys a static offset node on every
+    frame. So a write that does not bake folds each offset into its node's
+    own channels for the write (``FbxUtils.offsets_folded``), and the
+    scene comes back exactly; the bake flag and a preset are never touched.
+    Added: 2026-10-17
+    """
+
+    FRAMES = (1, 30, 60, 100)
+    CHANNELS = ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz")
+
+    def setUp(self):
+        super().setUp()
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        store = ptk.TempArtifacts("se_offset_parent", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+        self.exporter = SceneExporter(log_level="WARNING")
+        self.exporter.confirm = lambda question: False
+        self.addCleanup(FbxUtils.reset_export)
+        cmds.playbackOptions(min=1, max=100, ast=1, aet=100)
+
+    # -- fixtures -----------------------------------------------------------
+
+    def _rigged_prop(self):
+        """A keyed cube under a driven-locator rig: keyed, so the rig cancels
+        its pose in the cube's offsetParentMatrix. Returns ``(root, prop)``."""
+        from mayatk.rig_utils._rig_utils import RigUtils
+
+        cube = cmds.polyCube(name="opm_prop")[0]
+        cmds.xform(cube, worldSpace=True, translation=(3, 1, 2))
+        for attr, (first, last) in (("rotateY", (0, 90)), ("translateZ", (2, 6))):
+            cmds.setKeyframe(cube, attribute=attr, time=1, value=first)
+            cmds.setKeyframe(cube, attribute=attr, time=100, value=last)
+        cmds.setKeyframe(cube, attribute="translateZ", time=37.5, value=4)
+        cmds.currentTime(12)
+        RigUtils.create_locator_at_object([cube])
+        mesh = cmds.ls(type="mesh", long=True)[0]
+        prop = cmds.listRelatives(mesh, parent=True, fullPath=True)[0]
+        return prop.split("|")[1], prop
+
+    def _frozen(self):
+        """A static cube moved, turned, then frozen INTO its offset."""
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        cube = cmds.polyCube(name="opm_frozen")[0]
+        cmds.xform(cube, worldSpace=True, translation=(3, 0, 1), rotation=(0, 30, 0))
+        XformUtils.freeze_to_opm([cube])
+        node = cmds.ls(cube, long=True)[0]
+        return node, node
+
+    def _prebaked(self):
+        """The rigged prop, its channels baked per frame -- the offset stays."""
+        root, prop = self._rigged_prop()
+        cmds.bakeResults(prop, time=(1, 100), simulation=True, attribute=["tx", "tz"])
+        return root, prop
+
+    # -- reads --------------------------------------------------------------
+
+    def _worlds(self, node):
+        worlds = []
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            worlds.append(cmds.getAttr(f"{node}.worldMatrix[0]"))
+        return worlds
+
+    def _state(self, node):
+        """The node to the bit: offset, local matrix, channel values, keys
+        (time, value, tangents) and the frame."""
+        state = {
+            "opm": cmds.getAttr(f"{node}.offsetParentMatrix"),
+            "matrix": cmds.getAttr(f"{node}.matrix"),
+            "time": cmds.currentTime(query=True),
+        }
+        for channel in self.CHANNELS:
+            plug = f"{node}.{channel}"
+            state[channel] = (
+                cmds.getAttr(plug),
+                cmds.keyframe(plug, query=True, timeChange=True, valueChange=True),
+                cmds.keyTangent(plug, query=True, itt=True, ott=True, ia=True, oa=True),
+            )
+        return state
+
+    def _export(self, root, name, preset=None, **tasks):
+        """Export *root*; returns ``(path, whether the write baked)``."""
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        seen = {}
+        original = SceneExporter._warn_if_animation_excluded
+
+        def spy(exporter_self):
+            seen["bakes"] = FbxUtils.baking_enabled()
+            return original(exporter_self)
+
+        with patch.object(SceneExporter, "_warn_if_animation_excluded", spy):
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.out,
+                    objects=[root],
+                    output_name=name,
+                    preset_file=preset,
+                    tasks=dict({"output_format": "fbx", "smart_bake": True}, **tasks),
+                )
+            )
+        return os.path.join(self.out, f"{name}.fbx"), seen.get("bakes")
+
+    def _shipped(self, path, leaf):
+        """The shipped node's worlds at :attr:`FRAMES` and its key count."""
+        cmds.file(new=True, force=True)
+        cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+        (node,) = cmds.ls(leaf, long=True, type="transform")
+        return self._worlds(node), cmds.keyframe(node, query=True, keyframeCount=True)
+
+    def _assert_exact(self, expected, shipped, label):
+        drift = max(
+            abs(a - b) for ma, mb in zip(expected, shipped) for a, b in zip(ma, mb)
+        )
+        self.assertLess(drift, 1e-3, f"{label} ships {drift:.4f} off")
+
+    def _stand_in_preset(self, bakes):
+        """A preset file, and the loader for what it leaves in the plugin."""
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        preset = os.path.join(self.out, f"bakes_{bakes}.fbxexportpreset")
+        with open(preset, "w") as fh:
+            fh.write("; preset\n")
+
+        def load(*_args, **_kwargs):
+            FbxUtils.reset_export()
+            mel.eval(f"FBXExportBakeComplexAnimation -v {'true' if bakes else 'false'}")
+            if bakes:
+                mel.eval("FBXExportBakeComplexStart -v 1")
+                mel.eval("FBXExportBakeComplexEnd -v 100")
+
+        return preset, load
+
+    # -- scenarios ----------------------------------------------------------
+
+    def test_the_default_run_ships_every_offset_exactly(self):
+        """No preset, Smart Bake on (the panel default) and off: the keyed
+        prop and the static frozen cube both ship exact, the static one with
+        no key at all, the two Smart Bake settings ship the same file
+        motion, and the scene is handed back to the bit."""
+        for label, build in (("rig", self._rigged_prop), ("frozen", self._frozen)):
+            shipped_by = {}
+            for smart_bake in (True, False):
+                with self.subTest(fixture=label, smart_bake=smart_bake):
+                    cmds.file(new=True, force=True)
+                    cmds.playbackOptions(min=1, max=100, ast=1, aet=100)
+                    root, node = build()
+                    expected = self._worlds(node)
+                    cmds.currentTime(7)
+                    before = self._state(node)
+
+                    path, bakes = self._export(
+                        root, f"{label}_{int(smart_bake)}", smart_bake=smart_bake
+                    )
+
+                    self.assertFalse(bakes, "the default write baked")
+                    self.assertEqual(self._state(node), before)
+                    worlds, keys = self._shipped(path, node.rsplit("|", 1)[-1])
+                    self._assert_exact(expected, worlds, label)
+                    if label == "frozen":
+                        self.assertFalse(keys, "a static node shipped keyed")
+                    shipped_by[smart_bake] = worlds
+            if len(shipped_by) == 2:
+                with self.subTest(fixture=label, compare="smart_bake"):
+                    self._assert_exact(shipped_by[True], shipped_by[False], label)
+
+    def test_a_preset_that_bakes_is_left_to_bake(self):
+        """The plug-in folds the offset itself: nothing is folded for it."""
+        root, prop = self._rigged_prop()
+        expected = self._worlds(prop)
+        preset, load = self._stand_in_preset(bakes=True)
+
+        with (
+            patch.object(SceneExporter, "load_fbx_export_preset", side_effect=load),
+            patch(
+                "mayatk.anim_utils.smart_bake._smart_bake.SmartBake.fold_offsets"
+            ) as fold,
+        ):
+            path, bakes = self._export(root, "preset_bakes", preset=preset)
+
+        self.assertTrue(bakes)
+        fold.assert_not_called()
+        worlds, _ = self._shipped(path, prop.rsplit("|", 1)[-1])
+        self._assert_exact(expected, worlds, "baked prop")
+
+    def test_a_preset_that_will_not_bake_is_respected_and_still_exact(self):
+        """A preset that chose no bake keeps its choice -- the write does not
+        bake -- and the offsets still ship, folded."""
+        root, node = self._frozen()
+        expected = self._worlds(node)
+        preset, load = self._stand_in_preset(bakes=False)
+
+        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=load):
+            path, bakes = self._export(root, "preset_no_bake", preset=preset)
+
+        self.assertFalse(bakes, "a preset's choice not to bake was overruled")
+        worlds, keys = self._shipped(path, node.rsplit("|", 1)[-1])
+        self._assert_exact(expected, worlds, "frozen cube")
+        self.assertFalse(keys)
+
+    def test_an_already_baked_node_still_ships_exactly(self):
+        """Per-frame keys on the channels do not carry the offset either."""
+        root, prop = self._prebaked()
+        expected = self._worlds(prop)
+
+        path, _ = self._export(root, "prebaked")
+
+        worlds, _ = self._shipped(path, prop.rsplit("|", 1)[-1])
+        self._assert_exact(expected, worlds, "prebaked prop")
+
+    def test_the_scene_comes_back_when_the_write_fails(self):
+        """The fold is undone on the way out of a failed write too."""
+        root, prop = self._rigged_prop()
+        cmds.currentTime(7)
+        before = self._state(prop)
+        real = cmds.file
+
+        def failing(*args, **kwargs):
+            if kwargs.get("exportSelected"):
+                raise RuntimeError("the write failed")
+            return real(*args, **kwargs)
+
+        with (
+            patch.object(cmds, "file", side_effect=failing),
+            self.assertLogs(self.exporter.logger, level="INFO") as caught,
+            self.assertRaises(RuntimeError),
+        ):
+            self.exporter.perform_export(
+                export_dir=self.out,
+                objects=[root],
+                output_name="fails",
+                log_level="INFO",
+                tasks={"output_format": "fbx", "smart_bake": True},
+            )
+
+        self.assertTrue(any("Folded" in m for m in caught.output), "nothing folded")
+        self.assertEqual(self._state(prop), before)
+
+    def test_a_usd_export_keeps_the_offset_without_a_fold(self):
+        try:
+            cmds.loadPlugin("mayaUsdPlugin", quiet=True)
+            from pxr import Usd, UsdGeom
+        except Exception:  # noqa: BLE001
+            self.skipTest("mayaUsdPlugin not available")
+        root, prop = self._rigged_prop()
+        expected = self._worlds(prop)
+
+        with patch(
+            "mayatk.anim_utils.smart_bake._smart_bake.SmartBake.fold_offsets"
+        ) as fold:
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.out,
+                    objects=[root],
+                    output_name="usd_offset",
+                    tasks={"output_format": "usd", "smart_bake": True},
+                )
+            )
+
+        fold.assert_not_called()
+        stage = Usd.Stage.Open(os.path.join(self.out, "usd_offset.usd"))
+        leaf = prop.rsplit("|", 1)[-1]
+        prim = next(p for p in stage.Traverse() if p.GetName() == leaf)
+        worlds = []
+        for frame in self.FRAMES:
+            m = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                Usd.TimeCode(frame)
+            )
+            worlds.append([m[r][c] for r in range(4) for c in range(4)])
+        self._assert_exact(expected, worlds, "USD prop")
+
+    def test_the_predictors_read_the_plan_not_the_live_flags(self):
+        """The run's write plan is decided from the settings as the preset
+        left them: a flag a task writes later (a take split turns the bake
+        on) does not change what Smart Bake was told about this write."""
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        tm = self.exporter.task_manager
+        FbxUtils.reset_export()
+        tm.capture_write_baseline()
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+
+        self.assertFalse(tm.write_plan().bakes)
+        self.assertFalse(tm._write_resamples_layers())
+        tm.begin_run(tm.run)
+        self.assertTrue(tm.write_plan().bakes, "a fresh run reads the settings")
+
+
 class TestPresetDirectoryScan(QuickTestCase):
     """``SceneExporterSlots.presets`` — the dict backing the FBX preset combo (cmb000).
 
@@ -8959,11 +9389,10 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             "shipped 22.06 MB against the preview's 8.71 on a real assembly",
         )
 
-    def test_the_glb_publishes_the_runs_lighting_choices(self):
-        """The Baked Reflections row reaches the GLB's lighting recipe: an input
-        to the envelope the build embeds, so the deliverable carries the look
-        it was approved in wherever it is opened. Added: 2026-09-21"""
-        self.tm.run = self.tm.run.replace(baked_reflections=0.5)
+    def test_the_glb_publishes_the_lighting_recipe_as_declared(self):
+        """The GLB's lighting recipe is an input to the envelope the build
+        embeds. No panel row overrides it since Baked Reflections retired
+        (2026-10-19), so it ships the recipe's own level. Added: 2026-09-21"""
         seen = {}
 
         def fake_build(src, **kwargs):
@@ -8973,20 +9402,18 @@ class TestGeneralTextureFileType(MayaTkTestCase):
         with patch.object(ptk.GlbPipeline, "build", side_effect=fake_build):
             self.tm.create_glb(fbx_path="ignored.fbx")
         recipe = seen["sidecar"]["handoff"]["rendering"]["lightmappedMaterials"]
-        self.assertEqual(recipe["envMapIntensity"], 0.5)
+        policy = ptk.MeshConvert.RENDERING_POLICY["lightmappedMaterials"]
+        self.assertEqual(recipe["envMapIntensity"], policy["envMapIntensity"])
 
-    def test_the_fbx_handoff_publishes_the_runs_lighting_choices(self):
-        """And the FBX's handoff record, through the run's export context: one
-        decision, both carriers. Added: 2026-09-21"""
+    def test_the_fbx_handoff_publishes_the_lighting_recipe_as_declared(self):
+        """And the FBX's handoff record, through the run's export context: the
+        run overrides nothing, on either carrier. Added: 2026-09-21"""
         from mayatk.env_utils.fbx_utils import FbxUtils
 
-        self.tm.run = self.tm.run.replace(baked_reflections=0.0)
         with patch.object(FbxUtils, "publish", return_value=None) as publish:
             self.tm._publish_scene_records()
         ctx = publish.call_args[0][0]
-        self.assertEqual(
-            ctx.rendering, {"lightmappedMaterials": {"envMapIntensity": 0.0}}
-        )
+        self.assertEqual(ctx.rendering, {})
 
     def test_jpg_is_handed_to_the_encoder_as_jpeg(self):
         """REGRESSION: the dial's value is a file EXTENSION, but
@@ -9875,9 +10302,7 @@ class TestOverrideChecksDisarm(QuickTestCase):
         "txt001",  # output name
         "txt003",  # log panel
         "b009",  # Override Checks
-        "b011",  # create log file
         "cmb000",  # fbx preset
-        "cmb003",  # log level
         "cmb004",  # output format
     )
 
@@ -9916,6 +10341,15 @@ class TestOverrideChecksDisarm(QuickTestCase):
             slots.ui.b009.isChecked(),
             "the next export must be validated again",
         )
+
+    def test_every_export_keeps_the_run_log_and_sets_no_level(self):
+        """The panel has no log options (2026-10-14): it always keeps the
+        scene's run log and leaves the level to the panel's own INFO -- the
+        log records DEBUG by itself."""
+        slots = self._slots(True)
+        slots.b000()
+        self.assertIs(slots.export_calls[0]["create_log_file"], True)
+        self.assertNotIn("log_level", slots.export_calls[0])
 
     def test_a_failed_export_leaves_the_override_armed(self):
         slots = self._slots(False)
@@ -10003,6 +10437,22 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         entry = next(m for m in messages if "Missing Lightmap" in m)
         self.assertIn("LitCube_LightMap.exr", entry)
         self.assertIn("LitCube", entry)
+
+    def test_a_missing_reflection_probe_fails_the_check(self):
+        """The manifest ships the probe beside the export set's maps, so the
+        check reads it too: it was left out of every scoped read, and the FBX
+        shipped without it after one late warning. Added: 2026-10-14"""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        self._commit(self.cube, self._touch("bake", "LitCube_LightMap.exr"))
+        LightmapRecords.commit_probe(self._gone("room_Probe.exr"), (0, 0, 0))
+
+        passed, messages = self.tm.check_valid_paths()
+
+        self.assertFalse(passed, messages)
+        entry = next(m for m in messages if "Missing Lightmap" in m)
+        self.assertIn("reflection probe", entry)
+        self.assertIn("room_Probe.exr", entry)
 
     def test_a_lightmap_in_its_recorded_folder_passes(self):
         self._commit(self.cube, self._touch("bake", "LitCube_LightMap.exr"))
@@ -10101,6 +10551,95 @@ class TestCheckValidPathsLightmaps(MayaTkTestCase):
         passed, messages = self.tm.check_valid_paths()
         self.assertTrue(passed, messages)
         self.assertFalse(any("recorded folder" in m for m in messages), messages)
+
+
+class TestReferencedModuleCarrierScope(MayaTkTestCase):
+    """A referenced module's own ``MOD:data_export`` ships beside the scene's,
+    holding the module's records as it was last exported alone -- every
+    object it baked, whatever the export set. The scene's own lightmap record
+    is narrowed to the export set (2026-10-09); the module's is stored data on
+    a referenced node, so the export never edits it. What a reader of the
+    file binds is what it ships: an assembly export that left the module's
+    objects out embedded their maps, or failed ``fbx_dependencies`` on maps
+    the host's folders could not find (BACKLOG 2026-10-09, measured in a
+    fresh mayapy: 2 of 2 named files missing). Added: 2026-10-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        store = ptk.TempArtifacts.scoped("test_module_carrier_scope")
+        self.addCleanup(store.cleanup)
+        self.root = store.dir_path()
+        # The module: two baked cubes, its own carrier published, saved.
+        a = cmds.polyCube(name="ModA")[0]
+        b = cmds.polyCube(name="ModB")[0]
+        cmds.move(3, 0, 0, b)
+        LightmapRecords.commit({a: self._map("ModA_LM.exr")})
+        LightmapRecords.commit({b: self._map("ModB_LM.exr")})
+        module = os.path.join(self.root, "module.ma")
+        cmds.file(rename=module)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        # The assembly: an unbaked host and the module, referenced.
+        cmds.file(new=True, force=True)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the reference first
+        self.host = cmds.ls(cmds.polyCube(name="HostCube")[0], long=True)[0]
+        cmds.file(module, reference=True, namespace="MOD")
+
+    def _map(self, name):
+        path = os.path.join(self.root, "module", name)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(name.encode() * 8)
+        return path
+
+    def _export(self, name, objects):
+        out = os.path.join(self.root, "out")
+        os.makedirs(out, exist_ok=True)
+        result = SceneExporter(log_level="ERROR").perform_export(
+            export_dir=out,
+            objects=objects,
+            output_name=name,
+            tasks={"export_data_node": True},
+        )
+        self.assertTrue(result)
+        fbx = os.path.join(out, f"{name}.fbx")
+        carriers = ptk.FbxFile.load(fbx).user_properties(
+            ptk.SceneRecords.LIGHTMAPS.key, named=True
+        )
+        self.assertIn("MOD:data_export", [owner for owner, _v in carriers])
+        return fbx
+
+    def _gate(self, fbx):
+        rows = ptk.ExportVerifier(fbx=fbx, sidecar=None).run(["check_fbx_dependencies"])
+        return rows.rows[0]
+
+    def test_a_module_left_out_names_and_ships_none_of_its_maps(self):
+        fbx = self._export("left_out", [self.host])
+
+        self.assertEqual(ptk.FbxMedia.dependencies(fbx), [])
+        self.assertEqual(ptk.FbxMedia.embedded(fbx), [])
+        row = self._gate(fbx)
+        self.assertNotEqual(row.status, "FAIL", row.detail)
+
+    def test_a_module_partly_exported_ships_only_its_exported_objects_maps(self):
+        mod_a = cmds.ls("MOD:ModA", long=True)[0]
+        fbx = self._export("partial", [self.host, mod_a])
+
+        self.assertEqual(ptk.FbxMedia.dependencies(fbx), ["ModA_LM.exr"])
+        self.assertEqual(
+            [media["name"] for media in ptk.FbxMedia.embedded(fbx)], ["ModA_LM.exr"]
+        )
+        row = self._gate(fbx)
+        self.assertEqual(row.status, "PASS", row.detail)
 
 
 class TestFlattenShearedChains(unittest.TestCase):
@@ -10817,6 +11356,269 @@ class TestFlattenShearedChains(unittest.TestCase):
         for key, m in before.items():
             dev = max(abs(a - b) for a, b in zip(m, after[key]))
             self.assertLess(dev, 1e-4, f"{key} drifted by {dev}")
+
+
+class TestNonInheritingNodeExport(MayaTkTestCase):
+    """FBX has no "do not inherit", and Maya's writer ships a node with
+    ``inheritsTransform`` off as though it inherited: a baking write keys its
+    WORLD matrix as its local, a plain one its TRS alone. Either way it lands
+    its parent's world away. Production (2026-10-11/17): an assembly's wire looms
+    are skinned meshes PINNED under an animated module
+    (``Matrices.pin_world_matrix``, every channel locked); each shipped its
+    world as a constant local 118-419 cm off, and a Maya re-import bound it
+    170-720 cm from its skeleton. The flatten keys such a node relative to its
+    parent, inheriting, for the write -- and puts the pin back after.
+    Added: 2026-10-17
+    """
+
+    FRAMES = (1, 9, 16, 24)
+
+    def setUp(self):
+        super().setUp()
+        try:
+            if not cmds.pluginInfo("fbxmaya", q=True, loaded=True):
+                cmds.loadPlugin("fbxmaya")
+        except Exception:
+            self.skipTest("FBX plugin not available")
+        store = ptk.TempArtifacts("se_non_inheriting", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+        self.exporter = SceneExporter(log_level="WARNING")
+        self.exporter.confirm = lambda question: False
+
+    def _pinned_loom(self):
+        """A tube skinned to a 3-joint chain, both under a keyed module; the
+        chain rides the module beside the mesh, the mesh is pinned and locked
+        (the tube rig's idiom). Returns ``(module, loom)``."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        cmds.playbackOptions(min=1, max=24, animationStartTime=1, animationEndTime=24)
+        root = cmds.group(empty=True, name="module_GRP")
+        for attr, (first, last) in (
+            ("translateX", (50, 150)),
+            ("translateY", (10, 10)),
+            ("rotateY", (30, 75)),
+        ):
+            cmds.setKeyframe(root, attribute=attr, time=1, value=first)
+            cmds.setKeyframe(root, attribute=attr, time=24, value=last)
+        cmds.currentTime(1)
+        loom = cmds.polyCylinder(
+            name="LOOM", axis=(1, 0, 0), height=20, radius=1, subdivisionsHeight=10
+        )[0]
+        loom = cmds.ls(cmds.parent(loom, root)[0], long=True)[0]
+        cmds.xform(loom, translation=(0, 5, 0), rotation=(0, -90, 0))
+        rig = cmds.group(empty=True, name="rig_GRP", parent=root)
+        matrix = cmds.xform(loom, query=True, worldSpace=True, matrix=True)
+        joints = []
+        cmds.select(rig)
+        for i, along in enumerate((-10, 0, 10)):
+            position = [matrix[12 + k] + matrix[k] * along for k in range(3)]
+            joints.append(cmds.joint(name=f"loom_jnt_{i + 1}", position=position))
+        cmds.select(clear=True)
+        self.assertTrue(Matrices.pin_world_matrix(loom))
+        cmds.skinCluster(joints, loom, toSelectedBones=True)
+        cmds.setKeyframe(joints[1], attribute="rotateZ", time=1, value=0)
+        cmds.setKeyframe(joints[1], attribute="rotateZ", time=24, value=40)
+        for attr in ("translate", "rotate", "scale"):
+            for axis in "XYZ":
+                cmds.setAttr(f"{loom}.{attr}{axis}", lock=True)
+        return cmds.ls(root, long=True)[0], loom
+
+    def _points(self, loom):
+        points = []
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            points.append(
+                cmds.xform(
+                    f"{loom}.vtx[*]", query=True, worldSpace=True, translation=True
+                )
+            )
+        return points
+
+    def _export(self, root, name, flatten, bake):
+        import maya.mel as mel
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        def _load(*_args, **_kwargs):  # what a baking preset leaves in the plugin
+            FbxUtils.load_plugin()
+            mel.eval("FBXExportBakeComplexAnimation -v true")
+            mel.eval("FBXExportBakeComplexStart -v 1")
+            mel.eval("FBXExportBakeComplexEnd -v 24")
+
+        self.addCleanup(FbxUtils.reset_export)
+        FbxUtils.reset_export()
+        preset = None
+        if bake:
+            preset = os.path.join(self.out, "bakes.fbxexportpreset")
+            with open(preset, "w") as fh:
+                fh.write("; preset\n")
+        with patch.object(SceneExporter, "load_fbx_export_preset", side_effect=_load):
+            self.assertTrue(
+                self.exporter.perform_export(
+                    export_dir=self.out,
+                    objects=[root],
+                    output_name=name,
+                    preset_file=preset,
+                    tasks={"output_format": "fbx", "flatten_sheared_chains": flatten},
+                )
+            )
+        return os.path.join(self.out, f"{name}.fbx")
+
+    def _shipped_points(self, path):
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        cmds.file(new=True, force=True)
+        FbxUtils.import_scene(path)
+        (loom,) = cmds.ls("LOOM", long=True, type="transform")
+        return self._points(loom)
+
+    def _miss(self, source, shipped):
+        """The farthest any vertex lands from its source, over every frame."""
+        worst = 0.0
+        for a, b in zip(source, shipped):
+            self.assertEqual(len(a), len(b), "the shipped mesh lost vertices")
+            for i in range(0, len(a), 3):
+                gap = sum((a[i + k] - b[i + k]) ** 2 for k in range(3)) ** 0.5
+                worst = max(worst, gap)
+        return worst
+
+    def test_a_pinned_skin_ships_where_maya_draws_it(self):
+        """Flattened, the re-imported skin deforms where the source does at
+        every frame, through a baking write and a plain one; the source keeps
+        its pin, its locks and no keys. Unflattened, the shared write
+        re-anchors it itself (``FbxUtils.offsets_folded``, the one every FBX
+        write runs) -- 160.8 cm off before it did."""
+        for bake in (True, False):
+            with self.subTest(bake=bake):
+                cmds.file(new=True, force=True)
+                root, loom = self._pinned_loom()
+                source = self._points(loom)
+                pin = cmds.getAttr(f"{loom}.offsetParentMatrix")
+
+                path = self._export(root, f"flattened_{int(bake)}", True, bake)
+
+                self.assertFalse(cmds.getAttr(f"{loom}.inheritsTransform"))
+                self.assertEqual(cmds.getAttr(f"{loom}.offsetParentMatrix"), pin)
+                self.assertTrue(cmds.getAttr(f"{loom}.translateX", lock=True))
+                self.assertEqual(cmds.keyframe(loom, query=True, keyframeCount=True), 0)
+                self.assertLess(self._miss(source, self._shipped_points(path)), 1e-3)
+
+        cmds.file(new=True, force=True)
+        root, loom = self._pinned_loom()
+        source = self._points(loom)
+        pin = cmds.getAttr(f"{loom}.offsetParentMatrix")
+        path = self._export(root, "unflattened", False, True)
+        self.assertFalse(cmds.getAttr(f"{loom}.inheritsTransform"))
+        self.assertEqual(cmds.getAttr(f"{loom}.offsetParentMatrix"), pin)
+        self.assertEqual(cmds.keyframe(loom, query=True, keyframeCount=True), 0)
+        self.assertLess(self._miss(source, self._shipped_points(path)), 1e-3)
+
+    def test_the_flatten_leaves_the_shared_write_nothing_to_do(self):
+        """The flatten runs first and re-anchors the loom; the write's own
+        fold (``FbxUtils.offsets_folded``), which re-anchors it when the
+        flatten is off, then finds nothing -- the two never apply twice."""
+        import contextlib
+
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        real = FbxUtils.offsets_folded.__func__
+        for bake in (True, False):
+            with self.subTest(bake=bake):
+                cmds.file(new=True, force=True)
+                root, loom = self._pinned_loom()
+                source = self._points(loom)
+                folds = []
+
+                @contextlib.contextmanager
+                def spy(cls, *args, **kwargs):
+                    with real(cls, *args, **kwargs) as folded:
+                        folds.append(list(folded))
+                        yield folded
+
+                with patch.object(FbxUtils, "offsets_folded", classmethod(spy)):
+                    path = self._export(root, f"idempotent_{int(bake)}", True, bake)
+
+                self.assertEqual(folds, [[]])
+                self.assertLess(self._miss(source, self._shipped_points(path)), 1e-3)
+
+    def test_the_check_names_a_node_only_when_its_parent_leaves_the_origin(self):
+        """Under a parent at the origin a non-inheriting node's world IS its
+        local, so the write is right and nothing is flagged; under a parent
+        that moves it is, at the skew ceiling."""
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+        from mayatk.xform_utils.matrices import Matrices
+
+        root, loom = self._pinned_loom()
+        still = cmds.group(empty=True, name="still_GRP")
+        cube = cmds.polyCube(name="still_cube")[0]
+        cube = cmds.ls(cmds.parent(cube, still)[0], long=True)[0]
+        cmds.setAttr(f"{cube}.translateX", 4)
+        self.assertTrue(Matrices.pin_world_matrix(cube))
+        tm = TaskManager.__new__(TaskManager)
+        tm.objects = [root, cmds.ls(still, long=True)[0]]
+        tm._live_objects = lambda: tm.objects
+        tm.logger = logging.getLogger("test_non_inheriting")
+
+        self.assertEqual(tm._inherit_offenders(), {loom: 1.0})
+        status, messages = tm.check_sheared_local_transforms()
+        self.assertFalse(status)
+        self.assertTrue(any("inheritsTransform" in m for m in messages), messages)
+
+    def test_a_sibling_the_write_leaves_out_is_not_named(self):
+        """The write carries the export set's subtrees and the ancestors above
+        them (``FbxUtils._shipped_transforms``), never an ancestor's other
+        children: a pinned loom beside the exported cube ships nowhere, so the
+        check names it only once its own module is exported. The scan used to
+        take the ancestors' whole subtrees."""
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        root, loom = self._pinned_loom()
+        cube = cmds.polyCube(name="exported_cube")[0]
+        cube = cmds.ls(cmds.parent(cube, root)[0], long=True)[0]
+        tm = TaskManager.__new__(TaskManager)
+        tm.objects = [cube]
+        tm._live_objects = lambda: tm.objects
+        tm.logger = logging.getLogger("test_non_inheriting")
+
+        self.assertEqual(tm._inherit_offenders(), {})
+        tm.objects = [root]
+        self.assertEqual(tm._inherit_offenders(), {loom: 1.0})
+
+    def test_a_re_anchored_pin_stays_out_of_the_animated_names_tier(self):
+        """The fitted keys spell where the file places a pinned node; they are
+        no binding anyone authored. On production the three loom names shared
+        by both configs newly failed 'Connected & Animated' once the flatten
+        keyed the looms, blocking an export that had passed. An authored key
+        on both twins still collides."""
+        import logging
+
+        from mayatk.env_utils.scene_exporter.task_manager import TaskManager
+
+        _, first = self._pinned_loom()
+        _, second = self._pinned_loom()
+        second = cmds.ls(cmds.rename(second, "LOOM"), long=True)[0]
+        tm = TaskManager.__new__(TaskManager)
+        tm.objects = [first, second]
+        tm._live_objects = lambda: tm.objects
+        tm.logger = logging.getLogger("test_non_inheriting")
+        tm._deferred_restores = {}
+        self.assertTrue(tm.check_duplicate_names("connected")[0], "fixture: inert")
+
+        ok, messages = tm.flatten_sheared_chains()
+        try:
+            self.assertTrue(ok, messages)
+            self.assertGreater(cmds.keyframe(first, query=True, keyframeCount=True), 0)
+            status, messages = tm.check_duplicate_names("connected")
+            self.assertTrue(status, messages)
+            for loom in (first, second):
+                cmds.setKeyframe(loom, attribute="visibility", time=1, value=1)
+            self.assertFalse(tm.check_duplicate_names("connected")[0])
+        finally:
+            tm.run_deferred_restores()
 
 
 class TestShearedLocalTransformCheck(unittest.TestCase):
@@ -11692,8 +12494,19 @@ class TestCheckOutputWritable(unittest.TestCase):
                 order.index(task), cutoff, f"{task} runs before the gate: {order}"
             )
 
-    def test_the_panel_offers_it(self):
-        self.assertIn("check_output_writable", self.tm.check_definitions)
+    def test_every_panel_run_makes_it_with_no_row(self):
+        """Automatic since 2026-10-19, and kept by Override Checks: a held
+        destination fails the write whatever is overridden."""
+        self.assertNotIn("check_output_writable", self.tm.check_definitions)
+        for override in (False, True):
+            with self.subTest(override_checks=override):
+                tasks = ptk.ExportProfile.run_config(
+                    {},
+                    self.tm.task_definitions,
+                    self.tm.check_definitions,
+                    override_checks=override,
+                )["tasks"]
+                self.assertIs(tasks["check_output_writable"], True)
 
     def test_an_older_pythontk_skips_the_check_instead_of_aborting(self):
         """mayatk and pythontk update independently.
@@ -11706,13 +12519,236 @@ class TestCheckOutputWritable(unittest.TestCase):
         self._write(self.fbx)
         self._hold(self.fbx) if os.name == "nt" else None
 
-        with patch.object(ptk.FileUtils, "describe_lock", None, create=True):
+        with patch.object(
+            ptk.FileUtils, "describe_unwritable", None, create=True
+        ), patch.object(ptk.FileUtils, "describe_lock", None, create=True):
             del_target = ptk.FileUtils.describe_lock
             self.assertIsNone(del_target)
             status, msgs = self.tm.check_output_writable()
 
         self.assertTrue(status, "a missing primitive must not fail the export")
         self.assertEqual(msgs, [])
+
+    @unittest.skipUnless(os.name == "nt", "file locking is a Windows behavior")
+    def test_a_pythontk_without_the_folder_probe_still_names_a_held_file(self):
+        """One that predates ``describe_unwritable`` keeps the lock half."""
+        self._write(self.fbx)
+        self._hold(self.fbx)
+        with patch.object(ptk.FileUtils, "describe_unwritable", None, create=True):
+            status, msgs = self.tm.check_output_writable()
+        self.assertFalse(status)
+        self.assertTrue(any("in use by" in m for m in msgs), msgs)
+
+    def _deny_writes(self, folder):
+        """Deny this user the right to create files in *folder* -- a real ACL
+        denial (a folder's read-only attribute does not stop a write on
+        Windows), lifted at teardown before the folder is removed."""
+        import getpass
+        import subprocess
+
+        user = getpass.getuser()
+        denied = subprocess.run(
+            ["icacls", folder, "/deny", f"{user}:(W)"], capture_output=True
+        )
+        if denied.returncode != 0:
+            self.skipTest(f"icacls could not deny writes: {denied.stderr!r}")
+        self.addCleanup(
+            subprocess.run,
+            ["icacls", folder, "/remove:d", user],
+            capture_output=True,
+        )
+
+    @unittest.skipUnless(os.name == "nt", "the ACL denial is made with icacls")
+    def test_fails_when_the_destination_folder_is_not_writable(self):
+        """REGRESSION (2026-10-19): only a held FILE failed the check, so an
+        existing folder this user cannot write to passed it and the run failed
+        at the write -- the last thing it does. The folder is proven with a
+        probe file (``ptk.FileUtils.describe_unwritable``)."""
+        self._deny_writes(self.dir)
+        self.tm.run = self.tm.run.replace(output_format="fbx_glb")
+
+        status, msgs = self.tm.check_output_writable()
+        self.assertFalse(status, "an unwritable folder must fail the export")
+        said = "\n".join(msgs)
+        for expected in ("asset.fbx", "asset.glb", "the folder is not writable"):
+            self.assertIn(expected, said)
+
+
+class TestRetiredPanelState(unittest.TestCase):
+    """The panel's saved widget state outlives the rows retired 2026-10-19.
+
+    REGRESSION (2026-10-19): a restore skips a key no widget takes, so a user
+    whose saved state had Snap Keys To Frame / Fix Mangled Names off kept them
+    off and lost the checks those retired rows used to run, with nothing said
+    (``HKCU\\...\\scene_exporter_maya`` held ``check_floating_point_keys`` on
+    and ``baked_reflections`` "Quarter"). The panel says it once when it opens.
+    """
+
+    def _store(self):
+        """A real uitk settings store -- only inside the test sandbox, which
+        redirects QSettings off the user's registry into temp ini files."""
+        import uuid
+
+        from uitk.testing import TestSandbox
+
+        if not TestSandbox.is_active():
+            self.skipTest("uitk's settings sandbox is not active: refusing to write")
+        from uitk.managers.settings_manager import SettingsManager
+
+        store = SettingsManager(
+            namespace=f"switchboard/test_retired_state_{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(store.clear)
+        return store
+
+    def test_saved_state_says_what_its_retired_rows_no_longer_do_once(self):
+        store = self._store()
+        store.setValue("snap_keys_to_frame/toggled", False)
+        store.setValue("check_floating_point_keys/toggled", True)
+        store.setValue("check_mangled_names/toggled", True)
+        store.setValue("conform_shape_names/toggled", True)
+        store.setValue("baked_reflections/currentIndexChanged", "Quarter")
+        store.setValue("cmb004/currentIndexChanged", 1)
+        exporter = SceneExporter()
+
+        with self.assertLogs(exporter.logger, level="INFO") as caught:
+            exporter._note_retired_panel_state(store)
+        said = "\n".join(caught.output)
+        for expected in (
+            "Floating Point Keys (Snap Keys To Frame)",
+            "Turn the fix on",
+            "Baked Reflections to Quarter",
+        ):
+            self.assertIn(expected, said)
+        self.assertNotIn("Mangled Names", said, "its fix is on: nothing lost")
+        self.assertEqual(
+            sorted(store.keys()),
+            [
+                "cmb004/currentIndexChanged",
+                "conform_shape_names/toggled",
+                "snap_keys_to_frame/toggled",
+            ],
+        )
+        with self.assertNoLogs(exporter.logger, level="INFO"):
+            exporter._note_retired_panel_state(store)
+
+    def test_the_panel_says_it_when_it_opens(self):
+        """Wired in ``__init__``, with the window's own settings store."""
+        sb = MagicMock()
+        logger = SceneExporterSlots.logger
+        self.addCleanup(logger.setLevel, logger.level)
+        with patch.object(
+            SceneExporterSlots, "_note_retired_panel_state", autospec=True
+        ) as note, patch.object(logger, "set_text_handler"), patch.object(
+            logger, "setup_logging_redirect"
+        ), patch.object(
+            logger, "hide_logger_name"
+        ):
+            slots = SceneExporterSlots(sb, log_level=logger.level or "WARNING")
+        note.assert_called_once_with(slots, sb.loaded_ui.scene_exporter.settings)
+
+    def _open_panel(self, store):
+        """Open the panel over *store* in the switchboard's order
+        (``Switchboard._create_slots_instance``): the slots' ``__init__``, the
+        Output Filename's ``*_init``, then its default capture and restore --
+        a real ``StateManager`` over the same store.
+
+        Returns:
+            ``(field, state)``.
+        """
+        from qtpy import QtWidgets
+        from uitk.managers.state_manager import StateManager
+
+        class _Field:
+            """``txt001`` as ``MainWindow.register_widget`` registers it, over
+            the slice of a line edit the state manager reads and writes. Not a
+            QLineEdit: a QWidget native-crashes headless mayapy, which would
+            push this whole module into the GUI pass."""
+
+            restore_state = True
+            derived_type = QtWidgets.QLineEdit
+
+            def __init__(self):
+                self._text, self._blocked, self._props = "", False, {}
+                self.tooltip, self.option_box = MagicMock(), MagicMock()
+
+            def objectName(self):
+                return "txt001"
+
+            def default_signals(self):
+                return "textChanged"
+
+            def text(self):
+                return self._text
+
+            def setText(self, text):
+                self._text = text
+
+            def blockSignals(self, block):
+                was, self._blocked = self._blocked, block
+                return was
+
+            def signalsBlocked(self):
+                return self._blocked
+
+            def property(self, name):
+                return self._props.get(name)
+
+            def setProperty(self, name, value):
+                self._props[name] = value
+
+            def update(self):
+                pass
+
+        field = _Field()
+        sb = MagicMock()
+        ui = sb.loaded_ui.scene_exporter
+        ui.settings, ui.state, ui.txt001 = store, StateManager(store), field
+        logger = SceneExporterSlots.logger
+        self.addCleanup(logger.setLevel, logger.level)
+        with patch.object(logger, "set_text_handler"), patch.object(
+            logger, "setup_logging_redirect"
+        ), patch.object(logger, "hide_logger_name"), patch(
+            "uitk.widgets.optionBox.options.recent_values.RecentValuesOption"
+        ):
+            slots = SceneExporterSlots(sb, log_level="INFO")
+            slots.txt001_init(field)
+        ui.state.capture_default(field)
+        ui.state.load(field)
+        return field, ui.state
+
+    def test_a_saved_regex_field_folds_into_the_restored_output_filename_once(self):
+        """REGRESSION (2026-10-19): the retired RegEx field was read as
+        ``settings.value("txt002")``, but the switchboard saves a widget under
+        ``<objectName>/<signal>`` -- ``HKCU\\...\\scene_exporter_maya`` holds
+        ``txt002/textChanged`` -- so a saved rule was never migrated. Folded
+        into the widget at ``txt001_init`` it would not have survived either:
+        the switchboard restores the field's own saved pattern right after
+        that init, and captures the folded text as its reset default first."""
+        cases = (
+            ("WIP_*", "test_|prod_", "WIP_{scene:test_->prod_}"),
+            (None, "_bar.*", "{scene:_bar.*->}"),  # no pattern saved: the name
+        )
+        logger = SceneExporterSlots.logger
+        for pattern, regex, folded in cases:
+            with self.subTest(pattern=pattern, regex=regex):
+                store = self._store()
+                if pattern is not None:
+                    store.setValue("txt001/textChanged", pattern)
+                store.setValue("txt002/textChanged", regex)
+
+                with self.assertLogs(logger, level="INFO") as caught:
+                    field, state = self._open_panel(store)
+                self.assertEqual(field.text(), folded, "the restore shows the rule")
+                self.assertIn("RegEx field is retired", "\n".join(caught.output))
+                self.assertEqual(
+                    store.keys(), ["txt001/textChanged"], "the retired key is gone"
+                )
+                self.assertEqual(state.default_for(field), "", "a reset still empties it")
+
+                field, _ = self._open_panel(store)  # and the next session
+                self.assertEqual(field.text(), folded)
+                self.assertEqual(store.keys(), ["txt001/textChanged"])
 
 
 class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
@@ -11797,25 +12833,24 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
                 self.assertIsNone(defs[key].get("restore_by"))
 
 
-class TestLogFileName(unittest.TestCase):
-    """``hide_log_file``: Windows hides the log with the file attribute; elsewhere
-    hidden means a dot-prefixed name, which the option used to skip."""
+class TestRunLogFile(unittest.TestCase):
+    """The run log is the SCENE's (``ptk.SceneExporterBase.log_file_path``):
+    one file in the per-user cache whatever the export is named, never one
+    beside each deliverable (2026-10-13). ``hide_log_file`` is retired."""
 
-    def test_log_name_per_os(self):
+    def test_the_log_is_keyed_by_the_scene(self):
         exp = SceneExporter.__new__(SceneExporter)
-        exp.export_dir = "exports"
-        for os_name, hide, want in (
-            ("nt", True, "hero.log"),
-            ("posix", True, ".hero.log"),
-            ("posix", False, "hero.log"),
-        ):
-            exp.hide_log_file = hide
-            with (
-                self.subTest(os_name=os_name, hide=hide),
-                patch.object(os, "name", os_name),
-            ):
-                got = os.path.basename(exp.generate_log_file_path("hero.fbx"))
-                self.assertEqual(got, want)
+        exp._saved_scene_path = lambda: os.path.join("proj", "shot1", "hero.ma")
+        first = exp.log_file_path()
+        self.assertRegex(os.path.basename(first), r"^hero_[0-9a-f]{8}\.log$")
+        exp._saved_scene_path = lambda: os.path.join("proj", "shot2", "hero.ma")
+        self.assertNotEqual(exp.log_file_path(), first)
+
+    def test_hide_log_file_is_retired(self):
+        exp = SceneExporter.__new__(SceneExporter)
+        missing = os.path.join(os.path.dirname(__file__), "no_such_export_dir")
+        with self.assertWarns(DeprecationWarning):
+            self.assertFalse(exp.perform_export(export_dir=missing, hide_log_file=True))
 
 
 if __name__ == "__main__":

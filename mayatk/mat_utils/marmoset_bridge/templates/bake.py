@@ -23,7 +23,7 @@ BRIDGE_MODES = ("send_to", "round_trip")
 
 # Host-side knobs (read by the bridge slots before launch; echoed here so the
 # panel exposes the widgets): scope=__SCOPE__ carrier=__CARRIER__ assign=__ASSIGN_MATERIAL__
-# bake_source=__BAKE_SOURCE_SET__ auto_maps=__AUTO_MAPS__
+# bake_source=__BAKE_SOURCE_SET__ auto_maps=__AUTO_MAPS__ show_window=__SHOW_APP_WINDOW__
 #
 # AUTO_MAPS is resolved BEFORE substitution: the engine reads the material
 # manifest and rewrites the MAP_* tokens below from the channels the source

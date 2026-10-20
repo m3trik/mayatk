@@ -497,16 +497,20 @@ class _TaskChecksMixin(_TaskDataMixin):
         and a locked destination stops the run in milliseconds with the name of
         the process to close rather than in minutes with an errno.
 
-        A path that does not exist yet cannot be held, and passes.
+        A path that does not exist yet cannot be held, but its folder must take
+        a new file: ``FileUtils.describe_unwritable`` proves it with a probe
+        file, since ``os.access`` passes a folder whose ACL denies this user.
 
         Returns:
             tuple: (status: bool, messages: list)
         """
         # Resolved rather than called directly: mayatk and pythontk update
-        # independently, and a Maya running an older pythontk would raise
-        # AttributeError HERE -- aborting the very export this check exists to
-        # protect. Measured in mayapy against the installed pythontk.
-        describe = getattr(ptk.FileUtils, "describe_lock", None)
+        # independently, and an older pythontk would raise AttributeError
+        # HERE -- aborting the very export this check exists to protect. One
+        # that predates describe_unwritable still answers for a held file.
+        describe = getattr(ptk.FileUtils, "describe_unwritable", None) or getattr(
+            ptk.FileUtils, "describe_lock", None
+        )
         if describe is None:
             self.logger.warning(
                 "Output-writability check skipped: this pythontk predates "
@@ -519,12 +523,13 @@ class _TaskChecksMixin(_TaskDataMixin):
         if not blocked:
             return True, []
         return False, [
-            f"{len(blocked)} destination file(s) cannot be replaced:",
+            f"{len(blocked)} destination file(s) cannot be written:",
         ] + [
-            f"  - {os.path.basename(path)} is {why} -> {path}" for path, why in blocked
+            f"  - {os.path.basename(path)}: {why} -> {path}" for path, why in blocked
         ] + [
             "Close whatever holds the file (a viewer, the WebXR preview, an "
-            "engine import) and re-run.",
+            "engine import), make a read-only one writable (check it out), or "
+            "export to a folder you can write to -- and re-run.",
         ]
 
     def check_valid_paths(self) -> tuple:
@@ -709,7 +714,7 @@ class _TaskChecksMixin(_TaskDataMixin):
             for dep in missing_lightmaps:
                 links = ", ".join(
                     self._obj_link(o, "select") for o in sorted(dep["objects"])
-                )
+                ) or "the scene's reflection probe"
                 where = f"{dep['dir']}/{dep['map']}" if dep["dir"] else dep["map"]
                 note = f" ({dep['note']})" if dep.get("note") else ""
                 entries.append(f"Missing Lightmap: {links} -> {where}{note}")
@@ -901,8 +906,9 @@ class _TaskChecksMixin(_TaskDataMixin):
         if len(offenders) > 20:
             log_messages.append(f"  … and {len(offenders) - 20} more")
         log_messages.append(
-            "Repair via the 'Fix Mangled Names' task "
-            "(or SceneDiagnostics.repair_mangled_names)."
+            "Fix Mangled Names (SceneDiagnostics.repair_mangled_names) repairs "
+            "these; one still here after it refused the rename (a locked or "
+            "referenced node) -- unlock or import it, or rename it by hand."
         )
         return False, log_messages
 
@@ -1013,14 +1019,27 @@ class _TaskChecksMixin(_TaskDataMixin):
         return sorted(nodes)
 
     def _connected_transforms(self, objects: List[str]) -> List[str]:
-        """*objects* carrying an incoming connection on a transform channel."""
+        """*objects* carrying an incoming connection on a transform channel.
+
+        A node the flatten keyed although nothing drove it (a pinned mesh
+        re-anchored under its moving parent -- ``_inherit_offenders``) is
+        judged by its visibility alone: those keys spell where the file
+        places it, not a binding anyone authored. Production: the three
+        per-config loom names newly failed this tier once the looms were
+        keyed for the write.
+        """
+        verdict = self._shear_verdict or {}
+        keyed_for_write = set(cmds.ls(verdict.get("undriven") or [], long=True) or [])
         connected = []
         for obj in objects:
             # Shapes reach the set too ('all' scope lists geometry); they have
             # none of these channels, and their transform is what gets named.
             if not cmds.objectType(obj, isAType="transform"):
                 continue
-            plugs = [f"{obj}.{attr}" for attr in self._CONNECTED_CHANNELS]
+            channels = (
+                ("visibility",) if obj in keyed_for_write else self._CONNECTED_CHANNELS
+            )
+            plugs = [f"{obj}.{attr}" for attr in channels]
             if cmds.listConnections(
                 plugs, source=True, destination=False, skipConversionNodes=True
             ):
@@ -1550,10 +1569,12 @@ class _TaskChecksMixin(_TaskDataMixin):
         log_messages.append(
             f"{len(offenders)} node(s) across {len(worst_by_group)} group(s) "
             f"have a local transform FBX/glTF cannot represent (> "
-            f"{tolerance:g}): a sheared local has no TRS form, and a "
+            f"{tolerance:g}): a sheared local has no TRS form, a "
             "segment-scale-compensated joint under a scaling parent "
-            "recomposes with the parent scale the rig cancels. Either way "
-            "the error compounds along a chain:"
+            "recomposes with the parent scale the rig cancels, and a node "
+            "that ignores its parent (inheritsTransform off, reported at "
+            "1.0) is written as though it inherited. The first two compound "
+            "along a chain:"
         )
         for group, (skew, leaf) in sorted(
             worst_by_group.items(), key=lambda kv: -kv[1][0]
@@ -1564,9 +1585,11 @@ class _TaskChecksMixin(_TaskDataMixin):
             )
         log_messages.append(
             "    Usual cause: squash/stretch scale on a joint chain "
-            "(sheared locals, or segmentScaleCompensate the formats lack). "
-            "The Flatten Sheared Chains task re-anchors these "
-            "automatically; otherwise reduce the stretch at the source."
+            "(sheared locals, or segmentScaleCompensate the formats lack), "
+            "or a rig's pinned (non-inheriting) skinned mesh. "
+            "Flatten Sheared Chains re-anchors what it can; a node still here "
+            "after it has no clean ancestor or refused the reparent (locked or "
+            "referenced) -- reduce the stretch at the source."
         )
         return False, log_messages
 

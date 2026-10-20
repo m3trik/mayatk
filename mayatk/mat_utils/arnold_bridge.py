@@ -176,6 +176,8 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
                 plugs = (self._slot_driver(sg, plug=True) for sg in groups)
                 plug = next(p for p in plugs if p)
                 extended = self._attach(plug, groups)
+                if self._link_emission_weight(mat, existing):
+                    self.logger.info(f"{name}: bridge emission linked to the material.")
                 if extended:
                     results.append(existing)
                     self.logger.success(
@@ -191,6 +193,7 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             textures = self._iter_base_textures(mat)
             for path, map_type in textures:
                 self._connect_texture(path, map_type, ai_node, aiMult_node, bump_node)
+            self._link_emission_weight(mat, ai_node, copy=True)
 
             results.append(ai_node)
             self.logger.success(
@@ -333,6 +336,41 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
     def has_bridge(self, material: str) -> bool:
         """True if any of *material*'s shading groups has an Arnold bridge."""
         return self.get_bridge(material) is not None
+
+    @staticmethod
+    def authored_plug(plug: str) -> str:
+        """The plug *plug* follows: a bridge's ``emission`` resolves to the
+        material weight linked into it (:meth:`_link_emission_weight`); any other
+        plug -- a bridge built before the link, or one whose gain something
+        else drives (keys, say) -- to itself.
+
+        An edit belongs on the material: it is what the export ships, and the
+        bridge renders it through the link. A rig that set the bridge instead
+        disconnected the map, and the bridge kept its own number from then on:
+        a MOODY room baked its panels' light while its GLBs shipped them dark
+        (2026-10-18). ``LightRig`` resolves every override through this.
+        """
+        node, _, attr = plug.partition(".")
+        if attr != "emission" or not cmds.objExists(plug):
+            return plug
+        if cmds.nodeType(node) != "aiStandardSurface":
+            return plug
+        src = (
+            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
+        )
+        gain = f"{src[0].split('.')[0]}.alphaGain" if src else ""
+        if not gain or not cmds.objExists(gain):
+            return plug
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        weight = (
+            cmds.listConnections(gain, source=True, destination=False, plugs=True) or []
+        )
+        if not weight:
+            return plug
+        owner, _, real = weight[0].partition(".")
+        entry = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS.get(cmds.nodeType(owner))
+        return weight[0] if entry and entry[0] == real else plug
 
     @classmethod
     def unrenderable_materials(cls) -> List[str]:
@@ -669,6 +707,62 @@ class ArnoldBridge(ptk.LoggingMixin, _ArnoldBridgeInternal):
             src = self._chan_plug(file_node, ao_ch)
             for c in "RGB":
                 cmds.connectAttr(src, f"{aiMult_node}.input2{c}", force=True)
+
+    @staticmethod
+    def _link_emission_weight(material: str, ai_node: str, copy: bool = False) -> bool:
+        """Drive the bridged emission by the source's own emission weight.
+
+        A game shader's emissive map is wired at full strength, but the shader
+        displays it times its weight (StingrayPBS ``emissive_intensity``,
+        :meth:`ShaderAttributeMap.emission_weight`): unscaled, a bake lit by a
+        dimmed fixture came out at the map's full glow. The weight is
+        CONNECTED to the emission file's alpha gain -- what drives
+        ``emission`` -- not copied there: a copy went stale the moment the
+        material was dimmed after its bridge was built, and the bake lit what
+        the export no longer showed. Idempotent, so a bridge built before the
+        link gets it when :meth:`add` passes it again; a gain something else
+        drives keeps its driver. A gate weight (on or off) and an emission no
+        map drives keep a copy, taken at the build (*copy*) and never again.
+        Returns True when it made the link. An authored bridge with no
+        ``emission`` (an ``aiFlat``, a mix) is left as it is.
+        """
+        from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
+
+        if not cmds.attributeQuery("emission", node=ai_node, exists=True):
+            return False
+        src = (
+            cmds.listConnections(
+                f"{ai_node}.emission", source=True, destination=False, plugs=True
+            )
+            or []
+        )
+        node = src[0].split(".")[0] if src else None
+        gain = f"{node}.alphaGain" if node else ""
+        entry = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS.get(cmds.nodeType(material))
+        weight_plug = f"{material}.{entry[0]}" if entry else ""
+        if (
+            gain
+            and cmds.objExists(gain)
+            and entry
+            and entry[1] == "multiply"
+            and cmds.objExists(weight_plug)
+        ):
+            if cmds.listConnections(gain, source=True, destination=False):
+                return False  # linked already, or driven by something else
+            cmds.connectAttr(weight_plug, gain)
+            return True
+        if not copy:
+            return False  # a constant copied once is never multiplied again
+        weight = ShaderAttributeMap.emission_weight(material)
+        if weight == 1.0:
+            return False
+        if gain and cmds.objExists(gain):
+            cmds.setAttr(gain, weight)
+        elif not src:
+            cmds.setAttr(
+                f"{ai_node}.emission", cmds.getAttr(f"{ai_node}.emission") * weight
+            )
+        return False
 
     def _connect_texture(
         self,

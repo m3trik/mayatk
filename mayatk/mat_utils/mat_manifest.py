@@ -86,6 +86,18 @@ class MatManifest(ptk.HelpMixin):
             Dict mapping slot names (e.g. ``"baseColor"``) to absolute file paths.
             Empty dict if the shader type is unsupported or has no textures.
         """
+        data: Dict[str, str] = {}
+        for field, file_node in cls._channel_file_nodes(mat_name).items():
+            paths = MatUtils._paths_from_file_nodes([file_node], absolute=True)
+            if paths:
+                data[field] = paths[0]
+        return data
+
+    @staticmethod
+    def _channel_file_nodes(mat_name: str) -> Dict[str, str]:
+        """``{slot: file node}`` feeding each mapped slot of *mat_name* -- what
+        :meth:`_process_material` reads its paths from. Empty for a shader type
+        the attribute map does not declare."""
         try:
             node_type = cmds.nodeType(mat_name)
         except RuntimeError:
@@ -97,25 +109,17 @@ class MatManifest(ptk.HelpMixin):
             )
             return {}
 
-        data: Dict[str, str] = {}
-
+        nodes: Dict[str, str] = {}
         for field in ShaderAttributeMap.logical_channels():
             # The slot this NODE has, not just the declared one -- a StingrayPBS
             # graph or a version-dependent openPBR input may carry an alternate.
             slot_def = ShaderAttributeMap.resolve_live_slot(mat_name, field, node_type)
             if not slot_def:
                 continue
-
-            attr_name, _ = slot_def
-            file_node = MatUtils.get_texture_file_node(mat_name, attr_name)
-            if not file_node:
-                continue
-
-            paths = MatUtils._paths_from_file_nodes([file_node], absolute=True)
-            if paths:
-                data[field] = paths[0]
-
-        return data
+            file_node = MatUtils.get_texture_file_node(mat_name, slot_def[0])
+            if file_node:
+                nodes[field] = file_node
+        return nodes
 
     # ------------------------------------------------------------------
     # Restore
@@ -160,7 +164,12 @@ class MatManifest(ptk.HelpMixin):
 
         restored = 0
 
-        for field, tex_path in mat_data.items():
+        # Opacity last, whatever the producer's key order: on a StingrayPBS it
+        # can resolve to the colour map's alpha (``select_color_alpha``), which
+        # is recognisable only once that file drives ``TEX_color_map``. Listed
+        # first, it was refused on the uniform and the cutout rendered opaque.
+        ordered = sorted(mat_data.items(), key=lambda item: item[0] == "opacity")
+        for field, tex_path in ordered:
             # None for an unknown key, an undeclared slot, or one this node lacks.
             slot_def = ShaderAttributeMap.resolve_live_slot(mat_name, field, node_type)
             if not slot_def:

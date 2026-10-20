@@ -310,6 +310,22 @@ class TestReadConstant(MayaTkTestCase):
             ShaderAttributeMap.emission_weight(self._shader("lambert")), 1.0
         )
 
+    def test_emission_weight_reads_a_stingray_emissive_intensity(self):
+        """StingrayPBS's graph multiplies its emissive by ``emissive_intensity``;
+        unread, a dimmed fixture shipped at full glow (2026-10-16: moody-room
+        ceiling panels lit WebXR at 1.0 where the scene asked for less)."""
+        try:
+            cmds.loadPlugin("shaderFXPlugin", quiet=True)
+        except RuntimeError:
+            self.skipTest("shaderFXPlugin not available")
+        from mayatk.mat_utils._mat_utils import MatUtils
+
+        mat = MatUtils.create_stingray_shader("glowSrp")
+        if not cmds.attributeQuery("emissive_intensity", node=mat, exists=True):
+            self.skipTest("this StingrayPBS graph has no emissive_intensity")
+        cmds.setAttr(f"{mat}.emissive_intensity", 0.3)
+        self.assertAlmostEqual(ShaderAttributeMap.emission_weight(mat), 0.3, places=5)
+
 
 class TestConnectChannel(MayaTkTestCase):
     """connect_channel — apply a declaration against a REAL attribute.

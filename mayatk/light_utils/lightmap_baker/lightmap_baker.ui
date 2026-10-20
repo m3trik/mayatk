@@ -113,10 +113,11 @@
 Selected (default) — the selected meshes.
 Visible — every visible mesh in the scene.
 Scene — every visible mesh in the scene (Arnold renders no hidden or templated object, so one is skipped and named).
+Changed — what changed since the last bake (moved, deformed, re-lit) and the objects near enough to be shaded by it, each re-baked the way it was baked; choosing it puts what in the footer.
 
 Objects in the Exclude set get no map of their own whatever the scope, but they stay in the render: they still cast shadows and bounce light onto everything that bakes.
 
-The light button beside the field takes the scene's environment (HDRI skydome) in or out of the bake.</string>
+Its buttons say what lights the bake. The light: Include Scene Lighting — every scene light (on), or only the lights in the Scope. The sphere: Include Environment — the HDRI skydome, by its own switch. The eye: Include Hidden Lights — hidden lights switched on for the bake and off again after.</string>
         </property>
         <property name="frame">
          <bool>false</bool>
@@ -179,6 +180,70 @@ Stored in the scene (the lightmapBaker_exclude set), so every bake of this scene
            <string>Make the current selection the Exclude set (replacing it): objects that get no lightmap of their own but still light the bake — they cast shadows and bounce light onto everything that does bake.
 
 A selected group excludes every mesh under it; with nothing selected, the set is cleared.</string>
+          </property>
+          <property name="text">
+           <string>Set From Selection</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="isolate_layout">
+        <property name="spacing">
+         <number>1</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="lbl_isolate">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Isolate — moving parts (a locker door, a lid, a drawer) that bake in a pass of their own: lit by the static scene at their current pose, but out of every other object's render, so they leave no shadow or bounce in another object's map — and no other isolated part leaves one in theirs. A mesh brings everything parented under it; isolated objects still pack into their material's atlas.
+
+Stored in the scene (the lightmapBaker_isolate set), so every bake of this scene isolates them — from this panel or a script.</string>
+          </property>
+          <property name="text">
+           <string>Isolate:</string>
+          </property>
+          <property name="caption" stdset="0">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="set_isolation">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+            <horstretch>1</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>19</height>
+           </size>
+          </property>
+          <property name="toolTip">
+           <string>Make the current selection the Isolate set (replacing it): moving parts that bake alone, out of every other object's render, so the door's shadow never lands on its cabinet's map.
+
+A selected mesh brings everything under it; with nothing selected, the set is cleared.</string>
           </property>
           <property name="text">
            <string>Set From Selection</string>
@@ -568,7 +633,7 @@ The folder is created if it doesn't exist. Browsing to a folder inside sourceima
             </size>
            </property>
            <property name="toolTip">
-            <string>Preset — this panel's bake settings under a name: Packing, Reflection Probe, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Environment, Denoise and Beside Material Textures.
+            <string>Preset — this panel's bake settings under a name: Packing, Reflection Probe, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Scene Lighting, Include Environment, Include Hidden Lights, Denoise and Beside Material Textures.
 
    The built-ins (italic, read-only) — preview, mobile, desktop, hero — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
 

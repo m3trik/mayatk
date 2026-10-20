@@ -19,7 +19,17 @@ import math
 import re
 import collections
 from contextlib import contextmanager
-from typing import Dict, Iterable, List, Optional, Set, Tuple, Union, TYPE_CHECKING
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    TYPE_CHECKING,
+)
 from dataclasses import dataclass, field
 
 try:
@@ -129,10 +139,13 @@ class BakeResult:
     """Driver nodes that were muted (if mute_drivers=True)."""
 
     flattened: Dict[str, str] = field(default_factory=dict)
-    """Matrix drives whose folded local SHEARS, world-fitted under their
-    nearest shear-free ancestor instead of baked in place,
-    ``{path before: path after}``. Their keys are listed in ``baked`` under the
-    new path; the session reverses the reparent with the rest of the bake."""
+    """Nodes world-fitted under an ancestor instead of baked in place,
+    ``{path before: path after}``: matrix drives whose folded local SHEARS,
+    under their nearest shear-free ancestor; and, in a write's fold
+    (``SmartBake.fold_offsets``), nodes that ignore their parent, keyed under
+    it where they stand (``{path: path}``). Their keys are listed in ``baked``
+    under the new path; the session reverses the reparent with the rest of the
+    bake."""
 
     session_id: Optional[str] = None
     """Id of the restore-manifest session recorded for this bake (if
@@ -352,6 +365,8 @@ class _SmartBakeInternal:
         channels: List[str],
         frames: List[int],
         samples: Dict[int, "om2.MMatrix"],
+        keys: bool = True,
+        replace: bool = False,
     ) -> bool:
         """Key *channels* of *obj* from per-frame local matrices through om2.
 
@@ -376,6 +391,12 @@ class _SmartBakeInternal:
         ``rotatePivotTranslate``, which is never keyed, so every frame
         inherits the last frame's value (pinned by
         ``test_matrix_bake_on_pivoted_transform_matches_worlds``).
+
+        *keys* False leaves the decomposition of the (single) frame on the
+        plugs as plain values -- a static fold, which must ship no curve.
+        *replace* clears an existing curve's keys before keying it, so a key
+        between the sampled frames (a fractional one) cannot survive holding
+        the unfolded value.
 
         Returns:
             True when the keys were written; False when none was, and the
@@ -449,6 +470,8 @@ class _SmartBakeInternal:
                 except RuntimeError:
                     return False  # a locked or connected plug refused the set
 
+            if not keys:
+                return True  # the plugs hold the folded values
             unit = om2.MTime.uiUnit()
             times = om2.MTimeArray([om2.MTime(frame, unit) for frame in frames])
             for index, (name, plug) in enumerate(zip(cls.MATRIX_BAKE_CHANNELS, plugs)):
@@ -470,6 +493,9 @@ class _SmartBakeInternal:
                     sel.clear()
                     sel.add(existing[0])
                     curve = oma2.MFnAnimCurve(sel.getDependNode(0))
+                    if replace:
+                        for key in reversed(range(curve.numKeys)):
+                            curve.remove(key, **recorder.anim)
                     for time_value, value in zip(times, values):
                         curve.addKey(time_value, value, **recorder.anim)
                 else:
@@ -2052,7 +2078,9 @@ class SmartBake(_SmartBakeInternal):
         result: BakeResult,
         session: Optional[dict] = None,
         object_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
-    ) -> None:
+        fold: bool = False,
+        static: Optional[Set[str]] = None,
+    ) -> Optional[dict]:
         """Bake ``offsetParentMatrix``-driven objects onto their t/r/s channels.
 
         ``bakeResults`` cannot do this. It samples the scalar t/r/s plugs, and
@@ -2095,11 +2123,23 @@ class SmartBake(_SmartBakeInternal):
                 range measured 3.8x the evaluations on a production scene to
                 save a third of the plug reads. Only the reads and the keys
                 are narrowed.
+            fold: The write fold (:meth:`fold_offsets`): an UNCONNECTED offset
+                is folded too, its value recorded as the entry's ``offset``
+                (put back on restore) where a drive records its ``source``;
+                and an object whose fold cannot be exact -- a locked t/r/s
+                channel, a sheared local -- is skipped and reported, never
+                world-fitted under an ancestor (that moves the node).
+            static: Objects whose fold is one frame of plain values, no key
+                (:meth:`_write_matrix_keys` ``keys=False``).
+
+        Returns:
+            The world-fit plan for sheared drives (``None`` in *fold* mode).
         """
         import maya.api.OpenMaya as om2
 
         from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
 
+        static = set(static or ())
         step = max(1, int(self.sample_by))
         frames = list(range(int(start), int(end) + 1, step))
         if frames and frames[-1] != int(end):
@@ -2126,16 +2166,19 @@ class SmartBake(_SmartBakeInternal):
                 cmds.listConnections(plug, source=True, destination=False, plugs=True)
                 or []
             )
-            if not sources:  # disconnected between analyze() and bake()
+            if not sources and not fold:  # disconnected after analyze()
                 result.skip(
                     obj, "matrix: offsetParentMatrix was disconnected after analyze()"
                 )
                 continue
             channels = self._writable_matrix_channels(obj)
+            if fold and len(channels) != len(self.MATRIX_BAKE_CHANNELS):
+                result.skip(obj, "matrix: a locked t/r/s channel cannot take the fold")
+                continue
             if not channels:
                 result.skip(obj, "matrix: no writable channel to bake onto")
                 continue
-            targets.append((obj, plug, sources[0], channels))
+            targets.append((obj, plug, sources[0] if sources else None, channels))
 
         if not targets:
             return
@@ -2170,13 +2213,19 @@ class SmartBake(_SmartBakeInternal):
                     )
                 pending[obj] = {
                     "object": BakeSessionStore.node_ref(obj),
-                    "source": BakeSessionStore.plug_ref(source_plug),
+                    "source": (
+                        BakeSessionStore.plug_ref(source_plug) if source_plug else None
+                    ),
                     "channels": list(channels),
                     "originals": originals,
                     "stashes": [],  # filled as the object joins the session
                     "_to_stash": to_stash,
                     "_connections": connections,
                 }
+                if source_plug is None:  # the fold of an unconnected offset
+                    pending[obj]["offset"] = list(
+                        cmds.getAttr(f"{obj}.offsetParentMatrix")
+                    )
 
         restore_time = cmds.currentTime(query=True)
 
@@ -2245,7 +2294,18 @@ class SmartBake(_SmartBakeInternal):
         # done (``bake`` -> ``_apply_flatten``), so each pass works on the
         # hierarchy it analysed. What has no exact fit falls through to the
         # in-place bake and its warning.
-        flatten = self._prepare_flatten(sheared, frames, [e[0] for e in targets])
+        if fold and sheared:
+            # A write's fold never moves a node: a sheared local has no t/r/s
+            # form, so it stays unfolded and the caller says so.
+            for obj in sheared:
+                result.skip(obj, "matrix: the folded local shears; no t/r/s holds it")
+            targets = [e for e in targets if e[0] not in sheared]
+            sheared = []
+        flatten = (
+            None
+            if fold
+            else self._prepare_flatten(sheared, frames, [e[0] for e in targets])
+        )
         if flatten:
             # The flatten records its own cuts and values; the in-place bake it
             # replaces has stashed nothing yet (stashes are made as an object
@@ -2271,7 +2331,8 @@ class SmartBake(_SmartBakeInternal):
                 for curve in joined.pop("_to_stash", []):
                     joined["stashes"].append(BakeSessionStore.stash_curve(curve))
             try:
-                cmds.disconnectAttr(source_plug, plug)
+                if source_plug is not None:
+                    cmds.disconnectAttr(source_plug, plug)
                 cmds.setAttr(plug, self.IDENTITY_MATRIX, type="matrix")
                 # The folded local is the COMPLETE transform: any channel a
                 # live network keeps driving would stay unfolded beside it.
@@ -2354,7 +2415,12 @@ class SmartBake(_SmartBakeInternal):
         for entry in surviving:
             obj, _, _, channels = entry
             if not self._write_matrix_keys(
-                obj, channels, object_frames[obj], sampled[obj]
+                obj,
+                channels,
+                object_frames[obj],
+                sampled[obj],
+                keys=obj not in static,
+                replace=fold,
             ):
                 through_cmds.append(entry)
         # xform -matrix parks a pivoted node's compensation in the pivot
@@ -2378,7 +2444,8 @@ class SmartBake(_SmartBakeInternal):
                 # joints). A LOCKED channel still refuses and keeps its
                 # value.
                 cmds.xform(obj, matrix=list(sampled[obj][frame]))
-                cmds.setKeyframe(obj, attribute=channels, time=frame)
+                if obj not in static:
+                    cmds.setKeyframe(obj, attribute=channels, time=frame)
         for obj, (rpt, spt) in pivot_translates.items():
             try:
                 cmds.setAttr(f"{obj}.rotatePivotTranslate", *rpt)
@@ -3646,6 +3713,347 @@ class SmartBake(_SmartBakeInternal):
         for warning in result.warnings:
             cmds.warning(f"SmartBake matrix-wiring restore: {warning}")
         return result
+
+    #: Per element: an ``offsetParentMatrix`` this close to identity places
+    #: nothing a consumer could see, so a write has nothing to fold.
+    OFFSET_TOLERANCE: float = 1e-6
+
+    @classmethod
+    def fold_offsets(
+        cls,
+        objects: List[str],
+        bake_range: Optional[Tuple[float, float]] = None,
+    ) -> Tuple[BakeResult, Callable[[], List[str]]]:
+        """Put each node among *objects* where an FBX write would not, for
+        that write only: a non-identity ``offsetParentMatrix`` folded into the
+        node's own t/r/s, and a node that ignores its parent re-anchored
+        under it.
+
+        **Offsets.** The FBX plug-in writes a node's TRS and never its
+        offset; only a baking write folds the matrix in. Measured on Maya
+        2025 / FBX 2020.3.6: a static translate-3 offset shipped at world 0
+        and a keyed prop under a driven-locator rig 3.3 units off, both exact
+        through a baking write -- which also turns a static offset node into
+        nine channels keyed on every frame. So for a write that does not bake
+        (*bake_range* None) this is the matrix pass
+        (:meth:`_bake_matrix_drivers`) in its *fold* mode, and nothing more:
+
+        - nothing drives the node's t/r/s or its offset: the local at the
+          current frame lands as plain channel values, no key -- a static
+          prop stays static;
+        - keyed (or layered) t/r/s: per frame over the extent of the curves
+          behind them, each re-keyed on every frame of it;
+        - a driven offset (a matrix network): per frame over its drivers'
+          range, as the bake's matrix pass samples it.
+
+        **Inheritance.** FBX has no "do not inherit", and the writer ships a
+        node with ``inheritsTransform`` off as though it inherited -- a
+        baking write keys its WORLD as its local, a plain one its TRS alone
+        -- so it lands its parent's world away. Measured 2026-10-17 through
+        the hand-offs' shared write: a pinned, locked cube under a keyed
+        module 121.6 cm off baked and 98.7 plain, and folding its TRS x
+        offset -- its world -- still shipped it 121.6 off. In either kind of
+        write, each such node under a parent off the origin
+        (:meth:`WorldFitBake.non_inheriting`) is keyed relative to that
+        parent with inheritance on, in place, its locked plugs unlocked for
+        the write (:meth:`_anchor_to_parents`): over *bake_range* when the
+        write bakes, else over the curves behind it and its ancestors and
+        its offset's drivers -- and as plain values, no key, when every
+        sample is one pose. ``result.flattened`` names them, each to itself.
+
+        A fold that cannot be exact -- a locked t/r/s channel under an
+        offset, a sheared local (an offset's, or a re-anchor's under a
+        non-uniformly scaled parent), a result that misses the node's world
+        -- is reported in ``result.declined`` (``"matrix: ..."`` or
+        ``"inheritance: ..."``) for the caller to warn about, the node left as
+        it was. The record lives in memory only (never on ``data_internal``)
+        and *restore* reverses it: every matrix, key, offset, lock and
+        inheritance flag comes back, and a stash registry the fold had to
+        create goes with it.
+
+        Parameters:
+            objects: Transforms to consider -- each one, not its subtree.
+            bake_range: The ``(start, end)`` a baking write bakes over: the
+                plug-in folds every offset itself, so only the nodes that
+                ignore their parent are re-anchored, keyed over it. None for a
+                write that does not bake.
+
+        Returns:
+            ``(result, restore)``: ``result.baked`` names every folded node;
+            ``restore()`` reverses the fold and returns its warnings.
+        """
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+        from mayatk.xform_utils.matrices import Matrices
+
+        result = BakeResult()
+        seen: Set[str] = set()
+        nodes: List[str] = []
+        for node in cmds.ls(objects or [], type="transform", long=True) or []:
+            uuid = (cmds.ls(node, uuid=True) or [node])[0]
+            if uuid in seen:  # an instanced transform: one node, many paths
+                continue
+            seen.add(uuid)
+            nodes.append(node)
+        loose = [
+            node
+            for node in nodes
+            if not cmds.getAttr(f"{node}.inheritsTransform")
+            and cmds.listRelatives(node, parent=True)
+        ]
+        offsets = [
+            node
+            for node in ([] if bake_range else nodes)
+            if not Matrices.is_identity(
+                Matrices.to_mmatrix(Matrices.get_matrix(node, "offsetParentMatrix")),
+                cls.OFFSET_TOLERANCE,
+            )
+        ]
+        if not loose and not offsets:
+            return result, lambda: []
+
+        frame = cmds.currentTime(query=True)
+        now = int(round(frame))
+        drives = sorted(
+            node
+            for node in set(offsets) | (set() if bake_range else set(loose))
+            if cmds.listConnections(
+                f"{node}.offsetParentMatrix", source=True, destination=False
+            )
+        )
+        drive_ranges: Dict[str, Tuple[int, int]] = {}
+        if drives:
+            reader = cls(objects=drives, use_override_layer=False)
+            analysis = {
+                obj: data
+                for obj, data in reader.analyze().items()
+                if "matrix" in data.driven_channels
+            }
+            if analysis:
+                drive_ranges = reader.get_object_time_ranges(
+                    analysis, reader.get_time_range(analysis)
+                )
+
+        anchors: Dict[str, str] = {}
+        frames: List[int] = []
+        if loose:
+            if bake_range:
+                low = int(math.floor(bake_range[0]))
+                high = int(math.ceil(bake_range[1]))
+            else:
+                # What a plain write ships of the motion around it: the curves
+                # behind the node and every ancestor, and the drives.
+                held: Dict[str, Optional[Tuple[int, int]]] = {}
+                spans = []
+                for node in loose:
+                    parts = node.split("|")
+                    for depth in range(2, len(parts) + 1):
+                        path = "|".join(parts[:depth])
+                        if path not in held:
+                            held[path] = cls._channel_key_span(path)
+                        spans += [held[path], drive_ranges.get(path)]
+                spans = [span for span in spans if span and span[0] != span[1]]
+                low = min((s[0] for s in spans), default=now)
+                high = max((s[1] for s in spans), default=now)
+            frames = list(range(low, high + 1))
+            anchors = WorldFitBake.non_inheriting(loose, frames)
+        candidates = [node for node in offsets if node not in anchors]
+        if not anchors and not candidates:
+            return result, lambda: []
+
+        records: List[dict] = []  # the re-anchors' (WorldFitBake.restore)
+        session: Optional[dict] = None  # the offsets' (BakeSessionStore)
+        registries = cls._stash_registries()
+        worlds = {
+            node: cmds.getAttr(f"{node}.worldMatrix[0]")
+            for node in list(anchors) + candidates
+        }
+
+        def restore() -> List[str]:
+            warnings: List[str] = []
+            if session is not None:
+                warnings += BakeSessionStore.restore_session(session).warnings
+                for node in cls._stash_registries() - registries:
+                    if not cmds.listConnections(node, source=True, destination=False):
+                        try:
+                            cmds.lockNode(node, lock=False, lockName=False)
+                            cmds.delete(node)
+                        except RuntimeError:
+                            pass  # an empty registry costs nothing
+            _, errors = WorldFitBake.restore(records)
+            return warnings + list(errors)
+
+        try:
+            if anchors:
+                cls._anchor_to_parents(anchors, frames, result, records)
+            if candidates:
+                ranges: Dict[str, Tuple[int, int]] = {}
+                static: Set[str] = set()
+                for node in candidates:
+                    own = cls._channel_key_span(node)
+                    spans = [own, drive_ranges.get(node)]
+                    spans = [span for span in spans if span and span[0] != span[1]]
+                    if spans:
+                        ranges[node] = (
+                            min(s[0] for s in spans),
+                            max(s[1] for s in spans),
+                        )
+                    elif own:
+                        # Keyed once: a plain value under the curve lasts only
+                        # to the next evaluation, so the curve takes the fold
+                        # (one key, at the frame a static fold samples).
+                        ranges[node] = (now, now)
+                    else:
+                        ranges[node] = (now, now)
+                        static.add(node)
+                start = min(span[0] for span in ranges.values())
+                end = max(span[1] for span in ranges.values())
+                session = {
+                    "version": BakeSessionStore.SCHEMA_VERSION,
+                    "id": BakeSessionStore.new_session_id(),
+                    "restorable": True,
+                    "time_range": [start, end],
+                    "override_layer": None,
+                    "baked_plugs": [],
+                    "layer_conversions": [],
+                    "connections": [],
+                    "stashed_curves": [],
+                    "visibility": [],
+                    "matrix": [],
+                    "flatten": [],
+                    "ik_handles": [],
+                    "muted_drivers": [],
+                    "backup_path": None,
+                }
+                cls(objects=candidates, use_override_layer=False)._bake_matrix_drivers(
+                    {node: BakeAnalysis(object=node) for node in candidates},
+                    start,
+                    end,
+                    result,
+                    session=session,
+                    object_ranges=ranges,
+                    fold=True,
+                    static=static,
+                )
+        except BaseException:
+            restore()
+            cmds.currentTime(frame)  # the pass puts it back only when it ends
+            raise
+        for node in list(result.baked):
+            anchored = node in result.flattened
+            if anchored and now not in frames:
+                continue  # keyed over the write's range; the scene's frame is not
+            after = cmds.getAttr(f"{node}.worldMatrix[0]")
+            if max(abs(a - b) for a, b in zip(worlds[node], after)) > 1e-4:
+                result.skip(
+                    node,
+                    f"{'inheritance' if anchored else 'matrix'}: the fold misses "
+                    f"its world at frame {now}",
+                )
+        return result, restore
+
+    #: Per channel: samples of a re-anchored node this close together are one
+    #: pose, written as plain values rather than keys.
+    STATIC_TOLERANCE: float = 1e-9
+
+    @classmethod
+    def _anchor_to_parents(
+        cls,
+        anchors: Dict[str, str],
+        frames: List[int],
+        result: BakeResult,
+        records: List[dict],
+    ) -> None:
+        """Key each of *anchors* (``{node: parent}``) relative to its parent,
+        inheriting -- the re-anchor half of :meth:`fold_offsets`.
+
+        :meth:`WorldFitBake.prepare` samples every node over *frames* from the
+        untouched scene and :meth:`WorldFitBake.apply` keys them without a
+        reparent (inheritance on, offset at identity, locked plugs unlocked:
+        all recorded). A node whose samples are all one pose takes plain
+        values, no key; one whose local under its parent shears (a
+        non-uniformly scaled parent) is declined untouched. *records* gets
+        each restore record as it is made, so a raise part-way leaves every
+        node done so far reversible.
+        """
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+
+        plan = [
+            (node, (cmds.ls(node, uuid=True) or [None])[0], parent, False)
+            for node, parent in sorted(
+                anchors.items(), key=lambda item: item[0].count("|")
+            )
+        ]
+        prepared = WorldFitBake.prepare(plan, frames, max_residual=cls.SHEAR_TOLERANCE)
+        for path, residual in prepared["unfit"]:
+            result.skip(
+                path,
+                f"inheritance: its local under its parent shears ({residual:.3g}); "
+                "no t/r/s holds it",
+            )
+        static: Set[str] = set()
+        for path, _, target, _ in prepared["plan"]:
+            rows = prepared["samples"][(path, target)]
+            if all(
+                abs(a - b) <= cls.STATIC_TOLERANCE
+                for row in rows
+                for a, b in zip(row, rows[0])
+            ):
+                static.add(path)
+        outcome = WorldFitBake.apply(prepared, records, static=static)
+        for path, reason in outcome["failed"]:
+            result.skip(path, f"inheritance: the re-anchor failed ({reason})")
+        for warning in outcome["warnings"]:
+            cmds.warning(f"SmartBake: {warning}")
+        for path, _, _ in outcome["baked"]:
+            result.baked[path] = list(cls.MATRIX_BAKE_CHANNELS)
+            result.flattened[path] = path
+
+    @classmethod
+    def _channel_key_span(cls, node: str) -> Optional[Tuple[int, int]]:
+        """The frames the time curves behind *node*'s t/r/s span, or None.
+
+        Walks through what sits between a channel and its curves -- an
+        animation layer's blend, a pairBlend, a unit conversion -- so a
+        layered channel (a Smart Bake override) reads its layers' extent. A
+        channel only a constraint or expression drives has none: an FBX write
+        that does not bake ships its value at the write frame.
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        plugs = [f"{node}.{channel}" for channel in cls.MATRIX_BAKE_CHANNELS]
+        plugs += [f"{node}.{compound}" for compound in ("translate", "rotate", "scale")]
+        sources = set()
+        for plug in plugs:
+            sources.update(
+                cmds.listConnections(plug, source=True, destination=False) or []
+            )
+        if not sources:
+            return None
+        history = cmds.listHistory(list(sources), pruneDagObjects=True) or []
+        curves = cmds.ls(history, type=list(AnimUtils.TIME_CURVE_TYPES)) or []
+        times: List[float] = []
+        for curve in curves:
+            keyed = cmds.keyframe(curve, query=True, timeChange=True) or []
+            if keyed:
+                times.extend((min(keyed), max(keyed)))
+        if not times:
+            return None
+        return math.floor(min(times)), math.ceil(max(times))
+
+    @staticmethod
+    def _stash_registries() -> Set[str]:
+        """The stash registry nodes in the scene (``BakeSessionStore``)."""
+        from mayatk.anim_utils.smart_bake.bake_session import BakeSessionStore
+
+        return {
+            node
+            for node in cmds.ls(f"{BakeSessionStore.REGISTRY_NODE}*", type="network")
+            or []
+            if cmds.attributeQuery(
+                BakeSessionStore._REGISTRY_MARKER, node=node, exists=True
+            )
+        }
 
     @classmethod
     @contextmanager

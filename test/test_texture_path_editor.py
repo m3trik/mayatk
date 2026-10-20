@@ -2982,6 +2982,28 @@ class TestFindAndCopyLightmaps(MayaTkTestCase):
             "Copy 1 texture(s) + 1 lightmap(s)",
         )
 
+    def test_a_selected_row_relocates_its_own_file_the_probe_too(self):
+        """A lightmap row IS its file: the reflection probe's row names no
+        object, so a scope taken from the rows' objects relocated nothing for
+        it, and a map row's objects would drag the probe along. Added: 2026-10-14"""
+        cube = self._lit_cube("lit_p", self._write(self.ext_dir, "lit_p_LightMap.exr"))
+        records = self._records()
+        records.commit_probe(self._write(self.ext_dir, "room_Probe.exr"), (0, 0, 0))
+        deps = {d["map"]: d for d in records.lightmap_dependencies()}
+
+        self._run([], lightmaps=[deps["room_Probe.exr"]])
+
+        self.assertTrue(os.path.exists(os.path.join(self.dest_dir, "room_Probe.exr")))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.dest_dir, "lit_p_LightMap.exr"))
+        )
+        self.assertNotEqual(self._marker_dir(cube), self._norm(self.dest_dir))
+        after = {d["map"]: d for d in records.lightmap_dependencies()}
+        self.assertEqual(
+            self._norm(os.path.dirname(after["room_Probe.exr"]["path"])),
+            self._norm(self.dest_dir),
+        )
+
     def test_the_lightmaps_have_no_opt_out_row(self):
         """The scope already answered this. A row asking again could only
         contradict the selection that opened the panel — and an answer that

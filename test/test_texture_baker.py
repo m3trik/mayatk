@@ -17,6 +17,7 @@ import unittest
 from unittest import mock
 
 import maya.cmds as cmds
+import pythontk as ptk
 from base_test import MayaTkTestCase
 from mayatk.mat_utils.texture_baker import TextureBaker
 
@@ -2346,6 +2347,99 @@ class TestCancelledRenderStopsTheBake(MayaTkTestCase):
         self.assertEqual(len(self.calls), 1, "the next object's render must not start")
         with open(os.path.join(self.tmp, f"{planes[0]}_LM.exr"), "rb") as fh:
             self.assertEqual(fh.read(), b"old")
+
+
+class TestPathPastTheLimitIsNamedNotCancelled(MayaTkTestCase):
+    """Arnold names an RTT map after its shape's shortest unique DAG path, and
+    cannot write one past the OS path limit -- Maya and Arnold are not long-path
+    aware. Such a call returned with nothing written, read as a CANCEL, and
+    stopped the whole bake: a production soldering room's two trays (a
+    174-character name, 265 with the staging folder) left 49 of its 53 objects
+    unbaked (2026-10-15). An object whose map cannot be written is now named,
+    with why, and left out before anything renders; the rest bake."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.mkdtemp(prefix="bake_long_")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.selected = []
+
+    def test_an_unwritable_name_is_left_out_and_the_rest_bake(self):
+        short = cmds.polyPlane(name="shortPlane", sx=1, sy=1)[0]
+        outer = cmds.group(empty=True, name="A_VERY_LONG_GROUP_NAME_ONE")
+        inner = cmds.group(empty=True, name="A_VERY_LONG_GROUP_NAME_TWO", parent=outer)
+        cmds.parent(cmds.polyPlane(name="TRAY", sx=1, sy=1)[0], inner)
+        cmds.polyPlane(name="TRAY", sx=1, sy=1)  # a twin leaf: the unique path is long
+        deep = cmds.ls("A_VERY_LONG_GROUP_NAME_TWO|TRAY", long=True)[0]
+        shape = cmds.listRelatives(deep, shapes=True, fullPath=True)[0]
+        stem = TextureBaker._rtt_stem(deep, shape)
+        limit = len(os.path.join(os.path.abspath(self.tmp), f"{stem}.exr"))
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+
+        def render(**kwargs):
+            for obj in cmds.ls(selection=True, long=True):
+                self.selected.append(obj)
+                leaf = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+                path = os.path.join(
+                    kwargs["folder"], f"{TextureBaker._rtt_stem(obj, leaf)}.exr"
+                )
+                if len(os.path.abspath(path)) < limit:  # as Arnold: past it, nothing
+                    _write_map(path)
+
+        with (
+            mock.patch.object(ptk.FileUtils, "path_length_limit", return_value=limit),
+            mock.patch.object(TextureBaker, "_resolve_backend", return_value="arnold"),
+            mock.patch.object(
+                baker, "_pinned_render_settings", return_value=contextlib.nullcontext()
+            ),
+            mock.patch.object(cmds, "arnoldRenderToTexture", render, create=True),
+        ):
+            with self.assertLogs(baker.logger, level="WARNING") as caught:
+                result = baker.bake(
+                    [short, deep], output_dir=self.tmp, backend="arnold", batch=True
+                )
+        log = chr(10).join(caught.output)
+        self.assertEqual(list(result), cmds.ls(short, long=True))
+        self.assertNotIn(deep, self.selected, "never handed to Arnold")
+        self.assertIn("TRAY", log)
+        self.assertIn("path", log.lower())
+        self.assertNotIn("cancelled", log)
+
+    @unittest.skipUnless(os.name == "nt", "MAX_PATH is Windows'")
+    def test_long_paths_enabled_does_not_lift_arnolds_limit(self):
+        """``LongPathsEnabled`` lifts the OS limit to 32767, not Maya's or
+        Arnold's: the guard read the OS limit, so on a machine with long paths
+        on it let every over-long name through to the cancel."""
+        short = cmds.polyPlane(name="shortPlane", sx=1, sy=1)[0]
+        group = cmds.group(empty=True, name="G" * 240)
+        cmds.parent(cmds.polyPlane(name="TRAY", sx=1, sy=1)[0], group)
+        cmds.polyPlane(name="TRAY", sx=1, sy=1)  # a twin leaf: the group joins the name
+        deep = cmds.ls(f"{group}|TRAY", long=True)[0]
+        baker = TextureBaker(resolution=16, samples=1, file_format="exr")
+
+        def render(**kwargs):
+            for obj in cmds.ls(selection=True, long=True):
+                self.selected.append(obj)
+                leaf = cmds.listRelatives(obj, shapes=True, fullPath=True)[0]
+                path = os.path.join(
+                    kwargs["folder"], f"{TextureBaker._rtt_stem(obj, leaf)}.exr"
+                )
+                if len(os.path.abspath(path)) < 260:  # as Arnold: past MAX_PATH, nothing
+                    _write_map(path)
+
+        with (
+            mock.patch.object(ptk.FileUtils, "path_length_limit", return_value=32767),
+            mock.patch.object(TextureBaker, "_resolve_backend", return_value="arnold"),
+            mock.patch.object(
+                baker, "_pinned_render_settings", return_value=contextlib.nullcontext()
+            ),
+            mock.patch.object(cmds, "arnoldRenderToTexture", render, create=True),
+        ):
+            result = baker.bake(
+                [short, deep], output_dir=self.tmp, backend="arnold", batch=True
+            )
+        self.assertEqual(list(result), cmds.ls(short, long=True))
+        self.assertNotIn(deep, self.selected, "never handed to Arnold")
 
 
 class TestOutputSpace(MayaTkTestCase):

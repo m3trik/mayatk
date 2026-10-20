@@ -147,7 +147,7 @@ class TestReadChannels(MayaTkTestCase, _DecalSceneMixin):
             self.assertAlmostEqual(got, want, places=5)
 
     def test_unknown_shader_type_yields_nothing(self):
-        surface = cmds.shadingNode("surfaceShader", asShader=True)
+        surface = cmds.shadingNode("useBackground", asShader=True)
         self.assertEqual(ShaderConverter.read_channels(surface), {})
 
 

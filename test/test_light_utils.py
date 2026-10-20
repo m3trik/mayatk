@@ -641,5 +641,173 @@ class TestLightPopulation(MayaTkTestCase):
         self.assertEqual(mtk.LightUtils.contributing_lights(), [arnold])
 
 
+class TestSpecularLights(MayaTkTestCase):
+    """The lights a lightmap manifest ships for the highlights a bake cannot hold."""
+
+    def _light(self, kind, pos, rot=(0, 0, 0), scale=(1, 1, 1), **attrs):
+        node = cmds.shadingNode(kind, asLight=True)
+        shape = (cmds.ls(node, dag=True, shapes=True, long=True) or [node])[0]
+        transform = cmds.listRelatives(shape, parent=True, fullPath=True)[0]
+        cmds.xform(transform, ws=True, t=pos, ro=rot)
+        cmds.xform(transform, s=scale)
+        for attr, value in attrs.items():
+            if isinstance(value, (list, tuple)):
+                cmds.setAttr(f"{shape}.{attr}", *value, type="double3")
+            else:
+                cmds.setAttr(f"{shape}.{attr}", value)
+        return shape
+
+    def test_a_spot_ships_its_place_aim_cone_and_power(self):
+        import math
+
+        import pythontk as ptk
+
+        _arnold_loadable()
+        shape = self._light(
+            "spotLight",
+            (0, 300, 0),
+            rot=(-90, 0, 0),
+            intensity=2.0,
+            coneAngle=40.0,
+            penumbraAngle=10.0,
+            color=(1.0, 0.5, 0.25),
+        )
+        if cmds.attributeQuery("aiExposure", node=shape, exists=True):
+            cmds.setAttr(f"{shape}.aiExposure", 3.0)
+            cmds.setAttr(f"{shape}.aiSpecular", 0.5)
+            cmds.setAttr(f"{shape}.aiRadius", 5.0)
+            power = 2.0 * 8.0 * 0.5
+        else:
+            power = 2.0
+        (light,) = mtk.LightUtils.specular_lights()
+        self.assertEqual(light["type"], "spot")
+        for got, want in zip(light["position"], (0.0, 300.0, 0.0)):
+            self.assertAlmostEqual(got, want, places=4)
+        for got, want in zip(light["direction"], (0.0, -1.0, 0.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertAlmostEqual(light["intensity"], power, places=5)
+        self.assertAlmostEqual(light["angle"], math.radians(30.0), places=5)
+        self.assertAlmostEqual(light["penumbra"], 10.0 / 30.0, places=5)
+        self.assertAlmostEqual(light["unit_scale"], 0.01)  # the file's unit: cm
+        if cmds.attributeQuery("aiRadius", node=shape, exists=True):
+            self.assertAlmostEqual(light["radius"], 5.0, places=6)
+        space = cmds.colorManagementPrefs(query=True, renderingSpaceName=True)
+        try:
+            want = ptk.ImgUtils.convert_scene_linear(
+                __import__("numpy").array([[[1.0, 0.5, 0.25]]], "float32"), space
+            )[0, 0]
+        except KeyError:
+            want = (1.0, 0.5, 0.25)
+        for got, w in zip(light["color"], want):
+            self.assertAlmostEqual(got, float(w), places=4)
+
+    def test_an_area_light_ships_as_a_rect_its_size_and_width_axis(self):
+        self._light("areaLight", (10, 120, 250), scale=(125, 8, 1), intensity=3.0)
+        shape = cmds.ls(type="areaLight", long=True)[0]
+        if cmds.attributeQuery("aiNormalize", node=shape, exists=True):
+            cmds.setAttr(f"{shape}.aiNormalize", 0)
+        (light,) = mtk.LightUtils.specular_lights()
+        self.assertEqual(light["type"], "rect")
+        self.assertAlmostEqual(light["width"], 250.0, places=3)
+        self.assertAlmostEqual(light["height"], 16.0, places=3)
+        for got, want in zip(light["direction"], (0.0, 0.0, -1.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        for got, want in zip(light["right"], (1.0, 0.0, 0.0)):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertAlmostEqual(light["intensity"], 3.0, places=5)
+
+    def _shipped(self, unit):
+        """The lights in metres, as a GLB carries them, read under *unit*."""
+        import pythontk as ptk
+
+        cmds.currentUnit(linear=unit)
+        try:
+            return ptk.MeshConvert.lights_in_metres(mtk.LightUtils.specular_lights())
+        finally:
+            cmds.currentUnit(linear="cm")
+
+    def test_the_lights_ship_the_same_whatever_the_working_unit(self):
+        # An export switches Maya's working unit (the Scene Exporter's
+        # set_linear_unit) before the manifest is produced. Measured on a
+        # production export in metres: centimetre positions labelled metres,
+        # every light 100x too far and the tray rims' highlights gone.
+        _arnold_loadable()
+        spot = self._light(
+            "spotLight", (40, 300, -20), rot=(-90, 0, 0), intensity=2.0, coneAngle=40.0
+        )
+        if cmds.attributeQuery("aiRadius", node=spot, exists=True):
+            cmds.setAttr(f"{spot}.aiRadius", 5.0)
+        self._light("areaLight", (10, 120, 250), scale=(125, 8, 1), intensity=3.0)
+        in_cm = {light["type"]: light for light in self._shipped("cm")}
+        in_m = {light["type"]: light for light in self._shipped("m")}
+        self.assertEqual(sorted(in_cm), ["rect", "spot"])
+        self.assertAlmostEqual(in_cm["spot"]["position"][1], 3.0, places=5)
+        for kind, a in in_cm.items():
+            b = in_m[kind]
+            for key in ("position", "width", "height", "radius", "intensity"):
+                if key not in a:
+                    continue
+                want = a[key] if isinstance(a[key], list) else [a[key]]
+                got = b.get(key) if isinstance(b.get(key), list) else [b.get(key)]
+                for g, w in zip(got, want):
+                    self.assertAlmostEqual(g, w, places=5, msg=f"{a['name']}.{key}")
+
+    def test_a_limit_ranks_by_the_near_point_in_the_working_unit(self):
+        cmds.currentUnit(linear="m")
+        self.addCleanup(cmds.currentUnit, linear="cm")
+        there = self._light("pointLight", (10, 0.5, 0), intensity=1.0)
+        self._light("pointLight", (0.1, 0, 0), intensity=1.0)
+        (kept,) = mtk.LightUtils.specular_lights(limit=1, near=(10, 0, 0))
+        self.assertEqual(kept["name"], cmds.listRelatives(there, parent=True)[0])
+
+    def test_a_dark_hidden_or_highlightless_light_ships_nothing(self):
+        self._light("pointLight", (0, 100, 0), intensity=0.0)
+        hidden = self._light("pointLight", (0, 100, 0), intensity=1.0)
+        cmds.setAttr(
+            cmds.listRelatives(hidden, parent=True, fullPath=True)[0] + ".visibility", 0
+        )
+        if _arnold_loadable():
+            no_spec = self._light("pointLight", (0, 100, 0), intensity=1.0)
+            cmds.setAttr(f"{no_spec}.aiSpecular", 0.0)
+        self.assertEqual(mtk.LightUtils.specular_lights(), [])
+
+    def test_lit_reads_a_hidden_light_as_switched_on(self):
+        """``lit`` names the lights a bake switched on, whatever they show now
+        (a hidden one Include Hidden Lights lit it with), by shape or
+        transform: read as contributing. A dark one still ships nothing, and
+        every light it does not name is judged as without it."""
+        hidden = self._light("pointLight", (0, 100, 0), intensity=1.0)
+        hidden_t = cmds.listRelatives(hidden, parent=True, fullPath=True)[0]
+        cmds.setAttr(f"{hidden_t}.visibility", 0)
+        unnamed = self._light("pointLight", (0, 200, 0), intensity=1.0)
+        cmds.setAttr(
+            cmds.listRelatives(unnamed, parent=True, fullPath=True)[0] + ".visibility",
+            0,
+        )
+        dark = self._light("pointLight", (0, 300, 0), intensity=0.0)
+        shown = self._light("pointLight", (0, 400, 0), intensity=1.0)
+        name = hidden_t.rsplit("|", 1)[-1]
+        shown_name = cmds.listRelatives(shown, parent=True)[0]
+
+        def names(**kwargs):
+            return sorted(lt["name"] for lt in mtk.LightUtils.specular_lights(**kwargs))
+
+        self.assertEqual(names(), [shown_name], "the default is unchanged")
+        self.assertEqual(names(lit=()), [shown_name])
+        for lit in ([hidden_t], [hidden], [name]):
+            with self.subTest(lit=lit):
+                self.assertEqual(names(lit=lit + [dark]), sorted([name, shown_name]))
+
+    def test_a_limit_keeps_the_strongest_at_the_point_that_matters(self):
+        near = self._light("pointLight", (0, 110, 0), intensity=1.0)
+        far = self._light("pointLight", (0, 1000, 0), intensity=4.0)
+        self._light("pointLight", (0, 500, 0), intensity=1.0)
+        kept = mtk.LightUtils.specular_lights(limit=2, near=(0, 100, 0))
+        self.assertEqual(len(kept), 2)
+        names = [light["name"] for light in kept]
+        self.assertIn(cmds.listRelatives(near, parent=True)[0], names)
+        self.assertNotIn(cmds.listRelatives(far, parent=True)[0], names)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

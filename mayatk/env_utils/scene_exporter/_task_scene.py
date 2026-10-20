@@ -307,6 +307,7 @@ class _SceneTasksMixin(_TaskDataMixin):
             "flattened": [],
             "unplaced": [],
             "failed": [],
+            "undriven": [],
         }
         self._shear_verdict = verdict
         if not offenders:
@@ -379,6 +380,20 @@ class _SceneTasksMixin(_TaskDataMixin):
             "flatten_sheared_chains",
             lambda recs=records: self._restore_flattened(recs),
         )
+        # The nodes about to be keyed that nothing drove (a pinned mesh under a
+        # moving parent): their fitted keys only spell a placement in the file,
+        # so the duplicate-name check keeps judging them as the artist left
+        # them (_connected_transforms). Read before anything is keyed.
+        placement = [c for c in self._CONNECTED_CHANNELS if c != "visibility"]
+        verdict["undriven"] = [
+            uuid
+            for path, uuid, _, _ in plan
+            if not cmds.listConnections(
+                [f"{path}.{c}" for c in placement + ["offsetParentMatrix"]],
+                source=True,
+                destination=False,
+            )
+        ]
         # Census, pristine samples, reparent + fitted keys, and the IK handles
         # the moves would break -- WorldFitBake.flatten, the same reversible
         # flatten SmartBake runs on its own sheared matrix drives. A locked or
@@ -791,7 +806,52 @@ class _SceneTasksMixin(_TaskDataMixin):
         for node, severity in self._opm_offenders(tolerance, nodes).items():
             if severity > offenders.get(node, 0.0):
                 offenders[node] = severity
+        for node, severity in self._inherit_offenders().items():
+            if severity > offenders.get(node, 0.0):
+                offenders[node] = severity
         return offenders
+
+    #: The severity a node that ignores its parent is reported with: the skew
+    #: metric's ceiling. Its written local is not a TRS that lost some shear
+    #: but another matrix entirely (:meth:`_inherit_offenders`), so no
+    #: tolerance may pass it.
+    _NON_INHERITING_SEVERITY: float = 1.0
+
+    def _inherit_offenders(self) -> Dict[str, float]:
+        """``{node: _NON_INHERITING_SEVERITY}`` for written nodes that ignore a
+        parent which leaves the origin.
+
+        FBX and glTF have no "do not inherit": a node's transform is always
+        relative to its parent. Maya's writer ships a node with
+        ``inheritsTransform`` off as though it inherited -- a baking write
+        keys its WORLD matrix as its local, a plain one its TRS alone -- so
+        it lands its parent's world away. Measured 2026-10-17 on the
+        production wire looms (skinned meshes pinned by
+        ``Matrices.pin_world_matrix`` under an animated module): each loom
+        shipped its world as a constant local 118-419 cm off, and a Maya
+        re-import bound it 170-720 cm from its skeleton. The flatten keys
+        such a node relative to its parent, inheriting -- one meaning for
+        every consumer. Every FBX write re-anchors such a node too
+        (``FbxUtils.offsets_folded``); this flatten runs first, so the write's
+        finds nothing left, and it alone re-targets one whose local under its
+        parent shears.
+
+        The write takes the export set's ancestors and descendants along, so
+        they are scanned too -- the write's own scope
+        (``FbxUtils._shipped_transforms``), never an ancestor's other children.
+        The rule is :meth:`WorldFitBake.non_inheriting`, judged at the current
+        frame and the coarse grid (:meth:`_shear_sample_frames`).
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        objects = self._live_objects()
+        nodes = FbxUtils._shipped_transforms(objects) if objects else []
+        if not nodes:
+            return {}
+        return {
+            node: self._NON_INHERITING_SEVERITY
+            for node in WorldFitBake.non_inheriting(nodes, self._shear_sample_frames())
+        }
 
     def _sheared_offenders_after_flatten(self, tolerance: float) -> Dict[str, float]:
         """The shear CHECK's offenders, without re-running the flatten's scan.

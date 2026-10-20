@@ -77,6 +77,10 @@ class MatUpdater(ptk.LoggingMixin):
     }
     SUPPORTED_MAT_TYPES = tuple(CONNECTORS)
 
+    #: Environment maps a material's slots carry (the StingrayPBS IBL cubes and
+    #: LUT) that are no part of its texture set -- never a map to rebuild.
+    IGNORED_ENV_SETS = frozenset({"ibl_brdf_lut", "diffuse_cube", "specular_cube"})
+
     @classmethod
     @CoreUtils.undoable
     def update_materials(
@@ -397,6 +401,25 @@ class MatUpdater(ptk.LoggingMixin):
                         )
                         continue
 
+                # A rebuild wires back only the maps it classifies BY NAME, so
+                # a material none of whose own textures names a map type would
+                # come out of it with nothing: a projected shadow's silhouette
+                # (``BODY_shadow.png``) left its plane untextured and opaque in
+                # an export (2026-10-15). Nothing to rebuild -- left as authored.
+                own = [
+                    f
+                    for f in files
+                    if os.path.splitext(os.path.basename(f))[0].lower()
+                    not in cls.IGNORED_ENV_SETS
+                ]
+                if own and not any(ptk.MapFactory.resolve_map_type(f) for f in own):
+                    cls.logger.info(
+                        f"{mat_link}: left as authored -- none of its textures "
+                        "names a map type: "
+                        + ", ".join(os.path.basename(f) for f in own)
+                    )
+                    continue
+
                 # Determine if we need to run the factory
                 processed_files = []
 
@@ -416,12 +439,6 @@ class MatUpdater(ptk.LoggingMixin):
 
                         # Filter out common environment maps that shouldn't be treated as texture sets
                         # These are often connected to slots but aren't part of the material's identity
-                        IGNORED_ENV_SETS = {
-                            "ibl_brdf_lut",
-                            "diffuse_cube",
-                            "specular_cube",
-                        }
-
                         local_sets = {}
 
                         if processed_sets and isinstance(processed_sets, dict):
@@ -429,7 +446,7 @@ class MatUpdater(ptk.LoggingMixin):
                             local_sets = {
                                 k: v
                                 for k, v in raw_sets.items()
-                                if k not in IGNORED_ENV_SETS
+                                if k not in cls.IGNORED_ENV_SETS
                             }
 
                             # If filtering removed everything (e.g. material only has env maps),

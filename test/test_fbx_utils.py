@@ -12,6 +12,7 @@ import shutil
 import struct
 import unittest
 import tempfile
+from unittest.mock import patch
 
 import maya.cmds as cmds
 import maya.mel as mel
@@ -19,7 +20,7 @@ import maya.mel as mel
 import pythontk as ptk
 from mayatk.env_utils.fbx_utils import FbxUtils
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, QuickTestCase
 
 
 class TestFbxUtilsPlugin(MayaTkTestCase):
@@ -108,6 +109,247 @@ class TestKnownProducers(MayaTkTestCase):
                 prepare, finish = FbxUtils.stagers(["probe"])["probe"]
         self.assertTrue(callable(prepare))
         self.assertIsNone(finish)
+
+
+class TestRecordUnits(MayaTkTestCase):
+    """Every record ships its lengths in the file's unit -- the export's
+    target, which the Scene Exporter makes the working unit before it runs the
+    producers (``set_linear_unit``) -- with ``unit_scale`` beside them, whatever
+    unit the scene's tools ran in.
+
+    A value read in one unit and labelled with another shipped a metre
+    export's lights 100x too far (2026-10-17). Each measured producer's
+    fixture builds one physical scene, runs its tool under (cm, deg) and under
+    (m, rad), and produces the record under both: each record's
+    ``unit_scale`` is its export's unit, and its metres (:meth:`_in_metres`)
+    are the same in all four.
+    Added: 2026-10-17
+    """
+
+    #: The producers whose records carry no length or angle, and what they
+    #: carry instead. A new producer belongs here or in :meth:`_fixtures`.
+    UNITLESS = {
+        ptk.SceneRecords.SHOTS.key: "frames, with their fps",
+        ptk.SceneRecords.VISIBILITY.key: "frames with their fps, and colours",
+        ptk.SceneRecords.AUDIO.key: "frames, with their fps",
+        ptk.SceneRecords.EMISSIVE_GROUPS.key: "weights",
+    }
+    UNITS = (("cm", "deg"), ("m", "rad"))
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(cmds.currentUnit, linear="cm", angle="deg")
+        self.tmp = ptk.TempArtifacts("record_units", policy="session").dir_path()
+
+    def _fixtures(self):
+        return {
+            ptk.SceneRecords.LIGHTMAPS.key: self._lightmaps,
+            ptk.SceneRecords.SHADOWS.key: self._shadows,
+            ptk.SceneRecords.ARTICULATION.key: self._articulation,
+        }
+
+    def test_every_producer_is_measured_or_declared_unitless(self):
+        produced = {spec.key for spec in FbxUtils.PRODUCERS}
+        self.assertEqual(produced, set(self.UNITLESS) | set(self._fixtures()))
+
+    def test_the_lightmap_record_is_in_the_file_unit_whatever_the_units(self):
+        self._assert_invariant(ptk.SceneRecords.LIGHTMAPS.key)
+
+    def test_the_shadow_record_is_in_the_file_unit_whatever_the_units(self):
+        self._assert_invariant(ptk.SceneRecords.SHADOWS.key)
+
+    def test_the_articulation_record_is_in_the_file_unit_whatever_the_units(self):
+        self._assert_invariant(ptk.SceneRecords.ARTICULATION.key)
+
+    # ------------------------------------------------------------- harness
+    def _assert_invariant(self, key):
+        import json
+
+        payloads = {}
+        for authored in self.UNITS:
+            cmds.file(new=True, force=True)
+            cmds.currentUnit(linear="cm", angle="deg")
+            self._fixtures()[key](authored)
+            for produced in self.UNITS:
+                cmds.currentUnit(linear=produced[0], angle=produced[1])
+                (producer,) = FbxUtils.producers([key]).values()
+                record = producer(FbxUtils.export_context())
+                self.assertIsNotNone(record, f"{key}: the fixture made no record")
+                payload = json.loads(record.text)
+                unit = ptk.MathUtils.metres_per_unit(produced[0])
+                self._assert_unit_scale(payload, unit, f"{key} {authored + produced}")
+                payloads[authored + produced] = self._in_metres(key, payload, unit)
+        reference = payloads[("cm", "deg", "cm", "deg")]
+        for units, metres in payloads.items():
+            self._assert_same(reference, metres, f"{key} {units}")
+        return reference
+
+    def _assert_unit_scale(self, payload, unit, where):
+        """Every ``unit_scale`` in *payload* is the file's: *unit* metres."""
+        if isinstance(payload, dict):
+            if "unit_scale" in payload:
+                self.assertAlmostEqual(payload["unit_scale"], unit, msg=where)
+            for k, v in payload.items():
+                self._assert_unit_scale(v, unit, f"{where}.{k}")
+        elif isinstance(payload, list):
+            for i, v in enumerate(payload):
+                self._assert_unit_scale(v, unit, f"{where}[{i}]")
+
+    @staticmethod
+    def _in_metres(key, payload, unit):
+        """*payload* as its readers take it, in metres: the lights through the
+        GLB's own conversion, every other length times its ``unit_scale`` --
+        or, for the articulation record (it carries none), the file's unit."""
+        import copy
+
+        out = copy.deepcopy(payload)
+        if key == ptk.SceneRecords.LIGHTMAPS.key:
+            out["lights"] = ptk.MeshConvert.lights_in_metres(out.get("lights"))
+            probe = out.get("probe") or {}
+            scale = probe.pop("unit_scale", 1.0)
+            probe["position"] = [c * scale for c in probe.get("position") or []]
+            probe["box"] = [[c * scale for c in v] for v in probe.get("box") or []]
+        elif key == ptk.SceneRecords.SHADOWS.key:
+            scale = out.pop("unit_scale")
+            for plane in out["planes"]:
+                for name in ("ground", "radius", "height", "source_size"):
+                    plane[name] *= scale
+                if plane.get("horizon"):
+                    plane["horizon"]["bounds"] = [
+                        c * scale for c in plane["horizon"]["bounds"]
+                    ]
+                    plane["horizon"]["height_scale"] *= scale
+        elif key == ptk.SceneRecords.ARTICULATION.key:
+            for rig in out["rigs"]:
+                for joint in rig["joints"]:
+                    joint["t"] = [c * unit for c in joint["t"]]
+                    for channel in joint["channels"]:
+                        if channel["channel"].startswith("t"):
+                            for side in ("min", "max"):
+                                if channel[side] is not None:
+                                    channel[side] *= unit
+        return out
+
+    def _assert_same(self, want, got, where):
+        if isinstance(want, dict):
+            self.assertIsInstance(got, dict, where)
+            self.assertEqual(sorted(want), sorted(got), where)
+            for k in want:
+                self._assert_same(want[k], got[k], f"{where}.{k}")
+        elif isinstance(want, list):
+            self.assertIsInstance(got, list, where)
+            self.assertEqual(len(want), len(got), where)
+            for i, (a, b) in enumerate(zip(want, got)):
+                self._assert_same(a, b, f"{where}[{i}]")
+        elif isinstance(want, float) or isinstance(got, float):
+            self.assertLessEqual(
+                abs(float(want) - float(got)),
+                2e-6 + 1e-6 * abs(float(want)),
+                f"{where}: {want} vs {got}",
+            )
+        else:
+            self.assertEqual(want, got, where)
+
+    @staticmethod
+    def _here(metres):
+        """A position given in metres, in the working unit cmds takes."""
+        from mayatk.core_utils.units import Units
+
+        return Units.convert(list(metres), "m", "working")
+
+    @staticmethod
+    def _deg(degrees):
+        from mayatk.core_utils.units import Units
+
+        return Units.angle(degrees, "deg", "working")
+
+    def _set_units(self, units):
+        cmds.currentUnit(linear=units[0], angle=units[1])
+
+    # ------------------------------------------------------------ fixtures
+    def _lightmaps(self, units):
+        """A marked bench, a recorded probe, and a spot and an area light."""
+        import os
+
+        from mayatk.light_utils.lightmap_baker.lightmap_records import (
+            LightmapRecords,
+        )
+
+        _arnold = __import__("mayatk").Plugins.available("mtoa")
+        if _arnold:
+            __import__("mayatk").Plugins.load("mtoa")
+        bench = cmds.polyCube(name="Bench", width=200, height=90, depth=80)[0]
+        self._set_units(units)
+        lightmap = os.path.join(self.tmp, "Bench_Lightmap.exr")
+        open(lightmap, "wb").close()
+        LightmapRecords.commit({bench: lightmap})
+        probe = os.path.join(self.tmp, "Bench_Probe.exr")
+        open(probe, "wb").close()
+        LightmapRecords.commit_probe(
+            probe,
+            self._here((0.0, 1.2, 0.5)),
+            [self._here((-2.0, 0.0, -1.0)), self._here((2.0, 2.5, 1.5))],
+        )
+        spot = cmds.shadingNode("spotLight", asLight=True)
+        cmds.xform(
+            spot, worldSpace=True, translation=self._here((0.4, 3.0, -0.2))
+        )
+        cmds.xform(spot, worldSpace=True, rotation=[self._deg(-90.0), 0.0, 0.0])
+        cmds.setAttr(f"{spot}.coneAngle", self._deg(40.0))
+        cmds.setAttr(f"{spot}.penumbraAngle", self._deg(10.0))
+        cmds.setAttr(f"{spot}.intensity", 2.0)
+        shape = cmds.listRelatives(spot, shapes=True, fullPath=True)[0]
+        if cmds.attributeQuery("aiRadius", node=shape, exists=True):
+            cmds.setAttr(f"{shape}.aiRadius", 5.0)  # a plain float: centimetres
+        area = cmds.shadingNode("areaLight", asLight=True)
+        cmds.xform(area, worldSpace=True, translation=self._here((0.1, 1.2, 2.5)))
+        cmds.xform(area, scale=(125, 8, 1))
+        cmds.setAttr(f"{area}.intensity", 3.0)
+
+    def _shadows(self, units):
+        """A shadow rig on a box, lit from above and to the side."""
+        from mayatk.rig_utils.shadow_rig import ShadowRig
+
+        box = cmds.polyCube(name="Box", width=40, height=60, depth=30)[0]
+        cmds.move(0, 30, 0, box)
+        self._set_units(units)
+        rig = ShadowRig.create(
+            [box], light_pos=self._here((0.6, 2.0, 0.4)), texture_res=64
+        )
+        if rig.texture_path:
+            self.addCleanup(
+                lambda p=rig.texture_path: os.path.exists(p) and os.remove(p)
+            )
+
+    def _articulation(self, units):
+        """The test arm, rigged: a turn and a slide limit typed in (the plan's
+        degrees and centimetres, as the panel passes them), then each taken
+        from a pose the user made in the scene's own units."""
+        from test_articulated_rig import build_arm
+        from mayatk.core_utils.units import Units
+        from mayatk.rig_utils.articulated_rig._articulated_rig import ArticulatedRig
+
+        arm = build_arm()
+        self._set_units(units)
+        plan = ArticulatedRig.analyze(arm)
+        rig = ArticulatedRig.create(plan["links"], plan["joints"])
+        posed = set()
+        for joint, entry in zip(rig.spec["joints"], rig.record()["joints"]):
+            channels = [c["channel"] for c in entry["channels"]]
+            turn = next((c for c in channels if c.startswith("r")), None)
+            slide = next((c for c in channels if c.startswith("t")), None)
+            ctrl = rig.control(joint["id"])
+            if turn and "turn" not in posed:
+                rig.set_limits(joint["id"], turn, -30.0, 45.0)
+                cmds.setAttr(f"{ctrl}.{turn}", self._deg(20.0))
+                rig.set_limit_from_pose(joint["id"], turn, "max")
+                posed.add("turn")
+            if slide and "slide" not in posed:
+                rig.set_limits(joint["id"], slide, -1.0, 2.0)
+                cmds.setAttr(f"{ctrl}.{slide}", Units.convert(0.015, "m", "working"))
+                rig.set_limit_from_pose(joint["id"], slide, "max")
+                posed.add("slide")
+        self.assertEqual(posed, {"turn", "slide"}, "the fixture posed no limit")
 
 
 class TestFbxUtilsExport(MayaTkTestCase):
@@ -1401,6 +1643,477 @@ class TestNativeReadMemo(_TakeFilesCase):
             self.assertEqual(FbxUtils._native_read(path, self.LOG), first)
             self.assertGreater(load.call_count, reads, "a changed file was not read")
         self.assertTrue(first and first.startswith("merged:"), first)
+
+
+class TestWritePlan(MayaTkTestCase):
+    """``FbxUtils.write_plan`` -- THE plan of one write: bakes, why, over what,
+    resampled -- and its application, the bake flag FIRST: any write of
+    ``FBXExportBakeComplexAnimation`` (on, off, or the value it holds) resets
+    the bake range to the scene's animation range (measured on Maya 2025 /
+    FBX 2020.3.6), so a range set before the flag is lost.
+    Added: 2026-10-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        FbxUtils.reset_export()
+        self.addCleanup(FbxUtils.reset_export)
+        cmds.playbackOptions(min=5, max=60, ast=2, aet=310)
+
+    def test_a_flag_write_resets_the_range_so_the_plan_writes_it_second(self):
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 7")
+        mel.eval("FBXExportBakeComplexEnd -v 9")
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        self.assertEqual(FbxUtils.bake_range(), (2.0, 310.0), "the trap is gone?")
+
+        FbxUtils.apply_write_plan(FbxUtils.write_plan(takes=(7, 9)))
+
+        self.assertEqual(FbxUtils.bake_range(), (7.0, 9.0))
+        self.assertTrue(FbxUtils.export_flag(FbxUtils.RESAMPLE_ALL))
+
+    def test_the_settings_decide_when_the_writer_does_not(self):
+        plan = FbxUtils.write_plan()
+        self.assertFalse(plan.bakes)
+        self.assertIsNone(plan.range)
+
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 11")
+        mel.eval("FBXExportBakeComplexEnd -v 22")
+        plan = FbxUtils.write_plan()
+        self.assertEqual(
+            (plan.bakes, plan.range, plan.resample_all), (True, (11.0, 22.0), False)
+        )
+
+    def test_a_split_bakes_over_at_least_its_takes(self):
+        plan = FbxUtils.write_plan(bakes=False, takes=(11, 40), span=(1, 30))
+        self.assertEqual(
+            (plan.bakes, plan.range, plan.resample_all), (True, (1, 40), True)
+        )
+        self.assertFalse(
+            FbxUtils.write_plan(takes=(11, 40), resample_all=False).resample_all
+        )
+
+    def test_a_bracket_publishes_against_its_plan(self):
+        """A producer inside the bracket reads the range the write will bake,
+        not what the settings held when the bracket opened."""
+        with FbxUtils.export_prepared(
+            plan=FbxUtils.write_plan(bakes=True, span=(4, 44))
+        ):
+            self.assertEqual(FbxUtils.planned_bake_range(), (4, 44))
+        with FbxUtils.export_prepared(plan=FbxUtils.write_plan(bakes=False)):
+            self.assertIsNone(FbxUtils.planned_bake_range())
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        self.assertEqual(FbxUtils.planned_bake_range(), FbxUtils.bake_range())
+
+
+class TestOffsetsFolded(MayaTkTestCase):
+    """An FBX write that does not bake ships each offsetParentMatrix folded into
+    its node's own channels (``FbxUtils.offsets_folded``, inside
+    ``FbxUtils.export``) -- a static node as plain values, no key -- and hands
+    the scene back. Unfolded, the plug-in drops the offset: a static
+    translate-3 offset shipped at world 0 (Maya 2025 / FBX 2020.3.6).
+    Added: 2026-10-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        store = ptk.TempArtifacts("fbx_offsets_folded", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+        FbxUtils.reset_export()
+        self.addCleanup(FbxUtils.reset_export)
+
+    def _offset_cube(self, name="offset_cube"):
+        import math
+        import maya.api.OpenMaya as om2
+
+        cube = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        xform = om2.MTransformationMatrix()
+        xform.setTranslation(om2.MVector(3, 0, 1), om2.MSpace.kTransform)
+        xform.setRotation(om2.MEulerRotation(0, math.radians(30), 0))
+        cmds.setAttr(
+            f"{cube}.offsetParentMatrix", list(xform.asMatrix()), type="matrix"
+        )
+        return cube
+
+    def test_an_unbaked_write_ships_a_static_offset_exactly_and_keyless(self):
+        cube = self._offset_cube()
+        world = cmds.getAttr(f"{cube}.worldMatrix[0]")
+        offset = cmds.getAttr(f"{cube}.offsetParentMatrix")
+        path = os.path.join(self.out, "static_offset.fbx")
+
+        FbxUtils.export(path, [cube])
+
+        self.assertEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), offset)
+        cmds.file(new=True, force=True)
+        cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+        (shipped,) = cmds.ls("offset_cube", long=True, type="transform")
+        got = cmds.getAttr(f"{shipped}.worldMatrix[0]")
+        self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-4)
+        self.assertFalse(cmds.keyframe(shipped, query=True, keyframeCount=True))
+
+    def test_a_write_that_bakes_folds_nothing(self):
+        cube = self._offset_cube()
+        offset = cmds.getAttr(f"{cube}.offsetParentMatrix")
+
+        with FbxUtils.offsets_folded([cube], FbxUtils.write_plan(bakes=True)) as done:
+            self.assertEqual(done, [])
+            self.assertEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), offset)
+
+    def test_the_fold_is_undone_when_the_write_raises(self):
+        cube = self._offset_cube()
+        offset = cmds.getAttr(f"{cube}.offsetParentMatrix")
+        matrix = cmds.getAttr(f"{cube}.matrix")
+
+        with self.assertRaises(RuntimeError):
+            with FbxUtils.offsets_folded(
+                [cube], FbxUtils.write_plan(bakes=False)
+            ) as done:
+                self.assertEqual(done, [cube])
+                self.assertNotEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), offset)
+                raise RuntimeError("the write failed")
+
+        self.assertEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), offset)
+        self.assertEqual(cmds.getAttr(f"{cube}.matrix"), matrix)
+
+    def test_what_cannot_fold_is_named(self):
+        """A locked channel cannot take the fold: the write ships that node
+        displaced, and says so by name."""
+        cube = self._offset_cube("locked_cube")
+        cmds.setAttr(f"{cube}.rotateX", lock=True)
+
+        with self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING") as caught:
+            with FbxUtils.offsets_folded([cube], FbxUtils.write_plan(bakes=False)):
+                pass
+
+        (message,) = [m for m in caught.output if "offsetParentMatrix" in m]
+        self.assertIn("locked_cube", message)
+        self.assertIn("locked", message)
+
+    def test_an_ancestor_the_write_carries_along_is_folded_too(self):
+        """The plug-in writes the parent chain of what it is handed: a child
+        exported alone ships its group, and the group's offset with it."""
+        group = cmds.group(empty=True, name="offset_group")
+        cmds.xform(group, translation=(3, 0, 1), rotation=(0, 30, 0))
+        from mayatk.xform_utils._xform_utils import XformUtils
+
+        XformUtils.freeze_to_opm([group])
+        cube = cmds.polyCube(name="carried_cube")[0]
+        cube = cmds.ls(cmds.parent(cube, group)[0], long=True)[0]
+        cmds.setAttr(f"{cube}.translateY", 2)
+        world = cmds.getAttr(f"{cube}.worldMatrix[0]")
+        path = os.path.join(self.out, "carried.fbx")
+
+        FbxUtils.export(path, [cube])
+
+        cmds.file(new=True, force=True)
+        cmds.file(path, i=True, type="FBX", ignoreVersion=True)
+        (shipped,) = cmds.ls("carried_cube", long=True, type="transform")
+        got = cmds.getAttr(f"{shipped}.worldMatrix[0]")
+        self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-4)
+
+
+class TestNonInheritingWrite(MayaTkTestCase):
+    """FBX has no "do not inherit": Maya's writer ships a node with
+    ``inheritsTransform`` off as though it inherited -- a baking write keys its
+    WORLD matrix as its local, a plain one its TRS alone -- so it lands its
+    parent's world away. Measured 2026-10-17 through the shared write the
+    Unity, Blender and WebXR hand-offs use: a pinned, locked cube under an
+    animated module 121.6 cm off baked and 98.7 plain, a pinned skin 160.8 and
+    105.4. Every FBX write re-anchors such a node under its parent, inheriting,
+    for the write only (``FbxUtils.offsets_folded`` ->
+    ``SmartBake.fold_offsets``), and hands the scene back.
+    Added: 2026-10-17
+    """
+
+    FRAMES = (1, 9, 16, 24)
+    LOCKED = tuple(f"{a}{x}" for a in ("translate", "rotate", "scale") for x in "XYZ")
+
+    def setUp(self):
+        super().setUp()
+        store = ptk.TempArtifacts("fbx_non_inheriting", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+        FbxUtils.reset_export()
+        self.addCleanup(FbxUtils.reset_export)
+
+    def _pinned(self, animated=True, skinned=False, parent_scale=None):
+        """A module group and a cube pinned under it
+        (``Matrices.pin_world_matrix``), every t/r/s locked; *skinned* adds a
+        tube pinned beside a joint chain that rides the module. The module
+        moves AFTER the pin -- keyed, or once -- so even a static one holds the
+        cube away from where its parent would put it. Returns
+        ``(module, cube, tube or None)``."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        cmds.playbackOptions(min=1, max=24, animationStartTime=1, animationEndTime=24)
+        cmds.currentTime(1)
+        root = cmds.group(empty=True, name="module_GRP")
+        cmds.xform(root, translation=(20, 4, 0), rotation=(0, 10, 0))
+        cube = cmds.polyCube(name="PIN_CUBE")[0]
+        cube = cmds.ls(cmds.parent(cube, root)[0], long=True)[0]
+        cmds.xform(cube, translation=(3, 2, 1), rotation=(0, 20, 0))
+        self.assertTrue(Matrices.pin_world_matrix(cube))
+        tube = None
+        if skinned:
+            tube = cmds.polyCylinder(
+                name="LOOM", axis=(1, 0, 0), height=20, radius=1, subdivisionsHeight=10
+            )[0]
+            tube = cmds.ls(cmds.parent(tube, root)[0], long=True)[0]
+            cmds.xform(tube, translation=(0, 5, 0), rotation=(0, -90, 0))
+            matrix = cmds.xform(tube, query=True, worldSpace=True, matrix=True)
+            rig = cmds.group(empty=True, name="rig_GRP", parent=root)
+            cmds.select(rig)
+            joints = [
+                cmds.joint(
+                    name=f"loom_jnt_{i + 1}",
+                    position=[matrix[12 + k] + matrix[k] * along for k in range(3)],
+                )
+                for i, along in enumerate((-10, 0, 10))
+            ]
+            cmds.select(clear=True)
+            self.assertTrue(Matrices.pin_world_matrix(tube))
+            cmds.skinCluster(joints, tube, toSelectedBones=True)
+            cmds.setKeyframe(joints[1], attribute="rotateZ", time=1, value=0)
+            cmds.setKeyframe(joints[1], attribute="rotateZ", time=24, value=40)
+        if animated:
+            for attr, (first, last) in (
+                ("translateX", (50, 150)),
+                ("translateY", (10, 10)),
+                ("rotateY", (30, 75)),
+            ):
+                cmds.setKeyframe(root, attribute=attr, time=1, value=first)
+                cmds.setKeyframe(root, attribute=attr, time=24, value=last)
+        else:
+            cmds.xform(root, translation=(50, 10, 0), rotation=(0, 30, 0))
+        if parent_scale:
+            cmds.xform(root, scale=parent_scale)
+        for node in [cube] + ([tube] if tube else []):
+            for attr in self.LOCKED:
+                cmds.setAttr(f"{node}.{attr}", lock=True)
+        return cmds.ls(root, long=True)[0], cube, tube
+
+    def _worlds(self, node):
+        out = []
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            out.append(cmds.getAttr(f"{node}.worldMatrix[0]"))
+        cmds.currentTime(1)
+        return out
+
+    def _points(self, node):
+        out = []
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            out.append(
+                cmds.xform(
+                    f"{node}.vtx[*]", query=True, worldSpace=True, translation=True
+                )
+            )
+        cmds.currentTime(1)
+        return out
+
+    @staticmethod
+    def _matrix_miss(source, shipped):
+        return max(
+            max(abs(a - b) for a, b in zip(m, n)) for m, n in zip(source, shipped)
+        )
+
+    def _point_miss(self, source, shipped):
+        worst = 0.0
+        for a, b in zip(source, shipped):
+            self.assertEqual(len(a), len(b), "the shipped mesh lost vertices")
+            for i in range(0, len(a), 3):
+                worst = max(
+                    worst, sum((a[i + k] - b[i + k]) ** 2 for k in range(3)) ** 0.5
+                )
+        return worst
+
+    def _state(self, nodes):
+        """Everything the write may touch, to the bit: inheritance, offset and
+        its input, every t/r/s value, lock and curve, the node set, the frame."""
+        state = {"nodes": sorted(cmds.ls(long=True)), "time": cmds.currentTime(q=True)}
+        for node in nodes:
+            state[node] = {
+                "inherits": cmds.getAttr(f"{node}.inheritsTransform"),
+                "opm": cmds.getAttr(f"{node}.offsetParentMatrix"),
+                "opm_in": cmds.listConnections(
+                    f"{node}.offsetParentMatrix", source=True, destination=False
+                ),
+                "shear": cmds.getAttr(f"{node}.shear"),
+            }
+            for attr in self.LOCKED:
+                plug = f"{node}.{attr}"
+                state[node][attr] = (
+                    cmds.getAttr(plug),
+                    cmds.getAttr(plug, lock=True),
+                    cmds.listConnections(plug, source=True, destination=False),
+                )
+        return state
+
+    def _write(self, root, name, bakes):
+        path = os.path.join(self.out, f"{name}.fbx")
+        FbxUtils.reset_export()
+        plan = FbxUtils.write_plan(bakes=bakes, span=(1, 24))
+        FbxUtils.apply_write_plan(plan)
+        FbxUtils.export(path, [root], plan=plan)
+        return path, plan
+
+    def _reimport(self, path, *leaves):
+        cmds.file(new=True, force=True)
+        FbxUtils.import_scene(path)
+        return [cmds.ls(leaf, long=True, type="transform")[0] for leaf in leaves]
+
+    def test_a_pinned_node_ships_where_maya_draws_it_through_either_write(self):
+        """A pinned, locked cube and a pinned skin under an animated module
+        re-import where Maya draws them at every frame, through a baking write
+        and a plain one -- and the scene is handed back to the bit."""
+        for bakes in (True, False):
+            with self.subTest(bakes=bakes):
+                cmds.file(new=True, force=True)
+                root, cube, tube = self._pinned(skinned=True)
+                worlds, points = self._worlds(cube), self._points(tube)
+                state = self._state([cube, tube])
+
+                path, _ = self._write(root, f"pinned_{int(bakes)}", bakes)
+
+                self.assertEqual(self._state([cube, tube]), state)
+                cube, tube = self._reimport(path, "PIN_CUBE", "LOOM")
+                self.assertLess(self._matrix_miss(worlds, self._worlds(cube)), 1e-3)
+                self.assertLess(self._point_miss(points, self._points(tube)), 1e-3)
+
+    def test_a_static_pinned_node_ships_static(self):
+        """Nothing moves: the write sets plain values, no key -- in the scene
+        while it writes, and in the file a plain write leaves."""
+        real = cmds.file
+        for bakes in (True, False):
+            with self.subTest(bakes=bakes):
+                cmds.file(new=True, force=True)
+                root, cube, _ = self._pinned(animated=False)
+                world = cmds.getAttr(f"{cube}.worldMatrix[0]")
+                seen = {}
+
+                def spy(*args, **kwargs):
+                    if kwargs.get("exportSelected"):
+                        seen["inherits"] = cmds.getAttr(f"{cube}.inheritsTransform")
+                        seen["keys"] = cmds.keyframe(
+                            cube, query=True, keyframeCount=True
+                        )
+                    return real(*args, **kwargs)
+
+                with patch.object(cmds, "file", side_effect=spy):
+                    path, _ = self._write(root, f"static_{int(bakes)}", bakes)
+
+                self.assertEqual(seen, {"inherits": True, "keys": 0})
+                (cube,) = self._reimport(path, "PIN_CUBE")
+                got = cmds.getAttr(f"{cube}.worldMatrix[0]")
+                self.assertLess(max(abs(a - b) for a, b in zip(world, got)), 1e-3)
+                if not bakes:
+                    self.assertFalse(
+                        cmds.keyframe(cube, query=True, keyframeCount=True)
+                    )
+
+    def test_a_static_pinned_skin_ships_where_maya_draws_it(self):
+        """A static SKINNED node takes one key per channel, not plain values:
+        Maya's FBX importer places an unanimated skinned mesh from its bind
+        pose (its bind world relative to its parent's), so plain values --
+        right in the file -- re-imported 30 cm off here, and 78.4 cm on four
+        production wire looms whose module moved after the bind."""
+        for bakes in (True, False):
+            with self.subTest(bakes=bakes):
+                cmds.file(new=True, force=True)
+                root, cube, tube = self._pinned(animated=False, skinned=True)
+                worlds = self._worlds(tube)
+                state = self._state([cube, tube])
+                seen = {}
+                real = cmds.file
+
+                def spy(*args, **kwargs):
+                    if kwargs.get("exportSelected"):
+                        seen["keys"] = cmds.keyframe(
+                            tube, query=True, keyframeCount=True
+                        )
+                    return real(*args, **kwargs)
+
+                with patch.object(cmds, "file", side_effect=spy):
+                    path, _ = self._write(root, f"static_skin_{int(bakes)}", bakes)
+
+                self.assertEqual(self._state([cube, tube]), state)
+                (tube,) = self._reimport(path, "LOOM")
+                self.assertLess(self._matrix_miss(worlds, self._worlds(tube)), 1e-3)
+                self.assertEqual(seen, {"keys": 9}, "one key per channel")
+
+    def test_the_re_anchor_is_undone_when_the_write_raises(self):
+        root, cube, _ = self._pinned()
+        state = self._state([cube])
+
+        with self.assertRaises(RuntimeError):
+            with FbxUtils.offsets_folded(
+                [root], FbxUtils.write_plan(bakes=True, span=(1, 24))
+            ) as done:
+                self.assertEqual(done, [cube])
+                self.assertTrue(cmds.getAttr(f"{cube}.inheritsTransform"))
+                raise RuntimeError("the write failed")
+
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_re_anchor_that_cannot_be_exact_is_named(self):
+        """Under a stretched, turned parent the pinned cube's local shears: no
+        t/r/s holds it, so it ships displaced and the write says so by name."""
+        root, cube, _ = self._pinned(parent_scale=(2.5, 1, 1))
+        state = self._state([cube])
+
+        with self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING") as caught:
+            with FbxUtils.offsets_folded(
+                [root], FbxUtils.write_plan(bakes=True, span=(1, 24))
+            ) as done:
+                self.assertEqual(done, [])
+                self.assertEqual(self._state([cube]), state)
+
+        (message,) = [m for m in caught.output if "inheritsTransform" in m]
+        self.assertIn("PIN_CUBE", message)
+        self.assertIn("shears", message)
+        self.assertEqual(self._state([cube]), state)
+
+
+class TestFinishDeliverable(QuickTestCase):
+    """``finish_deliverable``: every pass a written FBX deliverable takes."""
+
+    def test_a_scene_whose_files_are_not_resolved_still_finishes(self):
+        """The scene's folders and audio are the embed's alone: a failure to
+        resolve them skipped the pivot split, the highlight copies and the
+        host-lighting drop as well, and the FBX shipped unfinished.
+        Added: 2026-10-19"""
+        from pythontk.file_utils.mesh_convert.fbx_file import FBX_MAGIC
+
+        store = ptk.TempArtifacts("test_fbx_utils_finish", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "room.fbx")
+        with open(path, "wb") as fh:
+            fh.write(FBX_MAGIC)
+        seen = {}
+
+        def finish(fbx, glb=None, **kwargs):
+            seen.update(kwargs, fbx=fbx)
+            return {}
+
+        with (
+            patch.object(
+                FbxUtils, "_dependency_inputs", side_effect=RuntimeError("no scene")
+            ),
+            patch.object(
+                ptk.MeshConvert, "finish_fbx_deliverable", side_effect=finish
+            ),
+            self.assertLogs("mayatk.env_utils.fbx_utils", level="WARNING"),
+        ):
+            report = FbxUtils.finish_deliverable(path, search_dirs=["D:/maps"])
+        self.assertEqual(report, {})
+        self.assertEqual(seen["fbx"], path)
+        self.assertEqual(
+            (seen["search_dirs"], seen["walk_root"], seen["files"]),
+            (["D:/maps"], "", ()),
+        )
 
 
 if __name__ == "__main__":

@@ -23,6 +23,8 @@
 --
 -- Host-side export scope (read by the bridge slots before launch; echoed here so the
 -- panel exposes the Scope combo): scope=__SCOPE__
+-- Host-side run window (read by the bridge; echoed so the panel shows the toggle):
+-- show_window=__SHOW_APP_WINDOW__
 
 PACK_SUBSET = __PACK_SUBSET__
 

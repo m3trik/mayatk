@@ -108,7 +108,15 @@ DEFAULTS: Dict[str, Any] = {
     "LIGHTMAP_DEVICE": "AUTO",
     # Off, as on both panels: each map in its material's texture folder is opt-in.
     "LIGHTMAP_BESIDE_TEXTURES": False,
+    # On, as on both panels: the bake also captures the room it lit as a reflection
+    # probe, which comes home beside the maps and is recorded in this scene.
+    "LIGHTMAP_REFLECTION_PROBE": True,
+    # The Lightmap Baker panels' three lighting switches, same meaning: every scene
+    # light crosses (off: only the lights inside the send), the sky dome by its own
+    # switch, and the hidden ones switched on for the bake (off by default).
+    "INCLUDE_SCENE_LIGHTS": True,
     "INCLUDE_ENVIRONMENT": True,
+    "INCLUDE_HIDDEN_LIGHTS": False,
     "ENVIRONMENT_HDR": "",
     "WORLD_STRENGTH": 0.35,
     # Arnold's weight: ArnoldBridge wires an emissive map at emission 1, so a Cycles
@@ -310,54 +318,88 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 self.logger.error(refusal)
                 return None
 
-        payload = super()._produce(objects, request)
-        try:
-            self._write_manifest(
-                objects,
-                payload.primary,
-                include_materials=bool(request.params.get("INCLUDE_MATERIALS", True)),
-                include_lights=bool(
-                    request.params.get("INCLUDE_LIGHTS", DEFAULTS["INCLUDE_LIGHTS"])
-                ),
-                # The world is the bake's alone -- only its template lights one --
-                # so a plain send reads no dome and warns about none.
-                include_environment=request.template == self._LIGHTMAP_TEMPLATE
-                and bool(
-                    request.params.get(
-                        "INCLUDE_ENVIRONMENT", DEFAULTS["INCLUDE_ENVIRONMENT"]
-                    )
-                ),
-                # The bake's manifest is consumed by its own return leg, which has
-                # no use for scene records; a send carries them unless the artist
-                # opts out.
-                include_scene_data=request.template != self._LIGHTMAP_TEMPLATE
-                and bool(
-                    request.params.get(
-                        "INCLUDE_SCENE_DATA", DEFAULTS["INCLUDE_SCENE_DATA"]
-                    )
-                ),
-                spell=self._manifest_spelling(self.carrier(request)),
-                # The scene's Exclude set and map claims: the bake's alone.
-                include_lightmap=request.template == self._LIGHTMAP_TEMPLATE,
-                # The authored steps ride beside the animation they belong to.
-                include_animation=bool(
-                    request.params.get(
-                        "INCLUDE_ANIMATION", DEFAULTS["INCLUDE_ANIMATION"]
-                    )
-                ),
+        bake = request.template == self._LIGHTMAP_TEMPLATE
+        include_lights = bool(
+            request.params.get("INCLUDE_LIGHTS", DEFAULTS["INCLUDE_LIGHTS"])
+        )
+        # The Lightmap Baker panels' lighting switches -- the bake's alone: a send
+        # carries the lights in it, hidden ones included, as authored content.
+        hidden_lights = bake and bool(
+            request.params.get(
+                "INCLUDE_HIDDEN_LIGHTS", DEFAULTS["INCLUDE_HIDDEN_LIGHTS"]
             )
-        except Exception as error:  # noqa: BLE001
-            if request.template == self._LIGHTMAP_TEMPLATE:
-                self.logger.error(
-                    f"Bake refused: its manifest sidecar failed ({error}).",
+        )
+        spell = self._manifest_spelling(self.carrier(request))
+        # A light the bake needs that the send would not place -- one outside it
+        # (Include Scene Lighting), or one switched on from hidden -- rides a null
+        # of its own, gone again once the payload is written.
+        proxies = (
+            self._light_proxies(
+                objects,
+                everywhere=bool(
+                    request.params.get(
+                        "INCLUDE_SCENE_LIGHTS", DEFAULTS["INCLUDE_SCENE_LIGHTS"]
+                    )
+                ),
+                hidden=hidden_lights,
+                spell=spell,
+            )
+            if bake and include_lights
+            else {}
+        )
+        try:
+            payload = super()._produce(list(objects) + list(proxies.values()), request)
+            try:
+                self._write_manifest(
+                    objects,
+                    payload.primary,
+                    include_materials=bool(
+                        request.params.get("INCLUDE_MATERIALS", True)
+                    ),
+                    include_lights=include_lights,
+                    # The world is the bake's alone -- only its template lights
+                    # one -- so a plain send reads no dome and warns about none.
+                    include_environment=bake
+                    and bool(
+                        request.params.get(
+                            "INCLUDE_ENVIRONMENT", DEFAULTS["INCLUDE_ENVIRONMENT"]
+                        )
+                    ),
+                    # The bake's manifest is consumed by its own return leg, which
+                    # has no use for scene records; a send carries them unless the
+                    # artist opts out.
+                    include_scene_data=not bake
+                    and bool(
+                        request.params.get(
+                            "INCLUDE_SCENE_DATA", DEFAULTS["INCLUDE_SCENE_DATA"]
+                        )
+                    ),
+                    spell=spell,
+                    # The scene's Exclude set and map claims: the bake's alone.
+                    include_lightmap=bake,
+                    # The authored steps ride beside the animation they belong to.
+                    include_animation=bool(
+                        request.params.get(
+                            "INCLUDE_ANIMATION", DEFAULTS["INCLUDE_ANIMATION"]
+                        )
+                    ),
+                    light_proxies=proxies,
+                    include_hidden_lights=hidden_lights,
+                )
+            except Exception as error:  # noqa: BLE001
+                if bake:
+                    self.logger.error(
+                        f"Bake refused: its manifest sidecar failed ({error}).",
+                        exc_info=True,
+                    )
+                    return None
+                self.logger.warning(
+                    "Manifest sidecar failed; Blender keeps the FBX-carried materials.",
                     exc_info=True,
                 )
-                return None
-            self.logger.warning(
-                "Manifest sidecar failed; Blender keeps the FBX-carried materials.",
-                exc_info=True,
-            )
-        return payload
+            return payload
+        finally:
+            self._drop_light_proxies(proxies)
 
     @staticmethod
     def _manifest_spelling(carrier: str = "fbx"):
@@ -387,6 +429,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         spell=None,
         include_lightmap: bool = False,
         include_animation: bool = False,
+        light_proxies: Optional[Dict[str, str]] = None,
+        include_hidden_lights: bool = False,
     ) -> None:
         """Write ``<fbx>.manifest.json`` for *objects* (no-op when there is nothing to say).
 
@@ -433,6 +477,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         whose out tangent is ``step`` (:meth:`MayaExportMixin.stepped_keys`).
         The FBX carries the key, but Blender's importer makes it LINEAR, so a
         hold arrived as a ramp; blendertk's ``MayaSceneImport`` steps it again.
+
+        *light_proxies* (``{light transform: null}``, :meth:`_light_proxies`)
+        are the bake's lights that ride a null of their own: each is recorded
+        under its null's name instead of its own. *include_hidden_lights*
+        keeps a hidden light -- and a hidden dome -- at a non-zero power,
+        switched on (:meth:`_contributing_lights`): the bake's Include Hidden
+        Lights.
         """
         from mayatk.mat_utils._mat_utils import MatUtils
         from mayatk.mat_utils.mat_manifest import MatManifest
@@ -444,9 +495,22 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         _leaf = spell or self._manifest_spelling()
         node_types = self._manifest_node_types(transforms, _leaf)
-        lights = self._manifest_lights(transforms, _leaf) if include_lights else []
-        lights = self._contributing_lights(lights)
-        world = self._manifest_world(_leaf) if include_environment else None
+        proxies = light_proxies or {}
+        lights = (
+            self._manifest_lights([t for t in transforms if t not in proxies], _leaf)
+            if include_lights
+            else []
+        )
+        if include_lights and proxies:
+            lights += self._manifest_lights(
+                list(proxies), lambda transform: _leaf(proxies[transform])
+            )
+        lights = self._contributing_lights(lights, include_hidden=include_hidden_lights)
+        world = (
+            self._manifest_world(_leaf, include_hidden=include_hidden_lights)
+            if include_environment
+            else None
+        )
         scene_data = (
             DataNodes.transfer_sections(spell=_leaf, objects=transforms)
             if include_scene_data
@@ -668,7 +732,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         return intensity
 
     def _contributing_lights(
-        self, lights: List[Dict[str, Any]]
+        self, lights: List[Dict[str, Any]], include_hidden: bool = False
     ) -> List[Dict[str, Any]]:
         """*lights* less the ones that cannot light anything, said out loud.
 
@@ -678,6 +742,10 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         because the same light is authored CONTENT to a scene transfer, which
         reads the same records and must keep it (CHANGELOG 2026-09-17).
 
+        *include_hidden* is the bake's Include Hidden Lights: a hidden light at
+        a non-zero power is kept, and crosses switched ON (its ``hidden`` key
+        dropped); one at zero power still lights nothing.
+
         The warning is the load-bearing part: at info it sits below the default
         handler, and a rig whose lights all sit under one hidden group bakes dark
         with the explanation filtered out of the log. Same level, and for the
@@ -686,13 +754,131 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         kept = []
         for record in lights or []:
             if record.get("hidden"):
-                self.logger.warning(
-                    "Light %s is hidden or at intensity 0; not sent.",
-                    record.get("name"),
-                )
-                continue
+                power = record.get("radiance", record.get("energy")) or 0.0
+                if include_hidden and float(power) != 0.0:
+                    record = {k: v for k, v in record.items() if k != "hidden"}
+                else:
+                    self.logger.warning(
+                        "Light %s is hidden or at intensity 0; not sent.",
+                        record.get("name"),
+                    )
+                    continue
             kept.append(record)
         return kept
+
+    #: Appended to a light's name for the null it rides when that name is taken
+    #: in the send (its own transform's null, a mesh): Blender names every object
+    #: uniquely, and which of two keeps the plain name is the importer's call.
+    _LIGHT_PROXY_SUFFIX: str = "_bakeLight"
+
+    def _light_proxies(
+        self, objects, everywhere: bool = True, hidden: bool = False, spell=None
+    ) -> Dict[str, str]:
+        """``{light transform: null}`` -- a root null for each light the bake needs
+        that the send would not place.
+
+        The FBX carries a light's PLACEMENT as a null (:meth:`_manifest_lights`),
+        so a light only crosses where its transform ships. Two kinds do not:
+
+        * one outside the send, which Include Scene Lighting (*everywhere*,
+          the Lightmap Baker panels' default) brings to the bake. Exporting its
+          own transform is no answer: Maya's FBX export writes a selected node's
+          ANCESTORS too, geometry included (probed: a light under a lamp mesh
+          shipped the lamp), and they would bake as targets;
+        * one switched on from hidden (Include Hidden Lights, *hidden*): its own
+          null arrives hidden too, and Blender never evaluates a hidden object,
+          so its placement reads as the world origin (probed: an own-hidden
+          light's null at 0, 0, 0; one under a hidden group placed right).
+
+        Each gets a fresh transform at the world root, at the light's world
+        matrix, named after it (suffixed :attr:`_LIGHT_PROXY_SUFFIX` where the
+        send already uses the name) -- exported beside the send, so the FBX does
+        the placement and unit conversion as it does for every other light, and
+        deleted again by :meth:`_drop_light_proxies` once the payload is
+        written. Nothing is recorded on the undo queue. A light that cannot
+        light anything is left out here as :meth:`_contributing_lights` leaves
+        it out of the records -- hidden (without *hidden*) or at intensity 0 --
+        and said out loud when it sits outside the send, where no record names
+        it.
+        """
+        import maya.cmds as cmds
+
+        from mayatk.core_utils._core_utils import CoreUtils
+        from mayatk.display_utils._display_utils import DisplayUtils
+        from mayatk.light_utils._light_utils import LightUtils
+
+        _leaf = spell or self._manifest_spelling()
+        sent = set(self._subtree(objects))
+        taken = {_leaf(node) for node in sent}
+        wanted: List[str] = []
+        for shape in LightUtils.all_lights():
+            if cmds.nodeType(shape) not in self.LIGHT_TYPES:
+                continue
+            parents = cmds.listRelatives(shape, parent=True, fullPath=True)
+            if not parents:
+                continue
+            transform = parents[0]
+            inside = transform in sent
+            if not (inside or everywhere):
+                continue
+            switched_on = not DisplayUtils.is_visible(
+                shape, consider_templated_visible=True
+            )
+            if not LightUtils.light_contributes(shape) and not (
+                hidden and switched_on and self._exposed_intensity(shape) != 0.0
+            ):
+                if not inside:
+                    self.logger.warning(
+                        "Light %s is hidden or at intensity 0; not sent.",
+                        _leaf(transform),
+                    )
+                continue
+            if inside and not switched_on:
+                continue  # its own null places it
+            wanted.append(transform)
+        proxies: Dict[str, str] = {}
+        with CoreUtils.undo_disabled():
+            for transform in wanted:
+                base = re.sub(r"\W", "_", _leaf(transform))
+                name, count = base, 0
+                while name in taken or cmds.objExists(f"|{name}"):
+                    count += 1
+                    name = f"{base}{self._LIGHT_PROXY_SUFFIX}" + (
+                        str(count) if count > 1 else ""
+                    )
+                null = cmds.ls(cmds.createNode("transform", name=name), long=True)[0]
+                cmds.xform(
+                    null,
+                    worldSpace=True,
+                    matrix=cmds.xform(
+                        transform, query=True, matrix=True, worldSpace=True
+                    ),
+                )
+                taken.add(_leaf(null))
+                proxies[transform] = null
+        if proxies:
+            self.logger.info(
+                "%d light(s) ride a null of their own (outside the send, or "
+                "switched on from hidden): %s",
+                len(proxies),
+                ", ".join(_leaf(t) for t in list(proxies)[:8])
+                + (" ..." if len(proxies) > 8 else ""),
+            )
+        return proxies
+
+    @staticmethod
+    def _drop_light_proxies(proxies: Dict[str, str]) -> None:
+        """Delete the nulls :meth:`_light_proxies` made; nothing on the undo queue."""
+        if not proxies:
+            return
+        import maya.cmds as cmds
+
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            gone = [null for null in proxies.values() if cmds.objExists(null)]
+            if gone:
+                cmds.delete(gone)
 
     def _manifest_lights(
         self, transforms: List[str], spell=None
@@ -722,10 +908,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         finished on the far side rather than here.
 
         Scoped BY ITS ARGUMENT, and honours it: every light under *transforms* is
-        recorded, exactly like meshes. The send passes the artist's sent roots (a
-        bake's lighting is part of what the artist sends, so lights that should
-        ride a module belong parented inside it); the scene pull passes the whole
-        scene, and gets the whole scene.
+        recorded, exactly like meshes. The send passes the artist's sent roots,
+        and a bake with Include Scene Lighting (its default) the scene's other
+        lights besides, each named after the null it rides
+        (:meth:`_light_proxies`); the scene pull passes the whole scene, and gets
+        the whole scene.
 
         A light that CONTRIBUTES NOTHING -- hidden, or at intensity 0 -- is
         recorded with ``hidden: True`` rather than dropped. Deciding what to do
@@ -894,7 +1081,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
     #: layout a Blender world (an equirect Environment Texture) reads.
     _DOME_LATLONG: int = 2
 
-    def _manifest_world(self, spell=None) -> Optional[Dict[str, Any]]:
+    def _manifest_world(
+        self, spell=None, include_hidden: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """The scene's sky dome as the bake's world, or None.
 
         ``{name, hdri | color, strength, center, axis_up}``. A dome is not a light
@@ -917,7 +1106,8 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         None, having said why, when there is no dome, or the dome is switched off,
         is not a latlong, is fed by something other than an image, or reads an
-        image that is not there.
+        image that is not there. *include_hidden* (the bake's Include Hidden
+        Lights) takes a hidden dome at a non-zero intensity as on.
         """
         import maya.cmds as cmds
 
@@ -925,7 +1115,12 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         from mayatk.mat_utils._mat_utils import MatUtils
 
         domes = LightUtils.environment_lights()
-        lit = [shape for shape in domes if LightUtils.light_contributes(shape)]
+        lit = [
+            shape
+            for shape in domes
+            if LightUtils.light_contributes(shape)
+            or (include_hidden and self._exposed_intensity(shape) != 0.0)
+        ]
         if not lit:
             if domes:
                 self.logger.warning(
@@ -1125,12 +1320,16 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         irradiance natively, needs no licence, denoises, and runs on the GPU. Pick one
         per project -- the two will not match visually.
 
-        **Lighting: the sent selection's lights are used by default.** *scene_lights*
-        (on) brings the Maya lights inside the sent hierarchy across and bakes with
-        them, rebalanced by *light_strength* because Maya intensity is unitless --
-        the returned summary reports each light's final wattage so that dial is
-        tuned from a number. A light grouped outside the sent hierarchy does not
-        travel, exactly like a mesh outside it. The lights that cross
+        **Lighting: every scene light is used by default** -- the Lightmap Baker
+        panels' three switches, same meaning. *scene_lights* (on) brings the Maya
+        lights across and bakes with them, rebalanced by *light_strength* because
+        Maya intensity is unitless -- the returned summary reports each light's
+        final wattage so that dial is tuned from a number. ``INCLUDE_SCENE_LIGHTS``
+        (on) sends every light in the scene, wherever it sits (one outside the
+        send rides a null of its own, :meth:`_light_proxies`); off, only the
+        lights inside the sent hierarchy travel, exactly like meshes.
+        ``INCLUDE_HIDDEN_LIGHTS`` (off) sends the hidden ones too, switched on.
+        The lights that cross
         ride the manifest rather than the FBX (see :meth:`_manifest_lights`), which is
         also what lets an ``aiAreaLight`` come across at all. Compose with
         *environment_hdr* freely; left empty, the scene's own Arnold sky dome lights
@@ -1163,10 +1362,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             packing: ``"atlas"`` (default -- one shared map per material, each object
                 given a rect) or ``"per_object"``. The Lightmap Baker panel's Packing
                 dial; atlas is the default here because a send is a whole module.
-            scene_lights: Bring the sent selection's Maya lights across and bake
-                with them (default on; selection-scoped like every other node --
-                they ride the manifest, not the FBX, see ``_manifest_lights``).
-                ``False`` for a bake lit purely by *environment_hdr*.
+            scene_lights: Bring the Maya lights across and bake with them
+                (default on; every scene light, or the send's alone with
+                ``INCLUDE_SCENE_LIGHTS=False`` in *params* -- they ride the
+                manifest, not the FBX, see ``_manifest_lights``). ``False`` for
+                a bake lit purely by *environment_hdr*.
             light_strength: Multiplier on the imported lights' power (default 1.0).
                 The units do not survive the crossing intact; this is the one dial.
 
@@ -1859,6 +2059,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         # not name (a leaf name two sent nodes share) must still keep the map it had.
         excluded = set(LightmapExcludeSet.meshes())
         usable: Dict[str, Tuple[str, Any, Optional[List[float]]]] = {}
+        returned: Dict[str, Dict[str, Any]] = {}  # each wired object's entry
         for blender, maya in resolved.items():
             if maya in excluded:
                 self.logger.warning(
@@ -1873,6 +2074,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 self.logger.warning(f"{maya}: lightmap missing at {path!r}; skipped.")
             else:
                 usable[maya] = (path, layout, entry.get("rect"))
+                returned[maya] = entry
 
         # A LEGACY marker's squeeze (``uvRect``) is still in the UVs, which is why
         # ``commit`` carries its record forward. The layout below REPLACES those UVs,
@@ -1908,10 +2110,13 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             return {}
 
         rects = {m: usable[m][2] for m in wired if usable[m][2]}
+        # Where in its atlas each object went, for the bake baseline: what lets
+        # a later re-bake of PART of the atlas write back into those cells.
+        cells = self._returned_cells({m: returned[m] for m in wired})
         # The maps these objects read before, once nothing reads them, go --
         # the same rule the Maya-native bake applies around its commit.
         with LightmapRecords.superseding(list(mapping)):
-            recorded = LightmapRecords.commit(mapping, scale_offsets=rects)
+            recorded = LightmapRecords.commit(mapping, scale_offsets=rects, cells=cells)
         # Beside Material Textures sends each map to its own texture folder.
         folders = sorted({os.path.dirname(path) for path in mapping.values()})
         where = folders[0] if len(folders) == 1 else f"{len(folders)} folders"
@@ -1919,7 +2124,185 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             f"Wired {len(recorded)} lightmap(s) from {where} into the scene "
             "alongside the existing maps -- Lightmap Baker's Revert to Source undoes it."
         )
+        self._commit_returned_probe(data.get("probe"), resolved)
         return recorded
+
+    def _returned_cells(self, entries: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """``{maya node: {"cell", "extent", "size", "packing"}}`` from the return
+        manifest's entries, for :meth:`LightmapRecords.commit`'s ``cells``.
+
+        The template hands back where in its atlas each object was written
+        (``bake_atlased``); the EXTENT is measured here, on the Maya mesh wearing
+        the returned layout (``LightmapBaker._atlas_extent``), because it is what
+        a later Maya bake measures against it before writing the cell back in
+        place -- Blender's is in its own scene's units. An entry without cells (a
+        blendertk older than them) records none, said once: a partial re-bake of
+        that atlas then re-packs its whole group, as a legacy atlas does.
+        """
+        from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+
+        cells: Dict[str, Any] = {}
+        bare: List[str] = []
+        measure = None
+        for node, entry in entries.items():
+            packing = entry.get("packing")
+            if packing == "per_object":
+                cells[node] = {"packing": packing, "size": entry.get("size")}
+            elif packing == "atlas" and entry.get("cell"):
+                if measure is None:
+                    measure = LightmapBaker()
+                try:
+                    extent = [float(v) for v in measure._atlas_extent(node)]
+                except Exception as error:  # noqa: BLE001 -- costs the cell only
+                    self.logger.debug(f"{node}: atlas extent not read ({error}).")
+                    bare.append(node)
+                    continue
+                cells[node] = {
+                    "cell": [float(v) for v in entry["cell"]],
+                    "extent": extent,
+                    "size": entry.get("size"),
+                    "packing": packing,
+                }
+            else:
+                bare.append(node)
+        if bare:
+            self.logger.info(
+                f"{len(bare)} returned lightmap(s) carry no atlas cell (the Blender "
+                "side's blendertk returns none): a later re-bake of part of their "
+                "atlas re-packs its whole group."
+            )
+        return cells
+
+    #: The most an anchor may sit off the measured map onto this scene, as a share of
+    #: the anchors' spread: past it the points describe no ONE crossing (a mesh
+    #: edited since the hand-off, a wrong vertex order), and no probe is recorded.
+    _PROBE_FIT_TOLERANCE: float = 1e-3
+
+    def _commit_returned_probe(
+        self, probe: Optional[Dict[str, Any]], resolved: Dict[str, str]
+    ) -> Optional[str]:
+        """Record the reflection probe a Blender bake captured, in this scene's space.
+
+        The bake's ``probe`` (the template's ``capture_probe``): the room it lit as
+        an HDR, written beside the maps, its capture point and box in the Blender
+        probe record's frame and units. Mapped onto this scene by MEASUREMENT, the
+        way the return leg matches same-named objects (:meth:`_disambiguate_by_position`):
+        the template ships ANCHORS -- vertices of baked meshes in that frame -- and
+        the same vertices are read here (the crossing keeps vertex order, as the UV
+        layout's own fingerprint requires), so ``ptk.MathUtils.fit_similarity`` finds
+        the scale and offset of the crossing with no axis or unit convention written
+        down. The fit must be a pure scale and offset -- the probe's panorama is laid
+        out in that frame's axes, so a turned map (a Z-up scene) would reflect the
+        room on its side -- and must hold every anchor; otherwise the probe file stays
+        on disk and nothing is recorded, said once.
+
+        Then it is what Maya's own bake leaves (``LightmapBaker.bake_probe``):
+        ``<scene>_Probe.exr`` beside the maps -- renamed from the Blender scene's
+        name; a held file keeps the name it came with -- recorded through
+        :meth:`LightmapRecords.commit_probe`, which publishes it in the manifest and
+        sets the scene's previous probe file aside.
+
+        Returns:
+            The recorded probe's path, or ``None``.
+        """
+        if not isinstance(probe, dict) or not probe.get("map"):
+            return None
+        import maya.cmds as cmds
+
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        path = str(probe["map"])
+        if not os.path.isfile(path):
+            self.logger.warning(f"Reflection probe missing at {path!r}; not recorded.")
+            return None
+        if str(cmds.upAxis(query=True, axis=True)).lower() != "y":
+            self.logger.warning(
+                "No reflection probe recorded: the scene is Z-up, and the WebXR "
+                "preview and Unity read a probe in Y-up axes."
+            )
+            return None
+        source: List[List[float]] = []
+        target: List[List[float]] = []
+        for anchor in probe.get("anchors") or []:
+            node = resolved.get(str((anchor or {}).get("object")))
+            if not node:
+                continue
+            try:
+                here = cmds.pointPosition(
+                    f"{node}.vtx[{int(anchor['vertex'])}]", world=True
+                )
+                there = [float(c) for c in anchor["point"]]
+            except (RuntimeError, ValueError, TypeError, KeyError):
+                continue
+            source.append(there)
+            target.append([float(c) for c in here])
+        fit = ptk.MathUtils.fit_similarity(source, target)
+        spread = (
+            max(
+                ptk.MathUtils.distance_between_points(tuple(a), tuple(b))
+                for a in target
+                for b in target
+            )
+            if target
+            else 0.0
+        )
+        turned = fit is not None and any(
+            abs(fit[1][i][j] - (1.0 if i == j else 0.0)) > 1e-3
+            for i in range(3)
+            for j in range(3)
+        )
+        if fit is None or turned or fit[3] > self._PROBE_FIT_TOLERANCE * spread:
+            self.logger.warning(
+                f"Reflection probe not recorded: its {len(source)} anchor(s) "
+                + (
+                    "cannot fix the crossing onto this scene"
+                    if fit is None
+                    else "describe a turned crossing"
+                    if turned
+                    else f"sit up to {fit[3]:.3g} off any one crossing"
+                )
+                + f". The file stays at {path}."
+            )
+            return None
+        scale, rotation, translation, _residual = fit
+
+        def to_scene(point):
+            p = [float(c) for c in point]
+            return [
+                scale * sum(rotation[i][j] * p[j] for j in range(3)) + translation[i]
+                for i in range(3)
+            ]
+
+        position = to_scene(probe.get("position") or (0.0, 0.0, 0.0))
+        box = None
+        if probe.get("box"):
+            corners = [to_scene(corner) for corner in probe["box"]]
+            box = [
+                [min(a, b) for a, b in zip(*corners)],
+                [max(a, b) for a, b in zip(*corners)],
+            ]
+        # Named as Maya's own bake names its probe, beside the maps.
+        stem = os.path.splitext(
+            os.path.basename(cmds.file(query=True, sceneName=True) or "")
+        )[0]
+        wanted = f"{stem or 'untitled'}_Probe.exr"
+        if os.path.basename(path) != wanted:
+            try:
+                path = ptk.FileUtils.move_file(
+                    path, os.path.dirname(path), new_name=wanted
+                )
+            except OSError as e:
+                self.logger.warning(
+                    f"{wanted} is held ({e}); the reflection probe keeps the name "
+                    f"{os.path.basename(path)}."
+                )
+        LightmapRecords.commit_probe(path, position, box)
+        self.logger.info(
+            f"Reflection probe: {os.path.basename(path)} at "
+            f"{[round(c, 2) for c in position]}, recorded in the scene "
+            f"({len(source)} anchor(s), scale {scale:.4g})."
+        )
+        return path
 
     @staticmethod
     def list_templates() -> List[Path]:

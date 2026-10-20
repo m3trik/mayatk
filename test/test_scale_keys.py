@@ -1509,13 +1509,62 @@ class TestScaleKeysClaimHooks(MayaTkTestCase):
             [("replace", self.crv, [20.0]), ("move", self.crv, [(10.0, 20.0)])],
         )
 
-    def test_a_nudged_key_is_reported_where_it_landed(self):
-        """snap_mode "none" nudges a key past a taken frame: nothing is
-        replaced, and the move reported is the frame the key went to."""
+    def test_a_snap_none_scale_replaces_the_key_it_lands_on(self):
+        """Snap: None (snap_mode "none") is a scale like any other: the key it
+        lands on is replaced. It nudged the mover 0.001 past it (two keys on
+        one frame, measured 2026-10-16), where every other snap mode and
+        blendertk's twin replace it."""
         self._scale_0_to_10_by_2("none")
 
-        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 20.0), (20.001, 10.0)])
-        self.assertEqual(self.log, [("move", self.crv, [(10.0, 20.001)])])
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(
+            self.log,
+            [("replace", self.crv, [20.0]), ("move", self.crv, [(10.0, 20.0)])],
+        )
+
+    def test_a_selected_key_scale_replaces_the_key_it_lands_on(self):
+        """The same through the selected-keys path (snap_mode None): it runs
+        the per-key mover, which nudged the same way."""
+        cmds.selectKey(self.crv, time=(0, 10))
+        ScaleKeys.scale_keys(
+            objects=[self.cube],
+            factor=2,
+            pivot=0,
+            keys="selected",
+            split_static=False,
+            snap_mode=None,
+            **self._hooks(),
+        )
+
+        self.assertEqual(self._pairs(), [(0.0, 0.0), (20.0, 10.0)])
+        self.assertEqual(
+            self.log,
+            [("replace", self.crv, [20.0]), ("move", self.crv, [(10.0, 20.0)])],
+        )
+
+    def test_of_snapped_keys_landing_together_the_least_moved_is_kept(self):
+        """3 and 4 scaled x0.3 about 0 land on 0.9 and 1.2, both snapped to 1:
+        key 3 moved 0.1 off its exact time, key 4 0.2, so key 3 stays and key
+        4 is replaced, reported at its source frame. The later mover used to
+        win whatever its distance (blendertk's ``_merge_landed`` rule)."""
+        cube = cmds.polyCube(name="scale_least_moved")[0]
+        for t in (3, 4):
+            cmds.setKeyframe(cube, attribute="translateX", time=t, value=t)
+        crv = cmds.keyframe(cube, attribute="translateX", query=True, name=True)[0]
+
+        ScaleKeys.scale_keys(
+            objects=[cube],
+            factor=0.3,
+            pivot=0,
+            snap_mode="nearest",
+            split_static=False,
+            **self._hooks(),
+        )
+
+        self.assertEqual(self._pairs(crv), [(1.0, 3.0)])
+        self.assertEqual(
+            self.log, [("replace", crv, [4.0]), ("move", crv, [(3.0, 1.0)])]
+        )
 
     def _overlap_pair(self, split_static):
         """Two cubes scaled x3 per object, the second pushed past the first

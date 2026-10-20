@@ -140,6 +140,7 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         "standardSurface",
         "StingrayPBS",
         "openPBRSurface",
+        "surfaceShader",
     ]
 
     # Output plugs a file node derives from its ALPHA. Both need
@@ -306,6 +307,20 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             sheenRoughness=("fuzzRoughness", "outColorR"),
             thinFilm=("thinFilmWeight", "outColorR"),
             thinFilmThickness=("thinFilmThickness", "outColorR"),
+        ),
+        # Maya's unlit model: the colour IS what shows, and transparency is
+        # the inverted channel, as on the classic shaders. Declared so a
+        # texture on it is a base colour to the manifest and the GLB sidecar
+        # (which writes it unlit -- ``SceneState._read_unlit``).
+        "surfaceShader": ShaderAttrs(
+            baseColor=("outColor", "outColor"),
+            emission=None,
+            specular=None,
+            roughness=None,
+            metallic=None,
+            opacity=("outTransparency", "outTransparency"),
+            normal=None,
+            ambientOcclusion=None,
         ),
     }
 
@@ -578,6 +593,11 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         "aiStandardSurface": ("emission", "multiply"),
         "standardSurface": ("emission", "multiply"),
         "openPBRSurface": ("emissionLuminance", "gate"),
+        # Autodesk's Stingray PBS graph multiplies its emissive by this uniform
+        # (default 1). Unread, a dimmed fixture shipped at full glow: moody-room
+        # ceiling panels lit WebXR at 1.0 where the scene asked for less
+        # (2026-10-16). A graph without the uniform reads ungated, as before.
+        "StingrayPBS": ("emissive_intensity", "multiply"),
     }
 
     @classmethod

@@ -1068,14 +1068,15 @@ class RenderEffects(ptk.LoggingMixin):
         # The stack's origin.  Measured by the pipeline (``ctx.clip_span``)
         # once it has seen the final curves; until then the bake range is a
         # SEED, not the answer, and a producer cannot do better: it has no
-        # export set and no view of the final curves, so it reads whatever
-        # the FBX preset happens to hold. The bake range bounds only what the
+        # export set and no view of the final curves, so it reads the range the
+        # bracketed write plans to bake (a hand-off's), else whatever the FBX
+        # preset happens to hold. The bake range bounds only what the
         # plugin RE-BAKES, while an authored curve is written whole (a curve
         # keyed 0-100 exports as 0-100 under a 20-80 range), so as a
         # description of the stack it is simply wrong. The seed survives only
         # where no export pipeline runs (a hand-driven FBX write), or on a
         # scene with no exported keys, where there is no stack to misplace.
-        stack_range = ctx.clip_span or FbxUtils.bake_range()
+        stack_range = ctx.clip_span or FbxUtils.planned_bake_range()
         payload = ptk.MeshConvert.build_visibility_tracks(
             tracks,
             fps=fps,

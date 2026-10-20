@@ -391,7 +391,7 @@ class ScaleKeys:
     def _execute_move_operation(
         self,
         curve: Any,
-        time_pairs: List[Tuple[float, float]],
+        time_pairs: List[Tuple[float, ...]],
         allow_merge: bool = False,
     ) -> int:
         """Execute a move operation directly."""
@@ -621,7 +621,7 @@ class ScaleKeys:
 
         keys_scaled = 0
         global_pivot: Optional[float] = None
-        aggregated_moves: Dict[Any, List[Tuple[float, float]]] = {}
+        aggregated_moves: Dict[Any, List[Tuple[float, ...]]] = {}
 
         for group in groups:
             group_range = (
@@ -756,7 +756,9 @@ class ScaleKeys:
                             time_pairs.append((old_time, new_time))
 
                         if self.snap_mode and self.snap_mode != "none":
-                            # Apply snapping to new times
+                            # Apply snapping to new times; each move keeps its
+                            # exact scaled time, so of keys snapping onto one
+                            # frame the least moved is kept (_move_curve_keys).
                             snapped_pairs = []
                             for old, new in time_pairs:
                                 # Handle alias for aggressive
@@ -765,7 +767,7 @@ class ScaleKeys:
                                     mode = "aggressive_preferred"
 
                                 snapped_new = ptk.MathUtils.round_value(new, mode=mode)
-                                snapped_pairs.append((old, snapped_new))
+                                snapped_pairs.append((old, snapped_new, new))
                             time_pairs = snapped_pairs
 
                         if curve not in aggregated_moves:
@@ -1493,7 +1495,11 @@ class ScaleKeys:
             verbose_header: Optional custom text to prefix the verbose output headers.
             on_replace: ``on_replace(curve, frames)`` hears the keys a scaled
                 (or snapped) key lands on and so REPLACES -- what the shot
-                system releases its claims on. Mirror of blendertk's.
+                system releases its claims on; of scaled keys snapping onto
+                one frame the least moved (nearest its exact scaled time, an
+                exact tie to the later source) is kept and the others are
+                replaced, reported at their source frames. Mirror of
+                blendertk's.
             on_move: ``on_move(curve, pairs)`` hears the ``(old, new)`` frames
                 of the keys moved -- by the scale, then by the overlap
                 stagger -- each where it actually landed.

@@ -3,12 +3,13 @@
 """World-fitted transform bake: reparent nodes under a chosen target and key the
 translate / rotate / scale that reproduce their sampled WORLD matrices.
 
-The one primitive behind three callers: the Scene Exporter's
+The one primitive behind four callers: the Scene Exporter's
 ``flatten_sheared_chains`` (a deliverable export, with a staged restore),
 ``SmartBake``'s sheared matrix drives (a bake, reversed by its session) -- both
-through the reversible :meth:`WorldFitBake.flatten` -- and
-``SkinUtils.flatten_influences`` (a conversion scene, where each skin needs one
-skeleton). FBX and USD store an animated node as translate / rotate / scale, so a
+through the reversible :meth:`WorldFitBake.flatten` -- ``SmartBake.fold_offsets``
+(every FBX write re-anchors a node that ignores its parent, in place, for the
+write only) and ``SkinUtils.flatten_influences`` (a conversion scene, where each
+skin needs one skeleton). FBX and USD store an animated node as translate / rotate / scale, so a
 parent-relative matrix that shears has no representation and the residual
 compounds down a chain; relative to a similarity ancestor every orthogonal world
 matrix decomposes to TRS exactly.
@@ -47,6 +48,34 @@ class WorldFitBake:
         ("scaleX", "TU"),
         ("scaleY", "TU"),
         ("scaleZ", "TU"),
+    )
+
+    #: Everything else :meth:`bake_node` writes (compound parents included: a
+    #: locked parent refuses its children's writes). A LOCKED one is unlocked
+    #: for the bake and relocked by :meth:`restore_node` -- a rig's pinned mesh
+    #: locks every channel, and refusing it left the node shipping wrong.
+    _WRITTEN_ATTRS: Tuple[str, ...] = (
+        "translate",
+        "rotate",
+        "scale",
+        "shear",
+        "shearXY",
+        "shearXZ",
+        "shearYZ",
+        "offsetParentMatrix",
+        "inheritsTransform",
+    )
+    #: What :meth:`bake_node` writes on a joint besides :attr:`_WRITTEN_ATTRS`.
+    _JOINT_ATTRS: Tuple[str, ...] = (
+        "jointOrient",
+        "jointOrientX",
+        "jointOrientY",
+        "jointOrientZ",
+        "rotateAxis",
+        "rotateAxisX",
+        "rotateAxisY",
+        "rotateAxisZ",
+        "segmentScaleCompensate",
     )
 
     class Failed(RuntimeError):
@@ -169,14 +198,26 @@ class WorldFitBake:
         frames: Sequence[float],
         rows: Sequence[Sequence[float]],
         reparent: bool = True,
+        keys: bool = True,
     ) -> dict:
         """Reparent *node* under *target* and key the pre-sampled locals *rows*.
 
         Neutralises everything that would fight the keys: TRS driver connections
         are cut (recorded), offsetParentMatrix is reset to identity (source /
-        value recorded), and on joints the orient / axis / segmentScaleCompensate
-        are zeroed so the keyed rotate IS the local rotation. Keys land through
-        one ``MFnAnimCurve.addKeys`` per channel.
+        value recorded), a node that ignores its parent (``inheritsTransform``
+        off -- the ``Matrices.pin_world_matrix`` idiom) is made to inherit
+        (recorded) because the keys are LOCAL to *target*, and on joints the
+        orient / axis / segmentScaleCompensate are zeroed so the keyed rotate IS
+        the local rotation (any transform's rotateAxis too). Any of those plugs that is locked is unlocked first
+        (recorded; :meth:`restore_node` relocks it). Keys land through one
+        ``MFnAnimCurve.addKeys`` per channel.
+
+        *keys* False writes the first row as plain values instead, no curve:
+        for a node whose rows are all one pose -- a static prop stays static. A
+        skinned node takes that row as one key per channel instead (Maya's
+        FBX importer places an unanimated skin from its bind pose).
+        A transform's pivots stay as authored, and each translate written makes
+        up for them (:meth:`_pivot_compensated`).
 
         Returns:
             The restore record (UUIDs, cut plugs, original values, curves), what
@@ -199,6 +240,7 @@ class WorldFitBake:
             "opm_source": None,
             "opm_value": None,
             "cut": [],
+            "unlocked": [],
             "originals": {},
             "curves": [],
             "joint": {},
@@ -223,6 +265,7 @@ class WorldFitBake:
             or [None]
         )[0]
         record["opm_value"] = cmds.getAttr(opm_plug)
+        record["inherits"] = bool(cmds.getAttr(f"{node}.inheritsTransform"))
 
         # The driver BEHIND any unitConversion, with its factor: the cut orphans
         # the conversion node, so its name would dangle by restore time, and a
@@ -247,6 +290,15 @@ class WorldFitBake:
                     f"{node}.segmentScaleCompensate"
                 ),
             }
+        else:
+            axis = list(cmds.getAttr(f"{node}.rotateAxis")[0])
+            if any(abs(value) > 1e-12 for value in axis):
+                # The joint rule for any transform: the axis turns the rotate,
+                # so the keyed rotate is the local rotation only at zero.
+                record["axis"] = axis
+
+        if not record["joint"]:  # a joint's matrix has no pivots
+            rows = cls._pivot_compensated(node, rows)
 
         # The reparent is the one call expected to refuse (locked/referenced);
         # everything before it was read-only, so a raise there leaves the scene
@@ -264,6 +316,16 @@ class WorldFitBake:
             moved = (cmds.parent(node, target, relative=True) or [node])[0]
             node = (cmds.ls(moved, long=True) or [moved])[0]
         try:
+            # Unlocked FIRST: a locked plug refuses its cut as well as its keys.
+            written = [attr for attr, _ in cls.CHANNELS] + list(cls._WRITTEN_ATTRS)
+            if record["joint"]:
+                written += list(cls._JOINT_ATTRS)
+            elif record.get("axis"):
+                written += ["rotateAxis", "rotateAxisX", "rotateAxisY", "rotateAxisZ"]
+            for attr in written:
+                if cmds.getAttr(f"{node}.{attr}", lock=True):
+                    cmds.setAttr(f"{node}.{attr}", lock=False)
+                    record["unlocked"].append(attr)
             for _src_plug, attr, _factor in record["cut"]:
                 # Cut at the plug's own input -- the conversion node when there
                 # is one -- while the record names the driver behind it.
@@ -285,15 +347,50 @@ class WorldFitBake:
                 [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
                 type="matrix",
             )
+            if not record["inherits"]:
+                # Keys local to the target only hold while the node inherits:
+                # left off, Maya reads them as its WORLD -- and so does an FBX
+                # write, which keys a non-inheriting node's world as its local
+                # (a pinned production loom shipped 118-419 cm off).
+                cmds.setAttr(f"{node}.inheritsTransform", True)
             if record["joint"]:
                 cmds.setAttr(f"{node}.jointOrient", 0, 0, 0)
                 cmds.setAttr(f"{node}.rotateAxis", 0, 0, 0)
                 cmds.setAttr(f"{node}.segmentScaleCompensate", False)
+            elif record.get("axis"):
+                cmds.setAttr(f"{node}.rotateAxis", 0, 0, 0)
             cmds.setAttr(f"{node}.shear", 0, 0, 0)
 
             sel = om2.MSelectionList()
             sel.add(node)
             dep = om2.MFnDependencyNode(sel.getDependNode(0))
+            from mayatk.rig_utils.skinning import SkinUtils
+
+            if not keys and SkinUtils.get_skin_cluster(node):
+                # One key per channel, not plain values: Maya's FBX importer
+                # places an UNANIMATED skinned mesh from its bind pose (its
+                # bind world relative to its parent's), never its written
+                # local -- and a fitted local is not its bind-time one. Keyed,
+                # the importer plays the curve (measured 2026-10-17: plain
+                # values 30 cm off on a fixture, 78.4 on production looms).
+                keys, frames, rows = True, list(frames)[:1], list(rows)[:1]
+            if not keys:
+                # Internal units, as sampled: centimetres and radians.
+                modifier = om2.MDGModifier()
+                for (attr, kind), value in zip(cls.CHANNELS, rows[0]):
+                    plug = dep.findPlug(attr, False)
+                    if kind == "TL":
+                        modifier.newPlugValueMDistance(
+                            plug, om2.MDistance(value, om2.MDistance.kCentimeters)
+                        )
+                    elif kind == "TA":
+                        modifier.newPlugValueMAngle(
+                            plug, om2.MAngle(value, om2.MAngle.kRadians)
+                        )
+                    else:
+                        modifier.newPlugValueDouble(plug, value)
+                modifier.doIt()
+                return record
             time_array = om2.MTimeArray()
             unit = om2.MTime.uiUnit()
             for frame in frames:
@@ -321,6 +418,173 @@ class WorldFitBake:
         except Exception as e:
             raise cls.Failed(f"flatten bake failed mid-mutation: {e}", record) from e
         return record
+
+    @staticmethod
+    def _pivot_compensated(
+        node: str, rows: Sequence[Sequence[float]]
+    ) -> Sequence[Sequence[float]]:
+        """*rows* with each translate made up for *node*'s pivots.
+
+        A row is a pivot-free decomposition of the local matrix wanted, but a
+        transform composes its rotate and scale about its pivots, and adds
+        their translates: keyed as is, a pivoted node lands off by a constant
+        offset per pose (measured 2026-10-17 on four production wire looms:
+        12-21 cm, so the write's fold declined them). Rotate and scale stay;
+        the translate becomes the wanted one minus what the pivots add at
+        that rotate and scale (:class:`MTransformationMatrix`, Maya's own
+        composition). *rows* comes back as is when every pivot is zero.
+        """
+        import maya.api.OpenMaya as om2
+
+        selection = om2.MSelectionList()
+        selection.add(node)
+        fn = om2.MFnTransform(selection.getDagPath(0))
+        space = om2.MSpace.kTransform
+        scale_pivot = fn.scalePivot(space)
+        scale_shift = fn.scalePivotTranslation(space)
+        rotate_pivot = fn.rotatePivot(space)
+        rotate_shift = fn.rotatePivotTranslation(space)
+        if all(
+            abs(value) < 1e-12
+            for vector in (scale_pivot, scale_shift, rotate_pivot, rotate_shift)
+            for value in (vector.x, vector.y, vector.z)
+        ):
+            return rows
+        order = cmds.getAttr(f"{node}.rotateOrder")
+        out = []
+        for row in rows:
+            xf = om2.MTransformationMatrix()
+            xf.setScalePivot(om2.MPoint(scale_pivot), space, False)
+            xf.setScalePivotTranslation(om2.MVector(scale_shift), space)
+            xf.setRotatePivot(om2.MPoint(rotate_pivot), space, False)
+            xf.setRotatePivotTranslation(om2.MVector(rotate_shift), space)
+            xf.setScale(list(row[6:9]), space)
+            xf.setRotation(om2.MEulerRotation(row[3], row[4], row[5], order))
+            shift = xf.asMatrix()
+            out.append(
+                [row[0] - shift[12], row[1] - shift[13], row[2] - shift[14]]
+                + list(row[3:])
+            )
+        return out
+
+    @staticmethod
+    def non_inheriting(
+        nodes: Iterable[str], frames: Sequence[float] = ()
+    ) -> Dict[str, str]:
+        """``{node: parent}`` for each transform among *nodes* that ignores its
+        parent (``inheritsTransform`` off) while that parent leaves the origin,
+        at the current frame or at any of *frames*.
+
+        FBX and glTF have no "do not inherit": a node's transform is always
+        relative to its parent, and Maya's writer ships a non-inheriting node
+        as though it inherited -- a baking write keys its WORLD matrix as its
+        local, a plain one its TRS alone -- so it lands its parent's world
+        away (the production wire looms, pinned by
+        ``Matrices.pin_world_matrix``: 118-419 cm in the file, 170-720 cm
+        from their skeletons on a re-import). Keyed relative to that parent,
+        inheriting, it means the same to every consumer. The one rule the
+        Scene Exporter's flatten and every FBX write's fold
+        (``SmartBake.fold_offsets``) both ask; under a parent at the origin
+        throughout, world and local agree and nothing is named.
+
+        The current frame is read first, with no evaluation; the timeline is
+        walked only over the frames each parent still at the origin can move
+        at (:meth:`_frames_that_move`). A still parent -- a GEO group above a
+        skinned mesh, the usual setup -- costs no frame at all, where a
+        frame-by-frame walk cost one ``currentTime`` (a whole-scene
+        evaluation) per frame of every FBX write's range.
+
+        Parameters:
+            nodes: Transforms to judge -- each one, not its subtree.
+            frames: Frames to judge the parents at, beside the current one;
+                the first that places a parent off the origin settles it.
+
+        Returns:
+            ``{node: parent}``, long paths, sorted by node.
+        """
+        import maya.api.OpenMaya as om2
+
+        nodes = list(nodes)
+        parents: Dict[str, str] = {}
+        for node in sorted(set(cmds.ls(nodes, type="transform", long=True) or [])):
+            if cmds.getAttr(f"{node}.inheritsTransform"):
+                continue
+            parent = (cmds.listRelatives(node, parent=True, fullPath=True) or [None])[0]
+            if parent:
+                parents[node] = parent
+        if not parents:
+            return {}
+        identity = om2.MMatrix()
+
+        def off_origin(parent: str) -> bool:
+            world = om2.MMatrix(cmds.getAttr(f"{parent}.worldMatrix[0]"))
+            return not world.isEquivalent(identity, 1e-6)
+
+        placed = {node: p for node, p in parents.items() if off_origin(p)}
+        frames = list(frames)
+        still = {node: p for node, p in parents.items() if node not in placed}
+        if still and frames:
+            judged_at: Dict[float, List[str]] = {}
+            moving = WorldFitBake._frames_that_move(set(still.values()), frames)
+            for node, parent in still.items():
+                for frame in moving[parent]:
+                    judged_at.setdefault(frame, []).append(node)
+            restore = cmds.currentTime(query=True)
+            moved = False
+            try:
+                for frame in frames:  # the caller's order
+                    judged = [n for n in judged_at.pop(frame, ()) if n not in placed]
+                    if not judged:
+                        continue
+                    cmds.currentTime(frame, edit=True)
+                    moved = True
+                    for node in judged:
+                        if off_origin(parents[node]):
+                            placed[node] = parents[node]
+                    if len(placed) == len(parents):
+                        break
+            finally:
+                if moved:
+                    cmds.currentTime(restore, edit=True)
+        return {node: placed[node] for node in sorted(placed)}
+
+    @staticmethod
+    def _frames_that_move(
+        nodes: Iterable[str], frames: Sequence[float]
+    ) -> Dict[str, List[float]]:
+        """``{node: the frames of *frames* its world can differ from the
+        current frame's at}``, from what drives it and every ancestor
+        (``_TimeDependency.lineage`` -- the walk behind ``SmartBake``'s
+        per-object ranges):
+
+        - nothing time-dependent: none -- the current frame showed them all;
+        - time curves alone (keys, and the constraints, IK, expressions and
+          offset drives that read them): the frames within the curves' span,
+          plus one either side -- constant infinity holds the end poses
+          beyond it;
+        - anything the walk cannot prove (a time expression, a driven key, a
+          dynamics solver, a cycling curve): every frame.
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import _TimeDependency
+
+        resolver = _TimeDependency()
+        out: Dict[str, List[float]] = {}
+        for node in nodes:
+            try:
+                state, span = resolver.lineage(node)
+            except (RuntimeError, ValueError):  # Maya refusing a query: unproven
+                state, span = _TimeDependency.UNKNOWN
+            if state == "static":
+                out[node] = []
+            elif state == "known" and span:
+                first, last = span
+                before = [f for f in frames if f < first]
+                after = [f for f in frames if f > last]
+                inside = [f for f in frames if first <= f <= last]
+                out[node] = before[-1:] + inside + after[:1]
+            else:
+                out[node] = list(frames)
+        return out
 
     @staticmethod
     def similarity_ancestors(
@@ -520,7 +784,12 @@ class WorldFitBake:
         return prepared
 
     @classmethod
-    def apply(cls, prepared: dict, records: Optional[List[dict]] = None) -> dict:
+    def apply(
+        cls,
+        prepared: dict,
+        records: Optional[List[dict]] = None,
+        static: Iterable[str] = (),
+    ) -> dict:
         """Reparent and key every node :meth:`prepare` sampled, and park the IK
         handles the moves would break.
 
@@ -542,6 +811,8 @@ class WorldFitBake:
             records: The list to append restore records to -- pass one a
                 restore is already staged over, so an exception part-way
                 still leaves every node moved so far reversible.
+            static: Planned paths whose samples are all one pose: written as
+                plain values, no key (:meth:`bake_node` *keys*).
 
         Returns:
             ``{"records": [...], "baked": [(path, uuid, target)],
@@ -559,6 +830,7 @@ class WorldFitBake:
         }
         samples, frames = prepared["samples"], prepared["frames"]
         targets = prepared.get("targets") or {}
+        static = set(static)
         for path, uuid, target, reparent in prepared["plan"]:
             node = (cmds.ls(uuid, long=True) or [None])[0]
             # The target by its UUID: a target that is itself a chain node has
@@ -576,6 +848,7 @@ class WorldFitBake:
                         frames,
                         samples[(path, target)],
                         reparent=reparent,
+                        keys=path not in static,
                     )
                 )
             except cls.Failed as error:
@@ -699,6 +972,11 @@ class WorldFitBake:
                     cmds.setAttr(f"{node}.{attr}", value)
             except RuntimeError:
                 pass
+        if record.get("axis"):
+            try:
+                cmds.setAttr(f"{node}.rotateAxis", *record["axis"])
+            except RuntimeError:
+                pass
         for attr, value in (record.get("originals") or {}).items():
             try:
                 cmds.setAttr(f"{node}.{attr}", value)
@@ -715,6 +993,12 @@ class WorldFitBake:
                 )
             except (RuntimeError, ValueError):
                 pass
+        # ``is False``: a record from before inheritance was kept leaves it alone.
+        if record.get("inherits") is False:
+            try:
+                cmds.setAttr(f"{node}.inheritsTransform", False)
+            except RuntimeError:
+                pass
         opm_plug = f"{node}.offsetParentMatrix"
         if record.get("opm_source"):
             try:
@@ -723,6 +1007,11 @@ class WorldFitBake:
                 pass
         elif record.get("opm_value") is not None:
             cmds.setAttr(opm_plug, record["opm_value"], type="matrix")
+        for attr in record.get("unlocked") or []:  # last: every write is done
+            try:
+                cmds.setAttr(f"{node}.{attr}", lock=True)
+            except RuntimeError:
+                pass
         return True
 
     @classmethod

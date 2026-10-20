@@ -62,6 +62,15 @@ class _TaskDataMixin:
     #: its override layer, undone by the restore the task stages.
     _bake_session_id: Optional[str] = None
     _bake_override_layer: Optional[str] = None
+    #: The FBX settings as the preset (or the default reset) left them, read
+    #: once before the pipeline (``capture_write_baseline``) -- the input
+    #: ``write_plan`` decides from, so no later task's own write of those
+    #: settings feeds back into it. None reads them live (a manager driven
+    #: directly).
+    _write_baseline: Optional[Any] = None
+    #: The span ``apply_declared_takes`` realized (``()`` for none), None
+    #: until it ran -- after that the plan reads what was split, not a guess.
+    _realized_takes: Optional[tuple] = None
     #: ``convert_textures``' network snapshot, live for the length of its
     #: staged rewire (the texture checks link nodes through it).
     _texture_network_snapshot: Optional[Any] = None
@@ -128,6 +137,8 @@ class _TaskDataMixin:
         self._home_workspace = None
         self._bake_session_id = None
         self._bake_override_layer = None
+        self._write_baseline = None
+        self._realized_takes = None
         self._texture_network_snapshot = None
         self._shear_verdict = None
         self._invalidate_material_caches()

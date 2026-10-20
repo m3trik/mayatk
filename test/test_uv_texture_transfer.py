@@ -1341,6 +1341,265 @@ class TestTextureTransfer(MayaTkTestCase):
             os.path.basename(maps["baseColor"]), "hero_atlas_1_BaseColor.png"
         )
 
+    # ------------------------------------------------------- in place
+    def _in_place_pair(self, target_map=None):
+        """A checker-textured source and a copy of it in a mirrored layout,
+        wearing its OWN lambert ``ipTgtMat`` (reading *target_map*, if any)."""
+        src = self._plane("ipSrc")
+        _m, sg = self._lambert("ipSrcMat", texture=self.checker_path)
+        cmds.sets(src, e=True, forceElement=sg)
+        tgt = cmds.duplicate(src, name="ipTgt")[0]
+        _t, tsg = self._lambert("ipTgtMat", texture=target_map)
+        cmds.sets(tgt, e=True, forceElement=tsg)
+        cmds.polyEditUV(f"{tgt}.map[*]", scaleU=-1, pivotU=0.5)  # another layout
+        return src, tgt
+
+    def _target_map(self, name="ipTgt_diffuse.tga"):
+        """An existing grey map in its own folder, in a non-PNG format."""
+        folder = os.path.join(self.tmp, "tgt_textures")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, name).replace("\\", "/")
+        Image.fromarray(np.full((64, 64, 3), 128, np.uint8)).save(path)
+        return path
+
+    def _in_place(self, tgt, src, **kwargs):
+        kwargs = dict(
+            size=64,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="ip",
+            assign=True,
+            assign_from="in_place",
+            **kwargs,
+        )
+        return TextureTransfer().transfer(tgt, src, **kwargs)
+
+    def _color_map(self, mat):
+        """``(file node, normalized path)`` driving *mat*'s colour, or None."""
+        files = cmds.listConnections(f"{mat}.color", type="file") or []
+        if not files:
+            return None
+        path = cmds.getAttr(f"{files[0]}.fileTextureName")
+        return files[0], self._norm(path)
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(os.path.abspath(path))
+
+    def test_in_place_rewrites_the_targets_maps_and_keeps_its_material(self):
+        """The ask: re-use the target's material and overwrite its maps -- the
+        material keeps its name, its file node and the path that node reads
+        (here a TGA, rewritten as a TGA); no material and no map is added."""
+        tga = self._target_map()
+        src, tgt = self._in_place_pair(tga)
+        before = self._color_map("ipTgtMat")
+
+        out = self._in_place(tgt, src)
+
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["ipTgtMat"])
+        self.assertEqual(self._color_map("ipTgtMat"), before)
+        self.assertFalse(cmds.objExists("ip"))
+        (maps,) = out.values()
+        self.assertEqual(self._norm(maps["baseColor"]), self._norm(tga))
+        self.assertFalse(os.path.isfile(os.path.join(self.out_dir, "ip_BaseColor.png")))
+        with Image.open(tga) as img:
+            self.assertEqual(img.format, "TGA")
+        got = self._load(tga)
+        self.assertLess(np.abs(got - _checker().astype(np.float32)[:, ::-1]).max(), 2.0)
+
+    def test_in_place_wires_a_channel_the_target_had_no_map_for(self):
+        """Nothing to overwrite: the map is written fresh and wired into the
+        target's OWN material, which stays the one the faces wear."""
+        src, tgt = self._in_place_pair()
+        out = self._in_place(tgt, src)
+        (maps,) = out.values()
+        self.assertEqual(os.path.basename(maps["baseColor"]), "ip_BaseColor.png")
+        self.assertEqual(self._color_map("ipTgtMat")[1], self._norm(maps["baseColor"]))
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["ipTgtMat"])
+
+    def test_in_place_never_overwrites_a_map_the_source_reads(self):
+        """A target material whose file node reads the SOURCE's own file (a
+        duplicated graph, an import of the same asset): rewriting it would
+        change the source too. The target's material is still re-used, wired
+        to a fresh map instead."""
+        before = self._load(self.checker_path)
+        src, tgt = self._in_place_pair(self.checker_path)
+        out = self._in_place(tgt, src)
+        self.assertTrue(np.array_equal(self._load(self.checker_path), before))
+        (maps,) = out.values()
+        self.assertEqual(self._color_map("ipTgtMat")[1], self._norm(maps["baseColor"]))
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["ipTgtMat"])
+
+    def test_in_place_never_overwrites_a_map_another_material_reads(self):
+        """A shared library texture: a material outside the run reads the
+        same file, so it is left alone and the target is wired to a fresh map."""
+        lib = self._target_map("lib_scratches.png")
+        before = self._load(lib)
+        src, tgt = self._in_place_pair(lib)
+        self._lambert("libUser", texture=lib)
+        self._in_place(tgt, src)
+        self.assertTrue(np.array_equal(self._load(lib), before))
+        self.assertNotEqual(self._color_map("ipTgtMat")[1], self._norm(lib))
+        self.assertEqual(self._color_map("libUser")[1], self._norm(lib))
+
+    def _linked_sets(self, file_node, obj):
+        """The UV set names *file_node* is ``uvLink``-ed to on *obj*'s shape."""
+        shape = cmds.ls(cmds.listRelatives(obj, shapes=True, fullPath=True), long=True)
+        return sorted(
+            cmds.getAttr(plug)
+            for plug in cmds.uvLink(query=True, texture=file_node) or []
+            if cmds.ls(plug.split(".uvSet[")[0], long=True) == shape
+        )
+
+    def _flat(self, name, rgb):
+        path = os.path.join(self.tmp, name).replace("\\", "/")
+        Image.fromarray(np.full((64, 64, 3), rgb, np.uint8)).save(path)
+        return path
+
+    def test_in_place_skips_a_material_worn_outside_the_run(self):
+        """Rewriting a material a bystander wears changes the bystander, and
+        Overwrite target never creates, copies or reassigns one: the output is
+        skipped and named -- with nothing else to do, the run raises."""
+        tga = self._target_map()
+        before = self._load(tga)
+        src, tgt = self._in_place_pair(tga)
+        other = self._plane("ipBystander")
+        cmds.sets(other, e=True, forceElement="ipTgtMatSG")
+        with self.assertRaises(ValueError) as caught:
+            self._in_place(tgt, src)
+        self.assertIn("ipBystander", str(caught.exception))
+        self.assertTrue(np.array_equal(self._load(tga), before))
+        self.assertEqual(TextureTransfer().face_materials(tgt)[0], ["ipTgtMat"])
+        self.assertFalse(cmds.objExists("ip"))
+        self.assertFalse(os.path.isdir(self.out_dir) and os.listdir(self.out_dir))
+
+    def test_in_place_re_uses_an_instanced_target(self):
+        """An instance shares the target's UVs: it is the target, not a
+        bystander whose look the overwrite would change."""
+        tga = self._target_map()
+        src, tgt = self._in_place_pair(tga)
+        cmds.instance(tgt, name="ipTgtInstance")
+        out = self._in_place(tgt, src)
+        (maps,) = out.values()
+        self.assertEqual(self._norm(maps["baseColor"]), self._norm(tga))
+        self.assertFalse(cmds.objExists("ip"))
+
+    def test_in_place_never_overwrites_a_tiled_texture(self):
+        """A texture read through a tiling place2dTexture would tile the new
+        layout too: the file is left alone and a fresh map is wired in."""
+        tga = self._target_map()
+        before = self._load(tga)
+        src, tgt = self._in_place_pair(tga)
+        node = self._color_map("ipTgtMat")[0]
+        p2d = cmds.shadingNode("place2dTexture", asUtility=True)
+        cmds.connectAttr(f"{p2d}.outUV", f"{node}.uvCoord")
+        cmds.setAttr(f"{p2d}.repeatU", 2)
+        self._in_place(tgt, src)
+        self.assertTrue(np.array_equal(self._load(tga), before))
+        self.assertNotEqual(self._color_map("ipTgtMat")[1], self._norm(tga))
+
+    def test_in_place_keeps_each_materials_own_texture_set(self):
+        """Two target materials on one layout each rewrite their own map with
+        their own islands -- merged as one layout, both files got the whole
+        atlas, the other material's texels included."""
+        src = self._plane("ipTwoSrc")
+        for name, rgb, faces in (
+            ("red", (255, 0, 0), (0, 2)),
+            ("blue", (0, 0, 255), (1, 3)),
+        ):
+            _m, sg = self._lambert(
+                f"{name}SrcMat", texture=self._flat(f"{name}.png", rgb)
+            )
+            cmds.sets([f"{src}.f[{i}]" for i in faces], e=True, forceElement=sg)
+        tgt = cmds.duplicate(src, name="ipTwoTgt")[0]
+        files = {}
+        for name, faces in (("left", (0, 2)), ("right", (1, 3))):
+            files[name] = self._target_map(f"{name}.tga")
+            _m, sg = self._lambert(f"{name}TgtMat", texture=files[name])
+            cmds.sets([f"{tgt}.f[{i}]" for i in faces], e=True, forceElement=sg)
+        out = self._in_place(tgt, src)
+        self.assertEqual(sorted(out), ["leftTgtMat", "rightTgtMat"])
+        left, right = self._load(files["left"]), self._load(files["right"])
+        self.assertGreater(left[..., 0].max(), 250)
+        self.assertLess(left[..., 2].max(), 5, "the right material's texels")
+        self.assertGreater(right[..., 2].max(), 250)
+        self.assertLess(right[..., 0].max(), 5, "the left material's texels")
+
+    def test_a_copy_samples_the_uv_set_its_maps_were_written_for(self):
+        """A new file texture binds to the mesh's FIRST set whatever is current
+        (measured 2026-10-17), so a ``map1`` -> ``map2`` result rendered its
+        new maps through ``map1``."""
+        plane = self._plane("bindPlane")
+        _mat, sg = self._lambert("bindMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+        TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="bound",
+            assign=True,
+        )
+        node, _path = self._color_map("bound")
+        self.assertEqual(self._linked_sets(node, plane), ["map2"])
+
+    def test_in_place_on_one_mesh_re_uses_the_material_and_binds_the_new_set(self):
+        """UV set -> UV set: the material is the target's own, so it is re-used;
+        the maps it reads are the source being read, so they are written
+        fresh (the old layout's files survive); and its new textures sample
+        the set they were written for."""
+        plane = self._plane("ipOwn")
+        _mat, sg = self._lambert("ipOwnMat", texture=self.checker_path)
+        cmds.sets(plane, e=True, forceElement=sg)
+        self._rotate_uv_set_copy(plane, "map2", 90)
+        before = self._load(self.checker_path)
+        out = TextureTransfer().transfer(
+            plane,
+            source_uv_set="map1",
+            target_uv_set="map2",
+            size=16,
+            supersample=1,
+            padding=0,
+            output_dir=self.out_dir,
+            output_name="moved",
+            assign=True,
+            assign_from="in_place",
+        )
+        (maps,) = out.values()
+        self.assertTrue(np.array_equal(self._load(self.checker_path), before))
+        self.assertEqual(TextureTransfer().face_materials(plane)[0], ["ipOwnMat"])
+        node, path = self._color_map("ipOwnMat")
+        self.assertEqual(path, self._norm(maps["baseColor"]))
+        self.assertEqual(self._linked_sets(node, plane), ["map2"])
+
+    def test_in_place_skips_a_layouts_unshaded_faces(self):
+        """Faces wearing Maya's default shader are their own output, and it
+        cannot be re-used (maps wired into it texture every unassigned
+        object): skipped, nothing reassigned, the target's own material
+        overwritten."""
+        default = TextureTransfer._surface_shader("initialShadingGroup")
+        tga = self._target_map()
+        src, tgt = self._in_place_pair(tga)
+        cmds.sets(f"{tgt}.f[0:1]", e=True, forceElement="initialShadingGroup")
+        out = self._in_place(tgt, src)
+        self.assertEqual(list(out), ["ipTgtMat"])
+        self.assertEqual(
+            sorted(TextureTransfer().face_materials(tgt)[0]),
+            sorted(["ipTgtMat", default]),
+        )
+        self.assertFalse(cmds.ls(cmds.listHistory(default) or [], type="file"))
+
+    def test_in_place_refuses_a_shader_type(self):
+        """A retype builds a new node -- the opposite of re-using the target's."""
+        src, tgt = self._in_place_pair()
+        with self.assertRaises(ValueError):
+            self._in_place(tgt, src, assign_shader_type="stingray")
+
 
 class TestPairByName(QuickTestCase):
     """``pair_by_name`` -- path strings only, no scene."""

@@ -5104,6 +5104,33 @@ class TestReferenceRemoval(unittest.TestCase):
         controller.sb.message_box.assert_not_called()
 
 
+class TestRemovalReleasesFosteredNodes(unittest.TestCase):
+    """Unreferencing left ``ROOM_ENVRNfosterParent1`` in production: a
+    local node parented under a referenced one is parked by Maya under a foster
+    parent that outlives the reference. Live: it is Maya's removal behaviour."""
+
+    def setUp(self):
+        self._store = ptk.TempArtifacts("mtk_rm_foster_test", policy="scoped")
+        self.asset = os.path.join(self._store.dir_path(), "asset.ma")
+        TestImportReferencesNamespaceModes._author_asset(self.asset)
+        self.manager = TestImportReferencesNamespaceModes._make_manager()
+
+    def tearDown(self):
+        ref_engine.cmds.file(new=True, force=True)
+        self._store.cleanup()
+
+    def test_unreferencing_leaves_no_foster_parent_and_keeps_local_nodes(self):
+        cmds = ref_engine.cmds
+        cmds.file(self.asset, reference=True, namespace="ENV")
+        loc = cmds.spaceLocator(name="localLoc")[0]
+        cmds.parent(loc, "ENV:asset_root")
+
+        self.assertEqual(self.manager.remove_references(["ENV"]), [])
+
+        self.assertEqual(cmds.ls(type="fosterParent"), [])
+        self.assertEqual(cmds.ls("localLoc", long=True), ["|localLoc"])
+
+
 class TestConvertReferencesToAssemblies(unittest.TestCase):
     """``AssemblyManager.convert_references_to_assemblies`` against a real file."""
 

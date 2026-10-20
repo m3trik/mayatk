@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-8964%20passed%2C%201%20failed-orange.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-9379%20passed-brightgreen.svg)](../test/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -36,14 +36,14 @@ mayatk also ships [`mayapy-package-manager.bat`](../mayatk/env_utils/mayapy-pack
 | `display_utils` | Visibility & isolation, color ID, exploded view |
 | `edit_utils` | `Selection`, naming, primitives, snap, bevel, bridge, mirror, duplicate (linear/radial/grid), mesh graph |
 | `env_utils` | `MayaConnection`, workspace, namespace sandbox, references, hierarchy sync, FBX/USD, scene exporter, Blender + Unity bridges, WebXR preview |
-| `light_utils` | [Lightmap baker](lightmap_baker.md), HDR manager, lights-from-geometry |
+| `light_utils` | [Lightmap baker](lightmap_baker.md), [Light rigs](light_rig.md), HDR manager, lights-from-geometry |
 | `mat_utils` | `GameShader`, `RenderEffects` (per-object `opacity` / `highlight` channels; `RenderOpacity` is its deprecated alias, warning until 0.20.0), `ImageToPlane`, `MatUpdater`, shader templates, emissive groups, Marmoset + Substance bridges |
 | `node_utils` | `NodeUtils`, `Attributes`, Channels tool, [shared scene data nodes](data_nodes.md) |
 | `nurbs_utils` | NURBS surfaces, `ImageTracer`, curve-to-tube |
 | `render_utils` | Renderer switching and render-settings helpers (composed by `hdr_manager`) |
 | `rig_utils` | `Controls`, skinning, tube / wheel / telescope / shadow / [articulated](articulated_rig.md) rigs |
 | `ui_utils` | `MayaUiHandler`, channel box, native menus, hotkey collision check, node icons |
-| `uv_utils` | UV utilities, Rizom bridge |
+| `uv_utils` | UV utilities, [Texture Combine](texture_combine.md) (material atlas combine + UV / texture transfer), Rizom bridge |
 | `xform_utils` | Transforms, matrices, pivot watcher |
 
 Classes — and, for the wildcard-scanned `*_utils` roots, their public methods — are exposed at the package root via the lazy-loading resolver. Both bare and class-qualified forms work:
@@ -173,6 +173,7 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 - **[Shot Sequencer](shot_sequencer.md)** — the per-shot animation timeline: its Standard / Compact / Graph views, the shot, clip and key gestures, the graph editor, keys and header settings (the panel's `?` help links here).
 - **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
+- **[Texture Combine](texture_combine.md)** — several materials into one atlas and one material, in place: stack-aware packing, per-material / mesh / island scale overrides, lightmap consolidation, and restore / re-combine from a scene record; plus the UV / texture Transfer mode (the panel's `?` help links here).
 - **[Lightmap Baker](lightmap_baker.md)** — Arnold lighting baked into engine lightmaps: the panel, presets shared with the headless API, the Exclude set, where the maps land, and how the engine binds them.
 - **[Articulated Rig](articulated_rig.md)** — a prop of rigid parts (a lamp, a magnifier arm) rigged from its geometry: the joint types and how they are found, the rig, the `articulation` record the Unity and WebXR runtimes pose, and grab semantics.
 - **[Emissive groups → Unity](emissive_groups.md)** — runtime-toggleable emissive regions: one all-on emissive map, per-group gating via vertex-color or mask-texture encoding; cross-package SSoT (pythontk region-mask engine, blendertk mirror, unitytk templates).

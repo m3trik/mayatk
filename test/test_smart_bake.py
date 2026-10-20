@@ -2989,6 +2989,62 @@ class TestShearedMatrixFlatten(unittest.TestCase):
         self.assertEqual(cmds.listRelatives(cube, parent=True), ["rig_GRP"])
         self.assertIn("baked in place", said)
 
+    def test_a_node_that_ignores_its_parent_keeps_its_world_and_its_pin(self):
+        """The fitted keys are LOCAL to the target, which holds only while the
+        node inherits: a pinned node (``Matrices.pin_world_matrix`` --
+        inheritsTransform off, its parent's world folded into a static
+        offsetParentMatrix) keyed in place took those locals as its WORLD,
+        landing its parent's whole transform away (the production wire looms:
+        118-419 cm). The bake must switch inheritance on, and the restore put
+        the pin back exactly. A pinned mesh LOCKS every channel (the tube rig
+        does), which refused the keys outright: the bake unlocks what it writes
+        and the restore relocks it.
+        Added: 2026-10-17"""
+        from mayatk.anim_utils.world_fit_bake import WorldFitBake
+        from mayatk.xform_utils.matrices import Matrices
+
+        grp = cmds.group(empty=True, name="anchor_GRP")
+        cmds.xform(grp, translation=(50, 10, 30), rotation=(0, 30, 0))
+        cmds.setKeyframe(grp, attribute="translateX", time=1, value=50)
+        cmds.setKeyframe(grp, attribute="translateX", time=30, value=150)
+        cmds.setKeyframe(grp, attribute="rotateY", time=1, value=30)
+        cmds.setKeyframe(grp, attribute="rotateY", time=30, value=75)
+        cmds.currentTime(1)
+        cube = cmds.polyCube(name="pinned_cube")[0]
+        cube = cmds.ls(cmds.parent(cube, grp)[0], long=True)[0]
+        cmds.xform(cube, translation=(5, 0, 0), rotation=(0, 0, 20))
+        self.assertTrue(Matrices.pin_world_matrix(cube))
+        locked = [
+            f"{cube}.{a}{x}" for a in ("translate", "rotate", "scale") for x in "XYZ"
+        ]
+        for plug in locked:
+            cmds.setAttr(plug, lock=True)
+        pin = cmds.getAttr(f"{cube}.offsetParentMatrix")
+        uuid = cmds.ls(cube, uuid=True)[0]
+        before = self._worlds([uuid])
+        target = cmds.ls(grp, long=True)[0]
+
+        outcome = WorldFitBake.flatten([(cube, uuid, target, False)], self.FRAMES)
+
+        self.assertEqual(outcome["failed"], [])
+        self.assertTrue(cmds.getAttr(f"{cube}.inheritsTransform"))
+        self.assertLess(
+            self._drift(before, self._worlds([uuid])),
+            1e-6,
+            "the fitted locals were taken as the node's world",
+        )
+
+        restored, errors = WorldFitBake.restore(outcome["records"])
+
+        self.assertEqual((restored, errors), (1, []))
+        self.assertFalse(cmds.getAttr(f"{cube}.inheritsTransform"))
+        self.assertEqual(cmds.getAttr(f"{cube}.offsetParentMatrix"), pin)
+        self.assertEqual(
+            [p for p in locked if not cmds.getAttr(p, lock=True)], [], "relocked"
+        )
+        self.assertEqual(cmds.keyframe(cube, query=True, keyframeCount=True), 0)
+        self.assertLess(self._drift(before, self._worlds([uuid])), 1e-9)
+
 
 class TestFbxMatrixOpmExport(unittest.TestCase):
     """Maya's FBX exporter freezes a CONNECTED ``offsetParentMatrix`` whose
@@ -4655,6 +4711,478 @@ class TestStashRegistryLifetime(unittest.TestCase):
             cmds.lockNode(dup, lock=False)
             cmds.delete(dup)
         self.assert_carrier_intact()
+
+
+class TestFoldOffsets(unittest.TestCase):
+    """``SmartBake.fold_offsets``: the matrix pass's fold of an offsetParentMatrix,
+    for an FBX write that does not bake -- which drops every offset (measured on
+    Maya 2025 / FBX 2020.3.6: a static translate-3 offset shipped at world 0, a
+    keyed prop under a driven-locator rig 3.3 units off). A node nothing drives
+    folds to plain values, no key; a keyed one is re-keyed per frame; a driven
+    offset folds over its drivers. The in-memory session hands back every
+    matrix, key and offset exactly; a fold that cannot be exact is declined
+    with the scene untouched.
+    Added: 2026-10-17
+    """
+
+    FRAMES = (1, 13, 37, 60, 100)
+    CHANNELS = ("tx", "ty", "tz", "rx", "ry", "rz", "sx", "sy", "sz")
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from maya import standalone
+
+            try:
+                standalone.initialize(name="python")
+            except (RuntimeError, TypeError):
+                pass
+            cls.maya_available = True
+        except ImportError:
+            cls.maya_available = False
+
+    def setUp(self):
+        if not self.maya_available:
+            self.skipTest("Maya not available")
+        cmds.file(new=True, force=True)
+        cmds.playbackOptions(min=1, max=100, ast=1, aet=100)
+        cmds.currentTime(7)
+
+    def _offset(self, node, shear=None):
+        """A static non-identity offset: translate (3, 0, 1), rotate Y 30."""
+        import math
+        import maya.api.OpenMaya as om2
+
+        xform = om2.MTransformationMatrix()
+        xform.setTranslation(om2.MVector(3, 0, 1), om2.MSpace.kTransform)
+        xform.setRotation(om2.MEulerRotation(0, math.radians(30), 0))
+        if shear:
+            xform.setShear(list(shear), om2.MSpace.kTransform)
+        cmds.setAttr(
+            f"{node}.offsetParentMatrix", list(xform.asMatrix()), type="matrix"
+        )
+
+    def _keyed(self, name="keyed"):
+        cube = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+        cmds.setKeyframe(cube, attribute="translateZ", time=1, value=2)
+        cmds.setKeyframe(cube, attribute="translateZ", time=37.5, value=4)
+        cmds.setKeyframe(cube, attribute="translateZ", time=100, value=6)
+        cmds.setKeyframe(cube, attribute="rotateY", time=1, value=0)
+        cmds.setKeyframe(cube, attribute="rotateY", time=100, value=90)
+        cmds.keyTangent(cube, attribute="rotateY", itt="linear", ott="step")
+        return cube
+
+    def _worlds(self, node):
+        worlds = []
+        for frame in self.FRAMES:
+            cmds.currentTime(frame)
+            worlds.append(cmds.getAttr(f"{node}.worldMatrix[0]"))
+        cmds.currentTime(7)
+        return worlds
+
+    def _state(self, nodes):
+        """Everything the fold may touch, to the bit: offsets and their inputs,
+        local matrices, channel values, every key (time, value, tangents), the
+        node set, the current frame."""
+        state = {
+            "nodes": sorted(cmds.ls(long=True)),
+            "time": cmds.currentTime(query=True),
+        }
+        for node in nodes:
+            state[f"{node}.opm"] = cmds.getAttr(f"{node}.offsetParentMatrix")
+            state[f"{node}.matrix"] = cmds.getAttr(f"{node}.matrix")
+            state[f"{node}.inherits"] = cmds.getAttr(f"{node}.inheritsTransform")
+            state[f"{node}.opm_in"] = cmds.listConnections(
+                f"{node}.offsetParentMatrix", source=True, destination=False, plugs=True
+            )
+            for channel in self.CHANNELS:
+                plug = f"{node}.{channel}"
+                state[f"{plug}.value"] = cmds.getAttr(plug)
+                state[f"{plug}.lock"] = cmds.getAttr(plug, lock=True)
+                state[f"{plug}.keys"] = (
+                    cmds.keyframe(plug, query=True, timeChange=True, valueChange=True)
+                    or []
+                )
+                state[f"{plug}.tangents"] = (
+                    cmds.keyTangent(
+                        plug, query=True, itt=True, ott=True, ia=True, oa=True
+                    )
+                    or []
+                )
+        return state
+
+    def _assert_same_worlds(self, before, after):
+        for frame, (a, b) in zip(self.FRAMES, zip(before, after)):
+            self.assertLess(
+                max(abs(x - y) for x, y in zip(a, b)), 1e-4, f"world at frame {frame}"
+            )
+
+    def test_a_static_offset_folds_to_plain_values_with_no_key(self):
+        """A static prop stays static: no curve on any channel, the offset at
+        identity, the world unchanged -- and the restore puts the offset back."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = cmds.ls(cmds.polyCube(name="static")[0], long=True)[0]
+        cmds.xform(cube, translation=(1, 2, 3))
+        self._offset(cube)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.baked), [cube])
+        self.assertEqual(result.declined, {})
+        self.assertEqual(
+            cmds.getAttr(f"{cube}.offsetParentMatrix"), SmartBake.IDENTITY_MATRIX
+        )
+        for channel in self.CHANNELS:
+            self.assertFalse(
+                cmds.keyframe(f"{cube}.{channel}", query=True, keyframeCount=True),
+                f"{channel} was keyed",
+            )
+        self._assert_same_worlds(worlds, self._worlds(cube))
+
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_keyed_node_folds_per_frame_and_is_handed_back_exactly(self):
+        """Every frame of its keys keyed with the folded local -- and no key
+        between them left holding an unfolded value (the 37.5 key) -- then the
+        artist's curves back key for key, tangents included."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = self._keyed()
+        self._offset(cube)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.baked), [cube])
+        times = cmds.keyframe(f"{cube}.translateZ", query=True, timeChange=True)
+        self.assertEqual(times, [float(f) for f in range(1, 101)])
+        self._assert_same_worlds(worlds, self._worlds(cube))
+
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_channel_keyed_once_takes_the_fold_on_its_curve(self):
+        """One key is a curve all the same: plain values set under it lasted
+        only to the next evaluation, so the node shipped unfolded (declined
+        as missing its world). Its curve takes the folded value instead, one
+        key, and the restore hands the artist's key back.
+        Added: 2026-10-19
+        """
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = cmds.ls(cmds.polyCube(name="keyed_once")[0], long=True)[0]
+        cmds.setKeyframe(cube, attribute="translateZ", time=1, value=2)
+        self._offset(cube)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(result.declined, {})
+        self.assertEqual(list(result.baked), [cube])
+        self.assertEqual(
+            cmds.getAttr(f"{cube}.offsetParentMatrix"), SmartBake.IDENTITY_MATRIX
+        )
+        self._assert_same_worlds(worlds, self._worlds(cube))
+
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_driven_offset_folds_over_its_drivers_and_is_reconnected(self):
+        """A matrix drive -- what the bake's own matrix pass covers -- folds
+        over its driver's keys, and the restore reconnects it."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        driver = cmds.spaceLocator(name="driver")[0]
+        cmds.setKeyframe(driver, attribute="translateX", time=1, value=0)
+        cmds.setKeyframe(driver, attribute="translateX", time=100, value=10)
+        cube = cmds.ls(cmds.polyCube(name="driven")[0], long=True)[0]
+        cmds.connectAttr(f"{driver}.worldMatrix[0]", f"{cube}.offsetParentMatrix")
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.baked), [cube])
+        self.assertFalse(
+            cmds.listConnections(f"{cube}.offsetParentMatrix", source=True)
+        )
+        self._assert_same_worlds(worlds, self._worlds(cube))
+
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_fold_that_cannot_be_exact_is_declined_and_untouched(self):
+        """A locked channel cannot take the fold and a sheared local has no
+        t/r/s form: each is declined, by reason, and nothing about it moves."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        locked = cmds.ls(cmds.polyCube(name="locked")[0], long=True)[0]
+        self._offset(locked)
+        cmds.setAttr(f"{locked}.rotateX", lock=True)
+        sheared = cmds.ls(cmds.polyCube(name="sheared")[0], long=True)[0]
+        self._offset(sheared, shear=(0.3, 0, 0))
+        state = self._state([locked, sheared])
+
+        result, restore = SmartBake.fold_offsets([locked, sheared])
+
+        self.assertEqual(sorted(result.declined), sorted([locked, sheared]))
+        self.assertIn("locked", result.declined[locked])
+        self.assertIn("shears", result.declined[sheared])
+        self.assertEqual(self._state([locked, sheared]), state)
+        restore()
+        self.assertEqual(self._state([locked, sheared]), state)
+
+    def test_an_identity_offset_is_left_alone(self):
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = self._keyed()
+        state = self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(result.baked, {})
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_fold_that_raises_hands_the_scene_back(self):
+        """Mid-fold -- offsets neutralised, curves stashed -- a raise is
+        reversed before it propagates."""
+        from unittest.mock import patch
+
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        cube = self._keyed()
+        self._offset(cube)
+        state = self._state([cube])
+
+        with patch.object(
+            SmartBake, "_write_matrix_keys", side_effect=RuntimeError("mid-fold")
+        ):
+            with self.assertRaises(RuntimeError):
+                SmartBake.fold_offsets([cube])
+
+        self.assertEqual(self._state([cube]), state)
+
+    # -- a node that ignores its parent (inheritsTransform off) ---------------
+    # FBX has no "do not inherit": the writer ships such a node as though it
+    # inherited -- a baking write keys its WORLD as its local, a plain one its
+    # TRS alone -- so it lands its parent's world away (measured 2026-10-17: a
+    # pinned cube under a keyed module 121.6 cm off baked, 98.7 plain). Folding
+    # TRS x OPM leaves it shipping its world as a local, and a pinned rig mesh
+    # locks every channel, which the offset fold declines.
+
+    def _pinned_under(self, keyed=True, locked=True, scale=None):
+        """A cube pinned (``Matrices.pin_world_matrix``) under a group that
+        moves AFTER the pin -- keyed over 1-100, or set once; *locked* locks
+        every t/r/s (the tube rig's idiom). Returns ``(group, cube)``."""
+        from mayatk.xform_utils.matrices import Matrices
+
+        group = cmds.group(empty=True, name="module")
+        cmds.xform(group, translation=(20, 4, 0), rotation=(0, 10, 0))
+        cube = cmds.polyCube(name="pinned")[0]
+        cube = cmds.ls(cmds.parent(cube, group)[0], long=True)[0]
+        cmds.xform(cube, translation=(3, 2, 1), rotation=(0, 20, 0))
+        self.assertTrue(Matrices.pin_world_matrix(cube))
+        if keyed:
+            for attr, (first, last) in (
+                ("translateX", (50, 150)),
+                ("rotateY", (30, 75)),
+            ):
+                cmds.setKeyframe(group, attribute=attr, time=1, value=first)
+                cmds.setKeyframe(group, attribute=attr, time=100, value=last)
+        else:
+            cmds.xform(group, translation=(50, 10, 0), rotation=(0, 30, 0))
+        if scale:
+            cmds.xform(group, scale=scale)
+        if locked:
+            for channel in self.CHANNELS:
+                cmds.setAttr(f"{cube}.{channel}", lock=True)
+        return cmds.ls(group, long=True)[0], cube
+
+    def _assert_anchored(self, group, cube, frames=None):
+        """It inherits, its offset is identity, and its local is its world
+        under *group* -- what an FBX write ships is where Maya draws it."""
+        import maya.api.OpenMaya as om2
+
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        self.assertTrue(cmds.getAttr(f"{cube}.inheritsTransform"))
+        self.assertEqual(
+            cmds.getAttr(f"{cube}.offsetParentMatrix"), SmartBake.IDENTITY_MATRIX
+        )
+        for frame in frames or self.FRAMES:
+            cmds.currentTime(frame)
+            local = om2.MMatrix(cmds.getAttr(f"{cube}.matrix"))
+            expected = om2.MMatrix(
+                cmds.getAttr(f"{cube}.worldMatrix[0]")
+            ) * om2.MMatrix(cmds.getAttr(f"{group}.worldInverseMatrix[0]"))
+            self.assertTrue(local.isEquivalent(expected, 1e-4), f"frame {frame}")
+        cmds.currentTime(7)
+
+    def test_a_pinned_node_is_re_anchored_under_its_moving_parent(self):
+        """Locked or not: keyed relative to its parent, inheriting, on every
+        frame of its parent's keys -- then the pin, the locks and the curves
+        come back to the bit."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        for locked in (True, False):
+            with self.subTest(locked=locked):
+                self.setUp()
+                group, cube = self._pinned_under(locked=locked)
+                worlds, state = self._worlds(cube), self._state([cube])
+
+                result, restore = SmartBake.fold_offsets([cube])
+
+                self.assertEqual(list(result.baked), [cube])
+                self.assertEqual(result.declined, {})
+                self._assert_anchored(group, cube)
+                times = cmds.keyframe(f"{cube}.translateX", query=True, timeChange=True)
+                self.assertEqual(times, [float(f) for f in range(1, 101)])
+                self._assert_same_worlds(worlds, self._worlds(cube))
+
+                self.assertEqual(restore(), [])
+                self.assertEqual(self._state([cube]), state)
+
+    def test_a_pivoted_pinned_node_is_re_anchored_exactly(self):
+        """Its pivots stay as authored and the keyed translate makes up for
+        them. Production (2026-10-17): four wire looms carry a rotate/scale
+        pivot and a rotatePivotTranslate; keyed as a pivot-free TRS they
+        missed their worlds by 12-21 cm and the fold declined them."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+        from mayatk.xform_utils.matrices import Matrices
+
+        group = cmds.group(empty=True, name="module")
+        cmds.xform(group, translation=(20, 4, 0), rotation=(0, 10, 0))
+        cube = cmds.polyCube(name="pivoted")[0]
+        cube = cmds.ls(cmds.parent(cube, group)[0], long=True)[0]
+        for attr, value in (
+            ("rotatePivot", (5.3, -2.9, 14.5)),
+            ("scalePivot", (5.3, -2.9, 14.5)),
+            ("rotatePivotTranslate", (-19.8, 0.0, -9.1)),
+            ("scalePivotTranslate", (0.5, 0.0, 0.25)),
+        ):
+            cmds.setAttr(f"{cube}.{attr}", *value)
+        cmds.xform(cube, translation=(3, 2, 1), rotation=(0, -90, 0), scale=(1, 2, 1))
+        self.assertTrue(Matrices.pin_world_matrix(cube))
+        for attr, (first, last) in (("translateX", (50, 150)), ("rotateY", (30, 75))):
+            cmds.setKeyframe(group, attribute=attr, time=1, value=first)
+            cmds.setKeyframe(group, attribute=attr, time=100, value=last)
+        for channel in self.CHANNELS:
+            cmds.setAttr(f"{cube}.{channel}", lock=True)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(result.declined, {})
+        self.assertEqual(
+            cmds.getAttr(f"{cube}.rotatePivotTranslate"), [(-19.8, 0.0, -9.1)]
+        )
+        self._assert_same_worlds(worlds, self._worlds(cube))
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_pinned_node_with_a_rotate_axis_is_re_anchored_exactly(self):
+        """A transform's rotateAxis turns its rotate, so the keyed rotate is
+        only its local rotation with the axis at zero -- the joint rule
+        (``WorldFitBake.bake_node``), recorded and put back."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        group, cube = self._pinned_under()
+        cmds.setAttr(f"{cube}.rotateAxis", 0, 30, 15)
+        cmds.setAttr(f"{cube}.rotateAxis", lock=True)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(result.declined, {})
+        self._assert_same_worlds(worlds, self._worlds(cube))
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+        self.assertEqual(
+            [round(v, 6) for v in cmds.getAttr(f"{cube}.rotateAxis")[0]], [0, 30, 15]
+        )
+        self.assertTrue(cmds.getAttr(f"{cube}.rotateAxis", lock=True))
+
+    def test_a_static_pinned_node_takes_plain_values(self):
+        """Nothing moves: re-anchored as plain values, no key."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        group, cube = self._pinned_under(keyed=False)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.baked), [cube])
+        self._assert_anchored(group, cube)
+        for channel in self.CHANNELS:
+            self.assertFalse(
+                cmds.keyframe(f"{cube}.{channel}", query=True, keyframeCount=True),
+                f"{channel} was keyed",
+            )
+        self._assert_same_worlds(worlds, self._worlds(cube))
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
+
+    def test_a_baking_write_re_anchors_only_what_ignores_its_parent(self):
+        """A write that bakes folds every offset itself: only the pinned node
+        is the fold's, keyed over the write's range rather than its keys'."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        group, cube = self._pinned_under()
+        other = cmds.ls(cmds.polyCube(name="offset")[0], long=True)[0]
+        self._offset(other)
+        state = self._state([cube, other])
+
+        result, restore = SmartBake.fold_offsets([cube, other], bake_range=(1, 40))
+
+        self.assertEqual(list(result.baked), [cube])
+        self.assertEqual(
+            cmds.getAttr(f"{other}.offsetParentMatrix"),
+            state[f"{other}.opm"],
+        )
+        times = cmds.keyframe(f"{cube}.translateX", query=True, timeChange=True)
+        self.assertEqual(times, [float(f) for f in range(1, 41)])
+        self._assert_anchored(group, cube, frames=(1, 13, 37))
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube, other]), state)
+
+    def test_a_re_anchor_that_would_shear_is_declined_and_untouched(self):
+        """Under a stretched, turning parent the local shears: no t/r/s holds
+        it, so it is declined, by reason, and nothing about it moves."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        _, cube = self._pinned_under(scale=(2.5, 1, 1))
+        state = self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.declined), [cube])
+        self.assertIn("shears", result.declined[cube])
+        self.assertEqual(self._state([cube]), state)
+        restore()
+        self.assertEqual(self._state([cube]), state)
+
+    def test_under_a_parent_at_the_origin_the_offset_folds_in_place(self):
+        """World and local agree under a parent at the origin: the offset
+        folds as for any node, and inheritance stays as authored."""
+        from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
+
+        group = cmds.group(empty=True, name="still")
+        cube = cmds.polyCube(name="loose")[0]
+        cube = cmds.ls(cmds.parent(cube, group)[0], long=True)[0]
+        self._offset(cube)
+        cmds.setAttr(f"{cube}.inheritsTransform", False)
+        worlds, state = self._worlds(cube), self._state([cube])
+
+        result, restore = SmartBake.fold_offsets([cube])
+
+        self.assertEqual(list(result.baked), [cube])
+        self.assertFalse(cmds.getAttr(f"{cube}.inheritsTransform"))
+        self._assert_same_worlds(worlds, self._worlds(cube))
+        self.assertEqual(restore(), [])
+        self.assertEqual(self._state([cube]), state)
 
 
 if __name__ == "__main__":

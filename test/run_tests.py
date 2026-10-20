@@ -132,6 +132,11 @@ GUI_REQUIRED = {
         "loads the tube_rig panel through MayaUiHandler; native-crashes mayapy "
         "on load (2026-10-06)"
     ),
+    "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
+    "test_texture_combine_panel": (
+        "loads the texture_combine panel; its uitk TableWidget hard-crashes "
+        "mayapy in batch (same 0xC0000409 as test_sequencer)"
+    ),
     "test_emissive_groups_panel": (
         "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
@@ -1316,8 +1321,10 @@ finally:
         # Ceiling, not a budget -- the stall detector in wait_for_results ends a
         # genuinely hung pass long before this. 30s/module was under the real
         # cost of a GUI module on a busy box (one took ~6 min), so the old
-        # max(600, 30*n) killed healthy runs.
-        timeout = self.wait_timeout or max(1800, 90 * len(gui_modules))
+        # max(600, 30*n) killed healthy runs; 90s/module then killed a healthy
+        # 24-module pass still beating at 2160s (2026-10-19: test_shot_manifest
+        # runs ~3.5x slower after the other GUI modules than alone).
+        timeout = self.wait_timeout or max(3600, 240 * len(gui_modules))
         completed = self.wait_for_results(
             res_path, timeout=timeout, progress_path=base.with_suffix(".progress")
         )
@@ -1413,8 +1420,9 @@ finally:
                 except Exception:
                     pass  # fall through to file check
                 if done is None:
-                    # The command port refuses connections while Maya's main
-                    # thread runs the suite; stop hammering it after a few tries.
+                    # No reply in time: Maya's main thread runs the suite, and
+                    # its port QUEUES each poll until then; stop piling them
+                    # on after a few tries.
                     socket_failures += 1
                     if socket_failures >= 5:
                         use_socket = False

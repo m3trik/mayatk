@@ -9,9 +9,12 @@ that the whole stand follows.
 
 [← mayatk docs](README.md) · engine `mtk.ArticulatedRig`
 (`rig_utils/articulated_rig/`) · the math `ptk.ArticulationModel`,
-`ptk.ArticulationAnalysis` (pythontk `geo_utils/articulation/`) · the runtimes
+`ptk.ArticulationAnalysis` and the plan's host-free half `ptk.ArticulationPlan`
+(pythontk `geo_utils/articulation/`) · the runtimes
 unitytk `ArticulatedRigController` and the WebXR preview's `articulated_rig`
-script ([WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)).
+script ([WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md))
+· the Blender twin blendertk `btk.ArticulatedRig` (same names, behaviour and
+panel; its end control is solved by blendertk and baked into the file at save).
 
 ## The idea: one set of numbers everywhere
 
@@ -332,8 +335,6 @@ reach.
 
 ## Not yet
 
-- A **blendertk twin** (`.claude/BACKLOG.md`: *ArticulatedRig has no blendertk
-  twin*); the pure half is already shared.
 - **Physics** (a joint driven by a physics engine rather than the kinematic
   solver) -- the channels map onto revolute / prismatic / spherical joints, so
   a physics mode would read the same record.

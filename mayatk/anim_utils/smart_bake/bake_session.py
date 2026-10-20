@@ -396,9 +396,11 @@ class BakeSessionStore(_BakeSessionStoreInternal):
     #: The network node the stash registries live on (never ``data_internal``;
     #: see ``_ensure_stash_registry``).
     REGISTRY_NODE = "stash_registry"
-    SCHEMA_VERSION = 3  # 2: adds the 'matrix' (offsetParentMatrix) bucket;
+    SCHEMA_VERSION = 4  # 2: adds the 'matrix' (offsetParentMatrix) bucket;
     # 3: adds 'flatten' (sheared matrix drives world-fitted under a shear-free
-    # ancestor -- WorldFitBake records)
+    # ancestor -- WorldFitBake records); 4: a 'matrix' entry may hold the
+    # 'offset' an UNCONNECTED offsetParentMatrix had (SmartBake.fold_offsets)
+    # in place of the 'source' plug a drive is reconnected to
 
     @classmethod
     def load(cls) -> List[dict]:
@@ -977,8 +979,16 @@ class BakeSessionStore(_BakeSessionStoreInternal):
                     cmds.setAttr(f"{obj}.shear", *entry["shear_was"])
                 except RuntimeError as e:
                     result.warnings.append(f"Could not reset shear on '{obj}': {e}")
-            src = BakeSessionStore.resolve_plug(entry.get("source"))
             dst = f"{obj}.offsetParentMatrix"
+            if entry.get("offset") is not None:
+                # An unconnected offset (a write's fold): its value goes back.
+                try:
+                    cmds.setAttr(dst, entry["offset"], type="matrix")
+                    result.matrix_restored.append(obj)
+                except RuntimeError as e:
+                    result.warnings.append(f"Could not reset '{dst}': {e}")
+                continue
+            src = BakeSessionStore.resolve_plug(entry.get("source"))
             if not src:
                 result.warnings.append(
                     f"offsetParentMatrix source for '{obj}' no longer exists."

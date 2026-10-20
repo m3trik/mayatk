@@ -32,6 +32,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT))
 
+from pythontk import AppLauncher  # noqa: E402
 from mayatk.uv_utils.rizom_bridge import parameters as _params  # noqa: E402
 from mayatk.uv_utils.rizom_bridge._rizom_bridge import RizomUVBridge, APP  # noqa: E402
 
@@ -635,11 +636,9 @@ def run_case(
 
     t0 = time.time()
     try:
-        proc = subprocess.run(
-            [RIZOM_EXE, "-cfi", str(lua_path)],
-            capture_output=True,
-            text=True,
-            timeout=TIMEOUT,
+        # Hidden, as the bridge runs it: no window on the desktop, none left behind.
+        proc = AppLauncher.run(
+            RIZOM_EXE, args=["-cfi", str(lua_path)], timeout=TIMEOUT, hidden=True
         )
         rc = proc.returncode
         out_tail = ((proc.stdout or "") + (proc.stderr or ""))[-400:].strip()

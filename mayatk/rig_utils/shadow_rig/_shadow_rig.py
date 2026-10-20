@@ -24,6 +24,7 @@ import pythontk as ptk
 # From this package:
 from mayatk import NodeUtils
 from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils.units import Units
 from mayatk.display_utils._display_utils import DisplayUtils
 from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -82,8 +83,14 @@ class ShadowRig(ptk.LoggingMixin):
        silhouette, shadow casting/receiving + probes off). The silhouette
        PNG is an ordinary material texture, so Embed Textures ships it.
     4. WebXR / GLB: the sidecar's base-colour and alpha-mode sections carry
-       the silhouette and the blend mode; the baked ``opacity`` ramp rides
-       the visibility-tracks channel.
+       the silhouette and the blend mode, and its unlit section marks the
+       material ``KHR_materials_unlit`` (lit, the environment's specular
+       made a shadow brighter than its floor); the baked ``opacity`` ramp
+       rides the visibility-tracks channel.
+
+    A shadow that no longer moves (its links broken on purpose) becomes a
+    plain textured plane with :meth:`detach_planes` -- one unlit
+    ``surfaceShader`` and one PNG, nothing of the rig left to export.
 
     Re-attaching: :meth:`for_node` / :meth:`from_plane` rebuild an instance
     from the stamps on an existing plane (the plane, its group, a target, the
@@ -115,6 +122,10 @@ class ShadowRig(ptk.LoggingMixin):
     # Multi message attr on the plane linking every support node this rig
     # created — delete_rigs' rename-proof teardown manifest.
     _MEMBER_ATTR = "shadowRigMembers"
+    # The working unit the plane's expression was made in: the unit of every
+    # length stamp (groundHeight, objectHeight, footprintRadius, sourceSize) --
+    # an expression keeps the units it was made in. See :meth:`rig_unit`.
+    _UNIT_ATTR = "shadowRigUnit"
     # Message links from the plane to what the rig was built FROM — the
     # rename-proof handles refresh_silhouette needs once the Python instance
     # (and, after a bake, the decomposeMatrix connections) are gone.
@@ -539,13 +550,18 @@ class ShadowRig(ptk.LoggingMixin):
             m = cmds.xform(source, q=True, ws=True, matrix=True)
             sx = math.sqrt(m[0] ** 2 + m[1] ** 2 + m[2] ** 2)
             sy = math.sqrt(m[4] ** 2 + m[5] ** 2 + m[6] ** 2)
-            return LightUtils.AREA_LOCAL_SIZE * 0.5 * (sx + sy)
+            # The 2x2 plate is in Maya's internal unit; the rig works in the
+            # working one.
+            plate = LightUtils.AREA_LOCAL_SIZE * 0.5 * (sx + sy)
+            return Units.convert(plate, "internal", "working")
         if kind == "directionalLight":
             if cmds.attributeQuery("aiAngle", node=shape, exists=True):
                 return math.radians(cmds.getAttr(f"{shape}.aiAngle"))
             return 0.0
         if cmds.attributeQuery("aiRadius", node=shape, exists=True):
-            return 2.0 * cmds.getAttr(f"{shape}.aiRadius")
+            # A plain float Arnold reads in the internal unit.
+            radius = cmds.getAttr(f"{shape}.aiRadius")
+            return 2.0 * Units.convert(radius, "internal", "working")
         return 0.0
 
     def _source_size(self):
@@ -983,7 +999,12 @@ class ShadowRig(ptk.LoggingMixin):
         # path tasks see one spelling.
         self.texture_path = self.texture_path.replace("\\", "/")
 
-        meshes = self._gather_world_meshes(recursive)
+        # World points are in Maya's internal unit; the source, the contact and
+        # the stamps the raster places them against are in the working one.
+        factor = Units.convert(1.0, "internal", "working")
+        meshes = [
+            (pts * factor, tris) for pts, tris in self._gather_world_meshes(recursive)
+        ]
         if not meshes:
             raise ValueError("No mesh geometry found on the target(s).")
         if not self.object_height or not self.footprint_radius:
@@ -1311,6 +1332,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         if cmds.objExists(expr_name):
             cmds.delete(expr_name)
         cmds.expression(name=expr_name, string=body, alwaysEvaluate=True)
+        self._ensure_string_attr(self.shadow_plane, self._UNIT_ATTR, Units.working())
 
     # ------------------------------------------------------------------ bake
     def bake(self, start=None, end=None):
@@ -1326,12 +1348,24 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         Resolved via connections, not by name — robust to path-qualified
         plane names and suffixed expr nodes. Both sets are empty once baked.
         """
-        exprs = set(
+        # Inputs on the plane's own channels only: the member manifest links
+        # the expression by message as well, and a rig whose expression drives
+        # nothing (links broken by hand) read as live through it.
+        pairs = (
             cmds.listConnections(
-                plane, source=True, destination=False, type="expression"
+                plane,
+                source=True,
+                destination=False,
+                type="expression",
+                connections=True,
             )
             or []
         )
+        exprs = {
+            src
+            for dst, src in zip(pairs[::2], pairs[1::2])
+            if dst.rpartition(".")[2].split("[")[0] != ShadowRig._MEMBER_ATTR
+        }
         drivers = set()
         for expr in exprs:
             for kind in ("decomposeMatrix", "vectorProduct"):
@@ -2141,10 +2175,41 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @staticmethod
     def unit_scale():
-        """Metres per scene linear unit (the record's ``unit_scale``): an
-        engine that imported in metres multiplies the record's lengths."""
-        unit = cmds.currentUnit(query=True, linear=True)
-        return ptk.MathUtils.metres_per_unit(unit, 1.0)
+        """Metres per unit of the record (its ``unit_scale``): the working
+        unit -- the one an export writes the file in, since the Scene Exporter
+        switches to its target before producing the records. Each stamp is
+        converted to it from its rig's own unit (:meth:`rig_unit`)."""
+        return Units.metres_per("working")
+
+    @classmethod
+    def rig_unit(cls, plane):
+        """The unit *plane*'s length stamps are in: the working unit its
+        expression was made in -- an expression keeps the units it was made in
+        (measured), so a rig built in centimetres stays in centimetres in a
+        scene later switched to metres, the Scene Exporter's own switch
+        included. Stamped (:attr:`_UNIT_ATTR`) since 2026-10-17; an older rig's
+        is read off its expression, which takes its world inputs through a
+        ``unitConversion`` in any unit but the centimetre; a baked one with no
+        stamp is taken as centimetres, Maya's default."""
+        stamped = cls._plane_attr(plane, cls._UNIT_ATTR, "")
+        if stamped:
+            return str(stamped)
+        exprs, _drivers = cls._live_rig_nodes(plane)
+        for expr in exprs:
+            for conversion in (
+                cmds.listConnections(
+                    expr, source=True, destination=False, type="unitConversion"
+                )
+                or []
+            ):
+                factor = float(cmds.getAttr(f"{conversion}.conversionFactor") or 0.0)
+                if factor <= 0.0:
+                    continue
+                metres = Units.INTERNAL_M / factor  # internal -> the rig's unit
+                for name in ptk.MathUtils.LENGTH_UNIT_FACTORS:
+                    if math.isclose(Units.metres_per(name), metres, rel_tol=1e-6):
+                        return name
+        return "cm"
 
     @classmethod
     def _plane_attr(cls, plane, name, default=None):
@@ -2168,6 +2233,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         contact = cls._plane_contact(plane)
         directional = bool(source) and cls.source_is_directional(source)
         size = float(attr(plane, "sourceSize", 0.0) or 0.0)
+        # The stamps' unit -> the record's (the working one, :meth:`unit_scale`).
+        factor = Units.convert(1.0, cls.rig_unit(plane), "working")
         record = {
             "name": CoreUtils.leaf_name(plane),
             "type": cls.plane_type(plane),
@@ -2175,13 +2242,13 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             "intensity": round(float(attr(plane, "shadowIntensity", 1.0)), 4),
             "source": CoreUtils.leaf_name(source) if source else "",
             "source_type": "directional" if directional else "point",
-            "source_size": 0.0 if directional else round(size, 6),
+            "source_size": 0.0 if directional else round(size * factor, 6),
             "source_angle": round(size, 6) if directional else 0.0,
             "follow_source": bool(attr(plane, cls.FOLLOW_ATTR, True)),
             "contact": CoreUtils.leaf_name(contact) if contact else "",
-            "ground": round(float(attr(plane, "groundHeight", 0.0)), 6),
-            "radius": round(float(attr(plane, "footprintRadius", 0.0)), 6),
-            "height": round(float(attr(plane, "objectHeight", 0.0)), 6),
+            "ground": round(float(attr(plane, "groundHeight", 0.0)) * factor, 6),
+            "radius": round(float(attr(plane, "footprintRadius", 0.0)) * factor, 6),
+            "height": round(float(attr(plane, "objectHeight", 0.0)) * factor, 6),
             "max_stretch": round(
                 float(
                     attr(plane, "maxStretch", ptk.ShadowProjection.DEFAULT_MAX_STRETCH)
@@ -2369,10 +2436,14 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         for pts, tris in meshes:
             hom = np.hstack([pts, np.ones((len(pts), 1))]) @ inverse
             local.append((hom[:, :3], tris))
+        # The frame and the points are in Maya's internal unit, and so is the
+        # map (the record's horizon block); the contact and the ground stamp
+        # are in the working one.
         contact = self._contact_point()
-        ground_pt = (
-            np.array([contact[0], self.ground_height, contact[2], 1.0]) @ inverse
+        ground = Units.convert(
+            [contact[0], self.ground_height, contact[2]], "working", "internal"
         )
+        ground_pt = np.array([*ground, 1.0]) @ inverse
         hmap = ptk.ShadowHorizon.bake(
             local, ground=float(ground_pt[1]), up=1, size=size, spans=spans
         )
@@ -2434,8 +2505,9 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             size=ints[0],
             spans=ints[1],
             levels=ints[2],
-            bounds=floats[:4],
-            height_scale=floats[4],
+            # Baked in Maya's internal unit (:meth:`bake_horizon`).
+            bounds=Units.convert(floats[:4], "internal", "working"),
+            height_scale=Units.convert(floats[4], "internal", "working"),
             frame_a=cls.HORIZON_FRAME[0],
             frame_b=cls.HORIZON_FRAME[1],
             rect=cls._read_rect(plane, cls._HORIZON_RECT_ATTRS),
@@ -2885,6 +2957,272 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         if deleted:
             cls.refresh_export_metadata()
         return deleted
+
+    @classmethod
+    def plane_materials(cls, planes=None):
+        """The shaders shadow *planes* wear (every plane when None), once each.
+
+        The REAL material, a horizon preview's stand-in looked through
+        (:meth:`_plane_shading`). What an exporter asks to shade unlit.
+        """
+        found = (cls._plane_shading(p)[0] for p in cls.find_shadow_planes(planes))
+        return [m for m in dict.fromkeys(found) if m]
+
+    @classmethod
+    def set_intensity(cls, planes, value):
+        """Overall darkness of *planes*' shadows, 0-1: the ``shadowIntensity``
+        dial (the record's ``intensity``).
+
+        A live rig's expression multiplies it into the fade. A plane it no
+        longer drives -- baked to keys, or its links broken on purpose --
+        carries its fade itself, already holding the old intensity, so that
+        fade is rescaled by new / old: its shape kept, the dial meaning the
+        same everywhere (Unity and the viewer take the exported opacity as
+        the intensity already applied).
+
+        Returns:
+            The planes changed.
+        """
+        value = min(1.0, max(0.0, float(value)))
+
+        def rescale(plane, old, how):
+            plug = f"{plane}.{cls.OPACITY_ATTR}"
+            if how == "keys":
+                if old > 1e-6:
+                    cmds.scaleKey(plug, valueScale=value / old, valuePivot=0.0)
+                else:  # nothing left to scale: the dial is the fade
+                    cmds.keyframe(plug, edit=True, absolute=True, valueChange=value)
+            elif how is None:
+                current = cmds.getAttr(plug)
+                cmds.setAttr(
+                    plug, min(1.0, current * value / old) if old > 1e-6 else value
+                )
+
+        return cls._retune(
+            planes,
+            "shadowIntensity",
+            value,
+            cls.OPACITY_ATTR,
+            rescale,
+            "Shadow Intensity",
+        )
+
+    @classmethod
+    def set_ground_height(cls, planes, value):
+        """World Y of the floor under *planes*: the ``groundHeight`` stamp (the
+        record's ``ground``) a live expression lays the plane on, plus
+        :attr:`GROUND_OFFSET` -- for a floor that is not at 0.
+
+        A plane the expression no longer drives is laid on it too: a held
+        ``translateY`` is set to the floor plus the offset (the stamp may be
+        stale on a plane moved by hand), keyed ones shift by the difference
+        (they were baked from the old stamp).
+
+        Returns:
+            The planes changed.
+        """
+        value = float(value)
+
+        def move(plane, old, how):
+            plug = f"{plane}.translateY"
+            if how == "keys":
+                cmds.keyframe(plug, edit=True, relative=True, valueChange=value - old)
+            elif how is None:
+                cmds.setAttr(plug, value + cls.GROUND_OFFSET)
+
+        return cls._retune(
+            planes, "groundHeight", value, "translateY", move, "Shadow Ground Height"
+        )
+
+    @classmethod
+    def _retune(cls, planes, stamp, value, channel, carry, label):
+        """Set *stamp* to *value* on every shadow plane in *planes*, and hand
+        what a live expression would have done with it to ``carry(plane, old,
+        how)`` -- *how* is ``"keys"`` (an animCurve drives *channel*),
+        ``"driven"`` (anything else does: the expression reads the stamp
+        itself) or None (it holds a value of its own). One undo step;
+        republishes the export record."""
+        changed = []
+        with CoreUtils.undo_chunk(label):
+            for plane in cls.find_shadow_planes(planes):
+                plug = f"{plane}.{stamp}"
+                if not cmds.objExists(plug):
+                    continue
+                old = float(cmds.getAttr(plug))
+                cmds.setAttr(plug, value)
+                drivers = (
+                    cmds.listConnections(
+                        f"{plane}.{channel}",
+                        source=True,
+                        destination=False,
+                        skipConversionNodes=True,
+                    )
+                    or []
+                )
+                if not drivers:
+                    how = None
+                elif cmds.nodeType(drivers[0]).startswith("animCurve"):
+                    how = "keys"
+                else:
+                    how = "driven"
+                carry(plane, old, how)
+                changed.append(plane)
+            if changed:
+                cls.refresh_export_metadata()
+        return changed
+
+    @classmethod
+    def _rig_attr_names(cls):
+        """Every attribute the rig stamps on a plane, by name."""
+        from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
+
+        names = {
+            "shadowIntensity",
+            "falloffPower",
+            "maxStretch",
+            "fadeHeight",
+            "groundHeight",
+            "basePlaneSize",
+            "objectHeight",
+            "footprintRadius",
+            "sourceSize",
+            ShadowPreview.SHADER_ATTR,
+            ShadowPreview.RESTORE_ATTR,
+        }
+        for key, value in vars(cls).items():
+            if key.endswith("_ATTR") and isinstance(value, str):
+                names.add(value)
+            elif key.endswith("_ATTRS") and isinstance(value, tuple):
+                names.update(v for v in value if isinstance(v, str))
+        return names
+
+    @classmethod
+    def detach_planes(cls, planes=None, suffix="_plane"):
+        """Turn shadow rig(s) into plain textured planes: no rig, nothing extra.
+
+        For a shadow that stays where it is (a static prop's, its links broken
+        on purpose): what exports is a quad, one unlit material and one PNG.
+        Per plane --
+
+        * the silhouette is written to ``<silhouette><suffix>.png`` beside it
+          with the plane's CURRENT fade (``opacity``) multiplied into its
+          alpha -- the one value the rig's material computed per frame;
+        * the material becomes a ``surfaceShader`` (Maya's unlit model:
+          colour and transparency from that PNG), which the GLB writes
+          ``KHR_materials_unlit`` (``SceneState._read_unlit``) and the FBX
+          carries as a plain textured material;
+        * the expression, its drivers, the contact locator and the old shading
+          network go (the ``shadowRigMembers`` manifest), and so does every
+          attribute the rig stamped -- the plane is no longer a shadow plane,
+          so no tool re-places, re-renders or exports it as one.
+
+        The plane keeps its transform where the rig left it, and any keys on
+        its transform channels; the opacity keys go with the fade. An atlased
+        plane is unpacked first, so its UVs span its own PNG. One undo step;
+        the ``shadow_metadata`` channel is republished after.
+
+        Parameters:
+            planes: Shadow plane transform(s), or anything that resolves one
+                (:meth:`find_shadow_planes`); ``None`` detaches every rig.
+            suffix: Appended to the silhouette's file stem for the new PNG.
+
+        Returns:
+            ``{plane: png path}`` for each plane detached.
+        """
+        from PIL import Image
+
+        from mayatk.rig_utils.shadow_rig.shadow_preview import ShadowPreview
+
+        planes = [
+            p
+            for p in cls.find_shadow_planes(planes)
+            if not cmds.referenceQuery(p, isNodeReferenced=True)
+        ]
+        done = {}
+        if not planes:
+            return done
+        with CoreUtils.undo_chunk("Detach Shadow Planes"):
+            atlased = [p for p in planes if cls.plane_is_atlased(p)]
+            if atlased:
+                cls.unpack_atlas(atlased)
+            for plane in planes:
+                if ShadowPreview.is_attached(plane):
+                    ShadowPreview.detach(plane)
+                source = cls._plane_texture_path(plane)
+                if not source or not os.path.isfile(source):
+                    cls.logger.warning(
+                        f"Not detached: {plane} has no silhouette on disk "
+                        f"({source or 'no file node'})."
+                    )
+                    continue
+                fade = float(cls._plane_attr(plane, cls.OPACITY_ATTR, 1.0))
+                stem, _ext = os.path.splitext(source)
+                path = f"{stem}{suffix}.png"
+                with Image.open(source) as image:
+                    rgba = image.convert("RGBA")
+                alpha = rgba.getchannel("A").point(
+                    lambda a: int(round(a * max(0.0, min(1.0, fade))))
+                )
+                rgba.putalpha(alpha)
+                rgba.save(path)
+
+                # The quad's construction history is in the manifest, and
+                # deleting a creation node takes its mesh: bake it in first.
+                cmds.delete(plane, constructionHistory=True)
+                doomed = set()
+                if cmds.attributeQuery(cls._MEMBER_ATTR, node=plane, exists=True):
+                    doomed.update(
+                        cmds.listConnections(
+                            f"{plane}.{cls._MEMBER_ATTR}",
+                            source=True,
+                            destination=False,
+                        )
+                        or []
+                    )
+                exprs, drivers = cls._live_rig_nodes(plane)
+                doomed |= exprs | drivers
+                doomed.update(cls._plane_shading_groups(plane))
+                shader = cls._plane_shading(plane)[0]
+                if shader:
+                    doomed.add(shader)
+                # Plugs a deleted expression fed keep their last value; the
+                # stamps go before the nodes so no dangling input is left.
+                for attr in sorted(cls._rig_attr_names()):
+                    if cmds.attributeQuery(attr, node=plane, exists=True):
+                        plug = f"{plane}.{attr}"
+                        # Its keys (a baked fade) would outlive it, orphaned.
+                        doomed.update(
+                            cmds.listConnections(
+                                plug, source=True, destination=False, type="animCurve"
+                            )
+                            or []
+                        )
+                        cmds.setAttr(plug, lock=False)
+                        cmds.deleteAttr(plug)
+                for node in sorted(doomed):
+                    if cmds.objExists(node) and node != plane:
+                        cmds.delete(node)
+                cls._assign_unlit_texture(plane, path)
+                done[plane] = path
+            if done:
+                cls.refresh_export_metadata()
+        if done:
+            cls.logger.info(
+                f"Detached {len(done)} shadow plane(s) to textured planes: "
+                + ", ".join(CoreUtils.leaf_name(p) for p in done)
+            )
+        return done
+
+    @staticmethod
+    def _assign_unlit_texture(plane, path):
+        """Give *plane* a fresh ``surfaceShader`` showing *path* (colour + alpha)."""
+        leaf = CoreUtils.leaf_name(plane)
+        file_node, _place2d = MatUtils.create_file_node(path, name=leaf)
+        shader = cmds.shadingNode("surfaceShader", asShader=True, name=f"{leaf}_mat")
+        cmds.connectAttr(f"{file_node}.outColor", f"{shader}.outColor")
+        cmds.connectAttr(f"{file_node}.outTransparency", f"{shader}.outTransparency")
+        MatUtils.create_shading_group(shader, assign_to=plane)
+        return shader
 
     def _link_members(self, new_nodes):
         """Stamp the build's support nodes onto the plane as a multi message

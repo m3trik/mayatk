@@ -24,6 +24,8 @@ the scene answers:
 
 * :class:`LightmapExcludeSet` -- the objects a lightmap bake gives no map of
   their own, while they stay in the render and light the rest.
+* :class:`LightmapIsolateSet` -- the objects (moving parts) that bake in a
+  pass of their own and stay out of every other object's bake.
 * :class:`LightmapBakeSet` -- the objects the last lightmap bake acted on, so
   the bake can be re-selected and re-run.
 
@@ -239,6 +241,62 @@ class LightmapExcludeSet(BakeSet):
     """
 
     SET_NAME = "lightmapBaker_exclude"
+
+
+class LightmapIsolateSet(BakeSet):
+    """Objects that bake in a pass of their own, out of every other bake's render.
+
+    For a part that moves against what is baked around it -- a locker door on
+    its cabinet, a lid, a drawer: it still gets a map, lit by the static scene
+    at its authored pose, but it casts no shadow or bounce into another
+    object's map (the cabinet's would keep a door-shaped shadow wherever the
+    door swung), and no other isolated object casts into its own. Each member
+    -- with the meshes under it (:meth:`groups`) -- bakes alone
+    (:meth:`LightmapBaker._bake_to_lightmap_uvs`) and still packs
+    into its material's atlas. A member of :class:`LightmapExcludeSet` as well
+    gets no map, and is out of the render like any other isolated object.
+    """
+
+    SET_NAME = "lightmapBaker_isolate"
+
+    @classmethod
+    def groups(cls) -> List[List[str]]:
+        """The set's meshes by member: what lies under each one moves together.
+
+        A door stored as its mesh brings the glass parented under it along
+        (unlike :meth:`BakeSet.meshes`, where a mesh member stands for itself
+        alone), so the two are out of other bakes' render together and see
+        each other in their own. A mesh under two members counts with the
+        outermost (the glass stored beside its door).
+        """
+        from mayatk.mat_utils.texture_baker import TextureBaker
+
+        seen: set = set()
+        groups: List[List[str]] = []
+        # Outermost first: a set's member order is Maya's, not the define's.
+        for member in sorted(cls.members(), key=lambda m: m.count("|")):
+            below = (
+                []
+                if "." in member  # faces stand for their mesh alone
+                else cmds.listRelatives(
+                    member, allDescendents=True, fullPath=True, type="transform"
+                )
+                or []
+            )
+            meshes = [
+                m
+                for m in TextureBaker.resolve_meshes([member] + below)
+                if m not in seen
+            ]
+            seen.update(meshes)
+            if meshes:
+                groups.append(meshes)
+        return groups
+
+    @classmethod
+    def meshes(cls) -> List[str]:
+        """Every mesh :meth:`groups` holds: each member with all it carries."""
+        return [mesh for group in cls.groups() for mesh in group]
 
 
 class LightmapBakeSet(BakeSet):

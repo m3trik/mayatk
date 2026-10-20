@@ -231,6 +231,20 @@ class TestMayaConnectionMocked(unittest.TestCase):
         self.assertEqual(conn.execute("str(1+1)", wait_for_response=True), "2")
 
     @patch("socket.socket")
+    def test_execute_returns_none_when_no_reply_arrives_in_time(self, mock_socket_cls):
+        """A busy Maya's port accepts the command and QUEUES it; a wait that
+        times out is "no reply" (None, what both runners read as busy), never
+        an empty reply. Regression: it returned ``''``, so the mayatk runner's
+        "stop polling a busy port" branch never fired.
+        """
+        import socket
+
+        mock_socket_cls.return_value.recv.side_effect = socket.timeout
+        conn = MayaConnection()
+        conn.mode, conn.is_connected, conn.port = "port", True, 12345
+        self.assertIsNone(conn.execute("1", wait_for_response=True, timeout=1))
+
+    @patch("socket.socket")
     def test_connect_port_failure(self, mock_socket_cls):
         """Test failed port connection."""
         # Setup mock socket to raise exception
@@ -1029,6 +1043,140 @@ class TestPortCollisionResilience(unittest.TestCase):
         # The indiscriminate `taskkill /F /IM maya.exe` must be gone.
         for call in mock_run.call_args_list:
             self.assertNotIn("taskkill", " ".join(map(str, call[0][0])))
+
+
+class _MayaPortSocket:
+    """A socket whose peer is Maya's REAL python command-port handler
+    (``maya.app.general.CommandPort.TpythonCommandHandler``), run in-process.
+
+    ``sendall`` hands the message over as the port's ``receiveData`` does (NULs
+    dropped, decoded, stripped); ``recv`` returns the handler's reply.
+    """
+
+    sent = []
+
+    def __init__(self, *args, **kwargs):
+        self._reply = b""
+
+    def settimeout(self, timeout):
+        pass
+
+    def connect(self, address):
+        pass
+
+    def close(self):
+        pass
+
+    def sendall(self, data):
+        from types import SimpleNamespace
+        from maya.app.general.CommandPort import TpythonCommandHandler
+
+        _MayaPortSocket.sent.append(data)
+        handler = TpythonCommandHandler.__new__(TpythonCommandHandler)
+        handler.server = SimpleNamespace(
+            prefix="",
+            returnNbCommands=False,
+            sendResults=True,
+            pickleOutput=False,
+            outputVarName="outp",
+        )
+        handler.data = data.translate(None, b"\x00").decode("utf-8").strip()
+        self._reply = handler._languageExecute().encode("utf-8")
+
+    def recv(self, size):
+        reply, self._reply = self._reply, b""
+        return reply
+
+
+@unittest.skipUnless(MAYA_AVAILABLE, "needs Maya's own command-port handler")
+class TestPortPayloadRunsOnce(unittest.TestCase):
+    """What ``execute`` puts on the port runs exactly once, in one namespace.
+
+    Regression (BACKLOG 2026-10-15, 2026-10-06): Maya's handler evals a
+    one-line message and execs it AGAIN when that returns None or raises, so
+    an ``exec(open(script).read())`` dispatch ran its script twice; and it
+    execs multi-line text with split globals/locals, so a script's function
+    could not see the script's own top-level names. Tested against Maya's
+    real handler, not a model of it.
+    """
+
+    _SCRATCH = ("_mtk_port_hits", "_mtk_port_value", "_mtk_port_set", "LIMIT", "limit")
+
+    def setUp(self):
+        import __main__
+
+        self.main = __main__
+        __main__._mtk_port_hits = []
+        _MayaPortSocket.sent = []
+        self.conn = MayaConnection()
+        self.conn.mode, self.conn.is_connected, self.conn.port = "port", True, 12345
+        patcher = patch(
+            "mayatk.env_utils.maya_connection.socket.socket", _MayaPortSocket
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        for name in self._SCRATCH + ("_mayatk_port_run",):
+            self.main.__dict__.pop(name, None)
+
+    def hits(self):
+        return len(self.main._mtk_port_hits)
+
+    def test_a_one_line_call_that_returns_none_runs_once(self):
+        # The exec(open(script).read()) shape: one line, evaluates to None.
+        reply = self.conn.execute(
+            "__import__('__main__')._mtk_port_hits.append(1)", wait_for_response=True
+        )
+        self.assertEqual(self.hits(), 1)
+        self.assertEqual(reply, "None")
+
+    def test_fire_and_forget_runs_once(self):
+        self.conn.execute("__import__('__main__')._mtk_port_hits.append(1)")
+        self.assertEqual(self.hits(), 1)
+
+    def test_a_one_line_call_that_raises_runs_once_and_reports_the_error(self):
+        reply = self.conn.execute(
+            "__import__('__main__')._mtk_port_hits.append(1) or 1 / 0",
+            wait_for_response=True,
+        )
+        self.assertEqual(self.hits(), 1)
+        self.assertEqual(reply, "division by zero")
+
+    def test_a_scripts_functions_see_its_top_level_names(self):
+        # The accept_local_edits.py shape: a module-level constant read by a
+        # function and by a generator expression.
+        self.conn.execute(
+            "LIMIT = 3\n"
+            "def limit():\n"
+            "    return LIMIT\n"
+            "_mtk_port_value = (limit(), all(n <= LIMIT for n in [1]))\n",
+            wait_for_response=True,
+        )
+        self.assertEqual(getattr(self.main, "_mtk_port_value", None), (3, True))
+
+    def test_replies_keep_the_ports_formats(self):
+        def reply(code):
+            return self.conn.execute(code, wait_for_response=True)
+
+        self.assertEqual(reply("1 + 1"), "2")
+        self.assertEqual(reply("'abc'"), "abc")
+        self.assertEqual(reply("_mtk_port_set = 1"), "None")
+        self.assertEqual(reply("_mtk_port_set"), "1")  # persists between sends
+        self.assertEqual(
+            reply("_mtk_port_unset_name"),
+            "name '_mtk_port_unset_name' is not defined",
+        )
+
+    def test_an_oversized_script_runs_once_from_a_file(self):
+        code = "__import__('__main__')._mtk_port_hits.append(1)\n" + "#" * (
+            2 * MayaConnection.PORT_BUFFER
+        )
+        self.conn.execute(code, wait_for_response=True)
+        self.assertEqual(self.hits(), 1)
+        sent = _MayaPortSocket.sent[-1]
+        self.assertLess(len(sent), MayaConnection.PORT_BUFFER)
+        self.assertEqual(len(sent.decode("utf-8").splitlines()), 1)
 
 
 if __name__ == "__main__":

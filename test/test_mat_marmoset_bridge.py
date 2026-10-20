@@ -176,7 +176,7 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         (possibly cloud-synced) destination and relocates them afterwards.
         """
 
-        def fake_run(exe, args=None, cwd=None, timeout=None):
+        def fake_run(exe, args=None, cwd=None, timeout=None, **kwargs):
             import re
 
             script_body = Path(args[-1]).read_text(encoding="utf-8")
@@ -246,6 +246,143 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
                 Path(self.out_dir).resolve(),
                 "Roundtrip outputs must be relocated into the texture dir.",
             )
+
+    def test_the_roundtrip_runs_toolbag_hidden(self):
+        """Toolbag has no headless mode: a roundtrip runs it where no one sees
+        it (``AppLauncher.run(hidden=True)``); ``ROUNDTRIP_HIDDEN = False`` shows
+        it. Added: 2026-10-19"""
+        engine = "mayatk.mat_utils.marmoset_bridge._marmoset_engine"
+        cube = cmds.polyCube(name="marmoset_hidden_cube")[0]
+        for hidden in (True, False):
+            with self.subTest(hidden=hidden), unittest.mock.patch(
+                f"{engine}.MarmosetEngine.ROUNDTRIP_HIDDEN", hidden
+            ), unittest.mock.patch(
+                f"{engine}.AppLauncher.run",
+                side_effect=self._fake_toolbag_bake("Normal"),
+            ) as run:
+                result = MarmosetBridge(toolbag_path="fake_toolbag.exe").send(
+                    objects=[cube],
+                    output_dir=self.out_dir,
+                    texture_dir=self.out_dir,
+                    output_name="rt",
+                    template="bake",
+                    mode=ROUND_TRIP,
+                )
+                self.assertIsNotNone(result)
+                self.assertIs(run.call_args.kwargs.get("hidden"), hidden)
+
+    def test_a_timed_out_hidden_roundtrip_names_what_shows_toolbag(self):
+        """A dialog Toolbag opened would have waited unseen: the error says so,
+        only where the run really was hidden. Added: 2026-10-19"""
+        import subprocess
+
+        from mayatk.mat_utils.marmoset_bridge._marmoset_engine import (
+            AppLauncher,
+            MarmosetEngine,
+        )
+
+        def timing_out(exe, args=None, timeout=None, **kwargs):
+            raise subprocess.TimeoutExpired(exe, timeout)
+
+        for hides in (True, False):
+            engine = MarmosetEngine(toolbag_path="fake_toolbag.exe")
+            with self.subTest(hides=hides), unittest.mock.patch.object(
+                AppLauncher, "run", staticmethod(timing_out)
+            ), unittest.mock.patch.object(
+                AppLauncher, "can_hide", staticmethod(lambda: hides)
+            ), unittest.mock.patch.object(engine.logger, "error") as error:
+                self.assertIsNone(engine._run_roundtrip("bake.py", self.out_dir))
+                message = error.call_args.args[0]
+                self.assertIn("timed out", message)
+                self.assertEqual("ROUNDTRIP_HIDDEN = False" in message, hides)
+                self.assertEqual("Show App Window" in message, hides)
+
+    def test_show_app_window_shows_toolbag_for_the_roundtrip(self):
+        """The panel's Show App Window (``SHOW_APP_WINDOW``, off by default)
+        shows Toolbag for the roundtrip it rides in, as ``ROUNDTRIP_HIDDEN =
+        False`` does: a hidden app waiting on a dialog can't be answered. The
+        bake template -- the one with a roundtrip -- exposes its row.
+        Added: 2026-10-19"""
+        from mayatk.mat_utils.marmoset_bridge import template_params
+        from mayatk.mat_utils.marmoset_bridge._marmoset_engine import _TEMPLATE_DIR
+
+        spec = _params.PARAMS["SHOW_APP_WINDOW"]
+        self.assertEqual((spec.kind, spec.default), ("bool", False))
+        self.assertIn("dialog", spec.tooltip)
+        self.assertIs(template_params.DEFAULTS["SHOW_APP_WINDOW"], False)
+        bake = (_TEMPLATE_DIR / "bake.py").read_text(encoding="utf-8")
+        self.assertIn("SHOW_APP_WINDOW", _params.Parameters.referenced_keys(bake))
+
+        engine = "mayatk.mat_utils.marmoset_bridge._marmoset_engine"
+        cube = cmds.polyCube(name="marmoset_show_cube")[0]
+        for params, hidden in (
+            ({}, True),
+            ({"SHOW_APP_WINDOW": False}, True),
+            ({"SHOW_APP_WINDOW": True}, False),
+        ):
+            with self.subTest(params=params), unittest.mock.patch(
+                f"{engine}.AppLauncher.run",
+                side_effect=self._fake_toolbag_bake("Normal"),
+            ) as run:
+                result = MarmosetBridge(toolbag_path="fake_toolbag.exe").send(
+                    objects=[cube],
+                    output_dir=self.out_dir,
+                    texture_dir=self.out_dir,
+                    output_name="rt",
+                    template="bake",
+                    mode=ROUND_TRIP,
+                    params=params,
+                )
+                self.assertIsNotNone(result)
+                self.assertIs(run.call_args.kwargs.get("hidden"), hidden)
+
+    def test_a_cancelled_roundtrip_returns_at_once_and_says_so(self):
+        """Esc held during a hidden bake (the ambient CancelScope the panel's
+        ``@Cancelable`` Send activates, which a real hidden run polls) ends
+        Toolbag: the log says the roundtrip was cancelled, ``OperationCancelled``
+        reaches the caller -- never swallowed into an ordinary failure -- and no
+        maps are collected. Added: 2026-10-19"""
+        import pythontk as ptk
+
+        engine = "mayatk.mat_utils.marmoset_bridge._marmoset_engine"
+        cube = cmds.polyCube(name="marmoset_cancel_cube")[0]
+
+        def cancelled(exe, args=None, timeout=None, **kwargs):
+            ptk.CancelScope.check()  # the checkpoint a hidden run polls
+            raise AssertionError("the run never reached its checkpoint")
+
+        bridge = MarmosetBridge(toolbag_path="fake_toolbag.exe")
+        scope = ptk.CancelScope("Toolbag")
+        scope.cancel("escape")
+        with unittest.mock.patch(
+            f"{engine}.AppLauncher.run", side_effect=cancelled
+        ), unittest.mock.patch.object(bridge.logger, "warning") as warned:
+            with scope.activate(), self.assertRaises(ptk.OperationCancelled):
+                bridge.send(
+                    objects=[cube],
+                    output_dir=self.out_dir,
+                    texture_dir=self.out_dir,
+                    output_name="rt",
+                    template="bake",
+                    mode=ROUND_TRIP,
+                )
+        logged = " ".join(str(call.args[0]) for call in warned.call_args_list)
+        self.assertIn("cancelled", logged)
+        self.assertEqual(
+            [p for p in os.listdir(self.out_dir) if p.endswith((".png", ".tga"))], []
+        )
+
+    def test_holding_esc_cancels_the_panels_send_button(self):
+        """The panel's Send (``b000``) runs inside the dispatcher's CancelScope
+        (``@Cancelable``) -- the scope a hidden roundtrip polls. Without it
+        nothing activates one, and Esc held over a stuck bake did nothing.
+        Added: 2026-10-19"""
+        from mayatk.mat_utils.marmoset_bridge.marmoset_bridge_slots import (
+            MarmosetBridgeSlots,
+        )
+
+        meta = getattr(MarmosetBridgeSlots.b000, "_cancelable_meta", None) or {}
+        self.assertGreater(meta.get("timeout") or 0, 0)
 
     def test_bake_maps_land_in_the_project_texture_folder(self):
         """Baked maps go to ``sourceimages/baked``, not beside the handoff files.
@@ -460,7 +597,7 @@ class TestMarmosetBridgeExport(MayaTkTestCase):
         saved = {}
         bake = self._fake_toolbag_bake("MAT_Base_Color")
 
-        def fake_run(exe, args=None, cwd=None, timeout=None):
+        def fake_run(exe, args=None, cwd=None, timeout=None, **kwargs):
             body = Path(args[-1]).read_text(encoding="utf-8")
             saved["path"] = re.search(r'SAVE_PATH = r"(.*)"', body).group(1)
             return bake(exe, args=args, cwd=cwd, timeout=timeout)

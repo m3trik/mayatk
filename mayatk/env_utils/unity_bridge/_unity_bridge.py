@@ -95,8 +95,21 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
         return _params.Parameters.defaults()
 
     def _produce(self, objects, request) -> ptk.Payload:
-        """Export the FBX (via the mixin) and stamp the default asset name for the deliverer."""
+        """Export the FBX (via the mixin), embed what it depends on, and stamp
+        the default asset name for the deliverer.
+
+        The FBX lands in ``Assets/`` as the deliverable, so it is finished as
+        the Scene Exporter's is (:meth:`FbxUtils.finish_deliverable`, which
+        never raises and resolves the scene's map folders inside its own
+        guard): every file its records name and the audio its events play
+        inside it, the probe's highlight copies, a mesh per pivot set. The
+        deliverer embeds only the files a record names by file name, and an
+        audio event names its track, which only this scene can resolve.
+        """
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
         payload = super()._produce(objects, request)
+        FbxUtils.finish_deliverable(payload.primary, logger=self.logger)
         payload.extras["default_asset_name"] = self._default_asset_name(objects)
         return payload
 

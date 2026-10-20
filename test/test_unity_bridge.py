@@ -267,6 +267,50 @@ class TestUnityBridgeSend(MayaTkTestCase):
             "ShotA", ptk.FbxFile.load(still["asset"], raw_payloads=False).take_names()
         )
 
+    def test_a_send_ships_the_audio_its_scene_plays_now(self):
+        """The ``audio_manifest`` describes the tracks as they stand at the
+        send -- a track added since the last one included -- and each track's
+        file rides inside the FBX under its event's name, which Unity extracts
+        beside the model: no clip is placed by hand. Measured before: no
+        manifest at all, then the previous export's, and never the audio."""
+        import wave
+
+        import pythontk as ptk
+        from mayatk.audio_utils._audio_utils import AudioUtils
+
+        def wav(name):
+            path = (self.tmp / "sound" / name).as_posix()
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            with wave.open(path, "wb") as out:
+                out.setnchannels(1)
+                out.setsampwidth(2)
+                out.setframerate(22050)
+                out.writeframes(name.encode() * 400)
+            return path
+
+        cube = cmds.polyCube(name="UnityAudio")[0]
+        step = wav("footstep_take3.wav")
+        AudioUtils.add_clip(step, 1, name="footstep")
+        self.bridge.send(
+            [cube],
+            template="copy_to_assets",
+            mode="send_to",
+            params={"ASSETS_SUBDIR": "First"},
+        )
+        punch = wav("punch.wav")
+        AudioUtils.add_clip(punch, 10, name="punch")
+        result = self.bridge.send(
+            [cube],
+            template="copy_to_assets",
+            mode="send_to",
+            params={"ASSETS_SUBDIR": "Second"},
+        )
+        fbx = result["asset"]
+        self.assertEqual(sorted(ptk.FbxMedia.audio_events(fbx)), ["footstep", "punch"])
+        embedded = {row["name"]: row["bytes"] for row in ptk.FbxMedia.embedded(fbx)}
+        self.assertEqual(embedded.get("footstep.wav"), Path(step).stat().st_size)
+        self.assertEqual(embedded.get("punch.wav"), Path(punch).stat().st_size)
+
     def test_send_aborts_when_no_project(self):
         cube = cmds.polyCube(name="UnityNoProj")[0]
         self.bridge.project_path = str(self.tmp / "not_a_project")

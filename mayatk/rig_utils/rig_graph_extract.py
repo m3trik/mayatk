@@ -48,6 +48,8 @@ except ImportError:
 
 import pythontk as ptk
 
+from mayatk.core_utils.units import Units
+
 
 class _RigGraphExtractorInternal:
     """Readers: one per driver shape, plus identity and census helpers."""
@@ -808,8 +810,12 @@ class RigGraphExtractor(_RigGraphExtractorInternal, ptk.HelpMixin):
         ([], 0)
     """
 
+    @Units.working_as(linear=None, angle="deg")
     def extract(self, objects: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         """Read the scene's drivers into a RigGraph envelope.
+
+        Every angle is read in degrees, whatever the scene's preference (the
+        ``source`` block says so); lengths in the working unit it names.
 
         Parameters:
             objects: Reserved for scoping to a selection; the whole scene is

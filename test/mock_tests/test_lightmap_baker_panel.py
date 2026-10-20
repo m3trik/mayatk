@@ -75,8 +75,19 @@ class TestLightmapBakerPanelLoads(unittest.TestCase):
 
         for key, (field, _default) in LightmapBakerSlots._TOGGLES.items():
             with self.subTest(key):
-                on_field = getattr(self.ui, field).option_box.find_option(ToggleOption)
-                self.assertIs(self._toggle(key), on_field)
+                # A field carrying several switches (Scope's three) holds them
+                # in _TOGGLES order: each is the toggle at its place.
+                toggles = [
+                    option
+                    for option in getattr(self.ui, field).option_box.get_options()
+                    if isinstance(option, ToggleOption)
+                ]
+                place = [
+                    k
+                    for k, (f, _d) in LightmapBakerSlots._TOGGLES.items()
+                    if f == field
+                ].index(key)
+                self.assertIs(self._toggle(key), toggles[place])
                 # The STATE is persisted per user, so only its type is pinned
                 # here; the shipped defaults are the .ui's and are covered by
                 # the stub tests.
@@ -86,7 +97,9 @@ class TestLightmapBakerPanelLoads(unittest.TestCase):
         """The wrap reparents the field; a dead wrapper raises RuntimeError
         here rather than at bake time. Types and ranges, not values -- the
         panel restores each field's last session."""
-        self.assertIn(self.slots._scope(), ("selected", "visible", "scene"))
+        self.assertIn(
+            self.slots._scope(), [s.lower() for s in self.slots._SCOPE_LABELS]
+        )
         self.assertIn(self.slots._resolution(), self.slots._RESOLUTIONS)
         self.assertGreaterEqual(self.ui.spn_samples.value(), 1)
         self.assertIsInstance(self.ui.txt_output_dir.text(), str)

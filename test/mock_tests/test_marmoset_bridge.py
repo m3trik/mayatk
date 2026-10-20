@@ -1692,7 +1692,7 @@ class TestClassifyLogLine(unittest.TestCase):
         )
         self.assertLevel(
             "warning",
-            "[toolbag_helpers] Nothing to wire -- check Maya-side MatManifest.build().",
+            "[toolbag_helpers] Nothing to wire -- check the sending bridge's MatManifest.build().",
         )
 
     def test_helper_no_sky_classified_as_warning(self):

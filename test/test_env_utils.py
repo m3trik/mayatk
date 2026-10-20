@@ -480,6 +480,73 @@ class TestExportSceneAsFbxDefaults(MayaTkTestCase):
         )
 
 
+class TestExportSceneAsFbxShipsWhereMayaDraws(MayaTkTestCase):
+    """``export_scene_as_fbx`` -- tentacle's Export Scene, FBX and GLB -- runs
+    the one fold every FBX write runs (``FbxUtils.offsets_folded``). It wrote
+    through ``FBXExport`` around it: an offsetParentMatrix was dropped (the
+    write does not bake) and a pinned node shipped its TRS under a parent
+    that had moved. Measured 2026-10-17 in the selection and whole-scene
+    modes: both nodes off by their offsets.
+    Added: 2026-10-17
+    """
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        cmds.loadPlugin("fbxmaya", quiet=True)
+        store = ptk.TempArtifacts("env_export_scene_fold", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.out = store.dir_path()
+
+    def _scene(self):
+        """A cube frozen into its offsetParentMatrix, and one pinned
+        (``Matrices.pin_world_matrix``, every t/r/s locked) under a group that
+        moved after the pin."""
+        from mayatk.xform_utils._xform_utils import XformUtils
+        from mayatk.xform_utils.matrices import Matrices
+
+        frozen = cmds.polyCube(name="frozen_cube")[0]
+        cmds.xform(frozen, translation=(3, 0, 1), rotation=(0, 30, 0))
+        XformUtils.freeze_to_opm([frozen])
+        group = cmds.group(empty=True, name="moved_GRP")
+        pinned = cmds.polyCube(name="pinned_cube")[0]
+        pinned = cmds.parent(pinned, group)[0]
+        cmds.xform(pinned, translation=(3, 2, 1), rotation=(0, 20, 0))
+        self.assertTrue(Matrices.pin_world_matrix(pinned))
+        cmds.xform(group, translation=(50, 10, 0), rotation=(0, 30, 0))
+        for attr in ("translate", "rotate", "scale"):
+            for axis in "XYZ":
+                cmds.setAttr(f"{pinned}.{attr}{axis}", lock=True)
+        return {
+            leaf: cmds.getAttr(f"{leaf}.worldMatrix[0]")
+            for leaf in ("frozen_cube", "pinned_cube")
+        }, ["|frozen_cube", "|moved_GRP"]
+
+    def test_each_node_ships_where_maya_draws_it(self):
+        for selection_only in (True, False):
+            with self.subTest(selection_only=selection_only):
+                cmds.file(new=True, force=True)
+                worlds, roots = self._scene()
+                cmds.select(roots)
+                out = os.path.join(self.out, f"scene_{int(selection_only)}.fbx")
+
+                EnvUtils.export_scene_as_fbx(
+                    file_path=out, selection_only=selection_only
+                )
+
+                self.assertFalse(cmds.getAttr("pinned_cube.inheritsTransform"))
+                self.assertTrue(cmds.getAttr("pinned_cube.translateX", lock=True))
+                cmds.file(new=True, force=True)
+                cmds.file(out, i=True, type="FBX", ignoreVersion=True)
+                misses = {}
+                for leaf, world in worlds.items():
+                    (node,) = cmds.ls(leaf, long=True, type="transform")
+                    got = cmds.getAttr(f"{node}.worldMatrix[0]")
+                    misses[leaf] = max(abs(a - b) for a, b in zip(world, got))
+                self.assertLess(max(misses.values()), 1e-4, misses)
+
+
 class TestListReferenceNodes(MayaTkTestCase):
     """Screening of the reference nodes Maya cannot answer for.
 
@@ -590,6 +657,97 @@ class TestListReferenceNodes(MayaTkTestCase):
         for path in paths:
             self.assertNotIn("{", path)
             self.assertTrue(os.path.exists(path), path)
+
+
+class TestClearOrphanFosterParents(MayaTkTestCase):
+    """Removing a reference left ``<RN>fosterParent1`` behind in production
+    (``ROOM_ENVRNfosterParent1``): Maya parks the local nodes that were
+    parented under referenced ones there, and removing the reference only drops the
+    ``<RN>.fosterParent`` link. Built live because the whole point is Maya's own
+    removal behaviour.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.child = self.temp_path("_foster_child.ma")
+        cmds.file(new=True, force=True)
+        grp = cmds.group(empty=True, name="grp")
+        cmds.parent(cmds.polyCube(name="cube")[0], grp)
+        cmds.file(rename=self.child)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+
+    def tearDown(self):
+        cmds.file(new=True, force=True)  # release the file handle before deleting
+        try:
+            os.remove(self.child)
+        except OSError:
+            pass
+
+    def _reference_with_local_child(self):
+        """Reference the child and parent a local locator under its group."""
+        cmds.file(self.child, reference=True, namespace="ENV")
+        loc = cmds.spaceLocator(name="localLoc")[0]
+        cmds.parent(loc, "ENV:grp")
+        return cmds.referenceQuery(self.child, referenceNode=True)
+
+    def test_removing_a_reference_returns_its_local_children_to_the_world(self):
+        self._reference_with_local_child()
+
+        EnvUtils.remove_reference(self.child)
+
+        self.assertEqual(cmds.ls(type="fosterParent"), [])
+        self.assertEqual(cmds.ls("localLoc", long=True), ["|localLoc"])
+
+    def test_an_orphaned_deformed_shape_goes_with_its_foster_parent(self):
+        """Deforming a referenced mesh makes a LOCAL shape under the referenced
+        transform; with that transform gone it has nothing to hang from."""
+        cmds.file(self.child, reference=True, namespace="ENV")
+        cmds.nonLinear("ENV:cube", type="bend")
+
+        EnvUtils.remove_reference(self.child)
+
+        self.assertEqual(cmds.ls(type="fosterParent"), [])
+        self.assertEqual(cmds.ls("cubeShapeDeformed*"), [])
+
+    def test_an_unloaded_reference_keeps_its_foster_parent(self):
+        """Reloading reparents the fostered nodes back, so the link must survive."""
+        rn = self._reference_with_local_child()
+        cmds.file(unloadReference=rn)
+        fosters = cmds.ls(type="fosterParent")
+        self.assertTrue(fosters, "Maya fosters local children on unload")
+
+        self.assertEqual(EnvUtils.clear_orphan_foster_parents(), [])
+        self.assertEqual(cmds.ls(type="fosterParent"), fosters)
+
+    def test_a_leftover_from_an_earlier_removal_is_swept(self):
+        """A scene already carrying an orphan (removed outside the toolkit)."""
+        rn = self._reference_with_local_child()
+        cmds.xform("localLoc", translation=(1, 2, 3), worldSpace=True)
+        cmds.file(removeReference=True, referenceNode=rn)  # raw Maya: orphans it
+        self.assertTrue(cmds.ls(type="fosterParent"))
+
+        self.assertEqual(EnvUtils.clear_orphan_foster_parents(), ["localLoc"])
+        self.assertEqual(cmds.ls(type="fosterParent"), [])
+        self.assertEqual(
+            [round(v, 3) for v in cmds.xform("localLoc", q=True, t=True, ws=True)],
+            [1.0, 2.0, 3.0],
+        )
+
+    def test_a_foster_parent_it_cannot_empty_is_kept_not_raised(self):
+        """A locked child cannot be reparented. Raising would make the removal
+        that came before it look failed, and deleting would take the user's node
+        with it, so that foster parent stays."""
+        rn = self._reference_with_local_child()
+        cmds.file(removeReference=True, referenceNode=rn)
+        fosters = cmds.ls(type="fosterParent")
+        cmds.lockNode("localLoc", lock=True)
+        try:
+            self.assertEqual(EnvUtils.clear_orphan_foster_parents(), [])
+            self.assertEqual(cmds.ls(type="fosterParent"), fosters)
+            self.assertTrue(cmds.objExists("localLoc"))
+        finally:
+            cmds.lockNode("localLoc", lock=False)
 
 
 class TestExportSceneAsObj(MayaTkTestCase):

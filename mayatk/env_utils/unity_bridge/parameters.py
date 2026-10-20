@@ -64,7 +64,7 @@ PARAMS: "dict[str, AttributeSpec]" = {
         section="Unity",
         tooltip=(
             "Subfolder under the project's <b>Assets/</b> the FBX is copied into\n"
-            "(created if absent). Blank = drop directly in Assets/."
+            "(created if absent). Blank = <i>Imported</i>; <i>/</i> = Assets/ itself."
         ),
     ),
     "ASSET_NAME": AttributeSpec(
@@ -110,8 +110,8 @@ PARAMS: "dict[str, AttributeSpec]" = {
         section="Unity",
         tooltip=(
             "Which installed Unity Editor to create/launch with (used by\n"
-            "'Launch Editor' and 'New Unity Project…'). Auto uses the newest\n"
-            "installed version."
+            "Launch Unity's Open Editor and Headless, and 'New Unity Project…').\n"
+            "Auto uses the newest installed version."
         ),
     ),
     # Shown only when the 'Manage Unity Scripts' template is selected

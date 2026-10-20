@@ -26,6 +26,22 @@ PARAMS: "dict[str, AttributeSpec]" = {
     # resolved by the DCC bridge-slots base.
     "SCOPE": _BridgeParams.scope_spec(),
     "CARRIER": _BridgeParams.carrier_spec(),
+    # Host-side run option, read by the engine (never Toolbag): echoed in
+    # bake.py, the one template with a roundtrip, so the panel shows it.
+    "SHOW_APP_WINDOW": AttributeSpec(
+        key="SHOW_APP_WINDOW",
+        label="Show App Window",
+        kind="bool",
+        default=False,
+        tooltip=(
+            "Show Toolbag's window while a roundtrip bake runs (a Send To\n"
+            "always shows it).\n"
+            "Off (default): it runs hidden, out of your way. A hidden Toolbag\n"
+            "that stops on a dialog (a license prompt, a missing file) can't be\n"
+            "answered: the bake waits out its timeout unless you hold Esc to\n"
+            "cancel it. Show the window to see the dialog and answer it."
+        ),
+    ),
     # ------------------------------------------------------------------
     # Bake output
     # ------------------------------------------------------------------

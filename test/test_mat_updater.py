@@ -131,7 +131,7 @@ class TestRetypeMaterials(MayaTkTestCase, _MaterialSceneMixin):
     def test_an_unconvertible_material_keeps_its_place(self):
         """``convert`` reports None for a type it cannot read; the caller must
         carry the original forward rather than a hole in the list."""
-        surface = cmds.shadingNode("surfaceShader", asShader=True, name="raw_surface")
+        surface = cmds.shadingNode("useBackground", asShader=True, name="raw_surface")
         out = MatUpdater._retype_materials([surface], "standard_surface")
         self.assertEqual(out, [surface])
         self.assertTrue(cmds.objExists(surface))
@@ -213,6 +213,53 @@ class TestUpdateMaterialsRetype(MayaTkTestCase, _MaterialSceneMixin):
         )
         self.assertEqual(results, {})
         self.assertEqual(cmds.nodeType(self.mat), "blinn")
+
+
+class TestUnclassifiedTexturesAreLeftAlone(MayaTkTestCase, _MaterialSceneMixin):
+    """A material none of whose textures names a map type is left as authored.
+
+    The Scene Exporter's template conversion (``convert_textures``) rebuilds
+    each material from the maps it classifies BY NAME. A projected shadow's
+    silhouette (``BODY_shadow.png``, no map-type token) classifies as nothing,
+    so the rebuild wired nothing back: the shadow plane exported with no
+    texture and opaque, a white quad in WebXR (production, 2026-10-15).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.artifacts = ptk.TempArtifacts(
+            "mtk_mat_updater_unclassified", policy="scoped"
+        )
+        self.addCleanup(self.artifacts.cleanup)
+        folder = self.artifacts.dir_path()
+        self.png = self._png(folder, "BODY_shadow")
+        self.staging = os.path.join(folder, "staging")
+        self.mat = cmds.shadingNode("standardSurface", asShader=True, name="shadowMat")
+        self.tex = cmds.shadingNode("file", asTexture=True, name="shadowTex")
+        cmds.setAttr(f"{self.tex}.fileTextureName", self.png, type="string")
+        cmds.connectAttr(f"{self.tex}.outColor", f"{self.mat}.baseColor")
+        mult = cmds.shadingNode("multiplyDivide", asUtility=True, name="shadowMult")
+        for axis in "XYZ":
+            cmds.connectAttr(f"{self.tex}.outAlpha", f"{mult}.input1{axis}")
+        cmds.connectAttr(f"{mult}.output", f"{self.mat}.opacity")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{self.mat}.outColor", f"{sg}.surfaceShader")
+        cmds.sets(cmds.polyPlane(name="shadowPlane")[0], forceElement=sg)
+
+    def test_the_exporters_template_conversion_keeps_the_silhouette(self):
+        MatUpdater.update_materials(
+            materials=[self.mat],
+            config={
+                "preset": "glTF 2.0",
+                "move_to_folder": self.staging,
+                "transfer_mode": "copy",
+            },
+        )
+        self.assertEqual(
+            cmds.listConnections(f"{self.mat}.baseColor", type="file"), [self.tex]
+        )
+        self.assertEqual(cmds.getAttr(f"{self.tex}.fileTextureName"), self.png)
+        self.assertTrue(cmds.listConnections(f"{self.mat}.opacity"), "fade kept")
 
 
 class TestUpdateNetworkKeepsOpacity(MayaTkTestCase):

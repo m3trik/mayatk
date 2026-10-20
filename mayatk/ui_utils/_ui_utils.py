@@ -363,6 +363,9 @@ class UiUtils:
                          Accepts ``?path=`` (canonical) or ``?filepath=``
                          (legacy) -- the marmoset/substance/rizom bridges
                          all emit ``?path=``.
+            ``preview`` — show the ``.glb`` at *path* in the WebXR preview
+                         (``WebXrPreview.preview_file``: the panel's own
+                         server and tab).
             ``select`` — select *node* in the Maya viewport.
             ``reveal`` — select *node* and reveal it in the Outliner.
 
@@ -394,6 +397,14 @@ class UiUtils:
             # Cross-platform open (win/mac/linux); returns False on failure and
             # avoids the Windows-only os.startfile AttributeError off-Windows.
             return ptk.FileUtils.open_explorer(filepath, logger=logger)
+
+        if action == "preview":
+            path = params.get("path", [""])[0]
+            if not path:
+                return False
+            from mayatk.env_utils.webxr_preview import WebXrPreview
+
+            return WebXrPreview().preview_file(path, logger=logger)
 
         # Node-based actions need cmds; defer the import so the ``open``
         # branch above stays usable in non-Maya contexts.

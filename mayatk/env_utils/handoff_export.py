@@ -302,7 +302,10 @@ class MayaExportMixin:
 
         The default suits a mesh hand-off to another DCC (smoothing groups on; no
         cameras / lights). Bridges that need a different surface (e.g. tangents)
-        override this.
+        override this. Whether the write bakes is not here: that, its range and
+        its resampling are :meth:`_write_plan`'s, applied flag-then-range
+        (:meth:`FbxUtils.apply_write_plan`) -- a bake flag written among these
+        reset the range the take split had just set.
         """
         return {
             "FBXExportSmoothingGroups": True,
@@ -317,7 +320,6 @@ class MayaExportMixin:
             "FBXExportTangents": True,
             "FBXExportEmbeddedTextures": bool(params.get("EMBED_TEXTURES", True)),
             "FBXExportTriangulate": bool(params.get("TRIANGULATE", False)),
-            "FBXExportBakeComplexAnimation": self._includes_animation(params),
             "FBXExportAnimationOnly": False,
             "FBXExportCameras": False,
             "FBXExportLights": False,
@@ -327,6 +329,37 @@ class MayaExportMixin:
             # hand-off (the lightmap round trip depends on instancing surviving).
             "FBXExportInstances": True,
         }
+
+    def _write_plan(self, params: Dict[str, Any]) -> "FbxUtils.WritePlan":
+        """This send's :meth:`FbxUtils.write_plan`: an animated hand-off bakes --
+        over the union of the declared shots it splits (:attr:`split_takes`),
+        else over the scene's animation range -- and a static one does not.
+
+        Decided before the bracket opens, from the takes the carrier declares
+        (the hand-off's publish refreshes only DERIVED records, never the
+        shots), so the bracket's producers read the range the write will bake
+        (:meth:`FbxUtils.planned_bake_range`).
+        """
+        from mayatk.anim_utils._anim_utils import AnimUtils
+
+        if not self._includes_animation(params):
+            return FbxUtils.write_plan(
+                bakes=False, reason="the hand-off carries no animation"
+            )
+        takes = (
+            FbxUtils.takes_span(FbxUtils.declared_takes()) if self.split_takes else None
+        )
+        if takes:
+            return FbxUtils.write_plan(
+                takes=takes,
+                resample_all=self.resample_takes,
+                reason="the hand-off splits the declared takes",
+            )
+        return FbxUtils.write_plan(
+            bakes=True,
+            reason="the hand-off carries animation",
+            span=AnimUtils.scene_animation_range(),
+        )
 
     def _export_fbx(
         self, transforms: List[str], fbx_path: str, params: Dict[str, Any]
@@ -350,9 +383,11 @@ class MayaExportMixin:
         # published with a HANDOFF context; the stagers finish on exit, AFTER the
         # file exists -- so the deliverable carries the staged scene and the
         # artist gets the viewport back as it was.
+        plan = self._write_plan(params)
         with FbxUtils.export_prepared(
             FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF),
             stagers=self._export_stagers(),
+            plan=plan,
         ):
             options = self._fbx_options(params)
             carrier = self._data_export_carrier()
@@ -433,26 +468,24 @@ class MayaExportMixin:
                         self.logger.info(
                             f"Animation: realized {takes} declared take(s)."
                         )
-                    else:
-                        # No split to set a union range, and the reset above left the
-                        # plugin's factory 1-48 -- which would ship 48 frames of
-                        # whatever timeline this scene actually has.
-                        #
-                        # NOT best-effort, unlike the reset: that one establishes a
-                        # baseline and a missing baseline still exports correctly,
-                        # while a range that failed to apply exports the WRONG
-                        # animation and says nothing. Same reason its sibling
-                        # ``apply_takes_from_node`` is unguarded.
-                        start, end = FbxUtils.set_bake_range_from_scene()
-                        self.logger.debug(
-                            f"Animation: no declared takes; bake range {start}-{end}."
-                        )
+                    # The plan, flag first and THEN its range: the reset above
+                    # left the plugin's factory 1-48, which would ship 48 frames
+                    # of any timeline, and a bake flag written after the split's
+                    # union range reset it to the whole animation range. NOT
+                    # best-effort, unlike the reset: a range that failed to apply
+                    # exports the WRONG animation and says nothing. A static send
+                    # needs none of it -- the reset left the bake off.
+                    FbxUtils.apply_write_plan(plan)
+                    self.logger.debug(
+                        f"Animation: bake range {plan.range} ({plan.reason})."
+                    )
                 if bool(params.get("INCLUDE_MATERIALS", True)):
                     FbxUtils.export(
                         file_path=fbx_path,
                         objects=list(transforms) + carrier,
                         options=options,
                         selection_only=True,
+                        plan=plan,
                     )
                     if self.drop_rig_apparatus:
                         FbxUtils.drop_rig_apparatus(
@@ -509,6 +542,7 @@ class MayaExportMixin:
                                 objects=duplicates + unshaded + carrier,
                                 options=options,
                                 selection_only=True,
+                                plan=plan,
                             )
                         finally:
                             if duplicates:
