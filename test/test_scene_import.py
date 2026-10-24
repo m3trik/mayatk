@@ -3229,7 +3229,7 @@ class TestApplySceneData(_ShotsCase):
             {
                 "version": 2,
                 "records": {
-                    "emissive_groups": {
+                    ptk.SceneRecords.EMISSIVE_REGISTRY.key: {
                         "registry": {
                             "schema": 1,
                             "groups": {"glow": {"slot": 0, "default": 1.0}},

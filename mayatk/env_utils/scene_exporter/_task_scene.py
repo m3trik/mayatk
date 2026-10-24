@@ -224,7 +224,7 @@ class _SceneTasksMixin(_TaskDataMixin):
         except Exception:  # the export goes on; say which shots may drop
             self.logger.warning(
                 "Could not point the shots at their repaired member names; a "
-                "shot keyed nothing in its frames may be left out as stale.",
+                "shot keyed nothing in its frames may read as stale.",
                 exc_info=True,
             )
             return 0

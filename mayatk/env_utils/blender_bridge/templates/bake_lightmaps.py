@@ -12,7 +12,7 @@ dir) and this script's artifact, a small JSON manifest carrying each object's ma
 exact per-loop UV layout it was baked through, itself written to tracked temp storage since
 Maya reads it once and never again. The Maya side writes those UVs onto its meshes and commits the
 maps alongside the existing materials -- after which **every** export path ships the bake
-with no knowledge of it: FBX -> Unity (the ``lightmap_metadata`` carrier) and GLB -> web
+with no knowledge of it: FBX -> Unity (the ``lightmaps`` carrier) and GLB -> web
 (``ptk.MeshConvert`` reads the same manifest back out of the GLB). The bake targets no
 platform; the exporters do. The Maya viewport shows nothing, by design: the commit builds
 no file node, so what lands in the scene is the lightmap UV set on channel 1 plus a marker
@@ -737,7 +737,7 @@ def write_return_manifest(packed, lighting, probe=None, cells=None):
         "version": RETURN_MANIFEST_VERSION,
         # A constant since the fused/unlit level was removed, but still WRITTEN: it is
         # the wire format every downstream reader keys on (the committed marker, the
-        # GLB's lightmap_metadata, ptk.MeshConvert), and dropping the field would make
+        # GLB's lightmaps record, ptk.MeshConvert), and dropping the field would make
         # this manifest unreadable to them for no gain.
         "mode": "separated",
         # What actually lit this bake, reported back so the host can say so. A black bake

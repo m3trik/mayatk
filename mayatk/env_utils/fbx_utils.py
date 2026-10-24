@@ -20,8 +20,8 @@ from typing import (
 try:
     import maya.cmds as cmds
     import maya.mel as mel
-except ImportError:
-    pass
+except Exception:
+    cmds = mel = None
 
 import pythontk as ptk
 
@@ -424,8 +424,8 @@ class FbxUtils(ptk.HelpMixin):
     ) -> Optional[Dict[str, Any]]:
         """Embed every file a written FBX's scene records name, in place.
 
-        The records name their files by file name -- ``lightmap_metadata`` its
-        maps and reflection probe, ``shadow_metadata`` its silhouette, atlas
+        The records name their files by file name -- ``lightmaps`` its
+        maps and reflection probe, ``shadows`` its silhouette, atlas
         and horizon maps -- and a lighting-only bake binds its maps to no
         material, so the FBX carried none of them and every consumer had them
         copied in beside it. ``ptk.FbxMedia.embed_dependencies`` puts each
@@ -434,7 +434,7 @@ class FbxUtils(ptk.HelpMixin):
         :meth:`LightmapRecords.search_dirs` -- the folders the GLB build joins
         the same names against; what those miss is looked for anywhere
         under *walk_root*, the folder the exporter's path check walks. The
-        audio the file's ``audio_manifest`` events play rides in too, each
+        audio the file's ``audio`` events play rides in too, each
         track's file under its event's name (:meth:`AudioUtils.track_files`).
         The last of the passes :meth:`finish_deliverable` runs.
 
@@ -564,7 +564,7 @@ class FbxUtils(ptk.HelpMixin):
     def _shipped_audio(file_path: str, log) -> List[Tuple[str, str]]:
         """``(file name, path)`` of the audio the FBX's events play.
 
-        Read off the ``audio_manifest`` the file itself carries (each event
+        Read off the ``audio`` the file itself carries (each event
         names its track: ``ptk.FbxMedia.audio_events``), resolved through the
         scene's file map; a track whose file is missing is said once and left
         out.
@@ -1920,9 +1920,9 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def declared_takes() -> list:
-        """The takes the scene's records declare -- each ``shot_metadata``
-        clip's range, else a legacy ``fbx_takes`` list
-        (``ptk.SceneRecords.declared_takes`` over the carrier): what
+        """The takes the scene's records declare -- each clip's range in
+        the shot record (``ptk.SceneRecords.declared_takes`` over the
+        carrier): what
         :meth:`apply_takes_from_node` realizes by default, and so what an
         export will split.  ``[]`` when nothing is declared."""
         from mayatk.node_utils.data_nodes import DataNodes
@@ -1940,12 +1940,12 @@ class FbxUtils(ptk.HelpMixin):
     ) -> int:
         """Realize the takes the scene declares into FBX export state.
 
-        Defaults to the shot record on the shared carrier -- each
-        ``shot_metadata`` clip's range, or the legacy ``fbx_takes`` channel of
-        a scene published before 0.17.0 (``ptk.SceneRecords.declared_takes``)
-        -- so this is shot-agnostic: it realizes whatever takes the scene
-        declares.  An explicit *node* / *attr* reads a JSON take list off any
-        node instead.
+        Defaults to the shot record on the shared carrier -- each clip's
+        range (``ptk.SceneRecords.declared_takes``) -- so this is
+        shot-agnostic: it realizes whatever takes the scene declares.  An
+        explicit *attr* reads a JSON take list off *node* (the carrier when
+        ``None``) instead; a *node* alone names no list: it arms nothing, and
+        warns why.
 
         Parameters:
             node: Node to read a JSON take list from (with *attr*).
@@ -1962,8 +1962,16 @@ class FbxUtils(ptk.HelpMixin):
         if node is None and attr is None:
             defs = FbxUtils.declared_takes()
         else:
+            if not attr:
+                # Until 0.28.0 a node alone read the retired ``fbx_takes``
+                # channel; say why nothing is armed rather than return 0.
+                logger.warning(
+                    f"apply_takes_from_node(node={node!r}) armed no takes: a take "
+                    "list is read only from an explicit attr=, and the retired "
+                    "'fbx_takes' channel is no default."
+                )
+                return 0
             node = node or DataNodes.get_export_node(create=False)
-            attr = attr or ptk.SceneRecords.FBX_TAKES.key
             if (
                 node is None
                 or not cmds.objExists(node)
@@ -2038,6 +2046,11 @@ class FbxUtils(ptk.HelpMixin):
         ptk.SceneRecords.LIGHTMAPS: (
             "mayatk.light_utils.lightmap_baker.lightmap_records",
             "LightmapRecords",
+            "export_record",
+        ),
+        ptk.SceneRecords.MATERIALS: (
+            "mayatk.env_utils.material_records",
+            "MaterialRecords",
             "export_record",
         ),
     }
@@ -2136,9 +2149,9 @@ class FbxUtils(ptk.HelpMixin):
         from mayatk.env_utils._env_utils import EnvUtils
 
         source = {"application": "maya"}
-        try:  # ``cmds`` is unbound outside Maya (the module's import guard)
+        try:  # ``cmds`` is None outside Maya (the module's import guard)
             source["version"] = cmds.about(version=True)
-            # Provenance, not identity -- see ``SceneRecords.handoff_block``.
+            # Provenance, not identity -- see ``HandoffSource`` (ptk.HandoffRecord).
             source["scene"] = (
                 os.path.basename(EnvUtils.saved_scene_path() or "") or None
             )
@@ -2177,6 +2190,14 @@ class FbxUtils(ptk.HelpMixin):
         not replace it (measured: a bracketed ``FBXExport -s`` shipped only
         ``data_export``).
 
+        Outside the undo queue unless *ctx* is AUTHORING (a tool's own
+        record, which undoes with the tool's edit): an export's records are
+        bookkeeping, and the restore after the write may delete the carrier
+        outside the queue (``DataNodes.discard_if_empty``) -- an undo of a
+        recorded commit then replayed onto the dead node and crashed Maya
+        (measured 2026-10-24). The Scene Exporter's run is undo-disabled
+        already; a hand-off's bracket is not.
+
         Returns:
             ptk.ExportSnapshot: What was produced and written -- the sidecar,
             the export log and the verifier read this object, not the node.
@@ -2188,8 +2209,17 @@ class FbxUtils(ptk.HelpMixin):
         with CoreUtils.preserved_selection():
             if not cls._export_depth:
                 cls._run_stagers("prepare", dict(cls._session_stagers))
-            snapshot = ptk.ExportSnapshot.assemble(cls.producers(only), ctx)
-            snapshot.commit(DataNodes)
+            with (
+                contextlib.nullcontext()
+                if ctx.mode == ptk.ExportContext.AUTHORING
+                else CoreUtils.undo_disabled()
+            ):
+                snapshot = ptk.ExportSnapshot.assemble(cls.producers(only), ctx)
+                snapshot.commit(DataNodes)
+        if cls._export_depth and snapshot.scene_wide:
+            # Written for the bracket's write alone (a transient record, a
+            # narrowed one): the bracket puts the scene's own copy back.
+            cls._bracket_state().setdefault("snapshots", []).append(snapshot)
         return snapshot
 
     @classmethod
@@ -2335,11 +2365,30 @@ class FbxUtils(ptk.HelpMixin):
 
     @classmethod
     def end_export(cls) -> None:
-        """Close an export bracket: run the stagers' finish (outermost only)."""
+        """Close an export bracket (outermost only): put back the scene's own
+        copy of what every publish inside it wrote for the write alone -- a
+        transient record cleared, a narrowed one whole
+        (``ptk.ExportSnapshot.restore_scene_wide``), newest first, outside the
+        undo queue as the publish was (:meth:`publish`) -- then run the
+        stagers' finish."""
         if cls._export_depth <= 0:
             return
         if cls._bracket_depth_add(-1) == 0:
             cls._bracket_state().pop("write_plan", None)
+            snapshots = cls._bracket_state().pop("snapshots", None) or []
+            if snapshots:
+                from mayatk.core_utils._core_utils import CoreUtils
+                from mayatk.node_utils.data_nodes import DataNodes
+
+                for snapshot in reversed(snapshots):
+                    try:
+                        with CoreUtils.undo_disabled():
+                            snapshot.restore_scene_wide(DataNodes)
+                    except Exception:  # noqa: BLE001 - a restore never costs the finish
+                        logger.warning(
+                            "Scene records not restored after the write.",
+                            exc_info=True,
+                        )
             table = cls._bracket_state().pop("stager_table", None)
             cls._run_stagers("finish", table if table is not None else cls.stagers())
 
@@ -2476,7 +2525,9 @@ class FbxUtils(ptk.HelpMixin):
         ASCII is warned about (:meth:`_warn_ascii_carrier`)."""
         if FbxUtils._export_depth:
             return
-        FbxUtils.publish(only=sorted(FbxUtils._session_producers))
+        FbxUtils._bracket_state()["hook_snapshot"] = FbxUtils.publish(
+            only=sorted(FbxUtils._session_producers)
+        )
         FbxUtils._warn_ascii_carrier()
         if FbxUtils.apply_takes_from_node():
             FbxUtils._bracket_state()["hook_stagers"] = FbxUtils.stage(
@@ -2511,11 +2562,23 @@ class FbxUtils(ptk.HelpMixin):
 
     @staticmethod
     def _on_after_export(*_):
-        """Clear take state and undo the hook's staging: the table a split
+        """Clear take state and undo the hook's staging: the records its
+        publish wrote for the write alone (a transient one cleared; outside
+        the undo queue, as :meth:`publish` wrote them), then the table a split
         staged (:meth:`_on_before_export`), else the session stagers'."""
         FbxUtils.reset_takes()
         if FbxUtils._export_depth:
             return
+        snapshot = FbxUtils._bracket_state().pop("hook_snapshot", None)
+        if snapshot is not None:
+            from mayatk.core_utils._core_utils import CoreUtils
+            from mayatk.node_utils.data_nodes import DataNodes
+
+            try:
+                with CoreUtils.undo_disabled():
+                    snapshot.restore_scene_wide(DataNodes)
+            except Exception:  # noqa: BLE001 - never costs the export
+                logger.warning("Scene records not restored after the write.", exc_info=True)
         table = FbxUtils._bracket_state().pop("hook_stagers", None)
         FbxUtils._run_stagers(
             "finish", table if table is not None else dict(FbxUtils._session_stagers)

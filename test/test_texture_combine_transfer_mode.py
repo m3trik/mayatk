@@ -300,7 +300,10 @@ class TestLightmaps(_Case):
         self.assertEqual(
             mtk.LightmapRecords.lightmap_info(tgt).get("map"), "hero_Lightmap.exr"
         )
-        self.assertTrue(os.path.isfile(os.path.join(out_dir, "hero_Lightmap.exr")))
+        # In the session until the scene is saved (LightmapRecords._stage).
+        written = os.path.join(out_dir, "hero_Lightmap.exr")
+        self.assertTrue(os.path.isfile(mtk.LightmapRecords._stage(written)))
+        self.assertFalse(os.path.isfile(written), "nothing in the folder before the save")
 
     def test_unchecked_auto_moves_the_layout_and_no_lightmap(self):
         src, tgt = self._lit_source_and_target()

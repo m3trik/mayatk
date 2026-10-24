@@ -74,7 +74,7 @@ class ShadowRig(ptk.LoggingMixin):
     1. Create shadow with ShadowRig.create()
     2. Export through the Scene Exporter — its smart-bake task bakes the
        expression non-destructively, and the rig publishes a
-       ``shadow_metadata`` channel on the ``data_export`` carrier
+       ``shadows`` channel on the ``data_export`` carrier
        (produced fresh at export time: ``FbxUtils.PRODUCERS``). For
        File > Export, the Game Exporter and the bridges, bake first with
        ShadowRig.bake() (or the panel's Bake to Keyframes button).
@@ -116,9 +116,14 @@ class ShadowRig(ptk.LoggingMixin):
         "scaleZ",
         OPACITY_ATTR,
     )
-    # data_export carrier channel (see refresh_export_metadata): the key of
-    # the ``ptk.SceneRecords.SHADOWS`` record.
-    SHADOW_METADATA = ptk.SceneRecords.SHADOWS.key
+    #: The shadows record's key under its old name, retired here: read the
+    #: declaration's (``ptk.SceneRecords.SHADOWS.key``).
+    SHADOW_METADATA = ptk.Deprecation.class_attribute(
+        ptk.SceneRecords.SHADOWS.key,
+        "ptk.SceneRecords.SHADOWS.key",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
     # Multi message attr on the plane linking every support node this rig
     # created — delete_rigs' rename-proof teardown manifest.
     _MEMBER_ATTR = "shadowRigMembers"
@@ -182,12 +187,13 @@ class ShadowRig(ptk.LoggingMixin):
     # canvas extent in world units.
     PLANE_SIZE = 1.0
 
-    #: Rig types, in the order the panel lists them. ``projected`` draws one
+    #: Rig types, in the order the panel lists them -- the record's
+    #: (``ptk.ShadowRecord.RIG_TYPES``). ``projected`` draws one
     #: silhouette the expression re-places; ``horizon`` adds a coverage-aware
     #: horizon map (``pythontk.ShadowHorizon``) the engine samples per frame
     #: so the outline follows a runtime light — see
     #: ``mayatk/docs/shadow_rig_morphing.md``.
-    RIG_TYPES = ("projected", "horizon")
+    RIG_TYPES = ptk.ShadowRecord.RIG_TYPES
     _TYPE_ATTR = "shadowRigType"
     #: The engine places the quad from the source node at runtime while this
     #: is on; off leaves the imported keys alone.
@@ -229,7 +235,7 @@ class ShadowRig(ptk.LoggingMixin):
     #: The map's bearing frame in FBX / glTF axes: Maya's contact-local +X
     #: and +Z (the contract's ``frame_a`` / ``frame_b``).
     HORIZON_FRAME = ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
-    #: The ``shadow_metadata`` schema this producer writes -- stamped by the
+    #: The ``shadows`` schema this producer writes -- stamped by the
     #: ``ptk.SceneRecords.SHADOWS`` declaration, never spelled here.
     METADATA_VERSION = ptk.SceneRecords.SHADOWS.version
     #: Atlas PNG per rig type, beside the silhouettes in ``sourceimages``.
@@ -933,15 +939,11 @@ class ShadowRig(ptk.LoggingMixin):
         local = self._rigid_contact_frame()[:3, :3] @ (world / n)
         return tuple(float(v) for v in local)
 
-    @ptk.Deprecation.parameter(
-        "axis", drop=True, remove_in="0.20.0", since="2026-09-23"
-    )
     def create_silhouette_texture(
         self,
         size=512,
-        axis="auto",
-        recursive=True,
         *,
+        recursive=True,
         uniform_alpha=True,
         falloff_power=0.8,
         vertical_weight=0.3,
@@ -954,11 +956,9 @@ class ShadowRig(ptk.LoggingMixin):
         ground through the source — via ``pythontk.ImgUtils.rasterize_shadow``.
 
         Args:
-            size: Texture resolution.
-            axis: DEPRECATED (warns; removed in 0.20.0) and ignored. The
-                silhouette is always the projection through the source (an
-                overhead source draws the footprint, a low one the stretched
-                shape); a positional value other than ``"auto"`` is logged.
+            size: Texture resolution. The silhouette is always the projection
+                through the source (an overhead source draws the footprint, a
+                low one the stretched shape).
             recursive: If True, include descendant meshes (e.g. for groups/locators).
             uniform_alpha: Physically flat shadow (default). False adds the
                 stylised contact falloff — alpha fading from the footprint to
@@ -979,11 +979,6 @@ class ShadowRig(ptk.LoggingMixin):
         """
         from PIL import Image
 
-        if str(axis).lower() not in ("auto", "light"):
-            self.logger.warning(
-                f"ShadowRig axis={axis!r} is retired and ignored: the silhouette "
-                "is the target's projection through the source."
-            )
         if path:
             self.texture_path = str(path)
             os.makedirs(os.path.dirname(self.texture_path) or ".", exist_ok=True)
@@ -2109,7 +2104,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def export_record(cls, ctx):
-        """The ``shadow_metadata`` record for this scene, or ``None`` when it
+        """The ``shadows`` record for this scene, or ``None`` when it
         has no shadow planes -- the ``ptk.SceneRecords.SHADOWS`` producer
         (``FbxUtils.PRODUCERS``).  Pure: it reads the planes' stamps and never
         writes.  The payload joins Unity-side by GameObject name (unitytk's
@@ -2156,7 +2151,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def refresh_export_metadata(cls):
-        """Republish the ``shadow_metadata`` channel on the ``data_export``
+        """Republish the ``shadows`` channel on the ``data_export``
         carrier from the scene's shadow planes.
 
         The authoring-time publish of :meth:`export_record`, committed through
@@ -2220,7 +2215,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
 
     @classmethod
     def plane_record(cls, plane):
-        """One plane's ``shadow_metadata`` v2 record (the engine contract in
+        """One plane's ``shadows`` v2 record (the engine contract in
         ``mayatk/docs/shadow_rig_morphing.md``): the join key, the type, the
         textures, the source and contact nodes the engine reads at runtime,
         the projection model's inputs, and the atlas / horizon blocks when
@@ -2504,7 +2499,6 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             texture=atlas or cls._plane_attr(plane, cls._HORIZON_TEX_ATTR, ""),
             size=ints[0],
             spans=ints[1],
-            levels=ints[2],
             # Baked in Maya's internal unit (:meth:`bake_horizon`).
             bounds=Units.convert(floats[:4], "internal", "working"),
             height_scale=Units.convert(floats[4], "internal", "working"),
@@ -2881,7 +2875,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         whole shading network (shader, SG, file/place2d/opacity nodes — via
         the ``shadowRigMembers`` manifest stamped at create), and the contact
         locator parented under the target. The targets and the shared
-        shadow-source locator are left untouched; the ``shadow_metadata``
+        shadow-source locator are left untouched; the ``shadows``
         channel is republished afterwards.
 
         Rigs built before the manifest existed still lose the plane, group,
@@ -3109,7 +3103,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
           alpha -- the one value the rig's material computed per frame;
         * the material becomes a ``surfaceShader`` (Maya's unlit model:
           colour and transparency from that PNG), which the GLB writes
-          ``KHR_materials_unlit`` (``SceneState._read_unlit``) and the FBX
+          ``KHR_materials_unlit`` (``MaterialRecords``' unlit family) and the FBX
           carries as a plain textured material;
         * the expression, its drivers, the contact locator and the old shading
           network go (the ``shadowRigMembers`` manifest), and so does every
@@ -3119,7 +3113,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
         The plane keeps its transform where the rig left it, and any keys on
         its transform channels; the opacity keys go with the fade. An atlased
         plane is unpacked first, so its UVs span its own PNG. One undo step;
-        the ``shadow_metadata`` channel is republished after.
+        the ``shadows`` channel is republished after.
 
         Parameters:
             planes: Shadow plane transform(s), or anything that resolves one
@@ -3263,15 +3257,12 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
 
     @classmethod
-    @ptk.Deprecation.parameter(
-        "axis", drop=True, remove_in="0.20.0", since="2026-09-23"
-    )
     def create(
         cls,
         targets,
         light_pos=(5, 10, 5),
         texture_res=512,
-        axis="auto",
+        *,
         source_name=DEFAULT_SOURCE_NAME,
         recursive=True,
         mode="orbit",
@@ -3294,9 +3285,8 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
                 per side and solid spans per column;
                 ``pythontk.ShadowHorizon``'s measured defaults when None.
             light_pos: Initial position for a source locator this call creates.
-            texture_res: Resolution of silhouette texture
-            axis: DEPRECATED (warns; removed in 0.20.0) and ignored -- the
-                  silhouette is always the projection through the source.
+            texture_res: Resolution of silhouette texture, which is always the
+                  projection through the source.
             source_name: The shadow source — any existing transform's name
                          (a light included; a ``directionalLight`` projects
                          along its direction), or the name of a locator to
@@ -3333,9 +3323,7 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
             )
             shadow.create_contact_locator()
             shadow.create_shadow_plane()
-            # Positional, so only a caller's own (positional) retired axis
-            # reaches the texture's notice -- the keyword form warned above.
-            shadow.create_silhouette_texture(texture_res, axis, recursive)
+            shadow.create_silhouette_texture(texture_res, recursive=recursive)
             shadow.create_material(shader_type=shader_type)
             shadow.setup_expression()
             # Follow Source, when it is on: either end of the projection.

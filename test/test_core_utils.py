@@ -158,6 +158,26 @@ class TestCoreUtils(MayaTkTestCase):
         cmds.undo()
         self.assertFalse(cmds.objExists("test_undo_cube"))
 
+    def test_an_undo_chunk_without_maya_groups_nothing(self):
+        """Outside Maya there is no undo queue to group into: the chunk is a
+        no-op, so an ``@CoreUtils.undoable`` method reaches its own no-Maya
+        answer (``AudioClips.prepare_for_export``'s ``cmds is None``) instead
+        of failing in the decorator. Added: 2026-10-20"""
+        from mayatk.core_utils import _core_utils
+
+        ran = []
+        with patch.object(_core_utils, "cmds", None):
+            with CoreUtils.undo_chunk("probe"):
+                ran.append("chunk")
+
+            @CoreUtils.undoable
+            def answered():
+                ran.append("undoable")
+                return "answered"
+
+            self.assertEqual(answered(), "answered")
+        self.assertEqual(ran, ["chunk", "undoable"])
+
     def test_undoable_decorator_with_exception(self):
         """Test undoable decorator handles exceptions properly."""
 

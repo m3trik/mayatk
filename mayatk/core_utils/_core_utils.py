@@ -193,7 +193,12 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
         """Group operations into a single Maya undo chunk.
 
         Drop-in replacement for ``pm.UndoChunk()`` using ``cmds.undoInfo``.
+        Outside Maya there is no undo queue: the chunk groups nothing, so a
+        decorated method reaches its own no-Maya answer.
         """
+        if cmds is None:
+            yield
+            return
         cmds.undoInfo(openChunk=True, chunkName=name) if name else cmds.undoInfo(
             openChunk=True
         )

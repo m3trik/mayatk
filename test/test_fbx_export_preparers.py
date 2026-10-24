@@ -462,31 +462,49 @@ class TestExportHandoffBlock(MayaTkTestCase):
         block = SR.HANDOFF.load(DataNodes)
         self.assertTrue(block, "the carrier has channels, so it must describe them")
         self.assertEqual(block["version"], SR.HANDOFF.version)
-        self.assertEqual(block["source"]["application"], "maya")
-        self.assertIn("data_export.lightmap_metadata", block["reads"])
-        self.assertNotIn("data_export.handoff", block["reads"], "not itself")
-        # The sentence the whole block exists for.
-        self.assertIn("No material references those maps", block["instructions"])
-        self.assertIn("lightmapInfo", block["instructions"])
+        # The fundamentals at the top, the rest under 'extras'.
+        self.assertEqual(
+            sorted(block), ["assembly", "extras", "instructions", "rendering", "version"]
+        )
+        # A source is all 'extras' holds: where the file came from.
+        source = {k: v for k, v in FbxUtils.export_context().source.items() if v}
+        self.assertEqual(block["extras"], {"source": source})
+        self.assertEqual(block["extras"]["source"]["application"], "maya")
+        # Each record the carrier holds is a part of the approved scene, at its
+        # data's address -- never the handoff itself.
+        parts = {row["part"]: row["data"] for row in block["assembly"]}
+        self.assertEqual(parts["lightmaps"], ["data_export.lightmaps"])
+        addresses = [address for data in parts.values() for address in data]
+        self.assertNotIn("data_export.handoff", addresses, "not itself")
+        # The sentence the whole block exists for -- the lightmaps row's own,
+        # so a file without lightmaps is told nothing of them.
+        specs = {row["part"]: row["spec"] for row in block["assembly"]}
+        self.assertIn("wired to no material", specs["lightmaps"])
+        self.assertNotIn("wired to no material", block["instructions"])
+        # The per-object marker restates its manifest entry; the deliverable
+        # leaves it out, so the text names no such property.
+        self.assertNotIn("lightmapInfo", block["instructions"])
 
     def test_the_session_hook_path_stamps_it_too(self):
         """File > Export and the Game Exporter run the session hook, which
         always publishes -- even with no producer opted in -- so every FBX
         written outside the Scene Exporter describes the channels it carries."""
-        DataNodes.write(ptk.Scope.DELIVERABLE, "audio_manifest", "1:beep")
+        DataNodes.write(ptk.Scope.DELIVERABLE, "audio", "1:beep")
         FbxUtils._on_before_export()
         FbxUtils._on_after_export()
         block = SR.HANDOFF.load(DataNodes)
         self.assertTrue(block, "the session-hook path must describe the carrier too")
-        self.assertIn("data_export.audio_manifest", block["reads"])
+        parts = {row["part"]: row["data"] for row in block["assembly"]}
+        self.assertEqual(parts.get("audio"), ["data_export.audio"])
 
     def test_a_producer_that_clears_its_record_leaves_no_stale_claim(self):
         """A scene whose bake was reverted must not still advertise a lightmap."""
         cmds.polyCube(name="handoffBoxB")
         SR.LIGHTMAPS.save(DataNodes, {"objects": []})
         FbxUtils.publish()  # the producer clears the unbacked record
-        reads = (SR.HANDOFF.load(DataNodes) or {}).get("reads") or {}
-        self.assertNotIn("data_export.lightmap_metadata", reads)
+        block = SR.HANDOFF.load(DataNodes) or {}
+        addresses = [a for row in block.get("assembly") or [] for a in row["data"]]
+        self.assertNotIn("data_export.lightmaps", addresses)
 
 
 class TestAudioShotsAutoExportCompose(MayaTkTestCase):
@@ -532,11 +550,11 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
         text = _export_selected_ascii([cube, DataNodes.EXPORT], "mtk_both.fbx")
 
         # Shots: metadata + both named takes.
-        self.assertIn("shot_metadata", text)
+        self.assertIn('"animation"', text)
         self.assertIn("Intro", text)
         self.assertIn("Outro", text)
         # Audio: manifest record + the track label, scoped to its clip.
-        self.assertIn("audio_manifest", text)
+        self.assertIn('"audio"', text)
         self.assertIn("footstep", text)
         manifest = SR.AUDIO.load(DataNodes)
         self.assertEqual({e["clip"] for e in manifest["events"]}, {"Intro"})
@@ -545,9 +563,9 @@ class TestAudioShotsAutoExportCompose(MayaTkTestCase):
         # the shot record: the clips carry their ranges, so a separate list
         # is no longer written.
         attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
-        for key in ("shot_metadata", "audio_manifest", "handoff"):
+        for key in ("animation", "audio", "handoff"):
             self.assertIn(key, attrs)
-        self.assertNotIn(SR.FBX_TAKES.key, attrs)
+        self.assertNotIn("fbx_takes", attrs)
 
 
 if __name__ == "__main__":

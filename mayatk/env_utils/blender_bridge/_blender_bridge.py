@@ -307,6 +307,18 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         if request.template == self._LIGHTMAP_TEMPLATE:
             if not request.params.get("LIGHTMAP_DIR"):
                 request.params["LIGHTMAP_DIR"] = self._default_lightmap_dir(objects)
+            # Into the session folder standing in for it, as every Maya bake
+            # writes: the files the saved scene reads change only when it is
+            # saved (LightmapRecords._stage; the return leg names them against
+            # the folder itself, _clear_of_strangers).
+            from mayatk.light_utils.lightmap_baker.lightmap_records import (
+                LightmapRecords,
+            )
+
+            if request.params["LIGHTMAP_DIR"]:
+                request.params["LIGHTMAP_DIR"] = LightmapRecords._pending().folder(
+                    request.params["LIGHTMAP_DIR"]
+                )
             # Before the export, so the hidden meshes cost nothing downstream
             # either -- not the FBX write, not the Blender import, not an atlas
             # rect taken from the geometry that does ship.
@@ -643,6 +655,55 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
                 for file_name, readers in LightmapRecords.claims().items()
             },
         }
+
+    @classmethod
+    def _clear_of_strangers(cls, mapping: Dict[str, str]) -> Dict[str, str]:
+        """*mapping* with each returned map that waits in the session
+        (``LightmapRecords._stage``) moved off a name its home folder holds for
+        another scene -- a file there nothing here reads and this scene did not
+        write (``LightmapRecords.strangers``' rule). Blender named the maps in
+        the session folder, which holds no such file, from the claims alone;
+        the save would otherwise put a map over it. Touches no mesh, so the
+        return leg runs it while vetting, before any UV is written; a map
+        that cannot be moved (the folder unreadable, the file held open) keeps
+        its path, warned -- never an error that costs the rest."""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        pending = LightmapRecords._pending()
+        claims = LightmapRecords.claims()
+        writers = LightmapRecords._writers()
+        moved: Dict[str, str] = {}
+        taken: set = set()
+        out: Dict[str, str] = {}
+        for obj, path in mapping.items():
+            if path not in moved:
+                moved[path] = path
+                home = pending.home(path)
+                key = os.path.basename(home).lower()
+                if (
+                    pending.holds(path)
+                    and os.path.isfile(home)
+                    and key not in claims
+                    and not LightmapRecords.wrote(key, writers)
+                ):
+                    folder = os.path.dirname(home)
+                    stem, ext = os.path.splitext(os.path.basename(home))
+                    try:
+                        held = os.listdir(folder) + os.listdir(os.path.dirname(path))
+                        free = ptk.FileUtils.unique_path(
+                            folder, stem, ext, taken, claims=held + list(claims)
+                        )
+                        target = pending.stage(free)
+                        os.replace(path, target)
+                        moved[path] = target
+                    except OSError as error:
+                        cls.logger.warning(
+                            f"{os.path.basename(path)}: not moved off another "
+                            f"scene's {home!r} ({error}); the next save would "
+                            "write over that file."
+                        )
+            out[obj] = moved[path]
+        return out
 
     @staticmethod
     def _manifest_node_types(transforms: List[str], spell=None) -> Dict[str, str]:
@@ -1302,7 +1363,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         file node and leaves the material untouched; the scene gains a lightmap UV set on
         channel 1 and a marker per transform, and the map is inspected on disk or in a
         viewer. To see it lit, click **WebXR Preview** (Rendering panel): a fresh export carries the
-        just-committed ``lightmap_metadata``, so that button self-feeds (FBX -> GLB ->
+        just-committed ``lightmaps``, so that button self-feeds (FBX -> GLB ->
         ``apply_glb_lightmaps`` -> the viewer binds the maps) with no coupling back to
         this operation.
 
@@ -1446,7 +1507,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         It stops at committed scene state -- deliberately. Viewing the result is the
         WebXR Preview button's job, and that button already self-feeds off the commit
-        (a fresh export carries ``lightmap_metadata``, which ``apply_glb_lightmaps``
+        (a fresh export carries ``lightmaps``, which ``apply_glb_lightmaps``
         binds during FBX -> GLB). Chaining a browser push from here would couple a
         scene operation to a network service for no gain: the same click works before
         the bake, after it, and after a manual edit, with one code path.
@@ -1632,8 +1693,11 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
 
         Falls back to the project's ``sourceimages`` when nothing textured is in scope,
         then to the saved scene's own folder (the rare no-workspace case; a scene that was
-        never saved gets ``""``). Never temp: these become textures **this Maya scene
-        references**, and an age sweep would delete them out from under a committed bake.
+        never saved gets ``""``). This is the maps' HOME, never a temp folder: these become
+        textures **this Maya scene references**. The bake writes them into the session
+        folder standing in for it (``LightmapRecords._pending().folder``), as every Maya
+        bake does, and the scene's next save moves them here (``LightmapRecords._stage``);
+        until then the files the saved scene reads are unchanged.
         """
         import maya.cmds as cmds
 
@@ -2075,6 +2139,9 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             else:
                 usable[maya] = (path, layout, entry.get("rect"))
                 returned[maya] = entry
+        # Off another scene's file of its name too -- a rename on disk, before
+        # any mesh is touched, as the rest of the vetting is.
+        homed = self._clear_of_strangers({m: usable[m][0] for m in usable})
 
         # A LEGACY marker's squeeze (``uvRect``) is still in the UVs, which is why
         # ``commit`` carries its record forward. The layout below REPLACES those UVs,
@@ -2099,7 +2166,7 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
             {rep: usable[rep][1] for rep in reps}, quiet=True
         )
         wired = [m for rep, members in reps.items() if rep in applied for m in members]
-        mapping = {m: usable[m][0] for m in wired}
+        mapping = {m: homed[m] for m in wired}
         if not mapping:
             # Could be a vetting rejection or a UV failure; both are already logged per
             # object, so point there rather than naming one cause and being wrong.
@@ -2118,11 +2185,15 @@ class BlenderBridge(MayaExportMixin, ptk.ScriptLaunchBridge):
         with LightmapRecords.superseding(list(mapping)):
             recorded = LightmapRecords.commit(mapping, scale_offsets=rects, cells=cells)
         # Beside Material Textures sends each map to its own texture folder.
-        folders = sorted({os.path.dirname(path) for path in mapping.values()})
+        # Named by its home: the session folder it waits in until the save is
+        # no place the artist will find it.
+        folders = sorted(
+            {os.path.dirname(LightmapRecords._home(p)) for p in mapping.values()}
+        )
         where = folders[0] if len(folders) == 1 else f"{len(folders)} folders"
         self.logger.info(
-            f"Wired {len(recorded)} lightmap(s) from {where} into the scene "
-            "alongside the existing maps -- Lightmap Baker's Revert to Source undoes it."
+            f"Wired {len(recorded)} lightmap(s) for {where} into the scene "
+            "alongside the existing maps -- the Lightmap Baker's Revert Selected (its Manage page) undoes it."
         )
         self._commit_returned_probe(data.get("probe"), resolved)
         return recorded

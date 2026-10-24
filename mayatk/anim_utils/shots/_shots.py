@@ -738,33 +738,6 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
                 out[name] = found[0]
         return out
 
-    def _export_set_members(self, names, scope) -> set:
-        """Which member *names* an export of *scope* carries
-        (``ptk.ShotStore.export_records``): the node is an export root or
-        sits under one, both sides resolved to long DAG paths -- a short
-        name, a member whose parent was renamed (looked up by its leaf, as
-        :meth:`_existing_objects` does) and one renamed outright (its saved
-        UUID, :meth:`_current_names`) included."""
-        names = [str(n) for n in names]
-        if cmds is None or not names:
-            return super()._export_set_members(names, scope)
-        roots = cmds.ls([str(r) for r in scope], long=True) or []
-        renamed = self._current_names(names)
-
-        def carried(path: str) -> bool:
-            return any(path == r or path.startswith(r + "|") for r in roots)
-
-        kept = set()
-        for name in names:
-            paths = (
-                cmds.ls(name, long=True)
-                or cmds.ls(self.leaf_name(name), long=True, type="transform")
-                or ([renamed[name]] if name in renamed else [])
-            )
-            if any(carried(p) for p in paths):
-                kept.add(name)
-        return kept
-
     def _keyed_windows(self, windows) -> List[bool]:
         """Per ``(start, end)`` window, whether any animation curve in the
         scene keys a frame inside it -- whatever the curve drives, layers
@@ -895,10 +868,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         builds (each clip with its range) committed through
         ``FbxUtils.publish_authored``, handoff block included.  Idempotent;
         regenerated from the live store so it can't go stale.  An empty store
-        **clears** the record (never creating the carrier just to hold it), and
-        either way the commit clears a legacy ``fbx_takes`` the scene still
-        holds — deleting the last shot must not leave the previous takes
-        riding into the next export.  Returns the export node
+        **clears** the record (never creating the carrier just to hold it) --
+        deleting the last shot must not leave the previous takes riding into
+        the next export.  Returns the export node
         name, or ``None`` outside Maya / when a clear had nothing to do.
 
         An export pipeline does not call this: ``FbxUtils.PRODUCERS`` names

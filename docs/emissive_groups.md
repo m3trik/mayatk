@@ -49,7 +49,7 @@ binding-breaking reclaim.
   Blender: per-group boolean FACE attributes (same name), so overlap stays
   expressible like Maya sets.
 - **Registry** (slots / defaults / encoding / last-bake info) — one JSON channel
-  `emissive_groups` on `data_internal` (see [Scene data nodes](data_nodes.md)).
+  `emissive_registry` on `data_internal` (see [Scene data nodes](data_nodes.md)).
   Cleared when the last group and retired slot are gone. The bookkeeping model
   is `ptk.RegionGroupRegistry`; both DCCs only bind it to their carrier.
 - **Export manifest** — regenerated onto `data_export.emissive_groups` before
@@ -62,11 +62,11 @@ binding-breaking reclaim.
   only refreshes a manifest that already exists, so a scene that has never
   been baked or exported carries no `data_export` node from this tool.
 
-## Manifest wire schema (v1)
+## Manifest wire schema (v2)
 
 ```json
 {
-  "schema": 1,
+  "version": 2,
   "encoding": "vertex-color",
   "color_set": "emissiveGroups",
   "groups": [
@@ -80,7 +80,9 @@ binding-breaking reclaim.
 `uv_channel`, and `resolution`. A group made keyable additionally carries
 `"attr": "emissiveGroup_<name>"` — the carrier attribute whose animation
 curve drives its weight (absent otherwise). Model + (de)serialization:
-`ptk.RegionMaskManifest`; consumers warn-and-best-effort on newer `schema`.
+`ptk.RegionMaskManifest`, its `version` the record's
+(`ptk.SceneRecords.EMISSIVE_GROUPS.version`); consumers warn-and-best-effort
+on a newer `version`.
 
 ## Keyable weights (opt-in)
 

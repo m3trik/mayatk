@@ -46,7 +46,7 @@ class TestAudioClipsExport(MayaTkTestCase):
         audio_utils.write_key("jump", frame=28, value=0)
 
     def test_prepare_for_export_stamps_manifest(self):
-        """prepare_for_export writes ``audio_manifest`` as a plain export channel."""
+        """prepare_for_export writes ``audio`` as a plain export channel."""
         self._seed_tracks()
         manifest = AudioClips.prepare_for_export()
 
@@ -103,47 +103,25 @@ class TestAudioClipsExport(MayaTkTestCase):
             {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
         )
 
-    def test_a_legacy_take_list_still_scopes_the_events(self):
-        """A scene published before the ranges moved onto the clips carries
-        ``fbx_takes`` beside a range-less shot record; its events still scope
-        (``ptk.SceneRecords.declared_takes`` falls back to the old list)."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        self._seed_tracks()  # footstep on @10, jump on @24
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes, {"shots": [{"clip": "Intro", "objects": []}]}
-        )
-        ptk.SceneRecords.FBX_TAKES.save(
-            DataNodes,
-            [
-                {"name": "Intro", "start": 1, "end": 20},
-                {"name": "Outro", "start": 21, "end": 50},
-            ],
-        )
-
-        manifest = AudioClips.prepare_for_export()
-        self.assertEqual(
-            _event_set(manifest),
-            {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
-        )
-
     def test_scoping_skips_takes_missing_range(self):
-        """A published take without start/end must scope nothing — the old
+        """A published clip without start/end must scope nothing — the old
         ``get(..., 0)`` defaults turned it into a phantom ``(0, 0)`` take
-        that swallowed frame-0 events. Only a legacy ``fbx_takes`` list can
-        hold one (a clip without its range is not a take at all)."""
+        that swallowed frame-0 events (a clip without its range is not a
+        take at all)."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._seed_tracks()  # footstep @10, jump @24
         audio_utils.write_key(
             "boom", frame=0, value=1
         )  # only the phantom (0,0) contains it
-        ptk.SceneRecords.FBX_TAKES.save(
+        ptk.SceneRecords.SHOTS.save(
             DataNodes,
-            [
-                {"name": "Broken"},  # no range — must be ignored
-                {"name": "Intro", "start": 1, "end": 30},
-            ],
+            {
+                "shots": [
+                    {"clip": "Broken", "objects": []},  # no range — ignored
+                    {"clip": "Intro", "start": 1, "end": 30, "objects": []},
+                ]
+            },
         )
 
         manifest = AudioClips.prepare_for_export()
@@ -155,28 +133,20 @@ class TestAudioClipsExport(MayaTkTestCase):
         )
 
     def test_scoping_falls_back_unscoped_when_no_take_has_a_range(self):
-        """When the published takes carry no usable ranges at all, treat the
-        channel like any other malformed ``fbx_takes`` payload: bake unscoped
-        rather than silently dropping every event. A shot record whose clips
-        carry no range declares no take either (the last assertion)."""
+        """When no published clip carries a usable range, a shot record
+        declares no take: bake unscoped rather than silently dropping every
+        event."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         self._seed_tracks()
-        ptk.SceneRecords.FBX_TAKES.save(DataNodes, [{"name": "Broken"}])
+        ptk.SceneRecords.SHOTS.save(
+            DataNodes, {"shots": [{"clip": "Broken", "objects": []}]}
+        )
 
         manifest = AudioClips.prepare_for_export()
         self.assertTrue(manifest, "manifest should fall back to an unscoped bake")
         self.assertEqual(
             _event_set(manifest),
-            {("", 9, "footstep"), ("", 23, "jump")},
-        )
-
-        ptk.SceneRecords.FBX_TAKES.clear(DataNodes)
-        ptk.SceneRecords.SHOTS.save(
-            DataNodes, {"shots": [{"clip": "Broken", "objects": []}]}
-        )
-        self.assertEqual(
-            _event_set(AudioClips.prepare_for_export()),
             {("", 9, "footstep"), ("", 23, "jump")},
         )
 
@@ -200,6 +170,54 @@ class TestAudioClipsExport(MayaTkTestCase):
                     _event_set(split.text),
                     {("Intro", 9, "footstep"), ("Outro", 3, "jump")},
                 )
+
+    def test_an_unscoped_event_counts_from_the_first_frame_the_file_holds(self):
+        """An unscoped event's frame counts from the first frame the file's
+        animation holds: the clip origin the pipeline measured
+        (``ctx.clip_span``), else the range the write bakes, else the playback
+        start -- blendertk's chain, so one scene ships the same frames from
+        either DCC. Counted from the playback start alone, an export whose
+        playback range was not its exported range shipped every event off by
+        the difference. Added: 2026-10-20
+        """
+        self._seed_tracks()  # footstep on @10, jump on @24; playback min 1
+        measured = AudioClips.export_record(ptk.ExportContext(clip_span=(5.0, 60.0)))
+        self.assertEqual(
+            _event_set(measured.text), {("", 5, "footstep"), ("", 19, "jump")}
+        )
+        self.addCleanup(mel.eval, "FBXResetExport")
+        mel.eval("FBXResetExport")
+        mel.eval("FBXExportBakeComplexAnimation -v true")
+        mel.eval("FBXExportBakeComplexStart -v 8")
+        mel.eval("FBXExportBakeComplexEnd -v 60")
+        baked = AudioClips.export_record(ptk.ExportContext())
+        self.assertEqual(
+            _event_set(baked.text), {("", 2, "footstep"), ("", 16, "jump")}
+        )
+        mel.eval("FBXExportBakeComplexAnimation -v false")
+        played = AudioClips.export_record(ptk.ExportContext())
+        self.assertEqual(
+            _event_set(played.text), {("", 9, "footstep"), ("", 23, "jump")}
+        )
+
+    def test_an_unscoped_event_before_the_first_frame_is_dropped_and_said_where(self):
+        """One before the first frame the file's animation holds can never
+        fire: dropped, and the warning says where it fell -- not "outside
+        every shot take" when no take ships. Added: 2026-10-20
+        """
+        self._seed_tracks()  # footstep on @10, jump on @24
+        with self.assertLogs(AudioClips.logger, level="WARNING") as logs:
+            record = AudioClips.export_record(
+                ptk.ExportContext(clip_span=(12.0, 60.0))
+            )
+        self.assertEqual(_event_set(record.text), {("", 12, "jump")})
+        self.assertTrue(
+            any(
+                "footstep@10" in line and "before" in line and "shot take" not in line
+                for line in logs.output
+            ),
+            logs.output,
+        )
 
     def test_prepare_for_export_migrates_legacy_proxy(self):
         """A pre-taxonomy proxied manifest pair is replaced by the plain channel."""
@@ -279,9 +297,9 @@ class TestAudioClipsExport(MayaTkTestCase):
             "data_export transform should be present in the exported FBX",
         )
         self.assertIn(
-            '"audio_manifest"',
+            '"audio"',
             content,
-            "audio_manifest property should be present in the exported FBX",
+            "the audio record's property should be present in the exported FBX",
         )
         # Quote-free assertion: FBX ASCII escapes embedded quotes in string
         # values, so match the bare label rather than JSON punctuation.

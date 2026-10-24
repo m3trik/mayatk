@@ -319,7 +319,7 @@ class _KeyQueryInternal:
         return [str(objects)]
 
     @classmethod
-    def _objects_to_curves(cls, objects, recursive, as_strings, through_blends):
+    def _objects_to_curves(cls, objects, recursive, through_blends):
         """Body of :meth:`AnimUtils.objects_to_curves`."""
         # Use cmds.ls to handle various forms of input (single object, string, list)
         # Ensure input is a list of strings for cmds

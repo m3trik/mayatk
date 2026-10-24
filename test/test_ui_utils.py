@@ -111,5 +111,29 @@ class TestEditorRegistry(MayaTkTestCase):
             self.assertIsNone(mtk.UiUtils.open_editor("XGen Editor"))
 
 
+class TestLogLinks(MayaTkTestCase):
+    """``UiUtils.dispatch_log_link`` -- the ``action://`` links a report
+    viewer hands back."""
+
+    def test_a_select_link_selects_every_node_it_names(self):
+        """The Bake State viewer selects every reader of a map in one link
+        (``ptk.ReportDoc.action(..., node=[...])``); a node gone since the
+        report was built is warned of, the rest still selected."""
+        import pythontk as ptk
+        from qtpy import QtCore
+
+        a = cmds.ls(cmds.polyCube(name="linkA")[0], long=True)[0]
+        b = cmds.ls(cmds.polyCube(name="linkB")[0], long=True)[0]
+        link = ptk.ReportDoc.action("3", "select", node=[a, b, "|gone"])
+        href = link.html.split('href="', 1)[1].split('"', 1)[0].replace("&amp;", "&")
+        logger = mock.Mock()
+
+        handled = mtk.UiUtils.dispatch_log_link(QtCore.QUrl(href), logger=logger)
+
+        self.assertTrue(handled)
+        self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted([a, b]))
+        self.assertIn("|gone", logger.warning.call_args.args[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

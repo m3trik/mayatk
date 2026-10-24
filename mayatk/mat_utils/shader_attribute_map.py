@@ -136,6 +136,7 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         "lambert",
         "blinn",
         "phong",
+        "phongE",
         "aiStandardSurface",
         "standardSurface",
         "StingrayPBS",
@@ -156,6 +157,10 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         # ``outColor`` here (as this did) wired the image's RGB into
         # transparency: the alpha was ignored entirely and a white opacity map
         # made the surface fully SEE-THROUGH rather than fully opaque.
+        #
+        # ``incandescence`` and ``normalCamera`` are lambert's own attributes,
+        # inherited by blinn, phong and phongE: each declares both (a ``None``
+        # here dropped a lambert's normal map on a retype).
         "lambert": ShaderAttrs(
             baseColor=("color", "outColor"),
             emission=("incandescence", "outColor"),
@@ -163,12 +168,12 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             roughness=None,
             metallic=None,
             opacity=("transparency", "outTransparency"),
-            normal=None,
+            normal=("normalCamera", "outColor"),
             ambientOcclusion=None,
         ),
         "blinn": ShaderAttrs(
             baseColor=("color", "outColor"),
-            emission=None,
+            emission=("incandescence", "outColor"),
             specular=("specularColor", "outColor"),
             roughness=("eccentricity", "outColorR"),  # expects .outColorR from file
             metallic=None,
@@ -181,6 +186,22 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
             emission=("incandescence", "outColor"),
             specular=("specularColor", "outColor"),
             roughness=("cosinePower", "outColorR"),
+            metallic=None,
+            opacity=("transparency", "outTransparency"),
+            normal=("normalCamera", "outColor"),
+            ambientOcclusion=None,
+        ),
+        # Phong E keeps its highlight in its own ``roughness`` (0..1, default
+        # 0.5) -- a width, as blinn's ``eccentricity`` is, so it reads as a
+        # roughness with no transform (``highlightSize`` and ``whiteness`` shape
+        # the highlight; no channel holds them). Undeclared, a textured phongE
+        # named no map: the materials record states the type, and a map it
+        # leaves out is CLEARED from the GLB and Unity's Deliverable Lit.
+        "phongE": ShaderAttrs(
+            baseColor=("color", "outColor"),
+            emission=("incandescence", "outColor"),
+            specular=("specularColor", "outColor"),
+            roughness=("roughness", "outColorR"),
             metallic=None,
             opacity=("transparency", "outTransparency"),
             normal=("normalCamera", "outColor"),
@@ -310,8 +331,8 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         ),
         # Maya's unlit model: the colour IS what shows, and transparency is
         # the inverted channel, as on the classic shaders. Declared so a
-        # texture on it is a base colour to the manifest and the GLB sidecar
-        # (which writes it unlit -- ``SceneState._read_unlit``).
+        # texture on it is a base colour to the manifest and the materials
+        # record (which states it unlit -- ``MaterialRecords``).
         "surfaceShader": ShaderAttrs(
             baseColor=("outColor", "outColor"),
             emission=None,
@@ -464,16 +485,26 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         Returns:
             bool: True when a weight was opened.
         """
-        import maya.cmds as cmds
-
         gate = ptk.MapRegistry.LOBE_GATES.get(logical)
         if not gate:
             return False
         slot = cls.resolve_live_slot(shader, gate, shader_type)
         if not slot:
             return False
-        plug = f"{shader}.{slot[0]}"
+        return cls._open_weight(f"{shader}.{slot[0]}")
+
+    @staticmethod
+    def _open_weight(plug: str) -> bool:
+        """Set an undriven weight *plug* sitting at 0 to 1.0; True when it did.
+
+        The one rule both gate openers share: a map on the weight or a value
+        above 0 is the user's, never a default to overwrite.
+        """
+        import maya.cmds as cmds
+
         try:
+            if not cmds.objExists(plug):
+                return False
             if cmds.listConnections(plug, source=True, destination=False):
                 return False
             if cmds.getAttr(plug):
@@ -594,9 +625,10 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         "standardSurface": ("emission", "multiply"),
         "openPBRSurface": ("emissionLuminance", "gate"),
         # Autodesk's Stingray PBS graph multiplies its emissive by this uniform
-        # (default 1). Unread, a dimmed fixture shipped at full glow: moody-room
-        # ceiling panels lit WebXR at 1.0 where the scene asked for less
-        # (2026-10-16). A graph without the uniform reads ungated, as before.
+        # (default 0 -- see `open_emission_gate`). Unread, a dimmed fixture
+        # shipped at full glow: moody-room ceiling panels lit WebXR at 1.0
+        # where the scene asked for less (2026-10-16). A graph without the
+        # uniform reads ungated, as before.
         "StingrayPBS": ("emissive_intensity", "multiply"),
     }
 
@@ -642,6 +674,36 @@ class ShaderAttributeMap(_ShaderAttributeMapInternal):
         if mode == "gate":
             return 1.0 if value > 0.0 else 0.0
         return value
+
+    @classmethod
+    def open_emission_gate(cls, shader: str, shader_type: Optional[str] = None) -> bool:
+        """Switch on the emission weight of a shader that was just given a map.
+
+        The emission twin of :meth:`open_lobe_gate`: a ``multiply`` weight in
+        :attr:`EMISSION_WEIGHT_ATTRS` defaults to 0 (Stingray PBS's
+        ``emissive_intensity`` included), so a wired emissive map renders --
+        and exports -- as no emission. Opens it at 1.0 unless a map drives it
+        or it is already above 0 (an authored weight is the user's). A
+        ``gate`` weight is in physical units (OpenPBR nits) with no neutral
+        1.0, so it is the caller's to choose.
+
+        Parameters:
+            shader (str): The live shader node.
+            shader_type (str, optional): Skips the ``nodeType`` lookup.
+
+        Returns:
+            bool: True when a weight was opened.
+        """
+        import maya.cmds as cmds
+
+        try:
+            shader_type = shader_type or cmds.nodeType(shader)
+        except RuntimeError:
+            return False
+        attr, mode = cls.EMISSION_WEIGHT_ATTRS.get(shader_type, (None, None))
+        if mode != "multiply":
+            return False
+        return cls._open_weight(f"{shader}.{attr}")
 
     #: Shaders whose base colour is scaled by a SEPARATE weight --
     #: ``{node_type: attribute}``: the diffuse albedo is weight x colour.

@@ -345,6 +345,12 @@ class ShotsController(ptk.LoggingMixin):
             chk_snap.blockSignals(False)
         self._apply_snap_to_spinboxes(bool(store.snap_whole_frames))
 
+        chk_stale = getattr(self.ui, "chk_drop_stale_shots", None)
+        if chk_stale is not None:
+            chk_stale.blockSignals(True)
+            chk_stale.setChecked(bool(store.drop_stale_shots))
+            chk_stale.blockSignals(False)
+
         # ---- Editing group ----
         has_shots = bool(store.shots)
 
@@ -727,6 +733,17 @@ class ShotsController(ptk.LoggingMixin):
             if w is not None:
                 w.setDecimals(decimals)
 
+    def on_drop_stale_shots_changed(self, checked: bool) -> None:
+        """Whether this scene's exports leave its stale shots out
+        (``ShotStore.drop_stale_shots``): saved with the shots, read by every
+        export's take list."""
+        store = self._active_store()
+        if store is None:
+            return
+        store.drop_stale_shots = bool(checked)
+        store.mark_dirty()
+        store.notify_settings_changed()
+
     def on_fit_mode_changed(self, index: int) -> None:
         store = self._active_store()
         if store is None:
@@ -990,6 +1007,19 @@ class ShotsController(ptk.LoggingMixin):
         )
         for label, scope in self.DELETE_SCOPES:
             cmb.addItem(label, scope)
+        chk = btn.option_box.menu.add(
+            "QCheckBox",
+            setText="Leave Stale Shots Out of Exports",
+            setObjectName="chk_drop_stale_shots",
+            setToolTip=(
+                "Off (default): an export ships every shot -- a stale one as a\n"
+                "take that holds still -- and names the stale ones.\n"
+                "On: an export leaves the stale shots out of the takes it\n"
+                "declares.  This scene's setting; the records stay either way."
+            ),
+        )
+        # The scene's setting, synced from the store (see __init__).
+        chk.restore_state = False
         self.label_delete_shots()
 
     def delete_scope(self) -> str:
@@ -1375,7 +1405,8 @@ class ShotsController(ptk.LoggingMixin):
 
         ``"stale"``: every object they name is gone and nothing in their frames
         is keyed -- what a scene saved from another keeps of the shots whose
-        animation it deleted, and what every export already leaves out.
+        animation it deleted, which an export ships as takes that hold
+        still unless ``ShotStore.drop_stale_shots`` leaves them out.
         ``"empty"``: nothing they name is keyed in their frames.
         ``"all"``: every shot (``ShotStore.shots_in_scope``).  Records only, as
         one undoable edit: no key is touched and no shot moves, where Delete
@@ -1638,7 +1669,7 @@ class ShotsSlots(ptk.LoggingMixin):
                             "<b>Apply Gap</b> \u2014 Re-space the shots to the gap its option box \u25b8 holds. The option box also picks the scope (All Shots / Start / End / Start &amp; End) and <b>Override Locked Gaps</b>, which spends the gap on locked gaps too, without unlocking them.",
                             "<b>Shift To</b> \u2014 Moves every shot so the first one starts on the frame set in its option box \u25b8 (named on the button), keeping their spacing and the animation inside them.",
                             "<b>Trim Empty (All)</b> \u2014 Trim every shot; option box \u25b8 for leading / trailing only.",
-                            "<b>Delete Shots</b> \u2014 Deletes shot records by scope, picked in the option box \u25b8 and named on the button: <b>Stale</b> (every object they name is gone from the scene and nothing in their frames is keyed; exports already leave them out), <b>Empty</b> (nothing they name is keyed in their frames) or <b>All</b>. No key or other shot moves.",
+                            "<b>Delete Shots</b> \u2014 Deletes shot records by scope, picked in the option box \u25b8 and named on the button: <b>Stale</b> (every object they name is gone from the scene and nothing in their frames is keyed; an export ships them as takes that hold still, and names them), <b>Empty</b> (nothing they name is keyed in their frames) or <b>All</b>. No key or other shot moves. The option box's <b>Leave Stale Shots Out of Exports</b> keeps the stale shots' records but leaves them out of every export of this scene.",
                         ],
                     ),
                 ],
@@ -1704,6 +1735,10 @@ class ShotsSlots(ptk.LoggingMixin):
     def cmb_delete_scope(self, index):
         """A scope was picked: the button says what a click now deletes."""
         self.controller.label_delete_shots()
+
+    def chk_drop_stale_shots(self, checked):
+        """Leave Stale Shots Out of Exports toggled (Delete Shots' option box)."""
+        self.controller.on_drop_stale_shots_changed(checked)
 
     def btn_move_shot(self):
         """Move shot to the position in spn_move_to."""

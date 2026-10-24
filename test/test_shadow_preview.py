@@ -18,6 +18,7 @@ fresh GUI Maya per device and cannot run in this harness.
 """
 
 import json
+import math
 import os
 import struct
 import unittest
@@ -172,6 +173,16 @@ class TestPreviewLifecycle(MayaTkTestCase):
                 pass
         super().tearDown()
 
+    def test_the_layout_states_the_pyramid_levels_its_size_implies(self):
+        """The record states a map's layout, not what follows from it: the
+        pyramid's levels are log2(size), derived here as every reader
+        derives them -- read off the record, they went to 0 once it
+        stopped carrying them. Added: 2026-10-20"""
+        horizon = ShadowRig.plane_record(self.plane)["horizon"]
+        constants = ShadowPreview._layout_constants(horizon)
+        self.assertEqual(constants["gSize"], horizon["size"])
+        self.assertEqual(constants["gLevels"], round(math.log2(horizon["size"])))
+
     def _simulate_attach(self):
         """What ``attach`` does once the effect has compiled, with a
         ``surfaceShader`` standing in for the ``GLSLShader``."""
@@ -314,7 +325,7 @@ class TestPreviewLifecycle(MayaTkTestCase):
         Without it ``plane_record`` published ``"texture": ""`` -- the
         silhouette's file node is found by walking the plane's shading
         groups, which the preview's membership swap replaces -- and the R6
-        fallback silently vanished from ``shadow_metadata``.
+        fallback silently vanished from ``shadows``.
         """
         before = ShadowRig.plane_record(self.plane)
         node_before = ShadowRig._plane_texture_node(self.plane)
@@ -369,7 +380,7 @@ class TestPreviewLifecycle(MayaTkTestCase):
             ):
                 self.assertFalse(ShadowPreview.is_attached(self.plane))
                 payload = json.loads(
-                    cmds.getAttr(f"{DataNodes.EXPORT}.{ShadowRig.SHADOW_METADATA}")
+                    cmds.getAttr(f"{DataNodes.EXPORT}.{ptk.SceneRecords.SHADOWS.key}")
                 )
                 attach.assert_not_called()
         (plane,) = [call.args[0] for call in attach.call_args_list]

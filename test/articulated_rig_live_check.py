@@ -17,7 +17,7 @@ scene holding a prop of rigid parts. Deliberately NOT named ``test_*`` so
   E. the export (records published in the bracket, FBX written baked, the
      rig-helper sweep, FBX2glTF) ships every joint and every grabbed part and
      none of the controls -- the end control included -- and
-     ``extras.articulation_web`` binds them all;
+     ``extras.articulation`` binds them all;
   F. the teardown puts every part back exactly.
 
 The GLB is left in a detached scratch directory and its path printed as
@@ -224,7 +224,7 @@ def main():
     with ptk.MeshConvert.open_glb(glb) as edit:
         names = [n.get("name", "") for n in edit.gltf.get("nodes") or []]
         manifest = (edit.gltf.get("extras") or {}).get(
-            ptk.MeshConvert.ARTICULATION_WEB_KEY
+            ptk.SceneRecords.ARTICULATION.key
         )
     record = rig.record()
     joints = [j["name"] for j in record["joints"]]
@@ -243,7 +243,7 @@ def main():
     )
     bound = manifest["rigs"][0] if manifest and manifest.get("rigs") else {}
     ok &= verdict(
-        "E. extras.articulation_web binds them",
+        "E. extras.articulation binds them",
         len(bound.get("joints", [])) == len(joints)
         and len(bound.get("grab", [])) == len(grabbed),
         f"{len(bound.get('joints', []))} joints, {len(bound.get('grab', []))} grab parts bound",

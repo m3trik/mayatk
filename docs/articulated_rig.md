@@ -246,14 +246,14 @@ build and on every edit, opted into every FBX export):
 - `grab`: the parts a hand takes, each by name UNDER its joint's node (a
   production assembly repeats part names).
 
-The GLB conversion binds it as root `extras.articulation_web`: the record with a
+The GLB conversion binds it as root `extras.articulation`: the record with a
 glTF node index on every joint and grab entry
 (`ptk.MeshConvert.apply_glb_articulation`, run by `fbx_to_glb`).
 
 ## The runtimes
 
 **WebXR preview** -- the packaged `articulated_rig` script turns on by itself
-for a GLB carrying `articulation_web`. Every grabbed part is registered with the
+for a GLB carrying `articulation`. Every grabbed part is registered with the
 page's `viewer.grab`: the mouse (press on a part, drag in the camera-facing
 plane, wheel to push or pull; the orbit never sees the press), a controller's
 grip or trigger, or a tracked hand's pinch takes hold. A grab on a link hanging

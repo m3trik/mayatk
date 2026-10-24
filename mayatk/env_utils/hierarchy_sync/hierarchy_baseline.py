@@ -39,7 +39,6 @@ exporting asset B never reports asset A as missing, and recording B never
 forgets A.
 """
 
-import os
 from typing import Set
 
 import pythontk as ptk
@@ -70,49 +69,3 @@ class HierarchyBaseline(ptk.HierarchyBaselineStore):
         hierarchy as a group-selected one and must not read as a different one.
         """
         return SceneDataSidecar.with_ancestors(paths)
-
-    #: The sidecar names the baseline used to live under, per export stem --
-    #: the current one and the v1 spelling, because a scene that never
-    #: re-exported since v1 still has its history under the old name and must
-    #: not lose it on the way in.
-    _LEGACY_SUFFIXES = (".scene_data.json", ".hierarchy.json")
-
-    @classmethod
-    @ptk.Deprecation.symbol(
-        "HierarchyBaseline.adopt_sidecar", remove_in="0.21.0", since="2026-09-24"
-    )
-    def migrate_from_sidecar(cls, export_dir: str) -> int:
-        """Adopt every on-disk baseline in *export_dir* into the scene, once.
-
-        Superseded by :meth:`adopt_sidecar`, which adopts only the deliverable
-        being exported: a folder several modules export into holds the other
-        modules' histories too.  Runs only when the scene has no record of its
-        own.  Returns the number of sidecars adopted.
-        """
-        if cls.read():
-            return 0
-        try:
-            names = [
-                n
-                for n in os.listdir(export_dir)
-                if n.startswith(".") and n.endswith(cls._LEGACY_SUFFIXES)
-            ]
-        except OSError:
-            return 0
-
-        adopted, paths = 0, set()
-        for name in names:
-            record = ptk.FileUtils.read_json(os.path.join(export_dir, name))
-            if not isinstance(record, dict):
-                continue
-            section = record.get("hierarchy")
-            if not isinstance(section, dict):
-                # v1 sidecars are flat: the paths sit at the top level.
-                section = record
-            found = section.get("paths")
-            if isinstance(found, list):
-                paths.update(p for p in found if isinstance(p, str))
-                adopted += 1
-        if paths:
-            cls._save(paths)
-        return adopted

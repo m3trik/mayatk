@@ -17,21 +17,21 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# conftest.py is auto-loaded by pytest and injects mock_cmds into
-# sys.modules["maya.cmds"].  Under unittest/run_tests.py, conftest is not
-# auto-loaded — fall back to a placeholder so import succeeds and the
+# The conftest beside this file injects mock_cmds into sys.modules["maya.cmds"]
+# -- pytest and run_tests.py's driver both load it. Run bare (plain unittest),
+# no conftest loads: take whatever is there so the import succeeds and the
 # skipUnless guards below take effect.
 mock_cmds = sys.modules.get("maya.cmds")
 
 from mayatk.core_utils.script_job_manager import ScriptJobManager
 
-# Detect whether maya.cmds is mocked (pytest path) or real (run_tests.py path).
+# Detect whether maya.cmds is mocked (the conftest loaded) or real (it did not).
 # When real, this entire suite is incompatible — skip cleanly.
 _CMDS_IS_MOCKED = isinstance(mock_cmds, MagicMock)
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test — run via pytest or run_tests.py --mocks"
 )
 class ScriptJobManagerTestCase(unittest.TestCase):
     """Base that resets the singleton before each test."""

@@ -2,15 +2,18 @@
 # coding=utf-8
 """Read named sections of live-scene state for transport.
 
-The Maya *reader column* of the scene-data grid: every section of scene state
-that FBX translation drops -- base colour and emissive today; lights,
-environment tomorrow -- is read here, once, and handed to whichever carrier
-the caller is filling (the WebXR preview's in-process envelope, the Scene
-Exporter's GLB conversion, embedded in the GLB's ``extras``). The matching
-*applier column* is :attr:`pythontk.MeshConvert.SIDECAR_APPLIERS`, and the
-envelope wire format is :meth:`pythontk.MeshConvert.build_scene_sidecar` --
-adding a new kind of extended setup is one reader here (mirrored in
-blendertk) plus one applier row there. Nothing else in the codebase changes.
+Retired 2026-10-20 (removed in mayatk 0.29.0): the FBX states every material
+in its ``materials`` record (:class:`~mayatk.env_utils.material_records.MaterialRecords`,
+the one reader of the scene's materials), and a GLB's handoff comes from the
+FBX's own record -- so no export reads a section. Its readers still answer,
+through MaterialRecords' helpers, until the removal.
+
+It was the Maya *reader column* of the scene-data grid: each section of
+scene state that FBX translation drops, read once and handed to the carrier
+the caller filled (the WebXR preview's in-process envelope, the Scene
+Exporter's GLB conversion). The GLB build now applies the FBX's own
+``materials`` record (``ptk.MeshConvert.apply_glb_materials``) instead, so no
+section is read.
 
 Boundary with :class:`~mayatk.node_utils.data_nodes.DataNodes`: a section
 belongs here only when it *repairs FBX translation loss*, derived read-only
@@ -27,35 +30,40 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import pythontk as ptk
+
 try:
     import maya.cmds as cmds
 except ModuleNotFoundError:
     pass
 
-# Eager: SceneState names the shader map's emission-weight table at class
-# definition. The module is a pure table until a reader runs (no maya import).
+# Eager: SceneState names the shader map's emission-weight table, and
+# MaterialRecords' shader sets, at class definition. Both modules are pure
+# tables until a reader runs (no maya import).
+from mayatk.env_utils.material_records import MaterialRecords
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 
 
 class SceneState:
-    """Section-registry reader of scene state the FBX cannot express.
-
-    >>> sections = SceneState.read(cmds.ls(selection=True))
-    >>> envelope = ptk.MeshConvert.build_scene_sidecar(
-    ...     sections, source=SceneState.source()
-    ... )
-    """
+    """Section-registry reader of scene state the FBX cannot express --
+    retired with the sections it read (see the module's docstring)."""
 
     #: Section -> the classmethod that reads it. The extension point: a new
     #: section is one row here plus its reader, with the same
     #: ``(materials, textures)`` signature.
-    READERS: Dict[str, str] = {
+    _READERS: Dict[str, str] = {
         "base_color": "_read_base_color",
         "emissive": "_read_emissive",
         "metallic_roughness": "_read_metallic_roughness",
         "alpha_mode": "_read_alpha_mode",
         "unlit": "_read_unlit",
     }
+    READERS = ptk.Deprecation.class_attribute(
+        _READERS,
+        "mtk.MaterialRecords -- the materials record states every material",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
 
     # Maya's own legacy shading models — the only ones its FBX exporter maps.
     # Their colour reaches the GLB already scaled by Maya's ``diffuse`` weight,
@@ -63,21 +71,9 @@ class SceneState:
     # would preview brighter than the FBX intends.
     FBX_NATIVE_SHADERS = frozenset({"lambert", "blinn", "phong", "phongE"})
 
-    # Maya's unlit shading model. The FBX makes it lit PBR like any other
-    # shader; the ``unlit`` section says otherwise (:meth:`_read_unlit`), and
-    # its ``outTransparency`` is a transparency channel like the legacy
-    # models' (:meth:`_read_alpha_mode`).
-    UNLIT_SHADERS = frozenset({"surfaceShader"})
-
-    # Shaders whose transparency is a plain ``opacity`` colour rather than a
-    # graph: a driven or non-opaque channel IS alpha blend, and the FBX
-    # cannot say so (measured 2026-09-02: a standardSurface whose opacity
-    # came from a texture's alpha reached the GLB OPAQUE -- its silhouette
-    # embedded by the base-colour section and rendered solid). openPBR's is
-    # the scalar ``geometryOpacity`` (``ShaderAttributeMap`` names each one).
-    SURFACE_OPACITY_SHADERS = frozenset(
-        {"standardSurface", "aiStandardSurface", "openPBRSurface"}
-    )
+    # MaterialRecords' own: the reader of the scene's materials.
+    UNLIT_SHADERS = MaterialRecords.UNLIT_SHADERS
+    SURFACE_OPACITY_SHADERS = MaterialRecords.SURFACE_OPACITY_SHADERS
 
     # Shaders that gate emission behind a SEPARATE scalar --
     # ``{node_type: (attribute, mode)}``. The shader map's table
@@ -86,11 +82,19 @@ class SceneState:
     EMISSION_WEIGHT_ATTRS = ShaderAttributeMap.EMISSION_WEIGHT_ATTRS
 
     @staticmethod
+    @ptk.Deprecation.symbol(
+        "mtk.FbxUtils.export_context().source", remove_in="0.29.0", since="2026-10-24"
+    )
     def source() -> Dict[str, str]:
         """This host's identity for the envelope's ``source`` key."""
         return {"application": "maya", "version": cmds.about(version=True)}
 
     @classmethod
+    @ptk.Deprecation.symbol(
+        "mtk.MaterialRecords.entries -- the materials record states every material",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
     def read(
         cls,
         objects: List[str],
@@ -128,7 +132,7 @@ class SceneState:
         )
 
         result: Dict[str, Any] = {}
-        for section, reader in cls.READERS.items():
+        for section, reader in cls._READERS.items():
             if sections is not None and section not in sections:
                 continue
             data = getattr(cls, reader)(materials, textures)
@@ -138,26 +142,8 @@ class SceneState:
 
     @staticmethod
     def _expand(objects: List[str]) -> List[str]:
-        """*objects* plus their descendant transforms, de-duplicated.
-
-        ``MatUtils.get_mats`` reads direct shapes only, so a selected hierarchy
-        root would otherwise resolve to no materials at all — the same
-        expansion ``MatManifest.build`` does internally.
-        """
-        expanded: List[str] = []
-        for obj in objects:
-            obj = str(obj)
-            expanded.append(obj)
-            try:
-                expanded.extend(
-                    cmds.listRelatives(
-                        obj, allDescendents=True, type="transform", fullPath=True
-                    )
-                    or []
-                )
-            except RuntimeError:  # components / shapes pass through
-                pass
-        return list(dict.fromkeys(expanded))
+        """:meth:`MaterialRecords._expand`."""
+        return MaterialRecords._expand(objects)
 
     @classmethod
     def _read_alpha_mode(
@@ -221,63 +207,19 @@ class SceneState:
     def _read_unlit(
         cls, materials: List[str], textures: Dict[str, Dict[str, str]]
     ) -> Dict[str, Dict[str, Any]]:
-        """``{material: {}}`` for the *materials* the scene shades unlit.
-
-        Two kinds: Maya's own unlit model (:attr:`UNLIT_SHADERS`), and the
-        material of every projected shadow plane (:class:`ShadowRig`),
-        whatever shader it wears -- a shadow is darkness laid over what is
-        under it, never a surface the environment lights. The FBX cannot say
-        either: FBX2glTF makes each one lit PBR, and a shadow plane in WebXR
-        took the environment's specular and read BRIGHTER than the floor it
-        lay on (2026-10-15; its viewer script, which shades it unlit, runs
-        only when the scene carries a shadow record). Applied as
-        ``KHR_materials_unlit`` (``MeshConvert.set_glb_unlit``).
-        """
-        result: Dict[str, Dict[str, Any]] = {}
-        for mat in materials:
-            if cmds.objExists(mat) and cmds.nodeType(mat) in cls.UNLIT_SHADERS:
-                result[mat] = {}
-        try:
-            from mayatk.rig_utils.shadow_rig._shadow_rig import ShadowRig
-
-            wanted = set(materials)
-            for shader in ShadowRig.plane_materials():
-                if shader in wanted:
-                    result[shader] = {}
-        except Exception as error:  # noqa: BLE001 -- a section never fails a push
-            import logging
-
-            logging.getLogger(__name__).debug("Shadow planes unread: %s", error)
-        return result
+        """``{material: {}}`` for the *materials* the scene shades unlit
+        (:meth:`MaterialRecords._unlit_materials`)."""
+        return {mat: {} for mat in MaterialRecords._unlit_materials(materials)}
 
     @classmethod
     def _surface_opacity_is_driven(cls, mat: str, node_type: str) -> bool:
-        """Is *mat*'s opacity connected or below 1.0 on any channel?"""
-        slot = ShaderAttributeMap.get_attr(node_type, "opacity")
-        return bool(slot) and cls._channel_is_driven(mat, slot[0], clear=1.0)
+        """:meth:`MaterialRecords._surface_opacity_is_driven`."""
+        return MaterialRecords._surface_opacity_is_driven(mat, node_type)
 
     @staticmethod
     def _channel_is_driven(mat: str, channel: str, clear: float) -> bool:
-        """Is *mat*'s *channel* connected (on the compound or a child) or away
-        from *clear* -- the value that means fully opaque -- on any component?
-        Maya allows a compound and its children to be wired independently, so
-        both are checked. A scalar channel (openPBR's ``geometryOpacity``) is
-        its own single component; read as a colour it raised, and the reader
-        took the failure for "opaque"."""
-        plug = f"{mat}.{channel}"
-        if not cmds.objExists(plug):
-            return False
-        for candidate in [plug] + [f"{plug}{c}" for c in "RGB"]:
-            if cmds.objExists(candidate) and cmds.listConnections(
-                candidate, source=True, destination=False
-            ):
-                return True
-        try:
-            value = cmds.getAttr(plug)
-            components = list(value[0])[:3] if isinstance(value, list) else [value]
-        except (RuntimeError, ValueError, TypeError, IndexError):
-            return False
-        return max(abs(float(c) - clear) for c in components) > 1e-4
+        """:meth:`MaterialRecords._channel_is_driven`."""
+        return MaterialRecords._channel_is_driven(mat, channel, clear)
 
     @classmethod
     def _read_base_color(
@@ -341,65 +283,8 @@ class SceneState:
 
     @classmethod
     def _opacity_factor(cls, mat: str, node_type: str) -> Optional[float]:
-        """The scalar part of a :attr:`SURFACE_OPACITY_SHADERS` opacity --
-        what glTF states as ``baseColorFactor[3]`` -- or None at 1.0.
-
-        Two shapes carry one: a bare constant (a tint), and a texture's alpha
-        times a scalar through a ``multiplyDivide`` -- the shadow rig's
-        silhouette x its plane's ``opacity`` fade, read at the current frame
-        (a keyed fade also ships as a fade track, which drives the same
-        factor). A texture alone states nothing: its alpha rides the base
-        colour texture. The FBX carries neither: a shadow plane held at 0.836
-        reached WebXR at alpha 1.0, solid black where VP2 drew it
-        half-transparent (2026-10-15).
-        """
-        if node_type not in cls.SURFACE_OPACITY_SHADERS:
-            return None
-        slot = ShaderAttributeMap.get_attr(node_type, "opacity")
-        plug = f"{mat}.{slot[0]}" if slot else None
-        if not plug or not cmds.objExists(plug):
-            return None
-        sources = (
-            cmds.listConnections(plug, source=True, destination=False, plugs=True) or []
-        )
-        try:
-            if not sources:
-                value = ShaderAttributeMap.read_constant(mat, "opacity", node_type)
-                if not value:
-                    return None
-                factor = sum(value) / len(value)
-            else:
-                node = sources[0].split(".")[0]
-                if cmds.nodeType(node) != "multiplyDivide" or (
-                    cmds.getAttr(f"{node}.operation") != 1
-                ):
-                    return None
-                factor = None
-                for texture_in, scalar_in in (
-                    ("input1X", "input2X"),
-                    ("input2X", "input1X"),
-                ):
-                    upstream = (
-                        cmds.listConnections(
-                            f"{node}.{texture_in}", source=True, destination=False
-                        )
-                        or []
-                    )
-                    if (
-                        upstream
-                        and "texture"
-                        in (cmds.getClassification(cmds.nodeType(upstream[0])) or [""])[
-                            0
-                        ]
-                    ):
-                        factor = float(cmds.getAttr(f"{node}.{scalar_in}"))
-                        break
-                if factor is None:
-                    return None
-        except (RuntimeError, ValueError, TypeError, IndexError):
-            return None
-        factor = min(1.0, max(0.0, factor))
-        return factor if factor < 1.0 - 1e-4 else None
+        """:meth:`MaterialRecords._opacity_factor`."""
+        return MaterialRecords._opacity_factor(mat, node_type)
 
     @classmethod
     def _read_emissive(

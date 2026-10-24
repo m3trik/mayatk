@@ -416,7 +416,7 @@ def _restore_real_maya_modules(snapshot):
                 setattr(parent_mod, child_name, real_mod)
 
 
-_CONFTESTS = {}  # folder -> its conftest module, loaded once per run
+_CONFTESTS = {}  # folder -> its conftest module, while what it set up stands
 
 
 def _load_test_module(module_name, module_path):
@@ -427,6 +427,15 @@ def _load_test_module(module_name, module_path):
     (:func:`_ensure_sys_path`), ``mock_tests/`` ahead, so a root module's
     ``from conftest import ...`` loaded the MOCK conftest, which plants mocked
     ``maya`` modules unconditionally, in a real Maya.
+
+    A conftest loads once per run, unless loading it touched the ``maya``
+    modules: the loop restores those after every module
+    (:func:`_restore_real_maya_modules`), so such a conftest -- the mock one --
+    runs again for each module beside it, as a cached copy would leave every
+    mock module after a chunk's first on the real ``maya``. Its load also
+    purges mayatk: the copy :func:`_reset_session_globals` imported just
+    before is bound to the real ``maya``, and the module must import mayatk
+    against the mocks it planted.
     """
     folder = Path(module_path).resolve().parent
     for candidate in (folder, *folder.parents):
@@ -434,17 +443,26 @@ def _load_test_module(module_name, module_path):
         if conftest.is_file():
             module = _CONFTESTS.get(candidate)
             if module is None:
+                before = [sys.modules.get(k) for k in _REAL_MODULE_KEYS]
                 spec = importlib.util.spec_from_file_location("conftest", conftest)
                 module = importlib.util.module_from_spec(spec)
                 sys.modules["conftest"] = module
                 spec.loader.exec_module(module)
-                _CONFTESTS[candidate] = module
+                after = [sys.modules.get(k) for k in _REAL_MODULE_KEYS]
+                if all(a is b for a, b in zip(after, before)):
+                    _CONFTESTS[candidate] = module
+                else:
+                    _purge_mayatk_modules()
             sys.modules["conftest"] = module
             break
         if candidate == TEST_DIR:
             break
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     test_module = importlib.util.module_from_spec(spec)
+    # Registered as an import would: unittest runs setUpModule /
+    # tearDownModule only for a module it finds in sys.modules
+    # (``TestSuite._handleModuleFixture``) and skipped them silently.
+    sys.modules[module_name] = test_module
     spec.loader.exec_module(test_module)
     return test_module
 
@@ -692,6 +710,28 @@ def run_suite(config):
             return _run_modules(config)
 
 
+def _module_suite(test_module, patterns=()):
+    """Every ``TestCase`` in *test_module* as one suite; *patterns* (``-k``,
+    unittest's own semantics: no ``*`` = substring of the test id) narrows it.
+
+    A fresh loader, never ``unittest.defaultTestLoader``: a filter set on the
+    shared one would stay on for every later module of the chunk.
+    """
+    loader = unittest.TestLoader()
+    if patterns:
+        loader.testNamePatterns = [p if "*" in p else f"*{p}*" for p in patterns]
+    suite = unittest.TestSuite()
+    for attr_name in dir(test_module):
+        attr = getattr(test_module, attr_name)
+        if (
+            isinstance(attr, type)
+            and issubclass(attr, unittest.TestCase)
+            and attr is not unittest.TestCase
+        ):
+            suite.addTest(loader.loadTestsFromTestCase(attr))
+    return suite
+
+
 def _run_modules(config):
     """The module loop :func:`run_suite` runs inside its sandbox: one result
     block per module, appended as it goes, then the completion marker. Returns
@@ -736,16 +776,7 @@ def _run_modules(config):
                     f"[{elapsed:.1f}s]\n",
                 )
             else:
-                suite = unittest.TestSuite()
-                loader = unittest.defaultTestLoader
-                for attr_name in dir(test_module):
-                    attr = getattr(test_module, attr_name)
-                    if (
-                        isinstance(attr, type)
-                        and issubclass(attr, unittest.TestCase)
-                        and attr is not unittest.TestCase
-                    ):
-                        suite.addTest(loader.loadTestsFromTestCase(attr))
+                suite = _module_suite(test_module, config.get("patterns") or ())
 
                 # Construct the runner BEFORE the redirect: TextTestRunner binds
                 # sys.stderr at __init__, so this keeps its report on the real
@@ -874,6 +905,7 @@ def _run_modules(config):
             _reset_session_globals()
             _restore_real_maya_modules(snapshot)
             _purge_mayatk_modules()
+            sys.modules.pop(module_name, None)
 
         _progress(progress_file, f"FINISHED {module_name}")
 

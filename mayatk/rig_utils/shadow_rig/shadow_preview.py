@@ -41,6 +41,7 @@ the file node says, and a 16-bit texture has no sRGB format to decode.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -722,6 +723,30 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
             cls.preview_dir(png), f"{stem}_{key}{cls.TEXTURE_SUFFIX}"
         ).replace("\\", "/")
 
+    @staticmethod
+    def _layout_constants(horizon: Dict) -> Dict[str, float]:
+        """The map's layout as the effect's constants, from the record's
+        ``horizon`` block (DCC units: no unit scale). The pyramid's levels
+        follow from its size, log2 (``ptk.HeightFieldMap.levels``), as every
+        reader derives them: the record states the layout alone."""
+        rect = horizon.get("rect") or [1.0, 1.0, 0.0, 0.0]
+        bounds = horizon.get("bounds") or [-1.0, 1.0, -1.0, 1.0]
+        size = int(horizon.get("size", ptk.ShadowHorizon.DEFAULT_SIZE))
+        return {
+            "gSize": size,
+            "gSpans": horizon.get("spans", ptk.ShadowHorizon.DEFAULT_SPANS),
+            "gLevels": round(math.log2(size)) if size > 0 else 0,
+            "gBoundsA0": bounds[0],
+            "gBoundsA1": bounds[1],
+            "gBoundsB0": bounds[2],
+            "gBoundsB1": bounds[3],
+            "gHeightScale": horizon.get("height_scale", 1.0),
+            "gRectSX": rect[0],
+            "gRectSY": rect[1],
+            "gRectOX": rect[2],
+            "gRectOY": rect[3],
+        }
+
     @classmethod
     def _bind(cls, plane, fx: str, png: str) -> None:
         """Wire the effect's uniforms: the map through a Raw file node, the
@@ -804,24 +829,7 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
             cmds.setAttr(f"{fx}.{live}", float(record.get("source_size", 0.0)))
         cmds.setAttr(f"{fx}.{fixed}", 0.0)
 
-        # The layout, as the record carries it (DCC units: no unit scale).
-        rect = horizon.get("rect") or [1.0, 1.0, 0.0, 0.0]
-        bounds = horizon.get("bounds") or [-1.0, 1.0, -1.0, 1.0]
-        constants = {
-            "gSize": horizon.get("size", ptk.ShadowHorizon.DEFAULT_SIZE),
-            "gSpans": horizon.get("spans", ptk.ShadowHorizon.DEFAULT_SPANS),
-            "gLevels": horizon.get("levels", 0),
-            "gBoundsA0": bounds[0],
-            "gBoundsA1": bounds[1],
-            "gBoundsB0": bounds[2],
-            "gBoundsB1": bounds[3],
-            "gHeightScale": horizon.get("height_scale", 1.0),
-            "gRectSX": rect[0],
-            "gRectSY": rect[1],
-            "gRectOX": rect[2],
-            "gRectOY": rect[3],
-        }
-        for name, value in constants.items():
+        for name, value in cls._layout_constants(horizon).items():
             cmds.setAttr(f"{fx}.{name}", float(value))
         # Opacity carries the expression's fade AND the artist's intensity
         # dial (the expression multiplies shadowIntensity in), as every engine

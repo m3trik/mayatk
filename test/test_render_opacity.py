@@ -204,35 +204,6 @@ class TestLegacyMaterialModeCleanup(MayaTkTestCase):
         with self.assertRaises(TypeError):
             RenderEffects.key_fade([cube], start=1, end=10, preview=True)
 
-    def test_setup_is_a_deprecated_alias_of_create(self):
-        """``setup`` was a silent alias of ``create`` from 2026-02-13 with
-        callers outside mayatk (unitytk's Maya-side fixtures), so it warns
-        through ``ptk.Deprecation.symbol`` until mayatk 0.20.0 and forwards."""
-        cube = cmds.polyCube(name="setup_cube")[0]
-        with self.assertWarns(DeprecationWarning) as caught:
-            RenderEffects.setup(objects=[cube], mode="attribute")
-        self.assertTrue(cmds.attributeQuery("opacity", node=cube, exists=True))
-        self.assertIn("RenderEffects.create", str(caught.warning))
-        self.assertIn("mayatk 0.20.0", str(caught.warning))
-
-    def test_the_render_opacity_import_path_warns_and_forwards(self):
-        """``RenderOpacity`` resolved silently to ``RenderEffects`` from
-        2026-09-05; since 2026-09-21 the old path still resolves but warns
-        (``ptk.Deprecation.attributes``) and names the release it goes in."""
-        import importlib
-
-        legacy = importlib.import_module(
-            "mayatk.mat_utils.render_opacity._render_opacity"
-        )
-        with self.assertWarns(DeprecationWarning) as caught:
-            alias = legacy.RenderOpacity
-        self.assertIs(alias, RenderEffects)
-        self.assertIn("mayatk 0.20.0", str(caught.warning))
-        import mayatk as mtk
-
-        with self.assertWarns(DeprecationWarning):
-            self.assertIs(mtk.RenderOpacity, RenderEffects)
-
 
 class TestOpacityVisibilityDriver(MayaTkTestCase):
     """Tests for the keyframe-mirroring visibility logic.
@@ -855,35 +826,6 @@ class TestPrepareForExport(MayaTkTestCase):
         curve = cmds.keyframe(plug, q=True, name=True)[0]
         self.assertEqual(cmds.ls(curve, uuid=True)[0], uuid, "the node was rebuilt")
 
-    def test_the_ignored_objects_argument_warns(self):
-        """``objects`` has been ignored since 2026-09-15 -- the staging covers
-        every keyed channel -- and callers outside mayatk still pass it. It
-        warns through ``ptk.Deprecation`` until mayatk 0.20.0, by name or by
-        position, and changes nothing: a plain object in it is still skipped
-        without error."""
-        plain = cmds.polyCube(name="plain_cube")[0]
-        opacity_obj = cmds.polyCube(name="opacity_cube")[0]
-        RenderEffects.create(objects=[opacity_obj], mode="attribute")
-        cmds.setKeyframe(opacity_obj, attribute="opacity", time=1, value=0.0)
-        cmds.setKeyframe(opacity_obj, attribute="opacity", time=30, value=1.0)
-
-        for label, call in (
-            ("keyword", lambda: RenderEffects.prepare_for_export(objects=[plain])),
-            ("positional", lambda: RenderEffects.prepare_for_export([plain])),
-        ):
-            with self.subTest(form=label):
-                try:
-                    with self.assertWarns(DeprecationWarning) as caught:
-                        synced = call()
-                    self.assertEqual(synced, [])
-                    self.assertIn("mayatk 0.20.0", str(caught.warning))
-                    self.assertEqual(
-                        len(cmds.ls("opacity_cube__opacity")), 1, "still staged"
-                    )
-                finally:
-                    RenderEffects.finish_export()
-        self.assertFalse(cmds.attributeQuery("opacity", node=str(plain), exists=True))
-
 
 class TestRenderEffectsSlots(MayaTkTestCase):
     """The panel's two pages key their channel on demand, each with its Key /
@@ -1145,10 +1087,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
                 "version": 3,
                 "url": "http://127.0.0.1:0/",
                 "data_export": (
-                    [
-                        ptk.MeshConvert.VISIBILITY_TRACKS_KEY,
-                        ptk.MeshConvert.FBX_TAKES_KEY,
-                    ]
+                    [ptk.SceneRecords.VISIBILITY.key]
                     if applied
                     else []
                 ),
@@ -1177,7 +1116,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         kwargs = push.call_args.kwargs
         self.assertEqual(kwargs["objects"], [self.cube])
         overlay = kwargs["data_export"]
-        tracks = overlay[ptk.MeshConvert.VISIBILITY_TRACKS_KEY]["tracks"]
+        tracks = overlay[ptk.SceneRecords.VISIBILITY.key]["tracks"]
         self.assertEqual([t["node"] for t in tracks], [self.cube])
         fps = float(mtk.AudioUtils.get_fps() or 30.0)
         expected = ptk.RampKeys.fade_loop(
@@ -1185,9 +1124,8 @@ class TestRenderEffectsSlots(MayaTkTestCase):
         )
         self.assertEqual(tracks[0]["opacity"], self._published_ramp(expected))
         # No shot cuts it: the shot record carries the takes (each clip its
-        # range), and an older scene's take list is masked too.
-        self.assertIsNone(overlay[ptk.MeshConvert.SHOT_METADATA_KEY], "no shot cuts it")
-        self.assertIsNone(overlay[ptk.MeshConvert.FBX_TAKES_KEY], "no legacy take list")
+        # range).
+        self.assertIsNone(overlay[ptk.SceneRecords.SHOTS.key], "no shot cuts it")
         self.assertFalse(
             cmds.attributeQuery("opacity", node=self.cube, exists=True),
             "nothing created",
@@ -1209,7 +1147,7 @@ class TestRenderEffectsSlots(MayaTkTestCase):
 
         self.slot.sb.message_box.assert_not_called()
         overlay = push.call_args.kwargs["data_export"]
-        (track,) = overlay[ptk.MeshConvert.VISIBILITY_TRACKS_KEY]["tracks"]
+        (track,) = overlay[ptk.SceneRecords.VISIBILITY.key]["tracks"]
         fps = float(mtk.AudioUtils.get_fps() or 30.0)
         expected = ptk.RampKeys.pulse(
             0.0,

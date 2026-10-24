@@ -716,27 +716,19 @@ class GameShaderTest(unittest.TestCase):
         self.assertTrue(cmds.objExists(result))
         self.assertEqual(cmds.nodeType(result), "StingrayPBS")
 
-    def test_the_retired_opacity_bool_warns_and_still_means_transparent(self):
-        """Retired 2026-09-23 (removed in 0.20.0): ``opacity`` restated what
-        ``opacity_mode`` says, so every StingrayPBS helper warns on it and
-        still folds it -- and GameShader's own build passes the mode alone."""
+    def test_the_stingray_helpers_take_the_mode_alone(self):
+        """``opacity`` restated what ``opacity_mode`` says (True was
+        "transparent") and was removed in 0.28.0: the mode is the one input,
+        and GameShader's own build passes it without a notice."""
         from mayatk.mat_utils._mat_utils import MatUtils
 
-        with self.assertWarns(DeprecationWarning) as caught:
-            node = self.shader.setup_stringray_node("retired_bool", opacity=True)
-        self.assertIn("'opacity'", str(caught.warning))
+        node = self.shader.setup_stringray_node(
+            "mode_transparent", opacity_mode="transparent"
+        )
         self.assertEqual(MatUtils.get_stingray_opacity_mode(node), "transparent")
-        with self.assertWarns(DeprecationWarning):
-            node = MatUtils.create_stingray_shader("retired_bool_mat", opacity=True)
-        self.assertEqual(MatUtils.get_stingray_opacity_mode(node), "transparent")
-        for helper, args in (
-            (MatUtils.resolve_opacity_mode, ()),
-            (MatUtils.resolve_stingray_graph, ()),
-            (MatUtils.load_stingray_graph, (node,)),
-        ):
-            with self.subTest(helper=helper.__name__):
-                with self.assertWarns(DeprecationWarning):
-                    helper(*args, opacity=True)
+        self.assertEqual(MatUtils.resolve_opacity_mode(), "none")
+        with self.assertRaises(TypeError):  # a stale positional bool fails loudly
+            self.shader.setup_stringray_node("stale_bool", True)
 
         import warnings
 
@@ -814,6 +806,26 @@ class GameShaderTest(unittest.TestCase):
         success = self.shader.connect_stingray_nodes(texture_path, "Emissive", sr_node)
 
         self.assertTrue(success)
+
+    def test_a_stingray_emissive_map_emits(self):
+        """Autodesk's graph multiplies the emissive by ``emissive_intensity``,
+        default 0: a wired map left there renders dark and exports as no
+        emission -- a production room's ceiling lights reached WebXR unlit
+        (2026-10-21). Wiring the map opens the weight; an authored one stays.
+        """
+        sr_node = self.shader.setup_stringray_node("test_emissive_gate")
+        if not cmds.attributeQuery("emissive_intensity", node=sr_node, exists=True):
+            self.skipTest("this StingrayPBS graph has no emissive_intensity")
+        self.assertEqual(cmds.getAttr(f"{sr_node}.emissive_intensity"), 0.0)
+
+        self.shader.connect_stingray_nodes("model_Emissive.png", "Emissive", sr_node)
+        self.assertEqual(cmds.getAttr(f"{sr_node}.emissive_intensity"), 1.0)
+
+        cmds.setAttr(f"{sr_node}.emissive_intensity", 0.4)
+        self.shader.connect_stingray_nodes("model_Emissive.png", "Emissive", sr_node)
+        self.assertAlmostEqual(
+            cmds.getAttr(f"{sr_node}.emissive_intensity"), 0.4, places=5
+        )
 
     def test_connect_stingray_ao(self):
         """Test connecting AO texture to Stingray node."""

@@ -209,7 +209,7 @@ class _MaterialQueryInternal:
         return [str(nodes)]
 
     @classmethod
-    def _get_mats(cls, objs, as_strings, mat_type, include_displacement):
+    def _get_mats(cls, objs, mat_type, include_displacement):
         """Body of :meth:`MatUtils.get_mats`."""
         sg_slots = list(cls._SG_SHADER_SLOTS)
         if include_displacement:
@@ -725,7 +725,7 @@ class _MaterialQueryInternal:
         return defaults
 
     @classmethod
-    def _filter_materials_by_objects(cls, objects, as_strings, include_displacement):
+    def _filter_materials_by_objects(cls, objects, include_displacement):
         """Body of :meth:`MatUtils.filter_materials_by_objects`."""
         return cls.get_mats(objects, include_displacement=include_displacement)
 

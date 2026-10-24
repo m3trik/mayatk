@@ -1,18 +1,47 @@
 """Tests for ``env_utils.scene_state`` — the sidecar's DCC-side reader column.
 
-First coverage for the module (its behaviour previously rode consumer tests
-only). Focused on the ``metallic_roughness`` section, added after a measured
-production failure: FBX2glTF packs a solid-white ORM when it cannot resolve the
-real maps, glTF reads metallic from the blue channel, and a lightmapped viewer
-(scene lights off) compounds that to a black room.
+Retired 2026-10-20 (removed in 0.29.0): the materials record states every
+material (``MaterialRecords``, tested in ``test_material_records``), so no
+export reads a section. The readers keep working until the removal and stay
+pinned here; their notice is asserted once (``TestRetired``) and quieted for
+the rest.
 """
 
 import os
 import unittest
+import warnings
 
 import maya.cmds as cmds
 
 from base_test import MayaTkTestCase
+
+_QUIET = warnings.catch_warnings()
+
+
+def setUpModule():
+    _QUIET.__enter__()
+    warnings.filterwarnings(
+        "ignore", message=r".*SceneState\.", category=DeprecationWarning
+    )
+
+
+def tearDownModule():
+    _QUIET.__exit__(None, None, None)
+
+
+class TestRetired(MayaTkTestCase):
+    """Reading a section warns, naming the record that replaced it."""
+
+    def test_reading_a_section_names_the_materials_record(self):
+        from mayatk.env_utils.scene_state import SceneState
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            SceneState.read([])
+            SceneState.source()
+        notices = [str(w.message) for w in caught if w.category is DeprecationWarning]
+        self.assertTrue(any("MaterialRecords" in n for n in notices), notices)
+        self.assertTrue(any("export_context" in n for n in notices), notices)
 
 
 class _StingrayMixin:
@@ -22,9 +51,7 @@ class _StingrayMixin:
         from mayatk.mat_utils._mat_utils import MatUtils
 
         cmds.loadPlugin("shaderFXPlugin", quiet=True)
-        mat = MatUtils.create_stingray_shader(
-            name, opacity=opacity_mode != "none", opacity_mode=opacity_mode
-        )
+        mat = MatUtils.create_stingray_shader(name, opacity_mode=opacity_mode)
         cube = cmds.polyCube(name=f"{name}_geo")[0]
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name=f"{name}SG"

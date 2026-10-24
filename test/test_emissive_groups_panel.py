@@ -234,7 +234,7 @@ class TestPanelWorkflow(_PanelCase):
         self.slots.tb000(self.ui.tb000)
         payload = ptk.SceneRecords.EMISSIVE_GROUPS.load(DataNodes)
         self.assertEqual(payload["encoding"], "channels")
-        self.assertEqual(payload["resolution"], 64)
+        self.assertNotIn("resolution", payload)  # the mask states its own size
         # The button names no path, so the mask lands in the current project's
         # sourceimages -- which must be the run's sandbox, never the project the
         # user last had open (a GUI-pass Maya restores it from prefs: measured,

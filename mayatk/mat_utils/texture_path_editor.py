@@ -515,8 +515,8 @@ class TexturePathEditorSlots:
                     "Browse for File (one row) or Folder (several — each "
                     "repointed to its same-named file there), Rename File "
                     "(the file on disk, in place), scene selection, Hypershade "
-                    "graph, delete (on a lightmap row: Revert to Source, as "
-                    "the Lightmap Baker — its objects are unbound, the map "
+                    "graph, delete (on a lightmap row: Revert to Source, the "
+                    "Lightmap Baker's Revert Selected — its objects are unbound, the map "
                     "stays on disk). Editing "
                     "a path that changes only the file name renames the file "
                     "too, inside this project (outside it the path repoints).",
@@ -1478,7 +1478,7 @@ class TexturePathEditorSlots:
 
         Browse is a file pick for one row and a folder pick for several (its
         label says which); Rename File renames one row's file and is disabled
-        otherwise; Delete on lightmap rows only is the baker's Revert to Source.
+        otherwise; Delete on lightmap rows only is the baker's Revert Selected.
         """
         selection = (
             widget.get_selection(
@@ -1874,7 +1874,7 @@ class TexturePathEditorSlots:
 
         A lightmap row has no file node -- its bake markers bind the map -- so
         the action used to return silently on one. Its delete is the Lightmap
-        Baker's Revert to Source on the objects it binds
+        Baker's Revert Selected on the objects it binds
         (:meth:`_remove_lightmaps`).
         """
         everything = self._get_selected_contexts(selection, require_file_nodes=False)
@@ -1932,7 +1932,7 @@ class TexturePathEditorSlots:
     def _remove_lightmaps(self, deps) -> int:
         """Revert the objects each lightmap in *deps* binds to source.
 
-        The Lightmap Baker's Revert to Source, scoped to those objects and
+        The Lightmap Baker's Revert Selected, scoped to those objects and
         confirmed first: ``LightmapRecords.revert`` clears their markers and
         republishes the manifest, so nothing is left bound to the map (a legacy
         atlas UV layout is restored too). Their materials and texture UVs were

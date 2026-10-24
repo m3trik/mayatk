@@ -155,6 +155,28 @@ class TestShotsPanel(MayaTkTestCase):
             store.shots = []
             store.set_active_shot(None)  # the re-sync picked the survivor
 
+
+    def test_leave_stale_shots_out_is_the_scenes_own_setting(self):
+        """Delete Shots' option box holds Leave Stale Shots Out of Exports
+        (``ShotStore.drop_stale_shots``, 2026-10-21: "we probably shouldn't
+        remove stale shots by default, but that can be an option"): off
+        unless the scene says so, toggling it writes the store, and the
+        store's value is what the box shows."""
+        ctrl = self.slots.controller
+        store = ctrl._active_store()
+        chk = self.ui.chk_drop_stale_shots
+        self.assertFalse(chk.isChecked(), "off unless the scene says so")
+        try:
+            chk.setChecked(True)
+            self.assertTrue(store.drop_stale_shots)
+            for value in (False, True):
+                store.drop_stale_shots = value
+                ctrl._sync_from_store()
+                self.assertEqual(chk.isChecked(), value)
+        finally:
+            store.drop_stale_shots = False
+            ctrl._sync_from_store()
+
     def test_the_scope_decides_what_delete_shots_takes(self):
         """One button, three scopes, picked in its option box and named on
         the button (2026-10-07: "consolidate to one global delete shots

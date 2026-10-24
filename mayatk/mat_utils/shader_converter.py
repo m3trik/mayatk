@@ -76,19 +76,25 @@ class _ShaderConverterInternal(object):
 
         ``blinn.normalCamera`` is driven by a ``bump2d``, never by the file
         directly, so a naive one-hop read finds a utility node and gives up.
+        A ``bump2d`` passes its file through only as Tangent Space Normals
+        (``bumpInterp`` 1): in Bump mode the file is a greyscale height, which
+        a target's normal slot would read as a normal map.
         """
         node = plug.split(".")[0]
-        if cmds.nodeType(node) == "file":
+        node_type = cmds.nodeType(node)
+        if node_type == "file":
             return node
-        if cmds.nodeType(node) not in cls.PASSTHROUGH_NODES:
+        if node_type not in cls.PASSTHROUGH_NODES:
+            return None
+        if node_type == "bump2d" and cmds.getAttr(f"{node}.bumpInterp") != 1:
             return None
         for candidate in cmds.listHistory(node) or []:
             if cmds.nodeType(candidate) == "file":
                 return candidate
         return None
 
-    @staticmethod
-    def _retire(shader: str) -> None:
+    @classmethod
+    def _retire(cls, shader: str) -> None:
         """Delete *shader* along with any shading group it leaves EMPTY.
 
         :meth:`_transfer_assignments` re-assigns the geometry through the
@@ -100,7 +106,19 @@ class _ShaderConverterInternal(object):
 
         Only an empty group goes: one that still has members belongs to
         something else. Maya's own default groups are never touched.
+
+        Its :attr:`PASSTHROUGH_NODES` inputs go too once they drive nothing
+        but Maya's default nodes (the utility list): the target reads the file node behind a
+        ``bump2d`` directly, so the ``bump2d`` was the source's alone. One
+        still feeding another shader stays.
         """
+        passthrough = [
+            node
+            for node in set(
+                cmds.listConnections(shader, source=True, destination=False) or []
+            )
+            if cmds.nodeType(node) in cls.PASSTHROUGH_NODES
+        ]
         for sg in cmds.listConnections(shader, type="shadingEngine") or []:
             if not cmds.objExists(sg) or cmds.ls(sg, defaultNodes=True):
                 continue
@@ -108,6 +126,12 @@ class _ShaderConverterInternal(object):
                 cmds.delete(sg)
         if cmds.objExists(shader):
             cmds.delete(shader)
+        for node in passthrough:
+            readers = cmds.listConnections(node, source=False, destination=True) or []
+            if cmds.objExists(node) and not any(
+                not cmds.ls(r, defaultNodes=True) for r in readers
+            ):
+                cmds.delete(node)
 
 
 class ShaderConverter(ptk.LoggingMixin, _ShaderConverterInternal):

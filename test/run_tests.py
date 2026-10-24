@@ -20,6 +20,7 @@ paths, so headless and GUI runs behave identically per module.
 Usage:
     python run_tests.py                          # Run default core tests (headless)
     python run_tests.py core_utils components    # Run specific modules
+    python run_tests.py edit_utils -k mirror     # ...only tests whose id matches "mirror"
     python run_tests.py --all                    # Run ALL test modules
     python run_tests.py --gui                    # Force everything through a GUI Maya
     python run_tests.py --no-gui-pass            # Skip the GUI pass (GUI-only modules DEFERRED; no badge)
@@ -28,6 +29,7 @@ Usage:
     python run_tests.py --module-timeout 900     # Headless per-module hang timeout (seconds)
     python run_tests.py --mayapy <path>          # Explicit mayapy (else MAYATK_MAYAPY / newest install)
     python run_tests.py --dry-run                # Validate test setup without running
+    python run_tests.py --full-results           # Echo the whole results file at the end
     python run_tests.py --quick                  # Run quick validation test (GUI)
     python run_tests.py --list                   # List available test modules
     python run_tests.py --no-badge               # Skip README badge update
@@ -42,6 +44,11 @@ Notes:
     initializations are staggered (one at a time) to avoid license-checkout
     races; if a run ever hangs at init, drop back to --jobs 1 and let the
     FlexLM checkout reclaim before retrying.
+
+A scoped run (modules or -k) never stamps the badge; the console report shows
+the modules that did not pass in full, then the SUMMARY (the results file keeps
+everything). For the modules a change reaches:
+    python m3trik/scripts/affected_tests.py <files> --run
 
 Exit codes:
     0   every in-scope module ran and passed.
@@ -140,6 +147,10 @@ GUI_REQUIRED = {
     "test_emissive_groups_panel": (
         "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
+    ),
+    "test_lightmap_baker_panel": (
+        "loads the lightmap_baker panel through MayaUiHandler; native-crashes "
+        "mayapy on load (re-confirmed ALONE, 2026-10-21)"
     ),
     "test_reference_manager": (
         "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
@@ -343,8 +354,12 @@ class MayaTestRunner:
         module_timeout: int = 900,
         wait_timeout: Optional[int] = None,
         keep_maya: bool = False,
+        patterns: Optional[List[str]] = None,
     ):
         self.host = host
+        #: ``-k`` test-id filters, handed to every chunk / GUI pass (the driver's
+        #: ``_module_suite``).
+        self.patterns = list(patterns or [])
         self.port = port
         self.reuse_instance = reuse_instance
         # The GUI Maya stays open after the run (--keep-maya): see _run_via_port.
@@ -740,6 +755,12 @@ except Exception as e:
         )
         env.pop("PYTHONHOME", None)
         env.pop("VIRTUAL_ENV", None)
+        if sys.platform == "win32":
+            # Standalone pins its own ``minimal`` platform, so a headless QPA
+            # (affected_tests.py sets offscreen) buys mayapy nothing; it only
+            # reaches Autodesk's licensing helpers, whose platforms/ holds just
+            # qwindows: each pops "no Qt platform plugin could be initialized".
+            env.pop("QT_QPA_PLATFORM", None)
         # No display to open (a Linux CI or SSH host): the suite driver's
         # QApplication would abort the chunk from C++ on the xcb plug-in, which
         # reads as a native crash and defers module after module to the GUI pass.
@@ -881,6 +902,7 @@ except Exception as e:
                 "progress_file": str(prog_path).replace("\\", "/"),
                 "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
                 "extended": extended,
+                "patterns": self.patterns,
                 "reload": False,
                 # A mayapy this runner launched: its sandbox may stay up for
                 # good (_suite_driver._sandbox).
@@ -1272,6 +1294,7 @@ except Exception as e:
             "progress_file": str(base.with_suffix(".progress")).replace("\\", "/"),
             "temp_dir": str(self.temp_test_dir).replace("\\", "/"),
             "extended": extended,
+            "patterns": self.patterns,
             "reload": users_session,
             "launched": not (users_session or outlives_run),
         }
@@ -1709,13 +1732,49 @@ finally:
     # Reporting
     # ------------------------------------------------------------------
 
-    def print_results(self) -> None:
-        """Read and print the results file contents to console."""
+    @staticmethod
+    def concise_results(content: str) -> str:
+        """The results file as a console report: every module block that is not
+        a plain pass, in full, then the SUMMARY and SLOWEST sections.
+
+        A passing module's block is its SUMMARY line again plus its SKIP lines;
+        echoing ~175 of them buried the few that mattered (a clean full run
+        printed ~760 lines). A block carrying anything else -- a traceback, a
+        diagnostics note -- is kept whatever its status.
+        """
+        marker = "\n" + "=" * 70 + "\nSUMMARY\n"
+        head, sep, tail = content.partition(marker)
+        if not sep:
+            return content
+        blocks = re.split(r"(?m)^(?=test_\S+: )", head)
+        kept = [blocks[0].rstrip("\n")]
+        for block in blocks[1:]:
+            lines = [ln for ln in block.splitlines() if ln.strip()]
+            match = _MODULE_LINE.match(lines[0]) if lines else None
+            plain_pass = (
+                match is not None
+                and match.group(2) == "PASS"
+                and all(
+                    _COUNTS_LINE.match(ln) or ln.lstrip().startswith("SKIP:")
+                    for ln in lines[1:]
+                )
+            )
+            if not plain_pass:
+                kept.append(block.rstrip("\n"))
+        if len(kept) == 1:
+            kept.append("(every module passed -- one line each in the SUMMARY)")
+        return "\n\n".join(kept) + marker + tail
+
+    def print_results(self, full: bool = False) -> None:
+        """Print the results to the console: :meth:`concise_results`, or the
+        whole file with *full* (``--full-results``)."""
         if not self.results_file.exists():
             print("[WARNING] No results file found.")
             return
 
         content = self.results_file.read_text(encoding="utf-8")
+        if not full:
+            content = self.concise_results(content)
         # Use a unicode-safe write for Windows cp1252 consoles.
         try:
             print("\n" + content)
@@ -1768,6 +1827,16 @@ def main() -> int:
     """Main entry point. Returns a process exit code (0 = success)."""
     args = sys.argv[1:]
 
+    # -k may repeat; every other valued flag is single.
+    patterns: List[str] = []
+    while "-k" in args:
+        idx = args.index("-k")
+        if idx + 1 >= len(args):
+            print("Invalid value for -k")
+            return EXIT_USAGE
+        patterns.append(args[idx + 1])
+        del args[idx : idx + 2]
+
     port, ok = _pop_value(args, "--port", int, 7002)
     if not ok:
         return EXIT_USAGE
@@ -1802,6 +1871,23 @@ def main() -> int:
     gui = pop_flag("--gui")
     pop_flag("--headless")  # accepted for symmetry; headless is the default
     no_gui_pass = pop_flag("--no-gui-pass")
+    full_results = pop_flag("--full-results")
+
+    # What is left is actions and module names. An unknown FLAG used to become
+    # a module name ("test_--quiet": a LOAD ERROR after a Maya launch); refuse it
+    # before anything starts. `-q` is named: it once meant --quick, which opens
+    # a GUI Maya -- the opposite of the quiet an agent reaching for it wants.
+    actions = {"--list", "-l", "--help", "-h", "--quick", "--all", "-a"}
+    unknown = [a for a in args if a.startswith("-") and a not in actions]
+    if unknown:
+        hint = ""
+        if "-q" in unknown:
+            hint = (
+                " (-q is not a flag: the console report is concise by default; "
+                "--quick runs the GUI quick test)"
+            )
+        print(f"Unknown option(s): {' '.join(unknown)}{hint}. See --help.")
+        return EXIT_USAGE
 
     # Reusing/attaching only makes sense through the port path.
     gui = gui or reuse_instance
@@ -1818,6 +1904,7 @@ def main() -> int:
         module_timeout=module_timeout,
         wait_timeout=wait_timeout,
         keep_maya=keep_maya,
+        patterns=patterns,
     )
 
     if "--list" in args or "-l" in args:
@@ -1829,7 +1916,7 @@ def main() -> int:
 
     # Everything below may launch Maya — wrap in try/finally for cleanup
     try:
-        if "--quick" in args or "-q" in args:
+        if "--quick" in args:
             success = runner.run_quick_test()
             # Quick test is fire-and-forget (no results file to poll)
             return EXIT_OK if success else EXIT_FAILED
@@ -1865,19 +1952,22 @@ def main() -> int:
         if status.get("dry_run"):
             return EXIT_OK
 
-        runner.print_results()
+        runner.print_results(full=full_results)
 
         # Update README badge — only on a full --all run where every module
         # actually ran (a scoped or partial run must not clobber the badge).
         if not no_badge:
             if (
                 full_run
+                and not patterns
                 and status.get("all_ran")
                 and (status["passed"] > 0 or status["failed"] > 0)
             ):
                 runner.update_readme_badge(status["passed"], status["failed"])
             elif not status.get("all_ran"):
                 print("[INFO] Badge not updated (some modules did not run).")
+            elif patterns:
+                print("[INFO] Badge not updated (scoped run: -k).")
             elif not full_run:
                 print(
                     "[INFO] Badge not updated (scoped run — the badge reflects "

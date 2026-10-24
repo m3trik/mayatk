@@ -6740,65 +6740,6 @@ class TestUndoContract(MayaTkTestCase):
         self.assertEqual(self._curve(recorded), self._curve(silent))
 
 
-class TestDeprecatedAsStrings(MayaTkTestCase):
-    """``as_strings`` has had no effect since 2026-07-08 -- results are always
-    name strings -- and was deprecated in four docstrings that nothing
-    enforced. Since 2026-09-21 the keyword warns through
-    ``ptk.Deprecation.parameter`` and names the release it goes in; the call
-    is otherwise unchanged. Added: 2026-09-21
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.cube = cmds.polyCube(name="as_strings_cube")[0]
-        cmds.setKeyframe(self.cube, attribute="translateX", time=1, value=0)
-        cmds.setKeyframe(self.cube, attribute="translateX", time=10, value=5)
-
-    def test_the_keyword_warns_and_the_result_is_unchanged(self):
-        expected = AnimUtils.objects_to_curves([self.cube])
-        with self.assertWarns(DeprecationWarning) as caught:
-            got = AnimUtils.objects_to_curves([self.cube], as_strings=True)
-        self.assertEqual(got, expected)
-        self.assertIn("'as_strings'", str(caught.warning))
-        self.assertIn("mayatk 0.20.0", str(caught.warning))
-
-    def test_every_method_that_took_it_warns(self):
-        calls = {
-            "get_static_curves": lambda: AnimUtils.get_static_curves(
-                [self.cube], as_strings=True
-            ),
-            "get_redundant_flat_keys": lambda: AnimUtils.get_redundant_flat_keys(
-                [self.cube], as_strings=True
-            ),
-            "simplify_curve": lambda: AnimUtils.simplify_curve(
-                [self.cube], as_strings=True
-            ),
-        }
-        for name, call in calls.items():
-            with self.subTest(method=name), self.assertWarns(DeprecationWarning):
-                call()
-
-    def test_the_retired_time_tolerance_warns(self):
-        # time_tolerance has had no effect (filterCurve weighs values only, and
-        # no optimize pass compared times with it); since 2026-09-23 it warns
-        # the same way (removed in 0.20.0).
-        calls = {
-            "simplify_curve": lambda: AnimUtils.simplify_curve(
-                [self.cube], time_tolerance=0.01
-            ),
-            "optimize_keys": lambda: AnimUtils.optimize_keys(
-                [self.cube], time_tolerance=0.01
-            ),
-        }
-        for name, call in calls.items():
-            with (
-                self.subTest(method=name),
-                self.assertWarns(DeprecationWarning) as caught,
-            ):
-                call()
-            self.assertIn("'time_tolerance'", str(caught.warning))
-
-
 class TestOptimizeLevelResolution(MayaTkTestCase):
     """``AnimUtils.OPTIMIZE_LEVELS`` -- the one table every consumer reads.
 
@@ -6879,7 +6820,7 @@ class TestOptimizeLevelResolution(MayaTkTestCase):
         self.assertEqual(level, "extremes")
         message = str(caught.warning)
         self.assertIn("'unbake'", message)
-        self.assertIn("mayatk 0.20.0", message)
+        self.assertIn("mayatk 0.30.0", message)
         self.assertIn("'extremes'", message)
         with self.assertWarns(DeprecationWarning):
             kwargs = mtk.AnimUtils.resolve_optimize_level("unbake")

@@ -101,6 +101,43 @@ class TestBuild(MayaTkTestCase):
         self.assertIn("materials", manifest)
 
 
+class TestPhongEMaps(MayaTkTestCase):
+    """A textured phongE names its maps. The materials record states phongE
+    (legacy family), and a map the record leaves out is CLEARED from the GLB
+    and from Unity's Deliverable Lit -- an undeclared shader type named none,
+    so a textured phongE shipped flat colour."""
+
+    def test_colour_and_normal_maps_reach_the_manifest_and_the_record(self):
+        cube = cmds.polyCube(name="pe_cube")[0]
+        mat = cmds.shadingNode("phongE", asShader=True, name="pe_mat")
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="pe_SG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(cube, edit=True, forceElement=sg)
+
+        root = cmds.workspace(query=True, rootDirectory=True)
+        color = os.path.join(root, "maps", "pe_BaseColor.png").replace("\\", "/")
+        normal = os.path.join(root, "maps", "pe_Normal.png").replace("\\", "/")
+        _connect_file_to(mat, "color", color)
+        normal_file = cmds.shadingNode("file", asTexture=True, isColorManaged=True)
+        cmds.setAttr(f"{normal_file}.fileTextureName", normal, type="string")
+        bump = cmds.shadingNode("bump2d", asUtility=True)
+        cmds.setAttr(f"{bump}.bumpInterp", 1)  # tangent-space normals
+        cmds.connectAttr(f"{normal_file}.outAlpha", f"{bump}.bumpValue")
+        cmds.connectAttr(f"{bump}.outNormal", f"{mat}.normalCamera")
+
+        slots = MatManifest.build([cube])["materials"].get(mat, {})
+        self.assertEqual(
+            {k: os.path.basename(v) for k, v in slots.items()},
+            {"baseColor": "pe_BaseColor.png", "normal": "pe_Normal.png"},
+        )
+
+        from mayatk.env_utils.material_records import MaterialRecords
+
+        (entry,) = MaterialRecords.entries([cube])
+        self.assertEqual(entry.get("baseColorTexture"), "pe_BaseColor.png")
+        self.assertEqual(entry.get("normalTexture"), "pe_Normal.png")
+
+
 class TestProcessMaterial(MayaTkTestCase):
     """_process_material — single-material introspection used by MatSnapshot."""
 

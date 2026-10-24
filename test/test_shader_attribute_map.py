@@ -106,11 +106,13 @@ class TestGetMapping(QuickTestCase):
         )
 
     def test_lambert_to_stingray_only_includes_shared_channels(self):
-        # lambert has baseColor, emission, opacity (no specular/roughness/metallic/normal/AO).
-        # StingrayPBS has all of those — intersection = baseColor, emission, opacity.
+        # lambert has baseColor, emission, opacity and normal (no
+        # specular/roughness/metallic/AO). StingrayPBS has all of those.
         pairs = ShaderAttributeMap.get_mapping("lambert", "StingrayPBS")
         src_attrs = {p[0] for p in pairs}
-        self.assertEqual(src_attrs, {"color", "incandescence", "transparency"})
+        self.assertEqual(
+            src_attrs, {"color", "incandescence", "transparency", "normalCamera"}
+        )
 
     def test_pair_structure_is_src_attr_src_plug_dst_attr(self):
         pairs = ShaderAttributeMap.get_mapping("aiStandardSurface", "standardSurface")
@@ -449,7 +451,8 @@ class TestConnectChannel(MayaTkTestCase):
         try:
             return str(
                 GameShader(log_level="WARNING").setup_stringray_node(
-                    f"cc_sr_{'t' if opacity else 's'}", opacity
+                    f"cc_sr_{'t' if opacity else 's'}",
+                    opacity_mode="transparent" if opacity else "none",
                 )
             )
         except RuntimeError as error:  # no shaderFX plugin on this install
@@ -519,7 +522,7 @@ class TestConnectChannel(MayaTkTestCase):
         from mayatk.mat_utils._mat_utils import MatUtils
 
         shader = MatUtils.create_stingray_shader(
-            "test_masked_replay", opacity=True, opacity_mode="masked"
+            "test_masked_replay", opacity_mode="masked"
         )
         self.assertTrue(
             ShaderAttributeMap.connect_channel(self.file_node, "opacity", shader)
@@ -674,6 +677,25 @@ class TestOpenPBRLobes(MayaTkTestCase):
         file_node = cmds.shadingNode("file", asTexture=True)
         cmds.connectAttr(f"{file_node}.outColorR", f"{shader}.coatWeight")
         self.assertFalse(ShaderAttributeMap.open_lobe_gate(shader, "coatRoughness"))
+
+    def test_an_emission_weight_opens_only_from_its_default(self):
+        """Only a ``multiply`` weight at 0 opens; an authored one, a driven one
+        and OpenPBR's luminance (in nits, no neutral 1.0) are left alone."""
+        shader = self._shader("standardSurface", "emit_ss")
+        self.assertTrue(ShaderAttributeMap.open_emission_gate(shader))
+        self.assertEqual(cmds.getAttr(f"{shader}.emission"), 1.0)
+        cmds.setAttr(f"{shader}.emission", 0.3)
+        self.assertFalse(ShaderAttributeMap.open_emission_gate(shader))
+        self.assertAlmostEqual(cmds.getAttr(f"{shader}.emission"), 0.3, places=5)
+
+        driven = self._shader("standardSurface", "emit_driven")
+        file_node = cmds.shadingNode("file", asTexture=True)
+        cmds.connectAttr(f"{file_node}.outAlpha", f"{driven}.emission")
+        self.assertFalse(ShaderAttributeMap.open_emission_gate(driven))
+
+        opbr = self._shader("openPBRSurface", "emit_opbr")
+        self.assertFalse(ShaderAttributeMap.open_emission_gate(opbr))
+        self.assertEqual(cmds.getAttr(f"{opbr}.emissionLuminance"), 0.0)
 
     def test_thin_walled_is_spelled_per_type(self):
         """OpenPBR's switch is ``geometryThinWalled``; probing ``thinWalled``

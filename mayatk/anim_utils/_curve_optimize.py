@@ -76,7 +76,7 @@ class _CurveOptimizeInternal:
         return dict(cls.OPTIMIZE_LEVELS[key]) if key else None
 
     @classmethod
-    def _get_static_curves(cls, objects, value_tolerance, recursive, as_strings):
+    def _get_static_curves(cls, objects, value_tolerance, recursive):
         """Body of :meth:`AnimUtils.get_static_curves`."""
         from math import isclose
         import maya.api.OpenMaya as om2
@@ -161,7 +161,6 @@ class _CurveOptimizeInternal:
         value_tolerance,
         remove,
         recursive,
-        as_strings,
         time_range,
         selected_only,
     ):
@@ -364,9 +363,7 @@ class _CurveOptimizeInternal:
         cls,
         objects,
         value_tolerance,
-        time_tolerance,
         recursive,
-        as_strings,
         time_range,
         selected_only,
         on_delete=None,
@@ -601,7 +598,6 @@ class _CurveOptimizeInternal:
         cls,
         objects,
         value_tolerance,
-        time_tolerance,
         remove_flat_keys,
         remove_static_curves,
         simplify_keys,

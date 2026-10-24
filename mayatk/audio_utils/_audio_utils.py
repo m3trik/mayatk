@@ -277,7 +277,7 @@ class AudioUtils(ptk.HelpMixin):
         """``(file name, path)`` of each track in *track_ids* whose file exists.
 
         The file name is the TRACK ID with the file's extension: an
-        ``audio_manifest`` event names its track, and a consumer matches the
+        ``audio`` event names its track, and a consumer matches the
         clip by that name (unitytk's importer, by stem) -- so an FBX
         deliverable embeds each track's audio under it
         (``FbxUtils.embed_dependencies``). A track with no file on disk is
@@ -1012,7 +1012,7 @@ class AudioUtils(ptk.HelpMixin):
         raw Maya frame numbers rounded to int — rebasing (playback min, take
         start) is caller policy, applied by
         :meth:`mayatk.audio_utils.audio_clips.AudioClips.export_record` when
-        it builds the ``audio_manifest`` record.
+        it builds the ``audio`` record.
 
         Parameters:
             carrier: Carrier node to read tracks from.  Defaults to the

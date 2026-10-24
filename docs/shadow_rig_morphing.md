@@ -36,7 +36,7 @@ unambiguous.
 
 | # | Requirement | Why |
 |:--|:--|:--|
-| R1 | Rides the existing export routes unchanged in kind: FBX → Unity (template importer, embedded textures, the `shadow_metadata` channel on the `data_export` carrier) and FBX → GLB → WebXR (FBX2glTF + scene sidecar, the viewer shim). | The rig exists for engines that cannot afford real-time shadows; a bespoke export path defeats it. |
+| R1 | Rides the existing export routes unchanged in kind: FBX → Unity (template importer, embedded textures, the `shadows` channel on the `data_export` carrier) and FBX → GLB → WebXR (FBX2glTF + scene sidecar, the viewer shim). | The rig exists for engines that cannot afford real-time shadows; a bespoke export path defeats it. |
 | R2 | The outline follows the light at **runtime** — a light the engine animates or the user drags — not only the DCC animation. | Baking a direction only replays the DCC; the point is response. |
 | R3 | No ghosting: no double exposure at any light position, and no pop when the light crosses a sample boundary. | A crossfade of two silhouettes is a double exposure, not an intermediate shape. |
 | R4 | Penumbra from the source's size (an area light's plate, the sun's half-degree disc). | The projected rig already draws it; a live rig cannot lose it. |
@@ -48,7 +48,7 @@ unambiguous.
 ## What the routes carry today
 
 - **Texture**: the silhouette PNG is the plane material's base-colour texture, so *Embed Textures* ships it in the FBX and the GLB sidecar's base-colour / alpha-mode sections rebuild the material for the viewer. Unity's import binds an embedded texture to the created material as a **sub-asset**; the template importer looks the record's texture up in the project by name, falls back to that bound sub-asset, and rewires the material to a pipeline-correct unlit-transparent shader (`ConfigureUnlitTransparent`: URP / HDRP / built-in). Import settings can be pinned only on a **loose** PNG, and only on its first import: `OnPreprocessTexture` recognises the `_shadow` stem and sets alpha-is-transparency, sRGB and mipmaps. A sub-asset gets Unity's defaults (sRGB, platform compression) with no hook.
-- **Records**: `shadow_metadata` on the `data_export` carrier — v1 was `{name, texture, intensity}` per plane, and v2 (below) adds what an engine needs to place the plane itself; records join to nodes by name, like the lightmap channel, and the reader warns on a newer schema (`WarnIfNewer`).
+- **Records**: `shadows` on the `data_export` carrier — v1 was `{name, texture, intensity}` per plane, and v2 (below) adds what an engine needs to place the plane itself; records join to nodes by name, like the lightmap channel, and the reader warns on a newer schema (`WarnIfNewer`).
 - **Animation**: the fade is the plane's keyable `opacity` custom attribute — FBX user property (the `RenderOpacity` importer turns it into a controller) and, on the GLB route, a `KHR_animation_pointer` ramp the viewer shim resolves. The controller itself is import-time only: at runtime nothing reads the source or moves the plane.
 - **The source**: a locator or a real light. A real light exports on the FBX route; on the GLB route FBX2glTF keeps its transform as a plain node (this pipeline writes no `KHR_lights_punctual`), and a locator is a plain node on both. Either way the engine has the source's transform at runtime, by name — nothing about the light needs baking.
 - **The carrier precedent**: the lightmap web export already ships a data texture disguised in a real glTF slot (`LightmapWebExport.CARRIERS`: occlusion or emissive) plus a scene-extras manifest (`lightmap_web`: materials, carrier, encoding, uv) that the viewer's `applyLightmaps` reads to rebind the texture, set its colour space from the manifest and clear the slot it arrived in. On the Unity side the lightmap arrives as a loose file and `PinLightmapImportSettings` forces linear (sRGB off) and per-platform formats. That is the pattern a second shadow texture reuses.
@@ -239,7 +239,7 @@ a pop is acceptable. **C** is retired: dominated on every row.
    it by the record's name and pins its import settings on first import by a
    `_horizon` stem (sRGB **off**, alpha-is-transparency **off**, no mipmaps,
    clamp, uncompressed or a measured format), and on the GLB route a manifest
-   entry — the `lightmap_web` shape, on `shadow_metadata` — tells the viewer
+   entry — the `lightmaps` shape, on `shadows` — tells the viewer
    which material's `emissiveMap` is a map, to set `NoColorSpace`, no
    mipmaps and clamp, and to clear the slot. The projected silhouette stays in
    base colour, which is the fallback (R6). Two constraints: the plane's GLB
@@ -247,7 +247,7 @@ a pop is acceptable. **C** is retired: dominated on every row.
    `KHR_materials_unlit`; this pipeline never writes it), and the embedded
    sub-asset copy is never the one bound, because its settings cannot be
    pinned.
-3. **`shadow_metadata` v2**: per record `type`, `source` (the node the
+3. **`shadows` v2**: per record `type`, `source` (the node the
    engine reads the light from), `source_type` (`point` / `directional`),
    `source_size` in world units or `source_angle`, `follow_source`, the
    projection-model inputs (`contact`, `radius`, `height`, `max_stretch`),
@@ -307,7 +307,7 @@ block per rig.
 
 - **Level 1 — shared atlas.** One atlas texture and one material per rig type
   per scene (or per shadow set the panel builds together). A tile rect per rig
-  is stamped on the plane (`atlasRect`) and written into `shadow_metadata` v2
+  is stamped on the plane (`atlasRect`) and written into `shadows` v2
   (`atlas: {texture, rect}`). Each DCC plane keeps its own four UVs pointing
   at its tile, so every fallback viewer renders correctly with no transform
   at all; the material count drops to one per type and draw calls batch by
@@ -357,7 +357,7 @@ block per rig.
 
 ## Plan of record
 
-**Status, 2026-09-05: every phase is built and verified, and the horizon rig's map is the height-field march (option G).** The coverage map (D) measured 7-22 % against the exact projection on furniture and was replaced on 2026-09-05 (the section *The horizon map* under *Contracts*); the DCC viewport previews and all three engine pins run the one shared body. Earlier: pythontk carries the bake and the reference (`ShadowHorizon`, `HeightFieldMap`, `ImgUtils.rasterize_height_spans`) and the packer (`ShadowAtlas`); mayatk builds both rig types, per-object planes and the shared atlases, and publishes `shadow_metadata` v2; unitytk ships `ShadowPlane.shader` and a runtime controller that places the quad from the source node; pythontk's `MeshConvert.apply_glb_shadows` and the packaged `shadow_rig` viewer script do the same on the GLB route. Phase 6's previews shipped on 2026-09-04; the height-field march, planned as an escalation for a prop family that failed the bound, became the representation itself the day after, once the furniture fixtures were measured.
+**Status, 2026-09-05: every phase is built and verified, and the horizon rig's map is the height-field march (option G).** The coverage map (D) measured 7-22 % against the exact projection on furniture and was replaced on 2026-09-05 (the section *The horizon map* under *Contracts*); the DCC viewport previews and all three engine pins run the one shared body. Earlier: pythontk carries the bake and the reference (`ShadowHorizon`, `HeightFieldMap`, `ImgUtils.rasterize_height_spans`) and the packer (`ShadowAtlas`); mayatk builds both rig types, per-object planes and the shared atlases, and publishes `shadows` v2; unitytk ships `ShadowPlane.shader` and a runtime controller that places the quad from the source node; pythontk's `MeshConvert.apply_glb_shadows` and the packaged `shadow_rig` viewer script do the same on the GLB route. Phase 6's previews shipped on 2026-09-04; the height-field march, planned as an escalation for a prop family that failed the bound, became the representation itself the day after, once the furniture fixtures were measured.
 
 Revision 3 adopts the recommended answer for every call the review left open.
 Each is an attribute, an option or a constant, so any of them can be flipped
@@ -369,7 +369,7 @@ later without touching the phases.
 | Bins | K = 32 (measured: 16 doubles the error at every tile size), doubled to 64 while the tolerant reference error exceeds 5 % | `ShadowHorizon.DEFAULT_BINS`, `bake_adaptive` |
 | Patch mapping | Log-polar, an eighth of the footprint radius → the reach cap; a 256 × 64 tile (64 radial rows score within half a point of 128; 256 bearing columns keep a 5 cm pole's shadow at 3 m at alpha 0.81 where 128 smear it to 0.30) over a 128-pixel footprint (a 5 cm leg stays 5 cm; 32 pixels made it 13 cm) | `ShadowHorizon.range_for`, `DEFAULT_SIZE`, `DEFAULT_FOOTPRINT`, `HorizonMap.uv` |
 | Mobile texture format | RGBA8 uncompressed, pinned per platform the way the lightmap importer pins its formats; block formats only after the reference test measures them | `ShadowPlaneImporter.OnPreprocessTexture`, `_horizon` stem |
-| Carrier | Emission-slot transport; loose PNG plus record binding; a manifest on `shadow_metadata` for the viewer | DCC engines, `ShadowPlaneImporter`, viewer shim |
+| Carrier | Emission-slot transport; loose PNG plus record binding; a manifest on `shadows` for the viewer | DCC engines, `ShadowPlaneImporter`, viewer shim |
 | Runtime placement | `followSource` on the plane, default on: the engine places the quad from the source when the record names one and the node exists, else the baked keys play | plane attribute → record `follow_source` |
 | Planes per selection | `Combined` (today's behaviour) or `Per object` | panel `Planes:` combo, `ShadowRig.create_per_object` |
 | Atlas | `Shared` when two or more planes of a type exist, `Off` below that, `Instanced` as an export option | panel `Atlas:` combo, `ShadowRig.pack_atlas` |
@@ -423,7 +423,7 @@ Each phase ships on its own and lands behind the previous one's tests.
 1. **Per-object planes, shared atlas, instances — projected rig.** mayatk /
    blendertk `shadow_rig.py` and `.ui` (`Planes:` and `Atlas:` combos, a
    **Pack Atlas** Utility action) on pythontk's existing atlas helpers;
-   `shadow_metadata` v2 `atlas`; the Unity importer rewires once per shared
+   `shadows` v2 `atlas`; the Unity importer rewires once per shared
    material; nothing in the viewer for Level 1. Tests: N props → N rigs, one
    material and one atlas per type; Recalculate rewrites its tile and leaves
    every other tile's bytes unchanged; delete clears the tile; the FBX and
@@ -511,7 +511,7 @@ DCC never instances planes — instancing is an engine-side optimisation
 derived from the records, so R6 stays intact. Everything below is what the
 three work streams (pythontk + DCCs, Unity, viewer) build against.
 
-### `shadow_metadata` v2
+### `shadows` v2
 
 ```json
 {"version": 2, "unit_scale": 0.01,
@@ -524,15 +524,15 @@ three work streams (pythontk + DCCs, Unity, viewer) build against.
    "radius": 1.4142, "height": 2.0, "max_stretch": 6.0,
    "canvas": [-1.0, 1.0, -0.5, 0.5],
    "atlas": {"texture": "shadow_atlas_projected.png", "rect": [sx, sy, ox, oy]},
-   "horizon": {"texture": "Box_horizon.png", "bins": 16, "tile": [256, 128],
-               "layout": [4, 4], "mapping": "logpolar", "r_min": 0.7, "r_max": 5.7,
-               "frame_a": [1, 0, 0], "frame_b": [0, 0, 1], "encoding": 1,
-               "max_stretch": 6.0, "layers": 2, "rect": [1, 1, 0, 0]}}]}
+   "horizon": {"texture": "shadow_atlas_horizon.png", "size": 128, "spans": 2,
+               "bounds": [-3.0, 3.0, -1.5, 1.5], "height_scale": 2.5,
+               "frame_a": [1, 0, 0], "frame_b": [0, 0, 1], "rect": [sx, sy, ox, oy]}}]}
 ```
 
-- Lengths (`source_size`, `ground`, `radius`, `height`, `r_min`, `r_max`) are
-  DCC units; `unit_scale` is metres per DCC unit (Maya cm → 0.01, Blender
-  1.0) so an engine that imported in metres multiplies. Node fields are leaf
+- Lengths (`source_size`, `ground`, `radius`, `height`, `horizon.bounds`,
+  `horizon.height_scale`) are DCC units; `unit_scale` is metres per DCC
+  unit (Maya cm → 0.01, Blender 1.0) so an engine that imported in metres
+  multiplies. Node fields are leaf
   names, joined the way the records already join. `source_angle` is the
   angular *diameter* in radians (a sun: 0.0093). `canvas` is the stamp the
   expression reads — `[u0, u1, w0, w1]`: the far edge in top-disk radii from
@@ -622,11 +622,13 @@ reader -- the silhouette fallback stands -- and nothing decodes them any more.
   (even, odd), `A` (odd, odd), and texel `(S/2, S/2)` the marker `(83, 72, 1,
   165)` that says so. A map baked before the field has zeros there: it
   still reads, with the inner penumbra from heights alone, so the layout,
-  the encoding and the record did not change. `horizon.mapping =
-  "heightfield"`, `horizon.encoding = 2`,
-  `horizon.levels = log2 S`. `horizon.rect` is the block's rect inside the
-  type atlas -- the block's **exact** rect, never gutter-inset, since the
-  shader addresses texels through it. Every texel is **fetched**
+  the encoding and the record did not change. The record states the
+  layout and nothing a reader derives (`ShadowHorizon.record`): no
+  representation, encoding or level count -- the pyramid's levels are
+  `log2 horizon.size`, and the height-field representation and this
+  encoding are the record version's. `horizon.rect` is the block's rect
+  inside the type atlas -- the block's **exact** rect, never gutter-inset,
+  since the shader addresses texels through it. Every texel is **fetched**
   (`texelFetch` / `Load`), no mipmaps, never sRGB-decoded -- Maya's OpenGL
   path decodes any 8-bit texture a `GLSLShader` samples, so its preview binds
   a 16-bit promotion of the map (the preview table).
@@ -790,7 +792,7 @@ turn the cache off.
 - **Viewer**: a Python pass `MeshConvert.apply_glb_shadows(edit,
   search_dirs)` in `fbx_to_glb` binds each record's textures from the loose
   files (the horizon PNG as a texture with a clamp / linear / no-mip
-  sampler) and writes root `extras.shadow_web` = the v2 payload plus, per
+  sampler) and writes root `extras.shadows` = the v2 payload plus, per
   plane, the glTF `node` index of the plane, source and contact and the
   `texture` index of each map, and top-left rects. The packaged feature
   `net_utils/preview/features/shadow_rig/shadow_rig.js` (pythontk; a
@@ -858,7 +860,7 @@ behaviour, a different mechanism where the DCCs leave no choice:
 | Mechanism | a hardware **material**: `dx11Shader` + `.fx` on DirectX 11, `GLSLShader` + `.ogsfx` on OpenGL Core Profile, the effect written beside the horizon PNG so a saved scene rebinds it; legacy OpenGL (Pixel Shader 4) refused with the message that says so. Both bind the map's **16-bit promotion** (`<map>_preview16.png`, written beside it, refreshed after a re-bake): VP2's OpenGL path sRGB-decodes any 8-bit texture a `GLSLShader` samples -- Raw colour space, colour management and `MayaGammaCorrection` change nothing (measured: R came back as the piecewise sRGB decode of its byte, A untouched) -- and a 16-bit texture has no sRGB format to decode | a `gpu.shader.create_from_info` **overlay** in a `SpaceView3D` `POST_VIEW` handler (EEVEE nodes cannot bit-test a data map); the plane hidden while it stands in; refused headless, where the GPU module has no backend |
 | What it borrows | the plane's shading-group *membership* only -- the real network stays wired and `_plane_shading_groups` reads the snapshot, so the silhouette's file node, the opacity chain and the export record are the same with it on | the plane's viewport visibility only; nothing the record reads |
 | The frame | `O` / `A` / `B` / `Up` driven live by `decomposeMatrix` + `vectorProduct` nodes off the contact's world matrix; up is the contact's `+Y` | the contact's **local** frame (`X`, `Y`, up `Z` -- not the record's exporter-axes `HORIZON_FRAME`) through `matrix_world`, refilled per draw |
-| Export | the `"shadow_preview"` stager (`FbxUtils.register_export_stager`) detaches every preview before any producer runs and re-attaches it after the write; the `shadow_metadata` producer publishes the record from the real materials | the same `"shadow_preview"` stager (blendertk's `FbxUtils.register_export_stager`) stands the overlay down for the write and back up after it; the same producer publishes |
+| Export | the `"shadow_preview"` stager (`FbxUtils.register_export_stager`) detaches every preview before any producer runs and re-attaches it after the write; the `shadows` producer publishes the record from the real materials | the same `"shadow_preview"` stager (blendertk's `FbxUtils.register_export_stager`) stands the overlay down for the write and back up after it; the same producer publishes |
 | Verified, drawn | `test/shadow_preview_device_check.py`: one **fresh** GUI Maya per device via `MAYA_VP2_DEVICE_OVERRIDE`, playblast alpha vs `HorizonMap.alpha` on 8474 pixels -- **DirectX 11 and OpenGL Core Profile: mean \|d\| 0.0000, p98 0.000, 0.00 % over 0.05**, 33 of 33 checks each -- the traversal and the reference agree to the pixel (before the 16-bit texture, OpenGL sRGB-decoded the 8-bit map and drew only part of it) | `test/shadow_preview_gui_check.py` (windowed): 16132 pixels in display space (overlays blend in linear light, the viewport encodes) -- **mean \|d\| 0.0012, p98 0.004, 0.00 % over 0.05**, umbra 1.016 x the reference's |
 | Verified, headless | `test/test_shadow_preview.py` (19): the device classifier, both effect texts, the accessor guard, the export stager, the 16-bit promotion, delete / rebuild / recalculate carrying a standing preview | `test/test_shadow_preview.py` (12): the frame math, the uniform block, the refusal, the export stager |
 

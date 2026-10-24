@@ -52,7 +52,7 @@ _CMDS_IS_MOCKED = not _REAL_MAYA_AVAILABLE
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestMarmosetBridgeStandalone(unittest.TestCase):
     def setUp(self):
@@ -1224,7 +1224,7 @@ class _FakeBaker:
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestBakeTemplateGrouping(unittest.TestCase):
     """The bake template's own logic, exercised outside Toolbag.
@@ -1530,7 +1530,7 @@ class TestBakeTemplateGrouping(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestResolveToolbagLogPath(unittest.TestCase):
     """The three-tier fallback must survive a Toolbag major-version bump."""
@@ -1647,7 +1647,7 @@ class TestResolveToolbagLogPath(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestClassifyLogLine(unittest.TestCase):
     """Each Toolbag log line must route to the right severity so the
@@ -1729,7 +1729,7 @@ class TestClassifyLogLine(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestDispatchLogLines(unittest.TestCase):
     """End-to-end: a sequence of lines drives a real Python logger
@@ -1752,7 +1752,7 @@ class TestDispatchLogLines(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test -- run via pytest or run_tests.py --mocks"
 )
 class TestToolbagLogTail(unittest.TestCase):
     """The tail thread must read new content as it's written and stop

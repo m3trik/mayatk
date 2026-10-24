@@ -54,6 +54,7 @@ class _FakeTexture:
 
 
 _fake_mset = MagicMock()
+_fake_mset.__name__ = "mset"  # PySide6's import hook reads it (under mayapy)
 _fake_mset.Material = _FakeMaterial
 _fake_mset.SkyBoxObject = _FakeSkyBoxObject
 _fake_mset.MeshObject = _FakeMeshObject

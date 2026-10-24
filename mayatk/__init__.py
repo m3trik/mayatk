@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.27.1"
+__version__ = "0.28.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -177,9 +177,8 @@ DEFAULT_INCLUDE = {
     # Live browser / WebXR preview — a hand-off bridge whose target is a loopback
     # PreviewServer rather than an app. Counterpart of blendertk's ``WebXrPreview``.
     "env_utils.webxr_preview": "WebXrPreview",
-    # Scene-state reader column of the scene-data grid: sections of live-scene
-    # state FBX translation drops, shared by the WebXR preview and the Scene
-    # Exporter's GLB task. Counterpart of blendertk's ``SceneState``.
+    # Retired 2026-10-20 (removed in 0.29.0): the sections of live-scene state
+    # a GLB took beside its FBX -- the materials record states every material.
     "env_utils.scene_state": "SceneState",
     # Unity bridge engine (``btk.UnityBridge`` twin); its panel is discovered.
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
@@ -187,9 +186,6 @@ DEFAULT_INCLUDE = {
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",
     "mat_utils.render_opacity.render_effects": "RenderEffects",
-    # Deprecated import path of RenderEffects: resolves with a warning until its
-    # ``remove_in`` (``ptk.Deprecation.attributes`` in the module), then goes.
-    "mat_utils.render_opacity._render_opacity": "RenderOpacity",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
     # ``texture_path_editor`` likewise defines only its ``*Slots`` panel, which the
@@ -199,6 +195,9 @@ DEFAULT_INCLUDE = {
     # ``render_opacity`` / ``image_to_plane`` siblings above do.
     "mat_utils.shader_templates._shader_templates": "ShaderTemplates",
     "mat_utils.mat_manifest": "MatManifest",
+    # The ``materials`` record's producer (``FbxUtils.PRODUCERS``): every
+    # exported material stated as glTF states it. Mirror of blendertk's.
+    "env_utils.material_records": "MaterialRecords",
     "mat_utils.mat_snapshot": "MatSnapshot",
     "mat_utils.shader_converter": "ShaderConverter",
     # Marmoset Bridge

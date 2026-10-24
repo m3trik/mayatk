@@ -419,7 +419,7 @@ class TestDualKeyVisibilityExport(MayaTkTestCase):
 
 
 class TestVisibilityTracksProducer(MayaTkTestCase):
-    """The ``visibility_tracks`` channel — the glTF route's only path in.
+    """The ``render_effects`` channel — the glTF route's only path in.
 
     An FBX carries a ``Visibility`` curve natively (the test above pins that),
     but glTF animates only translation/rotation/scale/weights, so the
@@ -513,23 +513,6 @@ class TestVisibilityTracksProducer(MayaTkTestCase):
         # Shot_1's window opens at 7, but its first authored key is at 8.
         self.assertEqual(published["clip_span"]["Shot_1"], [8.0, 23.0])
         self.assertEqual(published["clip_span"]["Shot_5"], [1000.0, 1015.0])
-
-    def test_a_legacy_take_list_still_sizes_the_clip_spans(self):
-        """A scene published before the ranges moved onto the clips holds its
-        take list in ``fbx_takes`` beside a range-less shot record; the spans
-        come out the same (``ptk.SceneRecords.declared_takes`` falls back)."""
-        RenderEffects.key_fade([self.grp], start=8, end=23, direction="in")
-        ptk.SceneRecords.SHOTS.save(DataNodes, {"fps": 30.0, "shots": []})
-        ptk.SceneRecords.FBX_TAKES.save(
-            DataNodes, [{"name": "Shot_1", "start": 7, "end": 100}]
-        )
-
-        RenderEffects.refresh_export_metadata()
-
-        self.assertEqual(
-            self._carrier(RenderEffects.DATA_CHANNEL)["clip_span"]["Shot_1"],
-            [8.0, 23.0],
-        )
 
     def test_a_curve_that_is_no_timeline_channel_does_not_size_a_take(self):
         """The spans mirror the converter's take sizing, which reads the
@@ -883,7 +866,7 @@ class TestHandoffClipOrigin(MayaTkTestCase):
 class TestVisibilityChannelFrameRate(MayaTkTestCase):
     """The visibility channel always carries a frame rate.
 
-    A shot-less scene clears ``shot_metadata``, and the producer used to
+    A shot-less scene clears the shot record, and the producer used to
     forward its (absent) rate: the GLB appliers then could not place the
     frames in time and dropped every track and ramp -- "carry no frame rate,
     not applied" (measured 2026-09-02). The scene's own rate is the fallback.
@@ -1151,9 +1134,9 @@ class TestRenderEffectsExport(MayaTkTestCase):
             fbx, dst=glb, overwrite=True, prompt=False, lightmaps=False
         )
         bases, pointers = self._glb_material_and_pointers(glb)
-        # FBX carries no standardSurface emission (the sidecar does, when
-        # asked): the bases hold the format default, never a driven frame value.
-        self.assertTrue(all(max(b) < 1e-6 for b in bases), f"no leaked value: {bases}")
+        # The materials record states the AUTHORED emission (0.5 x white): the
+        # base holds that, never a driven frame value (the pulse is red).
+        self.assertEqual(bases, [[0.5, 0.5, 0.5]], f"no leaked value: {bases}")
         self.assertTrue(any(p.endswith("/emissiveFactor") for p in pointers), pointers)
 
     def test_the_preview_and_the_exporter_build_the_glb_through_one_pipeline(self):
@@ -1205,12 +1188,10 @@ class TestRenderEffectsExport(MayaTkTestCase):
         by_exporter, by_preview = builds
         self.assertEqual(by_exporter["src"], by_preview["src"])
         for build in builds:
-            # The same envelope schema from the same readers, and the same
-            # texture-policy keys -- the dials differ, the mechanism does not.
-            self.assertEqual(
-                build["sidecar"]["version"], ptk.MeshConvert.SIDECAR_VERSION
-            )
-            self.assertIn("emissive", build["sidecar"]["sections"])
+            # Neither hands the build an account of the scene beside the file
+            # -- the GLB reads its materials and handoff off the FBX -- and the
+            # same texture-policy keys: the dials differ, the mechanism does not.
+            self.assertIsNone(build.get("sidecar"))
             self.assertLessEqual(
                 {"image_format", "max_size"}, set(build["texture_params"])
             )
