@@ -644,6 +644,65 @@ class TestEmissionLandsLit(MayaTkTestCase):
         self.assertGreater(cmds.getAttr(f"{new_mat}.emissionLuminance"), 0.0)
 
 
+class TestNormalMapCarries(MayaTkTestCase, _DecalSceneMixin):
+    """``normalCamera`` is a lambert attribute (blinn and phong inherit it), so
+    a lambert's normal map is a channel like theirs. Declared ``None``, a
+    retyped lambert lost its normal map: an imported stand shipped to WebXR
+    without one (2026-10-21)."""
+
+    def setUp(self):
+        super().setUp()
+        self.mat = self.build_decal_material()
+
+    def tearDown(self):
+        self.artifacts.cleanup()
+        super().tearDown()
+
+    def test_a_lambert_normal_map_lands_on_stingray(self):
+        lam = cmds.shadingNode("lambert", asShader=True, name="stand_lambert")
+        cmds.connectAttr("decal_bump.outNormal", f"{lam}.normalCamera", force=True)
+        cmds.connectAttr(f"{self.color_file}.outColor", f"{lam}.color", force=True)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{lam}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name="stand_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+
+        new_mat = ShaderConverter.convert(lam, target="stingray")[lam]
+        normal = cmds.listConnections(f"{new_mat}.TEX_normal_map", source=True) or []
+        self.assertEqual(len(normal), 1, "the normal map did not carry")
+        self.assertEqual(
+            os.path.normpath(cmds.getAttr(f"{normal[0]}.fileTextureName")),
+            os.path.normpath(self.normal_map),
+        )
+
+    def test_the_retired_shaders_bump2d_goes_with_it(self):
+        """The target reads the file directly, so the source's ``bump2d``
+        drives nothing once the source is gone -- unless another shader
+        still reads it."""
+        keeper = cmds.shadingNode("lambert", asShader=True, name="keeper")
+        cmds.connectAttr("decal_bump.outNormal", f"{keeper}.normalCamera", force=True)
+        ShaderConverter.convert(self.mat, target="stingray")
+        self.assertTrue(cmds.objExists("decal_bump"), "still feeds 'keeper'")
+
+        cmds.delete(keeper)
+        lam = cmds.shadingNode("lambert", asShader=True, name="sole_reader")
+        cmds.connectAttr("decal_bump.outNormal", f"{lam}.normalCamera", force=True)
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True)
+        cmds.connectAttr(f"{lam}.outColor", f"{sg}.surfaceShader", force=True)
+        plane = cmds.polyPlane(name="sole_geo", constructionHistory=False)[0]
+        cmds.sets(plane, edit=True, forceElement=sg)
+        new_mat = ShaderConverter.convert(lam, target="stingray")[lam]
+        self.assertFalse(cmds.objExists("decal_bump"))
+        self.assertTrue(cmds.listConnections(f"{new_mat}.TEX_normal_map"))
+
+    def test_a_height_bump_is_not_a_normal_map(self):
+        """A ``bump2d`` in Bump mode carries a greyscale height: wired into
+        ``TEX_normal_map`` it reads as a tangent-space normal and tilts every
+        texel. Only Tangent Space Normals is one."""
+        cmds.setAttr("decal_bump.bumpInterp", 0)
+        self.assertNotIn("normal", ShaderConverter.read_channels(self.mat))
+
+
 class TestConvertSkips(MayaTkTestCase, _DecalSceneMixin):
     def setUp(self):
         super().setUp()

@@ -148,14 +148,20 @@ class _AssignmentInternal:
         return groups
 
     @staticmethod
-    def _is_mat_assigned(mat):
-        """Body of :meth:`MatUtils.is_mat_assigned`."""
-        mat_str = str(mat)
+    def _downstream_shading_engines(mat) -> List[str]:
+        """The shading engines downstream of *mat*: its own, and any it feeds
+        through a layeredShader, an aiMixShader or a utility -- every engine
+        that renders it. Empty for a node that does not exist."""
         try:
-            shading_engines = cmds.listConnections(mat_str, type="shadingEngine") or []
-        except Exception:
-            return False
-        for sg in set(shading_engines):
+            future = cmds.listHistory(str(mat), future=True) or []
+        except (RuntimeError, ValueError):
+            return []
+        return (cmds.ls(future, type="shadingEngine") or []) if future else []
+
+    @classmethod
+    def _is_mat_assigned(cls, mat):
+        """Body of :meth:`MatUtils.is_mat_assigned`."""
+        for sg in cls._downstream_shading_engines(mat):
             try:
                 members = cmds.sets(sg, query=True) or []
             except Exception:
@@ -164,8 +170,8 @@ class _AssignmentInternal:
                 return True
         return False
 
-    @staticmethod
-    def _is_connected(mat, delete):
+    @classmethod
+    def _is_connected(cls, mat, delete):
         """Body of :meth:`MatUtils.is_connected`."""
         try:
             mat_list = cmds.ls(str(mat), type="shadingDependNode", flatten=True) or []
@@ -174,9 +180,7 @@ class _AssignmentInternal:
             print(f"Error: Material {mat} not found or invalid.")
             return False
 
-        connected_shading_groups = cmds.listConnections(
-            f"{mat}.outColor", type="shadingEngine"
-        )
+        connected_shading_groups = cls._downstream_shading_engines(mat)
         if not connected_shading_groups:
             if delete:
                 cmds.delete(mat)

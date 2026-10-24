@@ -48,7 +48,7 @@ class RenderEffects(ptk.LoggingMixin):
               :meth:`prepare_for_export` runs before every FBX export
               (the ``FbxUtils.STAGERS`` bracket) and :meth:`finish_export`
               after it; call them yourself only around a raw ``cmds.file``.
-              :meth:`export_record` is the ``visibility_tracks`` producer
+              :meth:`export_record` is the ``render_effects`` producer
               (``FbxUtils.PRODUCERS``).
 
     :meth:`create`'s ``mode="attribute"`` adds the channel's custom float
@@ -56,9 +56,8 @@ class RenderEffects(ptk.LoggingMixin):
     ``mode="remove"`` takes it off. The viewport material binding
     (``mode="material"``) was retired 2026-09-05 and removed 2026-09-21.
 
-    ``RenderOpacity`` is this class's previous name, still importable from
-    ``mat_utils.render_opacity._render_opacity`` with a deprecation warning
-    until mayatk 0.20.0.
+    ``RenderOpacity`` is this class's previous name; its import alias was
+    removed in mayatk 0.28.0.
     """
 
     ATTR_NAME = OpacityAttributeMode.ATTR_NAME
@@ -305,14 +304,6 @@ class RenderEffects(ptk.LoggingMixin):
             return OpacityAttributeMode.create(objects, spec)
 
     @classmethod
-    @ptk.Deprecation.symbol(
-        "RenderEffects.create", remove_in="0.20.0", since="2026-09-23"
-    )
-    def setup(cls, *args, **kwargs) -> Dict[str, Dict]:
-        """Deprecated alias of :meth:`create` (warns until mayatk 0.20.0)."""
-        return cls.create(*args, **kwargs)
-
-    @classmethod
     def ensure_connections(cls, objects=None) -> None:
         """Re-establish opacity driver connections on objects that already
         have the ``opacity`` attribute but lost their wiring — typically
@@ -450,7 +441,7 @@ class RenderEffects(ptk.LoggingMixin):
                     OpacityAttributeMode.create(missing, spec)
 
     @classmethod
-    def prepare_for_export(cls, objects=None) -> List[str]:
+    def prepare_for_export(cls) -> List[str]:
         """Stage the curve-proxy transport for an FBX write; write nothing else.
 
         One transient child per keyed channel carries the per-object curve to
@@ -461,29 +452,13 @@ class RenderEffects(ptk.LoggingMixin):
         (``ptk.MeshConvert.apply_glb_visibility``), so an opacity keyed by hand
         gets no visibility mirror here. The missing-mirror repair this method
         used to run made what the track walk published depend on which producer
-        ran first, and keyed the artist's scene during an export.
-
-        Parameters:
-            objects: Deprecated and ignored -- the staging covers every keyed
-                channel in the scene. Passing it warns until mayatk 0.20.0.
+        ran first, and keyed the artist's scene during an export. The staging
+        covers every keyed channel in the scene.
 
         Returns:
             An empty list (it named the objects whose visibility was
-            re-synced) -- until mayatk 0.20.0, when *objects* goes and this
-            returns None.
+            re-synced).
         """
-        if objects is not None:
-            # A body notice rather than ``Deprecation.parameter``: callers pass
-            # it positionally as often as by name, and only this sees both.
-            ptk.Deprecation.warn(
-                "RenderEffects.prepare_for_export(objects)",
-                "RenderEffects.prepare_for_export()",
-                remove_in="0.20.0",
-                since="2026-09-23",
-                kind="parameter",
-                reason="The staging always covers every keyed channel.",
-                stacklevel=2,
-            )
         # Nor the materials: keying never binds them (the viewport preview that
         # did was retired 2026-09-05), so the FBX and the sidecar read the scene
         # as authored with no restore step.
@@ -814,7 +789,7 @@ class RenderEffects(ptk.LoggingMixin):
 
         spec = spec_for(channel)
         transforms = NodeUtils.get_transform_node(list(objects or [])) or []
-        # The leaf the producer publishes (``visibility_tracks``) and the GLB
+        # The leaf the producer publishes (``render_effects``) and the GLB
         # node is named: no DAG path, no namespace.
         nodes = [str(t).split("|")[-1].split(":")[-1] for t in transforms]
         return ptk.MeshConvert.effect_preview_channels(
@@ -1004,7 +979,7 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
-        """The ``visibility_tracks`` record for this scene, or ``None`` when it
+        """The ``render_effects`` record for this scene, or ``None`` when it
         has no keyed visibility -- the ``ptk.SceneRecords.VISIBILITY`` producer
         (``FbxUtils.PRODUCERS``).  Pure: it reads the curves and the shot
         record and never writes.
@@ -1052,13 +1027,13 @@ class RenderEffects(ptk.LoggingMixin):
             return None
 
         # The shot record the shots producer has just built (it runs first:
-        # the record declares ``after=("shot_metadata",)``), else the stored
+        # the record declares ``after=("animation",)``), else the stored
         # one -- it keeps the frame rate defined in ONE place for the export.
         metadata = ctx.record(ptk.SceneRecords.SHOTS, DataNodes)
         if not isinstance(metadata, dict):
             metadata = {}
         # The scene's own rate when the shots producer published none (a
-        # shot-less scene CLEARS shot_metadata): without a rate the GLB
+        # shot-less scene CLEARS the shot record): without a rate the GLB
         # appliers cannot place the frames in time and drop every track and
         # ramp -- measured 2026-09-02, "carry no frame rate ... not applied".
         fps = metadata.get("fps") or cls._scene_fps()
@@ -1096,7 +1071,7 @@ class RenderEffects(ptk.LoggingMixin):
 
     @classmethod
     def refresh_export_metadata(cls) -> Optional[str]:
-        """Republish the ``visibility_tracks`` channel on the ``data_export`` carrier.
+        """Republish the ``render_effects`` channel on the ``data_export`` carrier.
 
         The authoring-time publish of :meth:`export_record`, committed through
         ``FbxUtils.publish_authored`` (an export pipeline runs the producer

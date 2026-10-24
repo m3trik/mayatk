@@ -12,19 +12,18 @@ version up on its next poll.
 **Lookdev, not validation.** The push is the hand-off mixin's FBX write --
 fast, no export tasks or checks -- but the GLB is built by
 :class:`pythontk.GlbPipeline`, the SAME chain the Scene Exporter's GLB output
-goes through (scene sidecar, lightmaps, render effects, texture pass), so what
+goes through (materials, handoff, lightmaps, render effects, texture pass), so what
 the page shows is what the target platform receives for everything that lives
 in the file. To check the exporter's whole run, export the GLB and publish
 that file (:meth:`pythontk.PreviewBridge.publish_file`).
 
 Nothing here is Maya-specific except the binding itself, which is the point:
 :class:`pythontk.PreviewBridge` owns the export defaults and the public
-``push`` / ``url`` / ``stop`` surface, :class:`MayaExportMixin` supplies the
-selection read and FBX export every Maya-originating bridge shares, and
-:class:`~mayatk.env_utils.scene_state.SceneState` owns the sidecar readers --
-shared with the Scene Exporter's GLB stage, so the preview and the production
-deliverable describe the scene identically. Counterpart of blendertk's
-``WebXrPreview``.
+``push`` / ``url`` / ``stop`` surface, and :class:`MayaExportMixin` supplies
+the selection read and the FBX export every Maya-originating bridge shares --
+its carrier states every material and the handoff, as the Scene Exporter's
+FBX does, so the preview and the production deliverable describe the scene
+identically. Counterpart of blendertk's ``WebXrPreview``.
 
 Example:
     >>> preview = mtk.WebXrPreview()
@@ -44,7 +43,6 @@ except ModuleNotFoundError:
 import pythontk as ptk
 
 from mayatk.env_utils.handoff_export import MayaExportMixin
-from mayatk.env_utils.scene_state import SceneState
 
 
 class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
@@ -60,7 +58,7 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
     #: The preview READS the in-band metadata, so it has to ship the carrier.
     #:
     #: This is what makes the button self-feeding after a lightmap bake: the bake
-    #: commits ``lightmap_metadata`` to ``data_export``, this export carries that node,
+    #: commits ``lightmaps`` to ``data_export``, this export carries that node,
     #: and ``MeshConvert.fbx_to_glb`` -> ``apply_glb_lightmaps`` binds the maps during
     #: the GLB conversion. Without it a *selection* push exports the meshes alone, the
     #: manifest never reaches the GLB, and the preview renders unlit with no error to
@@ -100,27 +98,3 @@ class WebXrPreview(MayaExportMixin, ptk.PreviewBridge):
             name, type="transform", long=True, recursive=True
         )
         return nodes[0] if nodes else None
-
-    def _produce(self, objects, request) -> Optional[ptk.Payload]:
-        """Export the FBX, then attach the scene sidecar the FBX can't carry.
-
-        Same shape as the Marmoset bridge's producer: the skeleton's FBX
-        payload plus a sidecar riding on ``Payload.extras``. The sections come
-        from :class:`SceneState` (the shared reader column, the one the Scene
-        Exporter's GLB stage reads too) and the envelope is built by
-        :meth:`pythontk.GlbPipeline.envelope` through the bridge's
-        ``_attach_sidecar``, so neither can fork against blendertk's twin.
-        """
-        payload = super()._produce(objects, request)
-        if payload is None or not request.params.get("SCENE_SIDECAR", True):
-            return payload
-
-        return self._attach_sidecar(
-            payload,
-            lambda: SceneState.read(
-                objects, include_textures=request.params.get("EMBED_TEXTURES", True)
-            ),
-            source=SceneState.source(),
-            # Carries the recipe overrides preflight resolved (none from a panel row).
-            request=request,
-        )

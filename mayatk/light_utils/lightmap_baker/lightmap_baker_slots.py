@@ -21,12 +21,13 @@ import pythontk as ptk
 
 from mayatk.mat_utils.texture_baker import TextureBaker
 from mayatk.mat_utils.bake_sets import (
-    LightmapBakeSet,
     LightmapExcludeSet,
     LightmapIsolateSet,
 )
 from mayatk.node_utils.data_nodes import DataNodes
+from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
+from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
 
 class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
@@ -44,8 +45,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     Nothing is reverted before a bake. An object in the scene's Exclude set
     (:class:`LightmapExcludeSet`, edited by the Exclude row) keeps any map it
     has and still lights the rest, and so does an object the bake does not
-    finish. The header menu's **Revert to Source** undoes the wiring, once
-    confirmed.
+    finish. The **Manage** page lists the maps the scene reads and redoes
+    them: what changed (:meth:`b000` there), the selection
+    (:meth:`rebake_selected`), or undoes the wiring (:meth:`revert_selected`).
 
     The **Preset** combo (``cmb000``) is uitk's preset template
     (:meth:`PresetManager.wire_combo`) in semantic mode over
@@ -54,6 +56,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     headless bake recipe. :meth:`_preset_fields` is the one map between its
     keys and the widgets, which stay the source of truth at bake time.
     """
+
+    #: The full reference (mayatk's doc covers both twins).
+    HELP_URL = "https://github.com/m3trik/mayatk/blob/main/docs/lightmap_baker.md"
 
     # Packing labels for the Packing combobox (cmb002). Atlas by Material
     # (index 1, the default) consolidates a material group into one shared EXR
@@ -69,10 +74,17 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     # Scope labels for the Scope combobox (cmb_scope): which objects b000 bakes.
     # Selected (index 0, default) preserves the prior selection-only behavior;
     # _scope() / _scope_objects() resolve it to the mesh transforms to bake.
-    # Changed (LightmapBaker.rebake_changed: what changed since the last bake,
-    # and what that shades) is APPENDED: the combo persists by INDEX, so a
-    # saved choice of the first three reopens as itself.
-    _SCOPE_LABELS = ("Selected", "Visible", "Scene", "Changed")
+    # Every scope bakes fresh with the panel's settings; re-baking what
+    # changed is the Manage page's. The combo persists by INDEX: a session
+    # saved on the retired fourth row (Changed) reopens on Selected.
+    _SCOPE_LABELS = ("Selected", "Visible", "Scene")
+
+    #: The page picker's rows (cmb_page), in stk_pages order: what a new
+    #: bake covers, and the maps the scene already reads.
+    _PAGES = ("Bake", "Manage")
+
+    #: The Manage table's columns (tbl_maps).
+    _MAP_COLUMNS = ("Map", "Objects", "State")
 
     #: The panel's switches, ``{preset key: (field, default)}``. Each rides the
     #: option box of the field it QUALIFIES rather than a checkbox row of its
@@ -106,11 +118,6 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     #: :meth:`cmb000_init`).
     _PRESET_SEEDED_KEY = "lightmap_baker_preset_seeded"
 
-    # Footer tail for a per-object bake.
-    _LIGHTING_ONLY_TAIL = (
-        "Maps kept; lightmap + Unity metadata stamped. Export the FBX."
-    )
-
     def __init__(self, switchboard, log_level: str = "WARNING"):
         super().__init__()
         self.logger.setLevel(log_level)
@@ -120,6 +127,10 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
         # Output dir of the most recent bake (reported in the footer).
         self._last_output_dir: Optional[str] = None
+        # The Manage table's rows by map file (:meth:`_fill_maps`), and the
+        # dry run they were read from (:meth:`_refresh_manage`).
+        self._map_rows: Dict[str, Dict[str, Any]] = {}
+        self._report = None
         # Workflow instance, rebuilt per bake from the current dials. commit /
         # revert persist their state on the mesh, so revert works even from a
         # fresh instance / reopened scene.
@@ -176,109 +187,198 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             )
 
         # The Exclude set lives in the scene, so the count on its label must
-        # follow the scene: another file opened, a Set undone.
+        # follow the scene: another file opened, a Set undone. A save moves the
+        # maps waiting in the session home, which the Manage table shows.
         from mayatk.core_utils.script_job_manager import ScriptJobManager
 
         jobs = ScriptJobManager.instance()
-        for event in ("SceneOpened", "NewSceneOpened", "Undo", "Redo"):
+        handlers = dict.fromkeys(
+            ("SceneOpened", "NewSceneOpened", "SceneSaved"), self._refresh_scene_sets
+        )
+        handlers.update(Undo=self._scene_undone, Redo=self._scene_undone)
+        for event, handler in handlers.items():
             try:
-                jobs.subscribe(event, self._refresh_scene_sets, owner=self)
+                jobs.subscribe(event, handler, owner=self)
             except Exception as error:  # noqa: BLE001 -- never block the panel
                 self.logger.debug(f"scriptJob {event!r} unavailable ({error})")
         jobs.connect_cleanup(self.ui, owner=self)
-        self._refresh_scene_sets()
+        self._refresh_scene_sets(manage=False)  # the page refresh below reads it
+        # A session saved on the retired Changed scope restores an index the
+        # combo no longer has.
+        if self.ui.cmb_scope.currentIndex() < 0:
+            self.ui.cmb_scope.setCurrentIndex(0)
+        self._manage_footer()
+        # The picker restored its page with signals blocked; the scene moves
+        # on while the panel is away, so the page is read again on each show.
+        self._refresh_page()
+        self.ui.on_show.connect(lambda *_: self._refresh_page())
 
-    def _refresh_scene_sets(self) -> None:
-        """Re-read the scene sets onto their labels (Exclude, Isolate, Bake Set)."""
+    #: The footer's Select picks (:meth:`select_by_state`) and what each takes.
+    _SELECT_KINDS: Dict[str, str] = {
+        "Changed": "What a re-bake would redo: every changed object, and what "
+        "its change shades.",
+        "Split": "The maps of a material baked into more than one.",
+        "Untracked": "Maps whose objects' changes go unseen.",
+        "Missing": "Maps not on disk.",
+        "All": "Every map.",
+    }
+
+    def _manage_footer(self) -> None:
+        """The Manage page's footer controls: **Select** (maps and their
+        objects by state, :meth:`select_by_state`) and **Fix All**
+        (:meth:`fix_all`), shown with the page (:meth:`_refresh_page`). Built
+        once per footer; a reloaded panel re-wires them to itself."""
+        footer, Qt = self.ui.footer, self.sb.QtCore.Qt
+        controls = getattr(footer, "_lightmap_manage", None)
+        if controls is None:
+            # uitk's: its list widens to its longest item (a plain one is as
+            # narrow as the box, and clipped them).
+            combo = self.sb.registered_widgets.ComboBox(footer)
+            combo.setObjectName("cmb_select")
+            combo.addItem("Select…")
+            for kind, tip in self._SELECT_KINDS.items():
+                combo.addItem(kind)
+                combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
+            combo.setToolTip(
+                "Highlight the maps in a state and select their objects -- then "
+                "right-click a highlighted row."
+            )
+            # Sized by its items: uitk's sizes to none by default (5 px here).
+            combo.setSizeAdjustPolicy(self.sb.QtWidgets.QComboBox.AdjustToContents)
+            height = max(footer.height() - 2, 1)
+            combo.setFixedHeight(height)
+            footer.add_widget(combo, background=True)
+            # A button, styled as one: an action button is a footer icon,
+            # transparent on the footer.
+            fix = self.sb.QtWidgets.QPushButton("Fix All", footer)
+            fix.setObjectName("btn_fix_all")
+            fix.setToolTip(
+                "Fix every map that needs it, once confirmed: Revert a missing "
+                "map no re-bake renders, Combine each split, Start Tracking the "
+                "untracked as they stand, then re-bake what changed."
+            )
+            fix.setFixedHeight(height)
+            fix.setCursor(self.sb.QtGui.QCursor(Qt.ArrowCursor))
+            footer.add_widget(fix, background=True)
+            controls = footer._lightmap_manage = (combo, fix)
+        combo, fix = controls
+        # Re-wired on every init, its own handlers only: a reloaded panel keeps
+        # the widgets, not the connections (the Manage table's rule).
+        prior = getattr(footer, "_lightmap_handlers", {})
+        wired = {"activated": self._on_select, "clicked": self.fix_all}
+        for (name, handler), widget in zip(wired.items(), (combo, fix)):
+            signal = getattr(widget, name)
+            if name in prior:
+                try:
+                    signal.disconnect(prior[name])
+                except (TypeError, RuntimeError):
+                    pass
+            signal.connect(handler)
+        footer._lightmap_handlers = wired
+
+    def _on_select(self, index: int) -> None:
+        """The footer's Select: run the pick, then show its label again."""
+        combo = self.ui.footer._lightmap_manage[0]
+        kind = combo.itemText(index)
+        combo.setCurrentIndex(0)
+        if kind in self._SELECT_KINDS:
+            self.select_by_state(kind.lower())
+
+    def _refresh_scene_sets(self, manage: bool = True) -> None:
+        """Re-read the scene onto the panel: the Exclude and Isolate labels,
+        and the Manage table while it shows."""
         for row in self._SET_ROWS:
             self._refresh_set_row(row)
-        self._refresh_bake_set()
+        if manage and self._page() == "manage" and self.ui.isVisible():
+            self._refresh_manage()
+
+    #: How long Undo/Redo steps must stop before the Manage table is re-read.
+    _UNDO_SETTLE_MS = 400
+
+    def _scene_undone(self, *_args) -> None:
+        """Undo/Redo: the set rows now, the Manage table once the steps stop
+        (:attr:`_UNDO_SETTLE_MS`) -- its dry run costs about a second on a
+        production scene, and a held Ctrl+Z is a step per key repeat."""
+        for row in self._SET_ROWS:
+            self._refresh_set_row(row)
+        if self._page() != "manage" or not self.ui.isVisible():
+            return
+        timer = getattr(self, "_settle", None)
+        if timer is None:
+            timer = self._settle = self.sb.QtCore.QTimer(self.ui)
+            timer.setSingleShot(True)
+            timer.timeout.connect(lambda: self._refresh_scene_sets())
+        timer.start(self._UNDO_SETTLE_MS)  # a restart: one read per burst
 
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
 
     def header_init(self, widget) -> None:
-        """Configure the header menu and help text."""
+        """Configure the header and its help text.
+
+        Its menu holds what reads the whole scene: the Bake Report; a map's own verbs are the Manage table's
+        (:meth:`tbl_maps_init`), and the output folder opens from the Output
+        Directory field.
+        """
         widget.config_buttons("menu", "collapse", "hide")
         widget.menu.add(
             "QPushButton",
-            setText="Revert to Source",
-            setObjectName="revert_to_source",
-            setToolTip="Remove the lightmap wiring from the selected objects, or "
-            "from every baked object when nothing is selected. Asks first; the "
-            "baked EXR files stay on disk.",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="List Changed Objects",
-            setObjectName="list_changed_objects",
-            setToolTip="Select what a Changed bake would re-bake, and list each "
-            "object with why (moved, deformed, a neighbour changed, the "
-            "lighting changed ...) in the Script Editor. Nothing is baked.",
-        )
-        widget.menu.add(
-            "QPushButton",
-            setText="Open Sourceimages Folder",
-            setObjectName="open_sourceimages",
-            setToolTip="Open the folder the lightmaps are written to (the "
-            "Output Directory field, or the project's sourceimages) in the file manager.",
+            setText="Bake Report",
+            setObjectName="show_bake_state",
+            setToolTip="The full bake state: every map, each object a "
+            "re-bake would redo and why, and the visible meshes no bake "
+            "renders. Its links select objects and open folders.",
         )
         widget.set_help_text(
             self.sb.tooltip.fmt(
                 title="Lightmap Baker",
-                body="Bakes the scene's lighting with Arnold into a lightmap per "
-                "object (or an atlas per material) and wires it for the engine in "
-                "one step. Materials and texture UVs are never changed: each mesh "
-                "samples its lightmap on a second UV set, and the engine "
-                "multiplies it with the albedo.",
-                steps=[
-                    "<b>Scope</b>: the Selected meshes, every Visible one, the "
-                    "whole Scene, or what <b>Changed</b> since the last bake -- "
-                    "moved, deformed, re-lit, and the objects near enough to "
-                    "be shaded by it -- each written back into its own atlas "
-                    "cell (the footer says what, the menu lists it). Its "
-                    "buttons say what lights the bake: "
-                    "<b>Include Scene Lighting</b> (the light) bakes with every "
-                    "scene light, off only the Scope's own; the sphere takes the "
-                    "HDRI environment in or out; the eye switches hidden lights "
-                    "on for the bake. <b>Exclude</b> keeps objects from getting a map "
-                    "of their own but leaves them in the render: they still cast "
-                    "shadows and bounce light onto everything that bakes. Any "
-                    "other mesh that is neither baked nor excluded moves, and "
-                    "stays out of the render. <b>Isolate</b> is for moving parts "
-                    "that still get a map (a door on its cabinet): each bakes "
-                    "in a pass of its own and stays out of every other "
-                    "object's render, so it leaves no shadow behind.",
-                    "<b>Bake Set</b>: with <i>Save After Bake</i> on, every bake "
-                    "stores the objects it acted on as a set in the scene, so "
-                    "selecting it re-runs that bake. Its tag button names the "
-                    "set with the naming convention's Set suffix (the Naming "
-                    "panel's, <i>_SET</i> by default).",
-                    "<b>Packing</b>: one atlas per material (the default), or one "
-                    "map per object. Its camera button also captures the room as a "
-                    "<b>Reflection Probe</b>, for the reflections a lightmap cannot "
-                    "hold. <b>Processor</b>: which one Arnold renders on.",
-                    "<b>Quality</b>: Resolution, Samples, GI Samples and Bounces. "
-                    "Each dial carries its own switch: <b>Denoise</b> cleans a map "
-                    "at the size it ships, <b>Adaptive Sampling</b> (GPU) adds "
-                    "samples only where one is noisy.",
-                    "<b>Output</b>: empty writes to <i>sourceimages</i>; the image "
-                    "button saves each map beside its material's texture maps.",
-                    "The group at the bottom runs the bake. <b>Preset</b>: pick "
-                    "one, or set the dials above and save your own (the disk "
-                    "icon). <b>Reset to Defaults</b> puts every setting back; "
-                    "Shift+Click makes the current ones your defaults.",
-                    "<b>Bake Lightmaps</b>, then export with the Scene Exporter "
-                    "(or Export All): a plain Export Selection leaves out the "
-                    "hidden <i>data_export</i> node the engine wiring rides on.",
+                body="Bakes the scene's lighting with Arnold into lightmaps the engine "
+                "multiplies with the albedo, read on a second UV set. Materials "
+                "and texture UVs never change.",
+                sections=[
+                    (
+                        "Bake",
+                        [
+                            "<b>Scope</b>: Selected, Visible or Scene. Its icons pick "
+                            "the lights: scene lights, HDRI, hidden lights.",
+                            "<b>Exclude</b>: no map, still casts shadow and bounce. "
+                            "<b>Isolate</b>: moving parts, baked alone.",
+                            "Any other unbaked mesh is taken to move and left out "
+                            "of the render.",
+                            "A field's icons are its switches: Reflection Probe, "
+                            "Denoise, Adaptive Sampling, Beside Textures.",
+                        ],
+                    ),
+                    (
+                        "Manage",
+                        [
+                            "Every map the scene reads and its state; hover a row "
+                            "for what it means and how to fix it. Highlight rows "
+                            "to select their objects.",
+                            "Right-click: <b>Re-Bake</b>, <b>Combine</b>, <b>Start "
+                            "Tracking</b> or <b>Revert</b> the selection, or open a "
+                            "map's folder.",
+                            "Footer: <b>Select</b> picks maps by state; <b>Fix "
+                            "All</b> fixes every one that needs it.",
+                            "A material in two shading groups, or a duplicate of "
+                            "it, bakes one atlas.",
+                            "<b>Bake Report</b> (header menu): every map, and why "
+                            "each object re-bakes.",
+                        ],
+                    ),
+                    (
+                        "Run",
+                        [
+                            "<b>Preset</b> sets the Quality of every bake and re-bake.",
+                            "Export with the <b>Scene Exporter</b>: a plain Export Selection "
+                            "drops the hidden <i>data_export</i> node.",
+                        ],
+                    ),
                 ],
-                notes=[
-                    "Re-baking replaces the earlier maps. <b>Revert to Source</b> "
-                    "(this menu) removes the wiring; the EXR files stay on disk.",
-                    "Needs Arnold (mtoa): every bake renders with it.",
-                ],
-            )
+                notes=["Needs Arnold (mtoa)."],
+            ),
+            url=self.HELP_URL,
         )
 
     # ------------------------------------------------------------------
@@ -564,8 +664,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     def cmb_scope_init(self, widget) -> None:
         """Populate the Scope combobox (Selected is the default) and hang the
-        three lighting switches off it. Changed, last, is what changed since
-        the last bake (:meth:`cmb_scope` says what in the footer).
+        three lighting switches off it.
 
         Scope is what the bake gathers, and what lights it is part of that
         (:meth:`LightmapBaker._bake_lights`): **Include Scene Lighting** --
@@ -582,10 +681,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             "include_scene_lights",
             icon="light",
             on="Include Scene Lighting: every light in the scene lights the "
-            "bake, wherever it sits. Click to bake with only the lights in the "
-            "Scope (selected, or under what is selected).",
-            off="Scope lighting only: the lights in the Scope -- selected, or "
-            "under what is selected -- light the bake; every other scene light "
+            "bake, wherever it sits. Click to bake with only the lights the "
+            "Scope holds.",
+            off="Scope lighting only: the lights the Scope holds -- selected or "
+            "under the selection, every visible one (Visible), every one "
+            "(Scene) -- light the bake; every other scene light "
             "is switched off for it and back on after. The HDRI has its own "
             "button. Click to bake with every scene light.",
         )
@@ -617,26 +717,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
     def _scope(self) -> str:
-        """``"selected"`` (default), ``"visible"``, ``"scene"`` or ``"changed"``
-        from cmb_scope."""
+        """``"selected"`` (default), ``"visible"`` or ``"scene"`` from cmb_scope."""
         return (self.ui.cmb_scope.currentText() or "Selected").split()[0].lower()
-
-    def cmb_scope(self, index) -> None:
-        """Choosing Changed says what a bake would redo, in the footer.
-
-        The dry run (:meth:`LightmapBaker.stale_report`, built with the
-        panel's dials -- :meth:`_make_baker` -- so it reads the lights the
-        bake would): nothing is baked. The other scopes say nothing here.
-        """
-        if self._scope() != "changed":
-            return
-        try:
-            report = self._make_baker().stale_report()
-        except Exception as error:  # noqa: BLE001 -- a combo change never raises
-            self.logger.warning(f"Could not read what changed: {error}")
-            self.ui.footer.setText("Could not read what changed (see Script Editor).")
-            return
-        self.ui.footer.setText(report.summary())
 
     def _scope_objects(self) -> List[str]:
         """The mesh transforms the current Scope names (before the Exclude set).
@@ -656,13 +738,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
         The words and their precedence are :class:`pythontk.HandoffScope`'s
         (``scene`` is its synonym for ``all``; anything unknown bakes the
-        selection); this supplies only the scene reads. ``changed`` is the
-        panel's own word, answered first: what
-        :meth:`LightmapBaker.stale_report` names -- which Bake hands
-        :meth:`LightmapBaker.rebake_changed` rather than a list.
+        selection); this supplies only the scene reads.
         """
-        if self._scope() == "changed":
-            return list(self._make_baker().stale_report().targets)
 
         def scene_meshes():
             # Every DAG PATH of every mesh: an instanced shape is ONE node
@@ -823,7 +900,8 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             f"{count} mesh{'es' if count != 1 else ''} {spec['verb']}; {spec['effect']}"
             if count
             else f"{spec['title']} set stored, but it holds no meshes -- nothing "
-            f"is {spec['verb']}."
+            f"is {spec['verb']}.",
+            None if count else "warning",
         )
 
     def _select_set_row(self, row: str) -> None:
@@ -832,7 +910,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         members = spec["scene_set"].members()
         self._refresh_set_row(row)
         if not members:
-            self.ui.footer.setText(f"Nothing is {spec['verb']} in this scene.")
+            self.ui.footer.setText(
+                f"Nothing is {spec['verb']} in this scene.", level="warning"
+            )
             return
         cmds.select(members, replace=True)
         self.ui.footer.setText(
@@ -844,7 +924,9 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         """Delete a row's set; its objects are left untouched."""
         spec = self._SET_ROWS[row]
         if not spec["scene_set"].exists():
-            self.ui.footer.setText(f"Nothing is {spec['verb']} in this scene.")
+            self.ui.footer.setText(
+                f"Nothing is {spec['verb']} in this scene.", level="warning"
+            )
             return
         spec["scene_set"].clear()
         self._refresh_set_row(row)
@@ -887,175 +969,6 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
     def clear_isolation(self) -> None:
         """Delete the Isolate set; its objects are left untouched."""
         self._clear_set_row("set_isolation")
-
-    # ------------------------------------------------------------------
-    # Bake Set
-    # ------------------------------------------------------------------
-
-    #: Settings keys of the Bake Set row's two switches, panel-scoped: Save
-    #: After Bake (the global switch) and the naming-convention spelling.
-    _BAKE_SET_SAVE_KEY = "lightmap_baker_save_bake_set"
-    _BAKE_SET_CONVENTION_KEY = "lightmap_baker_bake_set_convention"
-
-    def select_bake_set_init(self, widget) -> None:
-        """Hang Save After Bake, the naming switch and Clear off the Bake Set row.
-
-        The row mirrors the Exclude row, and its switches ride the button's
-        option box as every switch on this panel does. **Save After Bake**
-        (the disk) is the global one: while it is on, every bake -- in any
-        scene; the state is per user -- saves the objects it acted on as the
-        scene's :class:`LightmapBakeSet`. The **tag** names that set plain
-        (``lightmapBaker_baked``) or by the naming convention
-        (``ptk.NamingConvention``'s Set affix, ``_SET`` by default -- the one
-        the Naming panel edits), renaming a set already in the scene on the
-        spot. The button selects the set; Clear deletes it. Added in that
-        order, which is how :meth:`_bake_set_switch` tells the two apart.
-        """
-        locked = ptk.Palette.status()["locked"][0]
-        widget.option_box.set_toggle(
-            icon="save",
-            tooltip_on="Save After Bake: every bake replaces this scene's Bake Set "
-            "with the objects it acted on, finished or not -- select it to "
-            "re-run the bake. One setting for every scene. Click to stop.",
-            tooltip_off="Bakes save no set. Click to have every bake store the "
-            "objects it acted on as this scene's Bake Set.",
-            initial=False,
-            disabled_color=locked,
-            settings_key=self._BAKE_SET_SAVE_KEY,
-        )
-        convention = ptk.NamingConvention.affix(LightmapBakeSet.CONVENTION_KEY)
-        widget.option_box.add_toggle(
-            icon="tag",
-            tooltip_on="Named by the naming convention: "
-            f"{LightmapBakeSet.conventional_name()} (the Naming panel's Set "
-            f"suffix, {convention or 'empty'}). Click to name it plain: "
-            f"{LightmapBakeSet.SET_NAME}.",
-            tooltip_off=f"Named plain: {LightmapBakeSet.SET_NAME}. Click to name "
-            f"it by the naming convention's Set suffix ({convention or 'empty'}).",
-            initial=False,
-            disabled_color=locked,
-            settings_key=self._BAKE_SET_CONVENTION_KEY,
-            on_toggled=self._respell_bake_set,
-        )
-        widget.option_box.add_action(
-            callback=self.clear_bake_set,
-            icon="clear",
-            tooltip="Delete the scene's Bake Set. The objects themselves are untouched.",
-            settings_key=False,
-        )
-        for target in (widget, self.ui.lbl_bake_set):
-            help_text = target.toolTip()
-            self.sb.tooltip.bind(
-                target, lambda text=help_text: self._bake_set_tooltip(text)
-            )
-
-    def _bake_set_switch(self, index: int) -> bool:
-        """The Bake Set row's switch *index* (0 Save After Bake, 1 naming), on or off.
-
-        A switch is an option with an on/off state (``is_on``) -- the row's
-        two toggles, in the order :meth:`select_bake_set_init` added them;
-        its Clear action has none. ``False`` before the row is wired.
-        """
-        widget = getattr(self.ui, "select_bake_set", None)
-        try:
-            switches = [
-                option
-                for option in widget.option_box.get_options()
-                if hasattr(option, "is_on")
-            ]
-        except Exception:  # noqa: BLE001 -- no option box on a bare widget
-            return False
-        return len(switches) > index and bool(switches[index].is_on)
-
-    def _save_bake_set(self) -> bool:
-        """Whether a bake saves its objects as the scene's Bake Set (Save After Bake)."""
-        return self._bake_set_switch(0)
-
-    def _bake_set_conventional(self) -> bool:
-        """Whether the Bake Set is named by the naming convention (the row's tag switch)."""
-        return self._bake_set_switch(1)
-
-    def _respell_bake_set(self, conventional: bool) -> None:
-        """Rename the scene's Bake Set to follow the tag switch, when there is one."""
-        if cmds is None:
-            return
-        before = LightmapBakeSet.name()
-        name = LightmapBakeSet.respell(bool(conventional))
-        self._refresh_bake_set()
-        if name and name != before:
-            self.ui.footer.setText(f"Bake Set renamed: {before} -> {name}.")
-
-    def _bake_set_tooltip(self, help_text: str) -> str:
-        """*help_text* over the objects the scene's Bake Set holds, live."""
-        try:
-            members = LightmapBakeSet.members() if cmds is not None else []
-            name = LightmapBakeSet.name() if cmds is not None else None
-        except Exception:  # noqa: BLE001 -- a tooltip must never raise into Qt
-            return help_text
-        return self.sb.tooltip.stored_items(
-            members,
-            body=help_text.replace("\n", "<br>"),
-            formatter=lambda n: n.rsplit("|", 1)[-1],
-            noun=f"object(s) in {name}" if name else "object(s) in the Bake Set",
-            empty_text="No Bake Set in this scene.",
-        )
-
-    def _refresh_bake_set(self) -> None:
-        """Show the Bake Set's member count on its label (``Bake Set (151):``)."""
-        label = getattr(self.ui, "lbl_bake_set", None)
-        if label is None or cmds is None:
-            return
-        try:
-            count = len(LightmapBakeSet.members())
-        except Exception:  # noqa: BLE001 -- a label refresh must never raise
-            count = 0
-        label.setText(f"Bake Set ({count}):" if count else "Bake Set:")
-
-    def select_bake_set(self) -> None:
-        """Select the Bake Set's members, hidden ones included."""
-        members = LightmapBakeSet.members()
-        self._refresh_bake_set()
-        if not members:
-            self.ui.footer.setText("No Bake Set in this scene.")
-            return
-        cmds.select(members, replace=True)
-        self.ui.footer.setText(
-            f"Selected {len(members)} object{'s' if len(members) != 1 else ''} "
-            f"of {LightmapBakeSet.name()}."
-        )
-
-    def clear_bake_set(self) -> None:
-        """Delete the scene's Bake Set; its objects are left untouched."""
-        if not LightmapBakeSet.exists():
-            self.ui.footer.setText("No Bake Set in this scene.")
-            return
-        name = LightmapBakeSet.name()
-        LightmapBakeSet.clear()
-        self._refresh_bake_set()
-        self.ui.footer.setText(f"{name} deleted; its objects are untouched.")
-
-    def _record_bake_set(self, result) -> str:
-        """Save *result*'s objects as the Bake Set when the panel asks to; the footer note.
-
-        Every object the bake acted on -- what it baked and what it left
-        unbaked (a cancel, a failed render) -- so the set re-runs the bake.
-        Nothing is saved for a bake that refused or produced nothing.
-        """
-        if not (self._save_bake_set() and result and cmds is not None):
-            return ""
-        objects = sorted(set(result.maps) | set(result.unbaked))
-        try:
-            members = LightmapBakeSet.define(
-                objects, conventional=self._bake_set_conventional()
-            )
-        except Exception as error:  # noqa: BLE001 -- the bake is committed already
-            self.logger.warning(f"Bake Set not saved: {error}")
-            return " Bake Set not saved (see Script Editor)."
-        self._refresh_bake_set()
-        return (
-            f" Saved {len(members)} object{'s' if len(members) != 1 else ''} "
-            f"as {LightmapBakeSet.name()}."
-        )
 
     # ------------------------------------------------------------------
     # Quality
@@ -1189,6 +1102,14 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             "each one beside its material's texture maps instead.",
             on_toggled=self._show_output_mode,
         )
+        widget.option_box.add_action(
+            callback=self.open_output,
+            icon="open_external",
+            tooltip="Open the folder the lightmaps are written to: where the "
+            "last bake wrote, else this field's folder, else the project's "
+            "sourceimages.",
+            settings_key=False,
+        )
         self._show_output_mode(self._beside_textures())
 
     def _beside_textures(self) -> bool:
@@ -1264,7 +1185,7 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
 
     def _make_baker(self) -> LightmapBaker:
         """A :class:`LightmapBaker` built from the panel's dials and switches --
-        the one every action builds, so the Changed dry run reads the lights,
+        the one every action builds, so the Manage page's dry run reads the lights,
         resolution and switches the bake will."""
         return LightmapBaker(
             resolution=self._resolution(),
@@ -1282,155 +1203,757 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         )
 
     def b000(self) -> None:
-        """Bake lightmaps for the Scope, minus the Exclude set (:meth:`LightmapBaker.bake`).
-
-        Under Changed, re-bake what changed since the last bake and what it
-        shades (:meth:`LightmapBaker.rebake_changed`), each object the way it
-        was baked -- written back into its own atlas cell where it fits.
-        """
-        changed = self._scope() == "changed"
-        scoped = [] if changed else self._scope_objects()
-        if not changed and not scoped:
+        """The Bake page's run button: bake the Scope minus the Exclude set
+        (:meth:`LightmapBaker.bake`). What changed re-bakes from the Manage
+        page (its footer's Fix All, or Select then a right-click)."""
+        scoped = self._scope_objects()
+        if not scoped:
             self.ui.footer.setText(
                 "Select one or more mesh objects to bake."
                 if self._scope() == "selected"
-                else f"No meshes found for scope '{self._scope()}'."
+                else f"No meshes found for scope '{self._scope()}'.",
+                level="warning",
             )
             return
 
         self._baker = self._make_baker()
+        args = self._bake_args()
+        if args is None:
+            return
+        result = self._baking(
+            lambda progress: self._baker.bake(
+                # The Scope's lights ride beside its meshes: what lights the
+                # bake with Include Scene Lighting off (the bake's targets stay
+                # the meshes).
+                scoped + [light for light in self._scope_lights() if light not in scoped],
+                packing=self._packing(),
+                on_progress=progress,
+                **args,
+            )
+        )
+        self._show_bake_report(result)
 
-        # Where the maps land: the Output Directory field resolved against the
-        # scene project's sourceimages (empty: its lightmaps folder; see
-        # _output_dir -- resolved HERE, so the workflow is never handed a
-        # relative directory). With Beside Material Textures it takes only the
-        # objects whose material has no texture folder.
+    def _bake_args(self) -> Optional[Dict[str, str]]:
+        """``{"output_dir", "prefix", "suffix"}`` every bake takes from the
+        panel, or ``None`` (the footer says why).
+
+        The Output Directory field resolved against the scene project's
+        sourceimages (empty: its lightmaps folder; see :meth:`_output_dir` --
+        resolved HERE, so the workflow is never handed a relative directory).
+        With Beside Material Textures it takes only the objects whose material
+        has no texture folder. The name is ``<texture set><affix>`` per the
+        field; an empty field falls back to the placeholder default (the
+        .ui's single source for it), so a cleared field never bakes
+        affix-less files that could collide with source texture names.
+        """
         src = self._output_dir()
         if src is None:
             self.ui.footer.setText(
-                "No project to bake into — save the scene or set a Maya project."
+                "No project to bake into — save the scene or set a Maya project.",
+                level="error",
             )
-            return
-        # Name the output <object><affix> per the field (e.g. "<object>_Lightmap"),
-        # following the texture-set convention; the shader inherits the name.
-        # An empty field falls back to the placeholder default (the .ui's
-        # single source for it), so a cleared field never bakes affix-less
-        # files that could collide with source texture names.
+            return None
         field = self.ui.txt000
         affix = field.text().strip() or field.placeholderText()
         prefix, suffix = field.option_box.resolve_affix(affix, default="suffix")
+        return {"output_dir": src, "prefix": prefix, "suffix": suffix}
 
-        # Indeterminate marquee + per-object text in OUR footer. Deliberately not a
-        # determinate 0..100% bar: a single Arnold bake is one opaque blocking call
-        # with no sub-progress, so a percentage would sit at 0 and jump -- which is
-        # exactly what mtoa's own popup does. The text still reports object i / N,
-        # which is the part that tells the artist the run is alive and how far in.
-        def progress(done, total, name):
+    def _baking(
+        self,
+        run: Callable[[Callable[[int, int, str], bool]], Any],
+        doing: str = "Baking",
+        done: str = "Baked",
+    ) -> Any:
+        """``run(progress)`` under the footer's marquee, *progress* naming
+        each object as it bakes -- or, by *doing* / *done*, as it combines.
+
+        Indeterminate marquee + per-object text in OUR footer. Deliberately
+        not a determinate 0..100% bar: a single Arnold bake is one opaque
+        blocking call with no sub-progress, so a percentage would sit at 0
+        and jump -- which is exactly what mtoa's own popup does. The text
+        still reports object i / N, which is the part that tells the artist
+        the run is alive and how far in.
+        """
+
+        def progress(count, total, name):
             return update(
                 None,
-                f"Baking {name}…  ({min(done + 1, total)}/{total})"
-                if done < total
-                else f"Baked {total} object{'s' if total != 1 else ''}.",
+                f"{doing} {name}…  ({min(count + 1, total)}/{total})"
+                if count < total
+                else f"{done} {total} object{'s' if total != 1 else ''}.",
             )
 
-        with self.ui.footer.progress(text="Baking lightmaps…") as update:
-            if changed:
-                # Each the way it was baked (its recorded packing), so the
-                # Packing row does not apply; the dials do.
-                result = self._baker.rebake_changed(
-                    output_dir=src, prefix=prefix, suffix=suffix, on_progress=progress
+        with self.ui.footer.progress(text=f"{doing} lightmaps…") as update:
+            return run(progress)
+
+    def _confirm_rebake(self, report, src: str, title: str) -> Optional[bool]:
+        """Ask what a re-bake must, from its dry run *report*: ``False`` keep
+        each map in its folder, ``True`` relocate to *src*, ``None`` cancelled
+        (the footer says so).
+
+        Two questions, each only when it applies:
+
+        - An Output Directory typed in -- a blank one means "where they are"
+          -- that is not where the maps the re-bake rewrites live: keep them
+          there, or move them, which re-packs every atlas it touches whole.
+        - An atlas that re-packs whole (every member renders again --
+          production: "29 to re-bake" was 97 maps and 50 minutes), or Bounces
+          that differ from the bake's (every map re-bakes): the dials of a
+          fresh panel, not the preset the maps were baked with, read as both.
+        """
+        if self.ui.txt_output_dir.text().strip():
+            here = os.path.normcase(os.path.abspath(src))
+            ids = list(report.targets) + list(report.joining)
+            elsewhere = sorted(
+                folder
+                for folder in self._baker.map_folders(ids)
+                if os.path.normcase(os.path.abspath(folder)) != here
+            )
+            if elsewhere:
+                answer = self.sb.message_box(
+                    f"<b>{title}</b> -- the maps it rewrites are in "
+                    + ", ".join(f"<hl>{folder}</hl>" for folder in elsewhere)
+                    + f", not the Output Directory (<hl>{src}</hl>).<br><br>"
+                    "<b>Keep</b> writes each back where it is, changed cells in "
+                    "place. <b>Move</b> writes them to the Output Directory: "
+                    "every atlas it touches re-packs whole there.",
+                    "Keep",
+                    "Move",
+                    "Cancel",
                 )
-            else:
-                result = self._baker.bake(
-                    # The Scope's lights ride beside its meshes: what lights
-                    # the bake with Include Scene Lighting off (the bake's
-                    # targets stay the meshes).
-                    scoped
-                    + [light for light in self._scope_lights() if light not in scoped],
-                    packing=self._packing(),
-                    output_dir=src,
-                    prefix=prefix,
-                    suffix=suffix,
-                    on_progress=progress,
+                if answer == "Move":
+                    return True
+                if answer != "Keep":
+                    self.ui.footer.setText(f"{title} cancelled.")
+                    return None
+        settings = ptk.BakeBaseline.SETTINGS in report.lighting
+        if report.repack or settings:
+            n, more = len(report.targets), len(report.joining)
+            why = []
+            if settings:
+                why.append(
+                    "The Bounces differ from the ones the maps were baked with: "
+                    "every map they lit re-bakes."
                 )
-        self.ui.footer.setText(
-            self._bake_report(result) + self._record_bake_set(result)
-        )
+            if report.repack:
+                atlases = len(report.repack)
+                why.append(
+                    f"{atlases} atlas{'es' if atlases != 1 else ''} re-pack"
+                    f"{'' if atlases != 1 else 's'} whole -- every member "
+                    "renders again:<br>"
+                    + "<br>".join(
+                        f"<hl>{atlas}</hl>: {reason}"
+                        for atlas, reason in report.repack.items()
+                    )
+                )
+            answer = self.sb.message_box(
+                f"<b>{title}</b> -- {n + more} objects"
+                + (f" ({n} to re-bake, {more} more with their atlases)" if more else "")
+                + ".<br><br>"
+                + "<br><br>".join(why)
+                + "<br><br>If the panel's dials are not the ones the maps were "
+                "baked with, load that preset first: only what changed re-bakes.",
+                "Bake All",
+                "Cancel",
+            )
+            if answer != "Bake All":
+                self.ui.footer.setText(f"{title} cancelled.")
+                return None
+        return False
+
+    def _show_bake_report(self, result) -> None:
+        """Put :meth:`_bake_report` in the footer: red when nothing baked,
+        gold when some objects were not or the level looks wrong."""
+        text = self._bake_report(result)
+        if result.refused or not result:
+            level = "error"
+        elif result.unbaked or result.verdict:
+            level = "warning"
+        else:
+            level = None
+        self.ui.footer.setText(text, level)
 
     def _bake_report(self, result) -> str:
-        """The footer line for a :class:`LightmapBakeResult`.
-
-        A refusal says why; an empty bake says where to look; a bake says how
-        many objects it baked and where to, then what it left alone and
-        whether its level looks wrong.
-        """
+        """The footer line for a :class:`LightmapBakeResult`, short: a refusal
+        says why, an empty bake where to look, a bake how many objects went
+        into how many maps where, what it left alone and whether its level
+        looks wrong. The detail is in the Script Editor."""
         if result.refused:
             self._last_output_dir = None
             return result.refused
         if not result:
             self._last_output_dir = None
             return "Bake produced no output (see Script Editor)."
-        self._last_output_dir = os.path.dirname(next(iter(result.maps.values())))
+        self._last_output_dir = os.path.dirname(
+            LightmapRecords._home(next(iter(result.maps.values())))
+        )
         folders = result.folders
         where = (
-            self._last_output_dir
+            os.path.basename(self._last_output_dir)
             if len(folders) == 1
-            else f"{len(folders)} folders (beside their textures)"
+            else f"{len(folders)} folders"
         )
-        if result.in_place or result.repacked or self._packing() == "atlas":
-            n = len(result.files)
-            tail = (
-                f"Consolidated into {n} atlas map{'s' if n != 1 else ''}; each "
-                "object samples its own atlas rect at engine time. Export the FBX."
+        count, files = len(result.maps), len(result.files)
+        atlas = result.in_place or result.repacked or self._packing() == "atlas"
+        kind = ("atlas" if files == 1 else "atlases") if atlas else (
+            "map" if files == 1 else "maps"
+        )
+        notes = [f"Baked {count} object{'s' if count != 1 else ''} → {files} {kind} in {where}"]
+        for n, what in (
+            (len(result.in_place), "in place"),
+            (len(result.repacked), "re-packed"),
+            (len(result.excluded), "excluded"),
+            (len(result.hidden), "hidden"),
+            (len(result.unbaked), "not baked"),
+            (len(result.retired), "old → Recycle Bin on save"),
+        ):
+            if n:
+                notes.append(f"{n} {what}")
+        text = "; ".join(notes) + "."
+        return f"{text} WARNING: {result.verdict}" if result.verdict else text
+
+    # ------------------------------------------------------------------
+    # Pages: Bake (what a new bake covers) and Manage (the maps it made)
+    # ------------------------------------------------------------------
+
+    def cmb_page_init(self, widget) -> None:
+        """Populate the page picker (Bake first); it restores the last page."""
+        widget.clear()
+        widget.addItems(self._PAGES)
+        widget.setCurrentIndex(0)
+
+    def cmb_page(self, index) -> None:
+        """Show the picked page (:meth:`_refresh_page`)."""
+        self._refresh_page()
+
+    def _page(self) -> str:
+        """``"bake"`` or ``"manage"``, from cmb_page."""
+        return (self.ui.cmb_page.currentText() or self._PAGES[0]).lower()
+
+    def _refresh_page(self):
+        """Show the picked page; the Manage page reads the dry run each time
+        it shows, and returns it (:meth:`_refresh_manage`).
+
+        Each page carries its own controls: the Bake page its settings,
+        Preset, Reset to Defaults and run button; the Manage page its table,
+        whose right-click menu acts on the selection (:meth:`tbl_maps_init`),
+        and the footer's Select and Fix All (:meth:`_manage_footer`). Neither
+        shows a control that acts on the other.
+        """
+        manage = self._page() == "manage"
+        self.ui.stk_pages.setCurrentIndex(int(manage))
+        for control in getattr(self.ui.footer, "_lightmap_manage", ()):
+            control.setVisible(manage)
+        return self._refresh_manage() if manage else None
+
+    def tbl_maps_init(self, widget) -> None:
+        """The Manage table: one row per map the scene reads
+        (:meth:`_refresh_manage`). Selecting rows selects their objects -- the
+        selection its right-click **Re-Bake**, **Combine**, **Start Tracking**
+        and **Revert** act on (:meth:`rebake_selected`, :meth:`combine_selected`,
+        :meth:`track_selected`,
+        :meth:`revert_selected`) -- and the menu
+        opens a map's folder (:meth:`_fit_map_menu`)."""
+        if not widget.is_initialized:
+            widget.is_initialized = True
+            QtWidgets = self.sb.QtWidgets
+            widget.setColumnCount(len(self._MAP_COLUMNS))
+            widget.setHorizontalHeaderLabels(list(self._MAP_COLUMNS))
+            header = widget.horizontalHeader()
+            header.setStretchLastSection(False)
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+            for col in range(1, len(self._MAP_COLUMNS)):
+                header.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
+            widget.verticalHeader().setVisible(False)
+            widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+            widget.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+            widget.menu.add(
+                "QPushButton",
+                setText="Re-Bake",
+                setObjectName="rebake_selected",
+                setToolTip="Re-bake the selected objects -- the highlighted maps' "
+                "objects, or what the footer's Select picked -- the way "
+                "each was baked, changed or not: an atlas member back into its own "
+                "cell where it fits. Uses the Bake page's Quality.",
             )
+            widget.menu.add(
+                "QPushButton",
+                setText="Combine…",
+                setObjectName="combine_selected",
+                setToolTip="Pack a split material's maps into one atlas from the "
+                "lighting they hold -- no render -- and merge its duplicate "
+                "materials. Asks the atlas size.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Start Tracking",
+                setObjectName="track_selected",
+                setToolTip="Record the selected untracked objects as baked, as they "
+                "stand -- no render -- so their changes from here on are detected. "
+                "For maps that match the scene; Re-Bake one that may not.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Revert…",
+                setObjectName="revert_selected",
+                setToolTip="Remove the selected objects' lightmap wiring, once "
+                "confirmed. Materials and texture UVs were never changed, and the "
+                "maps stay on disk; one Undo restores it.",
+            )
+            widget.menu.add(
+                "QPushButton",
+                setText="Open Folder",
+                setObjectName="open_map_folder",
+                setToolTip="Open the highlighted map's folder in the file manager.",
+            )
+        # Re-wired on every init: a reloaded panel keeps the widget, not the
+        # connection (the Texture Combine table's rule).
+        prior = getattr(widget, "_lightmap_handlers", {})
+        wired = {
+            "itemSelectionChanged": self._select_map_readers,
+            "context_menu_about_to_show": self._fit_map_menu,
+        }
+        for name, handler in wired.items():
+            signal = getattr(widget, name)
+            if name in prior:
+                try:
+                    signal.disconnect(prior[name])
+                except (TypeError, RuntimeError):
+                    pass
+            signal.connect(handler)
+        widget._lightmap_handlers = wired
+
+    def _fit_map_menu(self) -> None:
+        """Fit the table menu to the highlighted rows, just before it opens:
+        Open Folder needs a row whose map is on disk, Combine a split one,
+        Start Tracking an untracked one."""
+        rows = self._selected_maps()
+        menu = self.ui.tbl_maps.menu
+        QPushButton = self.sb.QtWidgets.QPushButton
+        for name, enabled in (
+            ("open_map_folder", any(row.get("path") for row in rows)),
+            ("combine_selected", any(row.get("state") == "split" for row in rows)),
+            ("track_selected", any(row.get("state") == "untracked" for row in rows)),
+        ):
+            item = menu.findChild(QPushButton, name)
+            if item is not None:
+                item.setEnabled(enabled)
+
+    def _refresh_manage(self, footer: bool = True):
+        """Read the maps and what changed onto the Manage page: the table and,
+        with *footer*, the summary; returns the dry run read (``None`` when it
+        could not be). Nothing is baked; nothing is read while the Bake page
+        shows (a dry run is not free)."""
+        if self._page() != "manage":
+            return None
+        try:
+            baker = self._make_baker()
+            # The folder Bake writes to: an atlas in another one re-packs
+            # whole, and a report blind to it promised "written in place".
+            report = baker.stale_report(output_dir=self._output_dir())
+            rows = baker.bake_maps(report)
+        except Exception as error:  # noqa: BLE001 -- a page change never raises
+            self.logger.warning(f"Could not read the bake state: {error}")
+            if footer:
+                self.ui.footer.setText(
+                    "Could not read the bake state (see Script Editor).", level="error"
+                )
+            return None
+        self._fill_maps(rows, report)
+        self._report = report  # the dry run the table shows (Combine's names)
+        if footer:
+            levels = {row["level"] for row in rows}
+            self.ui.footer.setText(
+                ptk.StaleReport.tally(rows) if rows else "Nothing baked yet.",
+                "error" if "error" in levels else "warning" if "warn" in levels else None,
+            )
+        return report
+
+    def _fill_maps(self, rows: List[Dict[str, Any]], report) -> None:
+        """Write *rows* (:meth:`LightmapBaker.bake_maps`) into the Manage table;
+        each row's tooltip says where the map is, who wrote it, what its state
+        means and how to remedy it (the row's ``hint``), and why each of its
+        readers re-bakes (*report*)."""
+        table = self.ui.tbl_maps
+        QtGui, Qt = self.sb.QtGui, self.sb.QtCore.Qt
+        colors = ptk.Palette.status()
+        targets = set(report.targets)
+        # A refill clears the highlight, which would select nothing in the
+        # scene: the rows are written with signals blocked, and the maps
+        # highlighted before are highlighted again.
+        kept = {row["map"] for row in self._selected_maps()}
+        blocked = table.blockSignals(True)
+        self._map_rows = {}
+        sorting = table.isSortingEnabled()
+        table.setSortingEnabled(False)  # rows land where they are written
+        table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            name = str(row["map"])
+            self._map_rows[name] = row
+            readers = list(row.get("objects") or [])
+            size = row.get("size")
+            tip = [
+                f"<b>{name}</b>",
+                f"Folder: {row.get('folder') or '-'}",
+                f"Size: {size[0]} x {size[1]}" if size else "Not on disk",
+                f"Written by: {row['writer']}" if row.get("writer") else "Written by this scene",
+                "",
+                # The cell names the condition; what it means and the button
+                # that remedies it ride the tooltip.
+                f"<b>{row['state'].capitalize()}</b>: {row['hint']}",
+            ]
+            redo = [obj for obj in readers if obj in targets]
+            if redo:
+                tip.append("")
+                tip += [f"{report.leaf(obj)}: {report.why(obj)}" for obj in redo]
+            values = (
+                name,
+                "probe" if row.get("probe") else str(len(readers)),
+                row["state"],
+            )
+            color = colors[{"ok": "valid"}.get(row["level"], row["level"])][0]
+            for col, value in enumerate(values):
+                item = self.sb.QtWidgets.QTableWidgetItem(value)
+                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                item.setToolTip("<br>".join(tip))
+                if col == 0:
+                    item.setData(Qt.UserRole, name)
+                    if row.get("saves_to"):  # waits for the save: its hint says
+                        font = item.font()
+                        font.setItalic(True)
+                        item.setFont(font)
+                elif col == 1:
+                    item.setTextAlignment(Qt.AlignCenter)
+                elif color:
+                    item.setForeground(QtGui.QColor(color))
+                table.setItem(r, col, item)
+        table.setSortingEnabled(sorting)
+        table.blockSignals(blocked)
+        self._highlight_maps(kept)
+
+    def _highlight_maps(self, names) -> None:
+        """Highlight exactly the rows of the maps *names*, quietly: a row
+        highlight otherwise selects every object its map is read by
+        (:meth:`_select_map_readers`), replacing a selection set elsewhere."""
+        table, Qt = self.ui.tbl_maps, self.sb.QtCore.Qt
+        flags = self.sb.QtCore.QItemSelectionModel
+        blocked = table.blockSignals(True)
+        table.clearSelection()
+        model = table.selectionModel()
+        for r in range(table.rowCount()):
+            if table.item(r, 0).data(Qt.UserRole) in names:
+                model.select(table.model().index(r, 0), flags.Select | flags.Rows)
+        table.blockSignals(blocked)
+
+    def select_by_state(self, kind: str) -> None:
+        """The footer's **Select**: highlight the maps in *kind*'s state on
+        the Manage page (shown if it was not) and select their objects, so a
+        right-click acts on them.
+
+        *kind*: ``"changed"`` -- exactly what a re-bake would redo, the dry
+        run's targets and what joins their atlases
+        (:meth:`LightmapBaker.stale_report`), not every reader of their maps
+        -- ``"split"``, ``"untracked"``, ``"missing"`` or ``"all"``. Quietly:
+        one dry run, the page's own refresh (:meth:`_refresh_manage`).
+        """
+        if cmds is None:
+            return
+        if self._page() != "manage":
+            # Quietly: the picker's own slot would read the dry run again.
+            combo = self.ui.cmb_page
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(self._PAGES.index("Manage"))
+            combo.blockSignals(blocked)
+        report = self._refresh_page()
+        if report is None:
+            return  # the footer says why
+        rows = self._map_rows
+        if kind == "changed":
+            objects = list(dict.fromkeys(list(report.targets) + list(report.joining)))
+            wanted = set(objects)
+            names = {
+                name for name, row in rows.items() if wanted & set(row.get("objects") or ())
+            }
         else:
-            tail = self._LIGHTING_ONLY_TAIL
-        count = len(result.maps)
-        notes = [f"Baked {count} object{'s' if count != 1 else ''} → {where}. {tail}"]
-        if result.in_place:
-            n = len(result.in_place)
-            notes.append(
-                f" {n} written back into {'its' if n == 1 else 'their'} atlas "
-                f"cell{'s' if n != 1 else ''} in place; every other object's "
-                "texels kept."
-            )
-        if result.repacked:
-            notes.append(
-                " Re-packed whole: "
-                + "; ".join(f"{name} ({why})" for name, why in result.repacked.items())
-                + "."
-            )
-        if result.excluded:
-            notes.append(f" {len(result.excluded)} excluded.")
-        if result.hidden:
-            notes.append(f" {len(result.hidden)} hidden or templated, not baked.")
-        if result.retired:
-            n = len(result.retired)
-            notes.append(
-                f" Moved {n} superseded map{'s' if n != 1 else ''} nothing reads "
-                "any more to the Recycle Bin (or a temp folder kept 30 days)."
-            )
-        if result.unbaked:
-            notes.append(
-                f" {len(result.unbaked)} not baked (cancelled or failed); "
-                "they keep the lightmap they had."
-            )
-        if result.verdict:
-            notes.append(f"  WARNING: {result.verdict}")
-        return "".join(notes)
+            names = {
+                name for name, row in rows.items() if kind in ("all", row["state"])
+            }
+            objects = sorted({o for name in names for o in rows[name].get("objects") or ()})
+        objects = [obj for obj in objects if cmds.objExists(obj)]
+        # Cleared first: a pick that finds nothing must not leave the last
+        # pick standing, as if it had found that.
+        cmds.select(clear=True)
+        self._highlight_maps(names)
+        if not (names or objects):
+            self.ui.footer.setText(f"No {kind} maps.")
+            return
+        if objects:
+            cmds.select(objects, replace=True)
+        n, m = len(objects), len(names)
+        self.ui.footer.setText(
+            f"Selected {n} object{'s' if n != 1 else ''} on {m} map{'s' if m != 1 else ''}."
+        )
 
-    # ------------------------------------------------------------------
-    # Header-menu actions
-    # ------------------------------------------------------------------
+    def _selected_maps(self) -> List[Dict[str, Any]]:
+        """The Manage table's highlighted rows, as :meth:`LightmapBaker.bake_maps` gave them."""
+        table = self.ui.tbl_maps
+        rows = sorted({index.row() for index in table.selectedIndexes()})
+        names = [table.item(r, 0).data(self.sb.QtCore.Qt.UserRole) for r in rows]
+        return [self._map_rows[n] for n in names if n in self._map_rows]
 
-    def revert_to_source(self) -> None:
-        """Take the lightmaps off the selected objects (or every baked one), once confirmed.
+    def _select_map_readers(self) -> None:
+        """Select the objects the highlighted maps are read by."""
+        if cmds is None:
+            return
+        readers = sorted(
+            {obj for row in self._selected_maps() for obj in row.get("objects") or []}
+        )
+        existing = [obj for obj in readers if cmds.objExists(obj)]
+        if existing:
+            cmds.select(existing, replace=True)
+        else:
+            cmds.select(clear=True)
 
-        A header-menu item one row from the panel's other actions, and with
-        nothing selected it reaches every baked object in the scene -- so it
-        says exactly what it will do and waits for OK. What it removes is only
-        the wiring: the materials and texture UVs were never changed, and the
-        EXR files stay on disk.
+    def open_map_folder(self) -> None:
+        """Open the highlighted map's folder in the file manager."""
+        rows = self._selected_maps()
+        path = rows[0].get("path") if rows else None
+        if not path:
+            self.ui.footer.setText(
+                "That map is missing." if rows else "Highlight a map first.",
+                level="error" if rows else "warning",
+            )
+            return
+        # Its home: where a map waiting for the save lands (LightmapRecords._stage).
+        ptk.FileUtils.open_explorer(
+            os.path.dirname(LightmapRecords._home(path)), logger=self.logger
+        )
+
+    def combine_selected(self) -> None:
+        """Pack the highlighted split maps' groups into one atlas each, no
+        render (:meth:`LightmapBaker.combine`) -- the table menu's
+        **Combine**, at the size the artist picks (:meth:`_combine_size`)."""
+        maps = [row["map"] for row in self._selected_maps() if row["state"] == "split"]
+        if not maps:
+            self.ui.footer.setText("Highlight a split map first.", level="warning")
+            return
+        self._baker = self._make_baker()
+        size = self._combine_size(maps)
+        if size is None:
+            return
+        self._show_combined(
+            self._baking(
+                lambda progress: self._baker.combine(maps, size=size, on_progress=progress),
+                "Combining",
+                "Combined",
+            )
+        )
+
+    def _combine_size(self, maps: List[str]) -> Optional[int]:
+        """Ask the atlas size :meth:`combine_selected` packs *maps* into, each
+        offered with the detail it keeps (:meth:`LightmapBaker.combine_sizes`);
+        ``None`` cancelled (the footer says so)."""
+        sizes = self._baker.combine_sizes(maps)
+        if not sizes:
+            self.ui.footer.setText("Nothing to combine.", level="warning")
+            return None
+        report = self._report
+        files = sorted({f for name in maps for f in (report.split.get(name) or (name,))})
+        duplicates = self._merged_materials(report, maps)
+        labels: Dict[str, int] = {}
+        for size, kept in sizes:
+            full = kept >= self._baker.COMBINE_KEEP
+            labels[f"{size} px: {'all' if full else f'{kept:.0%}'} detail"] = size
+        answer = self.sb.message_box(
+            "<b>Combine</b> -- "
+            + ", ".join(f"<hl>{f}</hl>" for f in files)
+            + " into one atlas, from the lighting they hold: no render."
+            + (
+                f"<br><br>Merges the duplicate materials ({', '.join(duplicates)})."
+                if duplicates
+                else ""
+            ),
+            *labels,
+            "Cancel",
+            default=list(labels)[-1],
+        )
+        if answer not in labels:
+            self.ui.footer.setText("Combine cancelled.")
+            return None
+        return labels[answer]
+
+    @staticmethod
+    def _merged_materials(report, maps: List[str]) -> List[str]:
+        """The duplicate materials a Combine of *maps* merges: each split
+        group's own, where it has more than one (one material in two shading
+        groups merges nothing). What every question that leads to a Combine
+        names."""
+        found: set = set()
+        for name in maps:
+            group = report.split_materials.get(name) or ()
+            if len(group) > 1:
+                found.update(group)
+        return sorted(found)
+
+    def _show_combined(self, result) -> None:
+        """Refresh the table and say in the footer what a combine did."""
+        self._refresh_manage(footer=False)
+        if result.refused or not result:
+            self.ui.footer.setText(result.refused or "Combined nothing.", level="error")
+            return
+        n = len(result.retired)
+        self.ui.footer.setText(
+            "Combined into " + ", ".join(os.path.basename(f) for f in result.files)
+            + (f"; {n} old → Recycle Bin on save." if n else ".")
+        )
+
+    def fix_all(self) -> None:
+        """The footer's **Fix All**: every map that needs it, once confirmed
+        (``ptk.StaleReport.fix_plan``), the render last so a cancel keeps the rest.
+
+        A missing map no re-bake renders (its objects hidden or excluded) comes
+        off them (:meth:`LightmapBaker.revert`); each split no re-bake mends is
+        combined (:meth:`LightmapBaker.combine`); the untracked rest is tracked
+        as it stands (:meth:`LightmapBaker.track`) -- confirming vouches for
+        those maps; then what changed re-bakes
+        (:meth:`LightmapBaker.rebake_changed`), a missing map among it. The
+        footer counts each step in one line, what it did not do too; detail
+        goes to the log.
+        """
+        report = self._refresh_manage(footer=False)
+        if report is None:
+            return
+        plan = report.fix_plan(self._map_rows.values())
+        if not any(plan.values()):
+            self.ui.footer.setText("Nothing to fix.")
+            return
+        self._baker = self._make_baker()
+        args = self._bake_args() if plan["rebake"] else {}
+        if args is None:
+            return
+
+        merged = self._merged_materials(report, plan["combine"])
+        steps = (
+            ("revert", "Take the lightmap off {}: hidden or excluded, map missing.", "object"),
+            (
+                "combine",
+                "Combine {}, no render"
+                + (
+                    f"; merges the duplicate materials ({', '.join(merged)})."
+                    if merged
+                    else "."
+                ),
+                "split map",
+            ),
+            ("track", "Start tracking {} as they stand, no render.", "untracked object"),
+            ("rebake", "Re-bake {}.", "changed object"),
+        )
+        if not self.sb.confirm(
+            "<b>Fix All</b><br><br>"
+            + "<br>".join(
+                line.format(f"{len(plan[key])} {noun}{'s' if len(plan[key]) != 1 else ''}")
+                for key, line, noun in steps
+                if plan[key]
+            ),
+            yes="Fix All",
+            no="Cancel",
+        ):
+            self.ui.footer.setText("Fix All cancelled.")
+            return
+        relocate = False
+        if plan["rebake"]:
+            relocate = self._confirm_rebake(report, args["output_dir"], "Fix All")
+            if relocate is None:
+                return
+        # Each step's count, and what it planned but did not do (a cancel, a
+        # refusal -- logged): "2 reverted, 3 not re-baked".
+        parts: List[str] = []
+
+        def tally(done: int, planned: int, verb: str) -> None:
+            if done:
+                parts.append(f"{done} {verb}")
+            if planned > done:
+                parts.append(f"{planned - done} not {verb}")
+
+        # The steps that render nothing are one undo step; the re-bake, a
+        # render, is its own.
+        cancelled = False
+        with CoreUtils.undo_chunk("Fix All"):
+            if plan["revert"]:
+                # Per object: revert names every node it cleared, a legacy
+                # shape marker's too.
+                reverted = self._baker.revert(plan["revert"])
+                tally(
+                    len(plan["revert"]) if reverted else 0, len(plan["revert"]), "reverted"
+                )
+            if plan["combine"]:
+                combined = self._baking(
+                    lambda progress: self._baker.combine(
+                        plan["combine"], on_progress=progress
+                    ),
+                    "Combining",
+                    "Combined",
+                )
+                cancelled = combined.cancelled
+                if combined.refused and not cancelled:
+                    self.logger.warning(f"Fix All: {combined.refused}")
+                n = len(plan["combine"])
+                tally(0 if combined.refused else n, n, "combined")
+            if plan["track"] and not cancelled:
+                tally(len(self._baker.track(plan["track"])), len(plan["track"]), "tracked")
+        if cancelled:  # the artist said stop: nothing after it runs
+            self._refresh_manage(footer=False)
+            self.ui.footer.setText(f"Fix All cancelled: {', '.join(parts)}.")
+            return
+        if plan["rebake"]:
+            result = self._baking(
+                lambda progress: self._baker.rebake_changed(
+                    relocate=relocate, on_progress=progress, **args
+                )
+            )
+            self.logger.info(f"Fix All: {self._bake_report(result)}")
+            tally(len(result.maps), len(plan["rebake"]), "re-baked")
+        self._refresh_manage(footer=False)
+        short = any(" not " in part for part in parts)
+        self.ui.footer.setText(
+            f"Fix All: {', '.join(parts)}" + (" (see Script Editor)." if short else "."),
+            "warning" if short else None,
+        )
+
+    def track_selected(self) -> None:
+        """Start tracking the selected untracked objects as they stand
+        (:meth:`LightmapBaker.track`) -- the table menu's **Start Tracking**.
+        No render: for maps known to match the scene; one that may not wants
+        **Re-Bake**."""
+        raw = (cmds.ls(selection=True, long=True) or []) if cmds else []
+        if not raw:
+            self.ui.footer.setText(
+                "Highlight the untracked maps first.",
+                level="warning",
+            )
+            return
+        tracked = self._make_baker().track(
+            TextureBaker.resolve_meshes(raw, descendants=True)
+        )
+        self._refresh_manage(footer=False)
+        if not tracked:
+            self.ui.footer.setText(
+                "None of the selected objects is untracked.", level="warning"
+            )
+            return
+        count = len(tracked)
+        self.ui.footer.setText(
+            f"Tracking {count} object{'s' if count != 1 else ''}."
+        )
+
+    def revert_selected(self) -> None:
+        """Take the lightmaps off the selected objects, once confirmed.
+
+        The selection only: an empty one is not every baked object (a
+        whole-scene revert is every Manage row highlighted). What it removes
+        is only the wiring -- the materials and texture UVs were never
+        changed, and the EXR files stay on disk.
         """
         if self._baker is None:
             self._baker = LightmapBaker()
@@ -1439,20 +1962,22 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         # "nothing selected", and the dialog offered to revert EVERY baked object.
         raw = cmds.ls(selection=True, long=True) or []
         selection = TextureBaker.resolve_meshes(raw, descendants=True) if raw else None
-        targets = self._baker.baked_objects(selection) if selection != [] else []
+        if not raw:
+            self.ui.footer.setText(
+                "Highlight the maps to revert (or select their objects).",
+                level="warning",
+            )
+            return
+        targets = self._baker.baked_objects(selection) if selection else []
         if not targets:
             self.ui.footer.setText(
-                "None of the selected objects has a lightmap."
-                if raw
-                else "No baked objects to revert."
+                "None of the selected objects has a lightmap.", level="warning"
             )
             return
         count = len(targets)
-        whose = "selected" if selection else "baked"
         confirmed = self.sb.confirm(
-            f"<b>Revert to Source</b> &mdash; {count} {whose} "
+            f"<b>Revert</b> &mdash; {count} selected "
             f"object{'s' if count != 1 else ''}"
-            + ("" if selection else " (nothing is selected, so: all of them)")
             + "<br><br>Removes their lightmap wiring: each object's lightmap "
             "record and its entry in the scene's lightmap export data. Their "
             "materials and texture UVs were never changed, and the baked EXR "
@@ -1462,48 +1987,138 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
             no="Cancel",
         )
         if not confirmed:
-            self.ui.footer.setText("Revert to Source cancelled.")
+            self.ui.footer.setText("Revert cancelled.")
             return
         reverted = self._baker.revert(selection)
+        self._refresh_manage(footer=False)
         if reverted:
             self.ui.footer.setText(
-                f"Reverted {count} object{'s' if count != 1 else ''} to source "
-                "(lightmap wiring removed; the EXR files stay on disk)."
+                f"Reverted {count} object{'s' if count != 1 else ''} (maps kept on disk)."
             )
         else:
-            self.ui.footer.setText("No baked objects to revert.")
+            self.ui.footer.setText("No baked objects to revert.", level="warning")
 
-    def list_changed_objects(self) -> None:
-        """Select what a Changed bake would re-bake, and list each with why.
-
-        The dry run (:meth:`LightmapBaker.stale_report`, the panel's dials):
-        one line per object in the Script Editor -- its own change, or the
-        neighbour whose change reaches it -- then the lighting, the atlases
-        that re-pack whole, what cannot bake and what has no baseline. The
-        footer carries the one-line summary. Nothing is baked.
-        """
-        try:
-            report = self._make_baker().stale_report()
-        except Exception as error:  # noqa: BLE001 -- a menu item never raises
-            self.logger.warning(f"Could not read what changed: {error}")
-            self.ui.footer.setText("Could not read what changed (see Script Editor).")
+    def rebake_selected(self) -> None:
+        """Re-bake the selected baked objects the way each was baked, changed
+        or not (:meth:`LightmapBaker.rebake`) -- the table menu's **Re-Bake**.
+        After Select: Changed (:meth:`select_by_state`), exactly what changed
+        and what it shades;
+        on a highlighted map, also what the baseline cannot see (an albedo or
+        emissive edit, a noisy render). Asks first what :meth:`_confirm_rebake`
+        must."""
+        selection = (cmds.ls(selection=True, long=True) or []) if cmds else []
+        if not selection:
+            self.ui.footer.setText(
+                "Highlight the maps to re-bake (or select their objects).",
+                level="warning",
+            )
             return
-        summary = report.summary()
-        lines = report.lines()
-        if lines:
-            self.logger.log_group(summary, lines)
-        if report.targets and cmds is not None:
-            cmds.select(list(report.targets), replace=True)
-        self.ui.footer.setText(summary)
+        self._baker = self._make_baker()
+        args = self._bake_args()
+        if args is None:
+            return
+        report = self._baker.rebake_report(selection, output_dir=args["output_dir"])
+        if not report.targets:
+            self.ui.footer.setText(
+                "None of the selection is baked yet.",
+                level="warning",
+            )
+            return
+        relocate = self._confirm_rebake(report, args["output_dir"], "Re-Bake")
+        if relocate is None:
+            return
+        result = self._baking(
+            lambda progress: self._baker.rebake(
+                selection, relocate=relocate, on_progress=progress, **args
+            )
+        )
+        self._refresh_manage(footer=False)
+        self._show_bake_report(result)
 
-    def open_sourceimages(self) -> None:
+    def show_bake_state(self) -> None:
+        """Show the scene's bake state, map by map, in a viewer
+        (:meth:`LightmapBaker.bake_breakdown`, read with the panel's dials
+        and Output Directory): each map's folder, readers, size, writer and
+        state, what a Changed bake would redo and why, and the visible meshes
+        no bake renders. Read-only; its links select and open
+        (``UiUtils.dispatch_log_link``).
+
+        One window: asked again while it is open, it is read again. It reads
+        itself again on its header's refresh button, and on every save, open and new scene
+        while it is open (:meth:`_refresh_bake_state`): a save is when a map
+        waiting in the session reaches its folder."""
+        import functools
+
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        html = self._bake_state_html()
+        if html is None:
+            return
+        view = self._state_view
+        if view is not None and view.isVisible():
+            view.setText(html)
+            view.present()
+            return
+        jobs = ScriptJobManager.instance()
+        if view is not None:  # a closed one stops listening
+            jobs.unsubscribe_all(view)
+        view = self._state_view = self.sb.text_view_dialog(
+            html,
+            "Ok",
+            title="Lightmap Bake State",
+            size=(980, 640),
+            link_handler=functools.partial(
+                UiUtils.dispatch_log_link, logger=self.logger
+            ),
+            on_refresh=self._refresh_bake_state,
+        )
+        for event in ("SceneSaved", "SceneOpened", "NewSceneOpened"):
+            try:
+                jobs.subscribe(event, self._refresh_bake_state, owner=view)
+            except Exception as error:  # noqa: BLE001 -- never block the window
+                self.logger.debug(f"scriptJob {event!r} unavailable ({error})")
+        # And with the panel: a window left open would read its gone widgets.
+        jobs.connect_cleanup(self.ui, owner=view)
+
+    #: The Bake State window (:meth:`show_bake_state`), once shown.
+    _state_view = None
+
+    def _bake_state_html(self) -> Optional[str]:
+        """The Bake State as HTML (:meth:`LightmapBaker.bake_breakdown`, with
+        the panel's Output Directory), or ``None`` -- said in the footer."""
+        try:
+            doc = self._make_baker().bake_breakdown(output_dir=self._output_dir())
+        except Exception as error:  # noqa: BLE001 -- a menu item never raises
+            self.logger.warning(f"Could not read the bake state: {error}")
+            self.ui.footer.setText(
+                "Could not read the bake state (see Script Editor).", level="error"
+            )
+            return None
+        return doc.to_html()
+
+    def _refresh_bake_state(self) -> None:
+        """Read the open Bake State window again; a closed one stops listening."""
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        view = self._state_view
+        if view is None:
+            return
+        if not view.isVisible():
+            ScriptJobManager.instance().unsubscribe_all(view)
+            return
+        html = self._bake_state_html()
+        if html is not None:
+            view.setText(html)
+
+    def open_output(self) -> None:
         """Open the bake's output folder in the file manager.
 
         The folder the last bake wrote to when there is one -- Beside Material
         Textures sends maps away from the Output Directory, which then showed
         nothing new -- else the Output Directory field's resolved target when
         it points somewhere that exists, else the project's sourceimages it
-        resolves against: a menu item labelled "where the bakes go" that opened
+        resolves against: an action labelled "where the bakes go" that opened
         the *base* of a custom relative path would be one click short of the
         truth.
         """
@@ -1513,10 +2128,11 @@ class LightmapBakerSlots(ptk.LoggingMixin, ptk.HelpMixin):
         if src and not os.path.isdir(src):  # not baked into yet
             src = self._sourceimages_dir()
         # The shared opener, not os.startfile: that exists on Windows only, and
-        # the menu item raised AttributeError on a macOS or Linux Maya.
+        # the action raised AttributeError on a macOS or Linux Maya.
         if not ptk.FileUtils.open_explorer(src, logger=self.logger):
             self.ui.footer.setText(
-                "No sourceimages directory — set a Maya project first."
+                "No sourceimages directory — set a Maya project first.",
+                level="error",
             )
 
     @staticmethod

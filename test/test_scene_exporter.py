@@ -209,21 +209,11 @@ class TestSceneExporter(MayaTkTestCase):
         for retired in ("timestamp", "name_regex"):
             self.assertFalse(hasattr(SceneExporter, retired), retired)
 
-    def _stem_for(self, output_name, **retired):
-        """The bare export stem the panel would write for *output_name*.
-
-        *retired* takes the retired naming inputs (``name_regex``,
-        ``version_format``, ``timestamp``): each must warn and still fold in
-        until its removal release."""
+    def _stem_for(self, output_name):
+        """The bare export stem the panel would write for *output_name*."""
         self.exporter.export_dir = self.temp_dir
         self.exporter.output_name = output_name
-        if not retired:
-            path = self.exporter.generate_export_path()
-        else:
-            with self.assertWarns(DeprecationWarning):
-                path = self.exporter.resolve_export_path(
-                    output_name, self.temp_dir, **retired
-                )["path"]
+        path = self.exporter.generate_export_path()
         return os.path.splitext(os.path.basename(path))[0]
 
     def test_wildcard_stands_in_for_the_scene_name(self):
@@ -255,7 +245,8 @@ class TestSceneExporter(MayaTkTestCase):
         """The RegEx is a transform of the SCENE NAME, so every token spelling
         that name carries it -- '{scene}_my text' used to resolve the raw name
         in the export and in the tooltip's "writes" line alike. Typed text is
-        literal, as the field promises."""
+        literal, as the field promises. A saved RegEx field reaches the pattern
+        through the panel's migration (``ExportProfile.fold_legacy_naming``)."""
         _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
 
         for pattern, expected in (
@@ -265,9 +256,10 @@ class TestSceneExporter(MayaTkTestCase):
             ("test_asset", "test_asset"),  # a literal name is the user's choice
         ):
             with self.subTest(pattern=pattern):
-                self.assertEqual(
-                    self._stem_for(pattern, name_regex="test_->prod_"), expected
+                folded = ptk.ExportProfile.fold_legacy_naming(
+                    pattern, name_regex="test_->prod_"
                 )
+                self.assertEqual(self._stem_for(folded), expected)
 
     def test_a_counter_in_the_filename_versions_the_export(self):
         """{n} is the next version this name has in the output folder."""
@@ -329,9 +321,6 @@ class TestSceneExporter(MayaTkTestCase):
         {stem} IS the filename pattern -- and the log names the replacement."""
         _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
 
-        legacy = self._stem_for("WIP_*", version_format="{stem}_v{n:03d}")
-        self.assertEqual(legacy, self._stem_for("WIP_*_v{n:03d}"))
-
         # perform_export's tasks["version"] -- stamped before the early abort,
         # folded once at the entry point (retired 2026-09-23, it warns), and
         # the log names the pattern that says the same thing.
@@ -353,36 +342,6 @@ class TestSceneExporter(MayaTkTestCase):
             os.path.basename(self.exporter.export_path), "test_scene_v001.fbx"
         )
         self.assertTrue(self.exporter.task_manager.run.versioned)
-
-    def test_retired_perform_export_naming_inputs_warn_and_fold_once(self):
-        """Retired 2026-09-23: perform_export(timestamp=, name_regex=) each warn
-        and fold into the name ONCE, at the entry point, so output_name -- which
-        everything after reads -- states the whole rule."""
-        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
-
-        for kwargs, retired in (
-            ({"name_regex": "test_->prod_"}, "'name_regex'"),
-            ({"timestamp": True}, "'timestamp'"),
-        ):
-            with self.subTest(kwargs=kwargs):
-                with self.assertWarns(DeprecationWarning) as caught:
-                    self.exporter.perform_export(
-                        export_dir=self.temp_dir,
-                        objects=[],
-                        output_name="WIP_*",
-                        **kwargs,
-                    )
-                self.assertIn(retired, str(caught.warning))
-                stem = os.path.splitext(os.path.basename(self.exporter.export_path))[0]
-                if "name_regex" in kwargs:
-                    self.assertEqual(stem, "WIP_prod_scene")
-                    self.assertEqual(
-                        self.exporter.output_name, "WIP_{scene:test_->prod_}"
-                    )
-                else:
-                    self.assertRegex(
-                        stem, r"^WIP_test_scene_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"
-                    )
 
     def test_characters_illegal_in_a_filename_are_dropped(self):
         """A '?' the user typed cannot reach the write — nothing else emits one."""
@@ -455,18 +414,6 @@ class TestSceneExporter(MayaTkTestCase):
             os.path.join(self.temp_dir, "prod_scene_v005.fbx") + " + .glb", html
         )
         self.assertNotIn("unknown", html)  # {n} is a token the field knows
-
-    def test_format_export_name_regex(self):
-        """The retired RegEx field's own formatter: still honoured, warning,
-        until its removal release (retired 2026-09-23 with the field's
-        plumbing)."""
-        for regex, expected in (
-            ("test_->prod_", "prod_scene"),
-            ("scene|asset", "test_asset"),
-        ):
-            with self.assertWarns(DeprecationWarning):
-                result = self.exporter.format_export_name("test_scene", regex)
-            self.assertEqual(result, expected)
 
     # ------------------------------------------------------------------
     # Export execution
@@ -5141,7 +5088,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
     def test_takes_are_default_on_beside_the_carrier(self):
         """The two default TOGETHER, or the deliverable contradicts itself.
 
-        The carrier ships ``shot_metadata`` naming one clip per shot; with the
+        The carrier ships the shot record naming one clip per shot; with the
         split off, the FBX (and the GLB converted from it) carries that
         metadata and none of the clips it names. The row is a ComboBox now --
         the sequence became a CHOICE rather than an always-on extra -- so the
@@ -5219,11 +5166,11 @@ class TestExportDataNodeOption(MayaTkTestCase):
 
         self.assertEqual(self.tm._clip_mode, "full")
 
-    def test_a_full_sequence_export_declares_its_mode_on_the_shot_metadata(self):
+    def test_a_full_sequence_export_declares_its_mode_on_the_shot_record(self):
         """Full Sequence Only ships one sequence while the shot record still
         declares every shot's take (each clip's range), which the deliverable
         gate cannot tell from a split that silently failed -- so the export
-        DECLARES its mode on the ``shot_metadata`` envelope and the gate reads
+        DECLARES its mode on the shot record's envelope and the gate reads
         it. Measured before: the ``fbx_takes`` gate failed a correct full-mode
         export "declared but absent".
         Added: 2026-09-15
@@ -5264,7 +5211,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         record = SceneDataSidecar.manifest_path_for(os.path.join(out, "full_mode.fbx"))
         with open(record, encoding="utf-8") as f:
             data = json.load(f)["data_export"]
-        meta = data["shot_metadata"]
+        meta = data["animation"]
         self.assertEqual(meta.get(ptk.MeshConvert.SHOT_CLIP_MODE_KEY), "full")
         # One record: each clip carries its range, and no take list rides
         # beside it.
@@ -5272,7 +5219,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
             [(s["clip"], s["start"], s["end"]) for s in meta["shots"]],
             [("ShotA", 1, 20), ("ShotB", 21, 40)],
         )
-        self.assertNotIn(ptk.SceneRecords.FBX_TAKES.key, data)
+        self.assertNotIn("fbx_takes", data)
         report = ptk.ExportVerifier(fbx=os.path.join(out, "full_mode.fbx")).run()
         gate = [row.status for row in report.rows if row.check == "fbx_takes"]
         self.assertEqual(gate, ["SKIP"], report.summary())
@@ -5406,7 +5353,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertNodeExists(DataNodes.EXPORT)
         self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
         self.assertIn(
-            "opening", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+            "opening", DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
         )
 
     def test_includes_carrier_with_audio_and_no_shots(self):
@@ -5423,8 +5370,8 @@ class TestExportDataNodeOption(MayaTkTestCase):
         self.assertNodeExists(DataNodes.EXPORT)
         self.assertTrue(any(o.endswith(DataNodes.EXPORT) for o in self.tm.objects))
         attrs = cmds.listAttr(DataNodes.EXPORT, userDefined=True) or []
-        self.assertIn("audio_manifest", attrs)
-        self.assertIn("footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio_manifest"))
+        self.assertIn("audio", attrs)
+        self.assertIn("footstep", cmds.getAttr(f"{DataNodes.EXPORT}.audio"))
 
     def test_a_run_stopped_after_the_publish_unstages_the_write(self):
         """``export_data_node`` stages the write (the curve proxies; a preview
@@ -5515,20 +5462,26 @@ class TestExportDataNodeOption(MayaTkTestCase):
         )
         self.assertTrue(finished, "the session stager never finished")
 
-    def test_noop_without_metadata(self):
+    def test_a_scene_with_nothing_else_to_say_keeps_no_carrier(self):
+        """Every export states its materials (a transient record), so the task
+        makes the carrier for the write -- and the restore that ends the run
+        takes it away again when nothing else is on it: the scene is left as
+        the export found it (2026-10-20; before the materials record, no
+        carrier was made at all)."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        before = list(self.tm.objects)
         self.tm.export_data_node()
-        # No producer wrote anything → carrier never created, selection untouched.
+        self.assertEqual(
+            set(DataNodes.channels(ptk.Scope.DELIVERABLE)), {"materials", "handoff"}
+        )
+        self.tm.run_deferred_restores()
         self.assertFalse(cmds.objExists(DataNodes.EXPORT))
-        self.assertEqual(self.tm.objects, before)
 
     def test_sidecar_written_when_carrier_ships(self):
         # New with the scene-data sidecar: a metadata-carrying export leaves
         # the record even when the hierarchy check never ran.  Uses a channel
         # no producer owns — export_data_node's refresh clears stale
-        # producer-owned channels (e.g. lightmap_metadata with no bake).
+        # producer-owned channels (e.g. lightmaps with no bake).
         import tempfile
         from mayatk.node_utils.data_nodes import DataNodes
         from mayatk.env_utils.hierarchy_sync.scene_data_sidecar import (
@@ -5547,15 +5500,15 @@ class TestExportDataNodeOption(MayaTkTestCase):
             self.assertTrue(any("dnCube" in p for p in paths))
 
     def test_after_a_glb_the_sidecar_records_the_lightmaps_it_ships(self):
-        """The GLB pass corrects the lightmap manifest the GLB carries -- the
-        encoded map, the scalar that restores the bake range -- so a sidecar
-        written from the scene restated the pre-encode .exr @ 1.0 beside a GLB
-        saying otherwise. With a GLB written the record is the GLB's copy; an
-        FBX-only run keeps the scene's.
-        Added: 2026-09-15
+        """The GLB build corrects the lightmap manifest the GLB states -- the
+        encoded map, the scalar that restores the bake range -- and reports it
+        (``lightmap_manifest``), so a sidecar written from the scene would
+        restate the pre-encode .exr @ 1.0 beside a GLB saying otherwise. After
+        a GLB build the record is the build's report; an FBX-only run keeps the
+        scene's, and a failed build forgets the last build's report.
+        Added: 2026-09-15; the build's report replaced the GLB read 2026-10-20
         """
         import json
-        import struct
         import tempfile
 
         from mayatk.node_utils.data_nodes import DataNodes
@@ -5570,37 +5523,39 @@ class TestExportDataNodeOption(MayaTkTestCase):
             "objects": [dict(entry, map="room_Lightmap.png", intensity=0.5)],
         }
         DataNodes.write(
-            ptk.Scope.DELIVERABLE, "lightmap_metadata", json.dumps(scene_copy)
+            ptk.Scope.DELIVERABLE, "lightmaps", json.dumps(scene_copy)
         )
         self.tm.export_data_node()  # folds the carrier in (and refreshes it)
         DataNodes.write(
-            ptk.Scope.DELIVERABLE, "lightmap_metadata", json.dumps(scene_copy)
+            ptk.Scope.DELIVERABLE, "lightmaps", json.dumps(scene_copy)
         )
         with tempfile.TemporaryDirectory() as d:
-            gltf = {
-                "asset": {"version": "2.0"},
-                "nodes": [
-                    {
-                        "name": "data_export",
-                        "extras": {"lightmap_metadata": json.dumps(shipped)},
-                    }
-                ],
-            }
-            chunk = json.dumps(gltf).encode("utf-8")
-            chunk += b" " * (-len(chunk) % 4)
+            fbx = os.path.join(d, "dn.fbx")
             glb = os.path.join(d, "dn.glb")
-            with open(glb, "wb") as f:
-                f.write(struct.pack("<4sII", b"glTF", 2, 20 + len(chunk)))
-                f.write(struct.pack("<I4s", len(chunk), b"JSON") + chunk)
-            self.tm.run = self.tm.run.replace(export_path=os.path.join(d, "dn.fbx"))
+            self.tm.run = self.tm.run.replace(export_path=fbx)
+            with patch.object(
+                ptk.GlbPipeline,
+                "build",
+                return_value={"glb": glb, "lightmap_manifest": shipped},
+            ):
+                built = self.tm.create_glb(fbx, announce=False)
+            self.assertEqual(built, glb)
 
-            self.tm.write_scene_data_sidecar(glb_path=glb)
+            self.tm.write_scene_data_sidecar(glb_path=built)
             data = SceneDataSidecar.read_data(self.tm.export_path)
-            self.assertEqual(data.get("lightmap_metadata"), shipped)
+            self.assertEqual(data.get("lightmaps"), shipped)
 
             self.tm.write_scene_data_sidecar()
             data = SceneDataSidecar.read_data(self.tm.export_path)
-            self.assertEqual(data.get("lightmap_metadata"), scene_copy)
+            self.assertEqual(data.get("lightmaps"), scene_copy)
+
+            with patch.object(
+                ptk.GlbPipeline, "build", side_effect=RuntimeError("no converter")
+            ):
+                self.assertIsNone(self.tm.create_glb(fbx, announce=False))
+            self.tm.write_scene_data_sidecar(glb_path=glb)
+            data = SceneDataSidecar.read_data(self.tm.export_path)
+            self.assertEqual(data.get("lightmaps"), scene_copy)
 
     def test_data_not_recorded_when_carrier_excluded(self):
         # The carrier exists in the scene but is NOT in the export set (e.g.
@@ -5641,7 +5596,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         with self.assertLogs("test_export_data_node", level="INFO") as cm:
             self.tm.export_data_node()
         self.assertTrue(
-            any("shot_metadata (2 entries)" in m for m in cm.output),
+            any("animation (2 entries)" in m for m in cm.output),
             f"post-export summary missing shot count: {cm.output}",
         )
 
@@ -5655,7 +5610,7 @@ class TestExportDataNodeOption(MayaTkTestCase):
         with self.assertLogs("test_export_data_node", level="INFO") as cm:
             self.tm.export_data_node()
         self.assertTrue(
-            any("audio_manifest (2 entries)" in m for m in cm.output),
+            any("audio (2 entries)" in m for m in cm.output),
             f"post-export summary missing audio count: {cm.output}",
         )
 
@@ -7114,20 +7069,20 @@ class TestTexturePathPipeline(MayaTkTestCase):
         The check is the validation half of the Texture Template combobox: a
         residual MSAO fails a glTF template, an ORM passes it -- and the same
         MSAO passes an HDRP template, where it is the native packing. The
-        verdict itself is pythontk's (``MeshConvert.sidecar_foreign_packings``
-        keyed by workflow); patched at the scene read so the test pins THIS
-        layer -- the keying, the pass-through default, and the message naming
-        the offending file.
+        verdict itself is pythontk's (``MapFactory.foreign_packings`` keyed by
+        workflow), asked of the maps the materials record names; patched at
+        the record read so the test pins THIS layer -- the keying, the
+        pass-through default, and the message naming the offending file.
         """
-        from mayatk.env_utils import scene_state
+        from mayatk.env_utils import material_records
 
-        def _sections(mask_path):
-            return {"metallic_roughness": {"MAT_probe": {"metallic": mask_path}}}
+        def _entries(mask_name):
+            return [{"name": "MAT_probe", "metallicTexture": mask_name}]
 
         with patch.object(
-            scene_state.SceneState,
-            "read",
-            return_value=_sections("C:/tex/probe_MSAO.png"),
+            material_records.MaterialRecords,
+            "entries",
+            return_value=_entries("probe_MSAO.png"),
         ):
             status, msgs = self.tm.check_material_compatibility("glTF 2.0")
             self.assertFalse(status, "a residual MSAO must fail a glTF template")
@@ -7140,9 +7095,9 @@ class TestTexturePathPipeline(MayaTkTestCase):
             )
 
         with patch.object(
-            scene_state.SceneState,
-            "read",
-            return_value=_sections("C:/tex/probe_ORM.png"),
+            material_records.MaterialRecords,
+            "entries",
+            return_value=_entries("probe_ORM.png"),
         ):
             status, msgs = self.tm.check_material_compatibility("glTF 2.0")
         self.assertTrue(status, f"an ORM mask must pass a glTF template: {msgs}")
@@ -7150,18 +7105,17 @@ class TestTexturePathPipeline(MayaTkTestCase):
         # A loose, ordinary source set must never trip it -- an AO or emissive
         # map declares no packing workflow and is not a foreign PACKING.
         with patch.object(
-            scene_state.SceneState,
-            "read",
-            return_value={
-                "metallic_roughness": {
-                    "MAT_probe": {
-                        "metallic": "C:/tex/probe_Metallic.png",
-                        "roughness": "C:/tex/probe_Roughness.png",
-                        "occlusion": "C:/tex/probe_AO.png",
-                    }
-                },
-                "emissive": {"MAT_probe": {"texture": "C:/tex/probe_Emissive.png"}},
-            },
+            material_records.MaterialRecords,
+            "entries",
+            return_value=[
+                {
+                    "name": "MAT_probe",
+                    "metallicTexture": "probe_Metallic.png",
+                    "roughnessTexture": "probe_Roughness.png",
+                    "occlusionTexture": "probe_AO.png",
+                    "emissiveTexture": "probe_Emissive.png",
+                }
+            ],
         ):
             status, msgs = self.tm.check_material_compatibility("glTF 2.0")
         self.assertTrue(status, f"a loose source set must pass the gate: {msgs}")
@@ -7169,20 +7123,22 @@ class TestTexturePathPipeline(MayaTkTestCase):
     def test_check_material_compatibility_disarmed_without_a_template(self):
         """'As Authored' (falsy template) passes without even reading the scene
         -- the combobox is the one definition, and unset means neither hook."""
-        from mayatk.env_utils import scene_state
+        from mayatk.env_utils import material_records
 
         with patch.object(
-            scene_state.SceneState, "read", side_effect=AssertionError("must not read")
+            material_records.MaterialRecords,
+            "entries",
+            side_effect=AssertionError("must not read"),
         ):
             self.assertEqual(self.tm.check_material_compatibility(None), (True, []))
             self.assertEqual(self.tm.check_material_compatibility(""), (True, []))
 
     def test_check_material_compatibility_survives_a_scene_read_failure(self):
         """A reader failure must not block an export -- it degrades to a pass."""
-        from mayatk.env_utils import scene_state
+        from mayatk.env_utils import material_records
 
         with patch.object(
-            scene_state.SceneState, "read", side_effect=RuntimeError("boom")
+            material_records.MaterialRecords, "entries", side_effect=RuntimeError("boom")
         ):
             status, msgs = self.tm.check_material_compatibility("glTF 2.0")
         self.assertTrue(status)
@@ -8639,7 +8595,7 @@ class TestUnconfiguredFbxWrite(MayaTkTestCase):
 
         self.assertTrue(ptk.FbxFile.is_fbx(path), "the carrier shipped as ASCII")
         metadata = ptk.FbxFile.load(path, raw_payloads=False).user_properties(
-            "shot_metadata"
+            "animation"
         )
         self.assertTrue(metadata and b"ShotA" in metadata[0])
 
@@ -9389,10 +9345,11 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             "shipped 22.06 MB against the preview's 8.71 on a real assembly",
         )
 
-    def test_the_glb_publishes_the_lighting_recipe_as_declared(self):
-        """The GLB's lighting recipe is an input to the envelope the build
-        embeds. No panel row overrides it since Baked Reflections retired
-        (2026-10-19), so it ships the recipe's own level. Added: 2026-09-21"""
+    def test_the_glb_reads_its_handoff_off_the_fbx(self):
+        """The GLB states what its FBX states: the exporter hands the build no
+        envelope and no lighting of its own -- the build reads both off the
+        FBX's ``handoff`` record, which the run's export context stamped
+        (next test). Added: 2026-09-21; the envelope retired 2026-10-20."""
         seen = {}
 
         def fake_build(src, **kwargs):
@@ -9401,9 +9358,8 @@ class TestGeneralTextureFileType(MayaTkTestCase):
 
         with patch.object(ptk.GlbPipeline, "build", side_effect=fake_build):
             self.tm.create_glb(fbx_path="ignored.fbx")
-        recipe = seen["sidecar"]["handoff"]["rendering"]["lightmappedMaterials"]
-        policy = ptk.MeshConvert.RENDERING_POLICY["lightmappedMaterials"]
-        self.assertEqual(recipe["envMapIntensity"], policy["envMapIntensity"])
+        self.assertIsNone(seen.get("sidecar"))
+        self.assertIsNone(seen.get("rendering"))
 
     def test_the_fbx_handoff_publishes_the_lighting_recipe_as_declared(self):
         """And the FBX's handoff record, through the run's export context: the
@@ -9560,7 +9516,6 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             patch.object(
                 ptk.GlbPipeline, "build", return_value={"glb": "x.glb"}
             ) as build,
-            patch.object(ptk.GlbPipeline, "envelope", return_value={}),
         ):
             self.assertEqual(self.tm.create_glb("x.fbx", announce=False), "x.glb")
         self.assertEqual(build.call_args.kwargs["key_tolerance"], 1e-4)

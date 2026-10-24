@@ -15,6 +15,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import sys
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -289,6 +290,19 @@ class TestChunkChildStdin(unittest.TestCase):
             kwargs["env"].get("PYTHONPATH"), runner._child_env()["PYTHONPATH"]
         )
 
+    @unittest.skipUnless(sys.platform == "win32", "Autodesk's helpers are Windows")
+    def test_a_chunk_never_inherits_an_offscreen_qpa(self):
+        """Measured 2026-10-21: ``affected_tests.py --run`` sets
+        ``QT_QPA_PLATFORM=offscreen``; a Maya child hands it to Autodesk's
+        licensing helpers, whose private ``platforms/`` holds only qwindows, and
+        each one pops "no Qt platform plugin could be initialized". Standalone
+        pins its own ``minimal`` platform, so the variable buys mayapy nothing."""
+        runner = rt.MayaTestRunner(port=7903)
+        self.addCleanup(runner.results_file.unlink, True)
+        with mock.patch.dict(os.environ, {"QT_QPA_PLATFORM": "offscreen"}):
+            env = runner._child_env()
+        self.assertNotIn("QT_QPA_PLATFORM", env)
+
 
 class TestChunkTempIsolation(unittest.TestCase):
     """A chunk's Maya reads TEMP once, at startup, and files its crash-save there.
@@ -443,6 +457,82 @@ class TestTheConfigNamesALaunchedMaya(unittest.TestCase):
             with self.subTest(mode=mode, reuse=reuse):
                 config = self._gui_config(mode, reuse)
                 self.assertFalse(config.get("launched", False), config)
+
+    def test_k_reaches_the_chunk_and_the_gui_pass(self):
+        """``-k`` narrows inside the driver, so both phases must be handed it."""
+        self.runner.patterns = ["mirror"]
+        self.assertEqual(self._chunk_config().get("patterns"), ["mirror"])
+        self.assertEqual(self._gui_config("port").get("patterns"), ["mirror"])
+
+
+class TestTheConsoleReport(unittest.TestCase):
+    """The end-of-run console report is the modules that did not pass, then the
+    SUMMARY -- not the whole results file, whose passing blocks repeat the
+    SUMMARY's lines (a clean full run printed ~760 of them)."""
+
+    RESULTS = (
+        "=" * 70 + "\nMAYATK TEST RESULTS\n" + "=" * 70 + "\n\n"
+        "\ntest_quiet: PASS [1.0s]\n  Tests: 3, Failures: 0, Errors: 0, Skipped: 1\n"
+        "  SKIP: test_x (m.T.test_x) | needs a GUI\n"
+        "\ntest_broken: FAIL [2.0s]\n  Tests: 2, Failures: 1, Errors: 0, Skipped: 0\n"
+        "\n  FAILURE: test_y (m.T.test_y)\n  Traceback ... PROBE-TRACE\n"
+        "\ntest_noted: PASS [1.5s]\n  Tests: 1, Failures: 0, Errors: 0, Skipped: 0\n"
+        "  [ERROR] UNEXPECTED SUCCESS: PROBE-NOTE\n"
+        "\n" + "=" * 70 + "\nSUMMARY\n" + "=" * 70 + "\n"
+        "  test_quiet: PASS (3 tests, 0 failures, 0 errors) [1.0s]\n"
+        "  test_broken: FAIL (2 tests, 1 failures, 0 errors) [2.0s]\n"
+        "Total: 6 tests, 1 failures, 0 errors, 1 skipped\n"
+    )
+
+    def setUp(self):
+        self.report = rt.MayaTestRunner.concise_results(self.RESULTS)
+
+    def test_a_failing_module_is_shown_in_full(self):
+        self.assertIn("PROBE-TRACE", self.report)
+
+    def test_a_plain_pass_is_left_to_its_summary_line(self):
+        self.assertNotIn("SKIP: test_x", self.report)
+        self.assertEqual(self.report.count("test_quiet: PASS"), 1)  # the SUMMARY's
+
+    def test_a_pass_carrying_a_note_is_kept(self):
+        self.assertIn("PROBE-NOTE", self.report)
+
+    def test_the_summary_survives_whole(self):
+        self.assertIn("Total: 6 tests, 1 failures", self.report)
+
+    def test_text_without_a_summary_is_returned_unchanged(self):
+        self.assertEqual(rt.MayaTestRunner.concise_results("partial"), "partial")
+
+
+class TestTheCommandLine(unittest.TestCase):
+    """A flag the runner does not know is refused before anything launches."""
+
+    def _main(self, *argv):
+        with mock.patch.object(rt.sys, "argv", ["run_tests.py", *argv]), \
+                mock.patch.object(rt, "MayaTestRunner") as built, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = rt.main()
+        return code, built, out.getvalue()
+
+    def test_an_unknown_flag_is_a_usage_error_not_a_module(self):
+        code, built, out = self._main("--quiet", "core_utils")
+        self.assertEqual(code, rt.EXIT_USAGE)
+        built.assert_not_called()  # no runner, so no Maya
+        self.assertIn("--quiet", out)
+
+    def test_dash_q_is_refused_with_its_history(self):
+        """`-q` once meant --quick, which opens a GUI Maya."""
+        code, built, out = self._main("-q")
+        self.assertEqual(code, rt.EXIT_USAGE)
+        built.assert_not_called()
+        self.assertIn("--quick", out)
+
+    def test_k_is_collected_and_handed_to_the_runner(self):
+        with mock.patch.object(rt.sys, "argv", ["run_tests.py", "--list", "-k", "a", "-k", "b"]), \
+                mock.patch.object(rt, "MayaTestRunner") as built, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(rt.main(), rt.EXIT_OK)
+        self.assertEqual(built.call_args.kwargs["patterns"], ["a", "b"])
 
 
 class TestAnInSessionRunLeavesTheUsersTempAlone(unittest.TestCase):

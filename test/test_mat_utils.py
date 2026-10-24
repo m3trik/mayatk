@@ -473,6 +473,26 @@ class TestMatUtils(MayaTkTestCase):
         cmds.sets(self.cube, edit=True, forceElement=self.sg1)
         self.assertTrue(MatUtils.is_mat_assigned(disp))
 
+    def test_a_material_inside_an_assigned_layered_network_is_in_use(self):
+        """A lambert feeding an assigned layeredShader has no shading engine of
+        its own, yet geometry renders it -- Maya's Delete Unused keeps it. Read
+        off its OWN shading engines it was unassigned, and ``is_connected(delete=
+        True)`` deleted it out of the network."""
+        layer = cmds.shadingNode("lambert", asShader=True, name="layer_mat")
+        layered = cmds.shadingNode("layeredShader", asShader=True, name="layered_mat")
+        cmds.connectAttr(f"{layer}.outColor", f"{layered}.inputs[0].color")
+        MatUtils.assign_mat(self.cube, layered)
+
+        self.assertTrue(MatUtils.is_mat_assigned(layer))
+        self.assertFalse(MatUtils.is_connected(layer, delete=True))
+        self.assertTrue(cmds.objExists(layer), "deleted out of an assigned network")
+        # An unwired material still reads unassigned while other shading
+        # engines in the scene have members.
+        cmds.sets(self.sphere, edit=True, forceElement=self.sg2)
+        loose = cmds.shadingNode("blinn", asShader=True, name="loose_mat")
+        self.assertFalse(MatUtils.is_mat_assigned(loose))
+        self.assertTrue(MatUtils.is_connected(loose))
+
     def test_get_mat_info_filter_flags(self):
         """``get_mat_info`` honors exclude_defaults / exclude_unassigned / field toggles."""
         cmds.sets(self.sphere, edit=True, forceElement=self.sg1)
@@ -1688,12 +1708,13 @@ def _stingray_graph():
     return hits[0] if hits else None
 
 
-class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
+class TestStingrayPackedOrmReachesTheRecord(MayaTkTestCase):
     """The production topology, end to end through three layers.
 
     The compound-plug tests above use a synthetic float3 on a lambert, which
     pins the MECHANISM but takes StingrayPBS's attribute names on trust. This
-    builds the real thing and walks resolver -> MatManifest -> SceneState,
+    builds the real thing and walks resolver -> MatManifest -> the materials
+    record (``MaterialRecords``),
     because that whole chain is what shipped a room with flat roughness and
     metallic: `ShaderAttributeMap` naming a slot StingrayPBS does not actually
     expose would fail here and nowhere else.
@@ -1711,9 +1732,9 @@ class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
         self.mat = cmds.shadingNode("StingrayPBS", asShader=True, name="MAT_PROBE")
         cmds.shaderfx(sfxnode=self.mat, loadGraph=self.graph)
 
-    def test_one_packed_orm_feeding_three_slots_emits_the_section(self):
+    def test_one_packed_orm_feeding_three_slots_states_all_three(self):
         from mayatk.mat_utils.mat_manifest import MatManifest
-        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.env_utils.material_records import MaterialRecords
 
         f = cmds.shadingNode("file", asTexture=True, name="PROBE_ORM")
         cmds.setAttr(f + ".fileTextureName", "C:/probe/PROBE_ORM.png", type="string")
@@ -1728,6 +1749,10 @@ class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
             for axis in "XYZ":
                 cmds.connectAttr(f"{f}.{src}", f"{self.mat}.{attr}{axis}", force=True)
 
+        # A StingrayPBS samples a map only while its use switch is on.
+        for switch in ("use_ao_map", "use_roughness_map", "use_metallic_map"):
+            cmds.setAttr(f"{self.mat}.{switch}", 1)
+
         cube = cmds.polyCube(name="probeCube")[0]
         sg = cmds.sets(
             renderable=True, noSurfaceShader=True, empty=True, name="probeSG"
@@ -1740,11 +1765,15 @@ class TestStingrayPackedOrmReachesTheSidecar(MayaTkTestCase):
         self.assertIn("metallic", slots)
         self.assertIn("ambientOcclusion", slots)
 
-        section = SceneState._read_metallic_roughness([self.mat], {self.mat: slots})
-        self.assertTrue(
-            section, "an occlusion-only entry is refused, so this proves all three"
+        entry = next(e for e in MaterialRecords.entries([cube]) if e["name"] == self.mat)
+        self.assertEqual(
+            {
+                entry.get(field)
+                for field in ("metallicTexture", "roughnessTexture", "occlusionTexture")
+            },
+            {"PROBE_ORM.png"},
+            "the one packed map states all three slots, by file name",
         )
-        self.assertEqual(set(section[self.mat]), {"metallic", "roughness", "occlusion"})
 
 
 class TestTexturePathTokens(MayaTkTestCase):
@@ -2650,26 +2679,6 @@ class TestFindTextureFilesByName(MayaTkTestCase):
 
         self.assertFalse(os.path.isfile(src), "a proven-identical source is redundant")
         self.assertEqual([os.path.basename(d) for _s, d in copied], ["dup.png"])
-
-
-class TestDeprecatedAsStrings(MayaTkTestCase):
-    """``get_mats`` and ``filter_materials_by_objects`` always return name
-    strings, so ``as_strings`` has no effect. Since 2026-09-23 the keyword warns
-    through ``ptk.Deprecation.parameter`` (removed in mayatk 0.20.0) and is
-    dropped; the call is otherwise unchanged. Added: 2026-09-23
-    """
-
-    def test_the_keyword_warns_and_the_result_is_unchanged(self):
-        cube = cmds.polyCube(name="as_strings_mat_cube")[0]
-        for name in ("get_mats", "filter_materials_by_objects"):
-            call = getattr(MatUtils, name)
-            with self.subTest(method=name):
-                expected = call([cube])
-                with self.assertWarns(DeprecationWarning) as caught:
-                    got = call([cube], as_strings=True)
-                self.assertEqual(got, expected)
-                self.assertIn("'as_strings'", str(caught.warning))
-                self.assertIn("mayatk 0.20.0", str(caught.warning))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
-[![Tests](https://img.shields.io/badge/Tests-9379%20passed-brightgreen.svg)](../test/)
+[![Tests](https://img.shields.io/badge/Tests-9480%20passed-brightgreen.svg)](../test/)
 ![Platform](https://img.shields.io/badge/Platform-Windows%2C%20Linux-lightgrey.svg)
 
 # mayatk
@@ -122,7 +122,7 @@ The report behind tentacle's Get Scene Info. Sections render through pythontk's 
 
 One-click hand-offs that export the selection and drive the target app with a templated script: **Marmoset Toolbag** (including a bundled JSON-RPC plugin for live Toolbag scene ops), **Substance 3D Painter**, **RizomUV**, **Blender**, and **Unity**. Built on pythontk's `HandoffBridge` engine (RizomUV uses its own script-driven flow); each ships as a tool panel.
 
-`WebXrPreview` is the same engine aimed at a browser instead of an application: `mtk.WebXrPreview().push()` converts the selection to glTF and publishes it to a loopback server, so a tab left open — including one open in a PC-tethered headset — swaps to the new version on its next poll. Baked lightmaps and the scene sidecar ride along automatically. See **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk owns the shared pipeline).
+`WebXrPreview` is the same engine aimed at a browser instead of an application: `mtk.WebXrPreview().push()` converts the selection to glTF and publishes it to a loopback server, so a tab left open — including one open in a PC-tethered headset — swaps to the new version on its next poll. Baked lightmaps and the scene's records (the `data_export` carrier: lightmaps, materials, the handoff) ride along automatically. See **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk owns the shared pipeline).
 
 ### More highlights
 
@@ -171,13 +171,13 @@ it bootstraps one with a fresh `Switchboard`. The editor window is cached per-ha
 ## Guides
 
 - **[Shot Sequencer](shot_sequencer.md)** — the per-shot animation timeline: its Standard / Compact / Graph views, the shot, clip and key gestures, the graph editor, keys and header settings (the panel's `?` help links here).
-- **[Scene data nodes](data_nodes.md)** — the shared `data_internal` / `data_export` two-node model that every tool uses to stash scene-wide metadata and (optionally) embed it in an FBX.
+- **[Scene data nodes](data_nodes.md)** — the `data_internal` / `data_export` carriers every tool keeps scene-wide metadata on: what each record holds, and what an FBX, GLB or USD export carries.
 - **[Shot data in the FBX → Unity](shot_export_unity.md)** — exporting Shots as named Unity AnimationClips plus embedded shot metadata, and side-by-side coexistence with Audio events.
 - **[Texture Combine](texture_combine.md)** — several materials into one atlas and one material, in place: stack-aware packing, per-material / mesh / island scale overrides, lightmap consolidation, and restore / re-combine from a scene record; plus the UV / texture Transfer mode (the panel's `?` help links here).
 - **[Lightmap Baker](lightmap_baker.md)** — Arnold lighting baked into engine lightmaps: the panel, presets shared with the headless API, the Exclude set, where the maps land, and how the engine binds them.
 - **[Articulated Rig](articulated_rig.md)** — a prop of rigid parts (a lamp, a magnifier arm) rigged from its geometry: the joint types and how they are found, the rig, the `articulation` record the Unity and WebXR runtimes pose, and grab semantics.
 - **[Emissive groups → Unity](emissive_groups.md)** — runtime-toggleable emissive regions: one all-on emissive map, per-group gating via vertex-color or mask-texture encoding; cross-package SSoT (pythontk region-mask engine, blendertk mirror, unitytk templates).
-- **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk) — what `WebXrPreview` builds and what survives the trip: lightmap carriage through a slot-less format, the `SceneState` sidecar sections that repair FBX translation loss, normal-map wiring, and the size/GPU-memory budget.
+- **[Live WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)** (pythontk) — what `WebXrPreview` builds and what survives the trip: lightmap carriage through a slot-less format, the `materials` record that repairs FBX translation loss, normal-map wiring, and the size/GPU-memory budget.
 
 Format specs (co-located with the code that consumes them):
 

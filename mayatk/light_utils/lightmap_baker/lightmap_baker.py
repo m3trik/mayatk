@@ -46,7 +46,7 @@ import math
 import os
 import shutil
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 try:
     import maya.cmds as cmds
@@ -85,9 +85,9 @@ class LightmapBakeResult:
             hidden objects.
         unbaked: Objects the bake was asked for and produced nothing for (a
             cancel, a failed render). They keep any map they already had.
-        retired: Map files the bake superseded and set aside (the Recycle
-            Bin, or the ``superseded`` temp store) -- what its objects
-            read before, that nothing reads now
+        retired: Map files the bake superseded, set aside when the scene is
+            saved (the Recycle Bin, or the ``superseded`` temp store) -- what
+            its objects read before, that nothing reads now
             (:meth:`LightmapRecords.superseding`).
         refused: Why nothing was baked, as a sentence for the artist, or
             ``None``.
@@ -105,6 +105,8 @@ class LightmapBakeResult:
         report: What :meth:`LightmapBaker.rebake_changed` found changed and
             re-baked (``ptk.StaleReport``), its ``in_place`` / ``repack`` as
             the bake did them; ``None`` for any other bake.
+        cancelled: The artist cancelled it (``on_progress`` answered
+            ``False``): what it finished is kept, nothing after it ran.
     """
 
     maps: Dict[str, str] = field(default_factory=dict)
@@ -119,6 +121,7 @@ class LightmapBakeResult:
     in_place: List[str] = field(default_factory=list)
     repacked: Dict[str, str] = field(default_factory=dict)
     report: Optional["ptk.StaleReport"] = None
+    cancelled: bool = False
 
     def __bool__(self) -> bool:
         return bool(self.maps)
@@ -130,10 +133,11 @@ class LightmapBakeResult:
 
     @property
     def folders(self) -> List[str]:
-        """The distinct folders the maps landed in, compared the way the disk does."""
+        """The distinct folders the maps go in, compared the way the disk does
+        -- a map waiting in the session for the save, its home's."""
         spelled: Dict[str, str] = {}
         for path in self.maps.values():
-            folder = os.path.dirname(path)
+            folder = os.path.dirname(LightmapRecords._home(path))
             spelled.setdefault(os.path.normcase(os.path.abspath(folder)), folder)
         return sorted(spelled.values())
 
@@ -182,6 +186,9 @@ class _InPlacePlan:
         repack: ``{atlas file name: why}`` -- the atlases whose whole group
             re-bakes instead, and why.
         expand: The members those groups add to the bake.
+        forks: ``{atlas path: the scene file that wrote it}`` -- in-place
+            atlases another scene file wrote (a Save As copy's source): their
+            cells are written into this scene's own copy of the atlas.
     """
 
     in_place: Dict[str, List[str]] = field(default_factory=dict)
@@ -190,11 +197,40 @@ class _InPlacePlan:
     rects: Dict[str, List[float]] = field(default_factory=dict)
     repack: Dict[str, str] = field(default_factory=dict)
     expand: List[str] = field(default_factory=list)
+    forks: Dict[str, str] = field(default_factory=dict)
 
     @property
     def placed(self) -> List[str]:
         """Every target written in place."""
         return [obj for objs in self.in_place.values() for obj in objs]
+
+
+@dataclass
+class _AtlasFiles:
+    """The atlases a scene's objects read, each owned by an atlas group --
+    what :meth:`LightmapBaker._atlas_files` reads once for the in-place plan
+    and the split check.
+
+    Attributes:
+        markers: ``{reader: its marker record}``.
+        entries: ``{object: baseline entry}`` of every object still recorded.
+        by_file: ``{normcased path: [readers]}``, readers sorted.
+        spelled: ``{normcased path: the path as read}``.
+        lone: The one-reader maps an atlas bake wrote (a group of one), and
+            those no record speaks for beside an atlas their group owns.
+        group: ``{object: atlas group}`` (:meth:`LightmapBaker._atlas_keys`)
+            for every reader and every object asked about.
+        owned: ``{atlas group: {normcased paths}}`` -- each atlas belongs to
+            the group most of its readers are in.
+    """
+
+    markers: Dict[str, Dict[str, Any]]
+    entries: Dict[str, Dict[str, Any]]
+    by_file: Dict[str, List[str]]
+    spelled: Dict[str, str]
+    lone: set
+    group: Dict[str, str]
+    owned: Dict[str, set]
 
 
 @dataclass
@@ -241,10 +277,42 @@ class LightmapBaker(ptk.LoggingMixin):
     #: panel's empty field alike, in both DCCs (``TextureBaker.default_output_dir``).
     OUTPUT_SUBDIR: str = "lightmaps"
     LIGHTMAP_INFO_ATTR: str = LightmapRecords.LIGHTMAP_INFO_ATTR
-    LIGHTMAP_METADATA: str = LightmapRecords.LIGHTMAP_METADATA
-    LIGHTMAP_METADATA_VERSION: int = LightmapRecords.LIGHTMAP_METADATA_VERSION
+    #: The lightmaps record's key under its old name, retired here: read the
+    #: declaration's (``ptk.SceneRecords.LIGHTMAPS.key``).
+    LIGHTMAP_METADATA = ptk.Deprecation.class_attribute(
+        ptk.SceneRecords.LIGHTMAPS.key,
+        "ptk.SceneRecords.LIGHTMAPS.key",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
+    #: The record's schema version -- the registry's
+    #: (``ptk.SceneRecords.LIGHTMAPS.version``), retired here.
+    LIGHTMAP_METADATA_VERSION = ptk.Deprecation.class_attribute(
+        ptk.SceneRecords.LIGHTMAPS.version,
+        "ptk.SceneRecords.LIGHTMAPS.version",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
     FOUND_BY_HINT: str = LightmapRecords.FOUND_BY_HINT
     FOUND_BY_SEARCH: str = LightmapRecords.FOUND_BY_SEARCH
+
+    #: Whether the bake under way records its maps (:meth:`bake`, a
+    #: recording baker): its maps then wait in the session until the scene is
+    #: saved (``LightmapRecords._stage``). Off for a mechanism called alone
+    #: (:meth:`bake_separated`, :meth:`bake_atlas`, :meth:`bake_probe`), which
+    #: writes into the folder it is given -- the Blender bridge's bake, a
+    #: script that places its maps itself. A cell written in place, Combine
+    #: and a transfer record as they write, and always stage. blendertk's twin.
+    _staging: bool = False
+
+    @contextlib.contextmanager
+    def _staged(self, on: bool = True):
+        """:attr:`_staging` set to *on* for the block (re-entrant)."""
+        was, self._staging = self._staging, bool(on) or self._staging
+        try:
+            yield
+        finally:
+            self._staging = was
 
     def __init__(
         self,
@@ -304,6 +372,10 @@ class LightmapBaker(ptk.LoggingMixin):
         # textures has no such folder, so its map falls back to the bake's
         # ``output_dir``.
         self.beside_textures = bool(beside_textures)
+        # While a re-bake updates a bake (:meth:`_keeping_folders`), each map
+        # it rewrites goes back to the folder it is in -- over the output
+        # folder and the texture folders alike (see :meth:`_homes`).
+        self._keep_folders = False
         # Denoise every map at the resolution it SHIPS at -- the object's own
         # map, or the atlas cell a tile is shrunk into (see _finish_tile) --
         # with ImgUtils.denoise_image. Arnold's bake path has none of its own
@@ -427,11 +499,13 @@ class LightmapBaker(ptk.LoggingMixin):
     #: every mobile / standalone-VR target; a script or the panel's preset
     #: pointer may still say it. :meth:`from_preset` resolves only a name the
     #: store lacks, so a user preset saved under a retired name still wins.
+    #: Re-dated from 0.21.0 on 2026-10-24: a saved preset pointer is saved
+    #: data, which gets the longest window (CODE_STANDARD section 0).
     _resolve_retired_preset = staticmethod(
         ptk.Deprecation.values(
             {"quest": "mobile"},
             what="LightmapBaker preset",
-            remove_in="0.21.0",
+            remove_in="0.30.0",
             since="2026-09-23",
             reason="The tier was renamed; its settings are unchanged.",
         )
@@ -645,9 +719,11 @@ class LightmapBaker(ptk.LoggingMixin):
            in the bake baseline its cell, the lighting it rendered with and
            the rule that chose those lights (:meth:`_lighting_state`) -- what
            :meth:`rebake_changed` diffs against and re-lights by, and the
-           lights the manifest ships for highlights. The maps the baked
-           objects read before -- when this scene
-           wrote them and nothing reads them now -- are set aside
+           lights the manifest ships for highlights. Every map waits in the
+           session until the scene is saved (``LightmapRecords._stage``): an
+           unsaved bake changes no file the saved scene reads. The maps the
+           baked objects read before -- when this scene wrote them and
+           nothing reads them now -- are set aside at that save
            (:meth:`LightmapRecords.superseding`): a bake after an output
            option changed leaves no old maps behind.
         6. :meth:`bake_verdict` reads the finished maps' level.
@@ -746,7 +822,7 @@ class LightmapBaker(ptk.LoggingMixin):
             lighting = None
         # Lit for what the bake was HANDED: the mechanisms below see meshes
         # alone, and keep this (re-entrant) rather than re-reading the Scope.
-        with self._lighting(objects):
+        with self._lighting(objects), self._staged(self.record):
             if packing == "atlas":
                 atlas = self._bake_atlas(targets, intensity=intensity, **common)
                 packed, cells = atlas.packed, atlas.cells
@@ -766,6 +842,7 @@ class LightmapBaker(ptk.LoggingMixin):
             for o, (_path, rect) in packed.items()
         }
         result.unbaked = [o for o in targets if o not in result.maps]
+        result.cancelled = cancelled
         if result.unbaked:
             self.logger.warning(
                 "%d object(s) were not baked (cancelled, or failed); they keep "
@@ -796,7 +873,7 @@ class LightmapBaker(ptk.LoggingMixin):
             # render that fails, or a probe file held open, costs the probe.
             # Lit as the maps were: a probe of other lights is another room.
             try:
-                with self._lighting(objects):
+                with self._lighting(objects), self._staged(self.record):
                     result.probe = self.bake_probe(result.maps)
             except Exception as e:
                 self.logger.warning("Reflection probe not captured: %s", e)
@@ -807,7 +884,11 @@ class LightmapBaker(ptk.LoggingMixin):
     # ------------------------------------------------------------------
 
     def stale_report(
-        self, objects: Optional[List[str]] = None, reach: Optional[float] = None
+        self,
+        objects: Optional[List[str]] = None,
+        reach: Optional[float] = None,
+        output_dir: Optional[str] = None,
+        relocate: bool = False,
     ) -> "ptk.StaleReport":
         """What a re-bake of the changed objects would redo, and why -- the dry run.
 
@@ -823,13 +904,17 @@ class LightmapBaker(ptk.LoggingMixin):
         read again by the rule it was baked by (:meth:`_lit_as`: its switches
         and, Scope-lit, its lights by name) whatever this baker's switches
         say, so a light renamed, deleted, changed, or added where the rule
-        reaches is a lighting change for what it lit. The report's
-        ``in_place`` / ``repack`` say which targets would be written back
-        into their atlas cells and which atlases re-pack whole
-        (:meth:`_in_place_plan`). Nothing is rendered or written.
+        reaches is a lighting change for what it lit. The report's packing
+        plan (:meth:`_planned`) says which targets would be written back into
+        their atlas cells -- a Save As copy's into its own copy of its
+        source's atlas (``forked``) -- which atlases re-pack whole and what
+        they bring in (``joining``); ``out_of_bake`` names the visible meshes
+        no bake renders (:meth:`_out_of_bake`). Nothing is rendered or
+        written.
 
         Not seen: an emissive material's strength and an albedo edit change
-        the bounce, not any state the baseline records.
+        the bounce, not any state the baseline records (:meth:`rebake` redoes
+        given objects for those).
 
         Parameters:
             objects: Report only these objects and what lies under them;
@@ -839,12 +924,17 @@ class LightmapBaker(ptk.LoggingMixin):
                 ``None``), and reads as changed once.
             reach: A multiplier on how far a change reaches its neighbours
                 (``ptk.BakeBaseline.STALE_REACH``); 0 names none. ``None``: 1.
+            output_dir: The folder the re-bake would write to, as
+                :meth:`rebake_changed` is handed it; ``None``: the bake's
+                default.
+            relocate: As :meth:`rebake_changed`.
 
         Returns:
             ``ptk.StaleReport`` -- ``summary()`` for a footer, ``lines()`` for
-            a log.
+            a log, ``doc()`` for a viewer.
         """
-        return self._stale_report(objects, reach)
+        with self._keeping_folders(not relocate):
+            return self._stale_report(objects, reach, output_dir=output_dir)
 
     def _stale_report(
         self,
@@ -852,6 +942,7 @@ class LightmapBaker(ptk.LoggingMixin):
         reach: Optional[float] = None,
         lighting: bool = True,
         intensity: Optional[float] = None,
+        output_dir: Optional[str] = None,
     ) -> "ptk.StaleReport":
         """:meth:`stale_report`; *lighting* ``False`` leaves the lights out,
         *intensity* is the one the re-bake applies (``None``: not asked)."""
@@ -871,44 +962,88 @@ class LightmapBaker(ptk.LoggingMixin):
             with self._lit_as(rule):
                 return self._lighting_state(scope)
 
+        current = LightmapRecords.scene_state()
         report = ptk.BakeBaseline.assess(
             LightmapRecords.bake_state(),
-            LightmapRecords.scene_state(),
+            current,
             lighting=lit if lighting else None,
             missing=LightmapRecords._missing_maps(),
             reach=1.0 if reach is None else float(reach),
             objects=ids,
         )
+        report = replace(
+            report, out_of_bake=tuple(self._out_of_bake(ids)), **self._split_fields()
+        )
+        return self._planned(report, intensity, output_dir)
+
+    def _planned(
+        self,
+        report: "ptk.StaleReport",
+        intensity: Optional[float] = None,
+        output_dir: Optional[str] = None,
+    ) -> "ptk.StaleReport":
+        """*report* with the packing plan its targets would bake by
+        (:meth:`_in_place_plan`, into the folders :meth:`_bake_folders`
+        names): ``in_place``, ``repack``, ``joining`` and ``forked``.
+        Read-only."""
         if not report.targets:
             return report
+        targets = list(report.targets)
         with self._cached_reads():
-            placing = self._in_place_plan(list(report.targets), intensity=intensity)
+            try:
+                folders = self._bake_folders(targets, output_dir)
+            except ValueError:  # no project: the bake refuses before it plans
+                folders = None
+            placing = self._in_place_plan(targets, intensity=intensity, folders=folders)
         return replace(
             report,
             in_place=tuple(sorted(placing.placed)),
             repack=dict(placing.repack),
+            joining=tuple(sorted(placing.expand)),
+            forked={os.path.basename(a): w for a, w in placing.forks.items()},
         )
+
+    def _out_of_bake(self, ids: Optional[List[str]] = None) -> List[str]:
+        """The visible meshes no bake renders, sorted: neither baked nor in
+        the Exclude set -- what :meth:`_out_of_render` switches off. Under
+        *ids* (long names) when given."""
+        static = (
+            cmds.ls(
+                LightmapRecords.baked_objects() + LightmapExcludeSet.meshes(),
+                long=True,
+            )
+            or []
+        )
+        unbaked, _shared = self._unbaked_visible(static)
+        if ids is not None:
+            wanted = set(ids)
+            unbaked = [n for n in unbaked if n in wanted]
+        return sorted(unbaked)
 
     def rebake_changed(
         self,
         packing: Optional[str] = None,
         reach: Optional[float] = None,
         lighting: bool = True,
+        relocate: bool = False,
         **bake_kwargs,
     ) -> LightmapBakeResult:
         """Re-bake what changed since the last bake, and what that change shades.
 
         :meth:`stale_report`'s targets through :meth:`bake`, so every check,
         the record and the verdict are the bake's own. Each target re-bakes
-        the way it was RECORDED as baked: packed so (*packing* forces one way
-        for all) and lit so -- by the rule its lighting recorded
-        (:meth:`_lit_as`), whatever this baker's lighting switches say, so
-        the next dry run reads what it rendered. An atlas target is written
-        back into the cell it owns where it still fits
+        the way it was RECORDED as baked (:meth:`_rebake`): packed so
+        (*packing* forces one way for all), lit so -- by the rule its lighting
+        recorded (:meth:`_lit_as`), whatever this baker's lighting switches
+        say, so the next dry run reads what it rendered -- and written back to
+        the folder its map is in (:meth:`_keeping_folders`). An atlas target
+        is written back into the cell it owns where it still fits
         (:meth:`_in_place_plan`), so each material keeps ONE atlas and every
-        other cell keeps its texels; each way of baking is one :meth:`bake`
-        call, the reflection probe captured after the last. A lighting change
-        stales everything lit by it, said before anything renders.
+        other cell keeps its texels; a Save As copy writes its source's atlas
+        into a copy of its own (``forked``), the source's untouched. Each way
+        of baking is one :meth:`bake` call, the reflection probe captured
+        after the last. A lighting change stales everything lit by it, said
+        before anything renders.
 
         Parameters:
             packing: ``"atlas"`` or ``"per_object"`` for every target;
@@ -917,8 +1052,13 @@ class LightmapBaker(ptk.LoggingMixin):
             reach: As :meth:`stale_report`.
             lighting: Whether a lighting change counts. ``False`` re-bakes
                 only what changed in the scene itself.
+            relocate: Write every map it rewrites to ``output_dir`` (the
+                bake's default when not given) instead of the folder it is
+                in -- an atlas elsewhere then re-packs whole into it.
             bake_kwargs: Forwarded to :meth:`bake` (``output_dir``,
-                ``prefix``, ``suffix``, ``on_progress``, ``intensity``, ...).
+                ``prefix``, ``suffix``, ``on_progress``, ``intensity``, ...);
+                ``output_dir`` takes only a map with no file yet unless
+                *relocate*.
 
         Returns:
             :class:`LightmapBakeResult` -- its ``report`` the dry run it acted
@@ -929,26 +1069,122 @@ class LightmapBaker(ptk.LoggingMixin):
             ValueError: *packing* is not ``None``, ``"atlas"`` or
                 ``"per_object"``.
         """
+        self._check_rebake_packing(packing)
+        with self._keeping_folders(not relocate):
+            report = self._stale_report(
+                reach=reach,
+                lighting=lighting,
+                intensity=float(bake_kwargs.get("intensity", 1.0)),
+                output_dir=bake_kwargs.get("output_dir"),
+            )
+            return self._rebake(report, packing, "Re-bake Changed", bake_kwargs)
+
+    def rebake_report(
+        self,
+        objects: Optional[List[str]] = None,
+        output_dir: Optional[str] = None,
+        relocate: bool = False,
+        intensity: Optional[float] = None,
+    ) -> "ptk.StaleReport":
+        """What :meth:`rebake` of *objects* would redo -- its dry run.
+
+        The baked meshes among *objects* (default: the selection; a group
+        stands for the meshes under it), with the packing plan they would
+        bake by (:meth:`_planned`). Nothing is rendered or written.
+        """
+        if cmds is None:
+            return ptk.StaleReport()
+        if objects is None:
+            objects = cmds.ls(selection=True, long=True) or []
+        meshes = (
+            TextureBaker.resolve_meshes(list(objects), descendants=True)
+            if objects
+            else []
+        )
+        baked = LightmapRecords.baked_objects(
+            (cmds.ls(meshes, long=True) or []) if meshes else []
+        )
+        with self._keeping_folders(not relocate):
+            return self._planned(
+                ptk.StaleReport(targets=tuple(sorted(set(baked)))),
+                intensity,
+                output_dir,
+            )
+
+    def rebake(
+        self,
+        objects: Optional[List[str]] = None,
+        packing: Optional[str] = None,
+        relocate: bool = False,
+        **bake_kwargs,
+    ) -> LightmapBakeResult:
+        """Re-bake *objects* the way each was baked, changed or not.
+
+        What the bake baseline cannot see -- an albedo or emissive edit, a
+        noisy render -- redone for exactly these objects, as
+        :meth:`rebake_changed` redoes what it can see: each packed, lit and
+        placed as recorded (:meth:`_rebake`), an atlas member written back
+        into its own cell where it fits. Objects with no lightmap yet are
+        left out: :meth:`bake` bakes them.
+
+        Parameters:
+            objects: Default: the selection (:meth:`rebake_report`).
+            packing / relocate / bake_kwargs: As :meth:`rebake_changed`.
+
+        Returns:
+            :class:`LightmapBakeResult`; ``refused`` when none of *objects*
+            has a lightmap.
+
+        Raises:
+            ValueError: *packing* is not ``None``, ``"atlas"`` or
+                ``"per_object"``.
+        """
+        self._check_rebake_packing(packing)
+        with self._keeping_folders(not relocate):
+            report = self.rebake_report(
+                objects,
+                output_dir=bake_kwargs.get("output_dir"),
+                relocate=relocate,
+                intensity=float(bake_kwargs.get("intensity", 1.0)),
+            )
+            if not report.targets:
+                return LightmapBakeResult(
+                    report=report,
+                    refused="None of these objects is baked yet; Bake them first.",
+                )
+            return self._rebake(report, packing, "Re-bake", bake_kwargs)
+
+    @staticmethod
+    def _check_rebake_packing(packing: Optional[str]) -> None:
         if packing not in (None, "atlas", "per_object"):
             raise ValueError(
                 f"packing must be None, 'atlas' or 'per_object', got {packing!r}"
             )
-        report = self._stale_report(
-            reach=reach,
-            lighting=lighting,
-            intensity=float(bake_kwargs.get("intensity", 1.0)),
-        )
+
+    def _rebake(
+        self,
+        report: "ptk.StaleReport",
+        packing: Optional[str],
+        label: str,
+        bake_kwargs: Dict[str, Any],
+    ) -> LightmapBakeResult:
+        """Bake *report*'s targets the way each was RECORDED as baked.
+
+        One :meth:`bake` per way of baking -- packed (atlases first; *packing*
+        forces one way) and lit (the recorded rule, :meth:`_lit_as`; ``None``:
+        none recorded) -- the reflection probe after the last. The shared body
+        of :meth:`rebake_changed` and :meth:`rebake`; the caller holds the
+        folders (:meth:`_keeping_folders`).
+        """
         result = LightmapBakeResult(report=report)
         if not report.targets:
             result.refused = report.summary()
             return result
-        self.logger.info("Re-bake Changed: %s", report.summary())
+        self.logger.info("%s: %s", label, report.summary())
         for line in report.lines():
             self.logger.info("  %s", line)
         recorded = LightmapRecords.bake_state()
         rules = ptk.BakeBaseline.lighting_rules(recorded)
-        # One bake per way of baking -- packed (atlases first) and lit (the
-        # recorded rule; ``None``: none recorded) as each target was.
         passes: List[Tuple[str, Optional[Dict[str, Any]], List[str]]] = []
         for target in report.targets:
             chosen = packing or (recorded["objects"].get(target) or {}).get("packing")
@@ -961,6 +1197,7 @@ class LightmapBaker(ptk.LoggingMixin):
                 same[2].append(target)
         passes.sort(key=lambda p: p[0] != "atlas")
 
+        bake_kwargs = dict(bake_kwargs)
         on_progress = bake_kwargs.pop("on_progress", None)
         cancelled = False
 
@@ -994,6 +1231,165 @@ class LightmapBaker(ptk.LoggingMixin):
         )
         return result
 
+    def map_folders(self, objects: Optional[List[str]] = None) -> Dict[str, List[str]]:
+        """``{folder: [map file names]}`` -- where the maps *objects* read are
+        on disk (default: every baked object). A missing map is in none. What
+        a panel weighs an Output Directory against before a re-bake
+        (``relocate``)."""
+        wanted = None if objects is None else set(objects)
+        out: Dict[str, List[str]] = {}
+        for transform, name, path in LightmapRecords._reads():
+            if path and (wanted is None or transform in wanted):
+                names = out.setdefault(os.path.normpath(os.path.dirname(path)), [])
+                if name not in names:
+                    names.append(name)
+        return out
+
+    def bake_breakdown(
+        self, output_dir: Optional[str] = None, relocate: bool = False
+    ) -> "ptk.ReportDoc":
+        """The scene's bake state, map by map -- the Bake State viewer.
+
+        Every lightmap the scene reads and its reflection probe: the file and
+        its folder, who reads it, its size, which scene file wrote it, and
+        whether it is up to date, missing, or re-bakes (and how) -- with what
+        :meth:`stale_report` would redo and why, and the visible meshes out of
+        the bake (``ptk.StaleReport.doc``). Read-only.
+
+        Parameters:
+            output_dir / relocate: As :meth:`stale_report`.
+        """
+        report = self.stale_report(output_dir=output_dir, relocate=relocate)
+        return report.doc(self._map_records())
+
+    def bake_maps(
+        self,
+        report: Optional["ptk.StaleReport"] = None,
+        output_dir: Optional[str] = None,
+        relocate: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """The lightmaps the scene reads, each with its state -- the Lightmap
+        Baker's Manage table (``ptk.StaleReport.map_rows``).
+
+        Parameters:
+            report: The dry run the states read; default :meth:`stale_report`
+                with *output_dir* / *relocate*.
+            output_dir / relocate: As :meth:`stale_report`.
+
+        Returns:
+            One dict per map: ``map``, ``path`` (``None`` when missing),
+            ``folder``, ``objects`` (its readers), ``writer`` (the other scene
+            file that wrote it, or ``None``), ``size``, ``probe``, ``state``,
+            ``level`` and ``stale``.
+        """
+        if report is None:
+            report = self.stale_report(output_dir=output_dir, relocate=relocate)
+        return report.map_rows(self._map_records())
+
+    @classmethod
+    def _map_records(cls) -> List[Dict[str, Any]]:
+        """Every lightmap the scene reads, as :meth:`ptk.StaleReport.doc` takes
+        it: file, folder, readers, writer and size; the probe has no
+        readers. A map waiting in the session for the save
+        (``LightmapRecords._stage``) gives the file it becomes then
+        (``saves_to``), and that one's folder."""
+        if cmds is None:
+            return []
+        writers = LightmapRecords._writers()
+        rows = []
+        for dep in LightmapRecords.lightmap_dependencies() or []:
+            path = dep.get("path") or None
+            readers = list(dep.get("objects") or [])
+            home = LightmapRecords._home(path) if path else None
+            saves_to = home if home != path else None
+            rows.append(
+                {
+                    "map": dep["map"],
+                    "path": path,
+                    "saves_to": saves_to,
+                    "folder": LightmapRecords._portable_dir(saves_to)
+                    if saves_to
+                    else dep.get("dir"),
+                    "objects": readers,
+                    "writer": LightmapRecords.foreign_writer(dep["map"], writers),
+                    "size": ptk.ImgUtils.get_image_size(path) if path else None,
+                    "probe": not readers,
+                }
+            )
+        return rows
+
+    @classmethod
+    def _atlas_keys(cls, objects: List[str]) -> Dict[str, str]:
+        """``{object: its atlas group}`` -- the objects one atlas holds share a key.
+
+        The key is what the object's primary shading group
+        (:meth:`_primary_material`) renders, not the node: shading groups
+        that shade alike, or whose materials duplicate each other, are one
+        group (:meth:`_duplicate_groups`), keyed by the one they fold into.
+        So one material in two shading groups (an FBX import's habit) or a
+        duplicate of it bakes one atlas, as if the duplicate never existed --
+        without touching the shading the exporter reads. ``__no_material__``
+        for an object with none.
+
+        The one rule the atlas plan (:meth:`atlas_plan`), the in-place plan
+        (:meth:`_in_place_plan`) and the split check (:meth:`_splits`)
+        group by. Read over *objects* together: a group is a duplicate only of
+        another one among them.
+        """
+        sgs = {obj: cls._primary_material(obj) for obj in objects}
+        into = cls._duplicate_groups(list(sgs.values())) if cmds is not None else {}
+        return {
+            obj: into.get(sg, sg) if sg else "__no_material__"
+            for obj, sg in sgs.items()
+        }
+
+    @classmethod
+    def _duplicate_groups(cls, groups: List[Optional[str]]) -> Dict[str, str]:
+        """``{duplicate: kept}`` among atlas groups -- shading groups, one entry
+        per object in it (``None`` skipped).
+
+        Two groups are one when they shade alike (the same shaders in every
+        slot: one material split over two shading groups, as an FBX import
+        leaves it) or their materials duplicate each other
+        (``MatUtils.find_materials_with_duplicate_textures``). Of groups that
+        shade alike, the one more objects are in is kept; a default node is
+        never a duplicate.
+        """
+        counts: Dict[str, int] = {}
+        for group in groups:
+            if group and cmds.objExists(group):
+                counts[group] = counts.get(group, 0) + 1
+        if len(counts) < 2:
+            return {}
+        defaults = set(cmds.ls(defaultNodes=True) or [])
+        slots = MatUtils._SG_SHADER_SLOTS + MatUtils._SG_EXTRA_SHADER_SLOTS
+        alike: Dict[Tuple, List[str]] = {}
+        for group in counts:
+            shading = tuple(
+                tuple(sorted(MatUtils._sg_shaders(group, slots=(slot,))))
+                for slot in slots
+            )
+            if shading[0]:  # no surface shader: nothing to compare
+                alike.setdefault(shading, []).append(group)
+        kept: Dict[str, str] = {}
+        for members in alike.values():
+            members.sort(key=lambda g: (g not in defaults, -counts[g], g))
+            kept.update((group, members[0]) for group in members)
+        by_shader: Dict[str, str] = {}
+        for head in sorted(set(kept.values())):
+            by_shader.setdefault(cls._surface_shader(head), head)
+        if len(by_shader) > 1:
+            found = MatUtils.find_materials_with_duplicate_textures(sorted(by_shader))
+            into = {dup: by_shader[k] for k, dups in found.items() for dup in dups}
+            for group in kept:
+                kept[group] = into.get(cls._surface_shader(group), kept[group])
+        return {d: k for d, k in kept.items() if d != k and d not in defaults}
+
+    @staticmethod
+    def _surface_shader(group: str) -> str:
+        """*group*'s surface shader (the shading group itself when it has none)."""
+        return next(iter(MatUtils._sg_shaders(group)), group)
+
     @staticmethod
     def _merge_result(into: LightmapBakeResult, part: LightmapBakeResult) -> None:
         """Fold one of :meth:`rebake_changed`'s bakes into its result."""
@@ -1003,6 +1399,7 @@ class LightmapBaker(ptk.LoggingMixin):
             getattr(into, name).extend(getattr(part, name))
         into.repacked.update(part.repacked)
         into.refused = into.refused or part.refused
+        into.cancelled = into.cancelled or part.cancelled
         into.verdict = part.verdict or into.verdict
         into.probe = part.probe or into.probe
 
@@ -1093,6 +1490,20 @@ class LightmapBaker(ptk.LoggingMixin):
             for k, value in was.items():
                 setattr(self, k, value)
             self._rule = held
+
+    @contextlib.contextmanager
+    def _keeping_folders(self, keep: bool = True):
+        """Place each map the bakes in this block rewrite in the folder it is
+        in now -- handed back after. How a re-bake updates a bake where it
+        lies: the output folder takes only a map with no file yet
+        (:meth:`_homes`). *keep* ``False`` leaves the bake's folders as they
+        are (a re-bake told to relocate)."""
+        held = self._keep_folders
+        self._keep_folders = bool(keep)
+        try:
+            yield
+        finally:
+            self._keep_folders = held
 
     @staticmethod
     def _light_state(shape: str, lit: bool) -> Tuple[str, Dict[str, Any]]:
@@ -1239,6 +1650,8 @@ class LightmapBaker(ptk.LoggingMixin):
                 os.path.basename(cmds.file(query=True, sceneName=True))
             )[0]
             path = os.path.join(folder, f"{stem or 'untitled'}_Probe.exr")
+            if self._staging:  # home at the save, as the maps (_stage)
+                path = LightmapRecords._stage(path)
             low, high = self.PROBE_WIDTH_RANGE
             width = max(low, min(high, int(self.resolution) // 2))
             # Their own meshes: a transform would hide its baked children.
@@ -1931,11 +2344,12 @@ class LightmapBaker(ptk.LoggingMixin):
         scene's :class:`LightmapExcludeSet` gets no map (it still lights the
         rest). No map takes a file name another object reads
         (:meth:`LightmapRecords.claims`); an object's own map keeps its name.
-        With :attr:`beside_textures` the maps are baked into a swept work dir
-        and each is then placed in its texture set's folder
-        (:meth:`_texture_homes`), *output_dir* taking any object without one
-        -- placed, not baked there, so a bake that fails partway leaves no
-        stray file in a texture folder.
+        With :attr:`beside_textures`, or under a re-bake that keeps folders
+        (:meth:`_keeping_folders`), the maps are baked into a swept work dir
+        and each is then placed in its own folder (:meth:`_homes`),
+        *output_dir* taking any object without one -- placed, not baked
+        there, so a bake that fails partway leaves no stray file in a texture
+        folder.
 
         Returns:
             ``{long_object_name: lightmap_path}`` for each successful bake.
@@ -1954,7 +2368,11 @@ class LightmapBaker(ptk.LoggingMixin):
             return {}
         claims = LightmapRecords.claims()
         with self._cached_reads(), self._lighting(scope):
-            if not self.beside_textures:
+            homes = self._homes(objects)
+            # A recorded bake places its maps itself, in the session until the
+            # save (_place_unpacked): never rendered onto a file the scene on
+            # disk reads.
+            if homes is None and not self._staging:
                 return self._bake_white_card(
                     objects,
                     output_dir=output_dir,
@@ -1964,7 +2382,6 @@ class LightmapBaker(ptk.LoggingMixin):
                     **kwargs,
                 )
 
-            homes = self._texture_homes(objects)
             output_dir = output_dir or self.baker.default_output_dir(self.OUTPUT_SUBDIR)
             with ptk.TempArtifacts(self.STAGING_PREFIX, policy="scoped") as tmp:
                 baked = self._bake_white_card(
@@ -2103,6 +2520,65 @@ class LightmapBaker(ptk.LoggingMixin):
         """:meth:`_texture_set_stem`, read once per bake -- the default map name."""
         found = self._texture_set_of(obj)
         return found[0] if found else None
+
+    def _bake_folders(
+        self,
+        targets: List[str],
+        output_dir: Optional[str] = None,
+        homes: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """``{target: folder}`` -- where a bake of *targets* writes each map.
+
+        Its entry in *homes* (:meth:`_homes`, read here when ``None``: the
+        folder its map is in while a re-bake keeps folders, else its texture
+        folder under :attr:`beside_textures`), else *output_dir* (``None``:
+        the bake's default). One answer for the bake's in-place plan and the
+        dry run's (:meth:`_in_place_plan`'s *folders*).
+
+        Raises:
+            ValueError: *output_dir* is ``None`` and the scene has no project.
+        """
+        output_dir = output_dir or self.baker.default_output_dir(self.OUTPUT_SUBDIR)
+        if homes is None:
+            homes = self._homes(targets)
+        return {t: (homes or {}).get(t) or output_dir for t in targets}
+
+    def _homes(self, objects: List[str]) -> Optional[Dict[str, str]]:
+        """``{object: folder}`` a bake places each map in, or ``None``: every
+        map in the bake's output folder.
+
+        While a re-bake keeps folders (:meth:`_keeping_folders`), the folder
+        of the map each object reads now; else, with :attr:`beside_textures`,
+        its texture set's (:meth:`_texture_homes`). An object with neither
+        takes the output folder -- as does one whose map is outside the
+        scene's project and not this scene's own (a referenced module's, a
+        Save As source's in another project): a re-bake there wrote this
+        scene's maps into a folder it does not own, which a copy of the
+        project alone then lacked.
+        """
+        if not (self._keep_folders or self.beside_textures):
+            return None
+        homes = self._texture_homes(objects) if self.beside_textures else {}
+        if self._keep_folders:
+            wanted = set(objects)
+            project = LightmapRecords.project_root()
+            writers = LightmapRecords._writers()
+            # A map waiting in the session for the save is placed by its home.
+            homes.update(
+                (t, os.path.dirname(p))
+                for t, n, p in (
+                    (t, n, LightmapRecords._home(p) if p else p)
+                    for t, n, p in LightmapRecords._reads()
+                )
+                if p
+                and t in wanted
+                and (
+                    not project
+                    or ptk.FileUtils.is_under(os.path.abspath(p), project)
+                    or LightmapRecords.wrote(n, writers)
+                )
+            )
+        return homes
 
     def _texture_homes(self, objects: List[str]) -> Dict[str, str]:
         """``{object: folder}`` -- where :attr:`beside_textures` puts each map.
@@ -2317,14 +2793,14 @@ class LightmapBaker(ptk.LoggingMixin):
         output_dir = output_dir or self.baker.default_output_dir(self.OUTPUT_SUBDIR)
         claims = LightmapRecords.claims()
         with self._cached_reads(), self._lighting(scope):
-            homes = self._texture_homes(targets) if self.beside_textures else None
+            homes = self._homes(targets)
             # Part of a group already in an atlas goes back into the cells it
             # owns there; a group that cannot re-bakes whole (_in_place_plan).
             placing = (
                 self._in_place_plan(
                     targets,
                     intensity=intensity,
-                    folders={t: (homes or {}).get(t) or output_dir for t in targets},
+                    folders=self._bake_folders(targets, output_dir, homes),
                 )
                 if self.record
                 else _InPlacePlan()  # a measurement writes no file the scene reads
@@ -2348,7 +2824,7 @@ class LightmapBaker(ptk.LoggingMixin):
                             extra, uv_set=uv_set, map_size=self.resolution, quiet=True
                         )
                     if homes is not None:
-                        homes.update(self._texture_homes(extra))
+                        homes.update(self._homes(extra) or {})
                     targets = targets + extra
             done.repacked = dict(placing.repack)
             in_place = set(placing.placed)
@@ -2385,13 +2861,17 @@ class LightmapBaker(ptk.LoggingMixin):
                 )
                 if not baked:
                     return done
+                # A fork names its copy against these claims, read before it
+                # existed: each name taken is recorded in them (and in *taken*)
+                # before the next fork or pack_atlas names anything.
+                taken: set = set()
                 for atlas, objs in placing.in_place.items():
                     tiles = {o: baked[o] for o in objs if o in baked}
                     if not tiles:
                         continue
                     try:
-                        written = self._pack_in_place(
-                            atlas, tiles, placing, intensity, regions
+                        written = self._write_in_place(
+                            atlas, tiles, placing, intensity, regions, claims, taken
                         )
                     except Exception as e:  # held open, unreadable: keep the old
                         self.logger.error(
@@ -2425,9 +2905,13 @@ class LightmapBaker(ptk.LoggingMixin):
                         # Beside the textures, the atlases are staged in a
                         # folder of their own -- never among the tiles, whose
                         # names they share -- and placed per group below.
+                        # Otherwise into the session, home at the save
+                        # (LightmapRecords._stage).
                         output_dir=(
                             os.path.join(tmp.dir_path(), "atlas")
                             if homes is not None
+                            else LightmapRecords._pending().folder(output_dir)
+                            if self._staging
                             else output_dir
                         ),
                         prefix=prefix,
@@ -2506,8 +2990,8 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> _InPlacePlan:
         """Which *targets* write back into their own atlas cells -- the one decision point.
 
-        Each material group (:meth:`_primary_material`, the atlas group) is
-        decided whole, against the atlases it owns -- an atlas is the group's
+        Each atlas group (:meth:`_atlas_keys`) is decided whole, against the
+        atlases it owns (:meth:`_atlas_files`) -- an atlas is the group's
         most of whose readers are. One that owns none bakes as any group
         does. One that owns ONE goes in place when every target of it can
         (:meth:`_in_place_refusal`): the atlas is on disk at this
@@ -2515,10 +2999,15 @@ class LightmapBaker(ptk.LoggingMixin):
         to, every object reading it has a recorded cell (the bake baseline,
         :meth:`LightmapRecords.bake_state`) at the intensity this bake
         applies, and each target reads it already and still fits its cell.
+        An atlas another scene file wrote (a Save As copy's source,
+        :meth:`LightmapRecords.foreign_writer`) goes in place too, into this
+        scene's own copy of it (``forks``): the source keeps its file.
 
         Otherwise -- or when the group owns two atlases, a split an earlier
-        partial bake left -- its WHOLE group re-bakes into a fresh
-        layout: with *expand*, every object reading those atlases whose
+        partial bake left, or one material in two shading groups baked before
+        they were one group (a map an atlas bake gave a group of one counts;
+        :meth:`_splits`) -- its WHOLE group re-bakes into a
+        fresh layout: with *expand*, every object reading those atlases whose
         primary material is still the group's joins the bake (``repack`` says
         why, once). That heals a legacy split, and a legacy atlas baked before
         cells were recorded, once; their next partial re-bake goes in place.
@@ -2541,45 +3030,18 @@ class LightmapBaker(ptk.LoggingMixin):
         plan = _InPlacePlan()
         if cmds is None or not targets:
             return plan
-        markers = dict(LightmapRecords._marker_records())
-        path_of = {t: p for t, _n, p in LightmapRecords._reads() if p}
-        by_file: Dict[str, List[str]] = {}
-        spelled: Dict[str, str] = {}
-        for reader in sorted(markers):
-            path = path_of.get(reader)
-            if path:
-                key = os.path.normcase(os.path.abspath(path))
-                by_file.setdefault(key, []).append(reader)
-                spelled.setdefault(key, path)
-        atlases = {f for f, readers in by_file.items() if len(readers) > 1}
-        if not atlases:
-            return plan  # every map is its object's own
-        record = LightmapRecords.bake_state()["objects"]
-        entries = {k: e for k, e in record.items() if e["removed_at"] is None}
-        groups: Dict[str, str] = {}
-
-        def group(obj: str) -> str:
-            if obj not in groups:
-                groups[obj] = self._primary_material(obj) or "__no_material__"
-            return groups[obj]
-
-        # Each atlas is the group's most of its readers belong to: a reader
-        # whose material changed since (Texture Combine's merge, a reassigned
-        # object) is new to its NEW group's atlas, never the owner of its old.
-        group_files: Dict[str, set] = {}
-        for f in atlases:
-            votes: Dict[str, int] = {}
-            for reader in by_file[f]:
-                votes[group(reader)] = votes.get(group(reader), 0) + 1
-            owner = min(votes, key=lambda g: (-votes[g], g))
-            group_files.setdefault(owner, set()).add(f)
         targets = list(dict.fromkeys(targets))
+        found = self._atlas_files(targets)
+        if found is None:
+            return plan  # every map is its object's own
+        markers, entries, group = found.markers, found.entries, found.group
+        by_file, spelled, lone = found.by_file, found.spelled, found.lone
         chosen = set(targets)
-        for key in dict.fromkeys(group(t) for t in targets):
-            files = sorted(group_files.get(key, ()))
-            if not files:
+        for key in dict.fromkeys(group[t] for t in targets):
+            files = sorted(found.owned.get(key, ()))
+            if not files or (len(files) == 1 and files[0] in lone):
                 continue
-            members = [t for t in targets if group(t) == key]
+            members = [t for t in targets if group[t] == key]
             if len(files) > 1:
                 why = (
                     f"{len(files)} atlases split this material ("
@@ -2600,6 +3062,9 @@ class LightmapBaker(ptk.LoggingMixin):
                 atlas = spelled[files[0]]
                 plan.in_place[atlas] = members
                 plan.readers[atlas] = list(by_file[files[0]])
+                writer = LightmapRecords.foreign_writer(os.path.basename(atlas))
+                if writer:  # a Save As copy's source still reads it
+                    plan.forks[atlas] = writer
                 for reader in by_file[files[0]]:
                     plan.entries[reader] = entries[reader]
                     plan.rects[reader] = [
@@ -2614,7 +3079,7 @@ class LightmapBaker(ptk.LoggingMixin):
                     r
                     for f in files
                     for r in by_file[f]
-                    if r not in chosen and group(r) == key
+                    if r not in chosen and group[r] == key
                 )
             )
             if expand and extra:
@@ -2624,6 +3089,100 @@ class LightmapBaker(ptk.LoggingMixin):
             for f in files:
                 plan.repack[os.path.basename(spelled[f])] = why
         return plan
+
+    def _atlas_files(self, objects: List[str] = ()) -> Optional[_AtlasFiles]:
+        """The atlases the scene's objects read and the atlas group owning
+        each, with *objects*' groups read beside theirs; ``None`` when every
+        map is its object's own (nothing to write into, nothing split).
+
+        Each atlas is the group's most of its readers belong to: a reader
+        whose material changed since (Texture Combine's merge, a reassigned
+        object) is new to its NEW group's atlas, never the owner of its old.
+        Groups are :meth:`_atlas_keys`', so a material in two shading groups
+        owns both maps they baked -- a split. Read-only.
+        """
+        markers = dict(LightmapRecords._marker_records())
+        path_of = {t: p for t, _n, p in LightmapRecords._reads() if p}
+        by_file: Dict[str, List[str]] = {}
+        spelled: Dict[str, str] = {}
+        for reader in sorted(markers):
+            path = path_of.get(reader)
+            if path:
+                key = os.path.normcase(os.path.abspath(path))
+                by_file.setdefault(key, []).append(reader)
+                spelled.setdefault(key, path)
+        atlases = {f for f, readers in by_file.items() if len(readers) > 1}
+        record = LightmapRecords.bake_state()["objects"]
+        entries = {k: e for k, e in record.items() if e["removed_at"] is None}
+        # An atlas bake gives a group of one its own map. Alone it is no atlas
+        # to write into, but a group reading it beside another map is split
+        # all the same: one material in two shading groups, or a duplicate.
+        lone = {
+            f
+            for f, readers in by_file.items()
+            if len(readers) == 1
+            and (entries.get(readers[0]) or {}).get("packing") == "atlas"
+        }
+        if not atlases and len(lone) < 2:
+            return None
+        # A one-reader map whose packing no record speaks for (baked before
+        # change tracking, then tracked as it stood) is a split-off only
+        # beside an atlas its group owns: a group that owns none was baked per
+        # object, and stays so.
+        unknown = {
+            f
+            for f, readers in by_file.items()
+            if len(readers) == 1 and not (entries.get(readers[0]) or {}).get("packing")
+        }
+        readers = [r for f in sorted(atlases | lone | unknown) for r in by_file[f]]
+        group = self._atlas_keys(list(dict.fromkeys(readers + list(objects))))
+        owned: Dict[str, set] = {}
+        for f in atlases:
+            votes: Dict[str, int] = {}
+            for reader in by_file[f]:
+                votes[group[reader]] = votes.get(group[reader], 0) + 1
+            owned.setdefault(min(votes, key=lambda g: (-votes[g], g)), set()).add(f)
+        for f in sorted(unknown):
+            if group[by_file[f][0]] in owned:
+                lone.add(f)
+        for f in lone:
+            owned.setdefault(group[by_file[f][0]], set()).add(f)
+        return _AtlasFiles(markers, entries, by_file, spelled, lone, group, owned)
+
+    def _splits(self) -> Dict[str, Tuple[List[str], List[str]]]:
+        """``{atlas group: (map paths, objects)}`` -- each group that reads
+        more than one map (one material in two shading groups, or a
+        duplicate, baked apart before :meth:`_atlas_keys` grouped them): its
+        maps, most-read first, and the group's objects reading them. What
+        :meth:`combine` packs into one atlas, and what the Manage table names
+        *split*. Read-only."""
+        found = self._atlas_files()
+        if found is None:
+            return {}
+        out: Dict[str, Tuple[List[str], List[str]]] = {}
+        for key, files in found.owned.items():
+            if len(files) < 2:
+                continue
+            files = sorted(files, key=lambda f: (-len(found.by_file[f]), f))
+            readers = sorted(
+                r for f in files for r in found.by_file[f] if found.group[r] == key
+            )
+            out[key] = ([found.spelled[f] for f in files], readers)
+        return out
+
+    def _split_fields(self) -> Dict[str, Dict[str, Tuple[str, ...]]]:
+        """``ptk.StaleReport``'s ``split`` and ``split_materials`` from
+        :meth:`_splits`: each split map's group maps, and the surface shaders
+        its objects use -- more than one is a duplicate still in the scene."""
+        split: Dict[str, Tuple[str, ...]] = {}
+        materials: Dict[str, Tuple[str, ...]] = {}
+        for paths, readers in self._splits().values():
+            names = tuple(os.path.basename(p) for p in paths)
+            sgs = {LightmapRecords._primary_material(r) for r in readers} - {None}
+            shaders = tuple(sorted({self._surface_shader(sg) for sg in sgs}))
+            for name in names:
+                split[name], materials[name] = names, shaders
+        return {"split": split, "split_materials": materials}
 
     def _in_place_refusal(
         self,
@@ -2641,9 +3200,6 @@ class LightmapBaker(ptk.LoggingMixin):
         first that fails worded for the log and the report.
         """
         name = os.path.basename(atlas)
-        writer = LightmapRecords.foreign_writer(name)
-        if writer:  # a Save As copy's source still reads it
-            return f"{name} was written by {writer}"
         res = int(self.resolution)
         size = ptk.ImgUtils.get_image_size(atlas)
         if not size:
@@ -2651,7 +3207,9 @@ class LightmapBaker(ptk.LoggingMixin):
         if tuple(size) != (res, res):
             return f"it is {size[0]} x {size[1]} px, this bake {res} px"
         if folders:
-            home = os.path.normcase(os.path.dirname(os.path.abspath(atlas)))
+            home = os.path.normcase(
+                os.path.dirname(os.path.abspath(LightmapRecords._home(atlas)))
+            )
             wanted = {
                 os.path.normcase(os.path.abspath(folders[m]))
                 for m in members
@@ -2693,6 +3251,67 @@ class LightmapBaker(ptk.LoggingMixin):
                 return f"{leaf}: its cell no longer fits ({area - 1.0:+.0%} area)"
         return None
 
+    def _write_in_place(
+        self,
+        atlas: str,
+        tiles: Dict[str, str],
+        placing: _InPlacePlan,
+        intensity: float = 1.0,
+        regions: Optional[Dict[str, Tuple[float, float, float, float]]] = None,
+        claims: Optional[Dict[str, FrozenSet[str]]] = None,
+        used: Optional[set] = None,
+    ) -> Dict[str, Tuple[str, List[float]]]:
+        """:meth:`_pack_in_place` -- into this scene's own copy of an atlas
+        another scene file wrote (:attr:`_InPlacePlan.forks`, a Save As
+        copy's source), whose file stays as it was: every reader here then
+        reads the copy (``LightmapRecords.fork_lightmap``). The one way every
+        in-place write goes, so none writes a file another scene reads -- nor
+        the one the scene file on disk reads: the atlas, cells and all, is
+        written to the session until the scene is saved
+        (``LightmapRecords._stage``).
+
+        A fork's name is the bake's once chosen: taken in *used* (the paths
+        this bake has named) and claimed by its readers in *claims* (mutated),
+        which were read before the copy existed -- so neither the next fork
+        nor :meth:`pack_atlas`'s groups, handed the same two, can name an
+        atlas of their own onto it. Twin of blendertk's.
+
+        Raises:
+            Whatever :meth:`_pack_in_place` raises; nothing is re-stamped.
+        """
+        dest = LightmapRecords._stage(atlas)
+        forked = atlas in placing.forks
+        if forked:
+            if claims is None:
+                claims = LightmapRecords.claims()
+            dest = self._unique_atlas_path(
+                LightmapRecords._pending().folder(os.path.dirname(atlas)),
+                os.path.splitext(os.path.basename(atlas))[0],
+                set() if used is None else used,
+                claims=claims,
+                owners=placing.readers[atlas],
+            )
+        written = self._pack_in_place(
+            atlas, tiles, placing, intensity, regions, dest=dest
+        )
+        if written and forked:
+            key = os.path.basename(dest).lower()
+            claims[key] = claims.get(key, frozenset()) | frozenset(
+                placing.readers[atlas]
+            )
+        if written and os.path.basename(dest) != os.path.basename(atlas):
+            LightmapRecords.fork_lightmap(
+                os.path.basename(atlas), os.path.basename(dest)
+            )
+            self.logger.info(
+                "%s was written by %s: copied to %s, which its readers here "
+                "now read; the original is as it was.",
+                os.path.basename(atlas),
+                placing.forks[atlas],
+                os.path.basename(dest),
+            )
+        return written
+
     def _pack_in_place(
         self,
         atlas: str,
@@ -2700,6 +3319,7 @@ class LightmapBaker(ptk.LoggingMixin):
         placing: _InPlacePlan,
         intensity: float = 1.0,
         regions: Optional[Dict[str, Tuple[float, float, float, float]]] = None,
+        dest: Optional[str] = None,
     ) -> Dict[str, Tuple[str, List[float]]]:
         """Write *tiles* back into their own cells of *atlas*; every other cell stays.
 
@@ -2721,9 +3341,13 @@ class LightmapBaker(ptk.LoggingMixin):
             placing: The plan (cells, readers, published rects).
             intensity: The multiplier the atlas already carries.
             regions: As :meth:`pack_atlas`.
+            dest: Where the result is written; ``None``: *atlas* itself. A
+                Save As copy writes its source's atlas into its own copy
+                (:attr:`_InPlacePlan.forks`), the source's file untouched.
 
         Returns:
-            ``{object: (atlas, published rect)}`` for each cell written.
+            ``{object: (the file written, published rect)}`` for each cell
+            written.
 
         Raises:
             RuntimeError: The atlas cannot be read or is another size.
@@ -2787,8 +3411,9 @@ class LightmapBaker(ptk.LoggingMixin):
             out, mask=union, iterations=self._atlas_gutter() + 1
         )
         out = ptk.ImgUtils.fill_empty_texels(out, mask=(out > 0).any(axis=2))
-        self._write_lightmap_exr(atlas, out)
-        return {obj: (atlas, published) for obj, published in placed}
+        dest = dest or atlas
+        self._write_lightmap_exr(dest, out)
+        return {obj: (dest, published) for obj, published in placed}
 
     def _cells_mask(self, cells: List[List[float]]) -> Any:
         """``(resolution, resolution)`` bool: the texels of *cells* -- exact
@@ -2814,7 +3439,9 @@ class LightmapBaker(ptk.LoggingMixin):
     ) -> Dict[str, List[Tuple[str, List[float]]]]:
         """``{material: [(object, rect), ...]}`` -- the atlas layout, decided before baking.
 
-        Groups the meshes by primary material and PACKS each group into its
+        Groups the meshes by what their primary material renders
+        (:meth:`_atlas_keys`: a material in two shading groups, or a duplicate
+        of it, is one group) and PACKS each group into its
         atlas (``ptk.ImgUtils.pack_atlas_rects``): every object a cell of its
         layout box's shape ON THE SURFACE, at one texel density for the whole
         group -- the largest at which the group fits -- each cell a whole number of texels
@@ -2851,10 +3478,10 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         objects = self.bake_targets(objects)
         names = sorted({(cmds.ls(o, long=True) or [None])[0] for o in objects} - {None})
+        keys = self._atlas_keys(names)
         groups: Dict[str, List[str]] = {}
         for name in names:  # deterministic rect order (matches pack_atlas)
-            key = self._primary_material(name) or "__no_material__"
-            groups.setdefault(key, []).append(name)
+            groups.setdefault(keys[name], []).append(name)
 
         gutter = self._atlas_gutter()
         plan: Dict[str, List[Tuple[str, List[float]]]] = {}
@@ -3096,11 +3723,12 @@ class LightmapBaker(ptk.LoggingMixin):
         """A failed group's per-object map, kept in *output_dir*: its path there.
 
         Moved in (copied with *keep_sources*) under its own name, made unique
-        by the atlas naming rule, unless it is there already: a caller's
-        sources may sit in a folder it sweeps on exit (Texture Combine's
-        re-pack stages its crops), and a binding into it is a map that stops
-        existing. ``None`` -- it could not be placed (logged); the object keeps
-        the map it had.
+        by the atlas naming rule (:meth:`_unique_atlas_path`: never onto
+        another scene's file of that name, ``LightmapRecords.strangers``),
+        unless it is there already: a caller's sources may sit in a folder it
+        sweeps on exit (Texture Combine's re-pack stages its crops), and a
+        binding into it is a map that stops existing. ``None`` -- it could not
+        be placed (logged); the object keeps the map it had.
         """
         source = os.path.abspath(src)
         if os.path.normcase(os.path.dirname(source)) == os.path.normcase(
@@ -3108,15 +3736,27 @@ class LightmapBaker(ptk.LoggingMixin):
         ):
             return src
         stem, ext = os.path.splitext(os.path.basename(source))
+        ext = ext or ".exr"
+        # A session folder is named for as its home (_unique_atlas_path).
+        home = LightmapRecords._home(output_dir)
+        # Claims know only this scene's readers: another scene's map of this
+        # name, sharing the folder, was replaced. The source is never its own.
+        strangers = {
+            p
+            for p in LightmapRecords.strangers(home, stem, ext, claims)
+            if os.path.normcase(p) != os.path.normcase(source)
+        }
         dst = ptk.FileUtils.unique_path(
-            output_dir,
+            home,
             stem,
-            ext or ".exr",
+            ext,
             used,
             claims=claims,
             owners=(obj,),
-            avoid=avoid,
+            avoid={LightmapRecords._home(p) for p in avoid} | strangers,
         )
+        if home != output_dir:
+            dst = LightmapRecords._stage(dst)
         try:
             if keep_sources:
                 shutil.copy2(source, dst)
@@ -3158,9 +3798,17 @@ class LightmapBaker(ptk.LoggingMixin):
         mapping -- the caller reports its objects unbaked, and they keep the
         map and marker they had. Handing back its work-dir path instead
         pointed the marker at a file the caller was about to sweep.
+
+        A recorded bake (:attr:`_staging`) places each map in the session
+        instead (``LightmapRecords._stage``), named as above for its folder,
+        which it reaches when the scene is saved.
         """
         homes = homes or {}
         claims = claims or {}
+
+        def staged(path: str) -> str:
+            return LightmapRecords._stage(path) if self._staging else path
+
         failed: set = set()
         # The objects each source file is placed for: a name only they read is
         # theirs to replace, a name anyone else reads is not.
@@ -3177,14 +3825,15 @@ class LightmapBaker(ptk.LoggingMixin):
             if source in failed:
                 continue
             folder = homes.get(name) or output_dir
-            if os.path.normcase(os.path.dirname(source)) == os.path.normcase(
-                os.path.abspath(folder)
-            ):
+            if os.path.normcase(
+                os.path.dirname(LightmapRecords._home(source))
+            ) == os.path.normcase(os.path.abspath(folder)):
                 moved[source] = path
                 out[name] = (path, rect)
                 continue
             stem, ext = os.path.splitext(os.path.basename(path))
-            os.makedirs(folder, exist_ok=True)
+            if not self._staging:  # a session folder is made as it is staged
+                os.makedirs(folder, exist_ok=True)
             # An adjacent name rather than a refusal when the destination is
             # held open (the DCC's own texture cache, or a cloud sync indexing
             # the fresh render) -- the same policy as
@@ -3198,7 +3847,7 @@ class LightmapBaker(ptk.LoggingMixin):
             # Material Textures) holds their maps under the same names, and
             # replacing one handed that scene this one's lighting. Nothing
             # placed earlier in this call is replaced at all.
-            placed = {os.path.normcase(p) for p in moved.values()}
+            placed = {os.path.normcase(LightmapRecords._home(p)) for p in moved.values()}
             owners = placed_for.get(source, set())
             dst, error = None, None
             k = attempts = 0
@@ -3217,8 +3866,9 @@ class LightmapBaker(ptk.LoggingMixin):
                     continue
                 attempts += 1
                 try:
-                    self._move_into_place(source, candidate)
-                    dst = candidate
+                    target = staged(candidate)
+                    self._move_into_place(source, target)
+                    dst = target
                     break
                 except OSError as e:
                     error = e
@@ -3386,7 +4036,7 @@ class LightmapBaker(ptk.LoggingMixin):
                 )
                 for atlas, objs in placing.in_place.items():
                     try:
-                        written = self._pack_in_place(
+                        written = self._write_in_place(
                             atlas, {o: mapping[o] for o in objs}, placing, 1.0, regions
                         )
                     except Exception as e:
@@ -4116,20 +4766,30 @@ class LightmapBaker(ptk.LoggingMixin):
         map (*avoid*, a set of abspaths), or a file name anyone else reads
         (*claims* -- see :meth:`LightmapRecords.claims`) are disambiguated
         (``{name}_1`` ...). The rule is :meth:`ptk.FileUtils.unique_path`.
+
+        A session folder (``LightmapRecords._stage``) is named for as its home
+        -- the folder the name lands in at the save -- and the path handed
+        back is in the session folder.
         """
-        return ptk.FileUtils.unique_path(
-            output_dir, name, ".exr", used, claims=claims, owners=owners, avoid=avoid
+        home = LightmapRecords._home(output_dir)
+        # Nor onto another scene's file the claims cannot see (one sharing
+        # this folder and texture set): LightmapRecords.strangers.
+        avoid = {LightmapRecords._home(p) for p in avoid} | LightmapRecords.strangers(
+            home, name, ".exr", claims
         )
+        path = ptk.FileUtils.unique_path(
+            home, name, ".exr", used, claims=claims, owners=owners, avoid=avoid
+        )
+        return path if home == output_dir else LightmapRecords._stage(path)
 
     def _apply_intensity(self, paths, intensity: float) -> None:
         """Scale each unique lightmap file's texels by *intensity*, once.
 
         Files shared by several objects (an atlas) are deduped by abspath so
         they scale exactly once per call. :meth:`bake` calls it on the maps it
-        has just written, which is what makes it once per map; so, until
-        0.20.0, does :meth:`commit_lightmap`'s deprecated ``intensity``. A file
-        that can't be read is left untouched and logged -- the record is worth
-        more than the multiplier.
+        has just written, which is what makes it once per map. A file that
+        can't be read is left untouched and logged -- the record is worth more
+        than the multiplier.
         """
         if TextureBaker._cv2() is None:
             self.logger.warning(
@@ -4158,29 +4818,14 @@ class LightmapBaker(ptk.LoggingMixin):
     #
     # What a bake leaves in the scene is LightmapRecords'. The workflow verbs a
     # baker is asked for stay here as delegates. The dependency and manifest
-    # calls moved there outright and warn here until 0.20.0: they never needed
-    # a baker, and building one just to read markers is what six modules did.
+    # calls moved there outright: they never needed a baker, and building one
+    # just to read markers is what six modules did.
 
-    @ptk.Deprecation.parameter(
-        "uv_rects",
-        remove_in="0.20.0",
-        since="2026-09-23",
-        reason="Only a pre-0.17 atlas pack squeezed UVs into a rect, and "
-        "LightmapRecords.migrate_legacy now restores those losslessly.",
-    )
-    @ptk.Deprecation.parameter(
-        "intensity",
-        remove_in="0.20.0",
-        since="2026-09-23",
-        reason="Pass intensity to bake(), which scales the maps it has just "
-        "written exactly once; committing a map twice here scaled it twice.",
-    )
     def commit_lightmap(
         self,
         mapping: Dict[str, str],
-        intensity: float = 1.0,
+        *,
         scale_offsets: Optional[Dict[str, List[float]]] = None,
-        uv_rects: Optional[Dict[str, List[float]]] = None,
     ) -> Dict[str, str]:
         """Record maps baked elsewhere: :meth:`LightmapRecords.commit`.
 
@@ -4189,28 +4834,10 @@ class LightmapBaker(ptk.LoggingMixin):
         ``{object: lightmap path}`` and *scale_offsets* each object's atlas
         rect (see :meth:`pack_atlas`).
 
-        Two parameters are deprecated (removed in 0.20.0) and keep their old
-        behaviour until then. ``intensity`` other than 1.0 is scaled into the
-        texels -- each unique file once per call, so committing a map again
-        scales it again; :meth:`bake`'s ``intensity`` applies it where the map
-        is written. ``uv_rects`` records a remap an old pack had already
-        squeezed INTO the UVs (the marker's ``uvRect``).
-
         Returns:
             ``{object: lightmap path}`` for each object recorded.
         """
-        recorded = LightmapRecords.commit(
-            mapping, scale_offsets=scale_offsets, intensity=intensity
-        )
-        for obj, rect in (uv_rects or {}).items():
-            if obj in recorded:
-                LightmapRecords._stamp_uv_rect(obj, rect)
-        # Scale texels only once a marker resolved: a commit that records
-        # nothing must not mutate files on disk (the retry would re-apply the
-        # multiplier on top).
-        if recorded and float(intensity) != 1.0:
-            self._apply_intensity(recorded.values(), intensity)
-        return recorded
+        return LightmapRecords.commit(mapping, scale_offsets=scale_offsets)
 
     def revert(self, objects: Optional[List[str]] = None) -> List[str]:
         """Take the lightmaps off *objects*, or off every baked object for ``None``.
@@ -4233,91 +4860,321 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         return LightmapRecords.baked_objects(objects)
 
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.lightmap_dependencies", remove_in="0.20.0", since="2026-09-23"
-    )
-    def lightmap_dependencies(
+    def track(self, objects: Optional[List[str]] = None) -> List[str]:
+        """Start tracking *objects*' untracked maps as they stand -- no render.
+
+        :meth:`LightmapRecords.track`, under the lighting this baker would
+        bake *objects* with (:meth:`_lighting_state`): for maps known to match
+        the scene, so their changes from here on are detected. A map that may
+        be out of date wants :meth:`rebake` instead. Returns the transforms
+        now tracked.
+        """
+        return LightmapRecords.track(objects, lighting=self._lighting_state(objects))
+
+    # ------------------------------------------------------------------
+    # Combine -- a split group's maps packed into one atlas, no render
+    # ------------------------------------------------------------------
+
+    #: The largest atlas :meth:`combine_sizes` offers, in px.
+    COMBINE_MAX_SIZE: int = 8192
+
+    #: The share of every object's cell edge a size must keep to count as
+    #: keeping all its detail (:meth:`combine_sizes`): rounding to whole
+    #: texels and block-aligned slots loses a hair of it at any size.
+    COMBINE_KEEP: float = 0.97
+
+    def combine_sizes(
+        self, maps: Optional[List[str]] = None
+    ) -> List[Tuple[int, float]]:
+        """``[(size, kept)]`` -- the atlas sizes :meth:`combine` of *maps* can
+        take, smallest first: from the largest map the groups read now, by
+        powers of two, up to the first that keeps every object's detail
+        (``kept``: the least of any object's new cell edge over its old one,
+        1.0 at most), at most :attr:`COMBINE_MAX_SIZE`. The last keeps the
+        most. Laid out as :meth:`combine` lays it; nothing written.
+        """
+        groups = self._combine_groups(maps)
+        if not groups:
+            return []
+        readers = [r for _paths, objs in groups for r in objs]
+        dims = {p: self._map_dims(p) for paths, _objs in groups for p in paths}
+        old = self._cell_texels(readers, dims)
+        # A map that cannot be read sizes nothing: the baker's own resolution.
+        largest = max(max(d) for d in dims.values()) or int(self.resolution)
+        size = 1 << max(0, int(math.ceil(math.log2(max(largest, 1)))))
+        out: List[Tuple[int, float]] = []
+        while True:
+            with self._at_resolution(size):
+                new = self.plan_sizes(self.atlas_plan(readers))
+            kept = min(
+                (
+                    min(1.0, new[o][0] / max(old[o][0], 1.0), new[o][1] / max(old[o][1], 1.0))
+                    for o in new
+                    if o in old
+                ),
+                default=1.0,
+            )
+            out.append((size, kept))
+            if kept >= self.COMBINE_KEEP or size >= self.COMBINE_MAX_SIZE:
+                return out
+            size *= 2
+
+    def combine(
         self,
-        objects: Optional[List[str]] = None,
-        search_dirs: Optional[List[str]] = None,
-        walk: bool = True,
-    ) -> List[Dict[str, Any]]:
-        """Moved to :meth:`LightmapRecords.lightmap_dependencies`."""
-        return LightmapRecords.lightmap_dependencies(objects, search_dirs, walk)
+        maps: Optional[List[str]] = None,
+        size: Optional[int] = None,
+        merge_materials: bool = True,
+        on_progress: Optional[Callable[[int, int, str], Any]] = None,
+    ) -> LightmapBakeResult:
+        """Pack each split group *maps* belong to into one atlas -- no render.
 
-    @classmethod
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.search_dirs", remove_in="0.20.0", since="2026-09-23"
-    )
-    def search_dirs(cls, objects: Optional[List[str]] = None) -> List[str]:
-        """Moved to :meth:`LightmapRecords.search_dirs`."""
-        return LightmapRecords.search_dirs(objects)
+        A split (:meth:`_splits`): one material in two shading groups, or a
+        duplicate of it, baked apart. Each object's lighting is cut from the
+        map it reads now (:meth:`_reused_tile`: its cell, through its
+        binding) and packed as a fresh bake packs it (:meth:`atlas_plan`,
+        :meth:`pack_atlas`: one texel density, gutters filled, seams
+        stitched) into the group's own folder -- under a name no other scene
+        file reads, so a map another scene shares is never written -- when
+        the scene is saved; until then it waits in the session
+        (``LightmapRecords._stage``), and an unsaved Combine leaves the saved
+        scene's maps as they were. The maps nothing reads any more are set
+        aside at that save (:meth:`LightmapRecords.superseding`); each object keeps when, and
+        under what lighting, it was baked. One undo chunk for the scene's part.
 
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.heal_lightmap_paths", remove_in="0.20.0", since="2026-09-23"
-    )
-    def heal_lightmap_paths(
-        self, objects: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        """Moved to :meth:`LightmapRecords.heal_lightmap_paths`."""
-        return LightmapRecords.heal_lightmap_paths(objects)
+        Parameters:
+            maps: Map file names (or paths) whose groups combine; ``None``:
+                every split.
+            size: The atlas size, px; ``None``: the last of
+                :meth:`combine_sizes` (every object's detail kept).
+            merge_materials: Merge the group's duplicate materials into one
+                (``MatUtils.reassign_duplicate_materials``): the duplicates
+                are what split the maps. Last, once every object is cut: a
+                cancel, or a map that cannot be read, merges nothing.
+            on_progress: ``(done, total, object) -> bool`` per object cut, as
+                :meth:`bake`'s; ``False`` cancels before anything is written.
 
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.relocate_lightmaps", remove_in="0.20.0", since="2026-09-23"
-    )
-    def relocate_lightmaps(
+        Returns:
+            :class:`LightmapBakeResult` -- ``refused`` when nothing is split,
+            or the combine was cancelled.
+        """
+        result = LightmapBakeResult()
+        groups = self._combine_groups(maps) if cmds is not None else []
+        if not groups:
+            result.refused = "Nothing to combine: no map is split."
+            return result
+        with CoreUtils.undo_chunk("Combine Lightmaps"):
+            for paths, readers in groups:
+                names = [os.path.basename(p) for p in paths]
+                # An earlier group's merge can mend a later one: no longer
+                # split, it has nothing to combine and no size to offer.
+                if not self._combine_groups(names):
+                    continue
+                chosen = size or self.combine_sizes(names)[-1][0]
+                part = self._combine_group(
+                    paths, readers, chosen, merge_materials, on_progress
+                )
+                self._merge_result(result, part)
+                if part.refused and not part.maps:
+                    break
+        if not result.maps and not result.refused:
+            result.refused = "Nothing to combine: no map is split."
+        return result
+
+    def _combine_groups(
+        self, maps: Optional[List[str]] = None
+    ) -> List[Tuple[List[str], List[str]]]:
+        """The :meth:`_splits` groups ``(maps, objects)`` reading any of *maps*."""
+        groups = list(self._splits().values())
+        if maps is None:
+            return groups
+        wanted = {os.path.basename(str(m)).lower() for m in maps}
+        return [
+            (paths, readers)
+            for paths, readers in groups
+            if wanted & {os.path.basename(p).lower() for p in paths}
+        ]
+
+    def _combine_group(
         self,
-        dest_dir: str,
-        source_dir: str = "",
-        mode: str = "copy",
-        objects: Optional[List[str]] = None,
-        dry_run: bool = False,
-    ) -> Dict[str, Any]:
-        """Moved to :meth:`LightmapRecords.relocate_lightmaps`."""
-        return LightmapRecords.relocate_lightmaps(
-            dest_dir, source_dir, mode, objects, dry_run
+        paths: List[str],
+        readers: List[str],
+        size: int,
+        merge: bool,
+        on_progress: Optional[Callable[[int, int, str], Any]] = None,
+    ) -> LightmapBakeResult:
+        """:meth:`combine` of one split group, into a *size* px atlas."""
+        result = LightmapBakeResult()
+        # A legacy marker's squeezed UVs become its binding first, as a bake
+        # migrates them: the cut reads each cell through its binding.
+        LightmapRecords.migrate_legacy(readers)
+        # Every map is read first: one that does not decode (cut short, gone,
+        # no cv2) leaves its objects their map -- named below -- and holds
+        # back the merge, which deletes the duplicates.
+        reads = LightmapRecords._reads()
+        path_of = {t: p for t, _n, p in reads if p}
+        cache: Dict[str, Any] = {
+            p: TextureBaker._read_exr(p) for p in {path_of.get(r) for r in readers} if p
+        }
+        group = set(readers)
+        unread = sorted(
+            {n for t, n, _p in reads if t in group and cache.get(path_of.get(t)) is None}
+        )
+        before = LightmapRecords.bake_state()
+        markers = dict(LightmapRecords._marker_records())
+        levels = {r: float(markers[r].get("intensity", 1.0)) for r in readers}
+        # One intensity per atlas: a minority cell is rescaled to the most
+        # common one, which the marker then records.
+        values = list(levels.values())
+        intensity = max(set(values), key=values.count)
+        with self._at_resolution(size), ptk.TempArtifacts(
+            self.STAGING_PREFIX, policy="scoped"
+        ) as tmp:
+            plan = self.atlas_plan(readers)
+            sizes = self.plan_sizes(plan)
+            tiles: Dict[str, str] = {}
+            for i, obj in enumerate(sorted(sizes)):
+                name = obj.rsplit("|", 1)[-1]
+                if on_progress is not None and on_progress(i, len(sizes), name) is False:
+                    result.refused = "Combine cancelled: nothing written."
+                    result.cancelled = True
+                    return result
+                image = cache.get(path_of.get(obj))
+                if image is None:  # unreadable: it keeps its map (below)
+                    continue
+                tile = self._reused_tile(
+                    image, self._binding(markers[obj]), obj, sizes[obj]
+                )
+                tiles[obj] = os.path.join(tmp.dir_path(), f"tile_{i}.exr")
+                # A map baked at intensity 0 holds no light to rescale.
+                scale = intensity / levels[obj] if levels[obj] else 1.0
+                self._write_lightmap_exr(tiles[obj], tile * scale)
+                self._dilate_lightmap(
+                    tiles[obj],
+                    0.05,
+                    uv_triangles=self._lightmap_uv_triangles(obj),
+                    keep_coverage=True,
+                )
+            # Merged last: the plan already groups the duplicates as one
+            # (_atlas_keys), so nothing above needs it, and a cancel or a map
+            # that cannot be read leaves every material as it was.
+            if merge and unread:
+                self.logger.warning(
+                    "Combine: no material merged -- %s could not be read.",
+                    ", ".join(unread),
+                )
+            elif merge:
+                self._merge_duplicates(readers)
+            # A map this scene did not write (another scene's, a module's, or
+            # one older than the writer record) is never written over: the
+            # atlas takes a name of its own, and the old file stays.
+            claims = LightmapRecords.claims()
+            for path in paths:
+                key = os.path.basename(path).lower()
+                if not LightmapRecords.wrote(key):
+                    claims[key] = claims.get(key, frozenset()) | {LightmapRecords.FOREIGN}
+            # Into the session, its own name kept: the file the scene on disk
+            # reads is untouched until the scene is saved (_stage).
+            packed = self.pack_atlas(
+                tiles,
+                output_dir=LightmapRecords._pending().folder(os.path.dirname(paths[0])),
+                plan=plan,
+                claims=claims,
+            )
+            cells = self._plan_cells(plan, packed)
+        left = sorted(set(readers) - set(packed))
+        if left:
+            self.logger.warning(
+                "Combine: %d object(s) keep their map (hidden, excluded or "
+                "unreadable): %s",
+                len(left),
+                ", ".join(o.rsplit("|", 1)[-1] for o in left),
+            )
+        result.maps = {o: p for o, (p, _rect) in packed.items()}
+        result.rects = {o: [float(v) for v in r] for o, (_p, r) in packed.items()}
+        if not result.maps:
+            result.refused = "Combine wrote nothing (see Script Editor)."
+            return result
+        with LightmapRecords.superseding(result.maps) as retired:
+            LightmapRecords.commit(
+                result.maps, scale_offsets=result.rects, intensity=intensity, cells=cells
+            )
+        result.retired = retired
+        # Packed, not re-baked: each keeps when and how it was lit.
+        LightmapRecords._keep_bake_state(before, list(result.maps))
+        return result
+
+    def _reused_tile(
+        self, image: Any, scale_offset: List[float], obj: str, cell: Tuple[int, int]
+    ) -> Any:
+        """*obj*'s lighting cut from *image*, the map it reads: its whole
+        layout (uv 0-1) through its binding *scale_offset*, as a bake renders
+        a tile -- at the old cell's density or the new *cell*'s, whichever is
+        finer (``ptk.ImgUtils.warp_quad``, supersampled where it shrinks)."""
+        height, width = image.shape[:2]
+        sx, sy, ox, oy = (float(v) for v in scale_offset)
+        u0, v0, u1, v1 = self._lightmap_uv_bbox(obj) or (0.0, 0.0, 1.0, 1.0)
+        span_u, span_v = max(u1 - u0, 1e-6), max(v1 - v0, 1e-6)
+        cap = self.COMBINE_MAX_SIZE
+        out = (
+            int(min(cap, math.ceil(max(sx * width, cell[0] / span_u)))),
+            int(min(cap, math.ceil(max(sy * height, cell[1] / span_v)))),
         )
 
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.repath_lightmaps", remove_in="0.20.0", since="2026-09-23"
-    )
-    def repath_lightmaps(
-        self,
-        dirs_by_map: Dict[str, str],
-        objects: Optional[List[str]] = None,
-        relative: bool = True,
-    ) -> int:
-        """Moved to :meth:`LightmapRecords.repath_lightmaps`."""
-        return LightmapRecords.repath_lightmaps(dirs_by_map, objects, relative)
+        def at(u, v):  # layout uv -> the map's pixel-edge coordinates, rows down
+            return ((u * sx + ox) * width, (1.0 - (v * sy + oy)) * height)
 
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.normalize_lightmap_paths",
-        remove_in="0.20.0",
-        since="2026-09-23",
-    )
-    def normalize_lightmap_paths(
-        self, objects: Optional[List[str]] = None, relative: bool = True
-    ) -> int:
-        """Moved to :meth:`LightmapRecords.normalize_lightmap_paths`."""
-        return LightmapRecords.normalize_lightmap_paths(objects, relative)
+        corners = [at(0.0, 1.0), at(1.0, 1.0), at(1.0, 0.0), at(0.0, 0.0)]
+        return ptk.ImgUtils.warp_quad(image[..., :3], corners, out)
 
-    @classmethod
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.export_record", remove_in="0.20.0", since="2026-09-23"
-    )
-    def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
-        """Moved to :meth:`LightmapRecords.export_record`."""
-        return LightmapRecords.export_record(ctx)
+    def _cell_texels(
+        self, objects: List[str], dims: Dict[str, Tuple[int, int]]
+    ) -> Dict[str, Tuple[float, float]]:
+        """``{object: (w, h)}`` -- the texels of its cropped cell in the map it
+        reads now (*dims*: ``{path: (width, height)}``): its binding's span of
+        the map over its island's span."""
+        markers = dict(LightmapRecords._marker_records())
+        path_of = {t: p for t, _n, p in LightmapRecords._reads() if p}
+        out: Dict[str, Tuple[float, float]] = {}
+        for obj in objects:
+            path = path_of.get(obj)
+            if path not in dims or obj not in markers:
+                continue
+            width, height = dims[path]
+            sx, sy = self._binding(markers[obj])[:2]
+            u0, v0, u1, v1 = self._lightmap_uv_bbox(obj) or (0.0, 0.0, 1.0, 1.0)
+            out[obj] = (sx * width * (u1 - u0), sy * height * (v1 - v0))
+        return out
 
     @classmethod
-    @ptk.Deprecation.symbol(
-        "LightmapRecords.refresh_export_metadata",
-        remove_in="0.20.0",
-        since="2026-09-23",
-    )
-    def refresh_export_metadata(cls) -> Optional[str]:
-        """Moved to :meth:`LightmapRecords.refresh_export_metadata`."""
-        return LightmapRecords.refresh_export_metadata()
+    def _binding(cls, marker: Dict[str, Any]) -> List[float]:
+        """A marker's ``scaleOffset`` -- the identity for one that predates it."""
+        return [float(v) for v in marker.get("scaleOffset") or cls._IDENTITY_SCALE_OFFSET]
+
+    @staticmethod
+    def _map_dims(path: str) -> Tuple[int, int]:
+        """``(width, height)`` of the map at *path* -- ``(0, 0)`` unread."""
+        image = TextureBaker._read_exr(path)
+        return (0, 0) if image is None else (image.shape[1], image.shape[0])
+
+    @contextlib.contextmanager
+    def _at_resolution(self, size: int):
+        """This baker at *size* px for the block -- its plan and pack."""
+        was = self.resolution
+        self.resolution = int(size)
+        try:
+            yield
+        finally:
+            self.resolution = was
+
+    @classmethod
+    def _merge_duplicates(cls, objects: List[str]) -> None:
+        """Merge the duplicate materials *objects* use into one
+        (``MatUtils.reassign_duplicate_materials``: verified, the duplicates
+        deleted) -- what split their maps."""
+        sgs = {LightmapRecords._primary_material(o) for o in objects} - {None}
+        shaders = sorted({cls._surface_shader(sg) for sg in sgs})
+        if len(shaders) > 1:
+            MatUtils.reassign_duplicate_materials(shaders, delete=True)
 
     @contextlib.contextmanager
     def _muted_environment(self):

@@ -98,6 +98,23 @@ class TestMatUtilsExtended(MayaTkTestCase):
         assigned = MatUtils.get_mats(cube)
         self.assertEqual(assigned[0], mat1)
 
+    def test_an_empty_scope_is_nothing_not_the_whole_scene(self):
+        """``materials=[]`` asks about no material, and the destructive merge is
+        reached with an export scope that may wear none. Pinned because both
+        paths narrow through ``cmds.ls(names, mat=True)``: that answers ``[]``
+        for ``[]`` on Maya 2025 (probed), so a host that widened it to the
+        scene would merge materials the caller never named."""
+        mat1, _ = self._create_textured_material("mat1", self.tex1)
+        mat2, _ = self._create_textured_material("mat2", self.tex1)
+        MatUtils.assign_mat(cmds.polySphere(name="test_sphere")[0], mat1)
+        MatUtils.assign_mat(cmds.polyCube(name="test_cube")[0], mat2)
+        self.assertTrue(MatUtils.find_materials_with_duplicate_textures())
+
+        self.assertEqual(MatUtils.find_materials_with_duplicate_textures([]), {})
+        MatUtils.reassign_duplicate_materials([], delete=True)
+        MatUtils.reassign_duplicate_materials(["no_such_node"], delete=True)
+        self.assertTrue(cmds.objExists("mat1") and cmds.objExists("mat2"))
+
     def test_bridged_materials_sharing_their_maps_are_still_duplicates(self):
         """An Arnold bridge's emission follows its material's weight through a
         connection out of the material: the bridge's file is none of its textures."""

@@ -174,7 +174,8 @@ class TestExportManifest(_GroupsCase):
         self._add_two()
         payload = EmissiveGroups.refresh_export_metadata()
         data = json.loads(payload)
-        self.assertEqual(data["schema"], 1)
+        self.assertEqual(data["version"], ptk.SceneRecords.EMISSIVE_GROUPS.version)
+        self.assertNotIn("schema", data)
         self.assertEqual(data["encoding"], "vertex-color")
         self.assertEqual(data["color_set"], "emissiveGroups")
         self.assertEqual(
@@ -182,8 +183,6 @@ class TestExportManifest(_GroupsCase):
             [("front", 0), ("top", 1)],
         )
         # Round-trips through the shared engine model.
-        import pythontk as ptk
-
         manifest = ptk.RegionMaskManifest.from_json(payload)
         self.assertEqual(len(manifest.groups), 2)
 
@@ -259,7 +258,9 @@ class TestMaskBake(_GroupsCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "eg_EMask.json")))
         self.assertEqual(manifest["encoding"], "channels")
         self.assertEqual(manifest["mask"], "eg_EMask.png")
-        self.assertEqual(manifest["resolution"], 64)
+        # The mask states its own size; the manifest no longer repeats it
+        # (2026-10-20).
+        self.assertNotIn("resolution", manifest)
         # Both groups rasterized coverage into their slot channels.
         import numpy as np
         from PIL import Image

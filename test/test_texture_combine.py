@@ -247,7 +247,10 @@ class TestTextureCombine(MayaTkTestCase):
         info = LightmapRecords.lightmap_info(a1)
         self.assertEqual(info["map"], "kit_Lightmap.png")
         self.assertEqual(LightmapRecords.lightmap_info(b)["map"], "kit_Lightmap.png")
-        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "kit_Lightmap.png")))
+        # In the session until the scene is saved (LightmapRecords._stage).
+        renamed = os.path.join(self.tmp, "kit_Lightmap.png")
+        self.assertTrue(os.path.isfile(LightmapRecords._stage(renamed)))
+        self.assertFalse(os.path.isfile(renamed), "nothing in the folder before the save")
         # Outside any project and never written by this scene: the re-bake
         # guard leaves the old file for whoever else may read it.
         self.assertTrue(os.path.isfile(atlas))
@@ -278,6 +281,20 @@ class TestTextureCombine(MayaTkTestCase):
         self.assertEqual(result["lightmaps"]["map"], "kit_Lightmap_1.png")
         self.assertEqual(LightmapRecords.lightmap_info(a1)["map"], "kit_Lightmap_1.png")
         self.assertEqual(LightmapRecords.lightmap_info(a2)["map"], "kit_Lightmap.png")
+
+    def test_renamed_atlas_steps_aside_from_another_scenes_map_of_its_name(self):
+        """Review 2026-10-24: a file another scene wrote under the combine's
+        name -- read by nothing here, so no claim -- was taken over at the
+        save (LightmapRecords.strangers)."""
+        a1, _, b = self._scene()
+        self._lightmap_sets(a1, b)
+        own = self._image("matA_Lightmap.png", (128, 128, 128), size=16)
+        self._image("kit_Lightmap.png", (64, 64, 64), size=16)  # theirs
+        LightmapRecords.commit({a1: own, b: own}, written=False)
+        result = self._combine([a1, b])
+        self.assertEqual(result["lightmaps"]["how"], "renamed")
+        self.assertEqual(result["lightmaps"]["map"], "kit_Lightmap_1.png")
+        self.assertEqual(LightmapRecords.lightmap_info(a1)["map"], "kit_Lightmap_1.png")
 
     def test_lightmaps_gone_from_disk_leave_the_combine_standing(self):
         a1, _, b = self._scene()

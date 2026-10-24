@@ -32,11 +32,11 @@ from typing import Dict, List, Optional
 
 import pythontk as ptk
 
-try:
+try:  # guarded like every mayatk module: the surface must import without Maya
     import maya.cmds as cmds
     import maya.mel as mel
 except ImportError:
-    pass
+    cmds = mel = None
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
@@ -69,13 +69,15 @@ class AudioClips(ptk.LoggingMixin):
     consumption -- the key of the ``ptk.SceneRecords.AUDIO`` record."""
 
     MANIFEST_VERSION: int = ptk.SceneRecords.AUDIO.version
-    """Schema version of the ``audio_manifest`` JSON payload (stamped by the
+    """Schema version of the ``audio`` JSON payload (stamped by the
     ``ptk.SceneRecords.AUDIO`` declaration, never spelled here).
 
-    v2: ``{"version": 2, "events": [{"clip", "frame", "name"}, ...]}`` — an
-    event's ``clip`` names the shot take (Unity AnimationClip) it belongs to,
-    with ``frame`` relative to that take's start; an empty ``clip`` means
-    "every clip" (no takes published). v1 was the flat unversioned
+    v2: ``{"version": 2, "events": [{"clip", "frame", "name"}, ...], "fps"}``
+    — an event's ``clip`` names the shot take (Unity AnimationClip) it
+    belongs to, with ``frame`` relative to that take's start; an empty
+    ``clip`` means "every clip" (no takes published), its ``frame`` counted
+    from the first frame the file's animation holds; ``fps`` is the rate the
+    frames count at, which travels with them. v1 was the flat unversioned
     ``"12:footstep 24:jump"`` wire string (unscoped; consumers keep a legacy
     parser for pre-v2 FBX).
     """
@@ -233,7 +235,7 @@ class AudioClips(ptk.LoggingMixin):
 
     @classmethod
     def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:
-        """The ``audio_manifest`` record for this scene, or ``None`` when there
+        """The ``audio`` record for this scene, or ``None`` when there
         is nothing to publish -- the ``ptk.SceneRecords.AUDIO`` producer
         (``FbxUtils.PRODUCERS``).  Pure: it reads the keyed tracks and the
         takes and never writes.
@@ -242,7 +244,7 @@ class AudioClips(ptk.LoggingMixin):
         each event to its clip.  The takes are the ones the shot record
         declares (``ptk.SceneRecords.declared_takes``: produced earlier in the
         same assembly -- the shots producer runs first, the record declares
-        ``after=("shot_metadata",)`` -- else as stored; each clip carries its
+        ``after=("animation",)`` -- else as stored; each clip carries its
         range), exactly what ``FbxUtils.apply_takes_from_node``
         realizes into FBX takes, so scoping against them is correct by
         construction.  A take entry missing its name or range is dropped; when
@@ -250,7 +252,12 @@ class AudioClips(ptk.LoggingMixin):
         instead of silently dropping every event.  A ``full`` Animation Clips
         mode (``ctx.clip_mode``) realizes no take -- the FBX ships one
         whole-timeline clip -- so its events ship unscoped too: scoped to the
-        shots, they would name clips the file does not have.
+        shots, they would name clips the file does not have. An unscoped
+        event counts from the first frame the file's animation holds:
+        ``ctx.clip_span`` when the pipeline measured it, else the range the
+        write bakes (``FbxUtils.planned_bake_range``), else the playback start
+        -- blendertk's chain. One before it can never fire, and is dropped
+        with a warning.
 
         Parameters:
             ctx: The export's decisions and the records produced before this
@@ -273,15 +280,23 @@ class AudioClips(ptk.LoggingMixin):
             )
             return None
 
-        # Unity (and most game engines) start their clip clock at 0 — Maya
-        # frame ``playbackOptions.min`` becomes Unity time 0 after FBX
-        # import.  Unscoped events are shifted by ``-min`` so consumers
-        # computing ``time = frame / framerate`` land on the right
-        # animation moment instead of one bake-start offset late.
-        try:
-            playback_min = float(cmds.playbackOptions(q=True, min=True))
-        except Exception:
-            playback_min = 0.0
+        # Unity (and most game engines) start a clip's clock at 0, on the
+        # first frame the file's animation holds, so an unscoped event counts
+        # from that frame and a consumer computing ``frame / fps`` lands on
+        # its moment: the clip origin the pipeline measured (``ctx.clip_span``),
+        # else the range the write bakes, else the playback start --
+        # blendertk's chain, so either DCC ships one scene's events at the
+        # same frames.
+        from mayatk.env_utils.fbx_utils import FbxUtils
+
+        stack = ctx.clip_span or FbxUtils.planned_bake_range()
+        if stack:
+            origin = float(stack[0])
+        else:
+            try:
+                origin = float(cmds.playbackOptions(q=True, min=True))
+            except Exception:
+                origin = 0.0
 
         events = _audio_utils.bake_events(carrier=carrier)
         takes = (
@@ -289,7 +304,7 @@ class AudioClips(ptk.LoggingMixin):
             if ctx.clip_mode == "full"
             else ptk.SceneRecords.declared_takes(lambda key: ctx.record(key, DataNodes))
         )
-        scoped = cls._scope_events(events, takes, playback_min)
+        scoped = cls._scope_events(events, takes, origin)
         if not scoped:
             return None
         return ptk.SceneRecords.AUDIO.make(
@@ -313,8 +328,9 @@ class AudioClips(ptk.LoggingMixin):
         frame rebased to that take's start — the same frames the imported
         AnimationClip counts from.  Events outside every take are dropped
         with a warning (they could never fire in any clip).  With no takes,
-        events ship unscoped (``clip: ""``) rebased to ``playbackOptions
-        min``, which becomes time 0 of the single imported clip.
+        events ship unscoped (``clip: ""``), counted from the first frame the
+        file's animation holds (:meth:`export_record`) -- time 0 of the single
+        imported clip.
 
         The manifest is a regenerated export artifact — authoring state (the
         keyed ``audio_clip_<id>`` enums and ``audio_file_map``) stays on
@@ -357,22 +373,30 @@ class AudioClips(ptk.LoggingMixin):
         return record.text if record is not None else ""
 
     @classmethod
-    def _scope_events(cls, events: list, takes: list, playback_min: float) -> list:
+    def _scope_events(cls, events: list, takes: list, origin: float) -> list:
         """Assign baked ``(frame, name)`` events to their shot takes.
 
         ``ptk.AudioUtils.scope_events`` -- the rule blendertk's producer ships
         by too: an event lands in every take whose ``[start, end]`` range
         (inclusive) contains it, its ``frame`` rebased to that take's start; a
         take missing its name or range scopes nothing; with no usable take
-        events ship unscoped (``clip: ""``), rebased to *playback_min*.
-        Events outside every take are dropped with a warning.
+        events ship unscoped (``clip: ""``), counted from *origin*, the first
+        frame the file's animation holds. An event that can never fire --
+        outside every take, or before *origin* -- is dropped with a warning
+        that says which.
         """
-        scoped, dropped = ptk.AudioUtils.scope_events(events, takes, playback_min)
+        scoped, dropped = ptk.AudioUtils.scope_events(events, takes, origin)
         if dropped:
+            where = (
+                "outside every shot take"
+                if takes
+                else f"before the clip's first frame ({origin:g})"
+            )
             cls.logger.warning(
-                "prepare_for_export: %d audio event(s) outside every shot "
-                "take were dropped (they can never fire in a clip): %s",
+                "Audio: %d event(s) %s were dropped (they can never fire in a "
+                "clip): %s",
                 len(dropped),
+                where,
                 ", ".join(dropped),
             )
         return scoped

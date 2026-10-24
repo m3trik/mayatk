@@ -536,7 +536,7 @@ class TestCleanupContractAttrRestore(MayaTkTestCase):
         """A snapshotted STRING channel must restore on rollback — a bare
         setAttr raises on string attrs (they need type="string"), which the
         restore loop previously swallowed, leaving the mutated value behind
-        (regression: data_export producer channels — e.g. shadow_metadata —
+        (regression: data_export producer channels — e.g. shadows —
         snapshotted by a previewed op)."""
         node = cmds.createNode("transform", name="contract_str_node")
         cmds.addAttr(node, ln="payload", dt="string")
@@ -581,7 +581,7 @@ class TestCleanupContractAttrRestore(MayaTkTestCase):
         """Recording an attr that does not exist yet must roll back by
         DELETING it (regression: previewing a shadow rig in a scene whose
         data_export carrier pre-existed — created by Shots/Audio — left a
-        stale shadow_metadata channel behind after canceling the preview,
+        stale shadows channel behind after canceling the preview,
         because the missing-attr getAttr raised and the snapshot was
         silently skipped)."""
         node = cmds.createNode("transform", name="contract_new_attr_node")

@@ -10,16 +10,14 @@ Exporter, File ▸ Export, Game Exporter, scripts). One record, a plain string
 
 | Channel (attr) | Shape | Consumed by |
 |---|---|---|
-| `shot_metadata` | `{ "version": 1, "fps", "clip_mode", "shots": [{ "clip", "start", "end", "description", "objects", "section" }, …] }` | engine-side scripts (this doc); each clip's `start`/`end` is the take the FBX exporter realizes (`FbxUtils.apply_takes_from_node`) — one **AnimStack (Unity AnimationClip)** per shot |
+| `animation` | `{ "version": 1, "fps", "clip_mode", "shots": [{ "clip", "start", "end", "description" }, …] }` | engine-side scripts (this doc); each clip's `start`/`end` is the take the FBX exporter realizes (`FbxUtils.apply_takes_from_node`) — one **AnimStack (Unity AnimationClip)** per shot |
 
 **Invariant:** each clip's name and range come from a single resolution pass,
 so the take and its metadata cannot disagree — `clip` is the take name and the
-join key from a metadata record back to its imported clip. `description` and
-`section` are left out when empty; `objects` is always present (Unity's
-`ShotRecord` reads it as an array). Every reader takes the take list through
-`ptk.SceneRecords.declared_takes`: the clips' own ranges, else the `fbx_takes`
-list a file written before the ranges moved onto the clips carries instead (no
-longer written; the next shots publish clears it from a scene). The record adds
+join key from a metadata record back to its imported clip. `description` is
+left out when empty; a shot's members stay in the scene's own store. Every
+reader takes the take list through
+`ptk.SceneRecords.declared_takes`: the clips' own ranges. The record adds
 `fps` — the rate every frame number in it is counted in, which a consumer that
 did not author the scene cannot otherwise know — and `clip_mode`, the Animation
 Clips mode the export declared (`full` realizes no take: the FBX ships one
@@ -51,55 +49,54 @@ store refuses anything else (`ShotStore.name_error` gives the reason; every
 name field in the Shots panel, the Sequencer and its dialogs shows it) rather
 than letting the export respell it. Only a name held from before that rule is
 still respelled on export, and the export logs each `old -> new` when it does.
-Descriptions, sections and object lists ride as JSON strings and are never
-refused or rewritten.
+Descriptions ride as JSON strings and are never refused or rewritten.
 
-**The record declares the scene as it is now.** A shot is *stale* when every
+**Stale shots ship unless you leave them out.** A shot is *stale* when every
 object it names is gone from the scene and nothing is keyed inside its frames
 -- what a scene saved from another keeps of shots whose animation it deleted.
-The record leaves stale shots out (a take of one would carry nothing, and a GLB
-cannot carry an empty clip at all), drops each member the scene no longer
-holds, and the bake range spans only what it declares; clip names are resolved
-over every shot first, so the ones that ship keep theirs. The export log names
-what it left out, with an **Open Shots** link. The store keeps them: **Delete
-Stale Shots** (the Shots window's *All Shots* group, or the Sequencer's
-shot-list menu; `ShotStore.remove_stale_shots()`) drops their records without
-touching a key or moving a shot, where *Delete Shot* cuts a shot's keys and
-closes the gap behind it. A shot that names no members is never stale --
-nothing tells it from a hold.
+An export declares it like any other shot (its take holds still) and names it
+in the export log, with an **Open Shots** link. **Leave Stale Shots Out of
+Exports** (the option box of *Delete Shots*; `ShotStore.drop_stale_shots`, saved
+with the scene) leaves them out of the record, the takes and the bake range;
+clip names are resolved over every shot first, so the ones that ship keep
+theirs. **Delete Shots** with its *Stale* scope (the Shots window's *All Shots*
+group, or the Sequencer's shot-list menu; `ShotStore.remove_stale_shots()`)
+drops their records without touching a key or moving a shot, where *Delete
+Shot* cuts a shot's keys and closes the gap behind it. A shot that names no
+members is never stale -- nothing tells it from a hold.
 
 ## The GLB deliverable
 
-The same record survives the FBX → glTF conversion (`MeshConvert.fbx_to_glb`
-passes `--user-properties`, so it arrives as a node extra on `data_export`), and
-each declared take becomes a **glTF animation** named by clip. Three things about
-that are worth knowing, all probe-measured on Maya 2025 + FBX2glTF 0.13.1:
-
-- Maya's exporter keeps its whole-timeline `Take 001` **alongside** the split
-  takes, and it converts first — so `animations[0]` is the entire timeline, not
-  shot 1. (The split is therefore additive: turning it on never costs you the
-  continuous clip.)
-- Every clip's own keyframe times are **rebased to zero**, so a shot authored at
-  frames 20–30 and one at 1–10 both start at t=0.
-- The channels ride as JSON *strings* nested under
-  `extras.fromFBX.userProperties`, i.e. JSON inside JSON.
-
-`MeshConvert.apply_glb_animations` (automatic on every conversion) resolves all
-three into `extras.animation_web`, decoded and joined to the clips:
+A GLB is built from the FBX (`ptk.GlbPipeline`), which carries the record as
+a node extra on `data_export` (JSON inside JSON, under
+`extras.fromFBX.userProperties`). The build cuts each shot's clip from the
+whole-timeline animation (`MeshConvert.apply_glb_clips`), as the Animation
+Clips mode says: *Shots + Full Sequence* keeps the whole timeline beside the
+shots as `FULL_SEQUENCE`, *Shots Only* drops it, *Full Sequence Only* cuts no
+shot. It then states the shots in `extras.animation`
+(`MeshConvert.apply_glb_animations`, automatic on every conversion) and removes
+the FBX's copy:
 
 ```json
-{ "version": 1, "fps": 30.0, "default_clip": "SHOT_A",
-  "clips": [{ "name": "Take 001", "animation": 0, "duration": 0.966667, "declared": false },
-            { "name": "SHOT_A", "animation": 1, "duration": 0.3, "declared": true,
-              "start_frame": 1, "end_frame": 10, "offset": 0.033333,
-              "description": "…", "objects": ["…"] }] }
+{ "version": 2, "fps": 30.0, "clip_mode": "both", "default_clip": "SHOT_A",
+  "shots": [{ "clip": "SHOT_A", "start": 1, "end": 10, "description": "…" },
+            { "clip": "SHOT_B", "start": 20, "end": 30 }],
+  "clips": [{ "name": "SHOT_A", "animation": 0, "zero_frame": 1.0 },
+            { "name": "SHOT_B", "animation": 1, "zero_frame": 20.0 },
+            { "name": "FULL_SEQUENCE", "animation": 2, "zero_frame": 1.0 }] }
 ```
 
-`declared` marks the clips a shot asked for, `offset` places a clip on the
-authoring timeline in seconds, and `default_clip` is the one a player should open
-on. The glTF's own `animations` order is left exactly as written. The bundled
-WebXR preview (`pythontk`'s `net_utils/preview/viewer.html`) reads this block for its clip
-picker; `MeshConvert.verify_glb` reports the counts to a recipient.
+`shots` is the record's list as it stands, whatever clips the file holds. A
+shot plays the clip its `clip` names; one without a clip of its own (a *Full
+Sequence Only* file, or a take the build could not cut) plays its window
+`start`..`end` of the whole-timeline clip -- the one no shot names, as Unity's
+`TryGetSequenceWindow` does. Every clip is rebased to t=0, and its `zero_frame`
+is the authoring frame t=0 sits on: frame f is `(f - zero_frame) / fps`
+seconds into it. `default_clip` is the one to open on; the glTF's own
+`animations` order is left as written. The bundled WebXR preview reads the
+block for its clip picker and names the shot under the playhead on the
+whole-timeline clip; `MeshConvert.verify_glb` reports the counts to a
+recipient.
 
 ## Maya side
 
@@ -111,18 +108,22 @@ ShotStore.active().publish_export_view()      # publish the shot record now
 ShotStore.enable_auto_export()                # before-export hook: republish fresh + apply takes
 ```
 
+A hand-off -- the Unity bridge, the WebXR preview -- needs none of these: the
+shot record is a *derived* record, so every send republishes it from the store
+before its write.
+
 ### Coexistence with Audio (shared before-export hook)
 
 `enable_auto_export` opts the shot record into a shared `FbxUtils` before-export
 hook (`FbxUtils.enable_export_producer`); the Audio system opts its own in via
 `AudioClips.enable_auto_export()`. Both ride out on the **same** `data_export`
-GameObject with distinct attrs — Shots' plain `shot_metadata`, Audio's
-JSON `audio_manifest` (baked from the keyed `audio_clip_*` authoring state on
+GameObject with distinct attrs — Shots' plain `animation`, Audio's
+JSON `audio` (baked from the keyed `audio_clip_*` authoring state on
 `data_internal`) — so a scene with both
 exports one FBX that Unity imports into both a `ShotMetadataController` and an
 `AudioEventController` on the prefab root. The hook is reference-counted: enable
 either or both; each runs once per export, fault-isolated, **in the records'
-declared dependency order (`audio_manifest` reads `shot_metadata`, so shots
+declared dependency order (`audio` reads `animation`, so shots
 first)** — the audio producer reads the takes the shots producer just built and
 scopes each event to its take (`clip` + take-relative `frame`), so every audio
 event fires in its own AnimationClip -- and, in a Shots + Full Sequence file, at
@@ -139,7 +140,7 @@ reader:
 ## Unity side
 
 A ready-to-use **`ShotMetadataController.cs`** ships in `unitytk/templates/ShotMetadata/`
-(runtime component + an `AssetPostprocessor` that parses `shot_metadata`, attaches
+(runtime component + an `AssetPostprocessor` that parses `animation`, attaches
 the controller to the prefab root, and joins records to clips by name). Deploy it
 as part of the full compile-coupled set — `UnitytkSettings.cs` provides the shared
 `ImportGate`/`CarrierImport` (`unitytk.TemplateDeployer.deploy_package(project_root)`
@@ -156,7 +157,7 @@ played shot by shot. The importer warns when a record names a clip the file
 does not carry, as when an FBX is written without its shot takes.
 
 The minimal read, for reference — clips import natively; Maya exports the
-`shot_metadata` attr as an FBX *user property* on the `data_export` GameObject:
+`animation` attr as an FBX *user property* on the `data_export` GameObject:
 
 ```csharp
 using UnityEditor;
@@ -165,9 +166,8 @@ using UnityEngine;
 class ShotMetadataPostprocessor : AssetPostprocessor
 {
     [System.Serializable] class ShotRec {
-        public string clip, description, section;
+        public string clip, description;
         public float start, end;
-        public string[] objects;
     }
     [System.Serializable] class ShotMeta { public int version; public ShotRec[] shots; }
 
@@ -177,19 +177,18 @@ class ShotMetadataPostprocessor : AssetPostprocessor
     {
         for (int i = 0; i < names.Length; i++)
         {
-            if (names[i] != "shot_metadata") continue;
+            if (names[i] != "animation") continue;
             var meta = JsonUtility.FromJson<ShotMeta>((string)values[i]);
             foreach (var s in meta.shots)
-                Debug.Log($"[shot] clip={s.clip}  desc={s.description}  section={s.section}");
+                Debug.Log($"[shot] clip={s.clip}  desc={s.description}");
             // Join to clips by name: AnimationClip whose name == s.clip.
         }
     }
 }
 ```
 
-> `objects` are leaf names (per-shot membership the whole-scene takes can't
-> express). The `data_export` GameObject is a hidden, zero-scale locator carrier;
-> strip it after reading if you don't want it in the scene.
+> The `data_export` GameObject is a hidden, zero-scale locator carrier; strip it
+> after reading if you don't want it in the scene.
 
 ## Limitations
 

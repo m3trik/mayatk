@@ -9,6 +9,7 @@ before anything is merged, and the merge itself.
 Reached through :class:`mayatk.MatUtils`; nothing here is called directly.
 """
 
+import logging
 import os
 import re
 from typing import List, Dict
@@ -17,6 +18,8 @@ try:
     import maya.cmds as cmds
 except Exception:
     cmds = None
+
+logger = logging.getLogger(__name__)
 
 
 class _DuplicatesInternal:
@@ -277,11 +280,8 @@ class _DuplicatesInternal:
                     ]
                 if dups:
                     duplicates[original] = dups
-
-        if duplicates:
-            print(f"{len(duplicates)} Duplicate material groups found:")
-            for original, dup_list in duplicates.items():
-                print(f"Original: {original}, Duplicates: {dup_list}")
+        # A query prints nothing: its callers report what it found (the
+        # Lightmap Baker's table reads it on every refresh).
         return duplicates
 
     @classmethod
@@ -306,38 +306,46 @@ class _DuplicatesInternal:
         duplicate_to_original = cls.find_materials_with_duplicate_textures(
             collected_materials, strict=strict, verify=verify
         )
-        duplicates_to_delete = []
         for original, duplicates in duplicate_to_original.items():
             original_sgs = cmds.listConnections(original, type="shadingEngine")
             if not original_sgs:
                 continue
-            original_sg = original_sgs[0]
-
             for duplicate in duplicates:
+                duplicate_sgs = set(
+                    cmds.listConnections(duplicate, type="shadingEngine") or []
+                )
                 try:
-                    duplicate_sgs = cmds.listConnections(
-                        duplicate, type="shadingEngine"
+                    cls._merge_shading_groups(
+                        {sg: original_sgs[0] for sg in sorted(duplicate_sgs)},
+                        delete=delete,
                     )
-                    if not duplicate_sgs:
-                        continue
-
-                    for dup_sg in duplicate_sgs:
-                        members = cmds.sets(dup_sg, q=True)
-                        if members:
-                            cmds.sets(members, edit=True, forceElement=original_sg)
-                            print(
-                                f"Reassigned material from {duplicate} to {original} on members: {members}"
-                            )
-                    duplicates_to_delete.append(duplicate)
+                    # Debug, never print: the Lightmap Baker's Combine and the
+                    # Scene Exporter call this, and a print lands in the Script
+                    # Editor once per material.
+                    logger.debug("Reassigned material from %s to %s.", duplicate, original)
                 except Exception as e:
-                    print(f"Error processing material {duplicate}: {e}")
-                    continue
+                    cmds.warning(f"Could not merge {duplicate} into {original}: {e}")
 
-        if delete:
-            for duplicate in duplicates_to_delete:
-                try:
-                    if cmds.objExists(duplicate):
-                        cmds.delete(duplicate)
-                        print(f"Deleted duplicate material: {duplicate}")
-                except Exception as e:
-                    print(f"Error deleting material {duplicate}: {e}")
+    @classmethod
+    def _merge_shading_groups(cls, pairs: Dict[str, str], delete: bool = True) -> None:
+        """Move each shading group's members into the one *pairs* maps it to;
+        with *delete*, then delete it and its shaders that no other shading
+        group uses. A default node (``initialShadingGroup``, ``lambert1``) is
+        emptied, never deleted."""
+        defaults = set(cmds.ls(defaultNodes=True) or [])
+        slots = cls._SG_SHADER_SLOTS + cls._SG_EXTRA_SHADER_SLOTS
+        for dup, kept in pairs.items():
+            if dup == kept or not cmds.objExists(dup):
+                continue
+            members = cmds.sets(dup, q=True)
+            if members:
+                cmds.sets(members, edit=True, forceElement=kept)
+            if not delete or dup in defaults:
+                continue
+            shaders = set(cls._sg_shaders(dup, slots=slots))
+            cmds.delete(dup)
+            for shader in sorted(shaders - defaults):
+                if cmds.objExists(shader) and not cmds.listConnections(
+                    shader, type="shadingEngine"
+                ):
+                    cmds.delete(shader)

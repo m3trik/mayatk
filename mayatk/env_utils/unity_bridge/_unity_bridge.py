@@ -48,7 +48,7 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     #: Unlike a DCC hand-off, this FBX is not an intermediate -- it lands in ``Assets/``
     #: as the deliverable, and unitytk's ``LightmapMetadataController`` binds Unity's
     #: native lightmap slots (``renderer.lightmapIndex`` / ``lightmapScaleOffset``) by
-    #: reading ``lightmap_metadata`` off ``data_export``. Without the carrier that
+    #: reading ``lightmaps`` off ``data_export``. Without the carrier that
     #: controller finds nothing and the import is silently unlit -- on the platform the
     #: bake targets first.
     include_data_export = True

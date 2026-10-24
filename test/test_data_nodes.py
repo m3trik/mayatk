@@ -361,6 +361,14 @@ class TestStoreContract(MayaTkTestCase):
         for node in (DataNodes.EXPORT, DataNodes.INTERNAL):
             self.assertFalse(cmds.attributeQuery("probe", node=node, exists=True))
 
+    def test_a_remove_drops_a_retired_proxy_pair(self):
+        """``migrate`` removes a renamed key: a proxied one must not leave its
+        private source behind, read by nothing."""
+        self._retired_proxy_pair()
+        self.assertTrue(DataNodes.remove(DELIVERABLE, "probe"))
+        for node in (DataNodes.EXPORT, DataNodes.INTERNAL):
+            self.assertFalse(cmds.attributeQuery("probe", node=node, exists=True))
+
     def test_dump_groups_by_node_and_decodes(self):
         self.assertEqual(
             DataNodes.dump(), {DataNodes.INTERNAL: {}, DataNodes.EXPORT: {}}
@@ -396,7 +404,7 @@ class TestRecords(MayaTkTestCase):
         self.assertEqual(payload["objects"], [{"name": "a"}])
         self.assertEqual(payload["version"], ptk.SceneRecords.LIGHTMAPS.version)
         self.assertEqual(
-            json.loads(cmds.getAttr(f"{DataNodes.EXPORT}.lightmap_metadata"))[
+            json.loads(cmds.getAttr(f"{DataNodes.EXPORT}.lightmaps"))[
                 "version"
             ],
             ptk.SceneRecords.LIGHTMAPS.version,
@@ -436,8 +444,22 @@ class TestRecords(MayaTkTestCase):
             },
         )
         handoff = ptk.SceneRecords.HANDOFF.load(DataNodes)
-        self.assertEqual(list(handoff["reads"]), ["data_export.lightmap_metadata"])
-        self.assertEqual(handoff["source"], None, "no provenance was given")
+        # Handoff v3: the approved scene part by part, each with the data it is
+        # built from -- the lightmaps record's own row, and the lighting rows
+        # that read it -- and only a source under ``extras``.
+        lightmaps = "data_export.lightmaps"
+        self.assertEqual(
+            [(row["part"], row["data"]) for row in handoff["assembly"]],
+            [
+                ("geometry", []),
+                ("lightmaps", [lightmaps]),
+                ("environment", ["rendering.environment", lightmaps]),
+                ("key_light", ["rendering.keyLight"]),
+                ("lightmapped_materials", ["rendering.lightmappedMaterials", lightmaps]),
+                ("renderer", ["rendering.renderer"]),
+            ],
+        )
+        self.assertNotIn("extras", handoff, "no provenance was given")
         ptk.ExportSnapshot.publish(DataNodes, {ptk.SceneRecords.LIGHTMAPS: None})
         self.assertFalse(ptk.SceneRecords.HANDOFF.is_present(DataNodes))
 
@@ -553,7 +575,7 @@ class TestCarrierCrossings(MayaTkTestCase):
         publishes afresh (here: no lightmap markers, so no manifest)."""
         carriers = self._foreign(
             deliverable={
-                "lightmap_metadata": {"version": 1, "objects": [{"name": "x"}]}
+                "lightmaps": {"version": 1, "objects": [{"name": "x"}]}
             }
         )
         plan = DataNodes.merge_plan(carriers)
@@ -721,6 +743,118 @@ class TestRecordHandoff(MayaTkTestCase):
         self.assertIn("glow", groups, "the registry still merges")
         self.assertTrue(groups["glow"]["missing"], "no set: no faces were claimed")
         self.assertTrue(any("faces" in n for n in ctx.notes), ctx.notes)
+
+
+class TestRecordMigration(MayaTkTestCase):
+    """A record stored under a key it has since been renamed from moves to
+    its current key, and a retired one goes (``ptk.SceneStoreBase.migrate``)
+    -- at every commit, and when a scene is opened (the path hook's
+    ``kAfterOpen``), so what reads the records before an export finds them.
+    ``remove`` deletes the attribute itself, so no emptied old one is left.
+    Added: 2026-10-20"""
+
+    def test_remove_deletes_the_attribute(self):
+        DataNodes.write(ptk.Scope.DELIVERABLE, "gone", "x")
+        self.assertTrue(DataNodes.remove(ptk.Scope.DELIVERABLE, "gone"))
+        self.assertFalse(cmds.attributeQuery("gone", node=DataNodes.EXPORT, exists=True))
+        self.assertFalse(DataNodes.remove(ptk.Scope.DELIVERABLE, "gone"))
+
+    def test_migrate_moves_a_renamed_record_and_removes_a_retired_one(self):
+        text = '{"version": 2, "objects": []}'
+        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmap_metadata", text)
+        DataNodes.write(ptk.Scope.DELIVERABLE, "fbx_takes", "[]")
+        moved = DataNodes.migrate()
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.LIGHTMAPS.key), text
+        )
+        for old in ("lightmap_metadata", "fbx_takes"):
+            self.assertFalse(
+                cmds.attributeQuery(old, node=DataNodes.EXPORT, exists=True), old
+            )
+        self.assertLessEqual({"lightmap_metadata", "fbx_takes"}, set(moved))
+        self.assertEqual(DataNodes.migrate(), [], "a migrated scene has nothing to move")
+
+    def test_opening_a_scene_migrates_its_records(self):
+        store = ptk.TempArtifacts("mtk_dn_migrate", policy="scoped")
+        self.addCleanup(store.cleanup)
+        path = os.path.join(store.dir_path(), "old_keys.ma")
+        text = '{"version": 1, "shots": []}'
+        DataNodes.write(ptk.Scope.DELIVERABLE, "shot_metadata", text)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        DataNodes.install_path_rebase()
+        cmds.file(path, open=True, force=True)
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key), text
+        )
+        self.assertFalse(
+            cmds.attributeQuery("shot_metadata", node=DataNodes.EXPORT, exists=True)
+        )
+
+    def test_an_open_whose_discard_fails_still_migrates_and_never_raises(self):
+        """``_after_open`` / ``_after_new`` never raise, and the pending files'
+        discard sat outside the guard: a failure there raised out of Maya's
+        callback and cost the open its migration. Added: 2026-10-24"""
+        from unittest import mock
+
+        text = '{"version": 1, "shots": []}'
+        DataNodes.write(ptk.Scope.DELIVERABLE, "shot_metadata", text)
+        with mock.patch.object(
+            ptk.PendingFiles, "discard", side_effect=OSError("held open")
+        ):
+            DataNodes._after_open()
+            DataNodes._after_new()
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key), text
+        )
+
+    def test_an_opened_scenes_migration_is_neither_an_edit_nor_an_undo_step(self):
+        """The open's migration is bookkeeping: a pre-rename scene opens
+        unmodified, and Ctrl+Z does not put its records back under the old
+        keys. A pin, not a fix: Maya holds undo off and leaves the modified
+        flag alone for the whole ``file -open``, its ``kAfterOpen`` callbacks
+        included (measured 2026-10-24, mayapy and GUI Maya 2025), so the
+        migration needs no guard of its own -- one deferred past the open
+        would. Added: 2026-10-24"""
+        store = ptk.TempArtifacts("mtk_dn_migrate_clean", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.addCleanup(cmds.file, new=True, force=True)  # off the file first
+        path = os.path.join(store.dir_path(), "old_keys.ma")
+        text = '{"version": 1, "shots": []}'
+        DataNodes.write(ptk.Scope.DELIVERABLE, "shot_metadata", text)
+        cmds.file(rename=path)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(new=True, force=True)
+        DataNodes.install_path_rebase()
+        self.addCleanup(DataNodes.remove_path_rebase)
+        was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True)
+        self.addCleanup(cmds.undoInfo, stateWithoutFlush=was)
+        cmds.file(path, open=True, force=True)
+        key = ptk.SceneRecords.SHOTS.key
+        self.assertEqual(DataNodes.read(ptk.Scope.DELIVERABLE, key), text)
+        self.assertFalse(
+            cmds.file(query=True, modified=True), "the open's migration is no edit"
+        )
+        try:
+            cmds.undo()
+        except RuntimeError:
+            pass  # nothing to undo: what this asks
+        self.assertEqual(
+            DataNodes.read(ptk.Scope.DELIVERABLE, key), text, "an undo un-migrated it"
+        )
+        self.assertFalse(
+            cmds.attributeQuery("shot_metadata", node=DataNodes.EXPORT, exists=True)
+        )
+
+    def test_the_shot_records_old_key_name_is_a_deprecated_alias(self):
+        """``DataNodes.SHOT_METADATA`` held the shot record's key under its
+        old name: retired, it warns and answers the declaration's.
+        Added: 2026-10-20"""
+        with self.assertWarns(DeprecationWarning):
+            key = DataNodes.SHOT_METADATA
+        self.assertEqual(key, ptk.SceneRecords.SHOTS.key)
 
 
 class TestProjectRelativePaths(MayaTkTestCase):

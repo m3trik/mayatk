@@ -226,7 +226,7 @@ class _AnimationTasksMixin(_TaskDataMixin):
 
         What :meth:`apply_declared_takes` realized, once it ran; before that,
         what it will: the shot store's shots (what the publish declares), else
-        the takes the carrier already declares (a legacy ``fbx_takes``).
+        the takes the carrier already declares.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
 
@@ -617,8 +617,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
     def ensure_scene_records_published(self):
         """Publish once if no task did: the bracket's fallback for a run with
         the carrier tasks off, so an ``all``-mode export never ships a carrier
-        whose records predate the artist's last edit.  What it left out is
-        logged as the carrier task's publish logs it
+        whose records predate the artist's last edit.  What its producers
+        noted is logged as the carrier task's publish logs it
         (:meth:`_log_snapshot_notes`): with that task off, this is the run's
         only publish, and the only place a stale shot is named."""
         if self._scene_snapshot is None:
@@ -651,7 +651,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         lightmaps and failed the verifier on two it could not find
         (2026-10-09). The scene's own copy of each narrowed record is put back
         after the run (``ExportSnapshot.restore_scene_wide``): the carrier the
-        scene keeps, and a later hand-off ships as stored, describes it all.
+        scene keeps, and a later hand-off ships as stored, describes it all --
+        and a transient record (the materials, which name this run's staged
+        maps) is cleared there, the scene never holding one.
         """
         from mayatk.env_utils.fbx_utils import FbxUtils
         from mayatk.node_utils.data_nodes import DataNodes
@@ -676,11 +678,16 @@ class _AnimationTasksMixin(_TaskDataMixin):
                     "scene_wide_records",
                     lambda: snapshot.restore_scene_wide(DataNodes),
                 )
-                self.logger.info(
-                    "Narrowed to the export set: "
-                    f"{', '.join(snapshot.scene_wide)} (the scene keeps its "
-                    "whole copy)."
-                )
+                narrowed = [
+                    key
+                    for key in snapshot.scene_wide
+                    if not ptk.SceneRecords.resolve(key).transient
+                ]
+                if narrowed:
+                    self.logger.info(
+                        "Narrowed to the export set: "
+                        f"{', '.join(narrowed)} (the scene keeps its whole copy)."
+                    )
             return snapshot
         except Exception:  # noqa: BLE001 - the write goes on; say what ships
             self.logger.warning(
@@ -712,8 +719,9 @@ class _AnimationTasksMixin(_TaskDataMixin):
         self._log_snapshot_notes()
 
     def _log_snapshot_notes(self):
-        """Log, as warnings, what a producer left out of this run's publish
-        (``ExportSnapshot.noted``: the stale shots a copied scene still holds),
+        """Log, as warnings, what a producer noted of this run's publish
+        (``ExportSnapshot.noted``: the stale shots a copied scene still holds,
+        shipped or left out),
         each with a link to the panel that acts on it (:attr:`NOTE_PANELS`).
         Every publish path calls it -- the carrier task's summary and the
         fallback publish of a run with that task off.  Best-effort: never
@@ -770,8 +778,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
         Producer-agnostic: publishes the scene records once when no task has
         this run (``ensure_scene_records_published`` -- ``export_data_node``
         normally has), then realizes the takes the shot record declares
-        (``ptk.SceneRecords.declared_takes``: the clips' own ranges, else a
-        legacy ``fbx_takes``) into FBX export state, folding the carrier into
+        (``ptk.SceneRecords.declared_takes``: the clips' own ranges) into FBX
+        export state, folding the carrier into
         the export selection with them.  Runs BEFORE
         ``set_bake_animation_range``, which widens whatever range it sets to
         cover the union these takes claim.  A scene that declares no takes is
@@ -815,8 +823,8 @@ class _AnimationTasksMixin(_TaskDataMixin):
             # No split: the FBX ships its whole-timeline take, and the
             # converter is told to keep only that. The declared shots still
             # ride on the carrier as METADATA -- they describe the scene, and
-            # extras.animation_web publishes each one's frame range so a player
-            # can seek the window inside the single clip.
+            # extras.animation inherits every one, so a player plays each as
+            # its window of the single clip.
             self.logger.info(
                 "Animation clips: shipping the full sequence only; the "
                 "declared shots are published as metadata, not as clips."

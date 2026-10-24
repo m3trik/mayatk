@@ -252,10 +252,10 @@ class _OpacityInternal:
     }
 
     @classmethod
-    def _resolve_opacity_mode(cls, opacity_mode, opacity):
+    def _resolve_opacity_mode(cls, opacity_mode):
         """Body of :meth:`MatUtils.resolve_opacity_mode`."""
         if opacity_mode is None:
-            opacity_mode = "transparent" if opacity else "none"
+            opacity_mode = "none"
         opacity_mode = cls._STINGRAY_GRAPH_ALIASES.get(opacity_mode, opacity_mode)
         return opacity_mode if opacity_mode in cls.STINGRAY_GRAPHS else "none"
 
@@ -277,9 +277,9 @@ class _OpacityInternal:
         return None
 
     @classmethod
-    def _resolve_stingray_graph(cls, opacity_mode, opacity):
+    def _resolve_stingray_graph(cls, opacity_mode):
         """Body of :meth:`MatUtils.resolve_stingray_graph`."""
-        name = cls.STINGRAY_GRAPHS[cls.resolve_opacity_mode(opacity_mode, opacity)]
+        name = cls.STINGRAY_GRAPHS[cls.resolve_opacity_mode(opacity_mode)]
         for graph in (
             os.path.join(os.path.dirname(os.path.abspath(__file__)), "shaderfx", name),
             os.path.join(
@@ -296,9 +296,9 @@ class _OpacityInternal:
         return None
 
     @classmethod
-    def _load_stingray_graph(cls, mat, opacity_mode, opacity):
+    def _load_stingray_graph(cls, mat, opacity_mode):
         """Body of :meth:`MatUtils.load_stingray_graph`."""
-        graph = cls.resolve_stingray_graph(opacity_mode, opacity)
+        graph = cls.resolve_stingray_graph(opacity_mode)
         if not graph:
             return False
         Plugins.load("shaderFXPlugin")
@@ -306,11 +306,11 @@ class _OpacityInternal:
         return True
 
     @classmethod
-    def _create_stingray_shader(cls, name, opacity, opacity_mode):
+    def _create_stingray_shader(cls, name, opacity_mode):
         """Body of :meth:`MatUtils.create_stingray_shader`."""
         Plugins.load("shaderFXPlugin")
         shader = NodeUtils.create_render_node(
             "StingrayPBS", name=name, create_shading_group=False
         )
-        cls.load_stingray_graph(shader, opacity_mode, opacity)
+        cls.load_stingray_graph(shader, opacity_mode)
         return shader

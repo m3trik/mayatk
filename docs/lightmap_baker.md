@@ -20,21 +20,23 @@ blendertk ships a Cycles twin; see [Blender twin](#blender-twin).
 ## Panel
 
 Open it from tentacle's **Lighting ▸ Lightmap Baker**, or with
-`marking_menu.show("lightmap_baker")`. From top to bottom:
+`marking_menu.show("lightmap_baker")`. A picker under the header switches
+between two pages: **Bake** -- what a new bake covers and how it renders --
+and **[Manage](#manage-page)** -- the maps the scene already reads. The run
+button sits below both. The Bake page, from top to bottom:
 
 | Control | What it does |
 |:---|:---|
-| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included -- or what **Changed** since the last bake and what that shades ([Re-bake Changed](#re-bake-changed)); choosing Changed puts what in the footer. Its three buttons say what lights the bake (see [Which lights light the bake](#which-lights-light-the-bake)): the **light** is *Include Scene Lighting* (on: every scene light; off: only the Scope's own), the **sphere** is *Include Environment* (on: the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards), and the **eye** is *Include Hidden Lights* (off by default: on switches the hidden lights on for the bake). |
+| **Scope** | What to bake: the **Selected** meshes, every **Visible** mesh, or the whole **Scene**, every copy of an instanced mesh included. Every Scope bakes fresh with the panel's settings; re-baking what changed is the [Manage page](#manage-page)'s. Its three buttons say what lights the bake (see [Which lights light the bake](#which-lights-light-the-bake)): the **light** is *Include Scene Lighting* (on: every scene light; off: only the Scope's own), the **sphere** is *Include Environment* (on: the HDRI skydome lights the bake; off hides the `aiSkyDomeLight` for the bake and restores it afterwards), and the **eye** is *Include Hidden Lights* (off by default: on switches the hidden lights on for the bake). |
 | **Exclude** | *Set From Selection* makes the selection the scene's [Exclude set](#exclude-set): objects that get no map of their own but still cast shadows and bounce light onto everything that bakes. Its icons select the set or clear it. The label shows how many meshes are excluded. |
 | **Isolate** | *Set From Selection* makes the selection the scene's [Isolate set](#isolate-set): moving parts (a locker door, a lid) that bake in a pass of their own and stay out of every other object's render. Same icons and count as Exclude. |
-| **Bake Set** | *Select Bake Set* selects the objects of the last saved bake. Its **disk** button is *Save After Bake*: while on, every bake replaces the scene's [Bake set](#bake-set) with the objects it acted on. One setting for every scene. Its **tag** button names the set with the naming convention's Set suffix (`lightmapBaker_baked_SET`) instead of plain (`lightmapBaker_baked`); **clear** deletes it. The label shows how many objects it holds. |
 | **Packing** | **Atlas by Material** (the default): one shared map per material group. **Per-Object**: one map per object at the full Resolution. See [Packing](#packing). Its **camera** button is *Reflection Probe*: on (the default), the bake also captures the room it lit as an HDR, for what a lightmap cannot hold. See [Reflection probe](#reflection-probe). |
 | **Processor** | Which one Arnold renders the bake on. **Auto** uses the GPU wherever Arnold has one, else the CPU; **GPU** and **CPU** force it. A machine setting, so it sits above the Quality group and no preset stores it. |
 | **Resolution** | Map size in pixels (256–4096). It also sets the gutter width. Its **filter** button is *Denoise*: each map is cleaned at the size it ships — the object's own map, or its atlas cell. |
 | **Samples** | Arnold camera (AA) samples per texel, squared. Its button is *Adaptive Sampling*: on a GPU bake the extra samples go only where the map is noisy. It greys out when the Processor is CPU. See [Sampling](#sampling). |
 | **GI Samples** | Indirect diffuse samples, squared. See [Sampling](#sampling). |
 | **Bounces** | Arnold's GI Diffuse Depth. 0 is direct light only; 2–3 light a room's corners and ceiling. |
-| **Output Directory** | Where maps are written. Empty uses the project's *sourceimages*. A relative path resolves under it; an absolute path is used as-is. The **image** toggle beside the field saves each map [beside its material's textures](#where-the-maps-land). |
+| **Output Directory** | Where maps are written. Empty writes to *sourceimages/lightmaps*. A relative path resolves under *sourceimages*; an absolute path is used as-is. The **image** toggle beside the field saves each map [beside its material's textures](#where-the-maps-land); the **open** button opens the folder the maps went to: where the last bake wrote, else this field's folder, else *sourceimages*. |
 | **Name** | Affix around each map's name. A leading `_` is a suffix (`_Lightmap`), a trailing `_` a prefix. |
 | **Preset** | The panel's bake settings under a name. See [Presets](#presets). |
 | **Reset to Defaults** | Puts every setting on the panel back, switches included. **Shift+Click** makes the current values your defaults; **Ctrl+Shift+Click** forgets those and returns to the shipped ones. The Exclude set lives in the scene, not on the panel, so a reset leaves it standing. |
@@ -55,9 +57,98 @@ action block the
 [WebXR preview](https://github.com/m3trik/pythontk/blob/main/docs/webxr_preview.md)
 panel ends with, so the two are worked the same way: pick a preset, then run.
 
-The header menu adds **Revert to Source** (see [Revert](#revert)) and
-**Open Sourceimages Folder**. The header's **?** holds a short version of this
-page.
+The header's menu holds the [Bake Report](#bake-report); every operation on
+the bakes the scene holds is the Manage page's. The header's **?** holds a
+short version of this page.
+
+### Manage page
+
+A table of every lightmap the scene reads, the reflection probe included:
+its file, how many objects read it, and its state. A state names the map's
+condition; a row's tooltip says what it means and which button fixes it,
+with the map's folder, size, which scene file wrote it, and why each of its
+readers re-bakes.
+
+| State | Means | Fix |
+|:---|:---|:---|
+| up to date | The map matches the scene as baked. | Nothing to do. |
+| N changed | N of its objects changed since the bake. | **Fix All**, or right-click: **Re-Bake**: they go back into their own cells, or the atlas is rebuilt when their cells no longer fit (the tooltip says why). A map another scene file wrote is copied for this scene first. |
+| group changed | Nothing in it changed, but its material group's atlas is rebuilt (an object new to the group, a different resolution or folder...). | **Fix All**, or right-click: **Re-Bake**. |
+| split | One material's objects read several maps where one atlas would do (see [Duplicate materials](#duplicate-materials)); the tooltip names the materials -- two or more is a duplicate still in the scene. Each extra map is one more texture to load, and its objects can't batch with the rest. Not a re-bake target. | **Fix All**, or right-click: **Combine…** -- no render. |
+| untracked | Baked before change tracking, or brought in from another file: changes to its objects go unseen. A bake of other objects leaves it untracked. | **Fix All**, or right-click: **Start Tracking**, records them as they stand, no render -- or **Re-Bake** if they may have changed since the map was baked. |
+| missing | The file is on disk nowhere -- tracked or not. | **Fix All**, or right-click: **Re-Bake** bakes it again -- or put the file back. When its objects are hidden or excluded no re-bake renders them: **Fix All**, or right-click: **Revert**, takes the lightmap off them -- or show them and re-bake. |
+
+Highlighting rows selects their objects, so the page acts on the scene
+selection like every Maya tool. The footer counts the rows by state, read
+again each time the page shows: gold when something needs fixing, red when a
+map is missing. Every footer message is one short line, in the same colors;
+the detail is in the tooltips, the confirmations and the Script Editor.
+
+The page's verbs are its table's right-click menu and two footer controls,
+shown with the Manage page only: the Preset, **Reset to Defaults** and the
+run button are the Bake page's, beside the settings they act on. A re-bake
+renders at the Bake page's Quality.
+
+| Where | Control | What it does |
+|:---|:---|:---|
+| Table (right-click a row) | **Re-Bake** | Re-bakes the selected objects -- a highlighted map's, or what Select picked -- as they were baked. See [Re-baking what changed](#re-baking-what-changed). |
+| | **Combine…** | Packs a *split* row's maps into one atlas from the lighting they hold -- no render -- and merges its duplicate materials. Asks the atlas size. See [Duplicate materials](#duplicate-materials). |
+| | **Start Tracking** | Records the selected untracked objects as baked, as they stand -- no render -- so a change from here on reads as changed. Enabled on an *untracked* row. For maps known to match the scene; **Re-Bake** one that may not. |
+| | **Revert…** | Removes the selected objects' lightmap wiring, once confirmed. See [Revert](#revert). |
+| | **Open Folder** | Opens the highlighted map's folder. |
+| Footer | **Select** | Highlights the maps in a state -- Changed, Split, Untracked, Missing, All -- and selects their objects, for the right-click menu. It clears the selection first, so a state with no maps leaves nothing selected. *Changed* selects exactly what a re-bake would redo, not every reader of their maps. |
+| | **Fix All** | Once confirmed, leaves no row needing a fix: reverts a missing map no re-bake renders (its objects hidden or excluded), combines each split, starts tracking the untracked as they stand -- confirming vouches for those maps; Cancel and **Re-Bake** them if they may be out of date -- then re-bakes what changed, a missing map among it. A split whose group has a changed member re-packs with the re-bake instead. The render runs last: cancelling it keeps the rest. |
+| Header | **Bake Report** | Opens the full [Bake Report](#bake-report): the whole scene, not a row. |
+
+### Duplicate materials
+
+An atlas is one per material group, and a group is what its material
+renders, not the node that holds it. Two groups that render alike are one
+group and bake one atlas:
+
+- **Duplicate materials**: two materials with one set of textures, an
+  imported copy (`Crate` and `Crate1`). The match is by texture, not name:
+  `MatUtils.find_materials_with_duplicate_textures` compares texture content,
+  placement and settings, so a renamed copy is found and two variants of one
+  name with their own textures are not.
+- **One material in two shading groups** (Maya): the same shaders wired into
+  two shading groups, as an FBX import leaves them. The material list shows
+  one material.
+
+A bake never edits the materials themselves: they stay as authored, and
+what the exporter reads is unchanged. Each object samples its own cell of
+the atlas, so sharing one changes no object's lighting. (Combine, below, is
+the one step that merges duplicates, and only when asked.)
+
+A scene baked before this grouping can still read two maps for one group
+(`Crate_Lightmap.exr` and `Crate_Lightmap_1.exr`): both rows read *split*.
+Nothing about it needs a render -- each object's lighting is in the maps
+already -- so **Combine…** (or **Fix All**) packs them:
+
+1. The group is laid out as a fresh bake lays it (`LightmapBaker.atlas_plan`):
+   one texel density, gutters, block-aligned cells.
+2. Each object's lighting is cut from the map it reads, through its own
+   binding, and placed in its new cell the way a bake places a tile:
+   coverage-weighted, seams stitched, gutters filled.
+3. The objects are bound to the new atlas. Each keeps when, and under what
+   lighting, it was baked, so nothing reads as changed.
+
+It runs under the footer's progress, one object at a time; a cancel writes
+nothing. The atlas size is asked: from the largest map the split reads, doubling until
+every object keeps its cell's detail (the production room: 2048 px keeps 56%,
+4096 px all of it). The duplicate materials are merged
+(`MatUtils.reassign_duplicate_materials`) -- they are what split the maps --
+last, once every object is cut: a cancel, or a map that cannot be read
+(that object keeps its map, named in the log), merges nothing.
+
+The new atlas is this scene's. A map another scene file wrote, one a
+referenced module reads, or one older than the writer record is never written
+over: the atlas takes a name of its own and the old file stays on disk.
+Otherwise it keeps the group's name, and, like every bake, reaches the folder
+when the scene is saved ([Saved with the scene](#saved-with-the-scene)); the
+map this scene wrote that nothing reads any more goes to the Recycle Bin then.
+A **Re-Bake** of either row's objects mends a split too, re-packing the whole
+group, at the cost of the render.
 
 ## Which lights light the bake
 
@@ -108,9 +199,10 @@ same steps:
 6. Place each map (see [Where the maps land](#where-the-maps-land)), then
    record it (`LightmapRecords.commit`): a JSON marker (`lightmapInfo`) on
    each transform, and a scene manifest on the `data_export` node that rides
-   the FBX (see [Scene data nodes](data_nodes.md)). The maps the objects read
-   before, and that nothing reads now, are set aside (see
-   [When the maps move](#when-the-maps-move)).
+   the FBX (see [Scene data nodes](data_nodes.md)). The maps wait in the
+   session until the scene is saved ([Saved with the scene](#saved-with-the-scene));
+   the ones the objects read before, and that nothing reads now, are set aside
+   then (see [When the maps move](#when-the-maps-move)).
 7. Measure the finished maps (`LightmapBaker.bake_verdict`). A bake that
    comes back essentially unlit, or blown out, is still recorded, because it
    is a faithful render of the scene. The panel's footer warns, and the
@@ -354,7 +446,7 @@ The JSON files in
 these numbers.
 
 **mobile** was named **quest**. `from_preset("quest")` still builds it, with
-a deprecation notice, until mayatk 0.21.0, and the panel moves a selection
+a deprecation notice, until mayatk 0.30.0, and the panel moves a selection
 saved as **quest** onto **mobile**.
 
 ## Exclude set
@@ -413,30 +505,14 @@ and shadows the rest, unless it is in this set.
 
 ## Bake set
 
-The Bake set holds the objects the last bake acted on: the Scope, minus the
-Exclude set and what Arnold renders nothing of, finished or not. Select it and
-bake again to re-run that bake. It is a plain `objectSet`
-(`mayatk.mat_utils.bake_sets.LightmapBakeSet`) and saves with the scene.
+Retired 2026-10-22: the panel no longer saves a Bake set. The Manage page
+selects each map's objects and re-bakes them the way they were baked, which
+is what selecting the set and baking again approximated (and only while the
+panel's settings had not moved). `mayatk.mat_utils.bake_sets.LightmapBakeSet`
+still resolves, with a deprecation notice, until mayatk 0.30.0; a set a scene
+already holds is left as it is.
 
-The panel writes it after a bake while *Save After Bake* (the row's disk
-button) is on; each bake replaces it. The switch is per user, not per scene,
-and off by default. The tag button picks its name: `lightmapBaker_baked`, or
-the naming convention's spelling, `lightmapBaker_baked_SET` with the shipped
-convention. The Set suffix is the one the Naming panel edits
-(`ptk.NamingConvention`, entry `objectSet`). Toggling the tag renames a set
-already in the scene. Either spelling reads, and so does a set saved before
-the convention changed.
-
-A script saves the same set after `bake()`:
-
-```python
-from mayatk.mat_utils.bake_sets import LightmapBakeSet
-
-result = mtk.LightmapBaker.from_preset("mobile").bake(objects)
-LightmapBakeSet.define(sorted(set(result.maps) | set(result.unbaked)), conventional=True)
-```
-
-## Re-bake Changed
+## Re-baking what changed
 
 Every bake records, per object, what its map was baked against: its world
 matrix and bounds, fingerprints of its points and of its lightmap UVs, its
@@ -446,7 +522,10 @@ switches and, with Include Scene Lighting off, the Scope's lights by name.
 The record is the scene's own (`data_internal`), never on the marker that
 ships.
 
-The **Changed** Scope re-bakes from it (`LightmapBaker.rebake_changed`):
+The Manage page's footer **Select** -> *Changed* selects what a re-bake of
+the changes would redo, read from it (`LightmapBaker.stale_report`), and
+highlights their maps; **Re-Bake** (right-click a map) then redoes exactly
+that, and **Fix All** does both. Scripted, `LightmapBaker.rebake_changed()`. What counts:
 
 - **Changed objects**: moved, deformed, remodelled, lightmap UVs re-laid,
   material regrouped, shown or hidden, or the map missing.
@@ -462,11 +541,13 @@ The **Changed** Scope re-bakes from it (`LightmapBaker.rebake_changed`):
   the whole room when every light lit it. A bake recorded before rules were
   reads as a lighting change once.
 
-Choosing Changed puts the count and why in the footer; **List Changed
-Objects** (header menu) selects them and lists each with its reason in the
-Script Editor. Nothing bakes until Bake. Each object re-bakes the way it was
-baked -- atlas or per object, lit by the lights its bake used -- whatever
-Packing and the light switches say, so the next Changed finds nothing.
+The Manage page puts the count in the footer, read again each time the
+page shows; each map's row names its state, and its tooltip says why and how
+to fix it. Nothing bakes until **Re-Bake**.
+Each object re-bakes the way it was baked -- atlas or per object, lit by the
+lights its bake used, into the folder its map is in -- whatever Packing, the
+light switches and the Output Directory say, so the next dry run finds
+nothing. The Output Directory takes only a map that has no file yet.
 
 An atlas re-bake writes the changed objects back into the cells they own in
 their material's atlas. Every other object's texels stay exactly as they
@@ -475,14 +556,67 @@ keeps one atlas at one texel density. A Selected or Visible bake of part of
 an atlas group does the same. The whole group re-bakes into a fresh layout
 instead, once, when an object no longer fits its cell (it grew or shrank by
 more than 10% on an axis), joins the group, or when the atlas was baked
-before cells were recorded or split by an earlier partial bake; the footer
-names the atlas and why. A member that cannot bake now (hidden, excluded)
-keeps the old atlas, and the rest of its group takes the next free name. An
-atlas baked through the Blender bridge records its cells too; one baked by a
-Blender whose blendertk predates them re-packs its group the first time.
+before cells were recorded, split by an earlier partial bake, or sits in
+another folder than the bake writes to; the confirmation names the atlas,
+why, and how many more objects re-bake with it. A member that cannot bake now
+(hidden, excluded) keeps the old atlas, and the rest of its group takes the
+next free name. An atlas baked through the Blender bridge records its cells
+too; one baked by a Blender whose blendertk predates them re-packs its group
+the first time.
 
-Not seen: an emissive material's strength and an albedo change. Bake the
-Scene after those.
+Re-Bake asks first when the answer is not obvious:
+
+- **Keep / Move**: the Output Directory is filled in, and the maps the
+  re-bake rewrites live elsewhere. Keep writes each back where it is; Move
+  writes them to the Output Directory, which re-packs every atlas it touches
+  whole there.
+- **Bake All / Cancel**: an atlas re-packs whole (every member renders
+  again), named with why, or the Bounces differ from the ones the maps were
+  baked with (every map re-bakes). A fresh Maya's panel holds its default
+  dials, not the preset the maps were baked with -- load that preset first,
+  and only what changed re-bakes.
+
+A Save As copy shares its source's maps until it re-bakes. Its first
+re-bake writes the changed cells into a copy of the source's atlas under the
+next free name (`<atlas>_1.exr`), and every object in the copy then reads
+that copy; the source's file is never written. Later re-bakes write in place
+into the copy. A copy saved into another project re-bakes into its own
+project's Output Directory, not the source project's folder.
+
+A visible mesh that is neither baked nor in the Exclude set is out of every
+bake's render, so adding one stales nothing. The footer counts these
+(`2 visible meshes out of the bake`), and the Bake Report lists them: bake them,
+or add them to the Exclude set to have them cast shadow and bounce without a
+map of their own.
+
+### Re-Bake a map
+
+**Re-Bake** on a highlighted map's row re-bakes its objects the way each was
+baked -- its packing, its lights, its folder -- whether or not anything
+changed: for what the record cannot see, an emissive material's strength or
+an albedo change, or a noisy render. Each atlas member is written back into
+its own cell, asking first as above. Objects with no lightmap yet are left
+out (Bake bakes them). Scripted: `LightmapBaker.rebake(objects)`, its dry run
+`rebake_report(objects)`.
+
+### Bake Report
+
+**Bake Report** (the header menu) opens a read-only report of every lightmap the
+scene reads: its file and folder, how many objects read it, its size, which
+scene file wrote it (another one, for a map a Save As copy still shares with
+its source), and its state, as the Manage table names it; *Needs
+attention* then says what each state not up to date means and how to fix
+it. Below that: each object a re-bake of the changes would redo, why and
+how (in place or re-pack), and the meshes out of the bake -- the table's
+detail, for the objects no row shows. Object counts and
+names select what they name; a folder opens. A map written since the scene
+was last saved shows the folder it reaches at the save, marked *on save* in
+italics (its name is italic on the Manage page too), and the report says why:
+it waits in a temp folder until then ([Saved with the scene](#saved-with-the-scene)).
+The window reads itself again on its header's refresh button, and on every save, open or new
+scene while it is open; so does the Manage page. Scripted:
+`LightmapBaker.bake_breakdown()` returns the same report as a
+`ptk.ReportDoc` (`to_html()` / `to_text()`).
 
 ## Where the maps land
 
@@ -500,14 +634,22 @@ object still uses. Re-baking one crate of ten that share a texture set, or a
 room around an excluded object that shares one, gives the new map the next
 free name (`_1`, `_2`, …) instead of writing over theirs. Both packings follow
 this rule. In an atlas, part of a group is written back into its own cells
-instead, so the material keeps one atlas ([Re-bake Changed](#re-bake-changed)).
+instead, so the material keeps one atlas ([Re-baking what changed](#re-baking-what-changed)).
 
 A scene saved from another (Save As) carries its source's markers, so they
 name the source's maps as this scene's own. The writer record says which
 scene file wrote each map (`SceneRecords.LIGHTMAP_WRITERS`): a map another
 scene file wrote is never written over -- the copy's map takes the next free
 name, and its atlas is never written in place -- so baking a moody copy
-cannot change what the original shows.
+cannot change what the original shows. The same holds for:
+
+- a map a referenced object reads that this scene did not write: it is the
+  module's, read by every scene that references it;
+- a file already in the folder under the atlas's name that this scene
+  neither reads nor wrote: another scene's whose material shares the texture
+  set. The atlas takes the next free name.
+
+Find & Move (Texture Path Editor) copies such a map instead of moving it.
 
 A measurement bake (`LightmapBaker(record=False)`: light layers, a rig's
 portability check) writes its maps and probe into the folder it is given and
@@ -532,12 +674,44 @@ the maps through the markers wherever they were written
 `FileDependencies`: resolve each map by its recorded folder first, then by a
 search, and gather the maps into one folder.
 
+## Saved with the scene
+
+A bake, a Re-Bake, a Combine, a lightmap transfer, Texture Combine's re-pack
+and a Blender bridge bake change maps the saved scene file reads, under the same names. Until
+the scene is saved, those changes stay out of the folder:
+
+- Each map is written to a session folder in temp, under the name it will
+  have (`LightmapRecords._stage`, pythontk's `PendingFiles`). The scene's
+  folder record points there, so the panel, the Scene Exporter, the Texture
+  Path Editor and the WebXR preview all read the new map. Writing a cell in
+  place copies the atlas there first.
+- **Save** moves each map the scene still reads into its folder, replacing
+  the old file under its own name -- no `_1` -- and then sets aside the maps
+  nothing reads any more ([When the maps move](#when-the-maps-move)). A map
+  an undo took back is dropped instead.
+- **Not saved** (File > New, opening a scene, quitting, a crash): the folder
+  is as the saved scene left it, and nothing is left behind -- the session
+  folder goes with the session, or with temp's next sweep after a crash.
+- **Save As** leaves the first file its maps. A map whose name is taken on
+  disk goes to the new file under the next free name, the new file owns
+  every map it saves, and nothing is set aside: the first file still reads
+  it all.
+
+An autosave or an export to a `.ma` is a copy, not a save: it moves nothing.
+A script calling a bake mechanism alone (`bake_separated`, `bake_atlas`,
+`bake_probe`) records nothing, so its maps go straight into the folder it
+names, as a measurement bake's do.
+If a map cannot be written to its folder (held open by another program), the
+save logs it, the scene keeps reading it from the session, and the next save
+tries again.
+
 ## When the maps move
 
 Re-bake after changing the Output Directory, Beside Material Textures, the
 Name affix or the Packing, and the objects get new files. The old ones are
-set aside once nothing reads them (`LightmapRecords.superseding`), and the
-footer says how many. A same-place re-bake just writes over its own maps.
+set aside once nothing reads them (`LightmapRecords.superseding`), when the
+scene is saved, and the footer says how many. A same-place re-bake just
+replaces its own maps.
 
 Set aside, never deleted: each goes to the Recycle Bin (the trash on Linux
 and macOS), or, where the drive has none -- a network share, a removable
@@ -564,14 +738,19 @@ file wrote the map, and a map is kept when:
 
 A scene saved under a new name, with the old file gone, still owns what it
 wrote, and so does a scene baked before its first save: the first save stamps
-the file it writes on every map baked while it was unsaved. Revert moves
-nothing.
+the file it writes on every map baked while it was unsaved. Its next save also
+writes the new name over the old one in the writer record, so a file that
+later reappears at the old name (a Save As back to it, a restored backup)
+does not take the maps over. A scene on a drive that is offline is not
+"gone": its maps stay its own. Revert moves nothing, and a reverted scene's
+own atlas stays its own to bake over.
 
 ## Revert
 
-**Revert to Source** removes the lightmap wiring: each object's marker and its
-entry in the export manifest. It acts on the selected objects, or on every
-baked object when nothing is selected.
+**Revert…** (right-click a map on the Manage page) removes the selected objects' lightmap wiring: each
+object's marker and its entry in the export manifest. It acts on the selected
+objects -- highlight rows to select their readers. With nothing selected it
+asks nothing: a whole-scene revert is every row highlighted.
 
 It first shows what it will do, with the object count, and waits for **Ok**.
 The materials and texture UVs were never changed, and the EXR files stay on
@@ -606,7 +785,7 @@ returns a `LightmapBakeResult`, the same shape in blendertk:
 | `excluded` | Objects the Exclude set left out. |
 | `hidden` | Objects left out because Arnold renders nothing of them (hidden or templated). Always empty in blendertk, which bakes hidden objects. |
 | `unbaked` | Objects asked for that the bake didn't finish. They keep the map they had. |
-| `retired` | Map files the bake superseded and set aside (the Recycle Bin, or a `_superseded` folder beside them). |
+| `retired` | Map files the bake superseded, set aside when the scene is saved (the Recycle Bin, or a `_superseded` folder beside them). |
 | `refused` | Why nothing was baked, as a sentence, or `None`. |
 | `verdict` | A warning about the maps' level, or `None`. |
 | `in_place` | Objects written back into their own atlas cells; every other object's texels were kept. |
@@ -629,23 +808,23 @@ objects handed to `bake` (or under them) are the Scope's. `bake(..., intensity=m
 Unity-native-light calibration into the texels, once. The default, 1.0,
 matches the Maya render.
 
-The record's methods moved from `LightmapBaker` to `LightmapRecords`. The
-baker's spellings (`lightmap_dependencies`, `search_dirs`,
-`heal_lightmap_paths`, `relocate_lightmaps`, `repath_lightmaps`,
-`normalize_lightmap_paths`, `export_record`, `refresh_export_metadata`) and
-`commit_lightmap`'s `intensity` and `uv_rects` parameters still work. Each one
-warns and is removed in 0.20.0.
+The record's methods live on `LightmapRecords` (`lightmap_dependencies`,
+`search_dirs`, `heal_lightmap_paths`, `relocate_lightmaps`,
+`repath_lightmaps`, `normalize_lightmap_paths`, `export_record`,
+`refresh_export_metadata`); the baker's old spellings of them, and
+`commit_lightmap`'s `intensity` and `uv_rects` parameters, were removed in
+0.28.0. Pass `intensity` to `bake`.
 
 ## Blender twin
 
 blendertk's `LightmapBaker` and its panel bake with Cycles and mirror this
 one control for control: the same layout, the preset template (its presets
-store `bounces` for `gi_depth`), the Exclude set and the Bake set (stamped
-collections that change nothing about what renders; the Bake set's name
-follows the same tag), the packed atlas (`ptk.ImgUtils.pack_atlas_rects`,
+store `bounces` for `gi_depth`), the Bake and Manage pages, the Exclude and
+Isolate sets (stamped collections that change nothing about what renders),
+the packed atlas (`ptk.ImgUtils.pack_atlas_rects`,
 the one planner both use), Beside Material Textures, Bounces,
-Adaptive Sampling, the switches on the fields they qualify (bar the
-Reflection Probe: Cycles captures none yet), Reset to
+Adaptive Sampling, the switches on the fields they qualify, the
+Reflection Probe, Reset to
 Defaults and the confirmed Revert. The engine matches too: `bake()` with its
 preflight and verdict, `bake_targets`, the file claims, setting superseded
 maps aside (a linked object's map is kept, as a referenced one's is here), a

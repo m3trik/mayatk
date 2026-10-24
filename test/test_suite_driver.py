@@ -62,6 +62,56 @@ class DriverTestCase(unittest.TestCase):
             self.addCleanup(mapping.pop, key, None)
 
 
+class TestModuleSuite(DriverTestCase):
+    """A module's suite: every TestCase in it, narrowed by ``-k`` patterns."""
+
+    def _module(self):
+        import types
+
+        module = types.ModuleType("test_probe_module")
+
+        class TestWords(unittest.TestCase):
+            def test_split_words(self):
+                pass
+
+            def test_join_words(self):
+                pass
+
+        class TestLines(unittest.TestCase):
+            def test_split_lines(self):
+                pass
+
+        module.TestWords, module.TestLines = TestWords, TestLines
+        module.TestCase = unittest.TestCase  # an imported base is not collected
+        return module
+
+    def test_no_pattern_collects_every_test(self):
+        suite = self.driver._module_suite(self._module())
+        self.assertEqual(
+            sorted(t._testMethodName for t in _flatten(suite)),
+            ["test_join_words", "test_split_lines", "test_split_words"],
+        )
+
+    def test_a_pattern_narrows_to_matching_ids(self):
+        suite = self.driver._module_suite(self._module(), ["split"])
+        self.assertEqual(
+            sorted(t._testMethodName for t in _flatten(suite)),
+            ["test_split_lines", "test_split_words"],
+        )
+
+    def test_the_shared_default_loader_is_left_alone(self):
+        self.driver._module_suite(self._module(), ["split"])
+        self.assertIsNone(unittest.defaultTestLoader.testNamePatterns)
+
+
+def _flatten(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from _flatten(item)
+        else:
+            yield item
+
+
 class TestCollectedIds(DriverTestCase):
     """Ids must be captured BEFORE the run, and must survive it."""
 
@@ -598,10 +648,81 @@ class TestEachModuleImportsTheConftestBesideIt(DriverTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _which(self, relative):
+    def _load(self, relative):
         path = str(self.root / relative)
-        name = Path(relative).stem
-        return self.driver._load_test_module(name, path).WHICH
+        return self.driver._load_test_module(Path(relative).stem, path)
+
+    def _which(self, relative):
+        return self._load(relative).WHICH
+
+    def _plant_from_the_mock_conftest(self):
+        """Make the mock conftest plant a ``maya.cmds`` and its module report
+        whether it sees it; returns the real modules' snapshot and the purge
+        mock (the unit run must not drop the process's own mayatk)."""
+        (self.root / "mock_tests" / "conftest.py").write_text(
+            "import sys, types\n"
+            "PLANTED = sys.modules['maya.cmds'] = types.ModuleType('maya.cmds')\n"
+        )
+        (self.root / "mock_tests" / "test_mock.py").write_text(
+            "import sys\n"
+            "from conftest import PLANTED\n"
+            "ON_MOCKS = sys.modules.get('maya.cmds') is PLANTED\n"
+        )
+        keys = self.driver._REAL_MODULE_KEYS
+        for key in keys:
+            self._keep(sys.modules, key)
+        patcher = mock.patch.object(self.driver, "_purge_mayatk_modules")
+        purge = patcher.start()
+        self.addCleanup(patcher.stop)
+        return {k: sys.modules[k] for k in keys if k in sys.modules}, purge
+
+    def test_a_conftest_that_plants_maya_runs_again_for_each_module(self):
+        """The module loop puts the real ``maya`` back after every module
+        (``_restore_real_maya_modules``), so mocks a conftest plants when it is
+        imported must be planted again for the next module beside it: a copy
+        cached for the run left every mock module after a chunk's first on the
+        real ``maya``."""
+        snapshot, _ = self._plant_from_the_mock_conftest()
+        for run in ("first module", "second module"):
+            self.assertTrue(self._load("mock_tests/test_mock.py").ON_MOCKS, run)
+            self.driver._restore_real_maya_modules(snapshot)
+
+    def test_a_conftest_that_plants_maya_has_mayatk_imported_again(self):
+        """mayatk imported before the plant (``_reset_session_globals``, ahead
+        of every module) is bound to the real ``maya``: a mock module then
+        drove the real ``cmds`` -- 7 of test_script_job_manager's 44 failed
+        under mayapy, all green in pytest. A conftest that plants nothing
+        leaves mayatk alone."""
+        snapshot, purge = self._plant_from_the_mock_conftest()
+        self._load("mock_tests/test_mock.py")
+        self.assertEqual(purge.call_count, 1)
+        self.driver._restore_real_maya_modules(snapshot)
+        self._load("test_root.py")
+        self.assertEqual(purge.call_count, 1, "the root conftest purged mayatk")
+
+    def test_the_module_s_own_fixtures_run(self):
+        """unittest finds ``setUpModule`` / ``tearDownModule`` through
+        ``sys.modules[test.__module__]`` and skips them silently when the module
+        is not there: a module loaded by path but not registered ran without
+        them (test_scene_data_sidecar's sandbox, the mock suites' skips)."""
+        (self.root / "test_root.py").write_text(
+            "import unittest\n"
+            "RAN = []\n"
+            "def setUpModule():\n    RAN.append('setUp')\n"
+            "def tearDownModule():\n    RAN.append('tearDown')\n"
+            "class T(unittest.TestCase):\n    def test(self):\n        pass\n"
+        )
+        self._keep(sys.modules, "test_root")
+        module = self._load("test_root.py")
+        tests = unittest.defaultTestLoader.loadTestsFromTestCase(module.T)
+        unittest.TestSuite([tests]).run(unittest.TestResult())
+        self.assertEqual(module.RAN, ["setUp", "tearDown"])
+
+    def test_a_conftest_that_plants_nothing_loads_once(self):
+        """The root conftest stands up the run's sandbox: one load per run."""
+        (self.root / "test_root.py").write_text("import conftest\nCONFTEST = conftest\n")
+        first = self._load("test_root.py").CONFTEST
+        self.assertIs(self._load("test_root.py").CONFTEST, first)
 
     def test_a_root_module_gets_the_root_conftest(self):
         self.assertEqual(self._which("test_root.py"), "root")

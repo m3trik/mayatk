@@ -13,10 +13,15 @@ import types
 from unittest.mock import MagicMock
 
 mock_om2 = MagicMock()
+# Named like the modules they stand in for: under mayapy, PySide6's import
+# hook (shiboken ``feature_imported``) reads ``__name__`` on every
+# ``from maya... import``, which a bare MagicMock raises for.
+mock_om2.__name__ = "maya.api.OpenMaya"
 mock_om2.MEventMessage.addEventCallback.return_value = 1
 mock_om2.MMessage.removeCallback = MagicMock()
 
 mock_cmds = MagicMock()
+mock_cmds.__name__ = "maya.cmds"
 mock_cmds.currentTime.return_value = 1.0
 mock_cmds.playbackOptions.return_value = 0.0
 mock_cmds.objExists.return_value = True
@@ -38,7 +43,11 @@ sys.modules.setdefault("maya.api.OpenMayaAnim", MagicMock())
 sys.modules["maya.cmds"] = mock_cmds
 sys.modules.setdefault("maya.mel", MagicMock())
 sys.modules.setdefault("maya.OpenMaya", MagicMock())
-sys.modules["maya.OpenMaya"].MFileIO.isReadingFile.return_value = False
+# Only a mock needs telling. Under mayapy (``run_tests.py --mocks``) the real
+# API-1 module stays and answers this itself; assigning onto its builtin
+# raised, so no mock module loaded there.
+if isinstance(sys.modules["maya.OpenMaya"], MagicMock):
+    sys.modules["maya.OpenMaya"].MFileIO.isReadingFile.return_value = False
 sys.modules.setdefault("maya.OpenMayaUI", MagicMock())
 
 # Force-sync each submodule as an attribute of its parent package. Plain

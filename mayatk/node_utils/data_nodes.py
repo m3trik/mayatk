@@ -55,10 +55,22 @@ class DataNodes(ptk.SceneStoreBase):
     EXPORT = "data_export"
     NAMES: Dict[ptk.Scope, str] = {_Scope.PRIVATE: INTERNAL, _Scope.DELIVERABLE: EXPORT}
 
-    #: Record keys readers used to spell here; the declarations are
-    #: ``ptk.SceneRecords`` and these are the same strings, not copies.
-    FBX_TAKES = ptk.SceneRecords.FBX_TAKES.key
-    SHOT_METADATA = ptk.SceneRecords.SHOTS.key
+    #: The shot record's key under its old name, retired here: read the
+    #: declaration's (``ptk.SceneRecords.SHOTS.key``).
+    SHOT_METADATA = ptk.Deprecation.class_attribute(
+        ptk.SceneRecords.SHOTS.key,
+        "ptk.SceneRecords.SHOTS.key",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
+    #: The retired take list's key (``ptk.SceneRecords.RETIRED``): an opened
+    #: scene's migration removes the channel, and nothing reads it.
+    FBX_TAKES = ptk.Deprecation.class_attribute(
+        "fbx_takes",
+        "ptk.SceneRecords.SHOTS -- each shot's range rides its clip",
+        remove_in="0.29.0",
+        since="2026-10-24",
+    )
 
     _LOCATOR_ATTR = "data_export_locator"
     #: Message attr on ``data_internal`` fed by an undeletable default node.
@@ -335,6 +347,25 @@ class DataNodes(ptk.SceneStoreBase):
         return node
 
     @classmethod
+    def remove(cls, scope: ptk.Scope, key: str) -> bool:
+        """Delete channel *key* from *scope*'s carrier outright -- the
+        attribute itself, where :meth:`write` clears to ``""`` -- and say
+        whether there was one (``ptk.SceneStoreBase.remove``): what
+        ``migrate`` runs on a renamed or retired key, so no emptied old
+        attribute is left behind. A locked or referenced attribute, which
+        Maya will not delete, is cleared instead."""
+        node = cls._carrier(scope)
+        if node is None or not cmds.attributeQuery(key, node=node, exists=True):
+            return False
+        if cls._drop_retired_proxy(node, key):
+            return True  # the pair, its private source included, is gone
+        try:
+            cmds.deleteAttr(f"{node}.{key}")
+        except RuntimeError:
+            return super().remove(scope, key)
+        return True
+
+    @classmethod
     def _drop_retired_proxy(cls, node: str, key: str) -> bool:
         """Drop a channel still stored the retired ``mirror_attr`` way;
         return whether one was there.
@@ -470,6 +501,38 @@ class DataNodes(ptk.SceneStoreBase):
     @classmethod
     def _carrier_values(cls, carrier: str) -> Dict[str, object]:
         return cls._node_values(carrier)
+
+    @classmethod
+    def discard_if_empty(cls, scope: ptk.Scope) -> bool:
+        """Delete the ``data_export`` carrier when every attribute it adds is
+        an empty string, nothing drives one, and nothing hangs under it (a
+        staged proxy) -- what an export leaves that made it only for a record
+        it then cleared (the transient materials) -- so the scene is left as
+        the export found it. A referenced carrier is its file's, and stays.
+        Outside the undo queue, as :meth:`ensure_export` made it."""
+        if cmds is None or _Scope(scope) is not _Scope.DELIVERABLE:
+            return False
+        node = cls._carrier(scope)
+        if node is None or cmds.referenceQuery(node, isNodeReferenced=True):
+            return False
+        if cmds.listRelatives(node, children=True, type="transform"):
+            return False
+        for attr in cmds.listAttr(node, userDefined=True) or []:
+            plug = f"{node}.{attr}"
+            if cmds.listConnections(plug, source=True, destination=False):
+                return False
+            try:
+                value = cmds.getAttr(plug)
+            except (RuntimeError, ValueError):
+                return False
+            if not (isinstance(value, str) and not value):
+                return False
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.undo_disabled():
+            cmds.lockNode(node, lock=False, lockName=False)
+            cmds.delete(node)
+        return True
 
     @classmethod
     def _rederive(cls, specs, ctx) -> None:
@@ -727,13 +790,19 @@ class DataNodes(ptk.SceneStoreBase):
     def install_path_rebase(cls) -> bool:
         """Keep the path records spelled from the project of whichever file
         is written (:meth:`respell_for_write`). The project and file are
-        remembered at every open, new and save, and:
+        remembered at every open, new and save -- an opened scene's records
+        brought to the current keys too (:meth:`_after_open`) -- and:
 
         - a save of the open scene (a Save As renames it first) re-spells the
           records from the remembered project to the new file's, and the
           scene's FIRST save stamps every writer stamp still ``""`` with the
           file written (``ptk.SceneRecords.stamp_unsaved``) -- else whatever
-          was baked before it was nobody's once saved;
+          was baked before it was nobody's once saved -- and every stamp
+          naming a scene file that is gone (a rename) is given the file the
+          scene was saved from, or the one written
+          (``ptk.SceneRecords.adopt_gone_stamps``) -- after the files written
+          for the scene since its last save go home, through the tools' hooks
+          (``ptk.PendingFiles.saving``); a new or opened scene drops them;
         - a COPY -- an Export All / Selection to a ``.ma`` / ``.mb``, and an
           autosave, which Maya writes as an export too (``kBeforeExport`` /
           ``kAfterExport``, never ``kBeforeSave``: measured in a fresh GUI
@@ -758,8 +827,8 @@ class DataNodes(ptk.SceneStoreBase):
         cls._remember_project()
         message = om.MSceneMessage
         state["ids"] = [
-            message.addCallback(message.kAfterOpen, cls._remember_project),
-            message.addCallback(message.kAfterNew, cls._remember_project),
+            message.addCallback(message.kAfterOpen, cls._after_open),
+            message.addCallback(message.kAfterNew, cls._after_new),
             message.addCallback(message.kBeforeSave, cls._rebase_before_save),
             message.addCallback(message.kAfterSave, cls._after_save),
             message.addCallback(message.kBeforeExport, cls._rebase_before_export),
@@ -806,6 +875,42 @@ class DataNodes(ptk.SceneStoreBase):
         state["pending"] = None
         state["clean"] = False
 
+    @classmethod
+    def _after_open(cls, *_args) -> None:
+        """A scene was opened: remember its project (:meth:`_remember_project`)
+        and bring its records to the current keys (``migrate``), so what reads
+        them before any export -- a bake panel, a preview push -- finds them
+        where the declarations say. Never raises: a record left under an old
+        key is moved by the next export's commit, and must not cost the open.
+        The files the scene closed unsaved was reading from the session go
+        (:meth:`_discard_pending`). The migration is neither an edit nor an
+        undo step: Maya holds undo off and leaves the modified flag alone for
+        the whole ``file -open``, this callback included (measured
+        2026-10-24, mayapy and GUI Maya 2025)."""
+        cls._remember_project()
+        cls._discard_pending()
+        try:
+            cls.migrate()
+        except Exception:  # noqa: BLE001 -- see above
+            logger.debug("Scene records not migrated on open.", exc_info=True)
+
+    @classmethod
+    def _after_new(cls, *_args) -> None:
+        """A new scene: remember its project, and drop the files the scene
+        closed unsaved was reading from the session (:meth:`_discard_pending`)."""
+        cls._remember_project()
+        cls._discard_pending()
+
+    @staticmethod
+    def _discard_pending() -> None:
+        """Drop the files the scene closed unsaved was reading from the session
+        (``ptk.PendingFiles.discard``; mirror of blendertk's ``load_post``
+        handler). Never raises: an open never fails on this."""
+        try:
+            ptk.PendingFiles.session().discard()
+        except Exception:  # noqa: BLE001 -- see above
+            logger.warning("Pending files were not discarded.", exc_info=True)
+
     @staticmethod
     def _same_path(a: str, b: str) -> bool:
         """Whether two spellings name one path (case and separators aside)."""
@@ -834,18 +939,28 @@ class DataNodes(ptk.SceneStoreBase):
                 # writes that as an export -- _rebase_before_export.)
                 cls._respell_copy(target)
                 return
-            if cls.project_root_of(target) is None:
-                return
             from mayatk.core_utils._core_utils import CoreUtils
 
             state = cls._rebase_state()
-            # Not an undo step: an undone re-spelling would name the files
-            # from the project the scene no longer lives in.
+            saved_from = state["scene"]
+            if cls.project_root_of(target) is not None:
+                # Not an undo step: an undone re-spelling would name the files
+                # from the project the scene no longer lives in.
+                with CoreUtils.undo_disabled():
+                    cls.respell_for_write(
+                        target,
+                        state["base"],
+                        first_save=not saved_from,
+                        saved_from=saved_from or "",
+                    )
+                state["base"] = cls.project_root_of(target)
+            # Then the files written for the scene since it was last saved go
+            # home (ptk.PendingFiles), their records spelled from the target's
+            # project -- after, not before: a Save As stamps them with the
+            # target, which is not on disk yet and would read as a scene file
+            # gone (``adopt_gone_stamps``). Not undo steps either.
             with CoreUtils.undo_disabled():
-                cls.respell_for_write(
-                    target, state["base"], first_save=not state["scene"]
-                )
-            state["base"] = cls.project_root_of(target)
+                ptk.PendingFiles.session().saving(target, saved_from=saved_from)
         except Exception:  # noqa: BLE001 - a save never fails on this
             logger.warning(
                 "Scene-record paths were not re-spelled for the save.", exc_info=True

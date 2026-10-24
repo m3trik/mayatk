@@ -82,8 +82,8 @@ class BlenderBridgeSlots(MayaBridgeSlotsBase):
                     "Blender does the whole lightmap job — UVs, bake, denoise, atlas — and "
                     "on return the layout is written onto your meshes and the maps wired in "
                     "<b>alongside your existing materials</b>: material and UV0 untouched, "
-                    "lightmap on UV1. Undo with <b>Revert to Source</b> in the Lightmap "
-                    "Baker panel.",
+                    "lightmap on UV1. Undo with <b>Revert Selected</b> on the Lightmap "
+                    "Baker's Manage page.",
                     "<b>The bake targets no platform.</b> Once committed, every export "
                     "ships it on its own: FBX → Unity (native lightmap binding) and "
                     "GLB → web viewer — neither needs to know the bake happened.",

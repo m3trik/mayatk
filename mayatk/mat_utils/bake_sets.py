@@ -26,8 +26,9 @@ the scene answers:
   their own, while they stay in the render and light the rest.
 * :class:`LightmapIsolateSet` -- the objects (moving parts) that bake in a
   pass of their own and stay out of every other object's bake.
-* :class:`LightmapBakeSet` -- the objects the last lightmap bake acted on, so
-  the bake can be re-selected and re-run.
+* ``LightmapBakeSet`` -- retired (a deprecated alias of the private
+  ``_LightmapBakeSet``): the Lightmap Baker's Manage page re-runs past work
+  by map, so no bake saves a set any more.
 
 A set may be stored under its plain name or under the naming convention's
 spelling of it (the ``objectSet`` affix, ``_SET`` by default --
@@ -299,17 +300,31 @@ class LightmapIsolateSet(BakeSet):
         return [mesh for group in cls.groups() for mesh in group]
 
 
-class LightmapBakeSet(BakeSet):
-    """The objects the last lightmap bake acted on.
+class _LightmapBakeSet(BakeSet):
+    """The objects a lightmap bake acted on -- retired with the panel's
+    Bake Set row (``LightmapBakeSet`` is its deprecated alias).
 
     Written by the Lightmap Baker panel after a bake when its *Save After
-    Bake* switch is on: every object the bake was asked to bake -- the Scope
+    Bake* switch was on: every object the bake was asked to bake -- the Scope
     minus the Exclude set and what Arnold renders nothing of -- whether or not
     it finished, so selecting the set and baking again re-runs that bake.
     Each bake replaces it; the panel names it plain or by the naming
-    convention (:meth:`BakeSet.conventional_name`). A script reads it the
-    same way: ``LightmapBakeSet.define(result.maps)`` after
-    :meth:`mayatk.LightmapBaker.bake`.
+    convention (:meth:`BakeSet.conventional_name`). The panel's Manage page
+    now re-runs past work by map; a set a scene already holds stays readable.
     """
 
     SET_NAME = "lightmapBaker_baked"
+
+
+# Retired 2026-10-22: the Lightmap Baker's Manage page selects and re-bakes
+# each map's objects, so no bake saves a set. Kept, warning, for scripts.
+ptk.Deprecation.attributes(
+    globals(),
+    {"LightmapBakeSet": "mayatk.mat_utils.bake_sets._LightmapBakeSet"},
+    remove_in="0.30.0",
+    reason=(
+        "The Lightmap Baker no longer saves a Bake Set: its Manage page "
+        "selects and re-bakes each map's objects."
+    ),
+    since="2026-10-22",
+)

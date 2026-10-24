@@ -221,7 +221,7 @@ class CleanupContract:
     #: rollback must DELETE it (the op added it onto a pre-existing node)
     #: rather than restore a value. Without it the getAttr raised and the
     #: snapshot was silently skipped — canceling a preview left the freshly
-    #: added channel (e.g. shadow_metadata on an existing data_export
+    #: added channel (e.g. shadows on an existing data_export
     #: carrier) behind with stale data.
     _ATTR_ABSENT = object()
 

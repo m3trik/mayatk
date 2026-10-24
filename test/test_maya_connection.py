@@ -478,6 +478,49 @@ class TestMayaConnectionMocked(unittest.TestCase):
                 MockAppLauncher.launch.call_args[0][0], "/custom/path/to/maya.exe"
             )
 
+    @patch("pythontk.AppLauncher")
+    def test_launch_maya_gui_drops_a_headless_qpa(self, MockAppLauncher):
+        """A GUI Maya never runs offscreen, and Autodesk's licensing helpers it
+        spawns (only qwindows in their own ``platforms/``) pop "no Qt platform
+        plugin could be initialized" when one leaks in (measured 2026-10-21)."""
+        MockAppLauncher.launch.return_value = MagicMock()
+        MockAppLauncher.process_environ.return_value = {
+            "QT_QPA_PLATFORM": "offscreen",
+            "PYTHONPATH": "X:/pkgs",
+        }
+        conn = MayaConnection()
+        with patch("socket.socket") as MockSocket:
+            MockSocket.return_value.connect_ex.return_value = 0
+            conn._launch_maya_gui(port=7002)
+        env = MockAppLauncher.launch.call_args.kwargs.get("env")
+        self.assertIsNotNone(env, "the launch inherited the caller's QPA")
+        self.assertNotIn("QT_QPA_PLATFORM", env)
+        self.assertEqual(env.get("PYTHONPATH"), "X:/pkgs")
+
+    @patch("pythontk.AppLauncher")
+    def test_launch_maya_gui_keeps_a_display_qpa(self, MockAppLauncher):
+        """Only a HEADLESS platform is dropped -- the one Qt would pick first
+        (``offscreen``, ``minimal``): a display platform the user chose
+        (``xcb``, ``wayland``) is what a GUI Maya needs, and it was popped
+        for any value. Added: 2026-10-24"""
+        MockAppLauncher.launch.return_value = MagicMock()
+        conn = MayaConnection()
+        for qpa, kept in (
+            ("xcb", True),
+            ("wayland;xcb", True),
+            ("xcb;offscreen", True),
+            ("offscreen;minimal", False),
+            ("minimal", False),
+            ("Offscreen:fontengine=freetype", False),
+        ):
+            MockAppLauncher.process_environ.return_value = {"QT_QPA_PLATFORM": qpa}
+            with patch("socket.socket") as MockSocket:
+                MockSocket.return_value.connect_ex.return_value = 0
+                conn._launch_maya_gui(port=7002)
+            env = MockAppLauncher.launch.call_args.kwargs.get("env") or {}
+            with self.subTest(qpa=qpa):
+                self.assertEqual("QT_QPA_PLATFORM" in env, kept, env)
+
     # ---- context manager -------------------------------------------------
 
     @patch("socket.socket")

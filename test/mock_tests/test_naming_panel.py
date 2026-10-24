@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover - Qt not installed
 
 @unittest.skipUnless(
     _CMDS_IS_MOCKED and QtWidgets is not None,
-    "Mock + Qt test — run via pytest, not run_tests.py",
+    "Mock + Qt test — run via pytest or run_tests.py --mocks",
 )
 class TestNamingPanel(unittest.TestCase):
     """The panel loads through the real discovery + compile path and its file scopes work."""

@@ -25,7 +25,7 @@ def _store_with(shots):
 
 def _clips(view):
     """The clip names of an export view, in order (the join keys)."""
-    return [s["clip"] for s in view["shot_metadata"]["shots"]]
+    return [s["clip"] for s in view["animation"]["shots"]]
 
 
 def _takes(view):
@@ -128,12 +128,12 @@ class TestExportViewLogic(QuickTestCase):
 
     def test_each_clip_carries_its_own_range_in_one_record(self):
         """The ranges ride the clips, so the take list cannot disagree with the
-        join keys: there is no second list (``fbx_takes`` is no longer
-        written) and no ``takes`` key on the record."""
+        join keys: there is no second list and no ``takes`` key on the
+        record."""
         store = _store_with([ShotBlock(0, "A", 5, 25, description="d")])
         view = store.to_export_view()
-        self.assertEqual(list(view), ["shot_metadata"])
-        meta = view["shot_metadata"]
+        self.assertEqual(list(view), ["animation"])
+        meta = view["animation"]
         self.assertEqual(meta["version"], 1)
         self.assertNotIn("takes", meta)
         (rec,) = meta["shots"]
@@ -141,25 +141,19 @@ class TestExportViewLogic(QuickTestCase):
         self.assertEqual(rec["description"], "d")
         self.assertEqual(_takes(view), [{"name": "A", "start": 5, "end": 25}])
 
-    def test_empty_description_and_section_are_omitted_objects_are_not(self):
-        """Unity's ShotRecord reads ``objects`` as an array, so it is always
-        present; an empty ``description`` / ``section`` is left out."""
-        store = _store_with([ShotBlock(0, "A", 1, 10)])
-        (rec,) = store.to_export_view()["shot_metadata"]["shots"]
-        self.assertEqual(set(rec), {"clip", "start", "end", "objects"})
-        self.assertEqual(rec["objects"], [])
-
-    def test_objects_reduced_to_leaf_names(self):
+    def test_a_clip_states_its_name_and_range_alone(self):
+        """An empty ``description`` is left out, and neither ``objects`` nor
+        ``section`` rides the record: no reader used them (2026-10-20)."""
         store = _store_with(
             [ShotBlock(0, "A", 1, 10, objects=["|grp|door_L", "|grp|door_R"])]
         )
-        rec = store.to_export_view()["shot_metadata"]["shots"][0]
-        self.assertEqual(rec["objects"], ["door_L", "door_R"])
+        (rec,) = store.to_export_view()["animation"]["shots"]
+        self.assertEqual(set(rec), {"clip", "start", "end"})
 
     def test_empty_store(self):
         view = _store_with([]).to_export_view()
-        self.assertEqual(list(view), ["shot_metadata"])
-        self.assertEqual(view["shot_metadata"]["shots"], [])
+        self.assertEqual(list(view), ["animation"])
+        self.assertEqual(view["animation"]["shots"], [])
         self.assertEqual(_takes(view), [])
         self.assertIsNone(_store_with([]).export_records(), "an empty store clears")
 
@@ -203,7 +197,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.publish_export_view()
 
         self.assertNodeExists(DataNodes.EXPORT)
-        meta_raw = DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+        meta_raw = DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
         self.assertIn("opening", meta_raw)
         # ONE record: each clip carries its range; the take list is not
         # written beside it (the attr is never even created).
@@ -213,7 +207,7 @@ class TestExportRoundTrip(MayaTkTestCase):
             [("Intro", 1, 50), ("Outro", 51, 100)],
         )
         self.assertFalse(
-            cmds.attributeQuery(DataNodes.FBX_TAKES, node=DataNodes.EXPORT, exists=True)
+            cmds.attributeQuery("fbx_takes", node=DataNodes.EXPORT, exists=True)
         )
 
     def test_refresh_export_view_publishes_with_shots(self):
@@ -222,7 +216,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.define_shot("Intro", 1, 50, description="opening")
         ShotStore.refresh_export_view()  # canonical no-arg preparer
         self.assertNodeExists(DataNodes.EXPORT)
-        self.assertIn("opening", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA))
+        self.assertIn("opening", DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key))
 
     def test_refresh_export_view_noop_without_shots(self):
         ShotStore.set_active(ShotStore())  # active but empty
@@ -237,44 +231,12 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.define_shot("Intro", 1, 50)
         store.publish_export_view()
         self.assertIsNotNone(
-            DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
         )
 
         store.remove_shot(store.shots[0].shot_id)
         ShotStore.refresh_export_view()
-        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA))
-        self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
-
-    def test_a_legacy_take_list_is_read_until_the_next_publish_clears_it(self):
-        """A scene published before the ranges moved onto the clips carries the
-        ``fbx_takes`` list and no ranged clip: it still realizes its takes (the
-        one reader, ``SceneRecords.declared_takes``, falls back to it), and the
-        next shots publish clears it -- the successor was produced, so the old
-        list must not ride beside it into the next export. An EMPTY store's
-        publish clears it too."""
-        ptk.SceneRecords.FBX_TAKES.save(
-            DataNodes, [{"name": "Legacy", "start": 1, "end": 20}]
-        )
-        self.assertEqual(FbxUtils.apply_takes_from_node(), 1)
-        q = mel.eval("FBXExportSplitAnimationIntoTakes -q") or []
-        self.assertTrue(any("Legacy" in x for x in q), q)
-        FbxUtils.reset_takes()
-
-        store = ShotStore()
-        ShotStore.set_active(store)
-        store.define_shot("Intro", 1, 50)
-        store.publish_export_view()
-        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.FBX_TAKES))
-        self.assertEqual(FbxUtils.apply_takes_from_node(), 1)
-        q = mel.eval("FBXExportSplitAnimationIntoTakes -q") or []
-        self.assertFalse(any("Legacy" in x for x in q), q)
-
-        ptk.SceneRecords.FBX_TAKES.save(
-            DataNodes, [{"name": "Legacy", "start": 1, "end": 20}]
-        )
-        ShotStore.set_active(ShotStore())
-        ShotStore.refresh_export_view()
-        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.FBX_TAKES))
+        self.assertIsNone(DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key))
         self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
 
     def test_apply_takes_from_node(self):
@@ -343,7 +305,7 @@ class TestExportRoundTrip(MayaTkTestCase):
 
             self.assertIn("LateAdd", text)  # fresh take, not the stale node
             self.assertIn(
-                "LateAdd", DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+                "LateAdd", DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
             )
         finally:
             ShotStore.disable_auto_export()
@@ -385,7 +347,7 @@ class TestExportRoundTrip(MayaTkTestCase):
         cube = self.create_test_cube("noShotCube")
         # A carrier EXISTS (another producer's channel) but declares no takes,
         # which is the only case that can tell the two orderings apart.
-        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmap_metadata", '{"records": []}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmaps", '{"records": []}')
         ShotStore.set_active(ShotStore())
 
         tm = TaskManager(logging.getLogger("test_takes_noop"))
@@ -417,7 +379,7 @@ class TestExportRoundTrip(MayaTkTestCase):
 
         self.assertIn("Intro", text)
         self.assertIn("Outro", text)
-        self.assertIn("shot_metadata", text)  # metadata attr name survives
+        self.assertIn('"animation"', text)  # metadata attr name survives
         self.assertIn("opening", text)  # metadata value survives
 
     def _keyed_shots(self, name="forkCube"):
@@ -434,12 +396,14 @@ class TestExportRoundTrip(MayaTkTestCase):
         FbxUtils.reset_takes()
         return cube, store
 
-    def test_a_copy_whose_animated_objects_are_gone_declares_no_takes(self):
+    def test_a_copy_whose_animated_objects_are_gone_declares_them_unless_dropped(self):
         """A Save As copy keeps its source's shot store verbatim, and with the
         animated objects deleted its shots describe nothing: 2026-09-24, a
         module forked from an 18-shot assembly declared all 18 as takes and
-        its GLB carried none (clips_vs_takes and glb_envelope failed). The
-        export declares none of them -- the store keeps them."""
+        its GLB carried none (clips_vs_takes and glb_envelope failed). They
+        ship unless the scene leaves stale shots out (2026-10-21: "we probably
+        shouldn't remove stale shots by default, but that can be an option");
+        the store keeps them either way."""
         cube, store = self._keyed_shots()
         stash = cmds.duplicate(
             cmds.listConnections(cube, type="animCurve", source=True)[0]
@@ -452,9 +416,17 @@ class TestExportRoundTrip(MayaTkTestCase):
         self.assertTrue(cmds.keyframe(stash, query=True, keyframeCount=True))
 
         store.publish_export_view()
+        record = ptk.SceneRecords.SHOTS.load(DataNodes)
+        self.assertEqual([s["clip"] for s in record["shots"]], ["Intro", "Outro"])
+        self.assertEqual(FbxUtils.apply_takes_from_node(), 2)
+        FbxUtils.reset_takes()
+        self.assertEqual(ShotStore.declared_range(), (1, 100))
+
+        store.drop_stale_shots = True
+        store.publish_export_view()
 
         self.assertIsNone(
-            DataNodes.read(ptk.Scope.DELIVERABLE, DataNodes.SHOT_METADATA)
+            DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.SHOTS.key)
         )
         self.assertEqual(FbxUtils.apply_takes_from_node(), 0)
         self.assertIsNone(ShotStore.declared_range(), "no bake range from them")
@@ -497,14 +469,13 @@ class TestExportRoundTrip(MayaTkTestCase):
         store.publish_export_view()
         meta = ptk.SceneRecords.SHOTS.load(DataNodes)
         self.assertEqual([s["clip"] for s in meta["shots"]], ["Intro", "Outro"])
-        self.assertEqual(meta["shots"][0]["objects"], ["renameCube"])
 
         cmds.rename(cmds.ls("renameCube", long=True)[0], "renamedCube")
         store.publish_export_view()
         meta = ptk.SceneRecords.SHOTS.load(DataNodes)
+        # Kept for its keys, though the name it held is no object of this
+        # scene's.
         self.assertEqual([s["clip"] for s in meta["shots"]], ["Intro", "Outro"])
-        # Kept for its keys; the name it held is no object of this scene's.
-        self.assertEqual(meta["shots"][0]["objects"], [])
 
     def test_a_renamed_hold_member_keeps_its_shot_declared(self):
         """Bug: a HOLD shot keys nothing in its frames, so only its members
@@ -530,7 +501,6 @@ class TestExportRoundTrip(MayaTkTestCase):
         (record,) = store.export_records()
         shots = record.payload["shots"]
         self.assertEqual([s["clip"] for s in shots], ["Hold", "Move"])
-        self.assertEqual(shots[0]["objects"], ["renamedHold"])
         self.assertEqual(store.shot_by_name("Hold").objects, [hold], "not changed")
         reopened = ShotStore.from_dict(saved)
         self.assertEqual(reopened.stale_shots(), [], "found by the saved UUID")
@@ -538,13 +508,11 @@ class TestExportRoundTrip(MayaTkTestCase):
         cmds.delete("renamedHold")  # its UUID names nothing now
         self.assertEqual([s.name for s in store.stale_shots()], ["Hold"])
 
-    def test_a_scoped_export_lists_only_the_members_it_carries(self):
-        """Bug: the shot record ignored the export set, so a selected or
-        visible-only export listed shot members its file did not carry.
-        Fixed: 2026-10-11 -- ``SceneRecords.SHOTS`` is export-scoped: each
-        clip names the members under the export roots (a short name and a
-        member whose parent was renamed resolved in the scene); every take
-        still ships, and the scene keeps its whole record."""
+    def test_a_scoped_export_ships_every_take_and_names_no_member(self):
+        """A selected or visible-only export ships every take, and its record
+        names no member -- the record carries no ``objects`` since
+        2026-10-20 (no reader used them), so it is the scene's own: not
+        export-scoped, nothing to restore after the write."""
         cube, store = self._keyed_shots("inCube")
         out = cmds.ls(self.create_test_cube("outCube"), long=True)[0]
         store.update_shot(store.shot_by_name("Intro").shot_id, objects=[cube, out])
@@ -555,13 +523,13 @@ class TestExportRoundTrip(MayaTkTestCase):
         (record,) = store.export_records(ctx)
         shots = record.payload["shots"]
         self.assertEqual([s["clip"] for s in shots], ["Intro", "Outro"])
-        self.assertEqual(shots[0]["objects"], ["inCube"])
+        self.assertFalse(any("objects" in s for s in shots))
         (whole,) = store.export_records()
-        self.assertEqual(sorted(whole.payload["shots"][0]["objects"]), ["inCube", "outCube"])
+        self.assertEqual(whole.payload, record.payload)
         snap = ptk.ExportSnapshot.assemble(
             {ptk.SceneRecords.SHOTS: store.export_records}, ctx
         )
-        self.assertEqual(list(snap.scene_wide), ["shot_metadata"], "kept to restore")
+        self.assertEqual(list(snap.scene_wide), [], "nothing to restore")
 
     def test_removing_stale_shots_moves_no_key(self):
         """The shot list's Remove Stale Shots drops RECORDS: a Sequencer delete
@@ -581,26 +549,37 @@ class TestExportRoundTrip(MayaTkTestCase):
         )
         self.assertEqual(cmds.keyframe(live, q=True, timeChange=True), [120.0, 160.0])
 
-    def test_the_exporter_names_the_stale_shots_it_left_out(self):
+    def test_the_exporter_names_the_stale_shots_it_ships_or_leaves_out(self):
         """The warning names them and links the Shots window, whose All Shots
-        group deletes them (``TaskManager.NOTE_PANELS``)."""
+        group deletes them or leaves them out (``TaskManager.NOTE_PANELS``)."""
         from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
 
         cube, store = self._keyed_shots("exportForkCube")
         keep = cmds.ls(self.create_test_cube("keptCube"), long=True)[0]
         cmds.delete(cube)
 
-        exporter = SceneExporter(log_level="WARNING")
-        tm = exporter.task_manager
-        tm.objects = [keep]
-        with self.assertLogs(exporter.logger, "WARNING") as logged:
-            tm.export_data_node()
-        stale = [line for line in logged.output if "2 shot(s) left out" in line]
-        self.assertTrue(stale, logged.output)
-        self.assertIn("action://show?ui=shots", stale[0])
-        tm.apply_declared_takes()
-        self.assertFalse(mel.eval("FBXExportSplitAnimationIntoTakes -q"))
-        tm.run_deferred_restores()
+        for drop, said, split in (
+            (False, "2 stale shot(s) exported as takes that hold still", True),
+            (True, "2 stale shot(s) left out", False),
+        ):
+            with self.subTest(drop_stale_shots=drop):
+                store.drop_stale_shots = drop
+                exporter = SceneExporter(log_level="WARNING")
+                tm = exporter.task_manager
+                tm.objects = [keep]
+                try:
+                    with self.assertLogs(exporter.logger, "WARNING") as logged:
+                        tm.export_data_node()
+                    stale = [line for line in logged.output if said in line]
+                    self.assertTrue(stale, logged.output)
+                    self.assertIn("action://show?ui=shots", stale[0])
+                    tm.apply_declared_takes()
+                    self.assertEqual(
+                        bool(mel.eval("FBXExportSplitAnimationIntoTakes -q")), split
+                    )
+                finally:
+                    tm.run_deferred_restores()
+                    FbxUtils.reset_takes()
 
     def test_a_run_without_the_carrier_task_still_names_the_stale_shots(self):
         """Export Scene Data Node off: the takes task publishes instead, and
@@ -620,7 +599,7 @@ class TestExportRoundTrip(MayaTkTestCase):
                 tm.apply_declared_takes("both")
         finally:
             tm.run_deferred_restores()
-        stale = [line for line in logged.output if "2 shot(s) left out" in line]
+        stale = [line for line in logged.output if "2 stale shot(s)" in line]
         self.assertTrue(stale, logged.output)
         self.assertIn("action://show?ui=shots", stale[0])
 
@@ -647,7 +626,7 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
 
     Verifies the full chain a Unity import depends on: shot names become
     AnimStacks, and the CSV-sourced description/section land in the embedded
-    ``shot_metadata``.
+    ``animation``.
     """
 
     CSV = (
@@ -675,7 +654,7 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
         self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
         return path
 
-    def test_csv_to_fbx_carries_names_descriptions_sections(self):
+    def test_csv_to_fbx_carries_names_and_descriptions(self):
         from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ShotManifest
         from mayatk.env_utils.scene_exporter.task_manager import TaskManager
         import logging
@@ -709,10 +688,11 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
             [(t["name"], t["start"], t["end"]) for t in _takes(view)],
             [("A01", 1, 50), ("A02", 51, 100)],
         )
-        rec = view["shot_metadata"]["shots"][0]
+        rec = view["animation"]["shots"][0]
         self.assertEqual(rec["clip"], "A01")
         self.assertEqual(rec["description"], "Open the hangar doors")
-        self.assertEqual(rec["section"], "A")
+        # The section stays the store's: no reader of the record used it.
+        self.assertNotIn("section", rec)
 
         # Exporter task: publish → include carrier → realize takes.
         tm = TaskManager(logging.getLogger("test_pipeline"))
@@ -726,11 +706,10 @@ class TestCsvToFbxPipeline(MayaTkTestCase):
         # Two named AnimStacks (→ Unity clips).
         self.assertIn("A01", text)
         self.assertIn("A02", text)
-        # Embedded metadata: attr name + CSV-sourced description + section field
-        # all survive inside the FBX user-property JSON (escaping-agnostic).
-        self.assertIn("shot_metadata", text)
+        # Embedded metadata: attr name + CSV-sourced description survive
+        # inside the FBX user-property JSON (escaping-agnostic).
+        self.assertIn('"animation"', text)
         self.assertIn("Open the hangar doors", text)
-        self.assertIn("section", text)
 
 
 if __name__ == "__main__":

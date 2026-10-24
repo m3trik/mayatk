@@ -3048,7 +3048,7 @@ class UvUtils(ptk.HelpMixin):
         goes through ``MFnMesh``, which Maya does not record, so undoing only removes a
         UV set this created (taking its UVs with it); re-running over an EXISTING set
         replaces those UVs irreversibly. For the lightmap workflow the supported undo is
-        ``LightmapBaker.revert_lightmap`` / the panel's Revert to Source.
+        ``LightmapBaker.revert_lightmap`` / the panel's Revert Selected.
 
         Parameters:
             layouts: ``{object: {"uv_set", "poly_counts", "num_verts", "uvs"}}`` where

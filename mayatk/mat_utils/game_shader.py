@@ -14,7 +14,7 @@ import pythontk as ptk
 # from this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
-from mayatk.mat_utils._mat_utils import MatUtils, _OPACITY_IS_A_MODE
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.mat_utils.shader_attribute_map import ShaderAttributeMap
 from mayatk.env_utils._env_utils import EnvUtils
 
@@ -1378,12 +1378,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         return result_node
 
-    @ptk.Deprecation.parameter(
-        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
-    )
-    def setup_stringray_node(
-        self, name: str, opacity: bool = False, opacity_mode: str = None
-    ) -> object:
+    def setup_stringray_node(self, name: str, *, opacity_mode: str = None) -> object:
         """Create a StingrayPBS shader node with the right ShaderFX graph loaded.
 
         Graph selection and loading live on ``MatUtils`` (the SSoT every route
@@ -1392,18 +1387,16 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         Parameters:
             name (str): The desired name for the StingrayPBS shader node.
-            opacity (bool): DEPRECATED (warns; removed in 0.20.0) -- True
-                selected the transparent graph when *opacity_mode* was not
-                given. Pass the mode.
-            opacity_mode (str, optional): ``"none"`` / ``"masked"`` /
-                ``"transparent"``. ``"masked"`` gives alpha-cutout with hard
-                edges and a clean VP2.0 preview — usually what a decal wants.
+            opacity_mode (str, optional): ``"none"`` (the default) /
+                ``"masked"`` / ``"transparent"``. ``"masked"`` gives
+                alpha-cutout with hard edges and a clean VP2.0 preview —
+                usually what a decal wants.
 
         Returns:
             str: The created StingrayPBS shader node.
         """
         if opacity_mode is None:
-            opacity_mode = "transparent" if opacity else "none"
+            opacity_mode = "none"
         sr_node = MatUtils.create_stingray_shader(name, opacity_mode=opacity_mode)
         # Named from the node Maya actually created, not the name asked for:
         # Maya uniquifies a taken name (`x` -> `x1`), and `x1` paired with an
@@ -1613,9 +1606,13 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             if not self._has_attr(sr_node, "TEX_emissive_map"):
                 return self._missing_slot(sr_node, texture_type, "TEX_emissive_map")
             texture_node = _file_node(color_space=None)  # color: Maya's sRGB default
-            return self._wire(
+            wired = self._wire(
                 sr_node, texture_type, "TEX_emissive_map", f"{texture_node}.outColor"
             )
+            # The graph scales the map by `emissive_intensity`, default 0.
+            if wired:
+                ShaderAttributeMap.open_emission_gate(str(sr_node), "StingrayPBS")
+            return wired
 
         elif texture_type == "Ambient_Occlusion":
             if not self._has_attr(sr_node, "TEX_ao_map"):
@@ -1838,7 +1835,7 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
             cmds.connectAttr(
                 f"{texture_node}.outColor", f"{std_node}.emissionColor", force=True
             )
-            cmds.setAttr(f"{std_node}.emission", 1.0)
+            ShaderAttributeMap.open_emission_gate(str(std_node), "standardSurface")
 
         elif texture_type == "Ambient_Occlusion":
             # Standard Surface doesn't have direct AO input, multiply with base color

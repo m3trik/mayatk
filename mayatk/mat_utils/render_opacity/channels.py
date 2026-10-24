@@ -59,7 +59,7 @@ class ChannelSpec:
 
     @property
     def track_color_stops(self) -> Optional[ColorStops]:
-        """The published ``visibility_tracks`` keys, one per stop.
+        """The published ``render_effects`` keys, one per stop.
 
         The Maya attributes and the published keys are two namespaces for one
         concept -- ``highlightColorDim`` here, ``highlight_color_dim`` in the

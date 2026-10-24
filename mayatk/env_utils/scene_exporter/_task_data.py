@@ -132,6 +132,9 @@ class _TaskDataMixin:
         self._scene_snapshot = None
         self._hierarchy_check_ran = False
         self._hierarchy_last_diff = None
+        # The lightmap manifest this run's GLB build corrected to what the GLB
+        # ships (``GlbPipeline.build``'s report), for the scene's record.
+        self._glb_lightmap_manifest = None
         self._required_range_coverage = None
         self._delivery_only_clamp_said = False
         self._home_workspace = None

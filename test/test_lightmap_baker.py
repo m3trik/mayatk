@@ -12,11 +12,13 @@ written back as opaque RGB.
 """
 
 import contextlib
+import dataclasses
 import errno
 import os
 import json
 import shutil
 import tempfile
+import types
 import unittest
 import warnings
 from unittest import mock
@@ -31,6 +33,7 @@ from mayatk.light_utils.lightmap_baker import lightmap_baker_slots as slots_modu
 from mayatk.light_utils.lightmap_baker.lightmap_baker import LightmapBaker
 from mayatk.light_utils.lightmap_baker.lightmap_baker_slots import LightmapBakerSlots
 from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+from mayatk.mat_utils._mat_utils import MatUtils
 from mayatk.light_utils.lightmap_baker._probe_placement import ProbePlacement
 from mayatk.light_utils._light_utils import LightUtils
 from mayatk.uv_utils._uv_utils import UvUtils
@@ -122,6 +125,9 @@ class _FakeBaker:
         self.seen_at_bake = None
         # One (objects, hidden meshes) per call: an isolated object's own pass.
         self.passes = []
+
+    # The real default: an unsaved test scene has no project, and says so.
+    default_output_dir = staticmethod(lmb_module.TextureBaker.default_output_dir)
 
     def render_panorama(self, position, path, width=1024, hide=None, lights=None):
         """A panorama as ``TextureBaker.render_panorama`` writes one: 2:1, every
@@ -535,6 +541,16 @@ class TestLightmapBakerComposition(MayaTkTestCase):
             )
         self.assertIsNotNone(seen.get("tris"), "bake() resolved no UV layout")
         self.assertEqual(len(seen["tris"]), 12)  # 6 quads, fan-triangulated
+
+    def test_the_records_old_key_names_are_deprecated_aliases(self):
+        """``LIGHTMAP_METADATA`` held the lightmaps record's key under its
+        old name, on the records and the baker: retired, each warns and
+        answers the declaration's. Added: 2026-10-20"""
+        for owner in (LightmapRecords, LightmapBaker):
+            with self.subTest(owner=owner.__name__):
+                with self.assertWarns(DeprecationWarning):
+                    key = owner.LIGHTMAP_METADATA
+                self.assertEqual(key, ptk.SceneRecords.LIGHTMAPS.key)
 
 
 @unittest.skipUnless(
@@ -1035,7 +1051,7 @@ class TestCommitLightmap(MayaTkTestCase):
         self.assertEqual(before_sets.index("lightmap"), 1)  # texture stays UV0
 
         baker = LightmapBaker(resolution=64)
-        recorded = baker.commit_lightmap({long: self.tex}, intensity=1.5)
+        recorded = LightmapRecords.commit({long: self.tex}, intensity=1.5)
         self.assertIn(long, recorded)
 
         # The whole point: material + UV order are untouched (maps preserved).
@@ -1051,7 +1067,10 @@ class TestCommitLightmap(MayaTkTestCase):
         self.assertEqual(rec["name"], "lmKeep")
         self.assertEqual(rec["map"], "cube_Lightmap.exr")
         self.assertEqual(rec["uvIndex"], 1)
-        self.assertEqual(rec["intensity"], 1.5)
+        # The intensity stays on the marker; the record ships none: its
+        # texels carry it, the map applied as stored (2026-10-20).
+        self.assertNotIn("intensity", rec)
+        self.assertEqual(LightmapRecords._marker_info(long)["intensity"], 1.5)
         self.assertEqual(rec["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
 
         # Revert drops the marker + empties the manifest; material still intact.
@@ -1076,23 +1095,16 @@ class TestCommitLightmap(MayaTkTestCase):
     @unittest.skipUnless(HAVE_CV2, "cv2/OpenEXR unavailable")
     def test_intensity_is_applied_to_texels_once_per_file(self):
         # Unity never applies the manifest intensity (LightmapData has no
-        # multiplier), so commit bakes it into the texels -- once per unique
+        # multiplier), so the bake scales it into the texels -- once per unique
         # file, even when several objects share one atlas.
         cv2, np = _cv2()
-        _, _, la = self._cube_with_material("intA")
-        _, _, lb = self._cube_with_material("intB")
         shared = os.path.join(self.tmp, "shared_Lightmap.exr")
         cv2.imwrite(shared, np.full((4, 4, 3), 0.25, np.float32))
 
-        baker = LightmapBaker(resolution=64)
-        with self.assertWarns(DeprecationWarning):  # bake(intensity=) replaces it
-            baker.commit_lightmap({la: shared, lb: shared}, intensity=2.0)
+        LightmapBaker(resolution=64)._apply_intensity([shared, shared], 2.0)
 
         out = cv2.imread(shared, cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
         self.assertAlmostEqual(float(out.mean()), 0.5, places=3)  # x2, not x4
-        objs = self._manifest()["objects"]
-        self.assertEqual(len(objs), 2)
-        self.assertTrue(all(o["intensity"] == 2.0 for o in objs))
 
     def test_manifest_publishes_real_uv_index_and_warns(self):
         # The manifest must carry the lightmap set's ACTUAL channel index --
@@ -1679,6 +1691,16 @@ class TestPackAtlas(MayaTkTestCase):
                 cmds.polyUVSet(shape, currentUVSet=True, uvSet=prev)
 
     @staticmethod
+    def _commit_legacy(obj, path, rect):
+        """Record *obj* as a pre-0.17 atlas pack left it: committed, with the
+        squeeze it applied to the UVs recorded as the marker's ``uvRect`` (the
+        legacy shape :meth:`LightmapRecords.migrate_legacy` reads)."""
+        LightmapRecords.commit({obj: path})
+        info = LightmapRecords._marker_info(obj)
+        info["uvRect"] = [float(v) for v in rect]
+        LightmapRecords._write_marker(LightmapRecords._marker_node(obj), info)
+
+    @staticmethod
     def _panel(name, sg, x0, width=3.94, depth=1.31):
         """A wall-like panel spanning world x [x0, x0 + width], its lightmap = map1."""
         plane = cmds.polyPlane(
@@ -2020,12 +2042,15 @@ class TestPackAtlas(MayaTkTestCase):
         self.assertFalse(os.path.exists(mapping[b]))
 
     def test_atlas_name_does_not_clobber_another_groups_source(self):
-        # Duplicated-material scenario: two materials share a texture set (same
-        # stem) but are different groups. The multi-object group's atlas name
-        # must not overwrite the single-object group's not-yet-consumed source
-        # map (which is deliberately named to collide). Regression.
+        # Two materials share a texture set (same stem) but are different
+        # groups. The multi-object group's atlas name must not overwrite the
+        # single-object group's not-yet-consumed source map (which is
+        # deliberately named to collide). Regression. N differs in a setting
+        # (diffuse), so it is no duplicate of M: a duplicate is one atlas group
+        # with what it duplicates (_atlas_keys) and would share M's atlas.
         sgM, _ = self._make_sg("DupM")
-        sgN, _ = self._make_sg("DupN")
+        sgN, matN = self._make_sg("DupN")
+        cmds.setAttr(f"{matN}.diffuse", 0.5)
         a1 = self._cube_on_sg("dupA1", sgM, "Shared_BaseColor.png")
         a2 = self._cube_on_sg("dupA2", sgM)
         b = self._cube_on_sg("dupB", sgN, "Shared_BaseColor.png")
@@ -2488,17 +2513,13 @@ class TestPackAtlas(MayaTkTestCase):
         # old pack already physically APPLIED to the UVs). The marker records
         # the applied rect while the manifest publishes an identity scaleOffset
         # (the engine applies nothing -- the UVs already sample the atlas).
-        # Current packs never pass uv_rects; this pins the old scenes' path.
+        # Current packs never write a uvRect; this pins the old scenes' path.
         from mayatk.node_utils.data_nodes import DataNodes
 
         sg, _ = self._make_sg("RectC")
         a = self._cube_on_sg("rectC", sg)
         rect = [0.5, 0.5, 0.25, 0.25]
-        baker = LightmapBaker(resolution=16)
-        with self.assertWarns(DeprecationWarning):  # removed in 0.20.0
-            baker.commit_lightmap(
-                {a: self._solid_exr("rectC.exr", (1, 1, 1))}, uv_rects={a: rect}
-            )
+        self._commit_legacy(a, self._solid_exr("rectC.exr", (1, 1, 1)), rect)
         info = LightmapRecords._marker_info(a)  # marker home is the transform now
         self.assertEqual(info["uvRect"], rect)
         self.assertEqual(info["scaleOffset"], [1.0, 1.0, 0.0, 0.0])
@@ -2519,10 +2540,7 @@ class TestPackAtlas(MayaTkTestCase):
         shape = cmds.listRelatives(a, shapes=True, fullPath=True)[0]
         lm = UvDiagnostics.find_lightmap_uv_set(shape)
         LightmapRecords._transform_lightmap_uvs(shape, lm, rect)
-        with self.assertWarns(DeprecationWarning):
-            baker.commit_lightmap(
-                {a: self._solid_exr("revU.exr", (1, 1, 1))}, uv_rects={a: rect}
-            )
+        self._commit_legacy(a, self._solid_exr("revU.exr", (1, 1, 1)), rect)
         baker.revert_lightmap([a])
         for got, want in zip(self._uv_bounds(a), pre):
             self.assertAlmostEqual(got, want, places=5)
@@ -2538,15 +2556,11 @@ class TestPackAtlas(MayaTkTestCase):
         sg, _ = self._make_sg("Guard")
         a = self._cube_on_sg("guardA", sg)
         pre = self._uv_bounds(a)
-        baker = LightmapBaker(resolution=16)
         rect = [0.25, 0.25, 0.5, 0.5]
         shape = cmds.listRelatives(a, shapes=True, fullPath=True)[0]
         lm = UvDiagnostics.find_lightmap_uv_set(shape)
         LightmapRecords._transform_lightmap_uvs(shape, lm, rect)
-        with self.assertWarns(DeprecationWarning):
-            baker.commit_lightmap(
-                {a: self._solid_exr("guard.exr", (1, 1, 1))}, uv_rects={a: rect}
-            )
+        self._commit_legacy(a, self._solid_exr("guard.exr", (1, 1, 1)), rect)
         self.assertEqual(LightmapRecords.migrate_legacy([a]), [a])
         for got, want in zip(self._uv_bounds(a), pre):
             self.assertAlmostEqual(got, want, places=5)
@@ -3300,15 +3314,20 @@ class TestIncludeSceneLighting(MayaTkTestCase):
         in_t, _inside = self._light("slShipsIn", parent=group)
         hid_t, _hidden = self._light("slShipsHidden", parent=group)
         cmds.setAttr(f"{hid_t}.visibility", False)
-        _o, _outside = self._light("slShipsOut")
+        out_t, _outside = self._light("slShipsOut")
+        # Each at its own place: the record names no light (a light's name is
+        # the scene's bookkeeping, which no reader of the record used), so a
+        # shipped light is told by where it stands. Updated: 2026-10-20
+        for transform, x in ((in_t, 10.0), (hid_t, 20.0), (out_t, 30.0)):
+            cmds.xform(transform, worldSpace=True, translation=(x, 0.0, 0.0))
         result, _fake = self._bake(
             [group], include_scene_lights=False, include_hidden_lights=True
         )
         self.assertTrue(result.maps, result.refused)
         shipped = LightmapRecords._record().payload.get("lights", [])
+        self.assertFalse(any("name" in light for light in shipped), shipped)
         self.assertEqual(
-            sorted(light["name"] for light in shipped),
-            sorted(t.rsplit("|", 1)[-1] for t in (in_t, hid_t)),
+            sorted(round(light["position"][0]) for light in shipped), [10, 20]
         )
         self.assertFalse(cmds.getAttr(f"{hid_t}.visibility"), "handed back hidden")
 
@@ -4701,6 +4720,34 @@ class TestNeverWritesOverAnotherObjectsMap(MayaTkTestCase):
         with open(own, "rb") as fh:
             self.assertEqual(fh.read(), b"rebaked")
 
+    def test_a_failed_groups_map_never_lands_on_another_scenes_file(self):
+        """The pack fallback (a group that fails keeps its per-object maps,
+        ``_keep_unpacked``) named by claims alone: another scene's same-named
+        map in the folder -- nothing here claims it, this scene never wrote
+        it -- was replaced. Named by the atlas rule now
+        (``LightmapRecords.strangers``), as the atlas itself is."""
+        theirs = os.path.join(self.tmp, "Crate_Lightmap.exr")
+        with open(theirs, "wb") as fh:
+            fh.write(b"theirs")
+        baker = LightmapBaker()
+        with ptk.TempArtifacts("lm_fallback_work", policy="scoped") as work:
+            source = os.path.join(work.dir_path(), "Crate_Lightmap.exr")
+            with open(source, "wb") as fh:
+                fh.write(b"mine")
+            kept = baker._keep_unpacked(source, self.tmp, set(), {}, "|crate", False)
+        self.assertEqual(os.path.basename(kept), "Crate_Lightmap_1.exr")
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), b"theirs")
+
+        # One its own object reads is still its own to replace.
+        with ptk.TempArtifacts("lm_fallback_work", policy="scoped") as work:
+            source = os.path.join(work.dir_path(), "Crate_Lightmap.exr")
+            with open(source, "wb") as fh:
+                fh.write(b"rebaked")
+            claims = {"crate_lightmap.exr": frozenset({"|crate"})}
+            kept = baker._keep_unpacked(source, self.tmp, set(), claims, "|crate", False)
+        self.assertEqual(os.path.abspath(kept), os.path.abspath(theirs))
+
 
 class _NoArnoldBaker(_FakeBaker):
     """A bake backend that cannot load Arnold (mtoa missing)."""
@@ -5012,7 +5059,7 @@ class TestBakeWorkflow(MayaTkTestCase):
 
     def test_intensity_is_baked_into_the_new_maps_once(self):
         """``bake(intensity=)`` scales the maps it just wrote -- once. The
-        deprecated ``commit_lightmap(intensity=)`` scaled whatever it was
+        retired ``commit_lightmap(intensity=)`` scaled whatever it was
         handed, so recording a map twice scaled it twice."""
         cv2, np = _cv2()
 
@@ -5118,18 +5165,18 @@ class TestBakeWorkflow(MayaTkTestCase):
         self.assertTrue(peak[0].endswith("b.exr"))
         self.assertAlmostEqual(peak[1], 3.0, places=3)
 
-    # -- the deprecated spellings still answer -----------------------------------
+    # -- the record lives on LightmapRecords --------------------------------------
 
-    def test_the_baker_s_old_record_spellings_warn_and_delegate(self):
+    def test_the_workflow_verbs_delegate_to_the_record(self):
+        """The record's calls live on ``LightmapRecords`` alone (the baker's
+        spellings were removed in 0.28.0); the workflow verbs stay delegates."""
         cube = self._cube("wfAlias")
         LightmapRecords.commit({cube: self._exr("alias.exr", 1.0)})
+        self.assertEqual(
+            [d["map"] for d in LightmapRecords.lightmap_dependencies()], ["alias.exr"]
+        )
+        self.assertFalse(hasattr(LightmapBaker, "lightmap_dependencies"))
         baker = LightmapBaker()
-        with self.assertWarns(DeprecationWarning):
-            deps = baker.lightmap_dependencies()
-        self.assertEqual([d["map"] for d in deps], ["alias.exr"])
-        with self.assertWarns(DeprecationWarning):
-            self.assertEqual(LightmapBaker.search_dirs(), LightmapRecords.search_dirs())
-        # The workflow verbs are delegates, not deprecations.
         self.assertEqual(baker.baked_objects(), [cube])
         self.assertEqual(baker.revert(), [cube])
 
@@ -5174,7 +5221,7 @@ class TestReflectionProbe(MayaTkTestCase):
     def test_the_manifest_carries_the_lights_for_their_highlights(self):
         """A lightmap holds no highlight: the bake's lights ride the manifest so
         a reader lights their specular (Arnold's look on a metal), in the
-        file's unit beside unit_scale."""
+        file's unit: the record's one unit_scale (version 2)."""
         room, table, _prop = self._room()
         spot = cmds.spotLight(intensity=3.0, coneAngle=50.0)
         cmds.xform(
@@ -5187,7 +5234,8 @@ class TestReflectionProbe(MayaTkTestCase):
         manifest = json.loads(LightmapRecords._record().text)
         (light,) = manifest["lights"]
         self.assertEqual(light["type"], "spot")
-        self.assertEqual(light["unit_scale"], 0.01)
+        self.assertEqual(manifest["unit_scale"], 0.01)
+        self.assertNotIn("unit_scale", light, "stated once, by the record")
         self.assertAlmostEqual(light["position"][1], 380.0, places=3)
         self.assertAlmostEqual(light["direction"][1], -1.0, places=5)
 
@@ -5195,7 +5243,9 @@ class TestReflectionProbe(MayaTkTestCase):
         room, table, prop = self._room()
         result, fake = self._bake([room, table])
         self.assertTrue(result.probe, "the bake captured no probe")
-        self.assertEqual(os.path.dirname(result.probe), self.tmp, "beside its maps")
+        self.assertEqual(  # waiting in the session for the save
+            os.path.dirname(LightmapRecords._home(result.probe)), self.tmp, "beside its maps"
+        )
         self.assertTrue(result.probe.endswith("_Probe.exr"))
         call = fake.called_panorama
         # Over the prop that moves, at the baked room's mid-height.
@@ -5226,12 +5276,23 @@ class TestReflectionProbe(MayaTkTestCase):
             self.assertAlmostEqual(got, want, delta=1.0)
 
         manifest = json.loads(LightmapRecords._record().text)
-        self.assertEqual(manifest["probe"], probe, "the manifest carries it to the GLB")
+        # Carried to the GLB in the record's shape: its box {min, max}, its unit
+        # the record's one unit_scale.
+        self.assertEqual(
+            manifest["probe"],
+            {
+                "map": probe["map"],
+                "position": probe["position"],
+                "box": {"min": [x0, y0, z0], "max": [x1, y1, z1]},
+            },
+            "the manifest carries it to the GLB",
+        )
+        self.assertEqual(manifest["unit_scale"], probe["unit_scale"])
         deps = {d["map"]: d for d in LightmapRecords.lightmap_dependencies()}
         self.assertEqual(deps[probe["map"]]["objects"], [], "the scene's, no object's")
         self.assertTrue(deps[probe["map"]]["path"], "a GLB build finds it")
-        self.assertIn(
-            self.tmp.replace("\\", "/").lower(),
+        self.assertIn(  # where it waits for the save
+            os.path.dirname(result.probe).replace("\\", "/").lower(),
             [d.replace("\\", "/").lower() for d in LightmapRecords.search_dirs()],
         )
 
@@ -5826,8 +5887,25 @@ class TestSupersededMaps(MayaTkTestCase):
         folder = os.path.join(self.tmp, folder)
         # The fake writes with cv2, which makes no folder: none, no file.
         os.makedirs(folder, exist_ok=True)
-        return LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
+        result = LightmapBaker(resolution=64, baker=_FakeBaker()).bake(
             objects, packing=packing, output_dir=folder, suffix=suffix
+        )
+        # What these rules are about happens at the save: the maps reach their
+        # folder, and the superseded ones go (LightmapRecords._commit_pending).
+        self._commit()
+        result.maps = {o: LightmapRecords._home(p) for o, p in result.maps.items()}
+        if result.probe:
+            result.probe = LightmapRecords._home(result.probe)
+        return result
+
+    @staticmethod
+    def _commit():
+        """The maps' half of a save of the open scene (DataNodes' save hook)."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        ptk.PendingFiles.session().saving(
+            cmds.file(query=True, sceneName=True) or "",
+            saved_from=DataNodes._rebase_state()["scene"],
         )
 
     def _save_as(self, name, write=True):
@@ -5877,11 +5955,12 @@ class TestSupersededMaps(MayaTkTestCase):
         outside = self.enterContext(
             ptk.TempArtifacts("lm_superseded_outside", policy="scoped")
         ).dir_path()
-        old = (
+        old = LightmapRecords._home(
             LightmapBaker(resolution=64, baker=_FakeBaker())
             .bake([cube], packing="per_object", output_dir=outside, suffix="_Lightmap")
             .maps[cube]
         )
+        self._commit()  # saved there
 
         result = self._bake([cube])  # the re-bake, inside the project
 
@@ -6033,10 +6112,28 @@ class TestSupersededMaps(MayaTkTestCase):
         self.assertNotEqual(os.path.normcase(placed[cube][0]), os.path.normcase(old))
         with open(old, "rb") as fh:
             self.assertEqual(fh.read(), before, "the source's map was written over")
-        self.assertIn(
-            "written by",
-            LightmapBaker()._in_place_refusal(old, [cube], [cube], {}, {}, None, None),
+        # An atlas cell is written into the copy's own copy of the atlas
+        # (TestRebakeChanged.test_a_copys_first_rebake_copies_its_sources_atlas...).
+
+    def test_a_copy_never_takes_back_a_name_its_source_wrote(self):
+        """The claim must not depend on this scene still reading the map. A
+        copy re-baked once under other names (its markers then name only its
+        own maps), and a later bake back under the source's name wrote over
+        the file the source reads -- PLAYGROUND_wStands over PLAYGROUND's
+        office atlas (2026-10-21). The writer record still said who wrote it."""
+        cube = self._cube("supCopyBack")
+        self._save_as("source.ma")
+        old = self._bake([cube]).maps[cube]
+        self._save_as("copy.ma")
+        self._bake([cube], suffix="_LM")  # the copy's own: no marker names `old` now
+        claims = LightmapRecords.claims()
+        folder, name = os.path.split(old)
+
+        self.assertIn(LightmapRecords.FOREIGN, claims.get(name.lower(), frozenset()))
+        named = ptk.FileUtils.unique_path(
+            folder, os.path.splitext(name)[0], ".exr", claims=claims, owners=[cube]
         )
+        self.assertNotEqual(os.path.normcase(named), os.path.normcase(old))
 
     def test_a_measurement_bake_leaves_the_scene_and_its_maps_as_they_were(self):
         """``record=False`` (light layers, a portability check): the maps land
@@ -6074,6 +6171,26 @@ class TestSupersededMaps(MayaTkTestCase):
 
         self.assertFalse(os.path.exists(old))
 
+    def test_a_renamed_scene_keeps_its_maps_when_its_old_name_comes_back(self):
+        """2026-10-21: renamed, the writer record still named the old file,
+        own only while nothing was there. A file back at the old name (a Save
+        As back to it, a restored backup) then owned the maps: this scene's
+        re-bake kept off them, and that file's wrote over what this one reads.
+        The renamed scene's save writes the ownership down."""
+        cube = self._cube("supRenamedBack")
+        source = self._save_as("before.ma")
+        old = self._bake([cube]).maps[cube]
+        os.remove(source)
+        self._save_as("after.ma")  # the renamed scene saved
+
+        name = os.path.basename(old).lower()
+        self.assertTrue(LightmapRecords._writers()[name].endswith("after.ma"))
+        with open(source, "w") as fh:  # the old name is back
+            fh.write("//Maya ASCII")
+        self.assertIsNone(LightmapRecords.foreign_writer(name))
+        self._bake([cube], suffix="_LM")
+        self.assertFalse(os.path.exists(old), "still this scene's to retire")
+
     def test_a_map_committed_before_writers_were_recorded_is_kept(self):
         """Nobody's to delete: it may be another scene's (a folder lifted off
         a legacy marker lands in the record the same way)."""
@@ -6089,7 +6206,7 @@ class TestSupersededMaps(MayaTkTestCase):
         """Its own file may name the same map."""
         cube = self._cube("supReferenced")
         old = self._bake([cube]).maps[cube]
-        with mock.patch.object(LightmapRecords, "_referenced", return_value=True):
+        with mock.patch.object(LightmapRecords, "_referenced_nodes", side_effect=set):
             self._bake([cube], suffix="_LM")
         self.assertTrue(os.path.exists(old))
 
@@ -6389,8 +6506,8 @@ class _Footer:
         self.text = ""
         self.progress_calls = []
 
-    def setText(self, t):
-        self.text = t
+    def setText(self, t, level=None):
+        self.text, self.level = t, level
 
     def progress(self, total=None, text=""):
         return _ProgressCtx(self, total, text)
@@ -6458,20 +6575,54 @@ class _Label:
         self._text = text
 
 
-class _BakeSetButton:
-    """Enough of the Bake Set row's button: its option box lists the row's two
-    switches in the order the panel adds them -- Save After Bake, then the
-    naming convention -- and a Clear action with no state."""
+class _PageCombo:
+    """Enough of the page picker: the page shown."""
 
-    class _Box:
-        def __init__(self, save, convention):
-            self.options = [_Toggle(save), _Toggle(convention), object()]
+    def __init__(self, page="Bake"):
+        self._page = page
 
-        def get_options(self):
-            return list(self.options)
+    def currentText(self):
+        return self._page
 
-    def __init__(self, save=False, convention=False):
-        self.option_box = _BakeSetButton._Box(save, convention)
+
+class _Stack:
+    def __init__(self):
+        self.index = 0
+
+    def setCurrentIndex(self, index):
+        self.index = index
+
+
+class _RunButton:
+    """The shared run button: what it says, and whether it may run."""
+
+    def __init__(self):
+        self._text, self.enabled = "Bake Lightmaps", True
+
+    def text(self):
+        return self._text
+
+    def setText(self, text):
+        self._text = text
+
+    def setEnabled(self, enabled):
+        self.enabled = bool(enabled)
+
+
+class _View:
+    """Enough of a ``TextViewBox``: open, its text."""
+
+    def __init__(self, text):
+        self.text, self.visible, self.presented = text, True, 0
+
+    def isVisible(self):
+        return self.visible
+
+    def setText(self, text):
+        self.text = text
+
+    def present(self):
+        self.presented += 1
 
 
 class _Sb:
@@ -6482,10 +6633,19 @@ class _Sb:
     def __init__(self, answer="Ok"):
         self.answer = answer
         self.asked = []
+        self.viewed = []
 
     def confirm(self, question, yes="Yes", no="No"):
         self.asked.append((question, (yes, no)))
         return self.answer == yes
+
+    def message_box(self, question, *buttons, **kwargs):
+        self.asked.append((question, buttons))
+        return self.answer
+
+    def text_view_dialog(self, text="", *buttons, **kwargs):
+        self.viewed.append((text, buttons, kwargs))
+        return _View(text)
 
 
 class _SlotUi:
@@ -6505,16 +6665,18 @@ class _SlotUi:
         adaptive=True,
         beside=False,
         probe=True,
-        save_set=False,
-        set_convention=False,
+        page="Bake",
         scene_lights=True,
         hidden_lights=False,
     ):
         self.footer = _Footer()
+        # The panel's destroyed signal, which a window's listeners follow.
+        self.destroyed = types.SimpleNamespace(connect=lambda *_a: None)
         self.cmb_device = _DeviceCombo(device)
-        # The Bake Set row: Save After Bake and the naming switch ride its button.
-        self.select_bake_set = _BakeSetButton(save_set, set_convention)
-        self.lbl_bake_set = _Label("Bake Set:")
+        # The page picker, its stack and the run button the pages share.
+        self.cmb_page = _PageCombo(page)
+        self.stk_pages = _Stack()
+        self.b000 = _RunButton()
         # Each switch rides the option box of the field it qualifies.
         self.cmb_resolution = _ResolutionCombo(res, denoise=denoise)
         self.spn_samples = _Spin(samples, switch=adaptive)
@@ -6608,21 +6770,65 @@ class _FakeWorkflow:
         self.calls.append(("revert", tuple(objects) if objects else None))
         return list(objects) if objects else []
 
+    def track(self, objects=None):
+        self.calls.append(("track", tuple(objects or ())))
+        return list(objects or ())
+
     #: What stale_report() says changed, and rebake_changed() re-bakes
     #: (``None``: nothing changed).
     report = None
 
-    def stale_report(self, objects=None, reach=None):
+    #: What map_folders() says the maps live in.
+    folders: dict = {}
+
+    def stale_report(self, objects=None, reach=None, output_dir=None, relocate=False):
         self.calls.append(("stale_report",))
+        self.stale_kwargs = {"output_dir": output_dir, "relocate": relocate}
         return self.report or ptk.StaleReport()
 
+    def bake_maps(self, report=None, output_dir=None, relocate=False):
+        report = report or self.report or ptk.StaleReport()
+        # One map, read by what the report re-bakes.
+        return report.map_rows(
+            [{"map": "Fake_Lightmap.exr", "path": "C:/fake/Fake_Lightmap.exr",
+              "folder": "lm", "objects": list(report.targets) or ["|fake"]}]
+        )
+
+    def combine(self, maps=None, size=None, merge_materials=True, on_progress=None):
+        self.calls.append(("combine", tuple(maps or ())))
+        return lmb_module.LightmapBakeResult(maps={"|s": "C:/out/S_Lightmap.exr"})
+
+    def rebake_report(self, objects=None, output_dir=None, relocate=False):
+        self.calls.append(("rebake_report",))
+        return self.report or ptk.StaleReport()
+
+    def map_folders(self, objects=None):
+        self.calls.append(("map_folders",))
+        return dict(self.folders)
+
+    def bake_breakdown(self, output_dir=None, relocate=False):
+        self.calls.append(("bake_breakdown",))
+        return ptk.ReportDoc().heading("Lightmap Bake State", 1).text("breakdown")
+
+    def rebake(self, objects=None, on_progress=None, **kwargs):
+        self.calls.append(("rebake",))
+        self.rebake_objects = list(objects or [])
+        return self.rebake_changed(**kwargs, _recorded=False)
+
     def rebake_changed(
-        self, packing=None, reach=None, lighting=True, on_progress=None, **kwargs
+        self,
+        packing=None,
+        reach=None,
+        lighting=True,
+        on_progress=None,
+        _recorded=True,
+        **kwargs,
     ):
         """The engine's contract: nothing to do is a refusal saying so; else
         each target lands in one atlas, written in place as the report says."""
         report = self.report or ptk.StaleReport()
-        self.calls.append(("rebake_changed",))
+        if _recorded:
+            self.calls.append(("rebake_changed",))
         self.rebake_kwargs = kwargs
         result = lmb_module.LightmapBakeResult(report=report)
         self.last_result = result
@@ -6967,70 +7173,6 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         )
         self.assertIn("Baked", ui.footer.text)
 
-    def test_b000_saves_the_bake_objects_as_the_bake_set_when_asked(self):
-        """Save After Bake: every bake replaces the scene's Bake Set with the
-        objects it acted on -- the Exclude set's counterpart for what WAS
-        baked -- named plain, or by the naming convention's Set suffix when
-        the row's tag switch is on. Off, or a bake that refused, saves none."""
-        from mayatk.mat_utils.bake_sets import LightmapBakeSet
-
-        self.addCleanup(LightmapBakeSet.clear)
-        table = {**ptk.NamingConvention.DEFAULTS}
-        table["objectSet"] = ptk.AffixRule("_SET", "auto", "Set")
-        pin = mock.patch.object(ptk.NamingConvention, "_cache", table)
-        pin.start()
-        self.addCleanup(pin.stop)
-
-        cube = self._select_cube("bakeSetCube")
-        self._slots(_SlotUi()).b000()  # the default: off
-        self.assertFalse(LightmapBakeSet.exists())
-
-        ui = _SlotUi(save_set=True)
-        self._slots(ui).b000()
-        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked")
-        self.assertEqual(LightmapBakeSet.members(), [cube])
-        self.assertIn("as lightmapBaker_baked", ui.footer.text)
-        self.assertEqual(ui.lbl_bake_set.text(), "Bake Set (1):")
-
-        other = self._select_cube("bakeSetOther")
-        ui = _SlotUi(save_set=True, set_convention=True)
-        self._slots(ui).b000()
-        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked_SET")
-        self.assertFalse(cmds.objExists("lightmapBaker_baked"))
-        self.assertEqual(LightmapBakeSet.members(), [other])  # replaced, not added
-
-        _FakeWorkflow.refusal = "Arnold is not loaded."
-        cmds.select(cube, replace=True)
-        self._slots(_SlotUi(save_set=True)).b000()
-        self.assertEqual(LightmapBakeSet.members(), [other])  # untouched
-
-    def test_the_tag_switch_renames_the_bake_set_and_says_so_only_then(self):
-        """Toggling the naming switch renames a set already in the scene, and
-        the footer names the change; a switch that leaves the name as it was
-        (or a scene with no set) reports no rename."""
-        from mayatk.mat_utils.bake_sets import LightmapBakeSet
-
-        self.addCleanup(LightmapBakeSet.clear)
-        table = {**ptk.NamingConvention.DEFAULTS}
-        table["objectSet"] = ptk.AffixRule("_SET", "auto", "Set")
-        pin = mock.patch.object(ptk.NamingConvention, "_cache", table)
-        pin.start()
-        self.addCleanup(pin.stop)
-
-        ui = _SlotUi()
-        slots = self._slots(ui)
-        slots._respell_bake_set(True)  # no set yet
-        self.assertNotIn("renamed", ui.footer.text)
-        LightmapBakeSet.define([self._select_cube("bakeSetRespell")])
-        slots._respell_bake_set(True)
-        self.assertEqual(LightmapBakeSet.name(), "lightmapBaker_baked_SET")
-        self.assertIn(
-            "renamed: lightmapBaker_baked -> lightmapBaker_baked_SET", ui.footer.text
-        )
-        ui.footer.text = ""
-        slots._respell_bake_set(True)  # already so spelled
-        self.assertNotIn("renamed", ui.footer.text)
-
     def test_b000_atlas_packing_bakes_the_atlas_and_says_so(self):
         # ONE atlas bake, not bake_separated + pack_atlas: the layout is
         # planned before any ray is traced (the engine's bake_atlas).
@@ -7320,14 +7462,13 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertIn("1 excluded", ui.footer.text)
         self.assertIn("WARNING: bake is essentially UNLIT", ui.footer.text)
 
-    def test_revert_to_source_asks_first_and_cancel_changes_nothing(self):
-        """The header item reaches every baked object when nothing is selected,
-        one row from the panel's other actions -- it must say so and wait."""
+    def test_revert_selected_asks_first_and_cancel_changes_nothing(self):
+        """It removes wiring an export reads -- it says what and waits."""
         long = self._select_cube()
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Cancel")
 
-        s.revert_to_source()
+        s.revert_selected()
 
         baker = _FakeWorkflow.instances[0]
         self.assertEqual(len(s.sb.asked), 1)
@@ -7338,25 +7479,28 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         self.assertIn("cancelled", s.ui.footer.text)
         self.assertTrue(cmds.objExists(long))
 
-    def test_revert_to_source_routes_selection_once_confirmed(self):
+    def test_revert_selected_routes_selection_once_confirmed(self):
         long = self._select_cube()
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Ok")
-        s.revert_to_source()
+        s.revert_selected()
         baker = _FakeWorkflow.instances[0]
         self.assertEqual(baker.calls, [("baked_objects", (long,)), ("revert", (long,))])
         self.assertIn("Reverted 1 object", s.ui.footer.text)
 
-    def test_revert_to_source_all_when_no_selection(self):
+    def test_revert_selected_with_nothing_selected_asks_nothing(self):
+        """An empty selection is not every baked object: a whole-scene revert
+        is every Manage row highlighted. Changed: 2026-10-22 (it offered to
+        revert ALL of them)."""
         cmds.select(clear=True)
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Ok")
-        s.revert_to_source()
-        baker = _FakeWorkflow.instances[0]
-        self.assertIn("all of them", s.sb.asked[0][0])
-        self.assertEqual(baker.calls[-1], ("revert", None))  # None -> all marked
+        s.revert_selected()
+        self.assertEqual(s.sb.asked, [])
+        self.assertNotIn("revert", [c[0] for b in _FakeWorkflow.instances for c in b.calls])
+        self.assertIn("select their objects", s.ui.footer.text)
 
-    def test_revert_to_source_reads_a_face_selection_as_its_object(self):
+    def test_revert_selected_reads_a_face_selection_as_its_object(self):
         """Faces name their mesh, as they do for a bake. Read as transforms
         only, a face selection was "nothing selected", and the dialog offered
         to revert EVERY baked object."""
@@ -7364,18 +7508,18 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         cmds.select(f"{long}.f[0]", replace=True)
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Ok")
-        s.revert_to_source()
+        s.revert_selected()
         baker = _FakeWorkflow.instances[0]
         self.assertIn("1 selected object", s.sb.asked[0][0])
         self.assertEqual(baker.calls, [("baked_objects", (long,)), ("revert", (long,))])
 
-    def test_revert_to_source_with_only_an_empty_group_selected_asks_nothing(self):
+    def test_revert_selected_with_only_an_empty_group_selected_asks_nothing(self):
         """A group bakes nothing (``TextureBaker.resolve_meshes``), so it has
         no lightmap to take off -- the footer says so, and nothing is asked."""
         cmds.select(cmds.group(empty=True, name="revertGroup"), replace=True)
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Ok")
-        s.revert_to_source()
+        s.revert_selected()
         self.assertEqual(s.sb.asked, [])
         self.assertIn("has a lightmap", s.ui.footer.text)
 
@@ -7389,16 +7533,16 @@ class TestLightmapBakerSlots(MayaTkTestCase):
         with mock.patch.object(
             ptk.FileUtils, "open_explorer", return_value=True
         ) as opened:
-            s.open_sourceimages()
+            s.open_output()
         self.assertEqual(opened.call_args.args[0], wrote)
 
-    def test_revert_to_source_with_nothing_baked_never_asks(self):
+    def test_revert_selected_with_nothing_baked_never_asks(self):
         self._select_cube()
         _FakeWorkflow.baked = []
         self.addCleanup(setattr, _FakeWorkflow, "baked", None)
         s = self._slots(_SlotUi())
         s.sb = _Sb(answer="Ok")
-        s.revert_to_source()
+        s.revert_selected()
         self.assertEqual(s.sb.asked, [])
         self.assertNotIn("revert", [c[0] for c in _FakeWorkflow.instances[0].calls])
         self.assertIn("has a lightmap", s.ui.footer.text)
@@ -7456,8 +7600,7 @@ class TestLightmapBakerSlots(MayaTkTestCase):
             retired=["C:/out/old_Lightmap.exr", "C:/out/old_Lightmap_1.exr"],
         )
         report = s._bake_report(result)
-        self.assertIn("Moved 2 superseded maps", report)
-        self.assertIn("Recycle Bin", report)
+        self.assertIn("2 old → Recycle Bin on save", report)
 
     def test_scene_scope_reaches_every_instance(self):
         """An instanced shape is ONE node under several transforms, and a
@@ -7856,6 +7999,22 @@ class TestLightmapDependencies(MayaTkTestCase):
         self.assertFalse(os.path.exists(src))
         self.assertTrue(os.path.isfile(os.path.join(self.si, "movedmap_LightMap.exr")))
 
+    def test_relocate_move_copies_a_map_another_scene_reads(self):
+        """2026-10-21 audit: a Find & Move in a Save As copy moved the map its
+        source still reads; only this scene's records followed, and the source
+        opened unlit. A map another scene wrote is copied instead."""
+        cube = self._cube("sharedmap")
+        src = self._file("elsewhere", "sharedmap_LightMap.exr")
+        self._commit(cube, src)
+        cmds.file(save=True, type="mayaAscii", force=True)
+        cmds.file(rename=os.path.join(self.root, "scenes", "deps_copy.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+
+        self.baker.relocate_lightmaps(self.si, mode="move")
+
+        self.assertTrue(os.path.isfile(src), "the source scene's map was moved")
+        self.assertTrue(self._same(self._map_dir(cube), self.si))
+
     def test_relocate_leaves_a_map_already_at_the_destination_in_place(self):
         cube = self._cube("inplace")
         open(os.path.join(self.si, "inplace_LightMap.exr"), "wb").close()
@@ -8246,9 +8405,10 @@ class TestPanelLayout(unittest.TestCase):
     """The panel's shape, read straight off the ``.ui`` -- no Qt.
 
     Two things it pins. The action block: Preset, Reset to Defaults and Bake
-    Lightmaps in one group at the bottom -- the WebXR preview panel's
-    ``grp_process`` shape (2026-09-22), so the two panels are worked the same
-    way. And the sections above it: what the bake gathers, then the machine it
+    Lightmaps in one group at the bottom of the Bake page -- the WebXR preview
+    panel's ``grp_process`` shape (2026-09-22), so the two panels are worked
+    the same way; nothing sits below both pages, so the Manage page shows no
+    control that acts on the Bake page's settings (2026-10-22). And the sections above it: what the bake gathers, then the machine it
     runs on, then the quality dials, then where the files go -- each switch
     riding the field it qualifies rather than a checkbox row of its own
     (``LightmapBakerSlots._TOGGLES``).
@@ -8277,19 +8437,36 @@ class TestPanelLayout(unittest.TestCase):
             names,
             [
                 "header",
+                "cmb_page",
+                "stk_pages",
+                "verticalSpacer",
+                "footer",
+            ],
+        )
+
+    def test_the_bake_page_reads_top_to_bottom(self):
+        names = [child.get("name") for child in self._items("bake_layout")]
+        self.assertEqual(
+            names,
+            [
                 "cmb_scope",
                 "exclude_layout",
                 "isolate_layout",
-                "bake_set_layout",
                 "cmb002",
                 "cmb_device",
                 "quality_group",
                 "output_group",
                 "grp_process",
-                "verticalSpacer",
-                "footer",
             ],
         )
+
+    def test_the_manage_page_is_its_table(self):
+        """Its verbs are the table menu's (Re-Bake, Revert, Open Folder) and
+        the header menu's (Select Changed, Bake Report). Changed: 2026-10-22
+        (was the table plus Re-bake Selected / Revert Selected buttons, and
+        the shared run button's Re-bake Changed)."""
+        names = [child.get("name") for child in self._items("manage_layout")]
+        self.assertEqual(names, ["tbl_maps"])
 
     def test_the_processor_is_not_a_quality_dial(self):
         """It names one machine's hardware, so no preset stores it -- and the
@@ -8315,21 +8492,15 @@ class TestPanelLayout(unittest.TestCase):
         row = [child.get("name") for child in self._items("isolate_layout")]
         self.assertEqual(row, ["lbl_isolate", "set_isolation"])
 
-    def test_the_bake_set_row_mirrors_the_exclude_row(self):
-        """A label and one button; Save After Bake and the naming switch ride
-        the button's option box, as every switch on this panel does."""
-        row = [child.get("name") for child in self._items("bake_set_layout")]
-        self.assertEqual(row, ["lbl_bake_set", "select_bake_set"])
-
-    def test_the_action_group_is_the_last_thing_before_the_footer(self):
-        names = [child.get("name") for child in self._main_items()]
-        self.assertIn("grp_process", names)
-        below = names[names.index("grp_process") + 1 :]
-        self.assertEqual(
-            below, ["verticalSpacer", "footer"], f"below the group: {below}"
-        )
+    def test_the_action_group_ends_the_bake_page(self):
+        """It is the Bake page's: Manage hides it with its page. Changed:
+        2026-10-22 (it sat below the pages, shown on both)."""
+        names = [child.get("name") for child in self._items("bake_layout")]
+        self.assertEqual(names[-1], "grp_process", names)
+        main = [child.get("name") for child in self._main_items()]
+        self.assertEqual(main[main.index("stk_pages") + 1 :], ["verticalSpacer", "footer"])
         # The Preset combo moved INTO the group; nothing of it left up top.
-        self.assertNotIn("cmb000", names)
+        self.assertNotIn("cmb000", main)
 
     def test_the_group_reads_preset_then_reset_then_bake(self):
         group = next(
@@ -8720,7 +8891,11 @@ class TestRebakeChanged(MayaTkTestCase):
         return self._baker().stale_report(**kwargs)
 
     def _atlas(self, name=None):
-        return _read(os.path.join(self.out, name or self.ATLAS))[..., :3]
+        """The atlas as the scene reads it: its copy waiting for the save, else
+        the folder's (``LightmapRecords._stage``)."""
+        path = os.path.join(self.out, name or self.ATLAS)
+        staged = LightmapRecords._stage(path)
+        return _read(staged if os.path.isfile(staged) else path)[..., :3]
 
     @staticmethod
     def _cell(atlas, obj, size=64):
@@ -8730,7 +8905,459 @@ class TestRebakeChanged(MayaTkTestCase):
         return atlas[row0:row1, col0:col1]
 
     def _files(self):
-        return sorted(f for f in os.listdir(self.out) if f.lower().endswith(".exr"))
+        """The maps the folder holds once the scene is saved: its own, and the
+        ones waiting in the session for it."""
+        session = LightmapRecords._pending().folder(self.out)
+        return sorted(
+            {f for d in (self.out, session) for f in os.listdir(d) if f.lower().endswith(".exr")}
+        )
+
+    def _disk(self):
+        """``{file name: bytes}`` of the folder itself -- what the scene file
+        on disk reads."""
+        out = {}
+        for name in sorted(os.listdir(self.out)):
+            if name.lower().endswith(".exr"):
+                with open(os.path.join(self.out, name), "rb") as fh:
+                    out[name] = fh.read()
+        return out
+
+    # -- one material, two shading groups ----------------------------------
+    def _split(self, same_shader: bool, legacy: bool = False):
+        """rcA and rcB on one material, rcC on a second shading group -- around
+        the SAME material (*same_shader*: two shading groups, one material, an
+        FBX import's habit) or around a duplicate of it -- baked together.
+        *legacy* bakes as the baker did before it grouped by what a group
+        renders: one atlas per shading group, ``Crate_Lightmap`` and
+        ``Crate_Lightmap_1``. Returns the objects and each one's shading
+        group."""
+        sg = self._crate_sg()
+        if same_shader:
+            other = cmds.sets(
+                renderable=True, noSurfaceShader=True, empty=True, name="rcSplitSG"
+            )
+            shader = MatUtils._sg_shaders(sg)[0]
+            cmds.connectAttr(f"{shader}.outColor", f"{other}.surfaceShader", force=True)
+        else:
+            other = self._crate_sg(name="rcDup")
+        a, b = self._crates(("rcA", "rcB"), sg=sg)
+        (c,) = self._crates(("rcC",), sg=other)
+        cmds.move(20, 0, 0, c)
+        groups = {o: LightmapRecords._primary_material(o) for o in (a, b, c)}
+        with contextlib.ExitStack() as stack:
+            if legacy:
+                stack.enter_context(
+                    mock.patch.object(
+                        LightmapBaker,
+                        "_atlas_keys",
+                        classmethod(lambda cls, objs: dict(groups)),
+                    )
+                )
+            self._bake([a, b, c])
+        return [a, b, c], groups
+
+    def _maps_read(self, objects):
+        reads = {t: p for t, _n, p in LightmapRecords._reads()}
+        return {os.path.basename(reads[o]) for o in objects}
+
+    def test_a_split_material_bakes_one_atlas_and_keeps_its_shading_groups(self):
+        """The production room's LX2000_Lightmap and LX2000_Lightmap_1: one
+        material in two shading groups, or a duplicate of it, baked an atlas
+        per shading group. Grouped by what a group renders, one bake packs
+        them into one atlas -- and never touches the shading the exporter
+        reads. Changed: 2026-10-22 (was a Merge Duplicate Materials step that
+        reassigned the materials and still needed a re-bake)."""
+        for same_shader in (True, False):
+            with self.subTest(same_shader=same_shader):
+                cmds.file(new=True, force=True)
+                self.out = self.store.dir_path(name=f"fresh_{same_shader}")
+                objects, groups = self._split(same_shader)
+                self.assertEqual(self._maps_read(objects), {self.ATLAS})
+                for obj, sg in groups.items():
+                    self.assertEqual(LightmapRecords._primary_material(obj), sg)
+                self.assertEqual(self._report().targets, ())
+
+    def test_an_existing_split_is_named_and_combines_without_a_render(self):
+        """A scene baked before the grouping keeps its two maps: both rows
+        read *split*, naming the materials (two: a duplicate still in the
+        scene), and no object re-bakes for it. Combine packs the group into
+        one atlas from the lighting the maps hold -- nothing rendered, each
+        cell its own light, each object still dated by its bake -- and merges
+        the duplicate materials. Changed: 2026-10-23 (a split re-baked)."""
+        for same_shader in (True, False):
+            with self.subTest(same_shader=same_shader):
+                cmds.file(new=True, force=True)
+                self.out = self.store.dir_path(name=f"legacy_{same_shader}")
+                self.fake.values = {"rcA": 0.25, "rcB": 0.5, "rcC": 0.75}
+                (a, b, c), groups = self._split(same_shader, legacy=True)
+                names = {self.ATLAS, "Crate_Lightmap_1.exr"}
+                self.assertEqual(self._maps_read([a, b, c]), names)
+                report = self._report()
+                self.assertEqual(report.targets, (), "a split is no re-bake target")
+                self.assertEqual(set(report.split), names)
+                self.assertEqual(
+                    len(report.split_materials[self.ATLAS]), 1 if same_shader else 2
+                )
+                rows = self._baker().bake_maps(report)
+                self.assertEqual({r["state"] for r in rows}, {"split"}, rows)
+                self.assertTrue(all("Combine" in r["hint"] for r in rows), rows)
+                dated = {o: LightmapRecords.bake_state()["objects"][o]["baked_at"] for o in (a, b, c)}
+                self.fake.baked.clear()
+                result = self._baker().combine()
+                self.assertEqual(self.fake.baked, [], "nothing rendered")
+                self.assertEqual(self._maps_read([a, b, c]), {self.ATLAS})
+                atlas = self._atlas()
+                for obj, value in ((a, 0.25), (b, 0.5), (c, 0.75)):
+                    cell = self._cell(atlas, obj, size=atlas.shape[0])
+                    self.assertAlmostEqual(float(cell.mean()), value, places=2, msg=obj)
+                state = LightmapRecords.bake_state()["objects"]
+                self.assertEqual({o: state[o]["baked_at"] for o in (a, b, c)}, dated)
+                shader = LightmapBaker._surface_shader
+                self.assertEqual(
+                    shader(LightmapRecords._primary_material(c)),
+                    shader(LightmapRecords._primary_material(a)),
+                    "the duplicate is merged",
+                )
+                self.assertEqual(len(result.files), 1)
+                after = self._report()
+                self.assertEqual((after.targets, dict(after.split)), ((), {}), after.lines())
+
+    def test_combine_sizes_end_at_the_one_that_keeps_every_cell(self):
+        """The sizes Combine offers start at the largest map the split reads
+        and double until every object keeps its cell's detail. Added:
+        2026-10-23"""
+        self._split(True, legacy=True)
+        sizes = self._baker().combine_sizes()
+        self.assertEqual(sizes[0][0], 64, sizes)
+        self.assertEqual([s for s, _k in sizes], sorted(s for s, _k in sizes))
+        self.assertGreaterEqual(sizes[-1][1], LightmapBaker.COMBINE_KEEP, sizes)
+        self.assertTrue(all(k < LightmapBaker.COMBINE_KEEP for _s, k in sizes[:-1]))
+        # A map that cannot be read sizes nothing: never a 1 px atlas.
+        with mock.patch.object(LightmapBaker, "_map_dims", return_value=(0, 0)):
+            self.assertEqual(self._baker().combine_sizes()[0][0], 64)
+
+    def test_combine_reports_each_cut_and_a_cancel_writes_nothing(self):
+        """Combine runs under the footer's progress: each object cut is
+        reported, and a cancel stops before any file or record is written.
+        Added: 2026-10-23"""
+        (a, b, c), _groups = self._split(True, legacy=True)
+        files, reads = self._files(), self._maps_read([a, b, c])
+        seen = []
+        result = self._baker().combine(
+            on_progress=lambda done, total, name: seen.append((done, total, name)) or False
+        )
+        self.assertEqual(seen, [(0, 3, "rcA")])
+        self.assertIn("cancelled", result.refused)
+        self.assertEqual((self._files(), self._maps_read([a, b, c])), (files, reads))
+
+    def test_combine_never_writes_over_a_map_this_scene_did_not_write(self):
+        """A map with no writer record (older than it, or another scene's)
+        may be read elsewhere: Combine packs into a file of its own and
+        leaves it on disk. Added: 2026-10-23"""
+        (a, b, c), _groups = self._split(True, legacy=True)
+        # The copy the scene reads: the bake waits in the session for a save.
+        atlas = LightmapRecords._stage(os.path.join(self.out, self.ATLAS))
+        before = open(atlas, "rb").read()
+        with mock.patch.object(LightmapRecords, "wrote", return_value=False):
+            result = self._baker().combine()
+        self.assertEqual(open(atlas, "rb").read(), before, "the old atlas is untouched")
+        self.assertNotIn(self.ATLAS, self._maps_read([a, b, c]))
+        self.assertEqual(len(set(result.maps.values())), 1)
+
+    def test_combine_reads_every_map_before_it_merges_a_material(self):
+        """Review 2026-10-24 (S2): Combine merged the duplicate materials --
+        deleting them -- and only then read the maps: one that would not
+        decode (cut short, gone, no cv2) raised out of the cut with the
+        duplicates already deleted and no atlas written. Every map is read
+        first: one that cannot be leaves its objects their map, named, and
+        no material is merged."""
+        (a, b, c), _groups = self._split(False, legacy=True)
+        bad = {t: p for t, _n, p in LightmapRecords._reads()}[c]
+        with open(bad, "wb") as fh:
+            fh.write(b"cut short")
+        shader = LightmapBaker._surface_shader
+        shaders = {o: shader(LightmapRecords._primary_material(o)) for o in (a, c)}
+        self.assertEqual(len(set(shaders.values())), 2)
+
+        with mock.patch.object(LightmapBaker.logger, "warning") as warn:
+            result = self._baker().combine()
+
+        for obj, mat in shaders.items():
+            self.assertTrue(cmds.objExists(mat), f"{mat} was deleted")
+            self.assertEqual(shader(LightmapRecords._primary_material(obj)), mat)
+        self.assertEqual(sorted(result.maps), sorted([a, b]))
+        self.assertEqual(self._maps_read([c]), {os.path.basename(bad)})
+        said = _rendered_warnings(warn)
+        self.assertTrue(any("keep their map" in m and "rcC" in m for m in said), said)
+
+    def test_a_cancelled_combine_merges_no_material(self):
+        """Review 2026-10-24: the merge ran before the first cut, so a cancel
+        -- "nothing written" -- had already deleted the duplicates and moved
+        their objects. It runs last; the plan groups the duplicates without
+        it (_atlas_keys)."""
+        (a, b, c), _groups = self._split(False, legacy=True)
+        shader = LightmapBaker._surface_shader
+        shaders = {o: shader(LightmapRecords._primary_material(o)) for o in (a, c)}
+        self.assertEqual(len(set(shaders.values())), 2)
+
+        result = self._baker().combine(on_progress=lambda *_args: False)
+
+        self.assertIn("cancelled", result.refused)
+        for obj, mat in shaders.items():
+            self.assertTrue(cmds.objExists(mat), f"{mat} was deleted")
+            self.assertEqual(shader(LightmapRecords._primary_material(obj)), mat)
+
+    def test_a_group_an_earlier_merge_mended_is_skipped(self):
+        """Review 2026-10-24: a group no longer split by the time Combine
+        reached it (an earlier group's merge mended it) offered no size, and
+        ``combine_sizes(...)[-1]`` raised IndexError."""
+        self._split(False, legacy=True)
+        real = LightmapBaker._combine_groups
+
+        def mended(baker, maps=None):
+            return real(baker, maps) if maps is None else []
+
+        with mock.patch.object(LightmapBaker, "_combine_groups", mended):
+            result = self._baker().combine()
+
+        self.assertEqual(result.maps, {})
+        self.assertIn("Nothing to combine", result.refused)
+
+    def test_combine_takes_a_map_baked_at_intensity_zero(self):
+        """Review 2026-10-24: each cell is rescaled to the atlas's one
+        intensity by ``intensity / its own``, and a marker at 0 raised
+        ZeroDivisionError. Such a map holds no light to rescale."""
+        (a, b, c), _groups = self._split(False, legacy=True)
+        node = LightmapRecords._marker_node(c)
+        LightmapRecords._write_marker(
+            node, dict(LightmapRecords._marker_info(c), intensity=0.0)
+        )
+
+        result = self._baker().combine()
+
+        self.assertEqual(sorted(result.maps), sorted([a, b, c]))
+
+    # -- saved with the scene ----------------------------------------------
+    def _saved_room(self):
+        """The legacy split saved as ``room.ma``, in a project that holds its
+        maps; returns its objects, the scene file and the folder's bytes."""
+        root = os.path.dirname(self.out)
+        previous = cmds.workspace(query=True, rootDirectory=True)
+        cmds.workspace(root, openWorkspace=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
+        # Set aside into the scratch folder, never the user's Recycle Bin.
+        no_trash = mock.patch.object(ptk.FileUtils, "move_to_trash", return_value=None)
+        no_trash.start()
+        self.addCleanup(no_trash.stop)
+        # Each its own light: a combined atlas then differs from the old one.
+        self.fake.values = {"rcA": 0.25, "rcB": 0.5, "rcC": 0.75}
+        objects, _groups = self._split(True, legacy=True)
+        return objects, self._save_as("room"), self._disk()
+
+    def test_an_unsaved_combine_leaves_the_saved_scene_its_maps(self):
+        """Production: a Combine never saved wrote its atlas over
+        LX2000_Lightmap.exr and recycled LX2000_Lightmap_1.exr, and the saved
+        scene reopened with a map missing and three objects lit from the
+        wrong cells. Until the save nothing reaches the folder, and the
+        session's maps go with the session. Added: 2026-10-23"""
+        (a, b, c), scene, disk = self._saved_room()
+        result = self._baker().combine()
+        self.assertEqual(self._maps_read([a, b, c]), {self.ATLAS}, "the session reads it")
+        self.assertEqual(self._disk(), disk, "the folder as the saved scene left it")
+        cmds.file(scene, open=True, force=True)
+        self.assertEqual(self._maps_read([a, b, c]), set(disk))
+        self.assertEqual(set(self._report().split), set(disk))
+        self.assertEqual([p for p in result.files if os.path.exists(p)], [], "nothing left")
+
+    def test_saving_a_combine_replaces_the_atlas_under_its_own_name(self):
+        """No ``_1`` for an unsaved scene to tell apart: the save writes the
+        atlas over the one the scene read and sets the split-off map aside.
+        Added: 2026-10-23"""
+        (a, b, c), scene, disk = self._saved_room()
+        self._baker().combine()
+        cmds.file(save=True, force=True)
+        saved = self._disk()
+        self.assertEqual(sorted(saved), [self.ATLAS], "the split-off map set aside")
+        self.assertNotEqual(saved[self.ATLAS], disk[self.ATLAS])
+        cmds.file(scene, open=True, force=True)
+        reads = {t: p for t, _n, p in LightmapRecords._reads()}
+        self.assertEqual(
+            {os.path.normcase(os.path.dirname(reads[o])) for o in (a, b, c)},
+            {os.path.normcase(os.path.abspath(self.out))},
+        )
+        self.assertEqual(self._report().split, {})
+
+    def test_a_save_as_after_a_combine_leaves_the_first_file_its_maps(self):
+        """A Save As writes a second scene file, and the first still reads
+        every map as it is: the atlas the session rewrote goes to the new
+        file under the next free name, the new file's own, and nothing is set
+        aside. Added: 2026-10-23"""
+        (a, b, c), first, disk = self._saved_room()
+        self._baker().combine()
+        second = self._save_as("room_v2")
+        saved = self._disk()
+        self.assertEqual({n: saved[n] for n in disk}, disk, "the first file's maps")
+        (forked,) = self._maps_read([a, b, c])
+        self.assertNotIn(forked, disk)
+        self.assertTrue(LightmapRecords.wrote(forked), "the new file owns it")
+        cmds.file(first, open=True, force=True)
+        self.assertEqual(self._maps_read([a, b, c]), set(disk))
+        cmds.file(second, open=True, force=True)
+        self.assertEqual(self._maps_read([a, b, c]), {forked})
+
+    def test_a_save_as_out_of_the_project_stamps_its_forks_as_its_own(self):
+        """Review 2026-10-24: a Save As's forked map was stamped by hand,
+        spelled from the re-base's project -- which a target in no project
+        leaves as the OLD one, so the stamp named a file there. Stamped as
+        the scene file's own writer stamp (``DataNodes.writer_stamp_of``)."""
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        (a, b, c), _first, disk = self._saved_room()
+        self._baker().combine()
+        real = DataNodes.project_root_of
+        nowhere = classmethod(
+            lambda cls, path: None if "room_out" in str(path or "") else real(path)
+        )
+        with mock.patch.object(DataNodes, "project_root_of", nowhere):
+            second = self._save_as("room_out")
+            expected = DataNodes.writer_stamp_of(second)
+        (forked,) = self._maps_read([a, b, c])
+        self.assertNotIn(forked, disk)
+        self.assertEqual(LightmapRecords._writers()[forked.lower()], expected)
+
+    def test_an_undone_combine_is_not_saved(self):
+        """The save moves only what the scene reads: a Combine undone before
+        it leaves the folder as it was. Added: 2026-10-23"""
+        was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True, infinity=True)
+        self.addCleanup(cmds.undoInfo, state=was)
+        (a, b, c), _scene, disk = self._saved_room()
+        self._baker().combine()
+        cmds.undo()
+        self.assertEqual(self._maps_read([a, b, c]), set(disk))
+        cmds.file(save=True, force=True)
+        self.assertEqual(self._disk(), disk)
+
+    def test_re_baking_either_maps_objects_mends_the_split(self):
+        """The split row's tooltip says "right-click it: Re-Bake": a Re-Bake
+        of either map's objects -- the main atlas's or the split-off one's --
+        packs the whole group into one atlas. Added: 2026-10-22"""
+        for main in (True, False):
+            with self.subTest(main=main):
+                cmds.file(new=True, force=True)
+                self.out = self.store.dir_path(name=f"mend_{main}")
+                (a, b, c), _groups = self._split(True, legacy=True)
+                self._baker().rebake([a, b] if main else [c], output_dir=self.out)
+                self.assertEqual(self._maps_read([a, b, c]), {self.ATLAS})
+                self.assertEqual(self._report().targets, ())
+
+    def test_merging_the_materials_after_a_bake_keeps_the_one_atlas(self):
+        """Fixing the duplicates elsewhere (tentacle's Remove Duplicate
+        Materials, the Scene Exporter task: ``MatUtils``' merge) after a bake
+        moves objects between shading groups of ONE atlas group: nothing
+        splits, nothing re-packs, the atlas stays one. Added: 2026-10-22"""
+        for same_shader in (True, False):
+            with self.subTest(same_shader=same_shader):
+                cmds.file(new=True, force=True)
+                self.out = self.store.dir_path(name=f"merged_{same_shader}")
+                (a, b, c), groups = self._split(same_shader)
+                MatUtils._merge_shading_groups({groups[c]: groups[a]})
+                report = self._report()
+                self.assertEqual(report.repack, {}, report.lines())
+                # The moved object reads its material changed, and re-bakes
+                # alone into the cell it owns.
+                self.assertEqual(report.targets, (c,), report.lines())
+                self.assertEqual(report.in_place, (c,))
+                self.assertEqual(report.split, {})
+                self._rebake()
+                self.assertEqual(self._maps_read([a, b, c]), {self.ATLAS})
+                self.assertEqual(self._report().targets, ())
+
+    @staticmethod
+    def _untracked(*objects):
+        """Patch the bake record to hold no entry for *objects*: baked before
+        change tracking, as the production room's split-off object was."""
+        real = LightmapRecords.bake_state.__func__
+
+        def state(cls, *args, **kwargs):
+            out = real(cls, *args, **kwargs)
+            out["objects"] = {
+                k: e for k, e in out["objects"].items() if k not in objects
+            }
+            return out
+
+        return mock.patch.object(LightmapRecords, "bake_state", classmethod(state))
+
+    def test_an_untracked_split_off_map_beside_its_groups_atlas_is_a_split(self):
+        """The production room: BODY (BODYSG, one material with CHEESE_CAKESG)
+        read LX2000_Lightmap_1 alone, baked before change tracking -- no
+        record says it was an atlas of one, so the split went unseen. A
+        one-reader map in a group that owns an atlas is that group's split
+        either way. Changed: 2026-10-23 (a split re-baked)."""
+        (a, b, c), _groups = self._split(same_shader=True, legacy=True)
+        with self._untracked(c):
+            report = self._report()
+        self.assertEqual(
+            set(report.split), {self.ATLAS, "Crate_Lightmap_1.exr"}, report.lines()
+        )
+        self.assertEqual(report.targets, ())
+
+    def test_tracking_one_map_leaves_the_split_and_the_rest_untracked(self):
+        """Production: Start Tracking two rows turned every row "up to date"
+        -- the commit took every other untracked object in as tracked, and
+        the split-off map, recorded now, no longer read as split. Added:
+        2026-10-23"""
+        (a, b, c), _groups = self._split(True, legacy=True)
+        self._forget(a, c)
+        self.assertEqual(self._report().untracked, (a, c))
+        self.assertEqual(self._baker().track([c]), [c])
+        report = self._report()
+        self.assertEqual(report.untracked, (a,), "the other stays untracked")
+        self.assertEqual(set(report.split), {self.ATLAS, "Crate_Lightmap_1.exr"})
+
+    @staticmethod
+    def _forget(*objects):
+        """Drop *objects* from the STORED bake record: baked before change
+        tracking, for real (``_untracked`` only patches the read)."""
+        record = LightmapRecords.bake_state()
+        for obj in objects:
+            record["objects"].pop(obj)
+        ptk.SceneRecords.LIGHTMAP_BAKE_STATE.save(
+            LightmapRecords._data_nodes(), ptk.BakeBaseline.encode(record)
+        )
+
+    def test_start_tracking_records_an_untracked_map_without_a_render(self):
+        """An untracked object's changes go unseen; Start Tracking records it
+        as baked, as it stands and under the bake's lighting, rendering
+        nothing -- so its next change reads as changed. Its cell stays
+        unrecorded (a re-bake re-packs its atlas whole). Added: 2026-10-22"""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        self._forget(c)
+        self.assertEqual(self._report().untracked, (c,))
+        self.fake.baked.clear()
+        self.assertEqual(self._baker().track([a, c]), [c], "only the untracked")
+        self.assertEqual(self.fake.baked, [], "nothing rendered")
+        entry = LightmapRecords.bake_state()["objects"][c]
+        self.assertIsNotNone(entry["baked_at"])
+        self.assertIsNotNone(entry["lighting"])
+        self.assertIsNone(entry["cell"])
+        report = self._report()
+        self.assertEqual((report.untracked, report.targets), ((), ()), report.lines())
+        cmds.move(0, 5, 0, c, relative=True)
+        self.assertIn(c, self._report().targets)
+        self.assertEqual(self._baker().track([c]), [], "a tracked object stays as is")
+
+    def test_untracked_per_object_maps_are_no_split(self):
+        """Objects of one material each baked to their own map, before change
+        tracking, own no atlas: their packing was per object, not a split, so
+        nothing re-packs them into one. Added: 2026-10-22"""
+        a, b = self._crates(("rcA", "rcB"))
+        result = self._baker().bake([a, b], packing="per_object", output_dir=self.out)
+        self.assertTrue(result.maps, result.refused)
+        self.assertEqual(len(self._maps_read([a, b])), 2)
+        with self._untracked(a, b):
+            self.assertEqual(self._report().targets, ())
 
     # -- what is stale ------------------------------------------------------
     def test_nothing_is_stale_after_a_bake_or_a_save_and_reopen(self):
@@ -8772,7 +9399,7 @@ class TestRebakeChanged(MayaTkTestCase):
     def test_a_missing_map_stales_its_readers(self):
         objects = self._crates()
         self._bake(objects)
-        os.remove(os.path.join(self.out, self.ATLAS))
+        os.remove(LightmapRecords._stage(os.path.join(self.out, self.ATLAS)))
         report = self._report()
         self.assertEqual(report.targets, tuple(sorted(objects)))
         for obj in objects:
@@ -8902,6 +9529,395 @@ class TestRebakeChanged(MayaTkTestCase):
         self.assertEqual(self._files(), [self.ATLAS], "the group keeps its one atlas")
         self.assertTrue(any(why in m for m in _rendered_warnings(info)))
         self.assertEqual(self._report().targets, ())
+
+    def _save_as(self, name, write=True):
+        path = self.store.path(".ma", name=name)
+        cmds.file(rename=path)
+        if write:
+            cmds.file(save=True, type="mayaAscii", force=True)
+        return path
+
+    def test_a_rebake_keeps_each_atlas_in_its_folder_unless_told_to_relocate(self):
+        """Production PLAYGROUND_wStands (2026-10-21): its atlases sat in
+        sourceimages, the re-bake wrote to sourceimages/lightmaps, and an atlas
+        in another folder re-packs whole -- the dry run, blind to the folder,
+        read "29 written in place"; the bake re-packed 97 maps in 50 minutes.
+        An update now writes each map back where it is; *relocate* moves them,
+        and its dry run says what that re-packs."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.move(0, 0.5, 0, a, relative=True)
+        elsewhere = self.store.dir_path(name="elsewhere")
+
+        self.assertEqual(self._report(output_dir=elsewhere).in_place, (a,))
+        moved = self._report(output_dir=elsewhere, relocate=True)
+        self.assertEqual(moved.in_place, ())
+        self.assertIn("another folder", moved.repack[self.ATLAS])
+
+        result = self._baker().rebake_changed(output_dir=elsewhere)
+        self.assertEqual(result.in_place, [a])
+        self.assertEqual(os.listdir(elsewhere), [], "nothing was written there")
+
+        cmds.move(0, 0.5, 0, b, relative=True)
+        result = self._baker().rebake_changed(output_dir=elsewhere, relocate=True)
+        self.assertEqual(list(result.repacked), [self.ATLAS])
+        moving = LightmapRecords._pending().folder(elsewhere)  # there at the save
+        self.assertEqual([f for f in os.listdir(moving) if f.endswith(".exr")], [self.ATLAS])
+        self.assertEqual(self._report().targets, ())
+
+    def test_the_dry_run_counts_what_a_repack_drags_in(self):
+        """A re-pack re-bakes its atlas's every member: the footer counted the
+        changed alone ("29 to re-bake") for a bake of 97."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.scale(2, 2, 2, a)
+
+        report = self._report(output_dir=self.out)
+
+        self.assertEqual(report.targets, (a,))
+        self.assertEqual(report.joining, tuple(sorted([b, c])))
+        self.assertIn("(+2 more objects)", report.summary())
+
+    def test_rebake_redoes_the_given_objects_as_baked_changed_or_not(self):
+        """What the baseline cannot see -- an albedo or emissive edit, a noisy
+        render -- redone for exactly the objects asked, each written back into
+        its own cell; the rest keep every texel."""
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0}
+        self._bake([a, b, c])
+        before = self._atlas()
+        self.fake.values["rcB"] = 7.0
+        self.assertEqual(self._report().targets, (), "unseen by the baseline")
+
+        result = self._baker().rebake([b], output_dir=self.out)
+
+        self.assertEqual(result.in_place, [b])
+        self.assertEqual(list(result.maps), [b])
+        after = self._atlas()
+        self.assertTrue(np.allclose(self._cell(after, b), 7.0, atol=1e-3))
+        for obj in (a, c):
+            self.assertTrue(np.array_equal(self._cell(after, obj), self._cell(before, obj)))
+        stool = cmds.ls(cmds.polyCube(name="rcStool")[0], long=True)[0]
+        refused = self._baker().rebake([stool], output_dir=self.out)
+        self.assertEqual(refused.maps, {})
+        self.assertIn("None of these objects is baked yet", refused.refused)
+
+    def test_a_renamed_atlas_keeps_its_baseline(self):
+        """``rename_lightmap`` re-stamped the markers and records but not the
+        bake baseline, whose entries still named the old file: the next
+        partial re-bake refused in place ("recorded against another map") and
+        re-packed the whole group."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        staged = LightmapRecords._stage(os.path.join(self.out, self.ATLAS))  # unsaved
+        os.rename(staged, os.path.join(os.path.dirname(staged), "Room_LM.exr"))
+        LightmapRecords.rename_lightmap(self.ATLAS, "Room_LM.exr")
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        result = self._rebake()
+
+        self.assertEqual(result.repacked, {})
+        self.assertEqual(result.in_place, [a])
+
+    def test_a_copys_first_rebake_copies_its_sources_atlas_then_writes_in_place(self):
+        """BACKLOG 2026-10-21 (S3): a Save As copy re-packed every atlas it
+        shares with its source whole -- the source's maps kept, at 64 extra
+        re-bakes (PLAYGROUND_wStands). It now writes the source's atlas, its
+        changed cells new, under its own next free name: the source's file
+        stays byte for byte, every reader follows the copy, and the next
+        re-bake goes in place into it."""
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0}
+        self._save_as("rcSource")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        source = os.path.join(self.out, self.ATLAS)
+        with open(source, "rb") as fh:
+            before = fh.read()
+        self._save_as("rcCopy", write=False)
+        self.fake.values["rcA"] = 5.0
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        report = self._report(output_dir=self.out)
+        self.assertEqual(report.in_place, (a,))
+        self.assertEqual(list(report.forked), [self.ATLAS])
+        result = self._rebake()
+
+        copy = "Crate_Lightmap_1.exr"
+        self.assertEqual(result.in_place, [a])
+        self.assertEqual(result.repacked, {})
+        with open(source, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the source's atlas was written")
+        self.assertEqual(self._files(), [self.ATLAS, copy])
+        for obj in (a, b, c):
+            self.assertEqual(LightmapRecords._marker_info(obj)["map"], copy)
+        self.assertIn(
+            LightmapRecords.FOREIGN, LightmapRecords.claims()[self.ATLAS.lower()]
+        )
+        after, src = self._atlas(copy), self._atlas()
+        self.assertTrue(np.array_equal(self._cell(after, b), self._cell(src, b)))
+        self.assertTrue(np.allclose(self._cell(after, a), 5.0, atol=1e-3))
+        self.assertEqual(self._report().targets, ())
+        # The next change goes in place into the copy: no third file.
+        cmds.move(0, 0.5, 0, b, relative=True)
+        self.assertEqual(self._rebake().in_place, [b])
+        self.assertEqual(self._files(), [self.ATLAS, copy])
+
+    def test_a_fork_and_a_new_atlas_of_its_texture_set_never_share_a_file(self):
+        """Review 2026-10-24 (S2): a Save As copy's fork chose its name against
+        claims read before it existed, and a group packing anew in the same
+        bake under the same texture set chose it too: the new atlas replaced
+        the fork, and the fork's readers sampled the new group's layout,
+        nothing said. A fork's name is the bake's from the moment it is
+        chosen."""
+        np = _cv2()[1]
+        a, b, c = self._crates()
+        self.fake.values = {"rcA": 1.0, "rcB": 2.0, "rcC": 3.0, "rcD": 7.0, "rcE": 7.0}
+        self._save_as("rcSource")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        self._save_as("rcCopy", write=False)
+        # The same texture set on a material of its own (not a duplicate: its
+        # own diffuse), so a group of its own that packs anew under that name.
+        other = self._crate_sg(name="rcOther")
+        cmds.setAttr(f"{MatUtils._sg_shaders(other)[0]}.diffuse", 0.3)
+        d, e = self._crates(("rcD", "rcE"), sg=other)
+        for obj in (d, e):
+            cmds.move(0, 0, 40, obj, relative=True)
+        self.assertEqual(len(set(LightmapBaker._atlas_keys([a, d]).values())), 2)
+        self.fake.values["rcA"] = 5.0
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        result = self._bake([a, d, e])
+
+        fork, new = "Crate_Lightmap_1.exr", "Crate_Lightmap_2.exr"
+        self.assertEqual(result.in_place, [a])
+        self.assertEqual(self._maps_read([a, b, c]), {fork})
+        self.assertEqual(self._maps_read([d, e]), {new})
+        self.assertEqual(self._files(), [self.ATLAS, fork, new])
+        forked = self._atlas(fork)
+        self.assertTrue(np.allclose(self._cell(forked, b), 2.0, atol=1e-3))
+        self.assertTrue(np.allclose(self._cell(forked, a), 5.0, atol=1e-3))
+        self.assertTrue(np.allclose(self._cell(self._atlas(new), d), 7.0, atol=1e-3))
+
+    def test_another_scenes_atlas_of_the_same_name_is_never_written_over(self):
+        """2026-10-21 audit: two scenes in one project whose materials share a
+        texture set name the same ``<set>_Lightmap.exr``. The atlas name
+        skipped only what THIS scene's markers claim, and the disk was never
+        asked: the second scene's bake replaced the first's atlas, which then
+        read the second's lighting through its own cells."""
+        a, b, c = self._crates()
+        self._save_as("rcRoomDay")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        theirs = os.path.join(self.out, self.ATLAS)
+        with open(theirs, "rb") as fh:
+            before = fh.read()
+
+        cmds.file(new=True, force=True)
+        self._save_as("rcRoomNight")
+        self.fake.values.update(rcN1=9.0, rcN2=9.0)
+        objects = self._crates(names=("rcN1", "rcN2"))
+        result = self._bake(objects)
+
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the other scene's atlas was replaced")
+        self.assertEqual(
+            {os.path.basename(p) for p in result.maps.values()},
+            {"Crate_Lightmap_1.exr"},
+        )
+        # Its own atlas stays its own: the next bake goes back over it.
+        cmds.move(0, 0.5, 0, objects[0], relative=True)
+        again = self._bake(objects)
+        self.assertEqual(
+            {os.path.basename(p) for p in again.maps.values()},
+            {"Crate_Lightmap_1.exr"},
+        )
+        self.assertEqual(self._files(), [self.ATLAS, "Crate_Lightmap_1.exr"])
+
+    def test_a_map_waiting_for_the_save_is_set_aside_once_superseded(self):
+        """Review 2026-10-24 (S2): what a bake supersedes was read off the
+        files its objects read -- for a map re-baked in place and not saved
+        yet, its session copy -- and the project filter dropped that path:
+        the home file was never set aside once the next bake moved its
+        readers to another file."""
+        root = os.path.dirname(self.out)
+        previous = cmds.workspace(query=True, rootDirectory=True)
+        cmds.workspace(root, openWorkspace=True)
+        self.addCleanup(cmds.workspace, previous, openWorkspace=True)
+        no_trash = mock.patch.object(ptk.FileUtils, "move_to_trash", return_value=None)
+        no_trash.start()
+        self.addCleanup(no_trash.stop)
+        a, b, c = self._crates()
+        self._save_as("rcSuperseded")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        cmds.move(0, 0.5, 0, a, relative=True)
+        self.assertEqual(self._rebake().in_place, [a])  # waits in the session
+
+        # To maps of their own: an atlas bake would write the group back in place.
+        result = self._baker().bake([a, b, c], packing="per_object", output_dir=self.out)
+
+        self.assertTrue(result.maps, result.refused)
+        self.assertNotIn(self.ATLAS, self._maps_read([a, b, c]))
+        self.assertEqual([os.path.basename(p) for p in result.retired], [self.ATLAS])
+
+    def test_nor_does_a_one_object_group_of_that_texture_set(self):
+        """Review 2026-10-24 (S2): a group of one takes the texture set's name
+        too, and blendertk's twin moved its map in without asking the disk --
+        the other scene's atlas replaced at the save. Pinned on both twins."""
+        a, b, c = self._crates()
+        self._save_as("rcRoomDay")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        theirs = os.path.join(self.out, self.ATLAS)
+        with open(theirs, "rb") as fh:
+            before = fh.read()
+
+        cmds.file(new=True, force=True)
+        self._save_as("rcRoomSolo")
+        self.fake.values.update(rcS1=9.0)
+        result = self._bake(self._crates(names=("rcS1",)))
+        cmds.file(save=True, type="mayaAscii", force=True)  # its map home
+
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the other scene's atlas was replaced")
+        self.assertEqual(
+            {os.path.basename(p) for p in result.maps.values()},
+            {"Crate_Lightmap_1.exr"},
+        )
+        self.assertEqual(self._files(), [self.ATLAS, "Crate_Lightmap_1.exr"])
+
+    def test_a_hosts_bake_of_referenced_objects_never_writes_the_modules_maps(self):
+        """2026-10-21 audit: a module baked in its own scene, referenced into
+        a host, and baked there: its objects were the only readers, so the
+        module's atlas was theirs to replace -- every scene referencing the
+        module then read this host's lighting. A map a referenced object
+        reads is the module's unless this scene wrote it."""
+        a, b, c = self._crates()
+        module = self._save_as("rcModule")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)
+        theirs = os.path.join(self.out, self.ATLAS)
+        with open(theirs, "rb") as fh:
+            before = fh.read()
+
+        cmds.file(new=True, force=True)
+        self._save_as("rcHost")
+        cmds.file(module, reference=True, namespace="mod")
+        objects = cmds.ls("mod:rcA", "mod:rcB", "mod:rcC", long=True)
+        self.fake.values.update({"mod:rcA": 4.0, "mod:rcB": 4.0, "mod:rcC": 4.0})
+        result = self._bake(objects)
+
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the module's atlas was replaced")
+        self.assertNotIn(
+            os.path.normcase(theirs),
+            {os.path.normcase(p) for p in result.maps.values()},
+        )
+
+    def test_a_copy_in_another_project_rebakes_into_its_own(self):
+        """2026-10-21 audit: saved into another project, the copy's maps still
+        resolve in the source project's folder -- and a re-bake keeping folders
+        wrote the copy's maps there, where its project alone does not carry
+        them. A folder outside the project is never kept."""
+        a, b, c = self._crates()
+        self._save_as("rcFirstProject")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        theirs = os.path.join(self.out, self.ATLAS)
+        with open(theirs, "rb") as fh:
+            before = fh.read()
+        other = self.store.dir_path(name="secondProject")
+        os.makedirs(os.path.join(other, "scenes"))
+        with open(os.path.join(other, "workspace.mel"), "w") as fh:
+            fh.write("")
+        cmds.file(rename=os.path.join(other, "scenes", "rcSecond.ma"))
+        cmds.file(save=True, type="mayaAscii", force=True)
+        own = os.path.join(other, "sourceimages", "lightmaps")
+        self.fake.values["rcA"] = 5.0
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        result = self._baker().rebake_changed(output_dir=own)
+
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the first project's atlas was written")
+        self.assertTrue(result.maps)
+        for path in result.maps.values():  # its home, at the save
+            home = LightmapRecords._home(path)
+            self.assertTrue(ptk.FileUtils.is_under(os.path.abspath(home), other), path)
+
+    def test_a_reverted_scenes_atlas_is_still_its_own_to_bake_over(self):
+        """The rule above must not orphan a scene's own file: reverted, no
+        marker names its atlas, but the scene wrote it -- the next bake takes
+        the name back instead of leaving it beside a ``_1``."""
+        objects = self._crates()
+        self._save_as("rcReverted")
+        self._bake(objects)
+        LightmapRecords.revert()
+        result = self._bake(objects)
+        self.assertEqual(
+            {os.path.basename(p) for p in result.maps.values()}, {self.ATLAS}
+        )
+        self.assertEqual(self._files(), [self.ATLAS])
+
+    def test_a_copys_two_call_pack_writes_its_own_copy_of_the_sources_atlas(self):
+        """2026-10-21: ``pack_atlas``'s two-call form (``bake_separated`` then
+        a pack) wrote a recorded cell back in place with no fork check -- in a
+        Save As copy, into the atlas its source still reads. Every in-place
+        write now goes one way (``_write_in_place``)."""
+        a, b, c = self._crates()
+        self._save_as("rcPackSource")
+        self._bake([a, b, c])
+        cmds.file(save=True, type="mayaAscii", force=True)  # its maps home
+        source = os.path.join(self.out, self.ATLAS)
+        with open(source, "rb") as fh:
+            before = fh.read()
+        self._save_as("rcPackCopy", write=False)
+        self.fake.values["rcA"] = 5.0
+        work = self.store.dir_path(name="work")
+        tiles = self.fake.bake([a], output_dir=work)
+
+        out = self._baker().pack_atlas(tiles, output_dir=self.out)
+
+        copy = "Crate_Lightmap_1.exr"
+        self.assertEqual(os.path.basename(out[a][0]), copy)
+        with open(source, "rb") as fh:
+            self.assertEqual(fh.read(), before, "the source's atlas was written")
+        self.assertEqual(LightmapRecords._marker_info(b)["map"], copy)
+
+    def test_a_visible_mesh_no_bake_renders_is_named_and_stales_nothing(self):
+        """BACKLOG 2026-10-21 (S2): new FLYING_STAND meshes staled nothing,
+        and nothing said why. A bake switches every visible mesh that is
+        neither baked nor excluded off (``_out_of_render``), so staling
+        nothing is right -- the report names them instead."""
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        stand = cmds.polyCube(name="rcStand")[0]
+        cmds.move(1.2, 0, 0, stand)
+        stand = cmds.ls(stand, long=True)[0]
+
+        report = self._report()
+
+        self.assertEqual(report.targets, ())
+        self.assertEqual(report.out_of_bake, (stand,))
+        self.assertIn("1 visible mesh out of the bake", report.summary())
+        LightmapExcludeSet.define([stand])
+        self.assertEqual(self._report().out_of_bake, ())
+
+    def test_the_bake_breakdown_names_each_map_and_its_state(self):
+        a, b, c = self._crates()
+        self._bake([a, b, c])
+        cmds.move(0, 0.5, 0, a, relative=True)
+
+        doc = self._baker().bake_breakdown(output_dir=self.out)
+
+        text = doc.to_text()
+        for expected in (self.ATLAS, "64 x 64", "1 changed", "this scene"):
+            self.assertIn(expected, text)
+        self.assertIn("action://select?node=", doc.to_html())
 
     def test_a_legacy_atlas_repacks_whole_once_then_goes_in_place(self):
         """An atlas baked before change tracking holds no cells: re-baking one
@@ -9048,9 +10064,11 @@ class TestRebakeChanged(MayaTkTestCase):
 
 
 class TestChangedScope(MayaTkTestCase):
-    """The panel's half of Re-bake Changed: a fourth Scope, Changed, whose
-    choice says what a bake would redo, and whose Bake re-bakes exactly that
-    (:meth:`LightmapBaker.rebake_changed`) with the panel's dials."""
+    """The panel's half of re-baking what changed: the Manage page says what
+    a re-bake would redo, Select: Changed selects exactly that, and the table
+    menu's Re-Bake (:meth:`LightmapBaker.rebake`) redoes it with the panel's
+    dials, asking first what it must. Changed: 2026-10-22 (was the Manage
+    page's Re-bake Changed run button)."""
 
     def setUp(self):
         super().setUp()
@@ -9072,51 +10090,200 @@ class TestChangedScope(MayaTkTestCase):
         s.ui = ui
         s._last_output_dir = None
         s._baker = None
+        s._map_rows = {}
+        s._fill_maps = lambda rows, report: None  # no Qt table here
+        s._highlight_maps = lambda names: None
         return s
 
-    def test_changed_is_the_fourth_scope_and_reads_back(self):
-        """The combo persists by INDEX: Changed is appended, so a saved
-        Selected / Visible / Scene choice reopens as itself."""
-        self.assertEqual(
-            LightmapBakerSlots._SCOPE_LABELS,
-            ("Selected", "Visible", "Scene", "Changed"),
-        )
-        combo = _ItemCombo()
-        s = self._slots(_SlotUi())
-        s.ui.cmb_scope = combo
-        s.cmb_scope_init(combo)
-        combo.setCurrentIndex(3)
-        self.assertEqual(s._scope(), "changed")
+    def test_scope_bakes_fresh_and_changed_is_the_manage_pages(self):
+        """Every Scope bakes with the panel's settings; Changed (which kept
+        each object's recorded packing and ignored the Packing row) moved to
+        the Manage page. Changed: 2026-10-22."""
+        self.assertEqual(LightmapBakerSlots._SCOPE_LABELS, ("Selected", "Visible", "Scene"))
+        self.assertEqual(LightmapBakerSlots._PAGES, ("Bake", "Manage"))
 
-    def test_choosing_changed_writes_the_dry_run_to_the_footer(self):
-        s = self._slots(_SlotUi(scope="Changed", res=2048))
-        s.cmb_scope(3)
-        self.assertEqual(s.ui.footer.text, _FakeWorkflow.report.summary())
+    def test_the_manage_page_reads_the_dry_run_with_the_panels_dials(self):
+        s = self._slots(_SlotUi(page="Manage", res=2048, output_dir="C:/bakes/lm"))
+        s._fill_maps = lambda rows, report: None  # no Qt table here
+        s.cmb_page(1)
+        self.assertEqual(s.ui.stk_pages.index, 1)
+        self.assertEqual(s.ui.footer.text, "1 changed", "the table's states, counted")
         baker = _FakeWorkflow.instances[-1]
         self.assertEqual(baker.resolution, 2048, "the dry run uses the panel's dials")
         self.assertEqual(baker.calls, [("stale_report",)])
+        self.assertEqual(
+            os.path.normcase(baker.stale_kwargs["output_dir"] or ""),
+            os.path.normcase(os.path.normpath("C:/bakes/lm")),
+            "the dry run asks the folder Bake writes to",
+        )
 
         _FakeWorkflow.instances.clear()
-        self._slots(_SlotUi(scope="Scene")).cmb_scope(2)
-        self.assertEqual(_FakeWorkflow.instances, [], "only Changed reads the scene")
+        bake = self._slots(_SlotUi(page="Bake"))
+        bake.cmb_page(0)
+        self.assertEqual(_FakeWorkflow.instances, [], "only Manage reads the scene")
 
-    def test_b000_under_changed_rebakes_the_changed_with_the_panels_dials(self):
-        cmds.select(clear=True)  # Changed needs no selection
-        s = self._slots(_SlotUi(scope="Changed", res=512))
-        s.b000()
-        baker = _FakeWorkflow.instances[-1]
+    @staticmethod
+    def _rebaker(call="rebake"):
+        return [b for b in _FakeWorkflow.instances if (call,) in b.calls][-1]
+
+    def _rebake_changed(self, s):
+        """Select: Changed, then Re-Bake: how the Manage page redoes what changed."""
+        s.select_by_state("changed")
+        s.rebake_selected()
+
+    def test_select_changed_then_rebake_redoes_the_changed_with_the_panels_dials(self):
+        cmds.select(clear=True)
+        s = self._slots(_SlotUi(page="Manage", res=512))
+        s.select_by_state("changed")
+        self.assertEqual(cmds.ls(selection=True, long=True), [self.cube])
+        s.rebake_selected()
+        baker = self._rebaker()
         self.assertEqual(baker.resolution, 512)
-        self.assertEqual([c[0] for c in baker.calls], ["rebake_changed"])
+        self.assertEqual(baker.rebake_objects, [self.cube])
+        self.assertFalse(baker.rebake_kwargs["relocate"], "maps stay where they are")
         self.assertEqual(baker.rebake_kwargs["suffix"], "_Lightmap")
-        self.assertIn("1 written back into its atlas cell", s.ui.footer.text)
+        self.assertIn("1 in place", s.ui.footer.text)
 
-    def test_b000_under_changed_with_nothing_changed_says_so(self):
+    def test_select_changed_with_nothing_changed_says_so(self):
+        """And selects nothing: the last pick left standing read as this
+        one's. Changed: 2026-10-23 (a pick that found nothing kept it)."""
         _FakeWorkflow.report = ptk.StaleReport()
-        s = self._slots(_SlotUi(scope="Changed"))
-        s.b000()
-        self.assertEqual(s.ui.footer.text, "Nothing changed since the last bake.")
+        s = self._slots(_SlotUi(page="Manage"))
+        cmds.select(self.cube)  # an earlier pick
+        s.select_by_state("changed")
+        self.assertEqual(s.ui.footer.text, "No changed maps.")
+        self.assertEqual(cmds.ls(selection=True), [], "the earlier pick is cleared")
 
-    def test_the_report_names_the_atlases_repacked_and_why(self):
+    def test_fix_all_leaves_no_row_needing_a_fix(self):
+        """Fix All, once confirmed (``ptk.StaleReport.fix_plan``): a missing
+        map no re-bake renders comes off its hidden object, each split no
+        re-bake mends is combined, the untracked are tracked as they stand,
+        then what changed re-bakes -- the render last. The footer is one
+        short line. Changed: 2026-10-23 (it left untracked and missing rows:
+        "Fix All is still not fixing all")."""
+        report = _FakeWorkflow.report = dataclasses.replace(
+            _FakeWorkflow.report,
+            untracked=("|u",),
+            unbakeable=("|h",),
+            split_materials={"S_LM.exr": ("sMat", "sMatDup")},
+        )
+        rows = report.map_rows(
+            [{"map": "Fake_Lightmap.exr", "path": "C:/fake/Fake_Lightmap.exr",
+              "folder": "lm", "objects": [self.cube]}]
+        ) + ptk.StaleReport(split={"S_LM.exr": ("S_LM.exr", "S_LM_1.exr")}).map_rows(
+            [{"map": "S_LM.exr", "path": "C:/p/S_LM.exr", "folder": "lm",
+              "objects": ["|s"]}]
+        ) + ptk.StaleReport(untracked=("|u",)).map_rows(
+            [{"map": "U_LM.exr", "path": "C:/p/U_LM.exr", "folder": "lm",
+              "objects": ["|u"]}]
+        ) + ptk.StaleReport(unbakeable=("|h",)).map_rows(
+            # A missing map no re-bake reaches: a hidden prop's, brought in
+            # from another project, in production.
+            [{"map": "H_LM.exr", "path": None, "folder": "lm", "objects": ["|h"]}]
+        )
+        s = self._slots(_SlotUi(page="Manage"))
+        s._fill_maps = lambda rows, report: setattr(
+            s, "_map_rows", {row["map"]: row for row in rows}
+        )
+        s.sb = _Sb(answer="Fix All")
+
+        def steps():
+            calls = [c for b in _FakeWorkflow.instances for c in b.calls]
+            return [
+                c for c in calls if c[0] in ("revert", "combine", "track", "rebake_changed")
+            ]
+
+        # Review 2026-10-24: the steps that render nothing are one undo step.
+        chunks = []
+
+        @contextlib.contextmanager
+        def chunk(name=""):
+            chunks.append((name, len(steps())))
+            yield
+            chunks.append((f"/{name}", len(steps())))
+
+        with mock.patch.object(_FakeWorkflow, "bake_maps", lambda self, r=None, **k: rows), \
+                mock.patch.object(lmb_module.CoreUtils, "undo_chunk", chunk):
+            s.fix_all()
+        question = s.sb.asked[0][0]
+        for words in ("Take the lightmap off 1 object", "Combine 1 split map",
+                      "Start tracking 1 untracked object", "Re-bake 1 changed object",
+                      # Review 2026-10-24: the merge was asked only by Combine…
+                      "merges the duplicate materials (sMat, sMatDup)"):
+            self.assertIn(words, question)
+        self.assertEqual(
+            steps(),
+            [("revert", ("|h",)), ("combine", ("S_LM.exr",)), ("track", ("|u",)),
+             ("rebake_changed",)],
+            "the render last",
+        )
+        self.assertEqual(chunks, [("Fix All", 0), ("/Fix All", 3)])
+        self.assertEqual(
+            s.ui.footer.text, "Fix All: 1 reverted, 1 combined, 1 tracked, 1 re-baked."
+        )
+        # A step refused is counted as not done, never as done or "failed".
+        refused = lmb_module.LightmapBakeResult(refused="Nothing to combine: no map is split.")
+        with mock.patch.object(_FakeWorkflow, "bake_maps", lambda self, r=None, **k: rows),                 mock.patch.object(_FakeWorkflow, "combine", lambda self, *a, **k: refused):
+            s.fix_all()
+        self.assertEqual(
+            s.ui.footer.text,
+            "Fix All: 1 reverted, 1 not combined, 1 tracked, 1 re-baked (see Script Editor).",
+        )
+        # Review 2026-10-24: a cancel stops Fix All -- it tracked and re-baked
+        # on after the artist said stop.
+        _FakeWorkflow.instances.clear()
+        cancelled = lmb_module.LightmapBakeResult(
+            refused="Combine cancelled: nothing written.", cancelled=True
+        )
+        with mock.patch.object(_FakeWorkflow, "bake_maps", lambda self, r=None, **k: rows),                 mock.patch.object(_FakeWorkflow, "combine", lambda self, *a, **k: cancelled):
+            s.fix_all()
+        self.assertEqual(steps(), [("revert", ("|h",))])
+        self.assertEqual(s.ui.footer.text, "Fix All cancelled: 1 reverted, 1 not combined.")
+
+    def test_an_undo_reads_the_set_rows_now_and_the_table_once_it_settles(self):
+        """Review 2026-10-24: every Undo and Redo ran the Manage page's whole
+        dry run (0.7-1.9 s on the production room), once per step of a held
+        Ctrl+Z. The Exclude/Isolate rows follow at once; the table is read
+        once the steps stop."""
+
+        class _Timer:
+            made = []
+
+            def __init__(self, _parent=None):
+                self.starts, self.slot = [], None
+                self.timeout = types.SimpleNamespace(connect=self._connect)
+                _Timer.made.append(self)
+
+            def _connect(self, slot):
+                self.slot = slot
+
+            def setSingleShot(self, _on):
+                pass
+
+            def start(self, ms):
+                self.starts.append(ms)
+
+        s = self._slots(_SlotUi(page="Manage"))
+        s.ui.isVisible = lambda: True
+        s.sb = types.SimpleNamespace(QtCore=types.SimpleNamespace(QTimer=_Timer))
+        rows, reads = [], []
+        s._refresh_set_row = rows.append
+        s._refresh_manage = lambda footer=True: reads.append(footer)
+
+        s._scene_undone()
+        s._scene_undone()
+
+        self.assertEqual(rows, list(LightmapBakerSlots._SET_ROWS) * 2)
+        self.assertEqual(reads, [], "no dry run per step")
+        (timer,) = _Timer.made
+        self.assertEqual(len(timer.starts), 2, "each step restarts the one timer")
+        timer.slot()
+        self.assertEqual(reads, [True], "one dry run once it settles")
+
+    def test_the_report_counts_the_atlases_repacked(self):
+        """Short: the count, the reasons were the confirmation's (and the
+        Script Editor's). Changed: 2026-10-23 (it listed each with its reason,
+        past what the footer shows)."""
         result = lmb_module.LightmapBakeResult(
             maps={self.cube: "C:/out/Crate_Lightmap.exr"},
             rects={self.cube: [1.0, 1.0, 0.0, 0.0]},
@@ -9124,18 +10291,115 @@ class TestChangedScope(MayaTkTestCase):
         )
         s = self._slots(_SlotUi(packing="Atlas by Material (shared map)"))
         text = s._bake_report(result)
-        self.assertIn("Crate_Lightmap.exr", text)
-        self.assertIn("its cell no longer fits", text)
+        self.assertIn("1 atlas", text)
+        self.assertIn("1 re-packed", text)
 
-    def test_list_changed_objects_logs_the_lines_and_selects_the_targets(self):
+    def test_rebake_asks_when_the_panels_dials_are_not_the_bakes(self):
+        """A fresh Maya's panel holds its default dials, not the preset the
+        maps were baked with: production PLAYGROUND_wStands read "97 to
+        re-bake: lighting changed (@settings)", every atlas re-packing at
+        1024 px -- one click from re-baking the room at the wrong size."""
+        _FakeWorkflow.report = ptk.StaleReport(
+            targets=(self.cube,),
+            stale={self.cube: (ptk.BakeBaseline.Reason.LIGHTING,)},
+            lighting=(ptk.BakeBaseline.SETTINGS,),
+            in_place=(self.cube,),
+        )
+        s = self._slots(_SlotUi(page="Manage"))
+        s.sb = _Sb(answer="Cancel")
+        self._rebake_changed(s)
+        question, _buttons = s.sb.asked[0]
+        self.assertIn("Bounces", question)
+        self.assertIn("preset", question)
+        calls = [c for b in _FakeWorkflow.instances for c in b.calls]
+        self.assertNotIn(("rebake",), calls)
+
+    def test_rebake_asks_before_an_atlas_repacks_whole(self):
+        """Production: "29 to re-bake" became 97 maps and 50 minutes, unasked.
+        A re-pack is named, with why and what it brings in, before anything
+        bakes."""
+        _FakeWorkflow.report = ptk.StaleReport(
+            targets=(self.cube,),
+            stale={self.cube: (ptk.BakeBaseline.Reason.MOVED,)},
+            repack={"Crate_Lightmap.exr": "csCube: its cell no longer fits"},
+            joining=("|j1", "|j2"),
+        )
+        s = self._slots(_SlotUi(page="Manage"))
+        s.sb = _Sb(answer="Cancel")
+        self._rebake_changed(s)
+        question, buttons = s.sb.asked[0]
+        self.assertIn("3 objects", question)
+        self.assertIn("its cell no longer fits", question)
+        calls = [c for b in _FakeWorkflow.instances for c in b.calls]
+        self.assertNotIn(("rebake",), calls)
+        self.assertIn("cancelled", s.ui.footer.text)
+
+        s.sb = _Sb(answer=buttons[0])
+        self._rebake_changed(s)
+        self.assertTrue(self._rebaker())
+
+    def test_rebake_asks_keep_or_move_when_its_maps_live_elsewhere(self):
+        _FakeWorkflow.folders = {"C:/proj/sourceimages": ["Crate_Lightmap.exr"]}
+        self.addCleanup(setattr, _FakeWorkflow, "folders", {})
+        s = self._slots(_SlotUi(page="Manage", output_dir="C:/bakes/lm"))
+        s.sb = _Sb(answer="Keep")
+        self._rebake_changed(s)
+        question, buttons = s.sb.asked[0]
+        self.assertIn("C:/proj/sourceimages", question)
+        self.assertEqual(buttons, ("Keep", "Move", "Cancel"))
+        self.assertFalse(self._rebaker().rebake_kwargs["relocate"])
+
+        s.sb = _Sb(answer="Move")
+        self._rebake_changed(s)
+        self.assertTrue(self._rebaker().rebake_kwargs["relocate"])
+
+        # A blank Output Directory asks nothing: each map stays where it is.
+        blank = self._slots(_SlotUi(page="Manage"))
+        blank.sb = _Sb(answer="Cancel")
+        self._rebake_changed(blank)
+        self.assertEqual(blank.sb.asked, [])
+
+    def test_bake_state_shows_the_breakdown_in_a_viewer(self):
+        s = self._slots(_SlotUi(output_dir="C:/bakes/lm"))
+        s.sb = _Sb()
+        s.show_bake_state()
+        text, _buttons, kwargs = s.sb.viewed[-1]
+        self.assertIn("Lightmap Bake State", text)
+        self.assertEqual(kwargs.get("title"), "Lightmap Bake State")
+        self.assertTrue(callable(kwargs.get("link_handler")), "its links act")
+
+    def test_the_bake_state_reads_itself_again_in_one_window(self):
+        """The header's refresh button reads the open window again, as a
+        save, an open or a new scene does; asked again while open, the one
+        window is read again. Changed: 2026-10-23 (a footer Refresh button;
+        the header has its own)."""
         s = self._slots(_SlotUi())
-        with mock.patch.object(s.logger, "log_group") as group:
-            s.list_changed_objects()
-        self.assertEqual(cmds.ls(selection=True, long=True), [self.cube])
-        title, lines = group.call_args.args[:2]
-        self.assertEqual(lines, _FakeWorkflow.report.lines())
-        self.assertEqual(s.ui.footer.text, _FakeWorkflow.report.summary())
+        s.sb = _Sb()
+        s.show_bake_state()
+        (_text, buttons, kwargs), view = s.sb.viewed[-1], s._state_view
+        self.assertNotIn("Refresh", buttons, "no footer button")
+        view.text = ""
+        kwargs["on_refresh"]()  # the header's refresh button
+        self.assertIn("Lightmap Bake State", view.text, "read again")
+        s.show_bake_state()
+        self.assertEqual((len(s.sb.viewed), view.presented), (1, 1), "the same window")
+        view.visible = False  # closed: asked again, a new one
+        s.show_bake_state()
+        self.assertEqual(len(s.sb.viewed), 2)
 
+    def test_rebake_selected_rebakes_the_selection_as_baked(self):
+        cmds.select(self.cube, replace=True)
+        s = self._slots(_SlotUi())
+        s.sb = _Sb()
+        s.rebake_selected()
+        self.assertEqual(self._rebaker("rebake").rebake_objects, [self.cube])
+        self.assertIn("1 in place", s.ui.footer.text)
+
+        cmds.select(clear=True)
+        s.rebake_selected()
+        self.assertEqual(
+            s.ui.footer.text, "Highlight the maps to re-bake (or select their objects)."
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

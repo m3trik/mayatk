@@ -15,6 +15,8 @@ try:
 except ImportError:
     pass
 
+import pythontk as ptk
+
 # From this package:
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.core_utils.preview import Preview, OperationError
@@ -121,7 +123,7 @@ class ShadowRigSlots:
                     "once, so its outline morphs as the light moves; the "
                     "<b>Live Horizon Preview</b> box mirrors what stands.",
                     "Export through the <b>Scene Exporter</b> — its smart bake "
-                    "bakes the expression and the rig's <i>shadow_metadata</i> "
+                    "bakes the expression and the rig's <i>shadows</i> record "
                     "rides the data_export carrier. For File > Export or a "
                     "bridge, press <b>Bake to Keyframes</b> first.",
                 ],
@@ -1212,7 +1214,7 @@ class ShadowRigSlots:
         targets = self._shadow_targets(objects, recursive)
 
         if contract is not None:
-            # create() republishes shadow_metadata on the data_export carrier.
+            # create() republishes the shadows record on the data_export carrier.
             # A brand-new carrier is rolled back as a created node, but a
             # PRE-EXISTING one (other producers' channels) only gets its attr
             # mutated — snapshot it so canceling the preview can't leave a
@@ -1221,7 +1223,7 @@ class ShadowRigSlots:
 
             if cmds.objExists(DataNodes.EXPORT):
                 contract.record_modification(
-                    DataNodes.EXPORT, ShadowRig.SHADOW_METADATA
+                    DataNodes.EXPORT, ptk.SceneRecords.SHADOWS.key
                 )
 
         names = self._source_names()

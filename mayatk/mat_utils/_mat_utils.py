@@ -42,14 +42,6 @@ from mayatk.mat_utils._texture_paths import _TexturePathsInternal
 from mayatk.mat_utils._texture_files import _TextureFilesInternal
 
 
-# Why the StingrayPBS helpers' ``opacity`` bool warns: it restated what
-# ``opacity_mode`` says (True was "transparent"), so callers pass the mode alone.
-_OPACITY_IS_A_MODE = (
-    "Pass opacity_mode='transparent' (or 'masked' / 'none') instead; "
-    "opacity=True meant 'transparent'."
-)
-
-
 class _MatUtilsInternal(
     _MaterialQueryInternal,
     _AssignmentInternal,
@@ -101,12 +93,9 @@ class MatUtils(_MatUtilsInternal):
         return MatUtils._resolve_path(path=path, search=search)
 
     @staticmethod
-    @ptk.Deprecation.parameter(
-        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
-    )
     def get_mats(
         objs=None,
-        as_strings=True,
+        *,
         mat_type=None,
         include_displacement=False,
     ) -> List[str]:
@@ -115,8 +104,6 @@ class MatUtils(_MatUtilsInternal):
         Parameters:
             objs (list): The objects or components to retrieve the material from.
                 If None, the current selection is used.
-            as_strings (bool): DEPRECATED and ignored (warns; removed in
-                0.20.0) -- the result is always strings.
             mat_type (str, optional): Maya node type to filter by
                 (e.g. ``"StingrayPBS"``, ``"lambert"``, ``"aiStandardSurface"``).
                 If None, all material types are returned.
@@ -133,7 +120,6 @@ class MatUtils(_MatUtilsInternal):
         """
         return MatUtils._get_mats(
             objs=objs,
-            as_strings=as_strings,
             mat_type=mat_type,
             include_displacement=include_displacement,
         )
@@ -572,12 +558,13 @@ class MatUtils(_MatUtilsInternal):
 
     @staticmethod
     def is_mat_assigned(mat: object) -> bool:
-        """True iff *mat*'s shading engines contain at least one DAG member.
+        """True iff a shading engine downstream of *mat* has a DAG member.
 
-        A material is considered "assigned" when geometry is bound to one of
-        its shading engines (the same condition Maya's *Delete Unused
-        Materials* targets). Orphan shading engines and unconnected shaders
-        both return False.
+        A material is "assigned" -- in use -- when geometry renders it: bound
+        to its own shading engine, or to one it feeds through a layeredShader,
+        an aiMixShader or a utility (a lambert inside an assigned layered
+        network is in use, as Maya's *Delete Unused* reads it). Orphan shading
+        engines and unconnected shaders both return False.
 
         Works for surface, displacement, and volume shaders alike — follows
         all connections instead of probing a specific output attribute,
@@ -587,7 +574,9 @@ class MatUtils(_MatUtilsInternal):
 
     @staticmethod
     def is_connected(mat: object, delete: bool = False) -> bool:
-        """Checks if a given material is assigned and optionally deletes it."""
+        """True when *mat* reaches no shading engine -- its own or one it feeds
+        downstream (members or not) -- deleting it then when *delete*. False
+        for a connected material, and for a name that is no shading node."""
         return MatUtils._is_connected(mat=mat, delete=delete)
 
     @staticmethod
@@ -701,24 +690,18 @@ class MatUtils(_MatUtilsInternal):
     }
 
     @classmethod
-    @ptk.Deprecation.parameter(
-        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
-    )
-    def resolve_opacity_mode(cls, opacity_mode=None, opacity: bool = False) -> str:
+    def resolve_opacity_mode(cls, opacity_mode=None) -> str:
         """Normalize an opacity-mode argument to a :attr:`STINGRAY_GRAPHS` key.
 
         Parameters:
             opacity_mode: ``None`` / ``"none"`` / ``"masked"`` / ``"transparent"``
-                (legacy aliases accepted). Unknown values fall back to
-                ``"none"``.
-            opacity (bool): DEPRECATED (warns; removed in 0.20.0) -- used
-                only when *opacity_mode* is None, ``True`` meaning
-                ``"transparent"``. Pass the mode.
+                (legacy aliases accepted). ``None`` and unknown values fall
+                back to ``"none"``.
 
         Returns:
             str: One of ``"none"``, ``"masked"``, ``"transparent"``.
         """
-        return cls._resolve_opacity_mode(opacity_mode=opacity_mode, opacity=opacity)
+        return cls._resolve_opacity_mode(opacity_mode=opacity_mode)
 
     @classmethod
     def get_stingray_opacity_mode(cls, mat) -> Optional[str]:
@@ -742,10 +725,7 @@ class MatUtils(_MatUtilsInternal):
         return cls._get_stingray_opacity_mode(mat=mat)
 
     @classmethod
-    @ptk.Deprecation.parameter(
-        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
-    )
-    def resolve_stingray_graph(cls, opacity_mode=None, opacity: bool = False):
+    def resolve_stingray_graph(cls, opacity_mode=None):
         """Absolute path to the ShaderFX preset for *opacity_mode*.
 
         mayatk's own presets (``mat_utils/shaderfx/``, see
@@ -754,13 +734,10 @@ class MatUtils(_MatUtilsInternal):
         Returns:
             str | None: The ``.sfx`` path, or None when neither has it.
         """
-        return cls._resolve_stingray_graph(opacity_mode=opacity_mode, opacity=opacity)
+        return cls._resolve_stingray_graph(opacity_mode=opacity_mode)
 
     @classmethod
-    @ptk.Deprecation.parameter(
-        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
-    )
-    def load_stingray_graph(cls, mat, opacity_mode=None, opacity: bool = False) -> bool:
+    def load_stingray_graph(cls, mat, opacity_mode=None) -> bool:
         """Load the ShaderFX preset for *opacity_mode* onto a StingrayPBS node.
 
         The one place a ``.sfx`` reaches ``cmds.shaderfx`` — a StingrayPBS
@@ -774,21 +751,14 @@ class MatUtils(_MatUtilsInternal):
         Parameters:
             mat: StingrayPBS node.
             opacity_mode: See :meth:`resolve_opacity_mode`.
-            opacity (bool): DEPRECATED (warns; removed in 0.20.0) -- the
-                boolean form of *opacity_mode*.
 
         Returns:
             bool: True if a graph was loaded.
         """
-        return cls._load_stingray_graph(
-            mat=mat, opacity_mode=opacity_mode, opacity=opacity
-        )
+        return cls._load_stingray_graph(mat=mat, opacity_mode=opacity_mode)
 
     @classmethod
-    @ptk.Deprecation.parameter(
-        "opacity", remove_in="0.20.0", since="2026-09-23", reason=_OPACITY_IS_A_MODE
-    )
-    def create_stingray_shader(cls, name, opacity=False, opacity_mode=None):
+    def create_stingray_shader(cls, name, *, opacity_mode=None):
         """Create a StingrayPBS shader by loading a ShaderFX preset graph.
 
         StingrayPBS node attrs are graph-dependent — a bare ``StingrayPBS``
@@ -797,8 +767,6 @@ class MatUtils(_MatUtilsInternal):
 
         Parameters:
             name: Shader node name.
-            opacity: DEPRECATED (warns; removed in 0.20.0) -- ``True`` meant
-                ``opacity_mode="transparent"``; pass the mode.
             opacity_mode: One of:
                 * ``None`` / ``"none"``: opaque, ``Standard.sfx``.
                 * ``"masked"``: alpha cutout, ``Standard_Masked.sfx``.
@@ -808,9 +776,7 @@ class MatUtils(_MatUtilsInternal):
                   Caller wires alpha to scalar ``opacity``; soft edges,
                   but VP2.0 preview shows a faint tint over the quad.
         """
-        return cls._create_stingray_shader(
-            name=name, opacity=opacity, opacity_mode=opacity_mode
-        )
+        return cls._create_stingray_shader(name=name, opacity_mode=opacity_mode)
 
     @classmethod
     def find_by_mat_id(
@@ -1293,21 +1259,14 @@ class MatUtils(_MatUtilsInternal):
         )
 
     @staticmethod
-    @ptk.Deprecation.parameter(
-        "as_strings", drop=True, remove_in="0.20.0", since="2026-09-23"
-    )
     def filter_materials_by_objects(
         objects: List[str],
-        as_strings: bool = True,
+        *,
         include_displacement: bool = False,
     ) -> List[str]:
-        """Filter materials assigned to the given objects.
-
-        *as_strings* is DEPRECATED and ignored (warns; removed in 0.20.0).
-        """
+        """Filter materials assigned to the given objects."""
         return MatUtils._filter_materials_by_objects(
             objects=objects,
-            as_strings=as_strings,
             include_displacement=include_displacement,
         )
 

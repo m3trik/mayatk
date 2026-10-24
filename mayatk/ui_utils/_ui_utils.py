@@ -411,20 +411,22 @@ class UiUtils:
         from maya import cmds
 
         # Node-based actions -----------------------------------------------
-        node = params.get("node", [""])[0]
-
-        if not node:
+        # One ``node=`` per item (``ptk.ReportDoc.action(..., node=[...])``):
+        # a link may name every reader of a map.
+        named = [n for n in params.get("node", []) if n]
+        if not named:
             return False
-
-        if not cmds.objExists(node):
-            if logger:
-                logger.warning(f"Object not found: {node}")
+        nodes = [n for n in named if cmds.objExists(n)]
+        if len(nodes) != len(named) and logger:
+            gone = [n for n in named if n not in nodes]
+            logger.warning(f"Object not found: {', '.join(gone)}")
+        if not nodes:
             return False
 
         if action == "select":
-            cmds.select(node, replace=True)
+            cmds.select(nodes, replace=True)
         elif action == "reveal":
-            UiUtils.reveal_in_outliner([node])
+            UiUtils.reveal_in_outliner(nodes)
         else:
             if logger:
                 logger.debug(f"Unknown log link action: {action}")

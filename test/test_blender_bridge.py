@@ -881,12 +881,12 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
         EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
         EmissiveGroups.add_group("rim", ["stayed.f[0]"])  # not sent
         records = self._manifest(objects=[cube])["records"]
-        payload = records["emissive_groups"]
+        payload = records[ptk.SceneRecords.EMISSIVE_REGISTRY.key]
         self.assertEqual(sorted(payload["registry"]["groups"]), ["glow", "rim"])
         self.assertEqual(payload["members"], {"glow": {"ref:sent_cube": [1, 3]}})
         self.assertEqual(payload["faces"], {"ref:sent_cube": 6})
         # A record bound to Maya's constructs never rides a hand-off.
-        self.assertEqual(list(records), ["emissive_groups"])
+        self.assertEqual(list(records), [ptk.SceneRecords.EMISSIVE_REGISTRY.key])
 
     def test_the_sidecar_is_written_atomically(self):
         """Through ``HandoffManifest.write``: a send that died mid-write must not
@@ -1412,13 +1412,13 @@ class TestBlenderBridgeSaveAs(MayaTkTestCase):
         self.assertIsNotNone(rendered, script[:400])
         folder = rendered.group(1).strip().strip("'\"r")
         self.assertTrue(folder, "LIGHTMAP_DIR was left empty on the panel path")
-        self.assertNotEqual(
-            os.path.normcase(os.path.dirname(os.path.join(folder, "x"))),
-            os.path.normcase(tempfile.gettempdir()),
-            folder,
-        )
+        # The session folder standing in for it: the maps reach it when the
+        # scene is saved, from a store this session owns -- never age-swept
+        # while it runs (LightmapRecords._stage).
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
         self.assertEqual(
-            os.path.normcase(folder.replace("/", os.sep)),
+            os.path.normcase(LightmapRecords._home(folder.replace("/", os.sep))),
             os.path.normcase(BlenderBridge._default_lightmap_dir([cube])),
         )
 
@@ -2061,7 +2061,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         # And the publisher carries one record per instance.
         from mayatk.node_utils.data_nodes import DataNodes
 
-        raw = DataNodes.read(ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA)
+        raw = DataNodes.read(ptk.Scope.DELIVERABLE, ptk.SceneRecords.LIGHTMAPS.key)
         recs = {o["name"]: o for o in json.loads(raw)["objects"]}
         self.assertEqual(set(recs), {"bb_inst_src", "bb_inst_copy"})
         self.assertEqual(recs["bb_inst_src"]["scaleOffset"], rect_a)
@@ -2124,7 +2124,9 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             # object's atlas cell, and the squeeze recorded as uvRect.
             LightmapRecords._transform_lightmap_uvs(shape, "lightmap", rect)
             LightmapRecords.commit({solo: old})
-            LightmapRecords._stamp_uv_rect(solo, rect)
+            legacy = LightmapRecords._marker_info(solo)
+            legacy["uvRect"] = list(rect)
+            LightmapRecords._write_marker(LightmapRecords._marker_node(solo), legacy)
             self.assertEqual(LightmapRecords._marker_info(solo)["uvRect"], rect)
             manifest = os.path.join(tmp, "x.lightmaps.json")
             Path(manifest).write_text(
@@ -2412,7 +2414,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """The last leg of the round trip: bake here, click Preview, see it lit.
 
         Lives with the bake tests because it is the same contract -- the commit is
-        only worth anything if the manifest reaches a consumer. ``lightmap_metadata``
+        only worth anything if the manifest reaches a consumer. ``lightmaps``
         rides ``data_export``, which is NOT under the selected roots, so a selection
         push exported the meshes alone and the preview came back unlit with nothing
         in the log to explain it. Pinned at the export set: whatever the caller asks
@@ -2420,11 +2422,10 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """
         from mayatk.env_utils.webxr_preview import WebXrPreview
         from mayatk.node_utils.data_nodes import DataNodes
-        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
 
         mesh = cmds.ls(cmds.polyCube(name="bb_prev_mesh")[0], long=True)[0]
         DataNodes.write(
-            ptk.Scope.DELIVERABLE, LightmapRecords.LIGHTMAP_METADATA, '{"version": 1}'
+            ptk.Scope.DELIVERABLE, ptk.SceneRecords.LIGHTMAPS.key, '{"version": 1}'
         )
         # Resolve the carrier the way the product does. The export set now folds
         # in EVERY carrier (a referenced module publishes onto its own namespaced
@@ -2515,7 +2516,12 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """The strip copies what it takes materials off, and only that: a camera
         or a locator has none, and its copy would ship under Maya's uniquified
         name -- the preview's start camera as ``user_pos1``, found by nothing.
-        A set with nothing shaded copies nothing at all."""
+        A set with nothing shaded copies nothing at all. The ``data_export``
+        carrier rides beside the copies: the export states the shaded
+        set's materials on it, and the preview's GLB build reads that
+        record off it (``ptk.MeshConvert._apply_fbx_materials``).
+        Updated: 2026-10-20"""
+        from mayatk.node_utils.data_nodes import DataNodes
         from mayatk.env_utils.webxr_preview import WebXrPreview
 
         mesh = cmds.ls(cmds.polyCube(name="strip_mesh")[0], long=True)[0]
@@ -2535,8 +2541,53 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         self.assertIn(cam, exported)
         self.assertIn(loc, exported)
         self.assertNotIn(mesh, exported)  # the mesh went as a shader-less copy
-        self.assertEqual(len(exported), 3)
+        carrier = f"|{DataNodes.EXPORT}"
+        self.assertIn(carrier, exported)
+        self.assertEqual(len([o for o in exported if o != carrier]), 3)
+        # Nothing in that send is shaded, so its records state no material and
+        # no carrier rides: the hand-off's context is scoped to what it sends.
         self.assertEqual(unshaded, [cam, loc])
+
+    def test_a_subset_hand_off_states_only_the_materials_it_ships(self):
+        """A hand-off's records state what it ships: its context is scoped to
+        the roots it sends, as the Scene Exporter's is, so a send of one of
+        two shaded meshes carries that mesh's material alone -- not every
+        material in the scene -- and the scene keeps its own records: the
+        materials record, the write's alone, is cleared after it.
+        Added: 2026-10-20"""
+        from mayatk.env_utils.webxr_preview import WebXrPreview
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        def shaded(name):
+            mesh = cmds.ls(cmds.polyCube(name=name)[0], long=True)[0]
+            mat = cmds.shadingNode("blinn", asShader=True, name=f"{name}_mat")
+            sg = cmds.sets(
+                renderable=True, noSurfaceShader=True, empty=True, name=f"{name}_SG"
+            )
+            cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader")
+            cmds.sets(mesh, edit=True, forceElement=sg)
+            return mesh, mat
+
+        sent, sent_mat = shaded("sentMesh")
+        _kept, kept_mat = shaded("keptMesh")
+        stated = {}
+
+        def capture(*_args, **_kwargs):
+            stated["record"] = ptk.SceneRecords.MATERIALS.load(DataNodes)
+
+        with (
+            mock.patch.object(handoff_export.FbxUtils, "export", side_effect=capture),
+            mock.patch.object(handoff_export.FbxUtils, "load_plugin"),
+        ):
+            WebXrPreview()._export_fbx([sent], "x.fbx", {})
+
+        names = {m["name"] for m in (stated.get("record") or {}).get("materials", [])}
+        self.assertIn(sent_mat, names)
+        self.assertNotIn(kept_mat, names)
+        self.assertIsNone(
+            ptk.SceneRecords.MATERIALS.load(DataNodes),
+            "the materials record is the write's alone",
+        )
 
     def test_declared_takes_are_realized_for_an_animated_handoff(self):
         """Shots must survive the preview leg, not only the Scene Exporter's.
@@ -2610,7 +2661,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         """The preview must not ship a channel the exporter would rebuild.
 
         Most channels are persisted state, but some are DERIVED from the live
-        scene each export — ``visibility_tracks`` reads the visibility curves
+        scene each export — ``render_effects`` reads the visibility curves
         themselves — and those go stale the moment an artist re-keys. The Scene
         Exporter refreshes via its own task; without the same call here the same
         scene previewed one way and exported another, which is precisely the
@@ -2655,7 +2706,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
         A producer with nothing to publish CLEARS its channel — that is right
         for an export pipeline, which is the authority on every channel, and
         wrong for a hand-off that merely SHIPS the carrier. Refreshing the whole
-        set from here wiped a `lightmap_metadata` whose markers the scene no
+        set from here wiped a `lightmaps` whose markers the scene no
         longer carried, and the preview then shipped that asset unlit.
 
         Driven through ``_export_fbx`` for the reason the test above gives, and
@@ -2668,7 +2719,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
         self.addCleanup(self._drop_carrier)
         mesh = cmds.polyCube(name="bb_keepchan")[0]
-        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmap_metadata", '{"version": 1}')
+        DataNodes.write(ptk.Scope.DELIVERABLE, "lightmaps", '{"version": 1}')
 
         with (
             mock.patch.object(handoff_export.FbxUtils, "export"),
@@ -2677,7 +2728,7 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
             WebXrPreview()._export_fbx([mesh], "x.fbx", {})
 
         self.assertEqual(
-            DataNodes.read(ptk.Scope.DELIVERABLE, "lightmap_metadata"), '{"version": 1}'
+            DataNodes.read(ptk.Scope.DELIVERABLE, "lightmaps"), '{"version": 1}'
         )
 
     def test_visible_scope_keeps_every_instance_sibling(self):
@@ -2830,7 +2881,10 @@ class TestBridgeAtlasCells(MayaTkTestCase):
         result = LightmapBaker(
             resolution=self.RES, baker=_FlatBaker(), reflection_probe=False
         ).bake([a], packing="atlas", output_dir=self.dir)
-        after = cv2.imread(atlas, cv2.IMREAD_UNCHANGED)
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        # The atlas as the scene reads it: in the session until the save.
+        after = cv2.imread(LightmapRecords._stage(atlas), cv2.IMREAD_UNCHANGED)
         self.assertEqual(result.in_place, [a], result.repacked)
         self.assertEqual(
             sorted(f for f in os.listdir(self.dir) if f.endswith(".exr")),
@@ -4635,6 +4689,121 @@ class TestBridgeLightmapSceneRecords(MayaTkTestCase):
                     any("Exclude set" in line for line in caught.output), seed
                 )
         self.assertEqual(LightmapRecords._marker_info(kept)["map"], "Old_Lightmap.exr")
+
+
+class TestBridgeReturnsWaitForTheSave(MayaTkTestCase):
+    """The bridge's returned maps wait in the session until the scene is saved,
+    as every Maya bake's do (``LightmapRecords._stage``)."""
+
+    def test_a_returned_map_keeps_off_another_scenes_file_of_its_name(self):
+        """Blender names the maps in the session folder, which holds none of
+        the home folder's files: one whose home name is another scene's -- not
+        read here, not written by this scene -- moves to the next free name
+        before it is wired, so the save cannot put it over that file. Added:
+        2026-10-23"""
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        home = self.enterContext(
+            ptk.TempArtifacts("bb_strangers", policy="scoped")
+        ).dir_path()
+        theirs = os.path.join(home, "Room_Lightmap.exr")
+        with open(theirs, "wb") as fh:
+            fh.write(b"theirs")
+        returned = os.path.join(LightmapRecords._pending().folder(home), "Room_Lightmap.exr")
+        with open(returned, "wb") as fh:
+            fh.write(b"ours")
+        out = BlenderBridge._clear_of_strangers({"|a": returned, "|b": returned})
+        self.assertEqual(len(set(out.values())), 1, "one atlas, renamed once")
+        (path,) = set(out.values())
+        self.assertEqual(os.path.basename(path), "Room_Lightmap_1.exr")
+        self.assertEqual(os.path.dirname(path), os.path.dirname(returned))
+        with open(theirs, "rb") as fh:
+            self.assertEqual(fh.read(), b"theirs")
+        # A map this scene reads is its own to replace: kept as named.
+        LightmapRecords.commit({cmds.polyCube(name="bb_own")[0]: theirs}, written=False)
+        again = os.path.join(os.path.dirname(returned), "Room_Lightmap.exr")
+        with open(again, "wb") as fh:
+            fh.write(b"ours")
+        self.assertEqual(BlenderBridge._clear_of_strangers({"|a": again})["|a"], again)
+
+
+class TestStrangersAreVettedBeforeTheUvWrite(TestBridgeAtlasCells):
+    """``_clear_of_strangers`` renames files on disk and can raise; it ran
+    after ``UvUtils.apply_uv_layout``, so a failure there left rewritten UVs
+    with nothing committed -- against the return leg's own rule, "vet each
+    entry BEFORE touching a mesh". Added: 2026-10-24"""
+
+    def test_the_stranger_check_runs_before_any_uv_is_rewritten(self):
+        from mayatk.uv_utils._uv_utils import UvUtils
+
+        order = []
+        real_clear = BlenderBridge._clear_of_strangers.__func__
+        real_apply = UvUtils.apply_uv_layout
+
+        def clear(cls, mapping):
+            order.append("strangers")
+            return real_clear(cls, mapping)
+
+        def apply(*args, **kwargs):
+            order.append("uvs")
+            return real_apply(*args, **kwargs)
+
+        with mock.patch.object(
+            BlenderBridge, "_clear_of_strangers", classmethod(clear)
+        ), mock.patch.object(UvUtils, "apply_uv_layout", side_effect=apply):
+            wired = BlenderBridge().reassemble_lightmaps(
+                self._manifest(), list(self.cubes.values())
+            )
+        self.assertEqual(set(wired), set(self.cubes.values()))
+        self.assertEqual(order[:2], ["strangers", "uvs"], order)
+
+    def test_a_failed_check_leaves_every_mesh_as_it_was(self):
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        before = {
+            node: cmds.polyUVSet(node, query=True, allUVSets=True)
+            for node in self.cubes.values()
+        }
+        manifest = self._manifest()
+        with mock.patch.object(
+            BlenderBridge,
+            "_clear_of_strangers",
+            classmethod(lambda cls, mapping: (_ for _ in ()).throw(RuntimeError("x"))),
+        ):
+            with self.assertRaises(RuntimeError):
+                BlenderBridge().reassemble_lightmaps(manifest, list(self.cubes.values()))
+        after = {
+            node: cmds.polyUVSet(node, query=True, allUVSets=True)
+            for node in self.cubes.values()
+        }
+        self.assertEqual(after, before, "a UV set was written before the vetting")
+        self.assertFalse(LightmapRecords.bake_state().get("objects"))
+
+
+class TestAStrangerMoveThatFailsKeepsItsPath(TestBridgeAtlasCells):
+    """``os.listdir`` / ``os.replace`` raised out of the return leg: the map
+    keeps its path, warned, and the rest go on. Added: 2026-10-24"""
+
+    def test_a_held_file_keeps_its_returned_path(self):
+        from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
+
+        home = self.enterContext(
+            ptk.TempArtifacts("bb_strangers_held", policy="scoped")
+        ).dir_path()
+        with open(os.path.join(home, "Room_Lightmap.exr"), "wb") as fh:
+            fh.write(b"theirs")
+        returned = os.path.join(
+            LightmapRecords._pending().folder(home), "Room_Lightmap.exr"
+        )
+        with open(returned, "wb") as fh:
+            fh.write(b"ours")
+        with mock.patch("os.replace", side_effect=PermissionError("held open")), (
+            mock.patch.object(BlenderBridge.logger, "warning")
+        ) as warned:
+            out = BlenderBridge._clear_of_strangers({"|a": returned})
+        self.assertEqual(out, {"|a": returned})
+        self.assertTrue(warned.called)
+        self.assertIn("Room_Lightmap.exr", str(warned.call_args))
 
 
 class TestHandoffWritePlan(MayaTkTestCase):

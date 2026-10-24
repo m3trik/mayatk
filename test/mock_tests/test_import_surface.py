@@ -7,17 +7,18 @@ FRESH interpreter: this directory's conftest plants mock ``maya`` modules in
 ``sys.modules``, which would hide an unguarded import from an in-process test.
 """
 
+import importlib.machinery
 import json
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
 
-_REAL_MAYA_LOADED = "maya.cmds" in sys.modules and not isinstance(
-    sys.modules.get("maya.cmds"), MagicMock
-)
+# Asked of the PATH, not ``sys.modules``: the probe's fresh interpreter is this
+# one's executable, so under mayapy (``run_tests.py --mocks``, where the
+# conftest's mocks hide the real ``maya``) it would import the real one.
+_MAYA_INSTALLED = importlib.machinery.PathFinder.find_spec("maya") is not None
 
 _REPO = Path(__file__).resolve().parents[2]
 _PKG = _REPO / "mayatk"
@@ -38,16 +39,39 @@ MAYA_BOUND = {
 # inside Maya, so it is not this test's finding.
 _MAYA_ROOTS = frozenset({"maya", "pymel", "ufe", "mtoa", "arnold", "mayaUsd"})
 
+# One pass over the surface, two findings: each module that fails to import,
+# and each maya name a module answers ``is None`` for (its no-Maya branch)
+# that its guard leaves UNBOUND -- the branch then raises NameError instead
+# of answering.
 _PROBE = r"""
-import importlib, json, sys
-failed = {}
+import importlib, json, re, sys
+checked = re.compile(r"\b(cmds|mel|om|om2|oma|omui|omr)\s+is\s+(?:not\s+)?None\b")
+failed, unbound = {}, {}
 for name in json.loads(sys.stdin.read()):
     try:
-        importlib.import_module(name)
+        module = importlib.import_module(name)
     except BaseException as error:
         missing = error.name if isinstance(error, ModuleNotFoundError) else None
         failed[name] = [f"{type(error).__name__}: {error}", missing]
-print("@@RESULT@@" + json.dumps(failed))
+        continue
+    try:
+        with open(module.__file__, encoding="utf-8") as source:
+            text = source.read()
+    except (AttributeError, OSError, TypeError):
+        continue
+    names = {
+        alias
+        for alias in checked.findall(text)
+        if re.search(
+            rf"^[ \t]+(?:import maya[\w.]* as {alias}|from maya[\w.]* import {alias})\b",
+            text,
+            re.M,
+        )
+        and not hasattr(module, alias)
+    }
+    if names:
+        unbound[name] = sorted(names)
+print("@@RESULT@@" + json.dumps({"failed": failed, "unbound": unbound}))
 """
 
 
@@ -68,45 +92,55 @@ def _surface_modules():
     return names
 
 
+def _probe(names):
+    """:data:`_PROBE`'s findings over *names*, from a fresh interpreter."""
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONDONTWRITEBYTECODE="1")
+    # Absolute: the child runs in the repo (cwd below), where an entry
+    # given relative to this process's directory names nothing.
+    inherited = [
+        os.path.abspath(path)
+        for path in env.get("PYTHONPATH", "").split(os.pathsep)
+        if path
+    ]
+    env["PYTHONPATH"] = os.pathsep.join([str(_REPO)] + inherited)
+    proc = subprocess.run(
+        [sys.executable, "-c", _PROBE],
+        input=json.dumps(names),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        cwd=str(_REPO),
+        timeout=900,
+    )
+    marker = [
+        line for line in proc.stdout.splitlines() if line.startswith("@@RESULT@@")
+    ]
+    if not marker:
+        raise AssertionError(
+            f"the probe died (rc={proc.returncode}):\n{proc.stderr[-3000:]}"
+        )
+    return json.loads(marker[-1][len("@@RESULT@@") :])
+
+
 def setUpModule():
-    if _REAL_MAYA_LOADED:
-        raise unittest.SkipTest("Mock-based suite -- skipped when real Maya is loaded.")
+    if _MAYA_INSTALLED:
+        raise unittest.SkipTest(
+            "Needs an interpreter without Maya -- its probe would import the real one."
+        )
 
 
 class TestImportSurface(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.names = [name for name in _surface_modules() if name not in MAYA_BOUND]
+        cls.found = _probe(cls.names) if cls.names else {"failed": {}, "unbound": {}}
+
     def test_every_module_imports_without_maya(self):
-        names = [name for name in _surface_modules() if name not in MAYA_BOUND]
-        self.assertGreater(len(names), 100, "the package walk found nothing")
-        env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONDONTWRITEBYTECODE="1")
-        # Absolute: the child runs in the repo (cwd below), where an entry
-        # given relative to this process's directory names nothing.
-        inherited = [
-            os.path.abspath(path)
-            for path in env.get("PYTHONPATH", "").split(os.pathsep)
-            if path
-        ]
-        env["PYTHONPATH"] = os.pathsep.join([str(_REPO)] + inherited)
-        proc = subprocess.run(
-            [sys.executable, "-c", _PROBE],
-            input=json.dumps(names),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            cwd=str(_REPO),
-            timeout=900,
-        )
-        marker = [
-            line for line in proc.stdout.splitlines() if line.startswith("@@RESULT@@")
-        ]
-        self.assertTrue(
-            marker, f"the probe died (rc={proc.returncode}):\n{proc.stderr[-3000:]}"
-        )
+        self.assertGreater(len(self.names), 100, "the package walk found nothing")
         failed = {}
-        for name, (error, missing) in json.loads(
-            marker[-1][len("@@RESULT@@") :]
-        ).items():
+        for name, (error, missing) in self.found["failed"].items():
             root = (missing or "").partition(".")[0]
             if missing and root not in _MAYA_ROOTS and root != "mayatk":
                 with self.subTest(module=name):
@@ -118,6 +152,23 @@ class TestImportSurface(unittest.TestCase):
             {},
             "module(s) that need Maya to import -- try-guard the maya imports:\n"
             + "\n".join(f"  {name}: {error}" for name, error in sorted(failed.items())),
+        )
+
+    def test_a_maya_name_answered_is_none_is_bound_without_maya(self):
+        """A module whose no-Maya branch asks ``cmds is None`` binds the name in
+        its guard (the house form: ``except ImportError: cmds = None``). A
+        guard ending in ``pass`` leaves it unbound, and the branch meant to
+        answer outside Maya raises NameError instead -- found 2026-10-20 in
+        ``AudioClips.export_record`` and ``LightUtils``. Added: 2026-10-20"""
+        self.assertEqual(
+            self.found["unbound"],
+            {},
+            "module(s) whose guard leaves a name its no-Maya branch reads "
+            "unbound -- bind it to None in the guard:\n"
+            + "\n".join(
+                f"  {name}: {', '.join(aliases)}"
+                for name, aliases in sorted(self.found["unbound"].items())
+            ),
         )
 
     def test_maya_bound_entries_name_real_modules(self):

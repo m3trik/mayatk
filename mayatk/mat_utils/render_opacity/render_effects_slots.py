@@ -670,7 +670,7 @@ class RenderEffectsSlots:
         if not result:
             self.ui.footer.setText("WebXR preview failed -- see the log for details.")
             return
-        if ptk.MeshConvert.VISIBILITY_TRACKS_KEY not in (
+        if ptk.SceneRecords.VISIBILITY.key not in (
             result.get("data_export") or ()
         ):
             # Published, but what it published is the scene, not the page: a

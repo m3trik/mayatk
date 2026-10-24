@@ -95,7 +95,7 @@ def _world_translation(node, world=False):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test — run via pytest or run_tests.py --mocks"
 )
 class TestTelescopeRig(unittest.TestCase):
     """Node-graph expectations for TelescopeRig.setup_telescope_rig/teardown."""
@@ -470,7 +470,7 @@ class TestTelescopeRig(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _CMDS_IS_MOCKED, "Mock-based test — run via pytest, not run_tests.py"
+    _CMDS_IS_MOCKED, "Mock-based test — run via pytest or run_tests.py --mocks"
 )
 class TestTelescopeRigSlots(unittest.TestCase):
     def setUp(self):

@@ -4,10 +4,10 @@
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-try:
+try:  # guarded like every mayatk module: the surface must import without Maya
     from maya import cmds
 except ImportError:
-    pass
+    cmds = None
 
 import pythontk as ptk
 

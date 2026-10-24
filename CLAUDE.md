@@ -46,10 +46,10 @@ $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 | Test kind | How to tell | Run |
 |:---|:---|:---|
 | Standalone repro | has `maya.standalone.initialize()` + `__main__` | `& $MAYAPY <script.py>` |
-| Production module | uses `MayaTkTestCase` / `QuickTestCase` | `python mayatk/test/run_tests.py --all` (or `… core_utils components`, `… --list`). Headless by default: chunked fresh-mayapy processes; modules that native-crash mayapy auto-defer to one GUI pass (`GUI_REQUIRED` in the runner) |
+| Production module | uses `MayaTkTestCase` / `QuickTestCase` | Pointed: `python mayatk/test/run_tests.py edit_utils -k mirror` (`--list`); `--all` = review / release. Headless: chunked fresh-mayapy processes; modules that native-crash mayapy defer to one GUI pass (`GUI_REQUIRED`) |
 | GUI-dependent | needs Qt / viewport (→ `GUI_REQUIRED`) | auto GUI pass, or `--gui` to force the whole run through a launched GUI Maya. In-session (Script Editor): `import mayatk.test.run_tests as r; r.MayaTestRunner().run_tests(['core_utils'])` |
 
-Runner notes: per-module timings (`SLOWEST MODULES`); the badge only updates when every in-scope module ran; `--jobs N` runs chunks concurrently — drop to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
+Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES` (`--full-results`: all); the badge only updates on a full `--all`; `--jobs N` runs chunks concurrently — drop to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
 
 ## Tool panels — co-locate in mayatk, never in tentacle
 

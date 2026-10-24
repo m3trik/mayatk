@@ -102,9 +102,9 @@ class _TaskDefinitionsMixin:
                     "the FBX, carrying whatever metadata the scene's subsystems "
                     "have stamped on it.",
                     bullets=[
-                        "Shots writes <b>shot_metadata</b> (each clip with its "
+                        "Shots writes <b>animation</b> (each clip with its "
                         "frame range).",
-                        "Audio writes <b>audio_manifest</b>.",
+                        "Audio writes <b>audio</b>.",
                         "Any other producer's channel rides along the same way.",
                     ],
                     notes=[
@@ -830,7 +830,7 @@ class _TaskDefinitionsMixin:
                         "were cut from. For a player that switches clips.",
                         "<b>Full Sequence Only</b> — one continuous clip. For a "
                         "player that seeks a window inside it; each shot's frame "
-                        "range still rides in <b>extras.animation_web</b>.",
+                        "range still rides in <b>extras.animation</b>.",
                     ],
                     notes=[
                         "The two halves hold the SAME performance — the shots are "

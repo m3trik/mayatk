@@ -20,7 +20,7 @@ import pythontk as ptk
 from mayatk.mat_utils.bake_sets import (
     BakeSet,
     BakeSourceSet,
-    LightmapBakeSet,
+    _LightmapBakeSet as LightmapBakeSet,
     LightmapExcludeSet,
     LightmapIsolateSet,
 )
@@ -207,6 +207,14 @@ class TestLightmapBakeSet(MayaTkTestCase):
     def setUp(self):
         super().setUp()
         self._pin({"objectSet": ptk.AffixRule("_SET", "auto", "Set")})
+
+    def test_the_retired_name_still_resolves_with_a_notice(self):
+        """Retired with the panel's Bake Set row (the Manage page re-bakes by
+        map): a script keeps working, warned, until 0.30.0. Added: 2026-10-22"""
+        from mayatk.mat_utils import bake_sets
+
+        with self.assertWarns(DeprecationWarning):
+            self.assertIs(bake_sets.LightmapBakeSet, LightmapBakeSet)
 
     def tearDown(self):
         LightmapBakeSet.clear()

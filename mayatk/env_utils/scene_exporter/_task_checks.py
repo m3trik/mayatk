@@ -255,10 +255,11 @@ class _TaskChecksMixin(_TaskDataMixin):
         type), naming the residuals rather than blocking the fix. The override
         button skips it like any other check.
 
-        The judgement is pythontk's (``MeshConvert.sidecar_foreign_packings``
-        -> ``MapFactory.foreign_packings``), read off the same sidecar the GLB
-        conversion will carry and keyed by the registry workflow the combobox
-        named -- so no engine name or channel layout is spelled out here and
+        The judgement is pythontk's (``MapFactory.foreign_packings``), asked
+        of the maps the export's materials record names
+        (:meth:`MaterialRecords.entries`, the one reader of the scene's
+        materials) and keyed by the registry workflow the combobox named --
+        so no engine name or channel layout is spelled out here and
         blendertk's twin cannot drift from it.
 
         Returns:
@@ -266,17 +267,18 @@ class _TaskChecksMixin(_TaskDataMixin):
         """
         if not template:
             return True, []
-        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.env_utils.material_records import MaterialRecords
 
         log_messages = []
         try:
-            sections = SceneState.read(self._live_objects())
+            entries = MaterialRecords.entries(self._live_objects())
         except Exception:  # noqa: BLE001 — a read failure must not block an export
             self.logger.warning("Material compatibility check skipped.", exc_info=True)
             return True, log_messages
 
-        foreign = ptk.MeshConvert.sidecar_foreign_packings(
-            {"sections": sections}, workflow=template
+        foreign = ptk.MapFactory.foreign_packings(
+            ptk.MaterialFamilies.texture_files(ptk.MaterialFamilies.payload(entries)),
+            workflow=template,
         )
         if not foreign:
             return True, log_messages

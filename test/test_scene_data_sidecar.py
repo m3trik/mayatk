@@ -368,59 +368,11 @@ class ManifestFormatTest(unittest.TestCase):
     def test_data_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:
             export = os.path.join(d, "shot.fbx")
-            data = {"shot_metadata": {"shots": [1, 2]}, "fbx_takes": ["t1"]}
+            data = {"animation": {"shots": [1, 2]}, "audio": {"events": ["t1"]}}
             SceneDataSidecar.write_manifest(export, {"A"}, data=data)
             self.assertEqual(SceneDataSidecar.read_data(export), data)
             # Hierarchy read is unaffected by the data section.
             self.assertEqual(SceneDataSidecar.read_manifest(export), {"A"})
-
-    def test_authoring_locate_hint_is_not_recorded(self):
-        """The sidecar ships beside the deliverable, so it carries no machine paths.
-
-        The lightmap manifest no longer names a folder, but a scene published
-        before that still carries the absolute authoring directories (``dir`` /
-        ``dirs``) until its next bake republishes it; the sidecar is a
-        different consumer entirely ("a form of export", per this module) and a
-        recipient can do nothing with a path on someone else's drive but read the
-        folder names in it.  Measured on a client hand-off: the shipped sidecar
-        named the client and the full Dropbox tree it was authored in.
-        """
-        with tempfile.TemporaryDirectory() as d:
-            export = os.path.join(d, "shot.fbx")
-            authored = r"O:\Dropbox (Client)\Team Folder\PROD\maya\sourceimages"
-            data = {
-                "lightmap_metadata": {
-                    "version": 1,
-                    "dir": authored,
-                    "dirs": [authored, authored + r"\old"],
-                    "objects": [{"name": "room", "map": "room_Lightmap.exr"}],
-                },
-                "shot_metadata": {"shots": [1]},
-            }
-            SceneDataSidecar.write_manifest(export, {"A"}, data=data)
-            with open(
-                SceneDataSidecar.manifest_path_for(export), encoding="utf-8"
-            ) as f:
-                raw = f.read()
-            self.assertNotIn("Dropbox (Client)", raw)
-            written = json.loads(raw)["data_export"]
-            self.assertNotIn("dir", written["lightmap_metadata"])
-            self.assertNotIn("dirs", written["lightmap_metadata"])
-            # Scrubbed, not gutted: everything a consumer acts on survives, and
-            # unrelated channels are untouched.
-            self.assertEqual(
-                written["lightmap_metadata"]["objects"],
-                [{"name": "room", "map": "room_Lightmap.exr"}],
-            )
-            self.assertEqual(written["shot_metadata"], {"shots": [1]})
-
-    def test_scrub_does_not_mutate_the_caller_snapshot(self):
-        """The scrub is for the file; the in-memory snapshot is the caller's."""
-        with tempfile.TemporaryDirectory() as d:
-            export = os.path.join(d, "shot.fbx")
-            data = {"lightmap_metadata": {"version": 1, "dir": r"O:\authored"}}
-            SceneDataSidecar.write_manifest(export, {"A"}, data=data)
-            self.assertEqual(data["lightmap_metadata"]["dir"], r"O:\authored")
 
     def test_read_data_none_without_section(self):
         with tempfile.TemporaryDirectory() as d:

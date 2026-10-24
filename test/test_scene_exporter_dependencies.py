@@ -159,7 +159,7 @@ class TestSelfContainedFbx(MayaTkTestCase):
         self.assertTrue(mel.eval("FBXExportCameras -q"), "a content choice was lost")
 
     def test_the_shipped_audio_rides_inside_under_its_event_names(self):
-        """Unity matches an AudioClip to an ``audio_manifest`` event by name,
+        """Unity matches an AudioClip to an ``audio`` event by name,
         and an event names its TRACK, not the track's file: the file goes in
         under the event's name, its extension kept."""
         import wave

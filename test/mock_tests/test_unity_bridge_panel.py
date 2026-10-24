@@ -33,9 +33,12 @@ class TestEditorVersionCombo(unittest.TestCase):
         added = []
         combo = types.SimpleNamespace(addItem=lambda text, data: added.append(text))
         host = types.SimpleNamespace(_param_widgets={"UNITY_VERSION": combo})
-        with mock.patch.dict(
-            sys.modules, {"unitytk": types.SimpleNamespace(UnityFinder=finder)}
-        ):
+        # A real module object: under mayapy, PySide6's import hook reads the
+        # module's ``__name__``, and the method swallows the AttributeError a
+        # namespace raised into an empty combo.
+        stand_in = types.ModuleType("unitytk")
+        stand_in.UnityFinder = finder
+        with mock.patch.dict(sys.modules, {"unitytk": stand_in}):
             UnityBridgeSlots._populate_unity_versions(host)
         self.assertEqual(added, ["6000.0.2f1", "2022.3.10f1", "2022.3.9f1"])
 

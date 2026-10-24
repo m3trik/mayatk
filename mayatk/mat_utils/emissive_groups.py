@@ -21,7 +21,7 @@ Scene data (kept minimal — nothing is created until the tool is used):
 - Membership: one plain ``objectSet`` per group (``emissiveGroup_<name>``),
   no custom attrs.
 - Group registry (slots / defaults / encoding): a single JSON channel
-  ``emissive_groups`` on the ``data_internal`` node. Slots are assigned once
+  ``emissive_registry`` on the ``data_internal`` node. Slots are assigned once
   and never reshuffled — downstream Unity scenes key against them. Removing
   a group *retires* its slot; :meth:`EmissiveGroups.compact_slots` is the
   explicit, binding-breaking reclaim.
@@ -66,9 +66,9 @@ class _EmissiveGroupsInternal:
 
     SET_PREFIX = "emissiveGroup_"
     COLOR_SET = "emissiveGroups"
-    #: One key for both records: the ``data_internal`` registry
-    #: (``ptk.SceneRecords.EMISSIVE_REGISTRY``) and the ``data_export``
-    #: manifest (``ptk.SceneRecords.EMISSIVE_GROUPS``).
+    #: The ``data_export`` manifest's channel
+    #: (``ptk.SceneRecords.EMISSIVE_GROUPS``); the ``data_internal``
+    #: registry keeps its own (``ptk.SceneRecords.EMISSIVE_REGISTRY``).
     DATA_CHANNEL = ptk.SceneRecords.EMISSIVE_GROUPS.key
 
     # ------------------------------------------------------------------
@@ -646,10 +646,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
         manifest = packer.write(output_path, write_manifest=False)
 
         registry.set_encoding(
-            "channels",
-            mask=os.path.basename(output_path),
-            resolution=int(resolution),
-            uv_channel=0,
+            "channels", mask=os.path.basename(output_path), uv_channel=0
         )
         published = cls.refresh_export_metadata()
         cls.logger.info(f"Baked mask: {output_path}")
@@ -661,7 +658,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
 
     @classmethod
     def transfer_out(cls, ctx: "ptk.TransferContext") -> Optional[dict]:
-        """The ``emissive_groups`` hand-off payload: the registry, each
+        """The emissive registry's hand-off payload: the registry, each
         group's membership as ``{group: {object: [face index, ...]}}`` and
         each member object's face count -- the far side has no set to read,
         and a face index names the same face only on a mesh whose face count
@@ -695,7 +692,7 @@ class EmissiveGroups(_EmissiveGroupsInternal, ptk.LoggingMixin, ptk.HelpMixin):
 
     @classmethod
     def transfer_in(cls, payload: dict, ctx: "ptk.TransferContext") -> None:
-        """Land a received ``emissive_groups`` payload (:meth:`transfer_out`'s
+        """Land a received emissive-registry payload (:meth:`transfer_out`'s
         shape, from either DCC): the registry merges by its rule -- a group
         whose slot is taken here is re-slotted, noted -- and each group's
         faces join its set on the object ``ctx.rename`` resolves.  An object

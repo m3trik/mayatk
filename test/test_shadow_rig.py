@@ -261,18 +261,6 @@ class TestShadowRig(MayaTkTestCase):
         )
         self.assertEqual(cmds.getAttr(f"{rig.shader}.use_color_map"), 1.0)
 
-    def test_explicit_axis_is_retired(self):
-        """An explicit axis builds the same projected silhouette, ignored -- and
-        warns (removed in 0.20.0; 2026-09-23) on both entry points that take it."""
-        with self.assertWarns(DeprecationWarning) as caught:
-            rig = self._make(axis="y")
-        self.assertIn("'axis'", str(caught.warning))
-        self.assertIn("0.20.0", str(caught.warning))
-        self.assertTrue(os.path.exists(rig.texture_path))
-        self.assertPlaneMatchesModel(rig.shadow_plane)
-        with self.assertWarns(DeprecationWarning):
-            rig.create_silhouette_texture(size=64, axis="y")
-
     def test_namespaced_target(self):
         """A namespaced target builds with namespace-free rig node names and
         a legal texture filename (':' is invalid in Windows filenames)."""
@@ -1036,7 +1024,7 @@ class TestShadowRig(MayaTkTestCase):
 
     # ------------------------------------------------------------------ export metadata
     def test_export_metadata(self):
-        """create()/bake() publish the shadow_metadata channel on the
+        """create()/bake() publish the shadows channel on the
         data_export carrier (the Scene Exporter hand-off contract); a
         plane-less refresh clears it."""
         from mayatk.node_utils.data_nodes import DataNodes
@@ -1104,8 +1092,10 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(rec["texture"], "Box_shadow.png")
         hz = rec["horizon"]
         self.assertEqual(hz["texture"], "Box_horizon.png")
-        self.assertEqual((hz["mapping"], hz["encoding"]), ("heightfield", 2))
-        self.assertEqual((hz["size"], hz["spans"], hz["levels"]), (32, 2, 5))
+        # Nothing a reader derives: mapping and encoding are the record
+        # version's, the pyramid's levels log2(size) (2026-10-20).
+        self.assertFalse({"mapping", "encoding", "levels"} & set(hz), hz)
+        self.assertEqual((hz["size"], hz["spans"]), (32, 2))
         a0, a1, b0, b1 = hz["bounds"]
         # The 2 x 2 x 2 cube's footprint, padded, in the contact's frame.
         self.assertLess(a0, -1.0)
@@ -1450,6 +1440,15 @@ class TestShadowRig(MayaTkTestCase):
         self.assertEqual(len(payload["planes"]), 1)
 
 
+    def test_the_records_old_key_name_is_a_deprecated_alias(self):
+        """``ShadowRig.SHADOW_METADATA`` held the shadows record's key under
+        its old name: retired, it warns and answers the declaration's.
+        Added: 2026-10-20"""
+        with self.assertWarns(DeprecationWarning):
+            key = ShadowRig.SHADOW_METADATA
+        self.assertEqual(key, ptk.SceneRecords.SHADOWS.key)
+
+
 class TestDetachPlanes(MayaTkTestCase):
     """``ShadowRig.detach_planes``: a rig becomes a plain unlit textured plane.
 
@@ -1543,15 +1542,16 @@ class TestDetachPlanes(MayaTkTestCase):
         self.assertEqual(ShadowRig.find_shadow_planes(), cmds.ls(self.plane))
 
 
-class TestUnlitSection(MayaTkTestCase):
-    """What the GLB writes ``KHR_materials_unlit`` (``SceneState._read_unlit``).
+class TestUnlitMaterials(MayaTkTestCase):
+    """What the materials record states unlit -- the GLB's
+    ``KHR_materials_unlit`` (``MaterialRecords``).
 
     A shadow plane reached WebXR as lit PBR: the environment's specular made
     it brighter than the floor under it (production, 2026-10-15).
     """
 
     def test_a_shadow_planes_material_and_a_surface_shader_read_unlit(self):
-        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.env_utils.material_records import MaterialRecords
 
         cube = cmds.polyCube(name="UnlitBox")[0]
         rig = ShadowRig.create([cube], light_pos=(5, 10, 5), texture_res=64)
@@ -1562,13 +1562,14 @@ class TestUnlitSection(MayaTkTestCase):
         cmds.connectAttr(f"{flat}.outColor", f"{sg}.surfaceShader")
         cmds.sets(decal, forceElement=sg)
 
-        unlit = SceneState.read([cube, rig.shadow_plane, decal]).get("unlit") or {}
+        entries = MaterialRecords.entries([cube, rig.shadow_plane, decal])
+        unlit = {e["name"] for e in entries if e.get("unlit")}
 
-        self.assertEqual(set(unlit), {rig.shader, flat})
+        self.assertEqual(unlit, {rig.shader, flat})
         self.assertNotIn("lambert1", unlit)
 
     def test_a_surface_shaders_texture_alpha_is_blend(self):
-        from mayatk.env_utils.scene_state import SceneState
+        from mayatk.env_utils.material_records import MaterialRecords
 
         decal = cmds.polyPlane(name="BlendDecal")[0]
         flat = cmds.shadingNode("surfaceShader", asShader=True, name="blendFlat")
@@ -1578,9 +1579,12 @@ class TestUnlitSection(MayaTkTestCase):
         cmds.connectAttr(f"{flat}.outColor", f"{sg}.surfaceShader")
         cmds.sets(decal, forceElement=sg)
 
-        modes = SceneState.read([decal], include_textures=False).get("alpha_mode")
+        modes = {
+            e["name"]: e.get("alphaMode")
+            for e in MaterialRecords.entries([decal])
+        }
 
-        self.assertEqual((modes or {}).get(flat), {"mode": "BLEND"})
+        self.assertEqual(modes.get(flat), "BLEND")
 
 
 class TestIntensityAndGround(MayaTkTestCase):

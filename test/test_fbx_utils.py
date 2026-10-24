@@ -122,7 +122,8 @@ class TestRecordUnits(MayaTkTestCase):
     fixture builds one physical scene, runs its tool under (cm, deg) and under
     (m, rad), and produces the record under both: each record's
     ``unit_scale`` is its export's unit, and its metres (:meth:`_in_metres`)
-    are the same in all four.
+    are the same in all four. Its fixtures also build the scene every
+    producer's record is checked against its declaration on.
     Added: 2026-10-17
     """
 
@@ -133,6 +134,7 @@ class TestRecordUnits(MayaTkTestCase):
         ptk.SceneRecords.VISIBILITY.key: "frames with their fps, and colours",
         ptk.SceneRecords.AUDIO.key: "frames, with their fps",
         ptk.SceneRecords.EMISSIVE_GROUPS.key: "weights",
+        ptk.SceneRecords.MATERIALS.key: "factors and file names",
     }
     UNITS = (("cm", "deg"), ("m", "rad"))
 
@@ -160,6 +162,113 @@ class TestRecordUnits(MayaTkTestCase):
 
     def test_the_articulation_record_is_in_the_file_unit_whatever_the_units(self):
         self._assert_invariant(ptk.SceneRecords.ARTICULATION.key)
+
+    def test_every_record_a_producer_makes_is_one_its_declaration_reads(self):
+        """The shared reader gate (``MeshConvert._current_record``) refuses
+        what a record's declared shape refuses, so a producer drifting from
+        its shape ships a record nothing applies -- which a test pinning a copy
+        of the producer's own dict never sees. Every producer runs, through
+        the pipeline's own publish, on one small scene that gives each
+        something to say -- these fixtures' scene plus a shot, a fade, an
+        emissive group and an audio cue -- and each record, the handoff the
+        commit stamps too, is checked against its declaration
+        (``ptk.SceneRecords.problems``) -- and none writes a field its
+        shape does not declare (pruned as it is made, with a warning) or
+        calls a retired API. Mirror of blendertk's.
+        Added: 2026-10-20
+        """
+        import logging
+        import warnings
+
+        from mayatk.anim_utils.shots._shots import ShotStore
+        from mayatk.audio_utils._audio_utils import AudioUtils
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds.file(new=True, force=True)
+        cmds.currentUnit(linear="cm", angle="deg")
+        for fixture in self._fixtures().values():
+            fixture(self.UNITS[0])
+        # A horizon plane too: its block is the one a shadow record's shape
+        # trims most.
+        from mayatk.rig_utils.shadow_rig import ShadowRig
+
+        crate = cmds.polyCube(name="EvCrate", width=40, height=60, depth=30)[0]
+        cmds.move(400, 30, 0, crate)
+        horizon = ShadowRig.create(
+            [crate],
+            light_pos=self._here((4.6, 2.0, 0.4)),
+            texture_res=64,
+            rig_type="horizon",
+            horizon_size=32,
+            horizon_spans=2,
+        )
+        for path in (horizon.texture_path, horizon.horizon_path):
+            if path:
+                self.addCleanup(lambda p=path: os.path.exists(p) and os.remove(p))
+        cmds.playbackOptions(min=1, max=40)
+        cube = cmds.polyCube(name="EvCube")[0]
+        cmds.move(0, 50, 600, cube)
+        store = ShotStore()
+        ShotStore.set_active(store)
+        self.addCleanup(ShotStore.clear_active)
+        store.define_shot("Intro", 1, 20, objects=[cube])
+        RenderEffects.create(objects=[cube], mode="attribute")
+        cmds.setKeyframe(cube, attribute="opacity", time=8, value=0.0)
+        cmds.setKeyframe(cube, attribute="opacity", time=15, value=1.0)
+        EmissiveGroups.add_group("glow", [f"{cube}.f[0]"])
+        AudioUtils.write_key("tone", frame=5, value=1)
+        AudioUtils.write_key("tone", frame=9, value=0)
+
+        class _Pruned(logging.Handler):
+            """The shape-pruning warnings a publish logs."""
+
+            def __init__(self):
+                super().__init__(logging.WARNING)
+                self.messages = []
+
+            def emit(self, record):
+                message = record.getMessage()
+                if "left out what its shape does not declare" in message:
+                    self.messages.append(message)
+
+        pruned = _Pruned()
+        log = logging.getLogger(ptk.SceneRecords.__module__)
+        log.addHandler(pruned)
+        self.addCleanup(log.removeHandler, pruned)
+        with warnings.catch_warnings(record=True) as warned:
+            warnings.simplefilter("always")
+            snapshot = FbxUtils.publish()
+        log.removeHandler(pruned)
+        retired = sorted(
+            {
+                str(w.message)
+                for w in warned
+                if issubclass(w.category, DeprecationWarning)
+                and "will be removed in" in str(w.message)
+            }
+        )
+        self.assertEqual(
+            pruned.messages, [], "a producer wrote what its shape does not declare"
+        )
+        self.assertEqual(retired, [], "a producer called a retired API")
+        made = {key for key, record in snapshot.produced.items() if record is not None}
+        self.assertLessEqual(
+            {spec.key for spec in FbxUtils.PRODUCERS},
+            made,
+            "a producer made no record on a scene giving it something to say",
+        )
+        self.assertEqual(snapshot.failed, set(), "a producer raised")
+        problems = {
+            key: ptk.SceneRecords.problems(record.spec, record.payload)
+            for key, record in snapshot.produced.items()
+            if record is not None
+        }
+        problems[ptk.SceneRecords.HANDOFF.key] = ptk.SceneRecords.problems(
+            ptk.SceneRecords.HANDOFF, ptk.SceneRecords.HANDOFF.load(DataNodes)
+        )
+        self.assertEqual({key: found for key, found in problems.items() if found}, {})
 
     # ------------------------------------------------------------- harness
     def _assert_invariant(self, key):
@@ -204,11 +313,13 @@ class TestRecordUnits(MayaTkTestCase):
 
         out = copy.deepcopy(payload)
         if key == ptk.SceneRecords.LIGHTMAPS.key:
-            out["lights"] = ptk.MeshConvert.lights_in_metres(out.get("lights"))
+            # Version 2: one unit_scale for the probe and the lights alike.
+            scale = out.pop("unit_scale", 1.0)
+            out["lights"] = ptk.MeshConvert.lights_in_metres(out.get("lights"), scale)
             probe = out.get("probe") or {}
-            scale = probe.pop("unit_scale", 1.0)
             probe["position"] = [c * scale for c in probe.get("position") or []]
-            probe["box"] = [[c * scale for c in v] for v in probe.get("box") or []]
+            box = probe.get("box") or {}
+            probe["box"] = {k: [c * scale for c in box[k]] for k in box}
         elif key == ptk.SceneRecords.SHADOWS.key:
             scale = out.pop("unit_scale")
             for plane in out["planes"]:
@@ -2114,6 +2225,73 @@ class TestFinishDeliverable(QuickTestCase):
             (seen["search_dirs"], seen["walk_root"], seen["files"]),
             (["D:/maps"], "", ()),
         )
+
+
+
+class TestApplyTakesFromANodeNeedsItsAttr(MayaTkTestCase):
+    """``apply_takes_from_node(node=X)`` read the retired ``fbx_takes`` channel
+    when *attr* was left out; it now reads only an explicit ``attr=`` -- a
+    changed behavior on a public signature, so the node-alone call says why it
+    armed nothing rather than returning 0 silently (CODE_STANDARD §8).
+    Added: 2026-10-24"""
+
+    def test_a_node_alone_warns_and_arms_nothing(self):
+        import json
+
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        takes = json.dumps([{"name": "intro", "start": 1, "end": 12}])
+        DataNodes.write(ptk.Scope.DELIVERABLE, "fbx_takes", takes)
+        self.addCleanup(FbxUtils.reset_takes)
+        with self.assertLogs("mayatk.env_utils.fbx_utils", "WARNING") as logs:
+            armed = FbxUtils.apply_takes_from_node(node=DataNodes.EXPORT)
+        self.assertEqual(armed, 0)
+        self.assertTrue(any("attr=" in line for line in logs.output), logs.output)
+        self.assertEqual(
+            FbxUtils.apply_takes_from_node(node=DataNodes.EXPORT, attr="fbx_takes"),
+            1,
+            "an explicit attr still reads the list it names",
+        )
+
+
+class TestAHandOffLeavesNothingToUndo(MayaTkTestCase):
+    """A hand-off's records are bookkeeping, not an edit: its commit and the
+    restore after the write recorded their ``addAttr`` / ``setAttr`` on the
+    carrier, then ``DataNodes.discard_if_empty`` deleted that carrier outside
+    the queue -- and Ctrl+Z on the send replayed them onto the dead node and
+    crashed Maya (``TsetAttrCmd::undoIt``, measured 2026-10-24, mayapy 2025).
+    The Scene Exporter was spared only because its run is undo-disabled.
+    Added: 2026-10-24"""
+
+    def setUp(self):
+        super().setUp()
+        store = ptk.TempArtifacts("mtk_fbx_handoff_undo", policy="scoped")
+        self.addCleanup(store.cleanup)
+        self.path = os.path.join(store.dir_path(), "sent.fbx")
+        was = cmds.undoInfo(query=True, state=True)
+        cmds.undoInfo(state=True)
+        self.addCleanup(cmds.undoInfo, stateWithoutFlush=was)
+        mat = cmds.shadingNode("phong", asShader=True, name="LENS")
+        self.cube = cmds.polyCube(name="LENS_geo")[0]
+        sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="LENSSG")
+        cmds.connectAttr(f"{mat}.outColor", f"{sg}.surfaceShader", force=True)
+        cmds.sets(self.cube, edit=True, forceElement=sg)
+
+    def test_undoing_a_send_never_replays_onto_the_carrier_it_removed(self):
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        cmds.undoInfo(openChunk=True, chunkName="Probe Send")
+        try:
+            ctx = FbxUtils.export_context(mode=ptk.ExportContext.HANDOFF)
+            with FbxUtils.export_prepared(ctx, only=[ptk.SceneRecords.MATERIALS]):
+                FbxUtils.export(self.path, objects=[self.cube, DataNodes.EXPORT])
+        finally:
+            cmds.undoInfo(closeChunk=True)
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT), "fixture: carrier kept")
+        self.assertTrue(ptk.FbxMedia.record(self.path, "materials"), "fixture")
+        cmds.undo()  # crashed Maya before the fix
+        self.assertFalse(cmds.objExists(DataNodes.EXPORT))
+        self.assertTrue(cmds.objExists(self.cube))
 
 
 if __name__ == "__main__":

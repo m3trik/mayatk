@@ -94,6 +94,52 @@
        </widget>
       </item>
       <item>
+       <widget class="ComboBox" name="cmb_page">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>19</height>
+         </size>
+        </property>
+        <property name="toolTip">
+         <string>Bake — what a new bake covers and how it renders.
+
+Manage — the maps the scene already reads: which are out of date and why, re-baked or reverted from one list.</string>
+        </property>
+        <property name="frame">
+         <bool>false</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QStackedWidget" name="stk_pages">
+        <property name="currentIndex">
+         <number>0</number>
+        </property>
+        <widget class="QWidget" name="page_bake">
+         <layout class="QVBoxLayout" name="bake_layout">
+          <property name="spacing">
+           <number>1</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+      <item>
        <widget class="ComboBox" name="cmb_scope">
         <property name="minimumSize">
          <size>
@@ -112,8 +158,7 @@
 
 Selected (default) — the selected meshes.
 Visible — every visible mesh in the scene.
-Scene — every visible mesh in the scene (Arnold renders no hidden or templated object, so one is skipped and named).
-Changed — what changed since the last bake (moved, deformed, re-lit) and the objects near enough to be shaded by it, each re-baked the way it was baked; choosing it puts what in the footer.
+Scene — every mesh in the scene, every copy of an instance included; a hidden or templated one is skipped and named (Arnold renders neither).
 
 Objects in the Exclude set get no map of their own whatever the scope, but they stay in the render: they still cast shadows and bounce light onto everything that bakes.
 
@@ -247,68 +292,6 @@ A selected mesh brings everything under it; with nothing selected, the set is cl
           </property>
           <property name="text">
            <string>Set From Selection</string>
-          </property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="bake_set_layout">
-        <property name="spacing">
-         <number>1</number>
-        </property>
-        <item>
-         <widget class="QLabel" name="lbl_bake_set">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>16777215</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>Bake Set — the objects the last bake acted on, stored in the scene as a set (lightmapBaker_baked), so selecting it and baking again re-runs that bake.</string>
-          </property>
-          <property name="text">
-           <string>Bake Set:</string>
-          </property>
-          <property name="caption" stdset="0">
-           <bool>true</bool>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="select_bake_set">
-          <property name="sizePolicy">
-           <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
-            <horstretch>1</horstretch>
-            <verstretch>0</verstretch>
-           </sizepolicy>
-          </property>
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="maximumSize">
-           <size>
-            <width>16777215</width>
-            <height>19</height>
-           </size>
-          </property>
-          <property name="toolTip">
-           <string>Select the objects of the last saved bake (hidden ones included).
-
-The disk button is Save After Bake: while it is on, every bake replaces the scene's Bake Set with the objects it acted on — the Scope minus the Exclude set and what Arnold renders nothing of — finished or not. One setting for every scene. The tag button names the set with the naming convention's Set suffix (the Naming panel's, _SET by default).</string>
-          </property>
-          <property name="text">
-           <string>Select Bake Set</string>
           </property>
          </widget>
         </item>
@@ -561,7 +544,7 @@ The button beside the field is Adaptive Sampling. It greys out on a CPU bake, wh
            <property name="toolTip">
             <string>Where the baked lightmaps are written (optional).
 
-Empty — the project's sourceimages folder.
+Empty — sourceimages/lightmaps in the project.
 Relative (e.g. 'lightmaps' or 'bake/lm') — resolved under sourceimages, so the path stays portable across projects.
 Absolute (e.g. 'D:/bakes') — used as-is.
 
@@ -597,106 +580,142 @@ The folder is created if it doesn't exist. Browsing to a folder inside sourceima
         </layout>
        </widget>
       </item>
-      <item>
-       <widget class="QGroupBox" name="grp_process">
-        <property name="title">
-         <string/>
-        </property>
-        <layout class="QVBoxLayout" name="process_layout">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="leftMargin">
-          <number>2</number>
-         </property>
-         <property name="topMargin">
-          <number>2</number>
-         </property>
-         <property name="rightMargin">
-          <number>2</number>
-         </property>
-         <property name="bottomMargin">
-          <number>2</number>
-         </property>
          <item>
-          <widget class="ComboBox" name="cmb000">
-           <property name="minimumSize">
-            <size>
-             <width>180</width>
-             <height>19</height>
-            </size>
+          <widget class="QGroupBox" name="grp_process">
+           <property name="title">
+            <string/>
            </property>
-           <property name="maximumSize">
-            <size>
-             <width>999</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Preset — this panel's bake settings under a name: Packing, Reflection Probe, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Scene Lighting, Include Environment, Include Hidden Lights, Denoise and Beside Material Textures.
+           <layout class="QVBoxLayout" name="process_layout">
+            <property name="spacing">
+             <number>1</number>
+            </property>
+            <property name="leftMargin">
+             <number>2</number>
+            </property>
+            <property name="topMargin">
+             <number>2</number>
+            </property>
+            <property name="rightMargin">
+             <number>2</number>
+            </property>
+            <property name="bottomMargin">
+             <number>2</number>
+            </property>
+            <item>
+             <widget class="ComboBox" name="cmb000">
+              <property name="minimumSize">
+               <size>
+                <width>180</width>
+                <height>19</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>999</width>
+                <height>19</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Preset — this panel's bake settings under a name: Packing, Reflection Probe, Resolution, Samples, GI Samples, Bounces, Adaptive Sampling, Include Scene Lighting, Include Environment, Include Hidden Lights, Denoise and Beside Material Textures.
 
-   The built-ins (italic, read-only) — preview, mobile, desktop, hero — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
+      The built-ins (italic, read-only) — preview, mobile, desktop, hero — set the quality dials only. Save (the disk icon) stores the current settings under a name you type (Enter to commit); the ⋯ menu renames, deletes or opens the preset folder. A * after the name means a setting has changed since the preset loaded.
 
-   Not saved: Scope, Exclude, Processor, Output Directory and Name — they belong to a scene or a machine. A headless bake reads the same presets: LightmapBaker.from_preset(name).</string>
-           </property>
-           <property name="frame">
-            <bool>false</bool>
-           </property>
+      Not saved: Scope, the Exclude and Isolate sets, Processor, Output Directory and Name — they belong to a scene or a machine. A headless bake reads the same presets: LightmapBaker.from_preset(name).</string>
+              </property>
+              <property name="frame">
+               <bool>false</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="btn_reset_defaults">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>19</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>16777215</width>
+                <height>19</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Restore every setting on this panel to its default.</string>
+              </property>
+              <property name="text">
+               <string>Reset to Defaults</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="b000">
+              <property name="sizePolicy">
+               <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                <horstretch>0</horstretch>
+                <verstretch>0</verstretch>
+               </sizepolicy>
+              </property>
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>30</height>
+               </size>
+              </property>
+              <property name="maximumSize">
+               <size>
+                <width>16777215</width>
+                <height>30</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Bake a lightmap for every object in Scope (minus the Exclude set) and wire it for the engine: pack lightmap UVs, Arnold-bake white-card lighting into them, dilate the seams, denoise, then record it on the mesh. The material and its texture UVs are untouched — the engine composites albedo × lightmap.
+
+      Re-baking replaces the previous maps. On the Manage page, right-click a map to Re-Bake or Revert it.</string>
+              </property>
+              <property name="text">
+               <string>Bake Lightmaps</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
           </widget>
          </item>
-         <item>
-          <widget class="QPushButton" name="btn_reset_defaults">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>19</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Restore every setting on this panel to its default.</string>
-           </property>
-           <property name="text">
-            <string>Reset to Defaults</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="b000">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>30</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>30</height>
-            </size>
-           </property>
-           <property name="toolTip">
-            <string>Bake a lightmap for every object in Scope (minus the Exclude set) and wire it for the engine: pack lightmap UVs, Arnold-bake white-card lighting into them, dilate the seams, denoise, then record it on the mesh. The material and its texture UVs are untouched — the engine composites albedo × lightmap.
-
-   Re-baking replaces the previous maps; Revert to Source (header menu) removes the wiring.</string>
-           </property>
-           <property name="text">
-            <string>Bake Lightmaps</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="page_manage">
+         <layout class="QVBoxLayout" name="manage_layout">
+          <property name="spacing">
+           <number>1</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="TableWidget" name="tbl_maps">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>1</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="toolTip">
+             <string>Every lightmap the scene reads: how many objects read it and whether it is up to date. Hover a row for its folder, who wrote it and why it re-bakes; select rows to select their objects. Right-click a row to open its map's folder. The full Bake Report is in the header menu.</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
        </widget>
       </item>
       <item>
@@ -756,6 +775,11 @@ The folder is created if it doesn't exist. Browsing to a folder inside sourceima
    <class>LineEdit</class>
    <extends>QLineEdit</extends>
    <header>uitk.widgets.lineEdit.LineEdit.h</header>
+  </customwidget>
+  <customwidget>
+   <class>TableWidget</class>
+   <extends>QTableWidget</extends>
+   <header>uitk.widgets.tableWidget.TableWidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

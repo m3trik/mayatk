@@ -38,7 +38,7 @@ class TestUnityBridgeUnit(unittest.TestCase):
         """This FBX lands in Assets/ as the deliverable, not as an intermediate.
 
         unitytk's ``LightmapMetadataController`` binds Unity's native lightmap slots
-        by reading ``lightmap_metadata`` off ``data_export``. A selection export does
+        by reading ``lightmaps`` off ``data_export``. A selection export does
         not include that node, so without the opt-in the import is silently unlit --
         on the platform the bake targets first.
         """
@@ -268,7 +268,7 @@ class TestUnityBridgeSend(MayaTkTestCase):
         )
 
     def test_a_send_ships_the_audio_its_scene_plays_now(self):
-        """The ``audio_manifest`` describes the tracks as they stand at the
+        """The ``audio`` record describes the tracks as they stand at the
         send -- a track added since the last one included -- and each track's
         file rides inside the FBX under its event's name, which Unity extracts
         beside the model: no clip is placed by hand. Measured before: no

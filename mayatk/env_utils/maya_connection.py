@@ -588,6 +588,17 @@ class MayaConnection:
         atexit.register(_cleanup)
         self._atexit_registered = True
 
+    #: Qt platforms that draw nowhere -- a GUI Maya never runs on one.
+    _HEADLESS_QPA = frozenset({"offscreen", "minimal"})
+
+    @classmethod
+    def _is_headless_qpa(cls, value: Optional[str]) -> bool:
+        """Whether Qt would pick a headless platform from *value*, a
+        ``QT_QPA_PLATFORM`` (``;``-separated fallbacks, each ``name[:args]``):
+        the first entry, the one Qt tries first."""
+        first = (value or "").split(";")[0].split(":")[0].strip().lower()
+        return first in cls._HEADLESS_QPA
+
     def _launch_maya_gui(
         self,
         port: int,
@@ -647,14 +658,28 @@ class MayaConnection:
 
         cwd = TempArtifacts("maya_cwd").dir_path()
 
+        # A GUI Maya never runs offscreen, and a headless QPA a test harness
+        # set (affected_tests.py) reaches the licensing helpers Maya spawns,
+        # whose own platforms/ holds only qwindows: each pops "no Qt platform
+        # plugin could be initialized". Only a headless one goes, on every
+        # platform (a GUI is never headless): a display platform the user
+        # chose (xcb, wayland) is what the GUI needs.
+        env = AppLauncher.process_environ()
+        if self._is_headless_qpa(env.get("QT_QPA_PLATFORM")):
+            env.pop("QT_QPA_PLATFORM", None)
+
         if app_path:
             print(
                 f"[MayaConnection] Launching specific Maya: {app_path} with args: {args}"
             )
-            process = AppLauncher.launch(app_path, args=args, cwd=cwd, detached=True)
+            process = AppLauncher.launch(
+                app_path, args=args, cwd=cwd, detached=True, env=env
+            )
         else:
             print(f"[MayaConnection] Launching Maya with args: {args}")
-            process = AppLauncher.launch("maya", args=args, cwd=cwd, detached=True)
+            process = AppLauncher.launch(
+                "maya", args=args, cwd=cwd, detached=True, env=env
+            )
 
             if not process:
                 # 'maya' is on no PATH (a Linux RPM installs to
@@ -664,7 +689,7 @@ class MayaConnection:
                 found = AppLauncher.resolve_app_path(**self.MAYA_DISCOVERY)
                 if found:
                     process = AppLauncher.launch(
-                        found, args=args, cwd=cwd, detached=True
+                        found, args=args, cwd=cwd, detached=True, env=env
                     )
 
         if not process:
