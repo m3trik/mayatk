@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-24 -- Relicensed from MIT to MIT with the Commons Clause (`LICENSE`; `pyproject.toml` license + classifier; README).** Free to use, modify and share, including in paid production work; selling mayatk, or a product or service whose value derives mainly from it, is not permitted. The Blender-side scripts under `env_utils/blender_bridge/templates/` stay plain MIT: they run inside Blender, whose add-on code must be GPL-compatible. Applies from the next release on; versions already published keep their license.
+  - Test(s): none -- license files and packaging metadata only.
 - **2026-10-24 -- A textured phongE names its maps: the materials record binds them in the GLB and Unity (`mat_utils/shader_attribute_map.py` `SHADER_TYPES`, `SHADER_ATTRS`).** Review (S1): `MaterialRecords` states a phongE but the attribute map declared none, so `MatManifest` named no map and `MeshConvert._write_material` cleared every slot (flat colour). It reads as phong does, with phongE's own `roughness`; a phongE is now also retypable.
   - Test(s): `test_mat_manifest.py` +1 `test_colour_and_normal_maps_reach_the_manifest_and_the_record` (red: manifest `{}`).
 - **2026-10-24 -- A material feeding an assigned layered network is in use (`mat_utils/_assignment.py` new `_downstream_shading_engines`, `_is_mat_assigned`, `_is_connected`).** Both read only the material's own shading engines: a lambert in an assigned layeredShader / aiMixShader read unassigned and `is_connected(delete=True)` deleted it. Both now read every shading engine downstream.
