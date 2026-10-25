@@ -1,4 +1,4 @@
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT + Commons Clause](https://img.shields.io/badge/License-MIT%20%2B%20Commons%20Clause-blue.svg)](https://github.com/m3trik/mayatk/blob/main/LICENSE)
 [![PyPI](https://img.shields.io/pypi/v/mayatk.svg)](https://pypi.org/project/mayatk/)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Maya](https://img.shields.io/badge/Maya-2025+-orange.svg)](https://www.autodesk.com/products/maya/)
@@ -198,4 +198,4 @@ Format specs (co-located with the code that consumes them):
 
 ## License
 
-MIT — see [LICENSE](../LICENSE).
+MIT with the [Commons Clause](https://commonsclause.com/) — see [LICENSE](https://github.com/m3trik/mayatk/blob/main/LICENSE). Free to use, modify and share, including in paid production work; what it forbids is selling mayatk, or a product or service whose value comes mainly from it. The Blender-side scripts under `env_utils/blender_bridge/templates/` are plain MIT, since code that runs inside Blender must be GPL-compatible.

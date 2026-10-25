@@ -8,11 +8,11 @@ dynamic = ["version", "readme"]
 description = "Python toolkit for Autodesk Maya: modeling, UV, materials, animation, rigging, lighting and scene-export utilities."
 keywords = ["m3trik", "maya", "autodesk-maya", "maya-python", "rigging", "animation-tools", "technical-art", "dcc"]
 authors = [{name = "Ryan Simpson", email = "m3trik@outlook.com"}]
-license = {text = "MIT"}
+license = {text = "MIT with Commons Clause"}
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Operating System :: Microsoft :: Windows",
     "Operating System :: POSIX :: Linux",
     "Intended Audience :: Developers",
