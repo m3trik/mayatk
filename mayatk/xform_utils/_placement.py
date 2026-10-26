@@ -453,9 +453,9 @@ class _PlacementInternal:
                 f"{len(objs)}. Query them individually, or ask in world space."
             )
         else:
-            # Delegated so the two public bounding-box entry points cannot
-            # disagree about what object space means; see CoreUtils for why it
-            # is constructed from shape attributes rather than queried.
+            # Delegated to the one object-space rule;
+            # _CoreUtilsInternal._bounding_box says why it is constructed from
+            # shape attributes rather than queried.
             box = CoreUtils._bounding_box(objs[0], world=False)
             bbox = [*box.min, *box.max]
 

@@ -701,7 +701,7 @@ class TestNodeHandles(MayaTkTestCase):
 
 
 class TestObjectSpaceBoundingBox(MayaTkTestCase):
-    """``get_bounding_box(world=False)`` must be transform-INVARIANT.
+    """``XformUtils.get_bounding_box(..., world_space=False)`` must be transform-INVARIANT.
 
     Every Maya bounding-box query answers in world axis-aligned terms --
     ``polyEvaluate -boundingBox`` and ``xform -q -bb`` alike, with or without

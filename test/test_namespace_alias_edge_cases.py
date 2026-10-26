@@ -377,11 +377,19 @@ class TestPackageRoot(unittest.TestCase):
         pythontk's root loaded its image stack, and the root ``__init__``
         imported ``ExecutionMonitor`` outside the Maya GUI that uses it.
         Fixed: 2026-10-25."""
+        from unittest import mock
+
         from pythontk.core_utils.module_resolver import import_footprint
 
-        self.assertEqual(
-            import_footprint("mayatk"), {"modules": [], "third_party": []}
-        )
+        # import_footprint spawns sys.executable, which is maya.exe inside a GUI
+        # Maya (--gui, the Script Editor runner) and dies there; mayapy ships
+        # beside it.
+        exe = Path(sys.executable)
+        if exe.stem.lower() == "maya":
+            exe = exe.with_name("mayapy.exe" if os.name == "nt" else "mayapy")
+        with mock.patch.object(sys, "executable", str(exe)):
+            footprint = import_footprint("mayatk")
+        self.assertEqual(footprint, {"modules": [], "third_party": []})
 
     def test_each_flat_name_has_one_owner(self):
         """Six flat names had two owners, reached by module order alone:
