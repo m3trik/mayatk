@@ -20,6 +20,7 @@ import pythontk as ptk
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdReadRefused, UsdUtils
 from mayatk.env_utils.reference_manager._reference_manager import (
@@ -1481,8 +1482,8 @@ class ReferenceManagerController(ReferenceManager, ptk.LoggingMixin):
             _scratch_twins().discard_except(file_path)
             if file_path != workspace_source:
                 # The scratch stands in for its source: the scene's project is the
-                # source's, not the temp folder (EnvUtils.scene_project_root).
-                EnvUtils.set_scene_source(file_path, workspace_source)
+                # source's, not the temp folder (DataNodes.scene_project_root).
+                DataNodes.set_scene_source(file_path, workspace_source)
         except Exception as e:
             self.logger.error(f"Failed to open scene: {e}")
             self.sb.message_box(

@@ -2561,16 +2561,16 @@ float $riseFade = clamp(0.0, 1.0, 1.0 - max(0.0, $Cy - $Gy) / max(0.001, $fadeH)
     @staticmethod
     def default_texture_dir() -> str:
         """Where a rig's maps go when no path names one: the open SCENE's
-        project texture folder (``EnvUtils.scene_source_images_dir``) -- the
+        project texture folder (``DataNodes.scene_source_images_dir``) -- the
         project the scene is saved in, not merely the active one, which a
         scene opened from elsewhere does not share. Mirror of blendertk's.
 
         Raises:
             ValueError: The scene has no project to write into.
         """
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
-        folder = EnvUtils.scene_source_images_dir()
+        folder = DataNodes.scene_source_images_dir()
         if not folder:
             raise ValueError(
                 "ShadowRig: the scene has no project to write its maps into; "

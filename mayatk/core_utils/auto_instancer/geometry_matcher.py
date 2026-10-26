@@ -38,7 +38,7 @@ class ShellInfo:
             self.num_verts = 0
             self.num_faces = 0
 
-        self.bbox = CoreUtils.get_bounding_box(node, world=True)
+        self.bbox = XformUtils.get_bounding_box(node, "box")
         self.min_pt = self.bbox.min
         self.max_pt = self.bbox.max
         self.centroid = self.bbox.center

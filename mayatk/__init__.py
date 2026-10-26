@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.28.1"
+__version__ = "0.29.0"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -260,11 +260,14 @@ bootstrap_package(
 try:
     import sys
     import os
-    from pythontk import ExecutionMonitor
 
     # Only configure if running in Maya GUI (Linux: maya.bin, behind bin/maya)
     executable = sys.executable
     if os.path.basename(executable).lower() in ("maya.exe", "maya", "maya.bin"):
+        # Imported here, not above the check: it is used only in the GUI, and
+        # mayapy and plain-Python imports of mayatk need not load it.
+        from pythontk import ExecutionMonitor
+
         # Try using MAYA_LOCATION first as it's most reliable
         maya_location = os.environ.get("MAYA_LOCATION")
         mayapy = None

@@ -929,10 +929,10 @@ class TestProjectBakeStore(unittest.TestCase):
     def test_no_project_refuses_and_writes_nothing(self):
         from unittest import mock
 
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
         stub = _StubBake()
-        with mock.patch.object(EnvUtils, "scene_project_root", return_value=None):
+        with mock.patch.object(DataNodes, "scene_project_root", return_value=None):
             with self.assertRaises(RuntimeError):
                 stub.bake_scene(self.src)
         self.assertEqual(stub.bakes, [], "no bake ran")

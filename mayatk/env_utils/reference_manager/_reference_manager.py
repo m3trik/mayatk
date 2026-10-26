@@ -22,6 +22,7 @@ from mayatk.core_utils.plugins._plugins import Plugins
 
 # From this package:
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.fbx_utils import FbxUtils
 from mayatk.env_utils.usd import UsdUtils
 from mayatk.env_utils.workspace_manager import WorkspaceManager
@@ -709,7 +710,7 @@ class ReferenceManager(
             root = cmds.workspace(q=True, rd=True) or ""
         except Exception:  # noqa: BLE001 - no Maya (mock tests)
             root = ""
-        project = EnvUtils.scene_project_root() or ""
+        project = DataNodes.scene_project_root() or ""
         if (
             root
             and project
@@ -754,7 +755,7 @@ class ReferenceManager(
         moved = []
         for ref, path, source in baked_refs:
             target = None
-            if EnvUtils._in_temp(path):
+            if ptk.TempArtifacts.contains(path):
                 try:
                     home = engine.rehome_bake(path)
                 except (OSError, RuntimeError, ValueError) as e:

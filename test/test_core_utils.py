@@ -636,7 +636,7 @@ class TestBoundingBox(MayaTkTestCase):
 
     def test_bounding_box_of_a_cube_matches_its_corners(self):
         cube = cmds.polyCube(w=2, h=2, d=2, n="bbox_cube")[0]
-        box = CoreUtils.get_bounding_box(cube)
+        box = mtk.XformUtils.get_bounding_box(cube, "box")
         self.assertAlmostEqual(box.diagonal, (2**2 * 3) ** 0.5, places=5)
         self.assertTrue(all(abs(abs(c.x) - 1) < 1e-5 for c in box.corners))
 
@@ -721,20 +721,20 @@ class TestObjectSpaceBoundingBox(MayaTkTestCase):
         cmds.xform(moved, rotation=(0, 45, 0), worldSpace=True)
         cmds.xform(moved, scale=(3, 1, 2))
 
-        a = CoreUtils.get_bounding_box(base, world=False)
-        b = CoreUtils.get_bounding_box(moved, world=False)
+        a = mtk.XformUtils.get_bounding_box(base, "box", world_space=False)
+        b = mtk.XformUtils.get_bounding_box(moved, "box", world_space=False)
         for axis in range(3):
             self.assertAlmostEqual(a.min[axis], b.min[axis], places=5)
             self.assertAlmostEqual(a.max[axis], b.max[axis], places=5)
         # ...and the world box of the moved copy genuinely IS different, so
         # this is not just "both queries return the same wrong thing".
-        w = CoreUtils.get_bounding_box(moved, world=True)
+        w = mtk.XformUtils.get_bounding_box(moved, "box")
         self.assertGreater(abs(w.center.x - a.center.x), 1.0)
 
     def test_world_space_is_unchanged(self):
         cube = self._cube("osWorld")
         cmds.xform(cube, translation=(7, 0, 0), worldSpace=True)
-        box = CoreUtils.get_bounding_box(cube, world=True)
+        box = mtk.XformUtils.get_bounding_box(cube, "box")
         expected = cmds.exactWorldBoundingBox(cube)
         for axis in range(3):
             self.assertAlmostEqual(box.min[axis], expected[axis], places=5)
@@ -748,8 +748,8 @@ class TestObjectSpaceBoundingBox(MayaTkTestCase):
         base = self._cube("osComp")
         moved = cmds.duplicate(base, name="osCompMoved")[0]
         cmds.xform(moved, translation=(10, 5, -3), rotation=(0, 45, 0), worldSpace=True)
-        a = CoreUtils.get_bounding_box(f"{base}.f[0]", world=False)
-        b = CoreUtils.get_bounding_box(f"{moved}.f[0]", world=False)
+        a = mtk.XformUtils.get_bounding_box(f"{base}.f[0]", "box", world_space=False)
+        b = mtk.XformUtils.get_bounding_box(f"{moved}.f[0]", "box", world_space=False)
         for axis in range(3):
             self.assertAlmostEqual(a.min[axis], b.min[axis], places=5)
 
@@ -764,8 +764,8 @@ class TestObjectSpaceBoundingBox(MayaTkTestCase):
             moved, translation=(50, 20, -7), rotation=(0, 33, 0), worldSpace=True
         )
 
-        g1 = CoreUtils.get_bounding_box(grp, world=False)
-        g2 = CoreUtils.get_bounding_box(moved, world=False)
+        g1 = mtk.XformUtils.get_bounding_box(grp, "box", world_space=False)
+        g2 = mtk.XformUtils.get_bounding_box(moved, "box", world_space=False)
         for axis in range(3):
             self.assertAlmostEqual(g1.min[axis], g2.min[axis], places=4)
             self.assertAlmostEqual(g1.max[axis], g2.max[axis], places=4)
@@ -782,30 +782,48 @@ class TestObjectSpaceBoundingBox(MayaTkTestCase):
             node = maker(name)
             moved = cmds.duplicate(node, name=name + "Moved")[0]
             cmds.xform(moved, translation=(9, 9, 9), worldSpace=True)
-            a = CoreUtils.get_bounding_box(node, world=False)
-            b = CoreUtils.get_bounding_box(moved, world=False)
+            a = mtk.XformUtils.get_bounding_box(node, "box", world_space=False)
+            b = mtk.XformUtils.get_bounding_box(moved, "box", world_space=False)
             for axis in range(3):
                 self.assertAlmostEqual(a.min[axis], b.min[axis], places=5, msg=name)
 
     def test_empty_group_falls_back_to_the_world_box(self):
         """No shapes means no object-space extent to report."""
         grp = cmds.group(empty=True, name="osEmpty")
-        box = CoreUtils.get_bounding_box(grp, world=False)
+        box = mtk.XformUtils.get_bounding_box(grp, "box", world_space=False)
         self.assertIsNotNone(box)
 
 
 class TestXformBoundingBoxDelegation(MayaTkTestCase):
-    """``XformUtils.get_bounding_box`` shares one object-space definition."""
+    """``XformUtils.get_bounding_box`` is the one bounding-box query, with one
+    object-space definition."""
 
-    def test_object_space_matches_core_utils(self):
+    def test_the_value_keys_match_the_box(self):
         cube = cmds.polyCube(name="xfBase", width=2, height=4, depth=6)[0]
         cmds.xform(cube, translation=(4, 4, 4), rotation=(0, 30, 0), worldSpace=True)
         corners = "xmin|ymin|zmin|xmax|ymax|zmax"
         got = mtk.XformUtils.get_bounding_box(cube, corners, world_space=False)
-        want = CoreUtils.get_bounding_box(cube, world=False)
+        want = mtk.XformUtils.get_bounding_box(cube, "box", world_space=False)
         for axis in range(3):
             self.assertAlmostEqual(got[axis], want.min[axis], places=5)
             self.assertAlmostEqual(got[axis + 3], want.max[axis], places=5)
+
+    def test_the_retired_core_utils_query_warns_and_forwards(self):
+        """``CoreUtils.get_bounding_box`` was a second query beside XformUtils',
+        with another signature, and ``mtk.get_bounding_box`` reached XformUtils'
+        by module order alone. It forwards, with a warning, until 0.30.0.
+        Consolidated: 2026-10-25."""
+        cube = cmds.polyCube(name="xfRetired", width=2, height=4, depth=6)[0]
+        cmds.xform(cube, translation=(1, 2, 3), worldSpace=True)
+        for world in (True, False):
+            with self.subTest(world=world):
+                with self.assertWarns(DeprecationWarning):
+                    old = CoreUtils.get_bounding_box(cube, world=world)
+                new = mtk.XformUtils.get_bounding_box(cube, "box", world_space=world)
+                self.assertEqual(
+                    (tuple(old.min), tuple(old.max)), (tuple(new.min), tuple(new.max))
+                )
+        self.assertIs(mtk.get_bounding_box, mtk.XformUtils.get_bounding_box)
 
     def test_multiple_objects_in_object_space_is_refused(self):
         """Several nodes share no frame; the old query answered with a

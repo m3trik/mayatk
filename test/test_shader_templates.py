@@ -32,7 +32,7 @@ class TestPanelTextureFolder(unittest.TestCase):
     CWD-relative ``<project name>/sourceimages``. Added: 2026-10-13"""
 
     def test_browse_starts_in_the_scene_projects_texture_folder(self):
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
         from mayatk.mat_utils.shader_templates.shader_templates_slots import (
             ShaderTemplatesSlots,
         )
@@ -41,7 +41,7 @@ class TestPanelTextureFolder(unittest.TestCase):
         self.assertTrue(os.path.isabs(folder), folder)
         self.assertEqual(
             os.path.normcase(folder),
-            os.path.normcase(EnvUtils.scene_source_images_dir()),
+            os.path.normcase(DataNodes.scene_source_images_dir()),
         )
 
 

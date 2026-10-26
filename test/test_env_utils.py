@@ -18,6 +18,7 @@ import sys
 import unittest
 import unittest.mock
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
@@ -926,9 +927,9 @@ class TestSceneWorkspace(MayaTkTestCase):
         active = os.path.normcase(os.path.normpath(cmds.workspace(q=True, rd=True)))
         self.assertNotEqual(active, os.path.normcase(root))
 
-        ws = EnvUtils.scene_workspace()
+        ws = DataNodes.scene_workspace()
         self.assertEqual(os.path.normcase(ws.root), os.path.normcase(root))
-        folder = EnvUtils.scene_source_images_dir("baked", create=True)
+        folder = DataNodes.scene_source_images_dir("baked", create=True)
         self.assertEqual(
             os.path.normcase(folder),
             os.path.normcase(os.path.join(root, "sourceimages", "baked")),
