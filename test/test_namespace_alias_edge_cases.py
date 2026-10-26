@@ -168,31 +168,8 @@ class TestNamespaceAliasEdgeCases(unittest.TestCase):
             except Exception as e:
                 self.fail(f"Accessing Diagnostics class raised: {e}")
 
-    # -------------------------------------------------------------------------
-    # Error Handling Tests
-    # -------------------------------------------------------------------------
-
-    def test_nonexistent_module_in_alias(self):
-        """Test error handling for namespace alias to nonexistent module."""
-        # This would require modifying DEFAULT_INCLUDE temporarily
-        # which could affect other tests, so we skip actual modification
-        # but document the expected behavior:
-
-        # Expected: Should raise ImportError or ModuleNotFoundError
-        # The module_resolver should fail gracefully with clear message
-        pass
-
-    def test_empty_package_wildcard(self):
-        """Test wildcard on empty package (no classes) doesn't break."""
-        # Expected: Should create alias with no base classes (or just Any)
-        # This is a theoretical edge case
-        pass
-
-    def test_nonexistent_class_in_explicit_list(self):
-        """Test error handling for non-existent class in explicit list."""
-        # Expected: Should skip missing class or raise clear error
-        # The module_resolver should handle this gracefully
-        pass
+    # Error handling (a missing, failing or empty alias module) is pinned in
+    # pythontk's ``test_module_resolver.LazyNamespaceAliasTests``.
 
     # -------------------------------------------------------------------------
     # Integration Tests
@@ -391,6 +368,40 @@ class TestNamespaceAliasPerformance(unittest.TestCase):
         self.assertIs(diag1, diag2)
 
 
+class TestPackageRoot(unittest.TestCase):
+    """What the package root loads, and the flat surface it publishes."""
+
+    def test_importing_mayatk_loads_only_declarations(self):
+        """``import mayatk`` loaded 143 modules: the ``Diagnostics`` and ``Mash``
+        aliases were fused at import (their packages imported whole),
+        pythontk's root loaded its image stack, and the root ``__init__``
+        imported ``ExecutionMonitor`` outside the Maya GUI that uses it.
+        Fixed: 2026-10-25."""
+        from unittest import mock
+
+        from pythontk.core_utils.module_resolver import import_footprint
+
+        # import_footprint spawns sys.executable, which is maya.exe inside a GUI
+        # Maya (--gui, the Script Editor runner) and dies there; mayapy ships
+        # beside it.
+        exe = Path(sys.executable)
+        if exe.stem.lower() == "maya":
+            exe = exe.with_name("mayapy.exe" if os.name == "nt" else "mayapy")
+        with mock.patch.object(sys, "executable", str(exe)):
+            footprint = import_footprint("mayatk")
+        self.assertEqual(footprint, {"modules": [], "third_party": []})
+
+    def test_each_flat_name_has_one_owner(self):
+        """Six flat names had two owners, reached by module order alone:
+        ``mtk.get_bounding_box`` was XformUtils' while CoreUtils' (another
+        signature) was the node helper, and ``mtk.set_scene_source`` was the
+        record-only DataNodes one, skipping the save hook EnvUtils' armed.
+        Consolidated: 2026-10-25."""
+        import mayatk
+
+        self.assertEqual(mayatk._RESOLVER.flat_collisions, {})
+
+
 def run_tests(verbose=True):
     """Run all edge case tests."""
     loader = unittest.TestLoader()
@@ -400,6 +411,7 @@ def run_tests(verbose=True):
     suite.addTests(loader.loadTestsFromTestCase(TestNamespaceAliasEdgeCases))
     suite.addTests(loader.loadTestsFromTestCase(TestNamespaceAliasConfiguration))
     suite.addTests(loader.loadTestsFromTestCase(TestNamespaceAliasPerformance))
+    suite.addTests(loader.loadTestsFromTestCase(TestPackageRoot))
 
     runner = unittest.TextTestRunner(verbosity=2 if verbose else 1)
     result = runner.run(suite)

@@ -1371,7 +1371,7 @@ class TestReferenceManager(unittest.TestCase):
         with (
             patch.object(ref_engine.cmds, "workspace", create=True, return_value=root),
             patch.object(
-                ref_engine.EnvUtils, "scene_project_root", return_value=nested
+                ref_engine.DataNodes, "scene_project_root", return_value=nested
             ),
         ):
             self.assertEqual(self.controller._reference_spelling(bake), bake)
@@ -1383,7 +1383,7 @@ class TestReferenceManager(unittest.TestCase):
         bake = os.path.join(root, "cache", "bridge", "mtk_bake_cache_x_0123abcd.ma")
         with (
             patch.object(ref_engine.cmds, "workspace", create=True, return_value=root),
-            patch.object(ref_engine.EnvUtils, "scene_project_root", return_value=root),
+            patch.object(ref_engine.DataNodes, "scene_project_root", return_value=root),
         ):
             self.assertEqual(
                 self.controller._reference_spelling(bake),
@@ -2159,7 +2159,7 @@ class TestForeignScratch(unittest.TestCase):
 
 class TestForeignOpenStandsInForItsSource(unittest.TestCase):
     """A foreign row opens through a scratch twin in temp that stands in for its
-    SOURCE (``EnvUtils.set_scene_source``), so the scene's project -- the
+    SOURCE (``DataNodes.set_scene_source``), so the scene's project -- the
     boundary a lightmap bake, Keep Names In Sync and the Texture Path Editor
     keep -- is the source's, not the temp folder (BACKLOG 2026-10-04, decided
     2026-10-05). Mirror of blendertk's open-as-new check."""
@@ -2176,7 +2176,7 @@ class TestForeignOpenStandsInForItsSource(unittest.TestCase):
         scratch = "/temp/mtk_opened_0123456789/room_blend.ma"
         twins = MagicMock()
         twins.create.return_value = scratch
-        self.addCleanup(ref_ctrl.EnvUtils.set_scene_source, scratch, None)
+        self.addCleanup(ref_ctrl.DataNodes.set_scene_source, scratch, None)
         with (
             patch.object(ref_ctrl, "_scratch_twins", return_value=twins),
             patch.object(ref_engine.os.path, "exists", return_value=True),
@@ -2185,7 +2185,7 @@ class TestForeignOpenStandsInForItsSource(unittest.TestCase):
             self.assertTrue(controller.open_scene(source, set_workspace=False))
         mock_file.assert_any_call(scratch, open=True, force=True)
         self.assertEqual(
-            ref_ctrl.EnvUtils.scene_source(scratch), os.path.abspath(source)
+            ref_ctrl.DataNodes.scene_source(scratch), os.path.abspath(source)
         )
 
     def _controller(self):

@@ -1361,7 +1361,7 @@ Consumer-facing segment discovery for sequencer + manifest.
 
 - **[`class BoundingBox`](mayatk/mayatk/core_utils/_core_utils.py#L20)** — Plain-data bounding box with ``MVector`` extents.
   - `BoundingBox.corners(self)` *(property)* — The box's 8 corner ``MVector``s (every min/max combination per axis).
-- **[`class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L187)**
+- **[`class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`](mayatk/mayatk/core_utils/_core_utils.py#L280)**
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.undo_disabled()` *(static)* — Run a block without recording anything into the undo queue.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
@@ -1385,7 +1385,7 @@ Consumer-facing segment discovery for sequencer + manifest.
   - `CoreUtils.as_strings(nodes) -> List[str]` *(static)* — Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.
   - `CoreUtils.short_name(node) -> str` *(static)* — Leaf name with namespace stripped: ``"|grp|ns:obj"`` -> ``"obj"``.
   - `CoreUtils.leaf_name(node) -> str` *(static)* — Leaf name with namespace preserved: ``"|grp|ns:obj"`` -> ``"ns:obj"``.
-  - `CoreUtils.get_bounding_box(node, world: bool = True) -> BoundingBox` *(static)* — Return a :class:`BoundingBox` for *node*.
+  - `CoreUtils.get_bounding_box(node, world: bool = True) -> BoundingBox` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to ``XformUtils.get_bounding_box(node, "box", world_space=world)``,
 
 <a id="core_utils--auto_instancer--_auto_instancer"></a>
 ### `core_utils/auto_instancer/_auto_instancer.py`
@@ -2116,12 +2116,12 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.current_workspace(path: Optional[str] = None) -> Optional[ptk.Workspace]` *(static)* — The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.
   - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project (``workspace -openWorkspace``).
   - `EnvUtils.workspace_root(path: Optional[str] = None) -> str` *(static)* — Absolute root of the current workspace, or ''.
-  - `EnvUtils.set_scene_source(cls, scene: str, source: Optional[str] = None) -> Optional[str]` *(class)* — Record that the scene file *scene* stands in for the scene *source*;
-  - `EnvUtils.twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — Where a save of the stand-in *scene* (default: the open one) lands
-  - `EnvUtils.scene_source(scene: Optional[str] = None) -> Optional[str]` *(static)* — The scene the scene file *scene* (default: the open one) stands in
-  - `EnvUtils.scene_project_root() -> Optional[str]` *(static)* — The project the open scene's files belong to;
-  - `EnvUtils.scene_workspace() -> Optional[ptk.Workspace]` *(static)* — The open scene's project as a ``ptk.Workspace``, or ``None``
-  - `EnvUtils.scene_source_images_dir(subfolder: str = '', create: bool = False) -> str` *(static)* — Where a tool's generated maps for the open scene go by default: the
+  - `EnvUtils.set_scene_source(scene: str, source: Optional[str] = None) -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.set_scene_source`, which records the stand-in
+  - `EnvUtils.twin_save_target(scene: Optional[str] = None) -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.twin_save_target`.
+  - `EnvUtils.scene_source(scene: Optional[str] = None) -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.scene_source`.
+  - `EnvUtils.scene_project_root() -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.scene_project_root`.
+  - `EnvUtils.scene_workspace() -> Optional[ptk.Workspace]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.scene_workspace`.
+  - `EnvUtils.scene_source_images_dir(subfolder: str = '', create: bool = False) -> str` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.scene_source_images_dir`.
   - `EnvUtils.scenes_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →
   - `EnvUtils.source_images_dir(path: Optional[str] = None) -> str` *(static)* — The workspace's texture folder — its ``sourceImages`` rule → an existing
   - `EnvUtils.texture_search_dirs(path: Optional[str] = None) -> List[str]` *(static)* — Where this scene's map files can be found NOW, most specific first.
@@ -2688,12 +2688,12 @@ Shadow doctor for embedded-DCC installs (companion of package-manager.bat).
 
 Reference Manager engine — Maya file references, assemblies and workspaces.
 
-- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L87)**
+- **[`class AssemblyManager`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L88)**
   - `AssemblyManager.current_references(cls)` *(class)* — Get the current scene references.
   - `AssemblyManager.create_assembly_definition(cls, namespace: str, file_path: str) -> str` *(class)* — Create an assembly definition for the given file path.
   - `AssemblyManager.set_active_representation(cls, assembly_node: str, representation_name: str) -> bool` *(class)* — Set the active representation for an assembly.
   - `AssemblyManager.convert_references_to_assemblies(cls)` *(class)* — Convert all current references to assembly definitions and references.
-- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L392)** — Core Maya scene reference management functionality.
+- **[`class ReferenceManager(WorkspaceManager, pythontk.HelpMixin, pythontk.LoggingMixin, _ReferenceManagerInternal)`](mayatk/mayatk/env_utils/reference_manager/_reference_manager.py#L393)** — Core Maya scene reference management functionality.
   - `ReferenceManager.current_references(self)` *(property)* — Get the current scene references.
   - `ReferenceManager.sanitize_namespace(namespace: str) -> str` *(static)* — Sanitize the namespace by replacing or removing illegal characters.
   - `ReferenceManager.add_reference(self, namespace: str, file_path: str) -> bool` — Reference *file_path* under *namespace* (sanitized;
@@ -2710,7 +2710,7 @@ Reference Manager engine — Maya file references, assemblies and workspaces.
 
 Reference Manager controller — the panel-facing layer over the engine.
 
-- **[`class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_controller.py#L47)** — Controller that bridges Maya reference functionality with UI interactions.
+- **[`class ReferenceManagerController(ReferenceManager, pythontk.LoggingMixin)`](mayatk/mayatk/env_utils/reference_manager/reference_manager_controller.py#L48)** — Controller that bridges Maya reference functionality with UI interactions.
   - `ReferenceManagerController.scene_notes(self) -> 'ptk.SceneNotes'` *(property)* — The Notes column's store (:class:`pythontk.SceneNotes`: one file per
   - `ReferenceManagerController.current_working_dir(self)` *(property)*
   - `ReferenceManagerController.block_table_selection_method(method)`
@@ -4354,7 +4354,7 @@ UI slots for the Channels UI.
 
 The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 
-- **[`class DataNodes(pythontk.SceneStoreBase)`](mayatk/mayatk/node_utils/data_nodes.py#L46)** — The two shared scene data nodes, as a ``ptk.SceneStoreBase``.
+- **[`class DataNodes(pythontk.SceneStoreBase)`](mayatk/mayatk/node_utils/data_nodes.py#L47)** — The two shared scene data nodes, as a ``ptk.SceneStoreBase``.
   - `DataNodes.ensure_internal(cls) -> str` *(class)* — Get or create the shared network node.
   - `DataNodes.ensure_export(cls) -> str` *(class)* — Get or create the shared FBX export transform.
   - `DataNodes.get_internal_node(cls, create: bool = True) -> Optional[str]` *(class)* — The ``data_internal`` node (created when *create*), else ``None``.
@@ -4370,6 +4370,7 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
   - `DataNodes.scene_path(cls) -> str` *(class)* — The open scene's file, ``""`` while unsaved
   - `DataNodes.set_scene_source(cls, scene: str, source: Optional[str] = None) -> Optional[str]` *(class)* — Record that the scene file *scene* stands in for the scene *source*;
   - `DataNodes.scene_source(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — The scene the scene file *scene* (default: the open one) stands in
+  - `DataNodes.twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]` *(class)* — Where a save of the stand-in *scene* (default: the open one) lands
   - `DataNodes.scene_workspace(cls) -> Optional[ptk.Workspace]` *(class)* — The project the open scene's files belong to, as a ``ptk.Workspace``;
   - `DataNodes.scene_project_root(cls) -> Optional[str]` *(class)* — The root of :meth:`scene_workspace`, or ``None`` without a project.
   - `DataNodes.scene_source_images_dir(cls, subfolder: str = '', create: bool = False) -> str` *(class)* — Where a tool's generated maps for the open scene go by default.
@@ -4407,14 +4408,14 @@ Sweep a circular profile along NURBS curve(s) to build a tube.
 <a id="nurbs_utils--image_tracer"></a>
 ### `nurbs_utils/image_tracer.py`
 
-- **[`class BluePencilMixin(object)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L30)** — Mixin for handling Blue Pencil operations.
+- **[`class BluePencilMixin(object)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L29)** — Mixin for handling Blue Pencil operations.
   - `BluePencilMixin.get_blue_pencil_curves(self)` — Converts active Blue Pencil strokes to NURBS curves.
-- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L110)** — A class to trace images into Maya NURBS curves and generate geometry.
+- **[`class ImageTracer(BluePencilMixin)`](mayatk/mayatk/nurbs_utils/image_tracer.py#L109)** — A class to trace images into Maya NURBS curves and generate geometry.
   - `ImageTracer.trace_curves(self) -> List[str]` — Traces the image and returns a list of created NURBS curves.
   - `ImageTracer.create_mesh(self, curves: Optional[List[str]] = None, combine: bool = True, name: str = 'traced_mesh', group_output: bool = True) -> Union[str, List[str]]` — Creates a polygon mesh from the traced curves (positive space).
   - `ImageTracer.create_negative_space_mesh(self, curves: Optional[List[str]] = None, margin_scale: float = 0.1, name: str = 'negative_space_mesh', group_output: bool = True) -> Optional[str]` — Creates a mesh representing the negative space (plane with holes).
   - `ImageTracer.project_on_plane(self, curves: Optional[List[str]] = None, name: str = 'projected_curves', group_output: bool = True) -> Union[str, List[str], None]` — Projects curves onto a plane.
-- **[`class ImageTracerSlots`](mayatk/mayatk/nurbs_utils/image_tracer.py#L415)** — UI slots for the Image Tracer tool.
+- **[`class ImageTracerSlots`](mayatk/mayatk/nurbs_utils/image_tracer.py#L414)** — UI slots for the Image Tracer tool.
   - `ImageTracerSlots.header_init(self, widget)` — Initialize the header widget.
   - `ImageTracerSlots.txt000_init(self, widget)`
   - `ImageTracerSlots.browse_image(self)`

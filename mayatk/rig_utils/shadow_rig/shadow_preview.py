@@ -669,9 +669,9 @@ class ShadowPreview(_ShadowPreviewInternal, ptk.LoggingMixin):
         read as deliverable maps. Without a scene project, the project of
         *png* (the map the preview binds).
         """
-        from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
-        ws = EnvUtils.scene_workspace()
+        ws = DataNodes.scene_workspace()
         if ws is None and png:
             ws = ptk.Workspace.for_path(png)
         if ws is None:

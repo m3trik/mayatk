@@ -1,10 +1,12 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ d5beb41d)._
+_Diff vs the last release (origin/main @ 77fc5a53)._
 
-No public API changes since the last release (origin/main @ d5beb41d).
+## Added (1)
 
-## Deprecations (10)
+- `node_utils/data_nodes.py::DataNodes.twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]`
+
+## Deprecations (17)
 
 _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its window: delete the alias and its tests rather than moving the date. A **HELD** row is due by version, but its notice has not yet had its calendar window._
 
@@ -16,6 +18,21 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - **HELD** `anim_utils/shots/shots_slots.py::ShotsController.on_delete_stale_shots` — remove in 0.23.0, not before 2026-11-06
 - **HELD** `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS` — remove in 0.23.0, not before 2026-11-03
 - **HELD** `env_utils/scene_exporter/task_manager.py::TaskManager.check_uv_snapshots` — remove in 0.24.0, not before 2026-11-07
-- `env_utils/scene_state.py::SceneState.read` — remove in 0.29.0, not before 2026-11-23
-- `env_utils/scene_state.py::SceneState.source` — remove in 0.29.0, not before 2026-11-23
+- **HELD** `env_utils/scene_state.py::SceneState.read` — remove in 0.29.0, not before 2026-11-23
+- **HELD** `env_utils/scene_state.py::SceneState.source` — remove in 0.29.0, not before 2026-11-23
+- `core_utils/_core_utils.py::CoreUtils.get_bounding_box` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.scene_project_root` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.scene_source` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.scene_source_images_dir` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.scene_workspace` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
+- `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
 
+## Signature changed (2)
+
+- `env_utils/_env_utils.py::EnvUtils.set_scene_source`
+  - was: `(cls, scene: str, source: Optional[str] = None) -> Optional[str]`
+  - now: `(scene: str, source: Optional[str] = None) -> Optional[str]`
+- `env_utils/_env_utils.py::EnvUtils.twin_save_target`
+  - was: `(cls, scene: Optional[str] = None) -> Optional[str]`
+  - now: `(scene: Optional[str] = None) -> Optional[str]`

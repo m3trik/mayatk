@@ -785,171 +785,65 @@ class EnvUtils(ptk.HelpMixin):
         ws = EnvUtils.current_workspace(path)
         return ws.root if ws else ""
 
-    @classmethod
-    def set_scene_source(
-        cls, scene: str, source: Optional[str] = None
-    ) -> Optional[str]:
-        """Record that the scene file *scene* stands in for the scene *source*;
-        ``None`` forgets it. Returns the recorded source (absolute), or ``None``.
-
-        ``DataNodes.set_scene_source`` holds the record (the scene's project
-        resolves from it below this package); this also arms the save that
-        moves a copy in temp: its FIRST save is a Save As into the source
-        project's scenes folder (:meth:`twin_save_target`), so work never lands
-        in temp. Twin of ``btk.EnvUtils.set_scene_source``.
-        """
+    # The scene-source family's one owner is DataNodes (2026-10-25); these
+    # retired doors forward there for one release.
+    @staticmethod
+    @ptk.Deprecation.symbol(
+        "DataNodes.set_scene_source", remove_in="0.30.0", since="2026-10-25"
+    )
+    def set_scene_source(scene: str, source: Optional[str] = None) -> Optional[str]:
+        """Moved to :meth:`DataNodes.set_scene_source`, which records the stand-in
+        and arms its save."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        recorded = DataNodes.set_scene_source(scene, source)
-        if recorded:
-            cls._arm_twin_save()
-        return recorded
-
-    @classmethod
-    def twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]:
-        """Where a save of the stand-in *scene* (default: the open one) lands
-        instead of temp, or ``None`` when it saves where it is.
-
-        A scene opened in place of a source (:meth:`set_scene_source`) that
-        lives in the temp root is a scratch twin: saved as it is, real work
-        would sit in a folder the age sweep reclaims. Its first save goes to
-        the source's project scenes folder under the twin's own name
-        (``<stem>_<ext>.ma``: what it was converted from), never over a file
-        already there. Twin of ``btk.EnvUtils.twin_save_target``.
-
-        Parameters:
-            scene: The stand-in scene file.
-
-        Returns:
-            The path to save to, or ``None``.
-        """
-        if scene is None:
-            scene = cls.saved_scene_path()
-        source = cls.scene_source(scene) if scene else None
-        if not source or not cls._in_temp(scene):
-            return None
-        ws = ptk.Workspace.for_scene(source, session_root=cls.workspace_root() or None)
-        if ws is None:
-            return None
-        folder = ws.scene_dir
-        stem, ext = os.path.splitext(os.path.basename(scene))
-        try:
-            taken = os.listdir(folder)
-        except OSError:
-            taken = []
-        return ptk.FileUtils.unique_path(folder, stem, ext, claims=taken)
+        return DataNodes.set_scene_source(scene, source)
 
     @staticmethod
-    def _in_temp(path: str) -> bool:
-        """True when *path* is scratch ``ptk.TempArtifacts`` holds (its root, or
-        the system temp dir a pre-root flat twin lives in)."""
-        return ptk.TempArtifacts.contains(path)
-
-    #: The scratch twin a redirected save is writing (:meth:`_redirect_twin_save`),
-    #: forgotten once that save is written (:meth:`_forget_saved_twin`).
-    _saving_twin: ClassVar[Optional[str]] = None
-
-    @classmethod
-    def _redirect_twin_save(cls) -> Optional[str]:
-        """The before-save hook: a save of a scratch twin is renamed to its
-        :meth:`twin_save_target` first, so Maya writes THAT file (the twin
-        stays the untouched copy, discarded as such). Returns the new path.
-
-        The twin's record is kept until the save is written
-        (:meth:`_forget_saved_twin`, after the save): a save that fails leaves
-        the twin standing in for its source as it did."""
-        scene = cls.saved_scene_path()
-        target = cls.twin_save_target(scene)
-        if not target:
-            return None
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        cmds.file(rename=target)
-        cls._saving_twin = scene
-        import maya.api.OpenMaya as om
-
-        om.MGlobal.displayInfo(
-            f"Saved into the project instead of the temp copy: {target}"
-        )
-        return target
-
-    @classmethod
-    def _forget_saved_twin(cls) -> None:
-        """The after-save hook: the twin a redirected save wrote into the
-        project stands in for nothing any more. Maya calls it only for a save
-        that was written."""
+    @ptk.Deprecation.symbol(
+        "DataNodes.twin_save_target", remove_in="0.30.0", since="2026-10-25"
+    )
+    def twin_save_target(scene: Optional[str] = None) -> Optional[str]:
+        """Moved to :meth:`DataNodes.twin_save_target`."""
         from mayatk.node_utils.data_nodes import DataNodes
 
-        twin, cls._saving_twin = cls._saving_twin, None
-        if twin:
-            DataNodes.set_scene_source(twin, None)
+        return DataNodes.twin_save_target(scene)
 
     @staticmethod
-    def _arm_twin_save() -> None:
-        """Install the save hooks (:meth:`_redirect_twin_save` before a save,
-        :meth:`_forget_saved_twin` after one) once a session; kept on
-        ``__main__`` so a module reload does not add a second."""
-        import __main__
-
-        module = __name__
-
-        def hooked(method):
-            def hook(*_):
-                # Resolved at call time: a reloaded module is a second class,
-                # and the live one holds the redirect in progress.
-                current = sys.modules.get(module)
-                if current is not None:
-                    getattr(current.EnvUtils, method)()
-
-            return hook
-
-        try:
-            import maya.api.OpenMaya as om
-        except Exception:  # noqa: BLE001 - no Maya (mock tests, headless tooling)
-            return
-        message = om.MSceneMessage
-        for attr, when, method in (
-            ("_mayatk_twin_save_callback", message.kBeforeSave, "_redirect_twin_save"),
-            ("_mayatk_twin_saved_callback", message.kAfterSave, "_forget_saved_twin"),
-        ):
-            if getattr(__main__, attr, None) is None:
-                setattr(__main__, attr, message.addCallback(when, hooked(method)))
-
-    @staticmethod
+    @ptk.Deprecation.symbol(
+        "DataNodes.scene_source", remove_in="0.30.0", since="2026-10-25"
+    )
     def scene_source(scene: Optional[str] = None) -> Optional[str]:
-        """The scene the scene file *scene* (default: the open one) stands in
-        for, or ``None`` (``DataNodes.scene_source``). Twin of
-        ``btk.EnvUtils.scene_source``."""
+        """Moved to :meth:`DataNodes.scene_source`."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         return DataNodes.scene_source(scene)
 
     @staticmethod
+    @ptk.Deprecation.symbol(
+        "DataNodes.scene_project_root", remove_in="0.30.0", since="2026-10-25"
+    )
     def scene_project_root() -> Optional[str]:
-        """The project the open scene's files belong to; ``None`` without one
-        (``DataNodes.scene_project_root``: ``ptk.Workspace.for_scene`` of the
-        scene FILE, a stand-in resolved as its source). The boundary a tool
-        keeps when it writes, renames or retires files. Twin of
-        ``btk.EnvUtils.scene_project_root``."""
+        """Moved to :meth:`DataNodes.scene_project_root`."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         return DataNodes.scene_project_root()
 
     @staticmethod
+    @ptk.Deprecation.symbol(
+        "DataNodes.scene_workspace", remove_in="0.30.0", since="2026-10-25"
+    )
     def scene_workspace() -> Optional[ptk.Workspace]:
-        """The open scene's project as a ``ptk.Workspace``, or ``None``
-        (``DataNodes.scene_workspace``): where every permanent file a tool
-        writes for this scene resolves its folder -- the SCENE's project, never
-        merely the active one. Twin of ``btk.EnvUtils.scene_workspace``."""
+        """Moved to :meth:`DataNodes.scene_workspace`."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         return DataNodes.scene_workspace()
 
     @staticmethod
+    @ptk.Deprecation.symbol(
+        "DataNodes.scene_source_images_dir", remove_in="0.30.0", since="2026-10-25"
+    )
     def scene_source_images_dir(subfolder: str = "", create: bool = False) -> str:
-        """Where a tool's generated maps for the open scene go by default: the
-        scene project's texture folder plus *subfolder*, ``""`` without a
-        project (``DataNodes.scene_source_images_dir``). Twin of
-        ``btk.EnvUtils.scene_source_images_dir``."""
+        """Moved to :meth:`DataNodes.scene_source_images_dir`."""
         from mayatk.node_utils.data_nodes import DataNodes
 
         return DataNodes.scene_source_images_dir(subfolder, create=create)

@@ -3021,7 +3021,7 @@ class GameShaderPanelFolderTest(unittest.TestCase):
         self.assertTrue(os.path.isabs(folder), folder)
         self.assertEqual(
             os.path.normcase(folder),
-            os.path.normcase(mtk.EnvUtils.scene_source_images_dir()),
+            os.path.normcase(mtk.DataNodes.scene_source_images_dir()),
         )
 
 

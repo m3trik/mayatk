@@ -185,9 +185,9 @@ class CurtainMesh(CurtainDrape):
         gravity: How far the fabric falls between hanging points (the catenary
             sag depth, scaled by the span width — wider gaps fall further).
         tension: Catenary shape parameter for that sag (see
-            :func:`catenary_shape`).
+            :meth:`ptk.MathUtils.catenary`).
         round_points: ``0``–``1`` — round off the sharp cusp at each hanging
-            point into a smooth dome (see :func:`sag_profile`).
+            point into a smooth dome (see :meth:`ptk.MathUtils.catenary_sag`).
         round_gather: ``≥0`` — *push-pull* gather at each hanging point: the
             fabric puckers **up** above the rail right at the point and **dips**
             just inside as the slack falls off (a gathered/pleated header),

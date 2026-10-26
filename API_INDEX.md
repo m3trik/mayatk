@@ -1109,7 +1109,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/data_nodes.py` — The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 - `class DataNodes(pythontk.SceneStoreBase)`
-  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, remove, values, dump_export_nodes, carriers_in, discard_if_empty, scene_path, set_scene_source, scene_source, scene_workspace, scene_project_root, scene_source_images_dir, install_path_rebase, ensure_path_rebase, remove_path_rebase
+  - methods: ensure_internal, ensure_export, get_internal_node, get_export_node, get_export_nodes, read, write, remove, values, dump_export_nodes, carriers_in, discard_if_empty, scene_path, set_scene_source, scene_source, twin_save_target, scene_workspace, scene_project_root, scene_source_images_dir, install_path_rebase, ensure_path_rebase, remove_path_rebase
 
 ### `nurbs_utils/_nurbs_utils.py`
 - `class NurbsUtils(pythontk.HelpMixin)`

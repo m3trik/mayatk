@@ -194,7 +194,7 @@ class TelescopeRig(ptk.LoggingMixin):
         if not cls._has_geometry(node):
             return 0.0
         return cls._project_size(
-            CoreUtils.get_bounding_box(node, world=True).size, direction
+            XformUtils.get_bounding_box(node, "box").size, direction
         )
 
     @classmethod
@@ -208,7 +208,7 @@ class TelescopeRig(ptk.LoggingMixin):
         """
         if not cls._has_geometry(node):
             return XformUtils.get_translation(node, world=True)
-        bbox = CoreUtils.get_bounding_box(node, world=True)
+        bbox = XformUtils.get_bounding_box(node, "box")
         half = 0.5 * cls._project_size(bbox.size, direction)
         return bbox.center + direction * (sign * half)
 

@@ -21,7 +21,7 @@ except Exception:
 
 import pythontk as ptk
 
-from mayatk.core_utils._core_utils import CoreUtils
+from mayatk.core_utils._core_utils import BoundingBox, CoreUtils
 from mayatk.core_utils.components import Components
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils.matrices import Matrices
@@ -430,6 +430,7 @@ class _PlacementInternal:
             "centroid": None,
             "minsize": None,
             "maxsize": None,
+            "box": None,
         }
 
         if return_valid_keys:
@@ -440,6 +441,7 @@ class _PlacementInternal:
 
         objs = list(objects) if isinstance(objects, (list, tuple)) else [objects]
         objs = [str(o) for o in objs]
+        box = None
         if world_space:
             bbox = cmds.exactWorldBoundingBox(objs)
         elif len(objs) > 1:
@@ -451,10 +453,10 @@ class _PlacementInternal:
                 f"{len(objs)}. Query them individually, or ask in world space."
             )
         else:
-            # Delegated so the two public bounding-box entry points cannot
-            # disagree about what object space means; see CoreUtils for why it
-            # is constructed from shape attributes rather than queried.
-            box = CoreUtils.get_bounding_box(objs[0], world=False)
+            # Delegated to the one object-space rule;
+            # _CoreUtilsInternal._bounding_box says why it is constructed from
+            # shape attributes rather than queried.
+            box = CoreUtils._bounding_box(objs[0], world=False)
             bbox = [*box.min, *box.max]
 
         xmin, ymin, zmin, xmax, ymax, zmax = bbox
@@ -488,6 +490,10 @@ class _PlacementInternal:
             return (xmin, ymin, zmin, xmax, ymax, zmax)
 
         values = value.lower().split("|")
+        if "box" in values:
+            # The box itself (MVector min/max/center/size, diagonal,
+            # corners): built only when asked for.
+            bbox_values["box"] = box or BoundingBox(bbox[:3], bbox[3:])
         try:
             return (
                 tuple(bbox_values[val] for val in values)

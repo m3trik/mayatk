@@ -18,6 +18,7 @@ import maya.cmds as cmds
 import pythontk as ptk
 
 from mayatk.env_utils._env_utils import EnvUtils
+from mayatk.node_utils.data_nodes import DataNodes
 from mayatk.env_utils.workspace_manager import WorkspaceManager
 from mayatk.env_utils.workspace_map import WorkspaceMap
 
@@ -341,9 +342,9 @@ class TestSceneProjectRoot(MayaTkTestCase):
             os.path.join(self.tmp, "mtk_opened_0123456789", "room_blend.ma")
         )
         cmds.workspace(proj, openWorkspace=True)
-        EnvUtils.set_scene_source(scratch, source)
-        self.addCleanup(EnvUtils.set_scene_source, scratch, None)
-        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+        DataNodes.set_scene_source(scratch, source)
+        self.addCleanup(DataNodes.set_scene_source, scratch, None)
+        self.assertEqual(self._norm(DataNodes.scene_project_root()), self._norm(proj))
 
     def test_a_broad_project_never_outranks_the_scenes_own(self):
         """blendertk's broad-pin rule, which Maya's has by construction: the
@@ -354,7 +355,7 @@ class TestSceneProjectRoot(MayaTkTestCase):
         _make_workspace_dir(broad, "theirs")
         self._save_scene(os.path.join(mine, "scenes", "room.ma"))
         cmds.workspace(broad, openWorkspace=True)
-        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(mine))
+        self.assertEqual(self._norm(DataNodes.scene_project_root()), self._norm(mine))
 
     def test_an_unmarked_scene_in_the_active_project_is_that_projects(self):
         """``ptk.Workspace.for_scene``, the one rule both DCCs share: with no
@@ -365,13 +366,13 @@ class TestSceneProjectRoot(MayaTkTestCase):
         self._save_scene(os.path.join(proj, "scenes", "shots", "room.ma"))
         cmds.workspace(proj, openWorkspace=True)
         self.assertFalse(os.path.isfile(os.path.join(proj, "workspace.mel")))
-        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+        self.assertEqual(self._norm(DataNodes.scene_project_root()), self._norm(proj))
 
     def test_an_unsaved_scene_belongs_to_the_active_project(self):
         proj = _make_workspace_dir(self.tmp, "active")
         cmds.file(new=True, force=True)
         cmds.workspace(proj, openWorkspace=True)
-        self.assertEqual(self._norm(EnvUtils.scene_project_root()), self._norm(proj))
+        self.assertEqual(self._norm(DataNodes.scene_project_root()), self._norm(proj))
 
 
 class TestTwinSaveGoesToTheProject(MayaTkTestCase):
@@ -404,8 +405,8 @@ class TestTwinSaveGoesToTheProject(MayaTkTestCase):
         cmds.file(rename=twin)
         cmds.file(save=True, type="mayaAscii", force=True)
         stamp = os.path.getmtime(twin)
-        EnvUtils.set_scene_source(twin, self.source)
-        self.addCleanup(EnvUtils.set_scene_source, twin, None)
+        DataNodes.set_scene_source(twin, self.source)
+        self.addCleanup(DataNodes.set_scene_source, twin, None)
         return twin, stamp
 
     @staticmethod
@@ -424,7 +425,7 @@ class TestTwinSaveGoesToTheProject(MayaTkTestCase):
         with open(target) as f:
             self.assertIn("more_work", f.read())
         self.assertEqual(os.path.getmtime(twin), stamp, "the twin was written")
-        self.assertIsNone(EnvUtils.scene_source(target))
+        self.assertIsNone(DataNodes.scene_source(target))
 
     def test_an_existing_scene_of_that_name_is_never_overwritten(self):
         taken = os.path.join(self.proj, "scenes", "room_blend.ma")
@@ -456,13 +457,13 @@ class TestTwinSaveGoesToTheProject(MayaTkTestCase):
             f.write("// read-only\n")
         os.chmod(blocked, stat.S_IREAD)
         self.addCleanup(os.chmod, blocked, stat.S_IREAD | stat.S_IWRITE)
-        with mock.patch.object(EnvUtils, "twin_save_target", return_value=blocked):
+        with mock.patch.object(DataNodes, "twin_save_target", return_value=blocked):
             with self.assertRaises(RuntimeError):
                 cmds.file(save=True, type="mayaAscii")
         with open(blocked) as f:
             self.assertEqual(f.read(), "// read-only\n", "the save did not fail")
         self.assertEqual(
-            self._norm(EnvUtils.scene_source(twin)), self._norm(self.source)
+            self._norm(DataNodes.scene_source(twin)), self._norm(self.source)
         )
 
     def test_a_scene_outside_temp_saves_where_it_is(self):
@@ -474,11 +475,41 @@ class TestTwinSaveGoesToTheProject(MayaTkTestCase):
         mine = os.path.join(here, "room_blend.ma")
         os.makedirs(here, exist_ok=True)
         cmds.file(rename=mine)
-        EnvUtils.set_scene_source(mine, self.source)
-        self.addCleanup(EnvUtils.set_scene_source, mine, None)
-        self.assertIsNone(EnvUtils.twin_save_target(mine))
+        DataNodes.set_scene_source(mine, self.source)
+        self.addCleanup(DataNodes.set_scene_source, mine, None)
+        self.assertIsNone(DataNodes.twin_save_target(mine))
         cmds.file(save=True, type="mayaAscii")
         self.assertEqual(self._norm(EnvUtils.saved_scene_path()), self._norm(mine))
+
+
+class TestSceneSourceFamilyHasOneOwner(QuickTestCase):
+    """The scene-source family had two owners: EnvUtils' copies forwarded to
+    DataNodes, except ``set_scene_source``, which also armed the twin's save --
+    and the flat ``mtk.set_scene_source`` reached the record-only DataNodes one
+    by module order. DataNodes owns all six; EnvUtils' names forward, with a
+    warning, until 0.30.0. Consolidated: 2026-10-25."""
+
+    NAMES = (
+        "set_scene_source",
+        "scene_source",
+        "scene_workspace",
+        "scene_project_root",
+        "scene_source_images_dir",
+        "twin_save_target",
+    )
+
+    def test_the_flat_names_reach_the_owner(self):
+        import mayatk as mtk
+
+        for name in self.NAMES:
+            with self.subTest(name=name):
+                self.assertEqual(getattr(mtk, name), getattr(DataNodes, name))
+
+    def test_the_retired_env_utils_doors_warn_and_forward(self):
+        with self.assertWarns(DeprecationWarning):
+            self.assertEqual(
+                EnvUtils.scene_project_root(), DataNodes.scene_project_root()
+            )
 
 
 class TestWorkspaceManagerDefaults(QuickTestCase):

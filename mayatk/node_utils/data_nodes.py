@@ -26,7 +26,8 @@ referenced module brings along when its reference is imported.
 
 import logging
 import os
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+import sys
+from typing import Any, ClassVar, Dict, List, Mapping, Optional, Tuple
 
 
 try:
@@ -660,8 +661,8 @@ class DataNodes(ptk.SceneStoreBase):
     # The scene's project
     # ------------------------------------------------------------------
     # Here, beside the scene path, so every part that writes a file for the
-    # scene resolves it without reaching up into env_utils. EnvUtils keeps
-    # the same names as delegates (its twin-save hook arms on top of them).
+    # scene resolves it without reaching up into env_utils -- and the one
+    # owner of these names: a stand-in's save leaves temp from here too.
 
     #: Scene files opened in place of a source scene (the Reference Manager's
     #: open-as-new scratch twins in temp): normcased path -> that source
@@ -678,10 +679,21 @@ class DataNodes(ptk.SceneStoreBase):
         A foreign scene the Reference Manager opens as new is a scratch copy in
         temp (``ptk.ScratchTwins``), but the work in it belongs to its source's
         project: :meth:`scene_project_root` resolves such a scene from its
-        source. Held for the session. Only records: ``EnvUtils.set_scene_source``
-        also arms the save that moves a twin out of temp. Twin of
-        ``btk.DataNodes.set_scene_source``.
+        source. Held for the session. Recording one also arms the save that
+        moves the copy out of temp: its FIRST save is a Save As into the source
+        project's scenes folder (:meth:`twin_save_target`), so work never lands
+        in temp. Twin of ``btk.DataNodes.set_scene_source``.
         """
+        recorded = cls._record_scene_source(scene, source)
+        if recorded:
+            cls._arm_twin_save()
+        return recorded
+
+    @classmethod
+    def _record_scene_source(
+        cls, scene: str, source: Optional[str] = None
+    ) -> Optional[str]:
+        """The record alone (:meth:`set_scene_source` arms the save as well)."""
         if not scene:
             return None
         key = os.path.normcase(os.path.abspath(scene))
@@ -701,6 +713,107 @@ class DataNodes(ptk.SceneStoreBase):
         if not scene:
             return None
         return cls._scene_sources.get(os.path.normcase(os.path.abspath(scene)))
+
+    @classmethod
+    def twin_save_target(cls, scene: Optional[str] = None) -> Optional[str]:
+        """Where a save of the stand-in *scene* (default: the open one) lands
+        instead of temp, or ``None`` when it saves where it is.
+
+        A scene opened in place of a source (:meth:`set_scene_source`) that
+        lives in the temp root is a scratch twin: saved as it is, real work
+        would sit in a folder the age sweep reclaims. Its first save goes to
+        the source's project scenes folder under the twin's own name
+        (``<stem>_<ext>.ma``: what it was converted from), never over a file
+        already there. Twin of ``btk.DataNodes.twin_save_target``.
+
+        Parameters:
+            scene: The stand-in scene file.
+
+        Returns:
+            The path to save to, or ``None``.
+        """
+        if scene is None:
+            scene = cls.scene_path()
+        source = cls.scene_source(scene) if scene else None
+        if not source or not ptk.TempArtifacts.contains(scene):
+            return None
+        ws = ptk.Workspace.for_scene(source, session_root=cls._session_root())
+        if ws is None:
+            return None
+        folder = ws.scene_dir
+        stem, ext = os.path.splitext(os.path.basename(scene))
+        try:
+            taken = os.listdir(folder)
+        except OSError:
+            taken = []
+        return ptk.FileUtils.unique_path(folder, stem, ext, claims=taken)
+
+    #: The scratch twin a redirected save is writing (:meth:`_redirect_twin_save`),
+    #: forgotten once that save is written (:meth:`_forget_saved_twin`).
+    _saving_twin: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def _redirect_twin_save(cls) -> Optional[str]:
+        """The before-save hook: a save of a scratch twin is renamed to its
+        :meth:`twin_save_target` first, so Maya writes THAT file (the twin
+        stays the untouched copy, discarded as such). Returns the new path.
+
+        The twin's record is kept until the save is written
+        (:meth:`_forget_saved_twin`, after the save): a save that fails leaves
+        the twin standing in for its source as it did."""
+        scene = cls.scene_path()
+        target = cls.twin_save_target(scene)
+        if not target:
+            return None
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        cmds.file(rename=target)
+        cls._saving_twin = scene
+        import maya.api.OpenMaya as om
+
+        om.MGlobal.displayInfo(
+            f"Saved into the project instead of the temp copy: {target}"
+        )
+        return target
+
+    @classmethod
+    def _forget_saved_twin(cls) -> None:
+        """The after-save hook: the twin a redirected save wrote into the
+        project stands in for nothing any more. Maya calls it only for a save
+        that was written."""
+        twin, cls._saving_twin = cls._saving_twin, None
+        if twin:
+            cls._record_scene_source(twin, None)
+
+    @staticmethod
+    def _arm_twin_save() -> None:
+        """Install the save hooks (:meth:`_redirect_twin_save` before a save,
+        :meth:`_forget_saved_twin` after one) once a session; kept on
+        ``__main__`` so a module reload does not add a second."""
+        import __main__
+
+        module = __name__
+
+        def hooked(method):
+            def hook(*_):
+                # Resolved at call time: a reloaded module is a second class,
+                # and the live one holds the redirect in progress.
+                current = sys.modules.get(module)
+                if current is not None:
+                    getattr(current.DataNodes, method)()
+
+            return hook
+
+        try:
+            import maya.api.OpenMaya as om
+        except Exception:  # noqa: BLE001 - no Maya (mock tests, headless tooling)
+            return
+        message = om.MSceneMessage
+        for attr, when, method in (
+            ("_mayatk_twin_save_hook", message.kBeforeSave, "_redirect_twin_save"),
+            ("_mayatk_twin_saved_hook", message.kAfterSave, "_forget_saved_twin"),
+        ):
+            if getattr(__main__, attr, None) is None:
+                setattr(__main__, attr, message.addCallback(when, hooked(method)))
 
     @staticmethod
     def _session_root() -> Optional[str]:

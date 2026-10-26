@@ -881,6 +881,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 ``include_animation``; ``embed_textures`` is FBX-route only).
         """
         from mayatk.env_utils._env_utils import EnvUtils
+        from mayatk.node_utils.data_nodes import DataNodes
 
         # Decided BEFORE the import: "no content" must describe the scene the
         # user had, not the one the import just filled.
@@ -973,7 +974,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             )
         # The textures a glTF's conversion unpacked (or an FBX's extracted media)
         # sit in temp: the imported nodes are moved onto a project copy.
-        project = EnvUtils.scene_project_root()
+        project = DataNodes.scene_project_root()
         try:
             imported = self.import_payload(
                 out_path,
@@ -1260,14 +1261,12 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         """
         import maya.cmds as cmds
 
-        from mayatk.env_utils._env_utils import EnvUtils
-
         copied: Dict[str, str] = {}
         moved = 0
         for node in cmds.ls(file_nodes, type="file") or []:
             plug = f"{node}.fileTextureName"
             path = cmds.getAttr(plug) or ""
-            if not (path and os.path.isfile(path) and EnvUtils._in_temp(path)):
+            if not (path and os.path.isfile(path) and ptk.TempArtifacts.contains(path)):
                 continue
             key = os.path.normcase(os.path.realpath(path))
             target = copied.get(key)
@@ -1936,7 +1935,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             rig_mode: How a ``.blend`` source's rig logic travels (see
                 :meth:`import_scene`); inert for an ``.fbx`` source.
             project: The project root whose bake cache holds it; default the
-                open scene's (``EnvUtils.scene_project_root``: an unsaved scene's
+                open scene's (``DataNodes.scene_project_root``: an unsaved scene's
                 is the active project).
             **script_opts: Blender-side conversion knobs (``embed_textures`` /
                 ``include_animation``); inert for an ``.fbx`` source.
@@ -2037,9 +2036,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
                 must not be written to temp.
         """
         if not project:
-            from mayatk.env_utils._env_utils import EnvUtils
+            from mayatk.node_utils.data_nodes import DataNodes
 
-            project = EnvUtils.scene_project_root()
+            project = DataNodes.scene_project_root()
         if not project or not os.path.isdir(project):
             raise RuntimeError(
                 "No project to keep the bake in: save the scene or set a project "
@@ -2063,9 +2062,9 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             The folder (absolute), or ``None``.
         """
         if not project:
-            from mayatk.env_utils._env_utils import EnvUtils
+            from mayatk.node_utils.data_nodes import DataNodes
 
-            project = EnvUtils.scene_project_root()
+            project = DataNodes.scene_project_root()
         if not project:
             return None
         return cls._bakes().cache_dir(project, create=create)
@@ -2294,8 +2293,6 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
         :meth:`_rehome_temp_media` does to a live import, for a bake on disk.
         A texture already in *project*, or gone, is left as it is. Returns how
         many lines changed."""
-        from mayatk.env_utils._env_utils import EnvUtils
-
         lines = cls._read_ma_lines(baked_path)
         codec = cls._ma_codec(lines)
         copied: Dict[str, str] = {}
@@ -2305,7 +2302,7 @@ class BlenderSceneImport(ptk.LoggingMixin, _BlenderSceneImportInternal):
             if not match:
                 continue
             path = cls._mel_unescape(match.group(2).encode("latin-1").decode(codec))
-            if not (path and os.path.isfile(path) and EnvUtils._in_temp(path)):
+            if not (path and os.path.isfile(path) and ptk.TempArtifacts.contains(path)):
                 continue
             if ptk.FileUtils.is_under(path, project):
                 continue

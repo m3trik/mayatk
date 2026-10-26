@@ -896,7 +896,14 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     def get_bounding_box(objects, value="", world_space=True, return_valid_keys=False):
-        """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s)."""
+        """Calculate and retrieve specific properties of the bounding box for the given object(s) or component(s).
+
+        The one bounding-box query. *value* names one key, or several joined by
+        ``|`` for a tuple (``return_valid_keys=True`` lists them); ``"box"``
+        returns the :class:`BoundingBox` itself (``min``/``max``/``center``/
+        ``size`` vectors, ``diagonal``, ``corners``). An empty *value* returns
+        the six extents.
+        """
         return XformUtils._get_bounding_box(
             objects=objects,
             value=value,
