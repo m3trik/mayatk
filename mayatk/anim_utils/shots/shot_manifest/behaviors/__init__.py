@@ -24,22 +24,6 @@ To intercept an *intra-class* call — one ``Behaviors`` method calling another
 where the call is actually resolved.
 """
 
-import pythontk as ptk
 from pythontk.core_utils.module_resolver import lazy_exports
 
 lazy_exports(globals(), {"_behaviors": ("Behaviors", "BehaviorSpec")})
-
-# The pure-core staticmethods were once bound here as flat module functions;
-# they are ``Behaviors`` methods (inherited from the engine class).
-_BEHAVIORS = "mayatk.anim_utils.shots.shot_manifest.behaviors.Behaviors"
-ptk.Deprecation.attributes(
-    globals(),
-    {
-        "load_behavior": f"{_BEHAVIORS}.load_behavior",
-        "list_behaviors": f"{_BEHAVIORS}.list_behaviors",
-        "resolve_keys": f"{_BEHAVIORS}.resolve_keys",
-        "templates": f"{_BEHAVIORS}.templates",
-    },
-    remove_in="0.22.0",
-    since="2026-09-26",
-)
