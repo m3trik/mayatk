@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 from typing import List, Optional, Union
 
-# Before cv2 loads: OpenCV reads OPENCV_IO_ENABLE_OPENEXR once, at import, so a
-# cv2 imported without it leaves OpenEXR off for the whole process.
-os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+# OpenCV reads OPENCV_IO_ENABLE_OPENEXR once, at import; pythontk's root sets
+# it, and this package imports pythontk before any module of its own.
 try:
     import cv2
 except ImportError:

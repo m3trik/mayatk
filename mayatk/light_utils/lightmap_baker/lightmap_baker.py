@@ -4013,7 +4013,6 @@ class LightmapBaker(ptk.LoggingMixin):
         """
         if cmds is None or not mapping:
             return {}
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
         # Fail fast (before ANY side effects) when cv2 is unavailable -- the
         # caller's fallback then commits the per-object maps untouched.
         import cv2  # noqa: F401  (availability gate; used in _pack_group)

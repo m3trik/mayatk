@@ -528,11 +528,11 @@ class TextureBaker(ptk.LoggingMixin):
 
     @staticmethod
     def _cv2():
-        """cv2, its EXR codec asked for, or ``None`` when it is not installed.
+        """cv2 (pythontk's root already asked for its EXR codec), or ``None``
+        when it is not installed.
 
         No package declares it, so a bake asks rather than imports.
         """
-        os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
         try:
             import cv2
         except ImportError:

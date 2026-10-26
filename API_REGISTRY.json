@@ -19446,7 +19446,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str], *, scale_offsets: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]",
               "summary": "Record maps baked elsewhere: :meth:`LightmapRecords.commit`.",
-              "line": 4824,
+              "line": 4823,
               "deprecated": false
             },
             {
@@ -19455,7 +19455,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Take the lightmaps off *objects*, or off every baked object for ``None``.",
-              "line": 4842,
+              "line": 4841,
               "deprecated": false
             },
             {
@@ -19464,7 +19464,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": ":meth:`revert`, under its original name.",
-              "line": 4851,
+              "line": 4850,
               "deprecated": false
             },
             {
@@ -19473,7 +19473,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "The objects :meth:`revert` would take the lightmap from.",
-              "line": 4855,
+              "line": 4854,
               "deprecated": false
             },
             {
@@ -19482,7 +19482,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Start tracking *objects*' untracked maps as they stand -- no render.",
-              "line": 4863,
+              "line": 4862,
               "deprecated": false
             },
             {
@@ -19491,7 +19491,7 @@
               "kind": "method",
               "signature": "(self, maps: Optional[List[str]] = None) -> List[Tuple[int, float]]",
               "summary": "``[(size, kept)]`` -- the atlas sizes :meth:`combine` of *maps* can",
-              "line": 4886,
+              "line": 4885,
               "deprecated": false
             },
             {
@@ -19500,7 +19500,7 @@
               "kind": "method",
               "signature": "(self, maps: Optional[List[str]] = None, size: Optional[int] = None, merge_materials: bool = True, on_progress: Optional[Callable[[int, int, str], Any]] = None) -> LightmapBakeResult",
               "summary": "Pack each split group *maps* belong to into one atlas -- no render.",
-              "line": 4922,
+              "line": 4921,
               "deprecated": false
             }
           ]
@@ -27917,7 +27917,7 @@
         {
           "name": "BluePencilMixin",
           "summary": "Mixin for handling Blue Pencil operations.",
-          "line": 30,
+          "line": 29,
           "bases": [
             "object"
           ],
@@ -27928,7 +27928,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Converts active Blue Pencil strokes to NURBS curves.",
-              "line": 33,
+              "line": 32,
               "deprecated": false
             }
           ]
@@ -27936,7 +27936,7 @@
         {
           "name": "ImageTracer",
           "summary": "A class to trace images into Maya NURBS curves and generate geometry.",
-          "line": 110,
+          "line": 109,
           "bases": [
             "BluePencilMixin"
           ],
@@ -27947,7 +27947,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Traces the image and returns a list of created NURBS curves.",
-              "line": 140,
+              "line": 139,
               "deprecated": false
             },
             {
@@ -27956,7 +27956,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, combine: bool = True, name: str = 'traced_mesh', group_output: bool = True) -> Union[str, List[str]]",
               "summary": "Creates a polygon mesh from the traced curves (positive space).",
-              "line": 181,
+              "line": 180,
               "deprecated": false
             },
             {
@@ -27965,7 +27965,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, margin_scale: float = 0.1, name: str = 'negative_space_mesh', group_output: bool = True) -> Optional[str]",
               "summary": "Creates a mesh representing the negative space (plane with holes).",
-              "line": 252,
+              "line": 251,
               "deprecated": false
             },
             {
@@ -27974,7 +27974,7 @@
               "kind": "method",
               "signature": "(self, curves: Optional[List[str]] = None, name: str = 'projected_curves', group_output: bool = True) -> Union[str, List[str], None]",
               "summary": "Projects curves onto a plane.",
-              "line": 347,
+              "line": 346,
               "deprecated": false
             }
           ]
@@ -27982,7 +27982,7 @@
         {
           "name": "ImageTracerSlots",
           "summary": "UI slots for the Image Tracer tool.",
-          "line": 415,
+          "line": 414,
           "bases": [],
           "members": [
             {
@@ -27991,7 +27991,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "Initialize the header widget.",
-              "line": 440,
+              "line": 439,
               "deprecated": false
             },
             {
@@ -28000,7 +28000,7 @@
               "kind": "method",
               "signature": "(self, widget)",
               "summary": "",
-              "line": 477,
+              "line": 476,
               "deprecated": false
             },
             {
@@ -28009,7 +28009,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 484,
+              "line": 483,
               "deprecated": false
             },
             {
@@ -28018,7 +28018,7 @@
               "kind": "method",
               "signature": "(self, state)",
               "summary": "Use Blue Pencil",
-              "line": 517,
+              "line": 516,
               "deprecated": false
             },
             {
@@ -28027,7 +28027,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Trace the source image into curves.",
-              "line": 521,
+              "line": 520,
               "deprecated": false
             },
             {
@@ -28036,7 +28036,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Build a mesh from the traced curves.",
-              "line": 527,
+              "line": 526,
               "deprecated": false
             },
             {
@@ -28045,7 +28045,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Build a mesh from the traced negative space.",
-              "line": 533,
+              "line": 532,
               "deprecated": false
             },
             {
@@ -28054,7 +28054,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Project the traced result onto a plane.",
-              "line": 539,
+              "line": 538,
               "deprecated": false
             }
           ]
