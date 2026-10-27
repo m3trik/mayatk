@@ -986,16 +986,17 @@ class Preview(_PreviewInternal):
         """Commit -- with a live preview, or straight from the selection.
 
         Previewing: roll back the hermetic version, then replay it inside an
-        ``openChunk``/``closeChunk`` pair so the committed work is a single
-        Ctrl+Z-able entry. Not previewing: run the operation once on the
-        current selection inside that same chunk (:meth:`_commit_direct`) --
-        the preview is a convenience, not a prerequisite. ``require_preview``
-        panels no-op instead (their Create button is disabled anyway; this
-        also covers a programmatic call).
+        ``openChunk``/``closeChunk`` pair so the committed work -- the
+        ``finalize_func`` step included -- is a single Ctrl+Z-able entry. Not
+        previewing: run the operation once on the current selection inside
+        that same chunk (:meth:`_commit_direct`) -- the preview is a
+        convenience, not a prerequisite. ``require_preview`` panels no-op
+        instead (their Create button is disabled anyway; this also covers a
+        programmatic call).
 
-        The flag is held across rollback AND the replay chunk so a signal
-        fired by rollback (or the replay itself) can't re-enter refresh
-        and corrupt the chunk we're building.
+        The flag is held across rollback AND the replay so a signal fired by
+        rollback (or the replay itself) can't re-enter refresh and corrupt the
+        chunk we're building.
         """
         if self._refresh_in_progress:
             return
@@ -1006,70 +1007,73 @@ class Preview(_PreviewInternal):
         self._refresh_in_progress = True
         try:
             if previewing:
-                self._contract.rollback()
+                self._contract.rollback()  # recorded nowhere: undo is off for it
                 self._contract = None
-                self._replay_under_undo()
-            elif not self._commit_direct():
-                return  # gate failed; nothing committed (reason already reported)
+            # One entry for the commit AND its finalize step (Duplicate Radial's
+            # regroup): a finalize run after the chunk closed was an entry of its
+            # own, and the first Ctrl+Z took back only that.
+            cmds.undoInfo(
+                openChunk=True,
+                chunkName=self.undo_message
+                or type(self.operation_instance).__name__
+                or "PreviewCommit",
+            )
+            try:
+                if previewing:
+                    self._replay()
+                elif not self._commit_direct():
+                    return  # gate failed; nothing committed (reason already reported)
 
-            self.operated_objects.clear()
-            self._set_checkbox(False)
-            self._sync_create_enabled(False)
-            self.is_enabled = False
+                self.operated_objects.clear()
+                self._set_checkbox(False)
+                self._sync_create_enabled(False)
+                self.is_enabled = False
+                self._refresh_in_progress = False
+
+                if self.finalize_func:
+                    try:
+                        self.finalize_func()
+                    except Exception as e:
+                        self.logger.exception(f"finalize_func raised: {e}")
+            finally:
+                cmds.undoInfo(closeChunk=True)
         finally:
             self._refresh_in_progress = False
-
-        if self.finalize_func:
-            try:
-                self.finalize_func()
-            except Exception as e:
-                self.logger.exception(f"finalize_func raised: {e}")
 
         # Select Result on commit: AFTER finalize_func (which can change the
         # selection -- e.g. discarding Curtain's auto-rail), so the result wins.
         # Deferred so a post-commit selection restore can't clobber it.
         self._apply_select_result(defer=True)
 
-    def _replay_under_undo(self, pre_step: Optional[Callable] = None) -> None:
-        """Run the operation on the captured objects inside one undo chunk.
+    def _replay(self, pre_step: Optional[Callable] = None) -> None:
+        """Run the operation on the captured objects, inside the commit's undo
+        chunk (:meth:`finalize_changes`).
 
         Shared by both commit paths. ``contract`` is ``None`` -- a commit has no
         rollback path, so nothing is recorded. ``pre_step`` (the no-preview path)
-        runs inside the chunk before the operation and may populate
-        ``_captured_objects``.
+        runs before the operation and may populate ``_captured_objects``.
         """
-        chunk_name = (
-            self.undo_message
-            or type(self.operation_instance).__name__
-            or "PreviewCommit"
+        # Isolate Select: a commit has no contract to diff against, so the
+        # before-set is taken here -- and only when the user is actually
+        # isolated (the gate is one getPanel query; the snapshot is a full
+        # cmds.ls). Inside the chunk, so the membership commits and undoes
+        # atomically with the operation.
+        iso_before = (
+            frozenset(cmds.ls(long=True, allPaths=True) or [])
+            if DisplayUtils.get_isolated_panels()
+            else None
         )
-        cmds.undoInfo(openChunk=True, chunkName=chunk_name)
-        try:
-            # Isolate Select: a commit has no contract to diff against, so the
-            # before-set is taken here -- and only when the user is actually
-            # isolated (the gate is one getPanel query; the snapshot is a full
-            # cmds.ls). Inside the chunk, so the membership commits and undoes
-            # atomically with the operation.
-            iso_before = (
-                frozenset(cmds.ls(long=True, allPaths=True) or [])
-                if DisplayUtils.get_isolated_panels()
-                else None
+        if pre_step is not None:
+            pre_step()
+        self.operation_instance.perform_operation(self._captured_objects, None)
+        # Reassert per-face material on the freshly-built (clean) mesh so the
+        # COMMITTED result keeps every material -- inside the chunk so it
+        # commits/undoes atomically with the operation.
+        self._reassert_shading_snapshot()
+        if iso_before is not None:
+            self._update_isolation(
+                lambda: (frozenset(cmds.ls(long=True, allPaths=True) or []) - iso_before)
             )
-            if pre_step is not None:
-                pre_step()
-            self.operation_instance.perform_operation(self._captured_objects, None)
-            # Reassert per-face material on the freshly-built (clean) mesh so the
-            # COMMITTED result keeps every material -- inside the chunk so it
-            # commits/undoes atomically with the operation.
-            self._reassert_shading_snapshot()
-            if iso_before is not None:
-                self._update_isolation(
-                    lambda: (
-                        frozenset(cmds.ls(long=True, allPaths=True) or []) - iso_before
-                    )
-                )
-        finally:
-            cmds.undoInfo(closeChunk=True)
 
     def _commit_direct(self) -> bool:
         """Commit with no preview running: gate, capture, run once, under undo.
@@ -1077,8 +1081,8 @@ class Preview(_PreviewInternal):
         The front half mirrors :meth:`enable` -- selection gate, validation, the
         one-shot ``prepare_operation`` precondition, the shading snapshot -- so a
         bypassed commit is gated exactly like a previewed one; the back half is
-        the same :meth:`_replay_under_undo` the previewed commit uses, so the
-        result and its undo entry are identical either way.
+        the same :meth:`_replay` the previewed commit uses, so the result and
+        its undo entry are identical either way.
 
         ``prepare_operation`` runs INSIDE the chunk here (the previewed path runs
         it at enable, outside): with no preview session to keep it out of, a
@@ -1103,7 +1107,7 @@ class Preview(_PreviewInternal):
             self.operated_objects.clear()
             self.operated_objects.update(str(s) for s in sel)
 
-        self._replay_under_undo(pre_step=prepare_and_capture)
+        self._replay(pre_step=prepare_and_capture)
         return True
 
     def _sync_create_enabled(self, previewing: bool) -> None:

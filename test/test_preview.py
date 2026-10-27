@@ -489,6 +489,31 @@ class TestPreviewBypass(MayaTkTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(preview.operation_instance.perform_count, 1)
 
+    def _assert_one_undo_takes_back_commit_and_finalize(self, previewed):
+        """The finalize step (Duplicate Radial's regroup) belongs to the commit's
+        undo entry: it ran after the chunk closed, so the first Ctrl+Z took back
+        only the regroup and the copies needed a second."""
+        preview = self._preview(
+            finalize_func=lambda: cmds.group(self.cube, name="finalize_grp")
+        )
+        cmds.select(self.cube)
+        initial_y = self._y(self.cube)
+        if previewed:
+            preview.enable()
+        preview.finalize_changes()
+        self.assertTrue(cmds.objExists("finalize_grp"))
+        self.assertAlmostEqual(self._y(self.cube), initial_y + 1, places=4)
+
+        cmds.undo()
+        self.assertFalse(cmds.objExists("finalize_grp"), "the finalize step outlived the undo")
+        self.assertAlmostEqual(self._y(self.cube), initial_y, places=4)
+
+    def test_previewed_commit_and_finalize_are_one_undo(self):
+        self._assert_one_undo_takes_back_commit_and_finalize(previewed=True)
+
+    def test_bypassed_commit_and_finalize_are_one_undo(self):
+        self._assert_one_undo_takes_back_commit_and_finalize(previewed=False)
+
     def test_bypassed_commit_runs_finalize_func(self):
         preview = self._preview(finalize_func=lambda: self.messages.append("finalized"))
         cmds.select(self.cube)
