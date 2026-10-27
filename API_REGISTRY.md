@@ -1370,7 +1370,8 @@ Consumer-facing segment discovery for sequencer + manifest.
   - `CoreUtils.undo_chunk(name: str = '')` *(static)* — Group operations into a single Maya undo chunk.
   - `CoreUtils.undo_disabled()` *(static)* — Run a block without recording anything into the undo queue.
   - `CoreUtils.suspended_refresh()` *(static)* — Suspend viewport refresh for the duration of a bulk operation.
-  - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — A decorator to pass the current selection to the target parameter if None is given.
+  - `CoreUtils.selected(func: Callable) -> Callable` *(static)* — Pass the selection (:meth:`selected_objects`) to *func*'s target parameter
+  - `CoreUtils.selected_objects() -> List[str]` *(static)* — The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
   - `CoreUtils.preserved_selection()` *(static)* — Restore the viewport selection after a scene-mutating block.
   - `CoreUtils.temp_option_vars(values: Dict[str, Union[int, float, str]])` *(static)* — Set Maya optionVars for a block, then put the user's values back.
   - `CoreUtils.undoable(fn=None, *, name: str = '', suspend_refresh: bool = False)` *(static)* — A decorator to place a function into Maya's undo chunk.

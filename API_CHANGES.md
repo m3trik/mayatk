@@ -50,8 +50,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_off` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_on` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 
-## Added (5)
+## Added (6)
 
+- `core_utils/_core_utils.py::CoreUtils.selected_objects() -> List[str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`

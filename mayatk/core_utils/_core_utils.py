@@ -362,47 +362,49 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
 
     @staticmethod
     def selected(func: Callable) -> Callable:
-        """A decorator to pass the current selection to the target parameter if None is given.
+        """Pass the selection (:meth:`selected_objects`) to *func*'s target parameter
+        when it is ``None``; with nothing selected, return ``[]`` without calling it.
 
-        The selection is injected into the first *non-receiver* parameter: index 0
-        for static methods, index 1 for instance / class methods. The receiver is
-        detected by introspecting the wrapped callable's signature (``functools.wraps``
-        exposes ``__wrapped__``, so the real parameter names are visible even through
-        an inner ``undoable`` / ``reparent`` wrapper) rather than guessing from the
-        runtime type of the first argument, which misidentifies a data-bearing first
-        positional argument as ``self``.
+        The target is the first *non-receiver* parameter: index 0 for static
+        methods, index 1 for instance / class methods. The receiver is detected by
+        introspecting the wrapped callable's signature (``functools.wraps`` exposes
+        ``__wrapped__``, so the real parameter names are visible even through an
+        inner wrapper) rather than guessing from the runtime type of the first
+        argument, which misidentifies a data-bearing first positional argument as
+        ``self``. A target given by keyword is found by name.
         """
-
-        # Receiver detection is fixed at decoration time (the wrapped callable's
-        # signature never changes), so resolve the target index once here rather
-        # than re-introspecting on every call.
+        # Resolved once, at decoration: the wrapped callable's signature never changes.
         try:
             params = list(inspect.signature(func).parameters.values())
             has_receiver = bool(params) and params[0].name in ("self", "cls")
         except (TypeError, ValueError):
             params, has_receiver = [], False
         target = 1 if has_receiver else 0
-        # Given by keyword, the target is found by name: only positions were
-        # read before, so ``f(objects=nodes)`` ran on the selection instead.
         name = params[target].name if len(params) > target else None
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
             if name in kwargs:
                 if kwargs[name] is None:
-                    selection = cmds.ls(selection=True) or []
+                    selection = CoreUtils.selected_objects()
                     if not selection:
                         return []
                     kwargs = {**kwargs, name: selection}
             elif len(args) <= target or args[target] is None:
-                selection = cmds.ls(selection=True) or []
+                selection = CoreUtils.selected_objects()
                 if not selection:
                     return []
                 args = args[:target] + (selection,) + args[target + 1 :]
-
             return func(*args, **kwargs)
 
         return wrapped
+
+    @staticmethod
+    def selected_objects() -> List[str]:
+        """The current selection, ``[]`` when it is empty (``cmds.ls(selection=True)``).
+        What :meth:`selected` passes; twin of blendertk's ``CoreUtils.selected_objects``.
+        """
+        return cmds.ls(selection=True) or []
 
     @staticmethod
     @contextlib.contextmanager

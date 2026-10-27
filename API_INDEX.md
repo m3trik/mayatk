@@ -309,7 +309,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class BoundingBox`
   - methods: corners
 - `class CoreUtils(pythontk.CoreUtils, _CoreUtilsInternal)`
-  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, preserved_selection, temp_option_vars, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
+  - methods: undo_chunk, undo_disabled, suspended_refresh, selected, selected_objects, preserved_selection, temp_option_vars, undoable, reparent, wrap_control, confirm_existence, node_handles, resolve_handles, get_mfn_mesh, get_array_type, convert_array_type, get_parameter_mapping, set_parameter_mapping, build_mesh_similarity_mapping, get_mel_globals, reorder_objects, as_strings, short_name, leaf_name, get_bounding_box
 
 ### `core_utils/auto_instancer/_auto_instancer.py` — Scene auto-instancer: convert geometrically identical meshes to instances.
 - `class InstanceCandidate`
