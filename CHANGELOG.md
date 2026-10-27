@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-26 -- `optimize_keys` keeps a caller's viewport suspension (`anim_utils/_curve_optimize.py`).** It suspended and resumed the viewport with raw `cmds.refresh` calls, so inside the scene exporter, which suspends it for the whole run, every optimize resumed it for the rest of the export. It now uses the re-entrant `CoreUtils.suspended_refresh()`.
+  - Test(s): `test_anim_utils.py` +1 (`test_optimize_keys_keeps_a_callers_refresh_suspension`), red first.
 - **2026-10-26 -- Drop the redundant OpenEXR flags (`light_utils/lightmap_baker/lightmap_baker.py`, `mat_utils/texture_baker.py`, `nurbs_utils/image_tracer.py`).** pythontk's root sets `OPENCV_IO_ENABLE_OPENEXR` before any module of this package loads, so the module copies did nothing.
   - Test(s): none -- no behavior change.
 - **2026-10-26 -- Remove the aliases whose deprecation window has ended (`anim_utils/shots/shot_manifest/behaviors/`, `anim_utils/shots/shot_manifest/mapping/`, `edit_utils/curtain/`, `node_utils/attributes/channels/`).** `shot_manifest.behaviors.load_behavior` / `list_behaviors` / `resolve_keys` / `templates` -> `Behaviors.<name>`; the `shot_manifest.mapping` package (`Mapping`, `MappingSpec`, `DEFAULT_DIR`, `AUDIO_METHODS`; deleted) -> `pythontk.core_utils.engines.shots.manifest.mapping`; `edit_utils.curtain.catenary_shape` / `sag_profile` -> `ptk.MathUtils.catenary` / `catenary_sag`; `node_utils.attributes.channels.launch` -> `ChannelsSlots.launch`. All warned since 2026-09-26 (`remove_in="0.22.0"`); `CurtainMesh`'s docstring now names the `ptk.MathUtils` methods.
