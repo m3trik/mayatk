@@ -351,12 +351,13 @@ class TestProducerContract(MayaTkTestCase):
         super().tearDown()
 
     def test_every_producer_is_a_declared_deliverable_record(self):
-        specs = SR.check_producers(FbxUtils.PRODUCERS)
-        self.assertEqual(len(specs), len(FbxUtils.PRODUCERS))
+        # The library's rows and those installed tools register (tentacle's
+        # Emissive Groups): every one a declared record that imports.
+        rows = SR.producer_rows(FbxUtils.PRODUCERS, FbxUtils.HOST)
+        specs = SR.check_producers(rows)
+        self.assertEqual(len(specs), len(rows))
         resolved = FbxUtils.producers()
-        self.assertEqual(
-            set(resolved), set(FbxUtils.PRODUCERS), "every producer imports"
-        )
+        self.assertEqual(set(resolved), set(rows), "every producer imports")
 
     def test_producers_are_pure_on_an_empty_scene(self):
         """A producer RETURNS its record and never writes: on an empty scene

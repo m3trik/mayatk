@@ -452,10 +452,6 @@ class DataNodes(ptk.SceneStoreBase):
             "mayatk.anim_utils.smart_bake.bake_session",
             "BakeSessionStore",
         ),
-        ptk.SceneRecords.EMISSIVE_REGISTRY.key: (
-            "mayatk.mat_utils.emissive_groups",
-            "EmissiveGroups",
-        ),
     }
 
     @classmethod

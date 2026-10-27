@@ -875,7 +875,7 @@ class TestBlenderBridgeShotManifest(MayaTkTestCase):
     def test_every_portable_record_rides_the_records_section(self):
         """An emissive group crosses with its registry, its membership (scoped to
         the send, spelled by the carrier) and each member's face count."""
-        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
 
         cube, _shot = self._scene_with_a_shot()
         EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])

@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 255,
+          "line": 253,
           "deprecated": false
         }
       ]
@@ -14428,7 +14428,7 @@
               "kind": "classmethod",
               "signature": "(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]",
               "summary": ":attr:`PRODUCERS` resolved to callables, unimportable ones skipped;",
-              "line": 2158,
+              "line": 2153,
               "deprecated": false
             },
             {
@@ -14437,7 +14437,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext",
               "summary": "A context for this scene: provenance filled in, *decisions*",
-              "line": 2174,
+              "line": 2169,
               "deprecated": false
             },
             {
@@ -14446,7 +14446,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot",
               "summary": "Assemble every producer's record and commit the carrier ONCE.",
-              "line": 2193,
+              "line": 2188,
               "deprecated": false
             },
             {
@@ -14455,7 +14455,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot",
               "summary": "Commit a tool's own records at AUTHORING time, with this scene's",
-              "line": 2256,
+              "line": 2251,
               "deprecated": false
             },
             {
@@ -14464,7 +14464,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "The stager table for a bracket: the known stagers (*names* narrows",
-              "line": 2279,
+              "line": 2274,
               "deprecated": false
             },
             {
@@ -14473,7 +14473,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "Run every stager's ``prepare`` now and return the table that ran.",
-              "line": 2297,
+              "line": 2292,
               "deprecated": false
             },
             {
@@ -14482,7 +14482,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None) -> Optional[ptk.ExportSnapshot]",
               "summary": "Open an export bracket (outermost only): stage the scene, then --",
-              "line": 2342,
+              "line": 2337,
               "deprecated": false
             },
             {
@@ -14491,7 +14491,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Close an export bracket (outermost only): put back the scene's own",
-              "line": 2397,
+              "line": 2392,
               "deprecated": false
             },
             {
@@ -14500,7 +14500,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None)",
               "summary": "Stage the scene (and publish, given a *ctx* or *only* -- see",
-              "line": 2427,
+              "line": 2422,
               "deprecated": false
             },
             {
@@ -14509,7 +14509,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 2448,
+              "line": 2443,
               "deprecated": false
             },
             {
@@ -14518,7 +14518,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Run *spec*'s producer before every FBX export this session",
-              "line": 2470,
+              "line": 2465,
               "deprecated": false
             },
             {
@@ -14527,7 +14527,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Opt *spec* out of the session hook;",
-              "line": 2478,
+              "line": 2473,
               "deprecated": false
             },
             {
@@ -14536,7 +14536,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None",
               "summary": "Run *prepare* before and *finish* after every FBX export this",
-              "line": 2485,
+              "line": 2480,
               "deprecated": false
             },
             {
@@ -14545,7 +14545,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> None",
               "summary": "",
-              "line": 2502,
+              "line": 2497,
               "deprecated": false
             },
             {
@@ -14554,7 +14554,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export -- shot-agnostic.",
-              "line": 2507,
+              "line": 2502,
               "deprecated": false
             },
             {
@@ -14563,7 +14563,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 2520,
+              "line": 2515,
               "deprecated": false
             },
             {
@@ -14572,7 +14572,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 2735,
+              "line": 2730,
               "deprecated": false
             }
           ]
@@ -21033,188 +21033,6 @@
       "constants": []
     },
     {
-      "relpath": "mat_utils/emissive_groups.py",
-      "summary": "Emissive groups — named face sets that gate emissive regions at runtime.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "EmissiveGroups",
-          "summary": "Author, bake, and export named emissive face-groups (see module doc).",
-          "line": 214,
-          "bases": [
-            "_EmissiveGroupsInternal",
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
-            {
-              "name": "add_group",
-              "qualname": "EmissiveGroups.add_group",
-              "kind": "classmethod",
-              "signature": "(cls, name: str, faces=None, default: float = 1.0) -> str",
-              "summary": "Create a group from faces (or the selection), or extend an existing one.",
-              "line": 227,
-              "deprecated": false
-            },
-            {
-              "name": "remove_group",
-              "qualname": "EmissiveGroups.remove_group",
-              "kind": "classmethod",
-              "signature": "(cls, name: str) -> None",
-              "summary": "Delete a group's set, registry entry, and any keyable weight attr;",
-              "line": 257,
-              "deprecated": false
-            },
-            {
-              "name": "list_groups",
-              "qualname": "EmissiveGroups.list_groups",
-              "kind": "classmethod",
-              "signature": "(cls) -> Dict[str, dict]",
-              "summary": "``{name: {\"slot\", \"default\", \"faces\"(count), \"missing\"(set gone),",
-              "line": 270,
-              "deprecated": false
-            },
-            {
-              "name": "select_group",
-              "qualname": "EmissiveGroups.select_group",
-              "kind": "classmethod",
-              "signature": "(cls, name: str) -> None",
-              "summary": "",
-              "line": 288,
-              "deprecated": false
-            },
-            {
-              "name": "set_default",
-              "qualname": "EmissiveGroups.set_default",
-              "kind": "classmethod",
-              "signature": "(cls, name: str, default: float) -> None",
-              "summary": "Set the group's default gate weight (0-1; clamped).",
-              "line": 295,
-              "deprecated": false
-            },
-            {
-              "name": "make_weights_keyable",
-              "qualname": "EmissiveGroups.make_weights_keyable",
-              "kind": "classmethod",
-              "signature": "(cls, names=None) -> Dict[str, str]",
-              "summary": "Add a keyable 0-1 float per group on the ``data_export`` carrier.",
-              "line": 308,
-              "deprecated": false
-            },
-            {
-              "name": "remove_keyable_weights",
-              "qualname": "EmissiveGroups.remove_keyable_weights",
-              "kind": "classmethod",
-              "signature": "(cls, names=None) -> List[str]",
-              "summary": "Delete the keyable weight attrs — including their animation — and",
-              "line": 356,
-              "deprecated": false
-            },
-            {
-              "name": "key_weight",
-              "qualname": "EmissiveGroups.key_weight",
-              "kind": "classmethod",
-              "signature": "(cls, name: str, value: Optional[float] = None, frame: Optional[float] = None, auto_keyable: bool = True) -> str",
-              "summary": "Key one group's weight on its carrier attr.",
-              "line": 382,
-              "deprecated": false
-            },
-            {
-              "name": "compact_slots",
-              "qualname": "EmissiveGroups.compact_slots",
-              "kind": "classmethod",
-              "signature": "(cls) -> List[int]",
-              "summary": "Reclaim retired slots.",
-              "line": 419,
-              "deprecated": false
-            },
-            {
-              "name": "validate",
-              "qualname": "EmissiveGroups.validate",
-              "kind": "classmethod",
-              "signature": "(cls) -> List[str]",
-              "summary": "Non-fatal authoring warnings (empty list = clean).",
-              "line": 440,
-              "deprecated": false
-            },
-            {
-              "name": "bake_vertex_colors",
-              "qualname": "EmissiveGroups.bake_vertex_colors",
-              "kind": "classmethod",
-              "signature": "(cls, force: bool = False) -> dict",
-              "summary": "Bake membership into the ``emissiveGroups`` RGBA color set.",
-              "line": 502,
-              "deprecated": false
-            },
-            {
-              "name": "bake_mask",
-              "qualname": "EmissiveGroups.bake_mask",
-              "kind": "classmethod",
-              "signature": "(cls, output_path: Optional[str] = None, resolution: int = 512, padding_px: int = 4, uv_set: Optional[str] = None) -> dict",
-              "summary": "Rasterize membership into an ``_EMask`` RGBA texture (channels encoding).",
-              "line": 575,
-              "deprecated": false
-            },
-            {
-              "name": "transfer_out",
-              "qualname": "EmissiveGroups.transfer_out",
-              "kind": "classmethod",
-              "signature": "(cls, ctx: 'ptk.TransferContext') -> Optional[dict]",
-              "summary": "The emissive registry's hand-off payload: the registry, each",
-              "line": 660,
-              "deprecated": false
-            },
-            {
-              "name": "transfer_in",
-              "qualname": "EmissiveGroups.transfer_in",
-              "kind": "classmethod",
-              "signature": "(cls, payload: dict, ctx: 'ptk.TransferContext') -> None",
-              "summary": "Land a received emissive-registry payload (:meth:`transfer_out`'s",
-              "line": 694,
-              "deprecated": false
-            },
-            {
-              "name": "merge_carrier",
-              "qualname": "EmissiveGroups.merge_carrier",
-              "kind": "classmethod",
-              "signature": "(cls, carriers, other, ctx) -> None",
-              "summary": "Another scene's groups merged into the registry: a member set the",
-              "line": 733,
-              "deprecated": false
-            },
-            {
-              "name": "discard_carrier",
-              "qualname": "EmissiveGroups.discard_carrier",
-              "kind": "classmethod",
-              "signature": "(cls, carriers, other, ctx) -> None",
-              "summary": "Another scene's groups were dropped: delete the member sets it",
-              "line": 750,
-              "deprecated": false
-            },
-            {
-              "name": "export_record",
-              "qualname": "EmissiveGroups.export_record",
-              "kind": "classmethod",
-              "signature": "(cls, ctx: 'ptk.ExportContext') -> Optional['ptk.Record']",
-              "summary": "The ``emissive_groups`` manifest record, or ``None`` when no group",
-              "line": 787,
-              "deprecated": false
-            },
-            {
-              "name": "refresh_export_metadata",
-              "qualname": "EmissiveGroups.refresh_export_metadata",
-              "kind": "classmethod",
-              "signature": "(cls) -> Optional[str]",
-              "summary": "Republish the ``emissive_groups`` channel on the ``data_export``",
-              "line": 804,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
       "relpath": "mat_utils/game_shader.py",
       "summary": "",
       "functions": [],
@@ -27501,7 +27319,7 @@
               "kind": "classmethod",
               "signature": "(cls, namespace: str) -> Dict[ptk.Scope, str]",
               "summary": "The carriers a referenced module keeps under *namespace*",
-              "line": 462,
+              "line": 458,
               "deprecated": false
             },
             {
@@ -27510,7 +27328,7 @@
               "kind": "classmethod",
               "signature": "(cls, scope: ptk.Scope) -> bool",
               "summary": "Delete the ``data_export`` carrier when every attribute it adds is",
-              "line": 510,
+              "line": 506,
               "deprecated": false
             },
             {
@@ -27519,7 +27337,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "The open scene's file, ``\"\"`` while unsaved",
-              "line": 653,
+              "line": 649,
               "deprecated": false
             },
             {
@@ -27528,7 +27346,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: str, source: Optional[str] = None) -> Optional[str]",
               "summary": "Record that the scene file *scene* stands in for the scene *source*;",
-              "line": 676,
+              "line": 672,
               "deprecated": false
             },
             {
@@ -27537,7 +27355,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: Optional[str] = None) -> Optional[str]",
               "summary": "The scene the scene file *scene* (default: the open one) stands in",
-              "line": 710,
+              "line": 706,
               "deprecated": false
             },
             {
@@ -27546,7 +27364,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: Optional[str] = None) -> Optional[str]",
               "summary": "Where a save of the stand-in *scene* (default: the open one) lands",
-              "line": 721,
+              "line": 717,
               "deprecated": false
             },
             {
@@ -27555,7 +27373,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[ptk.Workspace]",
               "summary": "The project the open scene's files belong to, as a ``ptk.Workspace``;",
-              "line": 831,
+              "line": 827,
               "deprecated": false
             },
             {
@@ -27564,7 +27382,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The root of :meth:`scene_workspace`, or ``None`` without a project.",
-              "line": 852,
+              "line": 848,
               "deprecated": false
             },
             {
@@ -27573,7 +27391,7 @@
               "kind": "classmethod",
               "signature": "(cls, subfolder: str = '', create: bool = False) -> str",
               "summary": "Where a tool's generated maps for the open scene go by default.",
-              "line": 859,
+              "line": 855,
               "deprecated": false
             },
             {
@@ -27582,7 +27400,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> bool",
               "summary": "Keep the path records spelled from the project of whichever file",
-              "line": 906,
+              "line": 902,
               "deprecated": false
             },
             {
@@ -27591,7 +27409,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> bool",
               "summary": ":meth:`install_path_rebase` unless a copy of it already is.",
-              "line": 956,
+              "line": 952,
               "deprecated": false
             },
             {
@@ -27600,7 +27418,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Remove the re-base hook's callbacks (every copy's, by id).",
-              "line": 972,
+              "line": 968,
               "deprecated": false
             }
           ]

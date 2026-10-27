@@ -3222,7 +3222,7 @@ class TestApplySceneData(_ShotsCase):
     def test_an_emissive_group_lands_through_the_importer_spelling(self):
         """Every portable record rides the generic ``records`` section; its owner
         resolves members exactly as the shots do."""
-        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
 
         dotted = cmds.polyCube(name="CubeFBXASC046001")[0]
         path = self._manifest(

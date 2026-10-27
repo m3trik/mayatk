@@ -167,7 +167,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils) — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - [`mat_utils/arnold_bridge.py`](#mat_utils--arnold_bridge) — Arnold render-bridge management.
 - [`mat_utils/bake_sets.py`](#mat_utils--bake_sets) — Scene-stored bake sets: named object sets the bake tools read.
-- [`mat_utils/emissive_groups.py`](#mat_utils--emissive_groups) — Emissive groups — named face sets that gate emissive regions at runtime.
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
@@ -276,7 +275,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L255) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L253) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -3368,31 +3367,6 @@ Scene-stored bake sets: named object sets the bake tools read.
 - **[`class LightmapIsolateSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L247)** — Objects that bake in a pass of their own, out of every other bake's render.
   - `LightmapIsolateSet.groups(cls) -> List[List[str]]` *(class)* — The set's meshes by member: what lies under each one moves together.
   - `LightmapIsolateSet.meshes(cls) -> List[str]` *(class)* — Every mesh :meth:`groups` holds: each member with all it carries.
-
-<a id="mat_utils--emissive_groups"></a>
-### `mat_utils/emissive_groups.py`
-
-Emissive groups — named face sets that gate emissive regions at runtime.
-
-- **[`class EmissiveGroups(_EmissiveGroupsInternal, pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/mat_utils/emissive_groups.py#L214)** — Author, bake, and export named emissive face-groups (see module doc).
-  - `EmissiveGroups.add_group(cls, name: str, faces=None, default: float = 1.0) -> str` *(class)* — Create a group from faces (or the selection), or extend an existing one.
-  - `EmissiveGroups.remove_group(cls, name: str) -> None` *(class)* — Delete a group's set, registry entry, and any keyable weight attr;
-  - `EmissiveGroups.list_groups(cls) -> Dict[str, dict]` *(class)* — ``{name: {"slot", "default", "faces"(count), "missing"(set gone),
-  - `EmissiveGroups.select_group(cls, name: str) -> None` *(class)*
-  - `EmissiveGroups.set_default(cls, name: str, default: float) -> None` *(class)* — Set the group's default gate weight (0-1; clamped).
-  - `EmissiveGroups.make_weights_keyable(cls, names=None) -> Dict[str, str]` *(class)* — Add a keyable 0-1 float per group on the ``data_export`` carrier.
-  - `EmissiveGroups.remove_keyable_weights(cls, names=None) -> List[str]` *(class)* — Delete the keyable weight attrs — including their animation — and
-  - `EmissiveGroups.key_weight(cls, name: str, value: Optional[float] = None, frame: Optional[float] = None, auto_keyable: bool = True) -> str` *(class)* — Key one group's weight on its carrier attr.
-  - `EmissiveGroups.compact_slots(cls) -> List[int]` *(class)* — Reclaim retired slots.
-  - `EmissiveGroups.validate(cls) -> List[str]` *(class)* — Non-fatal authoring warnings (empty list = clean).
-  - `EmissiveGroups.bake_vertex_colors(cls, force: bool = False) -> dict` *(class)* — Bake membership into the ``emissiveGroups`` RGBA color set.
-  - `EmissiveGroups.bake_mask(cls, output_path: Optional[str] = None, resolution: int = 512, padding_px: int = 4, uv_set: Optional[str] = None) -> dict` *(class)* — Rasterize membership into an ``_EMask`` RGBA texture (channels encoding).
-  - `EmissiveGroups.transfer_out(cls, ctx: 'ptk.TransferContext') -> Optional[dict]` *(class)* — The emissive registry's hand-off payload: the registry, each
-  - `EmissiveGroups.transfer_in(cls, payload: dict, ctx: 'ptk.TransferContext') -> None` *(class)* — Land a received emissive-registry payload (:meth:`transfer_out`'s
-  - `EmissiveGroups.merge_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's groups merged into the registry: a member set the
-  - `EmissiveGroups.discard_carrier(cls, carriers, other, ctx) -> None` *(class)* — Another scene's groups were dropped: delete the member sets it
-  - `EmissiveGroups.export_record(cls, ctx: 'ptk.ExportContext') -> Optional['ptk.Record']` *(class)* — The ``emissive_groups`` manifest record, or ``None`` when no group
-  - `EmissiveGroups.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Republish the ``emissive_groups`` channel on the ``data_export``
 
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`

@@ -2068,11 +2068,6 @@ class FbxUtils(ptk.HelpMixin):
             "ArticulatedRig",
             "export_record",
         ),
-        ptk.SceneRecords.EMISSIVE_GROUPS: (
-            "mayatk.mat_utils.emissive_groups",
-            "EmissiveGroups",
-            "export_record",
-        ),
         ptk.SceneRecords.LIGHTMAPS: (
             "mayatk.light_utils.lightmap_baker.lightmap_records",
             "LightmapRecords",

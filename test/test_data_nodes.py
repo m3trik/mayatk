@@ -709,7 +709,7 @@ class TestRecordHandoff(MayaTkTestCase):
     hand-off sidecar's sections, landed through the same engine."""
 
     def _group_on_a_cube(self):
-        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
 
         cube = cmds.polyCube(name="cube")[0]
         EmissiveGroups.add_group("glow", [f"{cube}.f[1]", f"{cube}.f[3]"])
@@ -720,7 +720,7 @@ class TestRecordHandoff(MayaTkTestCase):
         return DataNodes.transfer_sections(spell=leaf)
 
     def test_an_emissive_group_crosses_with_its_membership(self):
-        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
 
         self._group_on_a_cube()
         sections = json.loads(json.dumps(self._sections()))  # as the sidecar holds it
@@ -732,7 +732,7 @@ class TestRecordHandoff(MayaTkTestCase):
         self.assertEqual(EmissiveGroups.list_groups()["glow"]["faces"], 2, ctx.notes)
 
     def test_a_member_whose_face_count_changed_keeps_no_membership(self):
-        from mayatk.mat_utils.emissive_groups import EmissiveGroups
+        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
 
         self._group_on_a_cube()
         sections = self._sections()

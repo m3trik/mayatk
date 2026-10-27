@@ -5,7 +5,7 @@
 :class:`BakeSet` is the storage: a plain ``objectSet`` under a fixed name, so
 it saves with the file, shows up in the Outliner, and can't go stale against a
 scene it was never captured in. Same pattern as
-:class:`mayatk.mat_utils.emissive_groups.EmissiveGroups` and
+tentacle's Emissive Groups tool (its group sets) and
 :class:`mayatk.display_utils.color_id.ColorId`. Each subclass is one question
 the scene answers:
 
