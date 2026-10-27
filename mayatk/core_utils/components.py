@@ -1648,9 +1648,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 if shapes and cmds.objectType(shapes[0]) == "mesh":
                     objs.append(obj)
         if len(objs) < 2:
-            raise ValueError(
-                "At least one source and one target mesh must be polygonal meshes."
-            )
+            raise ValueError("Transfer needs a source mesh and one or more target meshes.")
 
         source_mesh, *target_meshes = objs
         sample_space_value = space_map[space]

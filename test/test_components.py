@@ -752,6 +752,17 @@ class TestComponents(MayaTkTestCase):
         with self.assertRaises(ValueError):
             Components.transfer_normals([grp1, grp2])
 
+    def test_transfer_normals_of_one_mesh_asks_for_a_source_and_a_target(self):
+        """The panel shows this error as it is: one mesh selected must read as a
+        missing target, not as a mesh that is not polygonal."""
+        cube = cmds.polyCube(name="lone_cube")[0]
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer_normals([cube])
+        self.assertEqual(
+            str(caught.exception),
+            "Transfer needs a source mesh and one or more target meshes.",
+        )
+
     # -------------------------------------------------------------------------
     # Crease
     # -------------------------------------------------------------------------
