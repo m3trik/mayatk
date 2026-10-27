@@ -980,6 +980,19 @@ class TestUvUtils(MayaTkTestCase):
         self.assertAlmostEqual(u_min, 0.2, places=5)
         self.assertAlmostEqual(v_min, 0.3, places=5)
 
+    def test_gather_to_udim_keeps_a_callers_refresh_suspension(self):
+        """Inside an outer ``suspended_refresh`` the gather must not resume the
+        viewport: a raw ``refresh(suspend=False)`` released the caller's
+        suspension for the rest of its run."""
+        from unittest.mock import patch
+
+        shell = self._uv_shell_at(3.2, 2.3)
+        with CoreUtils.suspended_refresh():
+            with patch("maya.cmds.refresh", wraps=cmds.refresh) as spy:
+                UvUtils.gather_to_udim(shell, udim=1001)
+        resumed = [c for c in spy.call_args_list if c.kwargs.get("suspend") is False]
+        self.assertEqual(resumed, [], "the gather resumed the caller's viewport")
+
     def test_gather_to_udim_leaves_resident_shells_alone(self):
         """Shells already inside the target tile are untouched (moved count 0)."""
         shell = self._uv_shell_at(0.2, 0.3)
