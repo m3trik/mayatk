@@ -1,8 +1,16 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 8e85ad41)._
+_Diff vs the last release (origin/main @ 4cc9baa3)._
 
-No public API changes since the last release (origin/main @ 8e85ad41).
+## Added (7)
+
+- `__init__.py::MOVED_NAMES(constant)`
+- `anim_utils/_anim_utils.py::AnimUtils.exact_scale(cls)`
+- `anim_utils/_anim_utils.py::AnimUtils.hold_segments(curve: str, times: List[float]) -> List[bool]`
+- `anim_utils/_anim_utils.py::AnimUtils.move_curve_keys(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int`
+- `anim_utils/_anim_utils.py::AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]`
+- `anim_utils/_anim_utils.py::AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]`
+- `env_utils/fbx_utils.py::FbxUtils.hook(cls, role: str) -> Optional[Callable]`
 
 ## Deprecations (17)
 
@@ -25,4 +33,3 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - `env_utils/_env_utils.py::EnvUtils.scene_workspace` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
-

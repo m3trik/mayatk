@@ -436,6 +436,9 @@ class DataNodes(ptk.SceneStoreBase):
 
     #: The record owners (``ptk.SceneStoreBase.OWNERS``: what each hook means
     #: and when it runs) -- resolved lazily, like ``FbxUtils.PRODUCERS``.
+    #: The host whose registered record owners join :attr:`OWNERS`
+    #: (``ptk.SceneStoreBase.owner_rows``).
+    HOST = "maya"
     OWNERS: Dict[str, Tuple[str, str]] = {
         ptk.SceneRecords.SHOT_STORE.key: (
             "mayatk.anim_utils.shots._shots",

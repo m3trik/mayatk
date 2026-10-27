@@ -117,6 +117,25 @@ class FbxUtils(ptk.HelpMixin):
         "active",
     )
 
+    #: The tool code this module reaches, one ``(module, class, method)`` row
+    #: per role, resolved lazily (:meth:`hook`): a tool that moves out of this
+    #: library takes its row with it and registers it as an entry point
+    #: (``ptk.SceneRecords.hook_row``), so these calls never import upward.
+    HOOKS: Dict[str, Tuple[str, str, str]] = {
+        "take_stash": TAKE_STASH,
+        "dependency_dirs": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "search_dirs"),
+        "offset_fold": ("mayatk.anim_utils.smart_bake._smart_bake", "SmartBake", "fold_offsets"),
+    }
+
+    @classmethod
+    def hook(cls, role: str) -> Optional[Callable]:
+        """The callable :attr:`HOOKS` names for *role*, else the one an installed
+        package registers for :attr:`HOST`; ``None`` when neither resolves (the
+        caller then does without it, as for an unimportable producer)."""
+        row = ptk.SceneRecords.hook_row(cls.HOOKS.get(role), cls.HOST, role)
+        resolved = cls._resolve_row(f"Hook {role!r}", *row) if row else None
+        return resolved[0] if resolved else None
+
     @staticmethod
     def load_plugin():
         """Ensure the fbxmaya plugin is loaded."""
@@ -547,15 +566,18 @@ class FbxUtils(ptk.HelpMixin):
         log: logging.Logger,
     ) -> Tuple[List[str], str, Iterable[Any]]:
         """:meth:`embed_dependencies`'s inputs, each ``None`` asked of the scene."""
-        if search_dirs is None or walk_root is None:
-            from mayatk.light_utils.lightmap_baker.lightmap_records import (
-                LightmapRecords,
-            )
+        from mayatk.env_utils._env_utils import EnvUtils
 
-            if search_dirs is None:
-                search_dirs = LightmapRecords.search_dirs()
-            if walk_root is None:
-                walk_root = LightmapRecords._walk_root()
+        if search_dirs is None:
+            dirs = FbxUtils.hook("dependency_dirs")
+            if dirs is None:
+                log.warning(
+                    "No dependency-folder hook resolved (the lightmap records'): "
+                    "files are searched for in the project's texture folders only."
+                )
+            search_dirs = dirs() if dirs else EnvUtils.texture_search_dirs()
+        if walk_root is None:
+            walk_root = EnvUtils.get_env_info("sourceimages") or ""
         if files is None:
             files = FbxUtils._shipped_audio(file_path, log)
         return list(search_dirs), walk_root, files
@@ -1068,11 +1090,11 @@ class FbxUtils(ptk.HelpMixin):
         from mayatk.core_utils._core_utils import CoreUtils
 
         names = ", ".join(repr(t) for t in layout["stash"])
-        row = cls._resolve_row("Take stash", *cls.TAKE_STASH)
-        if not row or row[0] is None:
+        active = cls.hook("take_stash")
+        if active is None:
             log.warning(f"Key Stash is unavailable: {names} left out of the import.")
             return []
-        store = row[0]()
+        store = active()
         index = {take["name"]: take["index"] for take in layout["takes"]}
         parked = []
         with CoreUtils.undo_disabled():
@@ -1602,17 +1624,20 @@ class FbxUtils(ptk.HelpMixin):
                 )
         restore = None
         folded: List[str] = []
-        if shipped:
-            from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
-
+        fold = cls.hook("offset_fold") if shipped else None
+        if shipped and fold is None:
+            log.warning(
+                "offsetParentMatrix: no offset fold is installed, so this write "
+                "ships every offset and every node that ignores its parent as the "
+                "plug-in writes them."
+            )
+        if fold is not None:
             try:
                 with contextlib.ExitStack() as held:
                     held.enter_context(CoreUtils.undo_disabled())
                     held.enter_context(CoreUtils.preserved_selection())
                     held.enter_context(CoreUtils.suspended_refresh())
-                    result, restore = SmartBake.fold_offsets(
-                        shipped, bake_range=bake_range
-                    )
+                    result, restore = fold(shipped, bake_range=bake_range)
             except Exception as error:  # noqa: BLE001 -- the write still ships
                 log.warning(
                     "offsetParentMatrix: the fold failed and was undone, so this "
@@ -2005,6 +2030,11 @@ class FbxUtils(ptk.HelpMixin):
     # runs the subsystems that opted in for ANY FBX export (File > Export, the
     # Game Exporter, a raw ``cmds.file``), so their records ride out fresh.
 
+    #: The host a tool outside this library registers its producers, stagers
+    #: and record owners under (``ptk.SceneRecords.registered_hooks``): an
+    #: installed one joins :attr:`PRODUCERS` and :attr:`STAGERS` unimported.
+    HOST = "maya"
+
     #: The records this DCC produces: ``ptk.SceneRecords`` spec -> (module,
     #: class, classmethod taking the ExportContext).  Add a producer HERE and
     #: declare its record THERE; an unregistered key fails
@@ -2132,7 +2162,7 @@ class FbxUtils(ptk.HelpMixin):
             None if only is None else {ptk.SceneRecords.resolve(k).key for k in only}
         )
         table: Dict[Any, Callable] = {}
-        for spec, row in cls.PRODUCERS.items():
+        for spec, row in ptk.SceneRecords.producer_rows(cls.PRODUCERS, cls.HOST).items():
             if wanted is not None and spec.key not in wanted:
                 continue
             resolved = cls._resolve_row(f"Producer for {spec.key!r}", *row)
@@ -2254,7 +2284,7 @@ class FbxUtils(ptk.HelpMixin):
         -- those always run, a preview that must detach before the write is
         one."""
         table: Dict[str, Tuple[Optional[Callable], Optional[Callable]]] = {}
-        for name, row in cls.STAGERS.items():
+        for name, row in ptk.SceneRecords.stager_rows(cls.STAGERS, cls.HOST).items():
             if names is not None and name not in names:
                 continue
             resolved = cls._resolve_row(f"Stager {name!r}", *row)

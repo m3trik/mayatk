@@ -85,7 +85,7 @@ def scale_attribute_keys(
             (old_start, old_end),
             lambda t: new_start + (t - old_start) * ratio,
         ):
-            with AnimUtils._exact_scale():  # GUI Maya rounds a scaled key
+            with AnimUtils.exact_scale():  # GUI Maya rounds a scaled key
                 cmds.scaleKey(
                     str(crv),
                     time=(old_start, old_end),

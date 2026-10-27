@@ -1,0 +1,186 @@
+{
+ "census": {
+  "AnimationCurve": 1,
+  "AnimationCurveNode": 6,
+  "AnimationLayer": 1,
+  "AnimationStack": 1,
+  "BindingTable": 1,
+  "Deformer": 4,
+  "Geometry": 1,
+  "Implementation": 1,
+  "Material": 1,
+  "Model": 5,
+  "NodeAttribute": 4,
+  "Pose": 1
+ },
+ "format": "fbx",
+ "geometry": {
+  "geometry#0": {
+   "polygon_vertices": 144,
+   "vertices": 40
+  }
+ },
+ "materials": {
+  "standardSurface1": {
+   "properties": {
+    "Maya": [],
+    "Maya|TypeId": 1398031443,
+    "Maya|base": 1.0,
+    "Maya|baseColor": [
+     0.4,
+     0.4,
+     0.4
+    ],
+    "Maya|coat": 0.0,
+    "Maya|coatAffectColor": 0.0,
+    "Maya|coatAffectRoughness": 0.0,
+    "Maya|coatAnisotropy": 0.0,
+    "Maya|coatColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|coatIOR": 1.5,
+    "Maya|coatNormal": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|coatRotation": 0.0,
+    "Maya|coatRoughness": 0.1,
+    "Maya|diffuseRoughness": 0.0,
+    "Maya|emission": 0.0,
+    "Maya|emissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|hardwareShader": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|metalness": 0.0,
+    "Maya|normalCamera": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|normalCameraFactor": 0.0,
+    "Maya|normalCameraUsedAs": 0,
+    "Maya|opacity": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheen": 0.0,
+    "Maya|sheenColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheenRoughness": 0.3,
+    "Maya|specular": 1.0,
+    "Maya|specularAnisotropy": 0.0,
+    "Maya|specularColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|specularIOR": 1.5,
+    "Maya|specularRotation": 0.0,
+    "Maya|specularRoughness": 0.5,
+    "Maya|subsurface": 0.0,
+    "Maya|subsurfaceAnisotropy": 0.0,
+    "Maya|subsurfaceColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceRadius": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceScale": 1.0,
+    "Maya|thinFilmIOR": 1.5,
+    "Maya|thinFilmThickness": 0.0,
+    "Maya|thinWalled": 0,
+    "Maya|transmission": 0.0,
+    "Maya|transmissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|transmissionDepth": 0.0,
+    "Maya|transmissionDispersion": 0.0,
+    "Maya|transmissionExtraRoughness": 0.0,
+    "Maya|transmissionScatter": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|transmissionScatterAnisotropy": 0.0
+   },
+   "shading_model": "unknown",
+   "textures": {}
+  }
+ },
+ "models": {
+  "bone_0": {
+   "type": "LimbNode"
+  },
+  "bone_1": {
+   "Lcl Translation": [
+    0.0,
+    2.0,
+    0.0
+   ],
+   "type": "LimbNode"
+  },
+  "bone_2": {
+   "Lcl Translation": [
+    0.0,
+    2.0,
+    0.0
+   ],
+   "type": "LimbNode"
+  },
+  "limb": {
+   "Lcl Rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "Lcl Scaling": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "Lcl Translation": [
+    0.0,
+    2.0,
+    0.0
+   ],
+   "type": "Mesh"
+  },
+  "rig_grp": {
+   "type": "Null"
+  }
+ },
+ "takes": {
+  "Take 001": {
+   "bone_1|Lcl Rotation|d|Z": [
+    0.0417,
+    0.8333,
+    2
+   ]
+  }
+ },
+ "user_properties": {
+  "bone_0.lockInfluenceWeights": 0,
+  "bone_1.lockInfluenceWeights": 0,
+  "bone_2.lockInfluenceWeights": 0,
+  "limb.currentUVSet": "text"
+ }
+}

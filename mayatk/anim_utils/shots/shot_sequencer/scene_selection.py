@@ -270,7 +270,7 @@ class SceneSelectionMixin:
         The panel's attribute selection and the Channel Box's are meant to
         be one thing -- a sub-row IS a channel -- so a click here highlights
         there, and every helper that already reads that highlight
-        (``remove_intermediate_keys``, ``copy_keys``, ``AnimUtils._resolve_keys``
+        (``remove_intermediate_keys``, ``copy_keys``, ``AnimUtils.resolve_keys``
         and the rest) narrows to the same channels without being told twice.
 
         Deferred to idle: the Channel Box refills itself after a selection

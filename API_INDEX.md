@@ -3,12 +3,12 @@
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
 ### `__init__.py`
-- constants: DEFAULT_INCLUDE
+- constants: DEFAULT_INCLUDE, MOVED_NAMES
 
 ### `anim_utils/_anim_utils.py` — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
 - constants: STANDARD_TRANSFORM_ATTRS
 - `class AnimUtils(_AnimUtilsInternal, pythontk.HelpMixin)`
-  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_key_curves, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, euler_filter, shift_key_values, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer
+  - methods: scene_animation_range, normalize_optimize_level, resolve_optimize_level, bake, objects_to_curves, get_anim_curves, snapshot_curves, restore_curves, get_static_curves, get_redundant_flat_keys, simplify_curve, repair_corrupted_curves, reduce_to_extremes, optimize_keys, keyed_nodes, has_keyframes, keyframe_range, curve_key_spans, get_key_curves, get_keyframe_times, get_driver_animation_range, get_tangent_info, set_tangent_info, step_keys, set_current_frame, move_keys_to_frame, set_keys_for_attributes, filter_objects_with_keys, scene_has_animation, adjust_key_spacing, add_intermediate_keys, remove_intermediate_keys, invert_keys, align_selected_keyframes, set_visibility_keys, snap_keys_to_frames, transfer_keyframes, parse_time_range, delete_keys, select_keys, get_frame_ranges, get_tied_keyframes, insert_keys, tie_keyframes, untie_keyframes, create_animation_layer, get_animation_layers, copy_keys, paste_keys, delete_animation_layer, fit_playback_range, euler_filter, shift_key_values, clear_key_selection, get_selected_key_times, get_timeline_selection, create_preview_layer, remove_preview_layer, resolve_keys, tangent_half, exact_scale, move_curve_keys, hold_segments
 
 ### `anim_utils/_tied_keys.py` — Bookend (tied) keys behind :class:`mayatk.AnimUtils`.
 - constants: TIED_KEYS_ATTR
@@ -659,7 +659,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: hook, load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`

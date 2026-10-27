@@ -169,10 +169,10 @@ class _KeyTransferInternal:
             return {}
 
         # Resolve "auto" into the best concrete mode, with optional CB filter.
-        # Pass pre-resolved *objects* so _resolve_keys skips redundant cmds.ls.
+        # Pass pre-resolved *objects* so resolve_keys skips redundant cmds.ls.
         cb_filter: Optional[Set[str]] = None
         if mode == "auto":
-            resolved = cls._resolve_keys(
+            resolved = cls.resolve_keys(
                 objects,
                 mode="auto",
                 resolution_order=resolution_order

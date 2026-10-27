@@ -4,7 +4,7 @@ from pythontk.core_utils.module_resolver import bootstrap_package
 
 
 __package__ = "mayatk"
-__version__ = "0.29.1"
+__version__ = "0.29.2"
 
 """Dynamic Attribute Resolver for Module-based Packages
 
@@ -250,9 +250,15 @@ DEFAULT_INCLUDE = {
     "env_utils.scene_exporter.task_manager": "TaskManager",
 }
 
+#: Public names that left this package (CODE_STANDARD section 5): no alias, so a
+#: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
+#: a move adds its names here in the same change set.
+MOVED_NAMES = {}
+
 bootstrap_package(
     globals(),
     include=DEFAULT_INCLUDE,
+    moved=MOVED_NAMES,
 )
 
 

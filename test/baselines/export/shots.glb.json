@@ -1,0 +1,245 @@
+{
+ "animations": {
+  "FULL_SEQUENCE": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 50
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 50
+    }
+   },
+   "span": [
+    0.0,
+    1.6333
+   ]
+  },
+  "ShotA": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 2
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    }
+   },
+   "span": [
+    0.0,
+    0.7917
+   ]
+  },
+  "ShotB": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    }
+   },
+   "span": [
+    0.0,
+    0.7917
+   ]
+  }
+ },
+ "extensions_used": [],
+ "extras": {
+  "animation": {
+   "clip_mode": "text",
+   "clips": [
+    {
+     "animation": 0,
+     "name": "text",
+     "zero_frame": 1.0
+    },
+    {
+     "animation": 1,
+     "name": "text",
+     "zero_frame": 21.0
+    },
+    {
+     "animation": 2,
+     "name": "text",
+     "zero_frame": 1.0
+    }
+   ],
+   "default_clip": "text",
+   "fps": 24.0,
+   "shots": [
+    {
+     "clip": "text",
+     "end": 20,
+     "start": 1
+    },
+    {
+     "clip": "text",
+     "end": 40,
+     "start": 21
+    }
+   ],
+   "version": 2
+  },
+  "handoff": {
+   "assembly": [
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    }
+   ],
+   "extras": {
+    "source": {
+     "application": "text",
+     "version": "text"
+    }
+   },
+   "instructions": "text",
+   "rendering": {
+    "environment": {
+     "fallback": "text",
+     "intensity": 1.0,
+     "prefilter": "text",
+     "prefilterBlur": 0.04
+    },
+    "keyLight": {
+     "color": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "intensity": 0.9,
+     "position": [
+      3,
+      6,
+      4
+     ],
+     "type": "text"
+    },
+    "renderer": {
+     "toneMapping": "text",
+     "toneMappingExposure": 1.0
+    }
+   },
+   "version": 3
+  }
+ },
+ "format": "glb",
+ "images": [],
+ "materials": {
+  "standardSurface1": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.4,
+    0.4,
+    0.4,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "extensions": [],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "textures": []
+  }
+ },
+ "meshes": {
+  "mover": [
+   {
+    "attributes": {
+     "NORMAL": 24,
+     "POSITION": 24,
+     "TANGENT": 24,
+     "TEXCOORD_0": 24
+    },
+    "indices": 36,
+    "material": "standardSurface1",
+    "mode": 4,
+    "targets": 0
+   }
+  ]
+ },
+ "nodes": {
+  "RootNode": {
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "RootNode/mover": {
+   "mesh": "mover",
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "skins": {}
+}
