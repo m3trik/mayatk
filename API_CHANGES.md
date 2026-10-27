@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ 4cc9baa3)._
 
-## Added (6)
+## Added (8)
 
 - `__init__.py::MOVED_NAMES(constant)`
 - `anim_utils/_anim_utils.py::AnimUtils.exact_scale(cls)`
@@ -10,6 +10,8 @@ _Diff vs the last release (origin/main @ 4cc9baa3)._
 - `anim_utils/_anim_utils.py::AnimUtils.move_curve_keys(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int`
 - `anim_utils/_anim_utils.py::AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]`
 - `anim_utils/_anim_utils.py::AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]`
+- `env_utils/fbx_utils.py::FbxUtils.hook(cls, role: str) -> Optional[Callable]`
+- `light_utils/lightmap_baker/lightmap_records.py::LightmapRecords.walk_root(cls) -> str`
 
 ## Deprecations (17)
 

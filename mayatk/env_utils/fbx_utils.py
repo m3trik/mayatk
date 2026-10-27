@@ -117,6 +117,26 @@ class FbxUtils(ptk.HelpMixin):
         "active",
     )
 
+    #: The tool code this module reaches, one ``(module, class, method)`` row
+    #: per role, resolved lazily (:meth:`hook`): a tool that moves out of this
+    #: library takes its row with it and registers it as an entry point
+    #: (``ptk.SceneRecords.hook_row``), so these calls never import upward.
+    HOOKS: Dict[str, Tuple[str, str, str]] = {
+        "take_stash": TAKE_STASH,
+        "dependency_dirs": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "search_dirs"),
+        "dependency_root": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "walk_root"),
+        "offset_fold": ("mayatk.anim_utils.smart_bake._smart_bake", "SmartBake", "fold_offsets"),
+    }
+
+    @classmethod
+    def hook(cls, role: str) -> Optional[Callable]:
+        """The callable :attr:`HOOKS` names for *role*, else the one an installed
+        package registers for :attr:`HOST`; ``None`` when neither resolves (the
+        caller then does without it, as for an unimportable producer)."""
+        row = ptk.SceneRecords.hook_row(cls.HOOKS.get(role), cls.HOST, role)
+        resolved = cls._resolve_row(f"Hook {role!r}", *row) if row else None
+        return resolved[0] if resolved else None
+
     @staticmethod
     def load_plugin():
         """Ensure the fbxmaya plugin is loaded."""
@@ -547,15 +567,12 @@ class FbxUtils(ptk.HelpMixin):
         log: logging.Logger,
     ) -> Tuple[List[str], str, Iterable[Any]]:
         """:meth:`embed_dependencies`'s inputs, each ``None`` asked of the scene."""
-        if search_dirs is None or walk_root is None:
-            from mayatk.light_utils.lightmap_baker.lightmap_records import (
-                LightmapRecords,
-            )
-
-            if search_dirs is None:
-                search_dirs = LightmapRecords.search_dirs()
-            if walk_root is None:
-                walk_root = LightmapRecords._walk_root()
+        if search_dirs is None:
+            dirs = FbxUtils.hook("dependency_dirs")
+            search_dirs = dirs() if dirs else []
+        if walk_root is None:
+            root = FbxUtils.hook("dependency_root")
+            walk_root = root() if root else ""  # "": no walk
         if files is None:
             files = FbxUtils._shipped_audio(file_path, log)
         return list(search_dirs), walk_root, files
@@ -1068,11 +1085,11 @@ class FbxUtils(ptk.HelpMixin):
         from mayatk.core_utils._core_utils import CoreUtils
 
         names = ", ".join(repr(t) for t in layout["stash"])
-        row = cls._resolve_row("Take stash", *cls.TAKE_STASH)
-        if not row or row[0] is None:
+        active = cls.hook("take_stash")
+        if active is None:
             log.warning(f"Key Stash is unavailable: {names} left out of the import.")
             return []
-        store = row[0]()
+        store = active()
         index = {take["name"]: take["index"] for take in layout["takes"]}
         parked = []
         with CoreUtils.undo_disabled():
@@ -1602,17 +1619,20 @@ class FbxUtils(ptk.HelpMixin):
                 )
         restore = None
         folded: List[str] = []
-        if shipped:
-            from mayatk.anim_utils.smart_bake._smart_bake import SmartBake
-
+        fold = cls.hook("offset_fold") if shipped else None
+        if shipped and fold is None:
+            log.warning(
+                "offsetParentMatrix: no offset fold is installed, so this write "
+                "ships every offset and every node that ignores its parent as the "
+                "plug-in writes them."
+            )
+        if fold is not None:
             try:
                 with contextlib.ExitStack() as held:
                     held.enter_context(CoreUtils.undo_disabled())
                     held.enter_context(CoreUtils.preserved_selection())
                     held.enter_context(CoreUtils.suspended_refresh())
-                    result, restore = SmartBake.fold_offsets(
-                        shipped, bake_range=bake_range
-                    )
+                    result, restore = fold(shipped, bake_range=bake_range)
             except Exception as error:  # noqa: BLE001 -- the write still ships
                 log.warning(
                     "offsetParentMatrix: the fold failed and was undone, so this "

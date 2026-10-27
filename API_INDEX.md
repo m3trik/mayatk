@@ -659,7 +659,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/fbx_utils.py`
 - `class FbxUtils(pythontk.HelpMixin)`
-  - methods: load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
+  - methods: hook, load_plugin, embed_media_write_cwd, reset_import, reset_export, set_fbx_options, load_preset, export, drop_rig_apparatus, embed_dependencies, finish_deliverable, import_scene, set_bake_range_from_scene, baking_enabled, export_flag, bake_range, write_plan, apply_write_plan, planned_bake_range, offsets_folded, animation_export_enabled, set_animation_export, reset_takes, apply_takes, takes_span, declared_takes, apply_takes_from_node, producers, export_context, publish, publish_authored, stagers, stage, begin_export, end_export, export_prepared, scratch_export, enable_export_producer, disable_export_producer, register_export_stager, unregister_export_stager, enable_auto_takes, disable_auto_takes, is_auto_takes_enabled
 
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
@@ -824,7 +824,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
-  - methods: baked_objects, lightmap_info, commit, bake_state, scene_state, untracked, track, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, wrote, strangers, foreign_writer, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, repath_lightmaps, rename_lightmap, fork_lightmap, transfer_lightmaps
+  - methods: baked_objects, lightmap_info, commit, bake_state, scene_state, untracked, track, revert, probe, commit_probe, project_root, superseding, migrate_legacy, migrate_folder_hints, export_record, refresh_export_metadata, claims, wrote, strangers, foreign_writer, lightmap_dependencies, search_dirs, heal_lightmap_paths, normalize_lightmap_paths, relocate_lightmaps, walk_root, repath_lightmaps, rename_lightmap, fork_lightmap, transfer_lightmaps
 
 ### `mat_utils/_mat_utils.py` — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - `class MatUtils(_MatUtilsInternal)`
