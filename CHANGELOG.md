@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-27 -- The package declares its moved-names table (`__init__.py`).** `MOVED_NAMES`, empty for now, goes to `bootstrap_package(moved=...)`: a name that leaves mayatk for tentacle is listed there, and a read of it raises pythontk's `MovedNameError` naming the new home and version.
+  - Test(s): none new -- pythontk's `MovedNamesTests` cover the resolver.
 - **2026-10-27 -- Export baselines pin the Scene Exporter's FBX and GLB (`test/test_export_baselines.py`, `test/baselines/export/`).** Three fixed scenes (a prop hierarchy with two materials, keyed transforms split into two shots, a skinned joint chain) export through `perform_export` as FBX + GLB, and each file is compared with its saved `ExportFingerprint`, so a code move that changes any output fails with the change named. `UPDATE_EXPORT_BASELINES=1` rewrites them when a change is meant to. The skinned GLB carries no clip: a take keying only a child joint's rotation is lost in the FBX-to-GLB step (pinned by an expected-failure test and `.claude/BACKLOG.md`).
   - Test(s): `test_export_baselines.py` +4 (one an expected failure).
 - **2026-10-26 -- `optimize_keys` and `UvUtils.gather_to_udim` keep a caller's viewport suspension (`anim_utils/_curve_optimize.py`, `uv_utils/_uv_utils.py`).** Each suspended and resumed the viewport with raw `cmds.refresh` calls, so inside the scene exporter, which suspends it for the whole run, every optimize resumed it for the rest of the export. Both now use the re-entrant `CoreUtils.suspended_refresh()`.

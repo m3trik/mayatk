@@ -16,6 +16,15 @@
           "summary": "",
           "line": 17,
           "deprecated": false
+        },
+        {
+          "name": "MOVED_NAMES",
+          "qualname": "MOVED_NAMES",
+          "kind": "constant",
+          "signature": "",
+          "summary": "",
+          "line": 256,
+          "deprecated": false
         }
       ]
     },

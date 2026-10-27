@@ -1,8 +1,10 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 8e85ad41)._
+_Diff vs the last release (origin/main @ 4cc9baa3)._
 
-No public API changes since the last release (origin/main @ 8e85ad41).
+## Added (1)
+
+- `__init__.py::MOVED_NAMES(constant)`
 
 ## Deprecations (17)
 
@@ -25,4 +27,3 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - `env_utils/_env_utils.py::EnvUtils.scene_workspace` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
-

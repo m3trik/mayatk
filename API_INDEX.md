@@ -3,7 +3,7 @@
 _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a name; for full signatures/docs, slice [API_REGISTRY.md](API_REGISTRY.md) (never Read it whole)._
 
 ### `__init__.py`
-- constants: DEFAULT_INCLUDE
+- constants: DEFAULT_INCLUDE, MOVED_NAMES
 
 ### `anim_utils/_anim_utils.py` — ``AnimUtils`` -- the public index of mayatk's key and curve operations.
 - constants: STANDARD_TRANSFORM_ATTRS
