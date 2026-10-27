@@ -186,7 +186,8 @@ a classmethod that reads the scene and returns the record -- or `None`, which
 CLEARS it (deleting the last shot must not leave its takes riding into the
 next export): `animation` `ShotStore.produce_export_records`, `audio`
 `AudioClips`, `render_effects` `RenderEffects`, `shadows` `ShadowRig`,
-`articulation` `ArticulatedRig`, `emissive_groups` `EmissiveGroups`,
+`articulation` `ArticulatedRig`, `emissive_groups` `EmissiveGroups` (tentacle's tool,
+registered through its entry points: `FbxUtils.producers()` merges registered rows),
 `lightmaps` `LightmapRecords`, `materials` `MaterialRecords` (each
 `export_record(ctx)`). `ptk.ExportSnapshot.assemble` orders them by `after`
 and hands each the `ptk.ExportContext` -- the exporter's decisions as inputs
