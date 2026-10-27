@@ -495,9 +495,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/duplicate_radial.py`
 - `class DuplicateRadial(pythontk.LoggingMixin)`
-  - methods: duplicate_radial
-- `class DuplicateRadialSlots(pythontk.LoggingMixin)`
-  - methods: header_init, s015_init, s016_init, b001_init, perform_operation, regroup_copies
+  - methods: duplicate_radial, regroup_copies
 
 ### `edit_utils/dynamic_pipe.py`
 - `class DynamicPipe`

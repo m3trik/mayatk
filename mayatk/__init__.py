@@ -253,7 +253,9 @@ DEFAULT_INCLUDE = {
 #: Public names that left this package (CODE_STANDARD section 5): no alias, so a
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
-MOVED_NAMES = {}
+MOVED_NAMES = {
+    "DuplicateRadialSlots": ("tentacle.ui.panels.duplicate_radial", "0.30.0"),
+}
 
 bootstrap_package(
     globals(),

@@ -11,7 +11,6 @@ try:
 except ImportError:
     pass
 # from this package:
-from mayatk.core_utils.preview import Preview
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk import DisplayUtils
@@ -302,246 +301,48 @@ class DuplicateRadial(ptk.LoggingMixin):
 
         return copies
 
+    @staticmethod
+    def regroup_copies(copies: Dict[str, List[str]]) -> None:
+        """Regroup each source's committed copies under a fresh ``*_array`` group.
 
-class DuplicateRadialSlots(ptk.LoggingMixin):
-    # With keep_original=False, duplicate_radial deletes the original
-    # transform. MUTATES_SELECTION=True tells Preview to duplicate+hide the
-    # captured selection before perform_operation so rollback (and the next
-    # refresh, which re-targets the same names) can restore it.
-    MUTATES_SELECTION = True
+        The finalize step after :meth:`duplicate_radial` commits: that parents
+        every copy under ONE shared radial group, and the ``*_array`` group
+        takes its place in the hierarchy. All copies are unparented in a single
+        call and the shared group is deleted only once it is empty -- deleting
+        it while sibling copies were still inside destroyed them. One undo
+        chunk.
 
-    def __init__(self, switchboard, log_level="WARNING"):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.duplicate_radial
-
-        self.logger.setLevel(log_level)
-        self.logger.set_log_prefix("[duplicate radial] ")
-
-        # Output mode: independent copies vs shared-shape instances (was the
-        # "Instance" checkbox). Copy is the default, matching the prior unchecked state.
-        self.ui.cmb_inst.clear()
-        self.ui.cmb_inst.add([("Copy", "copy"), ("Instance", "instance")])
-        self.ui.cmb_inst.setAsCurrent("copy")
-
-        # Per-field reset buttons (uitk option-box): click resets a field to its
-        # default; Alt/Ctrl+click bypasses it to default (greyed, restorable).
-        # Must precede connect_multi/Preview — wrapping reparents the widgets and
-        # invalidates any already-deferred wrapper (see add_reset_buttons docstring).
-        self.sb.add_reset_buttons(self.ui)
-
-        self.preview = Preview(
-            self,
-            self.ui.chk000,
-            self.ui.b000,
-            finalize_func=self.regroup_copies,
-            message_func=self.sb.message_box,
-        )
-        self.sb.connect_multi(
-            self.ui,
-            "s000-16",
-            "valueChanged",
-            self.preview.refresh,
-        )
-        self.sb.connect_multi(
-            self.ui,
-            "chk002-4",
-            "toggled",
-            self.preview.refresh,
-        )
-        self.sb.connect_multi(
-            self.ui,
-            "chk006-8",
-            "toggled",
-            self.preview.refresh,
-        )
-        self.sb.connect_multi(
-            self.ui,
-            "cmb_inst",
-            "currentIndexChanged",
-            self.preview.refresh,
-        )
-        self.ui.cmb000.currentIndexChanged.connect(self.preview.refresh)
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Duplicate Radial",
-                body="Duplicate selected objects in a radial / circular pattern "
-                "around a chosen pivot.",
-                steps=[
-                    "Select one or more transforms.",
-                    "Set <b>Copies</b>, <b>Start Angle</b>, <b>End Angle</b>, "
-                    "and the <b>Rotate Axis</b> (X / Y / Z).",
-                    "Pick the <b>Pivot</b> — Object or World.",
-                    "Optionally set per-copy <b>Translate</b> / <b>Rotate</b> / "
-                    "<b>Scale</b> offsets and a <b>Pivot Offset</b>.",
-                    "Toggle <b>Preview</b>, then <b>Duplicate</b> to commit.",
-                ],
-                sections=[
-                    (
-                        "Options",
-                        [
-                            "<b>Instance</b> — copies share a shape; cheaper and "
-                            "edits propagate.",
-                            "<b>Keep Original</b> — leave the source object in place "
-                            "(off discards it after the pattern is built).",
-                            "<b>Combine</b> — merge result into a single mesh.",
-                            "<b>Suffix</b> — append a numeric suffix to copy names.",
-                        ],
-                    ),
-                ],
-                notes=[
-                    "<b>Weight Bias</b> and <b>Weight Curve</b> control "
-                    "non-uniform angular spacing of copies between start and "
-                    "end angle.",
-                ],
-            )
-        )
-
-    def s015_init(self, widget):
-        """Initialize Weight Bias."""
-        widget.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Weight Bias",
-                body="Controls the direction and strength of the bias — how far "
-                "the spacing departs from linear, and toward which end.",
-                bullets=[
-                    "<code>0</code> — bias completely towards the start.",
-                    "<code>0.5</code> (default) — no bias, linear distribution.",
-                    "<code>1</code> — bias completely towards the end.",
-                ],
-                notes=[
-                    "At the default 0.5, spacing is exactly linear and "
-                    "<b>Weight Curve</b> has no visible effect — move this away "
-                    "from 0.5 first.",
-                ],
-            )
-        )
-
-    def s016_init(self, widget):
-        """Initialize Weight Curve."""
-        widget.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Weight Curve",
-                body="Shapes the curvature of the bias set by Weight Bias.",
-                bullets=[
-                    "<code>0</code> — no curvature; a linear effect.",
-                    "<code>0.5</code> — moderate curvature.",
-                    "<code>1</code> (default) — maximum curvature, sharply eased "
-                    "toward one end.",
-                ],
-                notes=[
-                    "Has no visible effect while <b>Weight Bias</b> is at its "
-                    "default (0.5) — the two ends of the sweep are then already "
-                    "spaced identically regardless of this value.",
-                ],
-            )
-        )
-
-    def b001_init(self, widget):
-        """Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-        current values as the defaults, Ctrl+Shift+Click forgets them)."""
-        from uitk.managers.reset_gesture import ResetGesture
-
-        self._reset_gesture = ResetGesture(widget)
-
-    def perform_operation(self, objects, contract):
-        """Perform the radial duplication operation."""
-        kwargs = {
-            "num_copies": self.ui.s009.value(),
-            "start_angle": self.ui.s013.value(),
-            "end_angle": self.ui.s014.value(),
-            "weight_bias": self.ui.s015.value(),
-            "weight_curve": self.ui.s016.value(),
-            "instance": self.ui.cmb_inst.currentData() == "instance",
-            "keep_original": self.ui.chk006.isChecked(),
-            "combine": self.ui.chk007.isChecked(),
-            "suffix": self.ui.chk008.isChecked(),
-            "pivot": self._resolve_pivot(self.ui.cmb000.currentIndex()),
-            "rotate_axis": (
-                "x"
-                if self.ui.chk002.isChecked()
-                else "y"
-                if self.ui.chk003.isChecked()
-                else "z"
-            ),
-            "offset": (
-                self.ui.s010.value(),
-                self.ui.s011.value(),
-                self.ui.s012.value(),
-            ),
-            "translate": (
-                self.ui.s000.value(),
-                self.ui.s001.value(),
-                self.ui.s002.value(),
-            ),
-            "rotate": (
-                self.ui.s003.value(),
-                self.ui.s004.value(),
-                self.ui.s005.value(),
-            ),
-            "scale": (
-                self.ui.s006.value(),
-                self.ui.s007.value(),
-                self.ui.s008.value(),
-            ),
-        }
-
-        self.copies = DuplicateRadial.duplicate_radial(objects, **kwargs)
-
-    def _resolve_pivot(self, pivot_index: int) -> str:
-        """Resolve the pivot based on the index from the UI dropdown."""
-        axis_mapping = {0: "object", 1: "world"}
-        return axis_mapping.get(pivot_index, "object")
-
-    def regroup_copies(self):
-        """Regroup the committed copies under a fresh ``*_array`` group.
-
-        The duplicate step parents every copy under ONE shared radial group;
-        the ``*_array`` group takes its place in the hierarchy. All copies are
-        unparented in a single call and the shared group is deleted only once
-        it is empty — the old per-copy loop deleted it while sibling copies
-        were still inside, destroying them.
+        Parameters:
+            copies: :meth:`duplicate_radial`'s return, ``{source: [copies]}``.
         """
-        cmds.undoInfo(openChunk=True)
-        try:
-            for copies in self.copies.values():
-                copies = [copy for copy in copies if cmds.objExists(copy)]
-                if not copies:
+        with CoreUtils.undo_chunk():
+            for group_copies in copies.values():
+                group_copies = [c for c in group_copies if cmds.objExists(c)]
+                if not group_copies:
                     continue
 
-                first_obj_name = CoreUtils.short_name(copies[0])
-                name = re.sub(r"\d+$", "", first_obj_name)
-                name += "_array"
+                first_obj_name = CoreUtils.short_name(group_copies[0])
+                name = re.sub(r"\d+$", "", first_obj_name) + "_array"
                 unique_name = Naming.generate_unique_name(name)
 
                 # The shared group's parent (if any) hosts the new group.
-                shared_group = NodeUtils.get_parent(copies[0])
+                shared_group = NodeUtils.get_parent(group_copies[0])
                 original_parent = (
                     NodeUtils.get_parent(shared_group) if shared_group else None
                 )
 
                 if shared_group:
-                    copies = [str(c) for c in cmds.parent(copies, world=True)]
+                    group_copies = [
+                        str(c) for c in cmds.parent(group_copies, world=True)
+                    ]
                     if not cmds.listRelatives(shared_group, children=True):
                         cmds.delete(shared_group)
 
-                new_group = cmds.group(copies, n=unique_name)
+                new_group = cmds.group(group_copies, n=unique_name)
 
                 if original_parent is not None:
                     cmds.parent(new_group, original_parent)
-        finally:
-            cmds.undoInfo(closeChunk=True)
 
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("duplicate_radial", reload=True)
-    ui.show(pos="screen", app_exec=True)
 
 # -----------------------------------------------------------------------------
 # Notes

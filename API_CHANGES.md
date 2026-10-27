@@ -1,16 +1,20 @@
 # mayatk — API Changes
 
-_Diff vs the last release (origin/main @ 4cc9baa3)._
+_Diff vs the last release (origin/main @ f58c05fa)._
 
-## Added (7)
+## Moved out (7)
 
-- `__init__.py::MOVED_NAMES(constant)`
-- `anim_utils/_anim_utils.py::AnimUtils.exact_scale(cls)`
-- `anim_utils/_anim_utils.py::AnimUtils.hold_segments(curve: str, times: List[float]) -> List[bool]`
-- `anim_utils/_anim_utils.py::AnimUtils.move_curve_keys(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int`
-- `anim_utils/_anim_utils.py::AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]`
-- `anim_utils/_anim_utils.py::AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]`
-- `env_utils/fbx_utils.py::FbxUtils.hook(cls, role: str) -> Optional[Callable]`
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.b001_init` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.header_init` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.perform_operation` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.regroup_copies` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.s015_init` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+- `edit_utils/duplicate_radial.py::DuplicateRadialSlots.s016_init` → `tentacle.ui.panels.duplicate_radial` (from 0.30.0)
+
+## Added (1)
+
+- `edit_utils/duplicate_radial.py::DuplicateRadial.regroup_copies(copies: Dict[str, List[str]]) -> None`
 
 ## Deprecations (17)
 

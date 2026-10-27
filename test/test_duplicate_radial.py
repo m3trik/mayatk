@@ -2,7 +2,7 @@
 # coding=utf-8
 """Tests for edit_utils/duplicate_radial.py — the regroup-on-commit flow.
 
-``DuplicateRadialSlots.regroup_copies`` is the Preview's ``finalize_func``:
+``DuplicateRadial.regroup_copies`` is the panel Preview's ``finalize_func``:
 it must regroup the committed copies under a fresh ``*_array`` group. It was
 a silent no-op in every mode: ``duplicate_radial`` returned names that went
 stale the moment ``_finalize_output`` grouped the copies (pre-group ``|name``
@@ -20,17 +20,14 @@ except ImportError:
     from mayatk.test.base_test import MayaTkTestCase
 
 import maya.cmds as cmds
-from mayatk.edit_utils.duplicate_radial import DuplicateRadial, DuplicateRadialSlots
+from mayatk.edit_utils.duplicate_radial import DuplicateRadial
 
 
 class TestRegroupCopies(MayaTkTestCase):
     def _duplicate_and_regroup(self, suffix):
         cube = cmds.polyCube(name="radSrc")[0]
         mapping = DuplicateRadial.duplicate_radial([cube], num_copies=4, suffix=suffix)
-        # Established stub pattern: the slot body only needs self.copies.
-        slots = DuplicateRadialSlots.__new__(DuplicateRadialSlots)
-        slots.copies = mapping
-        slots.regroup_copies()
+        DuplicateRadial.regroup_copies(mapping)
         return [c for lst in mapping.values() for c in lst]
 
     def _assert_regrouped(self, copies):

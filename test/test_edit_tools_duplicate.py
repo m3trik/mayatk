@@ -15,7 +15,7 @@ import unittest
 import maya.cmds as cmds
 
 from mayatk.edit_utils.duplicate_linear import DuplicateLinear, DuplicateLinearSlots
-from mayatk.edit_utils.duplicate_radial import DuplicateRadial, DuplicateRadialSlots
+from mayatk.edit_utils.duplicate_radial import DuplicateRadial
 from mayatk.edit_utils.duplicate_grid import DuplicateGrid
 from mayatk.core_utils.preview import Preview
 
@@ -168,8 +168,8 @@ class TestDuplicateRadial(MayaTkTestCase):
 
         This is the documented behavior that broke Preview refresh — a
         second refresh re-targets the captured name and fails. The fix
-        lives on DuplicateRadialSlots.MUTATES_SELECTION; this test pins
-        the underlying deletion contract.
+        lives on the panel's DuplicateRadialSlots.MUTATES_SELECTION
+        (tentacle); this test pins the underlying deletion contract.
         """
         cube = cmds.polyCube(name="dr_del")[0]
         cmds.move(5, 0, 0, cube)
@@ -585,13 +585,6 @@ class TestDuplicateSlotsContract(QuickTestCase):
     Pure-Python attribute check — no Maya needed.
     """
 
-    def test_radial_slots_declares_mutates_selection(self):
-        """DuplicateRadial deletes the original when keep_original=False.
-        Without MUTATES_SELECTION=True, Preview's second refresh re-targets
-        the deleted name and cmds.duplicate returns NULL.
-        """
-        self.assertTrue(getattr(DuplicateRadialSlots, "MUTATES_SELECTION", False))
-
     def test_linear_slots_declares_mutates_selection(self):
         """Defensive: linear shouldn't delete its input, but the captured
         selection can be invalidated by external mutations between
@@ -723,6 +716,27 @@ class TestDuplicateLinearPreviewRollback(MayaTkTestCase):
         pv.disable()
         self.assertTrue(self._has_shape(cube))
         self.assertEqual(cmds.polyEvaluate(cube, face=True), orig_faces)
+
+    def test_commit_undo_chunk_takes_the_undo_message(self):
+        """``undo_message`` names the commit's undo entry, as blendertk's Preview
+        does; omitted, the operation's class name does."""
+        for undo_message, expected in (
+            ("Duplicate Linear", "Duplicate Linear"),
+            (None, "_DupLinearPreviewOp"),
+        ):
+            with self.subTest(undo_message=undo_message):
+                cube = cmds.polyCube()[0]
+                pv = Preview(
+                    _DupLinearPreviewOp(),
+                    _MockWidget(),
+                    _MockWidget(),
+                    message_func=lambda *a: None,
+                    undo_message=undo_message,
+                )
+                self._previews.append(pv)
+                cmds.select(cube)
+                pv.finalize_changes()
+                self.assertEqual(cmds.undoInfo(q=True, undoName=True), expected)
 
 
 class _DupGridPreviewOp:

@@ -1898,15 +1898,9 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
 <a id="edit_utils--duplicate_radial"></a>
 ### `edit_utils/duplicate_radial.py`
 
-- **[`class DuplicateRadial(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L22)**
+- **[`class DuplicateRadial(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L21)**
   - `DuplicateRadial.duplicate_radial(objects: List[str], num_copies: int, start_angle: float = 0, end_angle: float = 360, weight_bias: float = 0.5, weight_curve: float = 0.5, rotate_axis: str = 'y', offset: Tuple[float, float, float] = (0, 0, 0), translate: Tuple[float, float, float] = (0, 0, 0), rotate: Tuple[float, float, float] = (0, 0, 0), scale: Tuple[float, float, float] = (1, 1, 1), pivot: Union[str, Tuple[float, float, float]] = 'object', keep_original: bool = False, instance: bool = False, combine: bool = False, suffix: bool = True) -> Dict[str, List[str]]` *(static)* — Duplicate objects in a radial pattern.
-- **[`class DuplicateRadialSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_radial.py#L306)**
-  - `DuplicateRadialSlots.header_init(self, widget)` — Configure header help text.
-  - `DuplicateRadialSlots.s015_init(self, widget)` — Initialize Weight Bias.
-  - `DuplicateRadialSlots.s016_init(self, widget)` — Initialize Weight Curve.
-  - `DuplicateRadialSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-  - `DuplicateRadialSlots.perform_operation(self, objects, contract)` — Perform the radial duplication operation.
-  - `DuplicateRadialSlots.regroup_copies(self)` — Regroup the committed copies under a fresh ``*_array`` group.
+  - `DuplicateRadial.regroup_copies(copies: Dict[str, List[str]]) -> None` *(static)* — Regroup each source's committed copies under a fresh ``*_array`` group.
 
 <a id="edit_utils--dynamic_pipe"></a>
 ### `edit_utils/dynamic_pipe.py`

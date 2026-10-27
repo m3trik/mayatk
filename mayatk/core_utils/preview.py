@@ -573,6 +573,7 @@ class Preview(_PreviewInternal):
         result_provider: Optional[Callable] = None,
         reselect_on_disable: bool = True,
         require_preview: bool = False,
+        undo_message: Optional[str] = None,
     ):
         if not hasattr(operation_instance, "perform_operation"):
             raise ValueError(
@@ -611,6 +612,9 @@ class Preview(_PreviewInternal):
         # require_preview=True restores the gate for panels that must not commit
         # blind.
         self.require_preview = require_preview
+        # The commit's undo-chunk name (blendertk's Preview takes the same);
+        # omitted, the operation's class name.
+        self.undo_message = undo_message
         self._sync_create_enabled(False)
 
         self.operated_objects: Set[str] = set()
@@ -1034,7 +1038,11 @@ class Preview(_PreviewInternal):
         runs inside the chunk before the operation and may populate
         ``_captured_objects``.
         """
-        chunk_name = type(self.operation_instance).__name__ or "PreviewCommit"
+        chunk_name = (
+            self.undo_message
+            or type(self.operation_instance).__name__
+            or "PreviewCommit"
+        )
         cmds.undoInfo(openChunk=True, chunkName=chunk_name)
         try:
             # Isolate Select: a commit has no contract to diff against, so the

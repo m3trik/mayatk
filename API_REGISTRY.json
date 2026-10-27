@@ -8530,7 +8530,7 @@
               "kind": "method",
               "signature": "(self, enable_on_show: bool, disable_on_hide: bool) -> None",
               "summary": "",
-              "line": 673,
+              "line": 677,
               "deprecated": false
             },
             {
@@ -8539,7 +8539,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 688,
+              "line": 692,
               "deprecated": false
             },
             {
@@ -8548,7 +8548,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 692,
+              "line": 696,
               "deprecated": false
             },
             {
@@ -8557,7 +8557,7 @@
               "kind": "method",
               "signature": "(self, state: bool) -> None",
               "summary": "",
-              "line": 697,
+              "line": 701,
               "deprecated": false
             },
             {
@@ -8566,7 +8566,7 @@
               "kind": "method",
               "signature": "(self, objects: List[Any]) -> bool",
               "summary": "",
-              "line": 749,
+              "line": 753,
               "deprecated": false
             },
             {
@@ -8575,7 +8575,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 776,
+              "line": 780,
               "deprecated": false
             },
             {
@@ -8584,7 +8584,7 @@
               "kind": "method",
               "signature": "(self, *args) -> None",
               "summary": "Roll back the previous preview and re-run perform_operation.",
-              "line": 920,
+              "line": 924,
               "deprecated": false
             },
             {
@@ -8593,7 +8593,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Roll back the preview without committing.",
-              "line": 945,
+              "line": 949,
               "deprecated": false
             },
             {
@@ -8602,7 +8602,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Commit -- with a live preview, or straight from the selection.",
-              "line": 981,
+              "line": 985,
               "deprecated": false
             },
             {
@@ -8611,7 +8611,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "",
-              "line": 1230,
+              "line": 1238,
               "deprecated": false
             },
             {
@@ -8620,7 +8620,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "",
-              "line": 1243,
+              "line": 1251,
               "deprecated": false
             },
             {
@@ -8629,7 +8629,7 @@
               "kind": "property",
               "signature": "(self) -> int",
               "summary": "",
-              "line": 1247,
+              "line": 1255,
               "deprecated": false
             },
             {
@@ -8638,7 +8638,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "",
-              "line": 1250,
+              "line": 1258,
               "deprecated": false
             },
             {
@@ -8647,7 +8647,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "",
-              "line": 1254,
+              "line": 1262,
               "deprecated": false
             },
             {
@@ -8656,7 +8656,7 @@
               "kind": "staticmethod",
               "signature": "(widget, results, *, object_mode: bool = False, defer: bool = False) -> None",
               "summary": "Select the operation's result(s) — or explicitly deselect them — per a",
-              "line": 1258,
+              "line": 1266,
               "deprecated": false
             }
           ]
@@ -10178,7 +10178,7 @@
         {
           "name": "DuplicateRadial",
           "summary": "",
-          "line": 22,
+          "line": 21,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -10189,71 +10189,16 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str], num_copies: int, start_angle: float = 0, end_angle: float = 360, weight_bias: float = 0.5, weight_curve: float = 0.5, rotate_axis: str = 'y', offset: Tuple[float, float, float] = (0, 0, 0), translate: Tuple[float, float, float] = (0, 0, 0), rotate: Tuple[float, float, float] = (0, 0, 0), scale: Tuple[float, float, float] = (1, 1, 1), pivot: Union[str, Tuple[float, float, float]] = 'object', keep_original: bool = False, instance: bool = False, combine: bool = False, suffix: bool = True) -> Dict[str, List[str]]",
               "summary": "Duplicate objects in a radial pattern.",
-              "line": 24,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "DuplicateRadialSlots",
-          "summary": "",
-          "line": 306,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "DuplicateRadialSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 365,
-              "deprecated": false
-            },
-            {
-              "name": "s015_init",
-              "qualname": "DuplicateRadialSlots.s015_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Weight Bias.",
-              "line": 402,
-              "deprecated": false
-            },
-            {
-              "name": "s016_init",
-              "qualname": "DuplicateRadialSlots.s016_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Weight Curve.",
-              "line": 422,
-              "deprecated": false
-            },
-            {
-              "name": "b001_init",
-              "qualname": "DuplicateRadialSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the",
-              "line": 442,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "DuplicateRadialSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "Perform the radial duplication operation.",
-              "line": 449,
+              "line": 23,
               "deprecated": false
             },
             {
               "name": "regroup_copies",
-              "qualname": "DuplicateRadialSlots.regroup_copies",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Regroup the committed copies under a fresh ``*_array`` group.",
-              "line": 498,
+              "qualname": "DuplicateRadial.regroup_copies",
+              "kind": "staticmethod",
+              "signature": "(copies: Dict[str, List[str]]) -> None",
+              "summary": "Regroup each source's committed copies under a fresh ``*_array`` group.",
+              "line": 305,
               "deprecated": false
             }
           ]
