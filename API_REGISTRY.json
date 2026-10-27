@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 253,
+          "line": 255,
           "deprecated": false
         }
       ]
@@ -23147,7 +23147,7 @@
         {
           "name": "OpacityAttributeMode",
           "summary": "Implements the 'attribute' mode for the render-effect channels.",
-          "line": 22,
+          "line": 23,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -23158,7 +23158,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, spec: ChannelSpec = OPACITY) -> Dict[str, Dict]",
               "summary": "Add the channel's attribute(s) on each transform (no keyframes).",
-              "line": 56,
+              "line": 62,
               "deprecated": false
             },
             {
@@ -23167,7 +23167,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj, spec: ChannelSpec = OPACITY) -> bool",
               "summary": "Whether *obj* carries the channel's attribute.",
-              "line": 83,
+              "line": 89,
               "deprecated": false
             },
             {
@@ -23176,7 +23176,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj) -> List[ChannelSpec]",
               "summary": "Every channel *obj* carries.",
-              "line": 90,
+              "line": 96,
               "deprecated": false
             },
             {
@@ -23185,7 +23185,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, color, spec: ChannelSpec = HIGHLIGHT, stop: str = 'hi') -> List[str]",
               "summary": "Write the channel's colour attribute on *objects*, leaving keys alone.",
-              "line": 107,
+              "line": 113,
               "deprecated": false
             },
             {
@@ -23194,7 +23194,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj, spec: ChannelSpec = HIGHLIGHT, stop: str = 'hi') -> Optional[Tuple[float, float, float]]",
               "summary": "One end of the channel's authored colour ramp on *obj*.",
-              "line": 149,
+              "line": 155,
               "deprecated": false
             },
             {
@@ -23203,7 +23203,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj, spec: ChannelSpec = HIGHLIGHT) -> Tuple",
               "summary": "Every end of the channel's colour ramp on *obj*, high first.",
-              "line": 173,
+              "line": 179,
               "deprecated": false
             },
             {
@@ -23212,7 +23212,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, start: float, end: float, direction: str = 'in', auto_create: bool = True, tangent: str = 'linear', spec: ChannelSpec = OPACITY, whole_frames: bool = True) -> List[Tuple[str, str]]",
               "summary": "Key a two-key ramp on the channel;",
-              "line": 192,
+              "line": 198,
               "deprecated": false
             },
             {
@@ -23221,7 +23221,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, start: float, end: float, period: float, bright_fraction: float = 0.59, ramp_fraction: float = 0.25, lead_in: Optional[float] = None, lead_out: Optional[float] = None, color: Optional[Sequence[float]] = None, dim_color: Optional[Sequence[float]] = None, auto_create: bool = True, spec: ChannelSpec = HIGHLIGHT, whole_frames: bool = True) -> List[str]",
               "summary": "Key a repeating bright/dim pulse on the channel over ``start..end``.",
-              "line": 258,
+              "line": 264,
               "deprecated": false
             },
             {
@@ -23230,7 +23230,7 @@
               "kind": "classmethod",
               "signature": "(cls, obj, keys, spec: ChannelSpec = OPACITY, tangent: str = 'linear', mirror: Optional[bool] = None) -> List[Tuple[str, float]]",
               "summary": "Key a planned ``[(frame, value), ...]`` on *obj*'s channel -- the one",
-              "line": 372,
+              "line": 378,
               "deprecated": false
             },
             {
@@ -23239,7 +23239,7 @@
               "kind": "staticmethod",
               "signature": "(keys, eps: float = 0.001) -> List[Tuple[float, float]]",
               "summary": "Reduce a DENSE opacity curve to the sparse visibility keys that",
-              "line": 523,
+              "line": 529,
               "deprecated": false
             },
             {
@@ -23248,7 +23248,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, windows: bool = False) -> None",
               "summary": "Create visibility keyframes that mirror the opacity animation curve.",
-              "line": 619,
+              "line": 625,
               "deprecated": false
             },
             {
@@ -23257,7 +23257,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Repair opacity → visibility mirroring on objects that already have",
-              "line": 692,
+              "line": 698,
               "deprecated": false
             },
             {
@@ -23266,7 +23266,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, spec: Optional[ChannelSpec] = None)",
               "summary": "Delete the channel's attribute(s) and their curves from *objects*.",
-              "line": 723,
+              "line": 729,
               "deprecated": false
             }
           ]

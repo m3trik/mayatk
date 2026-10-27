@@ -275,7 +275,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L253) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L255) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -3714,7 +3714,7 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--render_opacity--attribute_mode"></a>
 ### `mat_utils/render_opacity/attribute_mode.py`
 
-- **[`class OpacityAttributeMode(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/attribute_mode.py#L22)** — Implements the 'attribute' mode for the render-effect channels.
+- **[`class OpacityAttributeMode(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/render_opacity/attribute_mode.py#L23)** — Implements the 'attribute' mode for the render-effect channels.
   - `OpacityAttributeMode.create(cls, objects, spec: ChannelSpec = OPACITY) -> Dict[str, Dict]` *(class)* — Add the channel's attribute(s) on each transform (no keyframes).
   - `OpacityAttributeMode.has_channel(cls, obj, spec: ChannelSpec = OPACITY) -> bool` *(class)* — Whether *obj* carries the channel's attribute.
   - `OpacityAttributeMode.channels_on(cls, obj) -> List[ChannelSpec]` *(class)* — Every channel *obj* carries.

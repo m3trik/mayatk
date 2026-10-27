@@ -14,6 +14,7 @@ from mayatk.mat_utils.render_opacity.channels import (
     CHANNELS,
     OPACITY,
     HIGHLIGHT,
+    PRESENCE,
     ChannelSpec,
     spec_for,
 )
@@ -43,6 +44,11 @@ class OpacityAttributeMode(ptk.LoggingMixin):
     """
 
     ATTR_NAME = OPACITY.name
+    #: Every render-effect channel (``{name: ChannelSpec}``), and the one whose
+    #: keys a visibility key mirrors: what a caller outside this package reads
+    #: through the class rather than the ``channels`` module.
+    CHANNELS = CHANNELS
+    PRESENCE = PRESENCE
     """The presence channel's attribute name (kept for its callers)."""
 
     _VIS_DRIVER_RE = re.compile(r"_VisDriver\d*$")

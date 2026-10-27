@@ -69,6 +69,7 @@ DEFAULT_INCLUDE = {
     "audio_utils.audio_clips._audio_clips": "AudioClips",
     # Audio utils
     "audio_utils._audio_utils": "AudioUtils",
+    "audio_utils.compositor": "Compositor",
     "audio_utils.segments": "AudioSegment",
     # Core utils - specific classes
     "core_utils.components": "Components",
@@ -186,6 +187,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.game_shader": "GameShader",
     "mat_utils.arnold_bridge": "ArnoldBridge",
     "mat_utils.render_opacity.render_effects": "RenderEffects",
+    "mat_utils.render_opacity.attribute_mode": "OpacityAttributeMode",
     "mat_utils.image_to_plane._image_to_plane": "ImageToPlane",
     "mat_utils.mat_updater": "MatUpdater",
     # ``texture_path_editor`` likewise defines only its ``*Slots`` panel, which the
