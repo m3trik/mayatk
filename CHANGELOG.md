@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-27 -- The five `AnimUtils` members the shot sequencer reaches into are public (`anim_utils/_tangents.py`, `_key_timing.py`, `_key_query.py`, `_key_edit.py`).** `tangent_half`, `exact_scale`, `resolve_keys`, `move_curve_keys` and `hold_segments` drop their underscore: the sequencer is a tool bound for tentacle, and once it moves a private member of a library class is out of its reach. Behavior is unchanged; every caller in mayatk is renamed with them, and `tangent_half` and `hold_segments` gain a typed return and a Parameters section.
+  - Test(s): none new -- the affected suites pass (19 modules, 2,495 tests).
 - **2026-10-27 -- The package declares its moved-names table (`__init__.py`).** `MOVED_NAMES`, empty for now, goes to `bootstrap_package(moved=...)`: a name that leaves mayatk for tentacle is listed there, and a read of it raises pythontk's `MovedNameError` naming the new home and version.
   - Test(s): none new -- pythontk's `MovedNamesTests` cover the resolver.
 - **2026-10-27 -- Export baselines pin the Scene Exporter's FBX and GLB (`test/test_export_baselines.py`, `test/baselines/export/`).** Three fixed scenes (a prop hierarchy with two materials, keyed transforms split into two shots, a skinned joint chain) export through `perform_export` as FBX + GLB, and each file is compared with its saved `ExportFingerprint`, so a code move that changes any output fails with the change named. `UPDATE_EXPORT_BASELINES=1` rewrites them when a change is meant to. The skinned GLB carries no clip: a take keying only a child joint's rotation is lost in the FBX-to-GLB step (pinned by an expected-failure test and `.claude/BACKLOG.md`).

@@ -262,8 +262,8 @@ class _ShotApplyInternal(object):
 
         moved = declined = 0
         # Where the claims say: GUI Maya rounds a scaled key to a whole frame,
-        # a gap's keys onto its bounds (AnimUtils._exact_scale).
-        with AnimUtils._exact_scale():
+        # a gap's keys onto its bounds (AnimUtils.exact_scale).
+        with AnimUtils.exact_scale():
             for crv in curves:
                 if not cmds.keyframe(crv, q=True, time=window):
                     continue

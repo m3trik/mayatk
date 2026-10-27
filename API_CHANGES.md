@@ -2,9 +2,14 @@
 
 _Diff vs the last release (origin/main @ 4cc9baa3)._
 
-## Added (1)
+## Added (6)
 
 - `__init__.py::MOVED_NAMES(constant)`
+- `anim_utils/_anim_utils.py::AnimUtils.exact_scale(cls)`
+- `anim_utils/_anim_utils.py::AnimUtils.hold_segments(curve: str, times: List[float]) -> List[bool]`
+- `anim_utils/_anim_utils.py::AnimUtils.move_curve_keys(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int`
+- `anim_utils/_anim_utils.py::AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]`
+- `anim_utils/_anim_utils.py::AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]`
 
 ## Deprecations (17)
 

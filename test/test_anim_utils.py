@@ -331,7 +331,7 @@ class TestAnimUtils(MayaTkTestCase):
         crv = cmds.listConnections(f"{self.cube}.translateY", type="animCurve")[0]
         cmds.keyTangent(crv, time=(25, 25), itt="auto", ott="auto")
 
-        AnimUtils._move_curve_keys(crv, [(25.0, 26.0)])
+        AnimUtils.move_curve_keys(crv, [(25.0, 26.0)])
 
         self.assertEqual(cmds.keyframe(crv, q=True, time=(26, 26)), [26.0])
         self.assertEqual(
@@ -2326,7 +2326,7 @@ class TestAnimUtils(MayaTkTestCase):
         cmds.copyKey(self.sphere, attribute="translateZ", time=(1, 1))
         crv = self._tx_curve()
 
-        AnimUtils._move_curve_keys(crv, [(10.0, 15.0)])
+        AnimUtils.move_curve_keys(crv, [(10.0, 15.0)])
 
         self.assertEqual(
             sorted(cmds.keyframe(crv, query=True, timeChange=True)), [1.0, 15.0]
@@ -2542,7 +2542,7 @@ class TestAnimUtils(MayaTkTestCase):
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
-        AnimUtils._move_curve_keys(crv, [(10.0, 20.0)], allow_merge=True, **hooks)
+        AnimUtils.move_curve_keys(crv, [(10.0, 20.0)], allow_merge=True, **hooks)
 
         self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0)])
         self.assertEqual(log, [("replace", crv, [20.0]), ("move", crv, [(10.0, 20.0)])])
@@ -2555,7 +2555,7 @@ class TestAnimUtils(MayaTkTestCase):
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
-        AnimUtils._move_curve_keys(
+        AnimUtils.move_curve_keys(
             crv, [(10.0, 20.0), (12.0, 20.0)], allow_merge=True, **hooks
         )
 
@@ -2570,7 +2570,7 @@ class TestAnimUtils(MayaTkTestCase):
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
-        AnimUtils._move_curve_keys(crv, [(10.0, 20.0)], **hooks)
+        AnimUtils.move_curve_keys(crv, [(10.0, 20.0)], **hooks)
 
         self.assertEqual(self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0)])
         self.assertEqual(log, [("replace", crv, [20.0]), ("move", crv, [(10.0, 20.0)])])
@@ -2583,7 +2583,7 @@ class TestAnimUtils(MayaTkTestCase):
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
-        AnimUtils._move_curve_keys(crv, [(10.0, 20.0), (12.0, 20.0)], **hooks)
+        AnimUtils.move_curve_keys(crv, [(10.0, 20.0), (12.0, 20.0)], **hooks)
 
         self.assertEqual(
             self._curve_pairs(crv), [(0.0, 0.0), (20.0, 10.0), (20.001, 12.0)]
@@ -2598,7 +2598,7 @@ class TestAnimUtils(MayaTkTestCase):
         log, hooks = self._edit_log()
         del hooks["on_delete"]
 
-        AnimUtils._move_curve_keys(
+        AnimUtils.move_curve_keys(
             crv, [(3.0, 1.0, 0.9), (4.0, 1.0, 1.2)], allow_merge=True, **hooks
         )
 

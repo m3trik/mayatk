@@ -1341,7 +1341,7 @@ class ShotSequencer(_ShotSequencerCore):
         PUBLIC because it has two consumers -- this class's own shot moves and
         ``ClipMotionMixin``'s drag handler -- so the underscore was describing
         a contract that no longer held. Not to be confused with the unrelated
-        ``AnimUtils._move_curve_keys``, which stays private and takes
+        ``AnimUtils.move_curve_keys``, which stays private and takes
         ``(curve, time_pairs, allow_merge=...)``: that one moves keys to
         arbitrary per-key destinations for the key-scale tool, where this one
         shifts a whole set by one delta and preserves the full key record.
@@ -1408,10 +1408,10 @@ class ShotSequencer(_ShotSequencerCore):
         one of *kinds* -- by default the ones Maya re-derives from both
         neighbours (:attr:`_NEIGHBOUR_DERIVED_TANGENTS`), the halves a move or
         a split disturbs -- else ``None``.  Read through
-        :meth:`AnimUtils._tangent_half`."""
+        :meth:`AnimUtils.tangent_half`."""
         from mayatk.anim_utils._anim_utils import AnimUtils
 
-        got = AnimUtils._tangent_half(crv, t, half)
+        got = AnimUtils.tangent_half(crv, t, half)
         return (got[1], got[2]) if got and got[0] in kinds else None
 
     @classmethod
@@ -1483,7 +1483,7 @@ class ShotSequencer(_ShotSequencerCore):
         from mayatk.anim_utils._anim_utils import AnimUtils
 
         landed = cls._key_time_at(crv, t, eps)
-        now = None if landed is None else AnimUtils._tangent_half(crv, landed, half)
+        now = None if landed is None else AnimUtils.tangent_half(crv, landed, half)
         if now is None or (kinds is not None and now[0] not in kinds):
             return 0
         angle, weight = held
@@ -1500,7 +1500,7 @@ class ShotSequencer(_ShotSequencerCore):
         cls._try_key_tangent(crv, tt, {"lock": False})
         cls._try_key_tangent(crv, tt, {f"{half}Angle": angle})
         if weighted:  # read after the angle is set, in case it moved the weight
-            after = AnimUtils._tangent_half(crv, landed, half)
+            after = AnimUtils.tangent_half(crv, landed, half)
             if after is not None and abs(after[2] - weight) > tol:
                 cls._try_key_tangent(crv, tt, {f"{half}Weight": weight})
         return 1
@@ -1873,7 +1873,7 @@ class ShotSequencer(_ShotSequencerCore):
             (old_start, old_end),
             lambda t: new_start + (t - old_start) * ratio,
         ):
-            with AnimUtils._exact_scale():  # GUI Maya rounds a scaled key
+            with AnimUtils.exact_scale():  # GUI Maya rounds a scaled key
                 cmds.scaleKey(
                     targets,
                     time=(old_start, old_end),
@@ -2002,7 +2002,7 @@ class ShotSequencer(_ShotSequencerCore):
                     continue  # re-tangented since — not ours to take back
                 itt = cmds.keyTangent(crv, q=True, time=tt, inTangentType=True)
                 value = cmds.keyframe(crv, q=True, time=tt, valueChange=True)
-                in_now = AnimUtils._tangent_half(crv, key_t, "in")
+                in_now = AnimUtils.tangent_half(crv, key_t, "in")
                 if not led.is_same_key(
                     claim,
                     (itt or [""])[0],
@@ -2121,7 +2121,7 @@ class ShotSequencer(_ShotSequencerCore):
                 # re-derived from the next shot's every move and re-shaped the
                 # held shot's last segment (ledger format 2, maintainer
                 # 2026-10-11; BACKLOG 2026-10-11, the held tail).
-                out_half = AnimUtils._tangent_half(crv, t, "out")
+                out_half = AnimUtils.tangent_half(crv, t, "out")
                 self._freeze_derived_half(crv, t, "in")
                 claims.append(
                     (crv, t, itt, ott[0], value[0] if value else None, out_half)
@@ -2132,7 +2132,7 @@ class ShotSequencer(_ShotSequencerCore):
         for crv, t, itt, ott, value, out_half in claims:
             # The in half as the key carries it once held: the claim knows its
             # key by that and the value (ShotEditLedger.is_same_key).
-            in_half = AnimUtils._tangent_half(crv, t, "in")
+            in_half = AnimUtils.tangent_half(crv, t, "in")
             led.record_step(
                 crv,
                 t,
@@ -3009,7 +3009,7 @@ class ShotSequencer(_ShotSequencerCore):
                 if any(abs(b - k) <= _BATCH_MOVE_EPS for k in times):
                     continue  # keyed: nothing spans it
                 if holds is None:
-                    holds = AnimUtils._hold_segments(crv, times)
+                    holds = AnimUtils.hold_segments(crv, times)
                 i = bisect.bisect_right(times, b) - 1
                 if not holds[i]:
                     continue  # shape: insert_keys pinned it

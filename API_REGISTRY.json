@@ -563,6 +563,51 @@
               "summary": "Delete a layer made by :meth:`create_preview_layer`;",
               "line": 2451,
               "deprecated": false
+            },
+            {
+              "name": "resolve_keys",
+              "qualname": "AnimUtils.resolve_keys",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]",
+              "summary": "Resolve which animation keys to operate on.",
+              "line": 988,
+              "deprecated": false
+            },
+            {
+              "name": "tangent_half",
+              "qualname": "AnimUtils.tangent_half",
+              "kind": "staticmethod",
+              "signature": "(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]",
+              "summary": "``(type, angle, weight)`` of the *side* (``\"in\"``/``\"out\"``) half of",
+              "line": 67,
+              "deprecated": false
+            },
+            {
+              "name": "exact_scale",
+              "qualname": "AnimUtils.exact_scale",
+              "kind": "classmethod",
+              "signature": "(cls)",
+              "summary": "``scaleKey`` lands every key where it computes it, inside the block.",
+              "line": 35,
+              "deprecated": false
+            },
+            {
+              "name": "move_curve_keys",
+              "qualname": "AnimUtils.move_curve_keys",
+              "kind": "classmethod",
+              "signature": "(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int",
+              "summary": "Move keys on a curve to new times, preserving value and tangents.",
+              "line": 740,
+              "deprecated": false
+            },
+            {
+              "name": "hold_segments",
+              "qualname": "AnimUtils.hold_segments",
+              "kind": "staticmethod",
+              "signature": "(curve: str, times: List[float]) -> List[bool]",
+              "summary": "Per key segment of *curve* (``times[i]`` to ``times[i + 1]``), True",
+              "line": 26,
+              "deprecated": false
             }
           ]
         }

@@ -64,9 +64,17 @@ class _TangentInternal:
     """Private helpers and ``AnimUtils`` method bodies; see the module docstring."""
 
     @staticmethod
-    def _tangent_half(crv: str, t: Optional[float], side: str):
+    def tangent_half(
+        crv: str, t: Optional[float], side: str
+    ) -> Optional[Tuple[str, float, float]]:
         """``(type, angle, weight)`` of the *side* (``"in"``/``"out"``) half of
-        *crv*'s key at *t*; ``None`` for no *t*, or no key exactly there."""
+        *crv*'s key at *t*; ``None`` for no *t*, or no key exactly there.
+
+        Parameters:
+            crv: The animation curve.
+            t: The key's time, or ``None``.
+            side: ``"in"`` or ``"out"``.
+        """
         if t is None:
             return None
         q = {"query": True, "time": (t, t)}
@@ -486,9 +494,9 @@ class _TangentInternal:
     @classmethod
     def _step_keys(cls, objects, keys, tangent, resolution_order):
         """Body of :meth:`AnimUtils.step_keys`."""
-        # --- Auto resolution: resolve keys via _resolve_keys helper ---
+        # --- Auto resolution: resolve keys via resolve_keys helper ---
         if keys == "auto":
-            resolved = cls._resolve_keys(
+            resolved = cls.resolve_keys(
                 objects, mode="auto", resolution_order=resolution_order
             )
             # Empty dict → None so the "step all" path handles no-result.

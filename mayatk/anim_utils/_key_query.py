@@ -985,7 +985,7 @@ class _KeyQueryInternal:
         return times
 
     @classmethod
-    def _resolve_keys(
+    def resolve_keys(
         cls,
         objects=None,
         mode: str = "auto",

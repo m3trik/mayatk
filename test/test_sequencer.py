@@ -5046,7 +5046,7 @@ class TestRetimesLandExactlyWithAutoSnapOn(unittest.TestCase):
     A gap kept a frame for its key landed that key ON a bound, stacked: 45 ->
     40.00000017 beside A's 40, measured in a GUI Maya, while the ledger's
     claims followed the unrounded frames.  The retimes switch it off
-    (``AnimUtils._exact_scale``).  Fixed: 2026-10-12"""
+    (``AnimUtils.exact_scale``).  Fixed: 2026-10-12"""
 
     def setUp(self):
         cmds.file(new=True, force=True)

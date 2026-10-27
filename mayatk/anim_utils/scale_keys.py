@@ -379,8 +379,8 @@ class ScaleKeys:
                 cmds.cutKey(curve, time=(t, t), clear=True)
 
             # Exactly where *pairs* says: GUI Maya rounds a scaled key to a
-            # whole frame otherwise (AnimUtils._exact_scale).
-            with AnimUtils._exact_scale():
+            # whole frame otherwise (AnimUtils.exact_scale).
+            with AnimUtils.exact_scale():
                 cmds.scaleKey(curve, **kwargs)
             if replaced and on_replace is not None:
                 on_replace(curve, replaced)
@@ -397,7 +397,7 @@ class ScaleKeys:
         """Execute a move operation directly."""
         if not cmds.objExists(curve):
             return 0
-        return self.utils._move_curve_keys(
+        return self.utils.move_curve_keys(
             curve,
             time_pairs,
             allow_merge=allow_merge,
@@ -758,7 +758,7 @@ class ScaleKeys:
                         if self.snap_mode and self.snap_mode != "none":
                             # Apply snapping to new times; each move keeps its
                             # exact scaled time, so of keys snapping onto one
-                            # frame the least moved is kept (_move_curve_keys).
+                            # frame the least moved is kept (move_curve_keys).
                             snapped_pairs = []
                             for old, new in time_pairs:
                                 # Handle alias for aggressive

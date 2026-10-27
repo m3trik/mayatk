@@ -990,7 +990,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             keys: Which keys to step.  Accepted values:
 
                   - ``None`` (default) — step **all** keys on *objects*.
-                  - ``"auto"`` — smart cascade via :meth:`_resolve_keys`:
+                  - ``"auto"`` — smart cascade via :meth:`resolve_keys`:
                     uses selected keys if any (narrowed by Channel Box
                     highlights), falls back to Channel Box attributes,
                     then current-frame keys, then all keys.
@@ -1009,7 +1009,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                   - ``"both"`` — both out ``step`` and in ``stepnext``.
             resolution_order: Strategies to try for ``"auto"`` mode.
                 Default: ``("selected", "channel_box", "current_frame",
-                "all")``.  See :meth:`_resolve_keys`.
+                "all")``.  See :meth:`resolve_keys`.
 
         Returns:
             dict: ``{"curves": int, "objects": int}`` counts.
@@ -2190,7 +2190,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
             objects: Objects to copy from. Defaults to selection.
             mode: Copy mode — one of:
                 - ``"auto"`` (default): Smart cascade via
-                  :meth:`_resolve_keys` — uses selected keys if any
+                  :meth:`resolve_keys` — uses selected keys if any
                   (narrowed to Channel Box highlights when they overlap,
                   otherwise all selected keys are used), falls back to
                   Channel Box values, then to all keyed attributes at
@@ -2203,7 +2203,7 @@ class AnimUtils(_AnimUtilsInternal, ptk.HelpMixin):
                   the Channel Box.
             resolution_order: Strategies to try for ``"auto"`` mode.
                 Default: ``("selected", "channel_box", "current_frame")``.
-                See :meth:`_resolve_keys` for available strategies.
+                See :meth:`resolve_keys` for available strategies.
             tangent_detail: When True, multi-key data additionally
                 captures tangent angles and weights per key, plus
                 pre/post infinity types per curve.  This produces

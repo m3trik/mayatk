@@ -343,6 +343,11 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
   - `AnimUtils.get_timeline_selection() -> Optional[Tuple[float, float]]` *(static)* — The time slider's drag-selected range, or ``None`` when nothing is selected.
   - `AnimUtils.create_preview_layer(sources: Dict[str, str], gate: Optional[Tuple[float, float]] = None, name: str = 'previewLayer') -> str` *(static)* — Play foreign curves on an object's plugs through a throwaway override layer.
   - `AnimUtils.remove_preview_layer(layer: Optional[str]) -> bool` *(static)* — Delete a layer made by :meth:`create_preview_layer`;
+  - `AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]` *(class)* — Resolve which animation keys to operate on.
+  - `AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]` *(static)* — ``(type, angle, weight)`` of the *side* (``"in"``/``"out"``) half of
+  - `AnimUtils.exact_scale(cls)` *(class)* — ``scaleKey`` lands every key where it computes it, inside the block.
+  - `AnimUtils.move_curve_keys(cls, curve: str, time_pairs: List[Tuple[float, ...]], tolerance: float = 0.0001, allow_merge: bool = False, on_replace=None, on_move=None) -> int` *(class)* — Move keys on a curve to new times, preserving value and tangents.
+  - `AnimUtils.hold_segments(curve: str, times: List[float]) -> List[bool]` *(static)* — Per key segment of *curve* (``times[i]`` to ``times[i + 1]``), True
 
 <a id="anim_utils--_tied_keys"></a>
 ### `anim_utils/_tied_keys.py`

@@ -23,14 +23,20 @@ class _KeyEditInternal:
     """Private helpers and ``AnimUtils`` method bodies; see the module docstring."""
 
     @staticmethod
-    def _hold_segments(curve: str, times: List[float]) -> List[bool]:
+    def hold_segments(curve: str, times: List[float]) -> List[bool]:
         """Per key segment of *curve* (``times[i]`` to ``times[i + 1]``), True
         when it plays ONE value end to end: the left key steps, or both keys
         carry the same value and the tangents facing the segment are flat.
 
-        *times* is the curve's key list in time order.  Four whole-curve
-        queries, not four per segment -- this is asked once per curve by
-        :meth:`AnimUtils.insert_keys`, over every bound at once.
+        Four whole-curve queries, not four per segment -- this is asked once
+        per curve by :meth:`AnimUtils.insert_keys`, over every bound at once.
+
+        Parameters:
+            curve: The animation curve.
+            times: Its key times, in time order.
+
+        Returns:
+            One flag per segment, ``len(times) - 1`` of them.
         """
         values = cmds.keyframe(curve, q=True, valueChange=True) or []
         out_types = cmds.keyTangent(curve, q=True, outTangentType=True) or []
@@ -759,7 +765,7 @@ class _KeyEditInternal:
                 if any(abs(t - k) <= tolerance for k in existing):
                     continue
                 if holds is None:
-                    holds = cls._hold_segments(curve, existing)
+                    holds = cls.hold_segments(curve, existing)
                 if holds[bisect.bisect_right(existing, t) - 1]:
                     continue  # between two keys that play one value: a hold
                 try:

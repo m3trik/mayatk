@@ -32,7 +32,7 @@ class _KeyTimingInternal:
 
     @classmethod
     @contextlib.contextmanager
-    def _exact_scale(cls):
+    def exact_scale(cls):
         """``scaleKey`` lands every key where it computes it, inside the block.
 
         GUI Maya's ``scaleKeyAutoSnap`` preference rounds each scaled key to
@@ -737,7 +737,7 @@ class _KeyTimingInternal:
                     on_move(node, pairs)
 
     @classmethod
-    def _move_curve_keys(
+    def move_curve_keys(
         cls,
         curve: str,
         time_pairs: List[Tuple[float, ...]],
@@ -830,7 +830,7 @@ class _KeyTimingInternal:
             # Without this list collision avoidance is blind — warn so a
             # silent overwrite of unmoved keys is at least diagnosable.
             cmds.warning(
-                f"_move_curve_keys: could not query remaining keys on "
+                f"move_curve_keys: could not query remaining keys on "
                 f"{curve} ({error}); collision avoidance is degraded."
             )
             remaining_times = []
@@ -917,7 +917,7 @@ class _KeyTimingInternal:
             cmds.cutKey(curve, time=(temp_time, temp_time), option="keys", clear=True)
         except RuntimeError as error:
             cmds.warning(
-                f"_move_curve_keys: failed to remove the temporary key at "
+                f"move_curve_keys: failed to remove the temporary key at "
                 f"{temp_time} on {curve}: {error}"
             )
 
@@ -1212,8 +1212,8 @@ class _KeyTimingInternal:
             (
                 frame,
                 cmds.keyframe(crv, query=True, time=(v_src,) * 2, valueChange=True)[0],
-                cls._tangent_half(crv, in_src, "in"),
-                cls._tangent_half(crv, out_src, "out"),
+                cls.tangent_half(crv, in_src, "in"),
+                cls.tangent_half(crv, out_src, "out"),
             )
             for frame, in_src, out_src, v_src in cls._layout_boundaries(times, entries)
         ]
@@ -1249,7 +1249,7 @@ class _KeyTimingInternal:
                 if want is None:
                     continue
                 kind, angle, weight = want
-                now = cls._tangent_half(crv, t, side)
+                now = cls.tangent_half(crv, t, side)
                 if now is None:
                     continue
                 now_kind, now_angle, now_weight = now
