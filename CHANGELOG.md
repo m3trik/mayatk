@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-27 -- `NodeIcons.audio_icon(size=16)`: an audio item's icon from the `audio` node type alone (`ui_utils/node_icons.py`, `anim_utils/shots/shot_manifest/manifest_host.py`).** The Shot Manifest host built it inline with `QIcon`; the shared panel will ask either host's `NodeIcons` for it by this one name (blendertk has the twin), and the host halves move to tentacle free of Qt.
+  - Test(s): `test_ui_utils.py` +2 (`TestNodeIconsAudio`: the resource path, and `None` for a missing resource).
 - **2026-10-27 -- `OpacityAttributeMode` and `Compositor` are on the package root; `OpacityAttributeMode.CHANNELS` / `.PRESENCE` name the render-effect channels (`__init__.py`, `mat_utils/render_opacity/attribute_mode.py`).** The Shot Manifest's Maya half reads them, and once it lives in tentacle it may reach mayatk only through its root (CODE_STANDARD §4), not the `render_opacity.channels` / `audio_utils.compositor` modules. Behavior is unchanged.
   - Test(s): none new -- the affected suites cover both classes.
 - **2026-10-27 -- The Shot Manifest panel sheds its retired surface before it moves to tentacle (`anim_utils/shots/shot_manifest/`).** `export_menu.py` (the `ExportMenuMixin` alias of `ExportPreviewMixin`, deprecated 2026-10-11) is removed, and the mapping picker no longer migrates a saved `speedrun` pointer (`_migrate_retired_mapping`; pythontk drops `Mapping.retired`).

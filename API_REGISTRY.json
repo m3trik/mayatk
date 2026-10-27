@@ -31932,12 +31932,21 @@
               "deprecated": false
             },
             {
+              "name": "audio_icon",
+              "qualname": "NodeIcons.audio_icon",
+              "kind": "staticmethod",
+              "signature": "(size: int = 16)",
+              "summary": "The ``QIcon`` of an audio item, or ``None``: Maya's ``audio`` node",
+              "line": 102,
+              "deprecated": false
+            },
+            {
               "name": "get_pixmap",
               "qualname": "NodeIcons.get_pixmap",
               "kind": "staticmethod",
               "signature": "(node_name: str, size: int = 16)",
               "summary": "Return a ``QPixmap`` for a Maya node, scaled to *size*.",
-              "line": 102,
+              "line": 117,
               "deprecated": false
             }
           ]

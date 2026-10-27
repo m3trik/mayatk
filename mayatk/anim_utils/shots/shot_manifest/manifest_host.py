@@ -96,8 +96,5 @@ class ManifestHost:
         if cmds is None:
             return None
         if getattr(obj, "kind", None) == "audio":
-            from qtpy.QtGui import QIcon
-
-            icon = QIcon(f":/{NodeIcons.icon_name_for_type('audio')}")
-            return icon if not icon.isNull() else None
+            return NodeIcons.audio_icon()
         return NodeIcons.get_icon(name)

@@ -1252,7 +1252,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/node_icons.py` — Reusable helper for resolving Maya node icons at runtime.
 - `class NodeIcons`
-  - methods: icon_name_for_type, icon_name_for_node, get_icon, get_pixmap
+  - methods: icon_name_for_type, icon_name_for_node, get_icon, audio_icon, get_pixmap
 
 ### `ui_utils/style_setter/_style_setter.py` — Match Maya's scriptable viewport colors to another DCC's look.
 - constants: STYLES_DIR

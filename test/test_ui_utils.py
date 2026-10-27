@@ -66,6 +66,31 @@ class TestUIUtils(MayaTkTestCase):
         self.assertEqual(cmds.ls(selection=True), [cube])
 
 
+class TestNodeIconsAudio(MayaTkTestCase):
+    """``NodeIcons.audio_icon``: an audio row's icon, read from the ``audio``
+    node type alone (the clip's node may not exist yet). The shared Shot
+    Manifest panel asks either host for it by this one name."""
+
+    def test_it_is_the_audio_node_types_resource_icon(self):
+        from qtpy import QtGui
+
+        from mayatk.ui_utils.node_icons import NodeIcons
+
+        with mock.patch.object(QtGui, "QIcon") as icon:
+            icon.return_value.isNull.return_value = False
+            self.assertIs(NodeIcons.audio_icon(), icon.return_value)
+        icon.assert_called_once_with(":/out_audio.png")
+
+    def test_a_missing_resource_reads_none(self):
+        from qtpy import QtGui
+
+        from mayatk.ui_utils.node_icons import NodeIcons
+
+        with mock.patch.object(QtGui, "QIcon") as icon:
+            icon.return_value.isNull.return_value = True
+            self.assertIsNone(NodeIcons.audio_icon())
+
+
 class TestEditorRegistry(MayaTkTestCase):
     """UiUtils.get_editor_types / open_editor -- the mirror of blendertk's pair.
 

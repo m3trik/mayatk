@@ -4974,6 +4974,7 @@ Reusable helper for resolving Maya node icons at runtime.
   - `NodeIcons.icon_name_for_type(node_type: str) -> str` *(static)* — Return the Maya resource icon filename for a given node type.
   - `NodeIcons.icon_name_for_node(node_name: str) -> Optional[str]` *(static)* — Return the icon filename for a specific node in the scene.
   - `NodeIcons.get_icon(node_name: str, size: int = 20)` *(static)* — Return a ``QIcon`` for a Maya node, or ``None`` if unavailable.
+  - `NodeIcons.audio_icon(size: int = 16)` *(static)* — The ``QIcon`` of an audio item, or ``None``: Maya's ``audio`` node
   - `NodeIcons.get_pixmap(node_name: str, size: int = 16)` *(static)* — Return a ``QPixmap`` for a Maya node, scaled to *size*.
 
 <a id="ui_utils--style_setter--_style_setter"></a>

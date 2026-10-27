@@ -50,7 +50,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_off` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_on` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 
-## Added (6)
+## Added (7)
 
 - `core_utils/_core_utils.py::CoreUtils.selected_objects() -> List[str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
@@ -58,6 +58,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
 - `edit_utils/duplicate_radial.py::DuplicateRadial.regroup_copies(copies: Dict[str, List[str]]) -> None`
+- `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 
 ## Deprecations (17)
 

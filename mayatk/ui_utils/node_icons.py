@@ -99,6 +99,21 @@ class NodeIcons:
         return icon
 
     @staticmethod
+    def audio_icon(size: int = 16):
+        """The ``QIcon`` of an audio item, or ``None``: Maya's ``audio`` node
+        type icon, read from the type alone since an audio clip's node may
+        not exist yet. Twin of blendertk's ``NodeIcons.audio_icon``.
+
+        Parameters:
+            size: Icon size in pixels (Maya's resource icons scale; kept for
+                the twin's signature).
+        """
+        from qtpy.QtGui import QIcon
+
+        icon = QIcon(f":/{NodeIcons.icon_name_for_type('audio')}")
+        return None if icon.isNull() else icon
+
+    @staticmethod
     def get_pixmap(node_name: str, size: int = 16):
         """Return a ``QPixmap`` for a Maya node, scaled to *size*.
 
