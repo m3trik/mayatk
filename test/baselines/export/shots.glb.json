@@ -1,0 +1,136 @@
+{
+ "animations": {
+  "FULL_SEQUENCE": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 50
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 50
+    }
+   },
+   "span": [
+    0.0,
+    1.6333
+   ]
+  },
+  "ShotA": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 2
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    }
+   },
+   "span": [
+    0.0,
+    0.7917
+   ]
+  },
+  "ShotB": {
+   "channels": {
+    "RootNode/mover|rotation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    },
+    "RootNode/mover|translation": {
+     "interpolation": "LINEAR",
+     "keys": 25
+    }
+   },
+   "span": [
+    0.0,
+    0.7917
+   ]
+  }
+ },
+ "extensions_used": [],
+ "extras": [
+  "animation",
+  "handoff"
+ ],
+ "format": "glb",
+ "images": [],
+ "materials": {
+  "standardSurface1": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.4,
+    0.4,
+    0.4,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "extensions": [],
+   "metallic": 0.0,
+   "roughness": 0.5,
+   "textures": []
+  }
+ },
+ "meshes": {
+  "mover": [
+   {
+    "attributes": {
+     "NORMAL": 24,
+     "POSITION": 24,
+     "TANGENT": 24,
+     "TEXCOORD_0": 24
+    },
+    "indices": 36,
+    "material": "standardSurface1",
+    "mode": 4,
+    "targets": 0
+   }
+  ]
+ },
+ "nodes": {
+  "RootNode": {
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "RootNode/mover": {
+   "mesh": "mover",
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "skins": {}
+}

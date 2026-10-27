@@ -1,0 +1,154 @@
+{
+ "animations": {},
+ "extensions_used": [],
+ "extras": [],
+ "format": "glb",
+ "images": [],
+ "materials": {
+  "ball_mat": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.1,
+    0.3,
+    0.9,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "extensions": [],
+   "metallic": 0.5,
+   "roughness": 0.2,
+   "textures": []
+  },
+  "crate_mat": {
+   "alpha_mode": "OPAQUE",
+   "base_color": [
+    0.64,
+    0.16,
+    0.08,
+    1.0
+   ],
+   "double_sided": false,
+   "emissive": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "extensions": [],
+   "metallic": 0.2,
+   "roughness": 0.8,
+   "textures": []
+  }
+ },
+ "meshes": {
+  "ball": [
+   {
+    "attributes": {
+     "NORMAL": 176,
+     "POSITION": 176,
+     "TANGENT": 176,
+     "TEXCOORD_0": 176
+    },
+    "indices": 240,
+    "material": "ball_mat",
+    "mode": 4,
+    "targets": 0
+   }
+  ],
+  "crate": [
+   {
+    "attributes": {
+     "NORMAL": 24,
+     "POSITION": 24,
+     "TANGENT": 24,
+     "TEXCOORD_0": 24
+    },
+    "indices": 36,
+    "material": "crate_mat",
+    "mode": 4,
+    "targets": 0
+   }
+  ]
+ },
+ "nodes": {
+  "RootNode": {
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "RootNode/props_grp": {
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "RootNode/props_grp/ball": {
+   "mesh": "ball",
+   "rotation": [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    -0.01,
+    0.01,
+    0.0
+   ]
+  },
+  "RootNode/props_grp/crate": {
+   "mesh": "crate",
+   "rotation": [
+    0.0,
+    0.3827,
+    0.0,
+    0.9239
+   ],
+   "scale": [
+    2.0,
+    1.0,
+    1.0
+   ],
+   "translation": [
+    0.01,
+    0.005,
+    -0.02
+   ]
+  }
+ },
+ "skins": {}
+}

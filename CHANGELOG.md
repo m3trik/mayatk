@@ -1,6 +1,8 @@
 # mayatk — Changelog
 
 ## 2026
+- **2026-10-27 -- Export baselines pin the Scene Exporter's FBX and GLB (`test/test_export_baselines.py`, `test/baselines/export/`).** Three fixed scenes (a prop hierarchy with two materials, keyed transforms split into two shots, a skinned joint chain) export through `perform_export` as FBX + GLB, and each file is compared with its saved `ExportFingerprint`, so a code move that changes any output fails with the change named. `UPDATE_EXPORT_BASELINES=1` rewrites them when a change is meant to. The skinned GLB carries no clip: a take keying only a child joint's rotation is lost in the FBX-to-GLB step (pinned by an expected-failure test and `.claude/BACKLOG.md`).
+  - Test(s): `test_export_baselines.py` +4 (one an expected failure).
 - **2026-10-26 -- `optimize_keys` and `UvUtils.gather_to_udim` keep a caller's viewport suspension (`anim_utils/_curve_optimize.py`, `uv_utils/_uv_utils.py`).** Each suspended and resumed the viewport with raw `cmds.refresh` calls, so inside the scene exporter, which suspends it for the whole run, every optimize resumed it for the rest of the export. Both now use the re-entrant `CoreUtils.suspended_refresh()`.
   - Test(s): `test_anim_utils.py` +1 (`test_optimize_keys_keeps_a_callers_refresh_suspension`), `test_uv_utils.py` +1 (`test_gather_to_udim_keeps_a_callers_refresh_suspension`), red first.
 - **2026-10-26 -- Drop the redundant OpenEXR flags (`light_utils/lightmap_baker/lightmap_baker.py`, `mat_utils/texture_baker.py`, `nurbs_utils/image_tracer.py`).** pythontk's root sets `OPENCV_IO_ENABLE_OPENEXR` before any module of this package loads, so the module copies did nothing.

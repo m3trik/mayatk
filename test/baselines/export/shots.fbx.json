@@ -1,0 +1,195 @@
+{
+ "census": {
+  "AnimationCurve": 6,
+  "AnimationCurveNode": 9,
+  "AnimationLayer": 3,
+  "AnimationStack": 3,
+  "BindingTable": 1,
+  "Geometry": 1,
+  "Implementation": 1,
+  "Material": 1,
+  "Model": 2,
+  "NodeAttribute": 1
+ },
+ "format": "fbx",
+ "geometry": {
+  "geometry#0": {
+   "polygon_vertices": 24,
+   "vertices": 8
+  }
+ },
+ "materials": {
+  "standardSurface1": {
+   "properties": {
+    "Maya": [],
+    "Maya|TypeId": 1398031443,
+    "Maya|base": 1.0,
+    "Maya|baseColor": [
+     0.4,
+     0.4,
+     0.4
+    ],
+    "Maya|coat": 0.0,
+    "Maya|coatAffectColor": 0.0,
+    "Maya|coatAffectRoughness": 0.0,
+    "Maya|coatAnisotropy": 0.0,
+    "Maya|coatColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|coatIOR": 1.5,
+    "Maya|coatNormal": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|coatRotation": 0.0,
+    "Maya|coatRoughness": 0.1,
+    "Maya|diffuseRoughness": 0.0,
+    "Maya|emission": 0.0,
+    "Maya|emissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|hardwareShader": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|metalness": 0.0,
+    "Maya|normalCamera": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|normalCameraFactor": 0.0,
+    "Maya|normalCameraUsedAs": 0,
+    "Maya|opacity": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheen": 0.0,
+    "Maya|sheenColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|sheenRoughness": 0.3,
+    "Maya|specular": 1.0,
+    "Maya|specularAnisotropy": 0.0,
+    "Maya|specularColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|specularIOR": 1.5,
+    "Maya|specularRotation": 0.0,
+    "Maya|specularRoughness": 0.5,
+    "Maya|subsurface": 0.0,
+    "Maya|subsurfaceAnisotropy": 0.0,
+    "Maya|subsurfaceColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceRadius": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|subsurfaceScale": 1.0,
+    "Maya|thinFilmIOR": 1.5,
+    "Maya|thinFilmThickness": 0.0,
+    "Maya|thinWalled": 0,
+    "Maya|transmission": 0.0,
+    "Maya|transmissionColor": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "Maya|transmissionDepth": 0.0,
+    "Maya|transmissionDispersion": 0.0,
+    "Maya|transmissionExtraRoughness": 0.0,
+    "Maya|transmissionScatter": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "Maya|transmissionScatterAnisotropy": 0.0
+   },
+   "shading_model": "unknown",
+   "textures": {}
+  }
+ },
+ "models": {
+  "data_export": {
+   "Lcl Rotation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "Lcl Scaling": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "Lcl Translation": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "type": "Null"
+  },
+  "mover": {
+   "type": "Mesh"
+  }
+ },
+ "takes": {
+  "ShotA": {
+   "mover|Lcl Rotation|d|Y": [
+    0.0417,
+    0.8333,
+    20
+   ],
+   "mover|Lcl Translation|d|X": [
+    0.0417,
+    0.8333,
+    20
+   ]
+  },
+  "ShotB": {
+   "mover|Lcl Rotation|d|Y": [
+    0.875,
+    1.6667,
+    20
+   ],
+   "mover|Lcl Translation|d|X": [
+    0.875,
+    1.6667,
+    20
+   ]
+  },
+  "Take 001": {
+   "mover|Lcl Rotation|d|Y": [
+    0.0417,
+    1.6667,
+    40
+   ],
+   "mover|Lcl Translation|d|X": [
+    0.0417,
+    1.6667,
+    40
+   ]
+  }
+ },
+ "user_properties": {
+  "data_export.animation": "text",
+  "data_export.handoff": "text",
+  "data_export.materials": "text",
+  "data_export.render_effects": "text",
+  "mover.currentUVSet": "text"
+ }
+}
