@@ -1217,6 +1217,20 @@ class TestNormalsOperations(MayaTkTestCase):
         self.assertEqual(self._hard_edges(self.cube), 12)
         self.assertEqual(cmds.ls(sl=True), [self.cube])
 
+    def test_a_keyword_target_is_honored(self):
+        """``objects=`` by keyword: the given nodes, never the selection; a keyword
+        ``None`` takes the selection."""
+        cmds.select(clear=True)
+        Components.set_edge_softness(objects=self.cube, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        other = cmds.polyCube(name="nrmOther")[0]
+        Components.set_edge_softness(other, soft=True)
+        cmds.select(other, replace=True)
+        Components.set_edge_softness(objects=self.cube, soft=True)
+        self.assertEqual(self._hard_edges(self.cube), 0)
+        Components.set_edge_softness(objects=None, soft=False)
+        self.assertEqual(self._hard_edges(other), 12)
+
     def test_set_edge_hardness_takes_the_selection_too(self):
         Components.set_edge_softness(self.cube, soft=True)
         cmds.select(self.cube, replace=True)

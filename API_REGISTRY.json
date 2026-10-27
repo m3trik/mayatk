@@ -6704,7 +6704,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Restore the viewport selection after a scene-mutating block.",
-              "line": 400,
+              "line": 409,
               "deprecated": false
             },
             {
@@ -6713,7 +6713,7 @@
               "kind": "staticmethod",
               "signature": "(values: Dict[str, Union[int, float, str]])",
               "summary": "Set Maya optionVars for a block, then put the user's values back.",
-              "line": 429,
+              "line": 438,
               "deprecated": false
             },
             {
@@ -6722,7 +6722,7 @@
               "kind": "staticmethod",
               "signature": "(fn=None, *, name: str = '', suspend_refresh: bool = False)",
               "summary": "A decorator to place a function into Maya's undo chunk.",
-              "line": 481,
+              "line": 490,
               "deprecated": false
             },
             {
@@ -6731,7 +6731,7 @@
               "kind": "staticmethod",
               "signature": "(func: Callable) -> Callable",
               "summary": "A decorator to manage reparenting of Maya nodes before and after an operation.",
-              "line": 525,
+              "line": 534,
               "deprecated": false
             },
             {
@@ -6740,7 +6740,7 @@
               "kind": "staticmethod",
               "signature": "(control_name, container)",
               "summary": "Embed a Maya Native UI Object.",
-              "line": 558,
+              "line": 567,
               "deprecated": false
             },
             {
@@ -6749,7 +6749,7 @@
               "kind": "staticmethod",
               "signature": "(objects: List[str]) -> Tuple[List[str], List[str]]",
               "summary": "Confirms the existence of each object in the provided list in Maya.",
-              "line": 579,
+              "line": 588,
               "deprecated": false
             },
             {
@@ -6758,7 +6758,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> list",
               "summary": "Rename-proof references to *nodes*, to be resolved after a renaming operation.",
-              "line": 593,
+              "line": 602,
               "deprecated": false
             },
             {
@@ -6767,7 +6767,7 @@
               "kind": "staticmethod",
               "signature": "(handles, drop_dead: bool = True) -> List[str]",
               "summary": "Current full path (DAG) / name (DG) for each :meth:`node_handles` handle.",
-              "line": 615,
+              "line": 624,
               "deprecated": false
             },
             {
@@ -6776,7 +6776,7 @@
               "kind": "staticmethod",
               "signature": "(objects, api_version: int = 2)",
               "summary": "Get MFnMesh function set(s) from transform or shape node(s).",
-              "line": 638,
+              "line": 647,
               "deprecated": false
             },
             {
@@ -6785,7 +6785,7 @@
               "kind": "staticmethod",
               "signature": "(array)",
               "summary": "Determine the given element(s) type.",
-              "line": 692,
+              "line": 701,
               "deprecated": false
             },
             {
@@ -6794,7 +6794,7 @@
               "kind": "staticmethod",
               "signature": "(lst, returned_type='str', flatten=False)",
               "summary": "Convert the given element(s) to <obj>, 'str', or int values.",
-              "line": 715,
+              "line": 724,
               "deprecated": false
             },
             {
@@ -6803,7 +6803,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Query a specified Maya command and return a dict mapping parameters to their values.",
-              "line": 797,
+              "line": 806,
               "deprecated": false
             },
             {
@@ -6812,7 +6812,7 @@
               "kind": "staticmethod",
               "signature": "(node, cmd, parameters)",
               "summary": "Apply a set of parameter values to a specified Maya node using a given Maya command.",
-              "line": 807,
+              "line": 816,
               "deprecated": false
             },
             {
@@ -6821,7 +6821,7 @@
               "kind": "classmethod",
               "signature": "(cls, source, target, tolerance: float = 0.1) -> dict",
               "summary": "Build a mapping of source meshes to target meshes based on geometric similarity.",
-              "line": 818,
+              "line": 827,
               "deprecated": false
             },
             {
@@ -6830,7 +6830,7 @@
               "kind": "staticmethod",
               "signature": "(keyword=None, ignore_case=True)",
               "summary": "Get global MEL variables.",
-              "line": 853,
+              "line": 862,
               "deprecated": false
             },
             {
@@ -6839,7 +6839,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, method='name', reverse=False)",
               "summary": "Reorder a given set of objects using various sorting methods.",
-              "line": 871,
+              "line": 880,
               "deprecated": false
             },
             {
@@ -6848,7 +6848,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> List[str]",
               "summary": "Coerce a node-or-iterable-of-nodes to a list of plain DAG-path strings.",
-              "line": 995,
+              "line": 1004,
               "deprecated": false
             },
             {
@@ -6857,7 +6857,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace stripped: ``\"|grp|ns:obj\"`` -> ``\"obj\"``.",
-              "line": 1013,
+              "line": 1022,
               "deprecated": false
             },
             {
@@ -6866,7 +6866,7 @@
               "kind": "staticmethod",
               "signature": "(node) -> str",
               "summary": "Leaf name with namespace preserved: ``\"|grp|ns:obj\"`` -> ``\"ns:obj\"``.",
-              "line": 1018,
+              "line": 1027,
               "deprecated": false
             },
             {
@@ -6875,7 +6875,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = True) -> BoundingBox",
               "summary": "Moved to ``XformUtils.get_bounding_box(node, \"box\", world_space=world)``,",
-              "line": 1028,
+              "line": 1037,
               "deprecated": true,
               "remove_in": "0.30.0"
             }
@@ -32204,7 +32204,7 @@
               "kind": "classmethod",
               "signature": "(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'",
               "summary": "Return the MayaUiHandler singleton, bootstrapping if needed.",
-              "line": 126,
+              "line": 132,
               "deprecated": false
             },
             {
@@ -32213,7 +32213,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> bool",
               "summary": "Recognise the native Maya menus this handler builds on demand.",
-              "line": 172,
+              "line": 178,
               "deprecated": false
             },
             {
@@ -32222,7 +32222,7 @@
               "kind": "method",
               "signature": "(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'",
               "summary": "Retrieve a UI, checking Maya menus first.",
-              "line": 185,
+              "line": 191,
               "deprecated": false
             },
             {
@@ -32231,7 +32231,7 @@
               "kind": "method",
               "signature": "(self, ui) -> str",
               "summary": "mayatk-sourced UIs stay open by default (hide button, not pin).",
-              "line": 197,
+              "line": 203,
               "deprecated": false
             }
           ]

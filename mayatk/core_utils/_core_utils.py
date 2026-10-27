@@ -380,12 +380,21 @@ class CoreUtils(ptk.CoreUtils, _CoreUtilsInternal):
             params = list(inspect.signature(func).parameters.values())
             has_receiver = bool(params) and params[0].name in ("self", "cls")
         except (TypeError, ValueError):
-            has_receiver = False
+            params, has_receiver = [], False
         target = 1 if has_receiver else 0
+        # Given by keyword, the target is found by name: only positions were
+        # read before, so ``f(objects=nodes)`` ran on the selection instead.
+        name = params[target].name if len(params) > target else None
 
         @wraps(func)
         def wrapped(*args, **kwargs) -> Any:
-            if len(args) <= target or args[target] is None:
+            if name in kwargs:
+                if kwargs[name] is None:
+                    selection = cmds.ls(selection=True) or []
+                    if not selection:
+                        return []
+                    kwargs = {**kwargs, name: selection}
+            elif len(args) <= target or args[target] is None:
                 selection = cmds.ls(selection=True) or []
                 if not selection:
                     return []

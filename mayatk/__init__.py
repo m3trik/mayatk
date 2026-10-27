@@ -254,7 +254,10 @@ DEFAULT_INCLUDE = {
 #: read raises MovedNameError naming the new home. ``{name: (new home, version)}``;
 #: a move adds its names here in the same change set.
 MOVED_NAMES = {
-    "DuplicateRadialSlots": ("tentacle.ui.panels.duplicate_radial", "0.30.0"),
+    "DuplicateRadialSlots": (
+        "tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

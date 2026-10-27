@@ -55,6 +55,12 @@ class MayaUiHandler(UiHandler):
             source_tags={"mayatk"},
             **kwargs,
         )
+        # A Slots class written for either host reaches its host through the
+        # switchboard's ``tk`` (tentacle's ``Slots.tk``): this package, unless
+        # the caller named one, so a panel this handler stands up alone (a
+        # shelf button's launch code) finds its host too.
+        if getattr(self.sb, "tk", None) is None:
+            self.sb.tk = sys.modules["mayatk"]
 
         # Maya's main window owns application-scoped shortcuts (it is always
         # up); uitk names no host, so the host declares it -- here, not only
