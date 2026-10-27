@@ -648,11 +648,14 @@ class _CurveOptimizeInternal:
         if not quiet:
             print(f"[optimize] Processing {len(anim_curves)} curves...")
 
-        # Suspend viewport refresh for the duration of the optimization.
-        # In interactive Maya this prevents per-operation viewport updates
-        # that dominate wall-clock time.
-        cmds.refresh(suspend=True)
-        try:
+        # Suspend viewport refresh for the duration of the optimization: in
+        # interactive Maya per-operation viewport updates dominate wall-clock
+        # time. Re-entrant, so a caller's own suspension (the scene exporter
+        # holds one for the whole run) survives this call: a raw
+        # refresh(suspend=False) here released it early.
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        with CoreUtils.suspended_refresh():
             return cls._optimize_keys_inner(
                 anim_curves,
                 value_tolerance=value_tolerance,
@@ -668,8 +671,6 @@ class _CurveOptimizeInternal:
                 extremes=extremes,
                 on_delete=on_delete,
             )
-        finally:
-            cmds.refresh(suspend=False)
 
     @classmethod
     def _optimize_keys_inner(

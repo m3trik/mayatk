@@ -1278,6 +1278,22 @@ class TestAnimUtils(MayaTkTestCase):
         keys = cmds.keyframe(self.cube, attribute="translateX", query=True) or []
         self.assertNotIn(5.0, keys)
 
+    def test_optimize_keys_keeps_a_callers_refresh_suspension(self):
+        """The scene exporter suspends the viewport for its whole run and calls
+        ``optimize_keys`` inside it; a raw ``refresh(suspend=False)`` at the end
+        of the optimize resumed the viewport for the rest of the export. Inside
+        an outer ``suspended_refresh`` the optimize must not resume it."""
+        from mayatk.core_utils._core_utils import CoreUtils
+
+        cmds.cutKey(self.cube, attribute="translateX", clear=True)
+        for t, v in ((1, 0.0), (5, 0.0), (10, 0.0)):
+            cmds.setKeyframe(self.cube, attribute="translateX", time=t, value=v)
+        with CoreUtils.suspended_refresh():
+            with patch("maya.cmds.refresh", wraps=cmds.refresh) as spy:
+                AnimUtils.optimize_keys([self.cube], quiet=True)
+        resumed = [c for c in spy.call_args_list if c.kwargs.get("suspend") is False]
+        self.assertEqual(resumed, [], "the optimize resumed the caller's viewport")
+
     def test_optimize_keys_counts_keys_only_for_stats(self):
         """The before/after key totals exist for ``stats`` alone, and were
         counted on every call -- ``keyframeCount`` per curve, which walks the

@@ -342,15 +342,14 @@ class UvUtils(ptk.HelpMixin):
 
         margin = ptk.MathUtils.uv_tile_margin(map_size)
         moved = 0
-        cmds.refresh(suspend=True)  # one edit per shell adds up on a dense scene
-        try:
+        # One edit per shell adds up on a dense scene; counted, so a caller's
+        # own suspension outlives this one.
+        with CoreUtils.suspended_refresh():
             for uvs, bounds in shells:
                 du, dv = ptk.MathUtils.fit_into_tile(bounds, tile, margin)
                 if du or dv:
                     cmds.polyEditUV(uvs, u=du, v=dv, relative=True)
                     moved += 1
-        finally:
-            cmds.refresh(suspend=False)
         return moved
 
     @staticmethod
