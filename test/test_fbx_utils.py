@@ -151,8 +151,7 @@ class TestRecordUnits(MayaTkTestCase):
         }
 
     def test_every_producer_is_measured_or_declared_unitless(self):
-        rows = ptk.SceneRecords.producer_rows(FbxUtils.PRODUCERS, FbxUtils.HOST)
-        produced = {spec.key for spec in rows}  # registered producers too
+        produced = {spec.key for spec in FbxUtils.PRODUCERS}
         self.assertEqual(produced, set(self.UNITLESS) | set(self._fixtures()))
 
     def test_the_lightmap_record_is_in_the_file_unit_whatever_the_units(self):
@@ -183,7 +182,7 @@ class TestRecordUnits(MayaTkTestCase):
 
         from mayatk.anim_utils.shots._shots import ShotStore
         from mayatk.audio_utils._audio_utils import AudioUtils
-        from tentacle.tools.emissive_groups.maya import EmissiveGroups  # tentacle's tool
+        from mayatk.mat_utils.emissive_groups import EmissiveGroups
         from mayatk.mat_utils.render_opacity.render_effects import RenderEffects
         from mayatk.node_utils.data_nodes import DataNodes
 

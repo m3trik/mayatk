@@ -843,6 +843,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class LightmapIsolateSet(BakeSet)`
   - methods: groups, meshes
 
+### `mat_utils/emissive_groups.py` — Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
+- `class MayaEmissiveGroups(_MayaEmissiveGroupsInternal)`
+  - methods: faces, add_members, remove_members, members, select, membership_stores, carrier_weights, weight_exists, ensure_weight, delete_weight, sync_weight, key_weight, foreign_color_sets, write_colors, uv_triangles, mask_path, object_names, face_count, mesh, merge_stores, discard_stores, publish, extra_warnings
+- `class EmissiveGroups(pythontk.EmissiveGroupsModel)`
+
 ### `mat_utils/game_shader.py`
 - `class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`
   - methods: create_network, resolve_opacity_sources, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map

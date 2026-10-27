@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 255,
+          "line": 258,
           "deprecated": false
         }
       ]
@@ -14437,7 +14437,7 @@
               "kind": "classmethod",
               "signature": "(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]",
               "summary": ":attr:`PRODUCERS` resolved to callables, unimportable ones skipped;",
-              "line": 2153,
+              "line": 2158,
               "deprecated": false
             },
             {
@@ -14446,7 +14446,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext",
               "summary": "A context for this scene: provenance filled in, *decisions*",
-              "line": 2169,
+              "line": 2174,
               "deprecated": false
             },
             {
@@ -14455,7 +14455,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot",
               "summary": "Assemble every producer's record and commit the carrier ONCE.",
-              "line": 2188,
+              "line": 2193,
               "deprecated": false
             },
             {
@@ -14464,7 +14464,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot",
               "summary": "Commit a tool's own records at AUTHORING time, with this scene's",
-              "line": 2251,
+              "line": 2256,
               "deprecated": false
             },
             {
@@ -14473,7 +14473,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "The stager table for a bracket: the known stagers (*names* narrows",
-              "line": 2274,
+              "line": 2279,
               "deprecated": false
             },
             {
@@ -14482,7 +14482,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "Run every stager's ``prepare`` now and return the table that ran.",
-              "line": 2292,
+              "line": 2297,
               "deprecated": false
             },
             {
@@ -14491,7 +14491,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None) -> Optional[ptk.ExportSnapshot]",
               "summary": "Open an export bracket (outermost only): stage the scene, then --",
-              "line": 2337,
+              "line": 2342,
               "deprecated": false
             },
             {
@@ -14500,7 +14500,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Close an export bracket (outermost only): put back the scene's own",
-              "line": 2392,
+              "line": 2397,
               "deprecated": false
             },
             {
@@ -14509,7 +14509,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None)",
               "summary": "Stage the scene (and publish, given a *ctx* or *only* -- see",
-              "line": 2422,
+              "line": 2427,
               "deprecated": false
             },
             {
@@ -14518,7 +14518,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 2443,
+              "line": 2448,
               "deprecated": false
             },
             {
@@ -14527,7 +14527,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Run *spec*'s producer before every FBX export this session",
-              "line": 2465,
+              "line": 2470,
               "deprecated": false
             },
             {
@@ -14536,7 +14536,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Opt *spec* out of the session hook;",
-              "line": 2473,
+              "line": 2478,
               "deprecated": false
             },
             {
@@ -14545,7 +14545,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None",
               "summary": "Run *prepare* before and *finish* after every FBX export this",
-              "line": 2480,
+              "line": 2485,
               "deprecated": false
             },
             {
@@ -14554,7 +14554,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> None",
               "summary": "",
-              "line": 2497,
+              "line": 2502,
               "deprecated": false
             },
             {
@@ -14563,7 +14563,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export -- shot-agnostic.",
-              "line": 2502,
+              "line": 2507,
               "deprecated": false
             },
             {
@@ -14572,7 +14572,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 2515,
+              "line": 2520,
               "deprecated": false
             },
             {
@@ -14581,7 +14581,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 2730,
+              "line": 2735,
               "deprecated": false
             }
           ]
@@ -21042,6 +21042,240 @@
       "constants": []
     },
     {
+      "relpath": "mat_utils/emissive_groups.py",
+      "summary": "Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable",
+      "functions": [],
+      "classes": [
+        {
+          "name": "MayaEmissiveGroups",
+          "summary": "The Maya scene operations of the Emissive Groups model",
+          "line": 96,
+          "bases": [
+            "_MayaEmissiveGroupsInternal"
+          ],
+          "members": [
+            {
+              "name": "faces",
+              "qualname": "MayaEmissiveGroups.faces",
+              "kind": "method",
+              "signature": "(self, faces=None) -> FaceMap",
+              "summary": "",
+              "line": 106,
+              "deprecated": false
+            },
+            {
+              "name": "add_members",
+              "qualname": "MayaEmissiveGroups.add_members",
+              "kind": "method",
+              "signature": "(self, store: str, face_map: FaceMap) -> None",
+              "summary": "",
+              "line": 116,
+              "deprecated": false
+            },
+            {
+              "name": "remove_members",
+              "qualname": "MayaEmissiveGroups.remove_members",
+              "kind": "method",
+              "signature": "(self, store: str) -> None",
+              "summary": "",
+              "line": 123,
+              "deprecated": false
+            },
+            {
+              "name": "members",
+              "qualname": "MayaEmissiveGroups.members",
+              "kind": "method",
+              "signature": "(self, store: str) -> Optional[FaceMap]",
+              "summary": "",
+              "line": 127,
+              "deprecated": false
+            },
+            {
+              "name": "select",
+              "qualname": "MayaEmissiveGroups.select",
+              "kind": "method",
+              "signature": "(self, face_map: FaceMap) -> None",
+              "summary": "",
+              "line": 133,
+              "deprecated": false
+            },
+            {
+              "name": "membership_stores",
+              "qualname": "MayaEmissiveGroups.membership_stores",
+              "kind": "method",
+              "signature": "(self, prefix: str)",
+              "summary": "",
+              "line": 136,
+              "deprecated": false
+            },
+            {
+              "name": "carrier_weights",
+              "qualname": "MayaEmissiveGroups.carrier_weights",
+              "kind": "method",
+              "signature": "(self, prefix: str) -> List[str]",
+              "summary": "",
+              "line": 145,
+              "deprecated": false
+            },
+            {
+              "name": "weight_exists",
+              "qualname": "MayaEmissiveGroups.weight_exists",
+              "kind": "method",
+              "signature": "(self, attr: str) -> bool",
+              "summary": "",
+              "line": 151,
+              "deprecated": false
+            },
+            {
+              "name": "ensure_weight",
+              "qualname": "MayaEmissiveGroups.ensure_weight",
+              "kind": "method",
+              "signature": "(self, attr: str, default: float) -> str",
+              "summary": "",
+              "line": 157,
+              "deprecated": false
+            },
+            {
+              "name": "delete_weight",
+              "qualname": "MayaEmissiveGroups.delete_weight",
+              "kind": "method",
+              "signature": "(self, attr: str) -> bool",
+              "summary": "",
+              "line": 174,
+              "deprecated": false
+            },
+            {
+              "name": "sync_weight",
+              "qualname": "MayaEmissiveGroups.sync_weight",
+              "kind": "method",
+              "signature": "(self, attr: str, value: float) -> None",
+              "summary": "",
+              "line": 185,
+              "deprecated": false
+            },
+            {
+              "name": "key_weight",
+              "qualname": "MayaEmissiveGroups.key_weight",
+              "kind": "method",
+              "signature": "(self, attr: str, value: Optional[float], frame: Optional[float]) -> str",
+              "summary": "",
+              "line": 193,
+              "deprecated": false
+            },
+            {
+              "name": "foreign_color_sets",
+              "qualname": "MayaEmissiveGroups.foreign_color_sets",
+              "kind": "method",
+              "signature": "(self, objects: List[str], color_set: str) -> Dict[str, List[str]]",
+              "summary": "",
+              "line": 205,
+              "deprecated": false
+            },
+            {
+              "name": "write_colors",
+              "qualname": "MayaEmissiveGroups.write_colors",
+              "kind": "method",
+              "signature": "(self, obj: str, channels, color_set: str) -> None",
+              "summary": "",
+              "line": 217,
+              "deprecated": false
+            },
+            {
+              "name": "uv_triangles",
+              "qualname": "MayaEmissiveGroups.uv_triangles",
+              "kind": "method",
+              "signature": "(self, obj: str, indices: List[int], uv_set: Optional[str]) -> list",
+              "summary": "",
+              "line": 231,
+              "deprecated": false
+            },
+            {
+              "name": "mask_path",
+              "qualname": "MayaEmissiveGroups.mask_path",
+              "kind": "method",
+              "signature": "(self, suffix: str) -> str",
+              "summary": "",
+              "line": 251,
+              "deprecated": false
+            },
+            {
+              "name": "object_names",
+              "qualname": "MayaEmissiveGroups.object_names",
+              "kind": "method",
+              "signature": "(self, objects) -> List[str]",
+              "summary": "",
+              "line": 265,
+              "deprecated": false
+            },
+            {
+              "name": "face_count",
+              "qualname": "MayaEmissiveGroups.face_count",
+              "kind": "method",
+              "signature": "(self, obj: str) -> int",
+              "summary": "",
+              "line": 268,
+              "deprecated": false
+            },
+            {
+              "name": "mesh",
+              "qualname": "MayaEmissiveGroups.mesh",
+              "kind": "method",
+              "signature": "(self, name: str) -> Optional[str]",
+              "summary": "",
+              "line": 271,
+              "deprecated": false
+            },
+            {
+              "name": "merge_stores",
+              "qualname": "MayaEmissiveGroups.merge_stores",
+              "kind": "method",
+              "signature": "(self, stores: List[str], ctx) -> None",
+              "summary": "",
+              "line": 274,
+              "deprecated": false
+            },
+            {
+              "name": "discard_stores",
+              "qualname": "MayaEmissiveGroups.discard_stores",
+              "kind": "method",
+              "signature": "(self, stores: List[str], ctx) -> None",
+              "summary": "",
+              "line": 286,
+              "deprecated": false
+            },
+            {
+              "name": "publish",
+              "qualname": "MayaEmissiveGroups.publish",
+              "kind": "method",
+              "signature": "(self, records) -> None",
+              "summary": "",
+              "line": 292,
+              "deprecated": false
+            },
+            {
+              "name": "extra_warnings",
+              "qualname": "MayaEmissiveGroups.extra_warnings",
+              "kind": "method",
+              "signature": "(self) -> List[str]",
+              "summary": "",
+              "line": 297,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "EmissiveGroups",
+          "summary": "The Emissive Groups API in Maya: pythontk's model over the Maya half.",
+          "line": 301,
+          "bases": [
+            "pythontk.EmissiveGroupsModel"
+          ],
+          "members": []
+        }
+      ],
+      "constants": []
+    },
+    {
       "relpath": "mat_utils/game_shader.py",
       "summary": "",
       "functions": [],
@@ -27328,7 +27562,7 @@
               "kind": "classmethod",
               "signature": "(cls, namespace: str) -> Dict[ptk.Scope, str]",
               "summary": "The carriers a referenced module keeps under *namespace*",
-              "line": 458,
+              "line": 462,
               "deprecated": false
             },
             {
@@ -27337,7 +27571,7 @@
               "kind": "classmethod",
               "signature": "(cls, scope: ptk.Scope) -> bool",
               "summary": "Delete the ``data_export`` carrier when every attribute it adds is",
-              "line": 506,
+              "line": 510,
               "deprecated": false
             },
             {
@@ -27346,7 +27580,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "The open scene's file, ``\"\"`` while unsaved",
-              "line": 649,
+              "line": 653,
               "deprecated": false
             },
             {
@@ -27355,7 +27589,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: str, source: Optional[str] = None) -> Optional[str]",
               "summary": "Record that the scene file *scene* stands in for the scene *source*;",
-              "line": 672,
+              "line": 676,
               "deprecated": false
             },
             {
@@ -27364,7 +27598,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: Optional[str] = None) -> Optional[str]",
               "summary": "The scene the scene file *scene* (default: the open one) stands in",
-              "line": 706,
+              "line": 710,
               "deprecated": false
             },
             {
@@ -27373,7 +27607,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene: Optional[str] = None) -> Optional[str]",
               "summary": "Where a save of the stand-in *scene* (default: the open one) lands",
-              "line": 717,
+              "line": 721,
               "deprecated": false
             },
             {
@@ -27382,7 +27616,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[ptk.Workspace]",
               "summary": "The project the open scene's files belong to, as a ``ptk.Workspace``;",
-              "line": 827,
+              "line": 831,
               "deprecated": false
             },
             {
@@ -27391,7 +27625,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The root of :meth:`scene_workspace`, or ``None`` without a project.",
-              "line": 848,
+              "line": 852,
               "deprecated": false
             },
             {
@@ -27400,7 +27634,7 @@
               "kind": "classmethod",
               "signature": "(cls, subfolder: str = '', create: bool = False) -> str",
               "summary": "Where a tool's generated maps for the open scene go by default.",
-              "line": 855,
+              "line": 859,
               "deprecated": false
             },
             {
@@ -27409,7 +27643,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> bool",
               "summary": "Keep the path records spelled from the project of whichever file",
-              "line": 902,
+              "line": 906,
               "deprecated": false
             },
             {
@@ -27418,7 +27652,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> bool",
               "summary": ":meth:`install_path_rebase` unless a copy of it already is.",
-              "line": 952,
+              "line": 956,
               "deprecated": false
             },
             {
@@ -27427,7 +27661,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Remove the re-base hook's callbacks (every copy's, by id).",
-              "line": 968,
+              "line": 972,
               "deprecated": false
             }
           ]

@@ -167,6 +167,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils) — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - [`mat_utils/arnold_bridge.py`](#mat_utils--arnold_bridge) — Arnold render-bridge management.
 - [`mat_utils/bake_sets.py`](#mat_utils--bake_sets) — Scene-stored bake sets: named object sets the bake tools read.
+- [`mat_utils/emissive_groups.py`](#mat_utils--emissive_groups) — Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
 - [`mat_utils/game_shader.py`](#mat_utils--game_shader)
 - [`mat_utils/image_to_plane/_image_to_plane.py`](#mat_utils--image_to_plane--_image_to_plane) — Map image files to textured polygon planes in Maya.
 - [`mat_utils/image_to_plane/image_to_plane_slots.py`](#mat_utils--image_to_plane--image_to_plane_slots) — Switchboard slots for the Image to Plane UI.
@@ -275,7 +276,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L255) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L258) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -3368,6 +3369,37 @@ Scene-stored bake sets: named object sets the bake tools read.
 - **[`class LightmapIsolateSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L247)** — Objects that bake in a pass of their own, out of every other bake's render.
   - `LightmapIsolateSet.groups(cls) -> List[List[str]]` *(class)* — The set's meshes by member: what lies under each one moves together.
   - `LightmapIsolateSet.meshes(cls) -> List[str]` *(class)* — Every mesh :meth:`groups` holds: each member with all it carries.
+
+<a id="mat_utils--emissive_groups"></a>
+### `mat_utils/emissive_groups.py`
+
+Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
+
+- **[`class MayaEmissiveGroups(_MayaEmissiveGroupsInternal)`](mayatk/mayatk/mat_utils/emissive_groups.py#L96)** — The Maya scene operations of the Emissive Groups model
+  - `MayaEmissiveGroups.faces(self, faces=None) -> FaceMap`
+  - `MayaEmissiveGroups.add_members(self, store: str, face_map: FaceMap) -> None`
+  - `MayaEmissiveGroups.remove_members(self, store: str) -> None`
+  - `MayaEmissiveGroups.members(self, store: str) -> Optional[FaceMap]`
+  - `MayaEmissiveGroups.select(self, face_map: FaceMap) -> None`
+  - `MayaEmissiveGroups.membership_stores(self, prefix: str)`
+  - `MayaEmissiveGroups.carrier_weights(self, prefix: str) -> List[str]`
+  - `MayaEmissiveGroups.weight_exists(self, attr: str) -> bool`
+  - `MayaEmissiveGroups.ensure_weight(self, attr: str, default: float) -> str`
+  - `MayaEmissiveGroups.delete_weight(self, attr: str) -> bool`
+  - `MayaEmissiveGroups.sync_weight(self, attr: str, value: float) -> None`
+  - `MayaEmissiveGroups.key_weight(self, attr: str, value: Optional[float], frame: Optional[float]) -> str`
+  - `MayaEmissiveGroups.foreign_color_sets(self, objects: List[str], color_set: str) -> Dict[str, List[str]]`
+  - `MayaEmissiveGroups.write_colors(self, obj: str, channels, color_set: str) -> None`
+  - `MayaEmissiveGroups.uv_triangles(self, obj: str, indices: List[int], uv_set: Optional[str]) -> list`
+  - `MayaEmissiveGroups.mask_path(self, suffix: str) -> str`
+  - `MayaEmissiveGroups.object_names(self, objects) -> List[str]`
+  - `MayaEmissiveGroups.face_count(self, obj: str) -> int`
+  - `MayaEmissiveGroups.mesh(self, name: str) -> Optional[str]`
+  - `MayaEmissiveGroups.merge_stores(self, stores: List[str], ctx) -> None`
+  - `MayaEmissiveGroups.discard_stores(self, stores: List[str], ctx) -> None`
+  - `MayaEmissiveGroups.publish(self, records) -> None`
+  - `MayaEmissiveGroups.extra_warnings(self) -> List[str]`
+- **[`class EmissiveGroups(pythontk.EmissiveGroupsModel)`](mayatk/mayatk/mat_utils/emissive_groups.py#L301)** — The Emissive Groups API in Maya: pythontk's model over the Maya half.
 
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`

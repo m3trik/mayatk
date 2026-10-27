@@ -53,7 +53,7 @@ Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES
 
 ## Tool panels — moving to tentacle
 
-Every panel and its Slots class moves to tentacle with its tool (`ui/panels/<panel>/`, one Slots class both hosts share; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14); mayatk keeps the host operations and no UI. New panels start in tentacle once the duplicate_radial pilot opens its panel root. Until a panel moves, it keeps this contract (canonical: `light_utils/hdr_manager.py`; blendertk mirrors it):
+Every panel and its Slots class moves to tentacle (`ui/tools/<tool>.ui` + `slots/tools/<tool>.py`, one Slots class both hosts share; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14); mayatk keeps every tool's API half (its operations and record rows) and no UI. New panels start in tentacle. Until a panel moves, it keeps this contract (canonical: `light_utils/hdr_manager.py`; blendertk mirrors it):
 
 - `<tool>.ui` + `<Tool>Slots` beside the domain module they act on; the `.ui` is the tracked SSoT, runtime-loaded (no compiled `_ui.py`).
 - `<Tool>Slots` is tentacle-independent: base `ptk.LoggingMixin`, `__init__(self, switchboard, log_level=...)` sets `self.sb`; a thin driver calling the engine directly. Guard the uitk import in the *logic* module so the headless surface stays uitk-free.
