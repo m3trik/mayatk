@@ -14204,7 +14204,7 @@
               "kind": "classmethod",
               "signature": "(cls, role: str) -> Optional[Callable]",
               "summary": "The callable :attr:`HOOKS` names for *role*, else the one an installed",
-              "line": 132,
+              "line": 131,
               "deprecated": false
             },
             {
@@ -14213,7 +14213,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Ensure the fbxmaya plugin is loaded.",
-              "line": 141,
+              "line": 140,
               "deprecated": false
             },
             {
@@ -14222,7 +14222,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Yield with the process CWD at the workspace root when the live FBX",
-              "line": 147,
+              "line": 146,
               "deprecated": false
             },
             {
@@ -14231,7 +14231,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Reset the FBX plugin's global IMPORT options to factory defaults.",
-              "line": 177,
+              "line": 176,
               "deprecated": false
             },
             {
@@ -14240,7 +14240,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Reset the FBX plugin's global EXPORT options to factory defaults.",
-              "line": 227,
+              "line": 226,
               "deprecated": false
             },
             {
@@ -14249,7 +14249,7 @@
               "kind": "staticmethod",
               "signature": "(options: Dict[str, Any])",
               "summary": "Apply FBX export options via MEL commands.",
-              "line": 248,
+              "line": 247,
               "deprecated": false
             },
             {
@@ -14258,7 +14258,7 @@
               "kind": "staticmethod",
               "signature": "(preset_path: str)",
               "summary": "Load an FBX export preset file.",
-              "line": 279,
+              "line": 278,
               "deprecated": false
             },
             {
@@ -14267,7 +14267,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, objects: Optional[List] = None, preset_file: Optional[str] = None, options: Optional[Dict[str, Any]] = None, selection_only: bool = True, plan: Optional['FbxUtils.WritePlan'] = None) -> str",
               "summary": "Export geometry to an FBX file.",
-              "line": 296,
+              "line": 295,
               "deprecated": false
             },
             {
@@ -14276,7 +14276,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, scope: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None) -> Optional[Dict[str, Any]]",
               "summary": "Remove the apparatus of the rigs a written FBX baked, in place.",
-              "line": 367,
+              "line": 366,
               "deprecated": false
             },
             {
@@ -14285,7 +14285,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, search_dirs: Optional[Iterable[str]] = None, files: Optional[Iterable[Any]] = None, logger: Optional[logging.Logger] = None, walk_root: Optional[str] = None) -> Optional[Dict[str, Any]]",
               "summary": "Embed every file a written FBX's scene records name, in place.",
-              "line": 438,
+              "line": 437,
               "deprecated": false
             },
             {
@@ -14294,7 +14294,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str, glb: Optional[str] = None, search_dirs: Optional[Iterable[str]] = None, logger: Optional[logging.Logger] = None, walk_root: Optional[str] = None, files: Optional[Iterable[Any]] = None) -> Optional[Dict[str, Any]]",
               "summary": "The passes a written FBX deliverable takes, in place.",
-              "line": 500,
+              "line": 499,
               "deprecated": false
             },
             {
@@ -14303,7 +14303,7 @@
               "kind": "classmethod",
               "signature": "(cls, file_path: str, namespace: Optional[str] = None, options: Optional[Dict[str, Any]] = None, return_new_nodes: bool = True, *, stash: bool = True, file_options: Optional[Dict[str, Any]] = None, logger: Optional[logging.Logger] = None) -> List[str]",
               "summary": "Import an FBX file -- ALL of its animation -- optionally into a namespace.",
-              "line": 602,
+              "line": 607,
               "deprecated": false
             },
             {
@@ -14312,7 +14312,7 @@
               "kind": "staticmethod",
               "signature": "() -> Tuple[float, float]",
               "summary": "Point the bake range at the scene's ANIMATION range.",
-              "line": 1342,
+              "line": 1347,
               "deprecated": false
             },
             {
@@ -14321,7 +14321,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether the next write will BAKE complex animation.",
-              "line": 1369,
+              "line": 1374,
               "deprecated": false
             },
             {
@@ -14330,7 +14330,7 @@
               "kind": "staticmethod",
               "signature": "(command: str) -> bool",
               "summary": "An ``FBXExport*`` switch's current value, read the one safe way.",
-              "line": 1384,
+              "line": 1389,
               "deprecated": false
             },
             {
@@ -14339,7 +14339,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The ``(start, end)`` frames the next write will actually BAKE.",
-              "line": 1403,
+              "line": 1408,
               "deprecated": false
             },
             {
@@ -14348,7 +14348,7 @@
               "kind": "staticmethod",
               "signature": "(bakes: Optional[bool] = None, reason: str = '', takes: Optional[Tuple[float, float]] = None, span: Optional[Tuple[float, float]] = None, resample_all: Optional[bool] = None) -> 'FbxUtils.WritePlan'",
               "summary": "THE plan of one FBX write: whether it bakes, why, over what, resampled.",
-              "line": 1457,
+              "line": 1462,
               "deprecated": false
             },
             {
@@ -14357,7 +14357,7 @@
               "kind": "staticmethod",
               "signature": "(plan: 'FbxUtils.WritePlan') -> None",
               "summary": "Put *plan* into the FBX settings: the bake flag FIRST, then its range.",
-              "line": 1517,
+              "line": 1522,
               "deprecated": false
             },
             {
@@ -14366,7 +14366,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[Tuple[float, float]]",
               "summary": "The range the write in progress bakes over: the open bracket's plan's",
-              "line": 1540,
+              "line": 1545,
               "deprecated": false
             },
             {
@@ -14375,7 +14375,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None, logger: Optional[logging.Logger] = None)",
               "summary": "Around ONE FBX write: ship every node where Maya draws it.",
-              "line": 1555,
+              "line": 1560,
               "deprecated": false
             },
             {
@@ -14384,7 +14384,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Whether this export will carry animation at all.",
-              "line": 1741,
+              "line": 1746,
               "deprecated": false
             },
             {
@@ -14393,7 +14393,7 @@
               "kind": "staticmethod",
               "signature": "(enabled: bool) -> None",
               "summary": "Turn the Animation include group on or off (see :attr:`ANIMATION_INCLUDE_PROPERTY`).",
-              "line": 1761,
+              "line": 1766,
               "deprecated": false
             },
             {
@@ -14402,7 +14402,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear FBX take definitions and restore pre-takes bake-complex state.",
-              "line": 1768,
+              "line": 1773,
               "deprecated": false
             },
             {
@@ -14411,7 +14411,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any], resample: bool = True) -> int",
               "summary": "Configure FBX export to emit one AnimStack (Unity clip) per take.",
-              "line": 1804,
+              "line": 1809,
               "deprecated": false
             },
             {
@@ -14420,7 +14420,7 @@
               "kind": "staticmethod",
               "signature": "(takes: Iterable[Any]) -> Optional[Tuple[int, int]]",
               "summary": "The ``(start, end)`` union of *takes* -- the bake range",
-              "line": 1929,
+              "line": 1934,
               "deprecated": false
             },
             {
@@ -14429,7 +14429,7 @@
               "kind": "staticmethod",
               "signature": "() -> list",
               "summary": "The takes the scene's records declare -- each clip's range in",
-              "line": 1942,
+              "line": 1947,
               "deprecated": false
             },
             {
@@ -14438,7 +14438,7 @@
               "kind": "staticmethod",
               "signature": "(node: Optional[str] = None, attr: Optional[str] = None, resample: bool = True) -> int",
               "summary": "Realize the takes the scene declares into FBX export state.",
-              "line": 1958,
+              "line": 1963,
               "deprecated": false
             },
             {
@@ -14447,7 +14447,7 @@
               "kind": "classmethod",
               "signature": "(cls, only: Optional[Iterable[Any]] = None) -> Dict[Any, Callable]",
               "summary": ":attr:`PRODUCERS` resolved to callables, unimportable ones skipped;",
-              "line": 2153,
+              "line": 2158,
               "deprecated": false
             },
             {
@@ -14456,7 +14456,7 @@
               "kind": "classmethod",
               "signature": "(cls, mode: str = ptk.ExportContext.PIPELINE, **decisions) -> ptk.ExportContext",
               "summary": "A context for this scene: provenance filled in, *decisions*",
-              "line": 2169,
+              "line": 2174,
               "deprecated": false
             },
             {
@@ -14465,7 +14465,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None) -> ptk.ExportSnapshot",
               "summary": "Assemble every producer's record and commit the carrier ONCE.",
-              "line": 2188,
+              "line": 2193,
               "deprecated": false
             },
             {
@@ -14474,7 +14474,7 @@
               "kind": "classmethod",
               "signature": "(cls, records: Dict[Any, Any]) -> ptk.ExportSnapshot",
               "summary": "Commit a tool's own records at AUTHORING time, with this scene's",
-              "line": 2251,
+              "line": 2256,
               "deprecated": false
             },
             {
@@ -14483,7 +14483,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "The stager table for a bracket: the known stagers (*names* narrows",
-              "line": 2274,
+              "line": 2279,
               "deprecated": false
             },
             {
@@ -14492,7 +14492,7 @@
               "kind": "classmethod",
               "signature": "(cls, names: Optional[Iterable[str]] = None) -> Dict[str, Tuple[Optional[Callable], Optional[Callable]]]",
               "summary": "Run every stager's ``prepare`` now and return the table that ran.",
-              "line": 2292,
+              "line": 2297,
               "deprecated": false
             },
             {
@@ -14501,7 +14501,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None) -> Optional[ptk.ExportSnapshot]",
               "summary": "Open an export bracket (outermost only): stage the scene, then --",
-              "line": 2337,
+              "line": 2342,
               "deprecated": false
             },
             {
@@ -14510,7 +14510,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Close an export bracket (outermost only): put back the scene's own",
-              "line": 2392,
+              "line": 2397,
               "deprecated": false
             },
             {
@@ -14519,7 +14519,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: Optional[ptk.ExportContext] = None, only: Optional[Iterable[Any]] = None, stagers: Optional[Iterable[str]] = None, plan: Optional['FbxUtils.WritePlan'] = None)",
               "summary": "Stage the scene (and publish, given a *ctx* or *only* -- see",
-              "line": 2422,
+              "line": 2427,
               "deprecated": false
             },
             {
@@ -14528,7 +14528,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Bracket for a THROWAWAY FBX write: the session hooks stand down.",
-              "line": 2443,
+              "line": 2448,
               "deprecated": false
             },
             {
@@ -14537,7 +14537,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Run *spec*'s producer before every FBX export this session",
-              "line": 2465,
+              "line": 2470,
               "deprecated": false
             },
             {
@@ -14546,7 +14546,7 @@
               "kind": "classmethod",
               "signature": "(cls, spec) -> None",
               "summary": "Opt *spec* out of the session hook;",
-              "line": 2473,
+              "line": 2478,
               "deprecated": false
             },
             {
@@ -14555,7 +14555,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, prepare: Optional[Callable[[], Any]] = None, finish: Optional[Callable[[], Any]] = None) -> None",
               "summary": "Run *prepare* before and *finish* after every FBX export this",
-              "line": 2480,
+              "line": 2485,
               "deprecated": false
             },
             {
@@ -14564,7 +14564,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> None",
               "summary": "",
-              "line": 2497,
+              "line": 2502,
               "deprecated": false
             },
             {
@@ -14573,7 +14573,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Realize declared takes on **every** FBX export -- shot-agnostic.",
-              "line": 2502,
+              "line": 2507,
               "deprecated": false
             },
             {
@@ -14582,7 +14582,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Clear the explicit enable;",
-              "line": 2515,
+              "line": 2520,
               "deprecated": false
             },
             {
@@ -14591,7 +14591,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Return whether the auto-takes export hook is currently registered.",
-              "line": 2730,
+              "line": 2735,
               "deprecated": false
             }
           ]
@@ -20105,15 +20105,6 @@
               "signature": "(cls, dest_dir: str, source_dir: str = '', mode: str = 'copy', objects: Optional[List[str]] = None, dry_run: bool = False, maps: Optional[Iterable[str]] = None) -> Dict[str, Any]",
               "summary": "Gather the scene's lightmaps into *dest_dir* and repoint the markers.",
               "line": 2167,
-              "deprecated": false
-            },
-            {
-              "name": "walk_root",
-              "qualname": "LightmapRecords.walk_root",
-              "kind": "classmethod",
-              "signature": "(cls) -> str",
-              "summary": "The project's sourceimages: where a map found nowhere else is walked for.",
-              "line": 2258,
               "deprecated": false
             },
             {

@@ -1341,7 +1341,7 @@ class ShotSequencer(_ShotSequencerCore):
         PUBLIC because it has two consumers -- this class's own shot moves and
         ``ClipMotionMixin``'s drag handler -- so the underscore was describing
         a contract that no longer held. Not to be confused with the unrelated
-        ``AnimUtils.move_curve_keys``, which stays private and takes
+        ``AnimUtils.move_curve_keys``, which takes
         ``(curve, time_pairs, allow_merge=...)``: that one moves keys to
         arbitrary per-key destinations for the key-scale tool, where this one
         shifts a whole set by one delta and preserves the full key record.

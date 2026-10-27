@@ -2034,7 +2034,7 @@ class LightmapRecords(ptk.LoggingMixin):
             search_dirs=cls._texture_search_dirs()
             if search_dirs is None
             else search_dirs,
-            walk_root=cls.walk_root() if walk else "",
+            walk_root=cls._walk_root() if walk else "",
             find_files=cls._find_files,
             resolve_hint=cls._resolved_dir,
         )
@@ -2255,7 +2255,7 @@ class LightmapRecords(ptk.LoggingMixin):
         return list(EnvUtils.texture_search_dirs())
 
     @classmethod
-    def walk_root(cls) -> str:
+    def _walk_root(cls) -> str:
         """The project's sourceimages: where a map found nowhere else is walked for."""
         return EnvUtils.get_env_info("sourceimages") or ""
 

@@ -50,10 +50,119 @@
   }
  },
  "extensions_used": [],
- "extras": [
-  "animation",
-  "handoff"
- ],
+ "extras": {
+  "animation": {
+   "clip_mode": "text",
+   "clips": [
+    {
+     "animation": 0,
+     "name": "text",
+     "zero_frame": 1.0
+    },
+    {
+     "animation": 1,
+     "name": "text",
+     "zero_frame": 21.0
+    },
+    {
+     "animation": 2,
+     "name": "text",
+     "zero_frame": 1.0
+    }
+   ],
+   "default_clip": "text",
+   "fps": 24.0,
+   "shots": [
+    {
+     "clip": "text",
+     "end": 20,
+     "start": 1
+    },
+    {
+     "clip": "text",
+     "end": 40,
+     "start": 21
+    }
+   ],
+   "version": 2
+  },
+  "handoff": {
+   "assembly": [
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    },
+    {
+     "data": [
+      "text"
+     ],
+     "part": "text",
+     "spec": "text"
+    }
+   ],
+   "extras": {
+    "source": {
+     "application": "text",
+     "version": "text"
+    }
+   },
+   "instructions": "text",
+   "rendering": {
+    "environment": {
+     "fallback": "text",
+     "intensity": 1.0,
+     "prefilter": "text",
+     "prefilterBlur": 0.04
+    },
+    "keyLight": {
+     "color": [
+      1.0,
+      1.0,
+      1.0
+     ],
+     "intensity": 0.9,
+     "position": [
+      3,
+      6,
+      4
+     ],
+     "type": "text"
+    },
+    "renderer": {
+     "toneMapping": "text",
+     "toneMappingExposure": 1.0
+    }
+   },
+   "version": 3
+  }
+ },
  "format": "glb",
  "images": [],
  "materials": {

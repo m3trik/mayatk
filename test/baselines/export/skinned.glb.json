@@ -1,7 +1,7 @@
 {
  "animations": {},
  "extensions_used": [],
- "extras": [],
+ "extras": {},
  "format": "glb",
  "images": [],
  "materials": {
@@ -81,9 +81,16 @@
    ]
   },
   "RootNode/rig_grp/bone_0": {
-   "extras": [
-    "fromFBX"
-   ],
+   "extras": {
+    "fromFBX": {
+     "userProperties": {
+      "lockInfluenceWeights": {
+       "type": "text",
+       "value": 0
+      }
+     }
+    }
+   },
    "rotation": [
     0.0,
     0.0,
@@ -102,9 +109,16 @@
    ]
   },
   "RootNode/rig_grp/bone_0/bone_1": {
-   "extras": [
-    "fromFBX"
-   ],
+   "extras": {
+    "fromFBX": {
+     "userProperties": {
+      "lockInfluenceWeights": {
+       "type": "text",
+       "value": 0
+      }
+     }
+    }
+   },
    "rotation": [
     0.0,
     0.0,
@@ -123,9 +137,16 @@
    ]
   },
   "RootNode/rig_grp/bone_0/bone_1/bone_2": {
-   "extras": [
-    "fromFBX"
-   ],
+   "extras": {
+    "fromFBX": {
+     "userProperties": {
+      "lockInfluenceWeights": {
+       "type": "text",
+       "value": 0
+      }
+     }
+    }
+   },
    "rotation": [
     0.0,
     0.0,

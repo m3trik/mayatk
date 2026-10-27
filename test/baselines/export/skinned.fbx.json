@@ -178,9 +178,9 @@
   }
  },
  "user_properties": {
-  "bone_0.lockInfluenceWeights": 0.0,
-  "bone_1.lockInfluenceWeights": 0.0,
-  "bone_2.lockInfluenceWeights": 0.0,
+  "bone_0.lockInfluenceWeights": 0,
+  "bone_1.lockInfluenceWeights": 0,
+  "bone_2.lockInfluenceWeights": 0,
   "limb.currentUVSet": "text"
  }
 }

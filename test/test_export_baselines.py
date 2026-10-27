@@ -120,21 +120,29 @@ class TestExportBaselines(MayaTkTestCase):
         rig = cmds.group(joints[0], limb, name="rig_grp")
         self.assertMatchesBaseline(self._export("skinned", [rig]))
 
-    @unittest.expectedFailure
-    def test_a_keyed_child_joint_reaches_the_glb(self):
-        """The FBX carries bone_1's rotation take, but FBX2glTF reads its range
-        as [4294967295 - 4294967295] and the GLB ships no clip (.claude/BACKLOG.md,
-        2026-10-27). A keyed mesh, or a lone root joint keyed on translate,
-        converts fine; Segment Scale Compensate makes no difference."""
+    def test_a_keyed_child_joints_take_is_lost_in_the_glb_today(self):
+        """Pins a defect (.claude/BACKLOG.md, 2026-10-27): the FBX carries
+        bone_1's rotation take, but FBX2glTF reads its range as [4294967295 -
+        4294967295] and the GLB ships no clip. A keyed mesh, or a lone root
+        joint keyed on translate, converts fine; Segment Scale Compensate makes
+        no difference. The FBX half must hold (anything else is not this
+        defect); when the GLB half fails, the defect is fixed: flip it and
+        delete the backlog entry."""
         cmds.select(clear=True)
         joints = [cmds.joint(name=f"bone_{i}", position=(0, i * 2.0, 0)) for i in range(3)]
         cmds.setKeyframe(joints[1], attribute="rotateZ", time=1, value=0)
         cmds.setKeyframe(joints[1], attribute="rotateZ", time=20, value=60)
         name = self._export("joint_take", [joints[0]])
-        clips = ptk.ExportFingerprint.of(os.path.join(self.out, f"{name}.glb"))["animations"]
+        takes = ptk.ExportFingerprint.of(os.path.join(self.out, f"{name}.fbx"))["takes"]
         self.assertTrue(
+            any(curve.startswith("bone_1|") for take in takes.values() for curve in take),
+            f"the FBX lost bone_1's take too -- not the pinned defect: {takes}",
+        )
+        clips = ptk.ExportFingerprint.of(os.path.join(self.out, f"{name}.glb"))["animations"]
+        self.assertFalse(
             any("bone_1" in channel for clip in clips.values() for channel in clip["channels"]),
-            f"no clip animates bone_1: {clips}",
+            "bone_1's clip now reaches the GLB: the defect is fixed -- flip this "
+            "assertion and delete the backlog entry",
         )
 
 

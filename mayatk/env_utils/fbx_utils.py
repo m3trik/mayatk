@@ -124,7 +124,6 @@ class FbxUtils(ptk.HelpMixin):
     HOOKS: Dict[str, Tuple[str, str, str]] = {
         "take_stash": TAKE_STASH,
         "dependency_dirs": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "search_dirs"),
-        "dependency_root": ("mayatk.light_utils.lightmap_baker.lightmap_records", "LightmapRecords", "walk_root"),
         "offset_fold": ("mayatk.anim_utils.smart_bake._smart_bake", "SmartBake", "fold_offsets"),
     }
 
@@ -567,12 +566,18 @@ class FbxUtils(ptk.HelpMixin):
         log: logging.Logger,
     ) -> Tuple[List[str], str, Iterable[Any]]:
         """:meth:`embed_dependencies`'s inputs, each ``None`` asked of the scene."""
+        from mayatk.env_utils._env_utils import EnvUtils
+
         if search_dirs is None:
             dirs = FbxUtils.hook("dependency_dirs")
-            search_dirs = dirs() if dirs else []
+            if dirs is None:
+                log.warning(
+                    "No dependency-folder hook resolved (the lightmap records'): "
+                    "files are searched for in the project's texture folders only."
+                )
+            search_dirs = dirs() if dirs else EnvUtils.texture_search_dirs()
         if walk_root is None:
-            root = FbxUtils.hook("dependency_root")
-            walk_root = root() if root else ""  # "": no walk
+            walk_root = EnvUtils.get_env_info("sourceimages") or ""
         if files is None:
             files = FbxUtils._shipped_audio(file_path, log)
         return list(search_dirs), walk_root, files
@@ -2025,6 +2030,11 @@ class FbxUtils(ptk.HelpMixin):
     # runs the subsystems that opted in for ANY FBX export (File > Export, the
     # Game Exporter, a raw ``cmds.file``), so their records ride out fresh.
 
+    #: The host a tool outside this library registers its producers, stagers
+    #: and record owners under (``ptk.SceneRecords.registered_hooks``): an
+    #: installed one joins :attr:`PRODUCERS` and :attr:`STAGERS` unimported.
+    HOST = "maya"
+
     #: The records this DCC produces: ``ptk.SceneRecords`` spec -> (module,
     #: class, classmethod taking the ExportContext).  Add a producer HERE and
     #: declare its record THERE; an unregistered key fails
@@ -2032,11 +2042,6 @@ class FbxUtils(ptk.HelpMixin):
     #: Resolved lazily, so an uninstalled subsystem is skipped rather than
     #: blocking an export.  Order is irrelevant: the snapshot orders by the
     #: records' ``after``.
-    #: The host a tool outside this library registers its producers, stagers
-    #: and record owners under (``ptk.SceneRecords.registered_hooks``): an
-    #: installed one joins :attr:`PRODUCERS` and :attr:`STAGERS` unimported.
-    HOST = "maya"
-
     PRODUCERS: Dict[Any, Tuple[str, str, str]] = {
         ptk.SceneRecords.SHOTS: (
             "mayatk.anim_utils.shots._shots",

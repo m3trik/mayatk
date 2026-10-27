@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ 4cc9baa3)._
 
-## Added (8)
+## Added (7)
 
 - `__init__.py::MOVED_NAMES(constant)`
 - `anim_utils/_anim_utils.py::AnimUtils.exact_scale(cls)`
@@ -11,7 +11,6 @@ _Diff vs the last release (origin/main @ 4cc9baa3)._
 - `anim_utils/_anim_utils.py::AnimUtils.resolve_keys(cls, objects=None, mode: str = 'auto', resolution_order: Optional[Tuple[str, ...]] = None) -> Dict[str, Any]`
 - `anim_utils/_anim_utils.py::AnimUtils.tangent_half(crv: str, t: Optional[float], side: str) -> Optional[Tuple[str, float, float]]`
 - `env_utils/fbx_utils.py::FbxUtils.hook(cls, role: str) -> Optional[Callable]`
-- `light_utils/lightmap_baker/lightmap_records.py::LightmapRecords.walk_root(cls) -> str`
 
 ## Deprecations (17)
 
