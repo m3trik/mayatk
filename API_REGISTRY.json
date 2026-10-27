@@ -7591,7 +7591,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> List[str]",
               "summary": "Set edge hardness based on normal angle thresholds.",
-              "line": 1336,
+              "line": 1337,
               "deprecated": false
             },
             {
@@ -7600,7 +7600,7 @@
               "kind": "classmethod",
               "signature": "(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')",
               "summary": "Filter for faces with normals that fall within an X,Y,Z tolerance.",
-              "line": 1455,
+              "line": 1461,
               "deprecated": false
             },
             {
@@ -7608,8 +7608,44 @@
               "qualname": "Components.average_normals",
               "kind": "classmethod",
               "signature": "(cls, objects, by_uv_shell=False)",
-              "summary": "Average the normals of the given objects.",
-              "line": 1525,
+              "summary": "Average the normals of the given objects (``None``: the selection).",
+              "line": 1532,
+              "deprecated": false
+            },
+            {
+              "name": "set_edge_softness",
+              "qualname": "Components.set_edge_softness",
+              "kind": "classmethod",
+              "signature": "(cls, objects, soft: bool = True) -> None",
+              "summary": "Soften (``soft=True``) or harden the edge normals of *objects*.",
+              "line": 1552,
+              "deprecated": false
+            },
+            {
+              "name": "set_to_face_normals",
+              "qualname": "Components.set_to_face_normals",
+              "kind": "staticmethod",
+              "signature": "(objects) -> None",
+              "summary": "Set the vertex normals of *objects* to their faces' (faceted shading).",
+              "line": 1571,
+              "deprecated": false
+            },
+            {
+              "name": "reverse_normals",
+              "qualname": "Components.reverse_normals",
+              "kind": "classmethod",
+              "signature": "(cls, objects, mode: int = 0) -> None",
+              "summary": "Reverse the normals of *objects* (meshes, or just the given faces).",
+              "line": 1584,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_normal_lock",
+              "qualname": "Components.toggle_normal_lock",
+              "kind": "staticmethod",
+              "signature": "(objects) -> Optional[bool]",
+              "summary": "Lock the vertex normals of *objects*, or unlock them when every one",
+              "line": 1597,
               "deprecated": false
             },
             {
@@ -7617,8 +7653,8 @@
               "qualname": "Components.transfer_normals",
               "kind": "staticmethod",
               "signature": "(objects, space: str = 'world')",
-              "summary": "Transfer vertex normals from source mesh to target meshes.",
-              "line": 1544,
+              "summary": "Transfer vertex normals from the first mesh of *objects* to the rest",
+              "line": 1622,
               "deprecated": false
             },
             {
@@ -7627,7 +7663,7 @@
               "kind": "classmethod",
               "signature": "(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')",
               "summary": "Get a list of components filtered by the number of their connected components.",
-              "line": 1655,
+              "line": 1734,
               "deprecated": false
             },
             {
@@ -7636,7 +7672,7 @@
               "kind": "classmethod",
               "signature": "(cls, vertex, angle_weighted=False)",
               "summary": "Return the normal at the given vertex.",
-              "line": 1684,
+              "line": 1763,
               "deprecated": false
             },
             {
@@ -7645,7 +7681,7 @@
               "kind": "staticmethod",
               "signature": "(components)",
               "summary": "Get a vector representing the averaged and normalized vertex-face normals.",
-              "line": 1705,
+              "line": 1784,
               "deprecated": false
             },
             {
@@ -7654,7 +7690,7 @@
               "kind": "staticmethod",
               "signature": "(edges=None, amount=None, angle=None)",
               "summary": "Adjust properties of the given edges with optional crease and edge softening/hardening.",
-              "line": 1720,
+              "line": 1799,
               "deprecated": false
             },
             {
@@ -7663,7 +7699,7 @@
               "kind": "staticmethod",
               "signature": "(edges)",
               "summary": "Return any creased edges from a list of edges.",
-              "line": 1744,
+              "line": 1823,
               "deprecated": false
             },
             {
@@ -7672,7 +7708,7 @@
               "kind": "staticmethod",
               "signature": "(frm, to)",
               "summary": "Transfer creased edges from the 'frm' object to the 'to' objects.",
-              "line": 1757,
+              "line": 1836,
               "deprecated": false
             }
           ]
@@ -10751,7 +10787,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1808,
+              "line": 1790,
               "deprecated": false
             },
             {
@@ -10760,7 +10796,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1882,
+              "line": 1864,
               "deprecated": false
             },
             {
@@ -10769,7 +10805,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1897,
+              "line": 1879,
               "deprecated": false
             }
           ]
@@ -10777,7 +10813,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1944,
+          "line": 1926,
           "bases": [],
           "members": [
             {
@@ -10786,7 +10822,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1948,
+              "line": 1930,
               "deprecated": false
             },
             {
@@ -10795,7 +10831,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1956,
+              "line": 1938,
               "deprecated": false
             },
             {
@@ -10804,7 +10840,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1962,
+              "line": 1944,
               "deprecated": false
             },
             {
@@ -10813,7 +10849,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1968,
+              "line": 1950,
               "deprecated": false
             },
             {
@@ -10822,7 +10858,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1974,
+              "line": 1956,
               "deprecated": false
             },
             {
@@ -10831,7 +10867,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1992,
+              "line": 1974,
               "deprecated": false
             },
             {
@@ -10840,7 +10876,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 2051,
+              "line": 2033,
               "deprecated": false
             },
             {
@@ -10849,7 +10885,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 2075,
+              "line": 2057,
               "deprecated": false
             }
           ]
@@ -10857,7 +10893,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 2107,
+          "line": 2089,
           "bases": [],
           "members": [
             {
@@ -10866,7 +10902,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 2111,
+              "line": 2093,
               "deprecated": false
             }
           ]
@@ -10874,7 +10910,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 2143,
+          "line": 2125,
           "bases": [],
           "members": [
             {
@@ -10883,7 +10919,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2148,
+              "line": 2130,
               "deprecated": false
             },
             {
@@ -10892,7 +10928,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2158,
+              "line": 2140,
               "deprecated": false
             }
           ]
@@ -10900,7 +10936,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 2170,
+          "line": 2152,
           "bases": [
             "MacroManager",
             "DisplayMacros",

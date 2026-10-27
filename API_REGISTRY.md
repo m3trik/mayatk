@@ -1496,8 +1496,12 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `Components.get_edges_by_normal_angle(cls, objects, low_angle: float = 0, high_angle: float = 180, return_angles: bool = False)` *(class)* — Return edges whose adjacent face-normal angle falls within a range.
   - `Components.set_edge_hardness(cls, objects, angle_threshold: float, upper_hardness: float = None, lower_hardness: float = None, unlock_normals: bool = False) -> List[str]` *(class)* — Set edge hardness based on normal angle thresholds.
   - `Components.get_faces_with_similar_normals(cls, faces, transforms=None, similar_faces=None, range_x=0.1, range_y=0.1, range_z=0.1, returned_type='str')` *(class)* — Filter for faces with normals that fall within an X,Y,Z tolerance.
-  - `Components.average_normals(cls, objects, by_uv_shell=False)` *(class)* — Average the normals of the given objects.
-  - `Components.transfer_normals(objects, space: str = 'world')` *(static)* — Transfer vertex normals from source mesh to target meshes.
+  - `Components.average_normals(cls, objects, by_uv_shell=False)` *(class)* — Average the normals of the given objects (``None``: the selection).
+  - `Components.set_edge_softness(cls, objects, soft: bool = True) -> None` *(class)* — Soften (``soft=True``) or harden the edge normals of *objects*.
+  - `Components.set_to_face_normals(objects) -> None` *(static)* — Set the vertex normals of *objects* to their faces' (faceted shading).
+  - `Components.reverse_normals(cls, objects, mode: int = 0) -> None` *(class)* — Reverse the normals of *objects* (meshes, or just the given faces).
+  - `Components.toggle_normal_lock(objects) -> Optional[bool]` *(static)* — Lock the vertex normals of *objects*, or unlock them when every one
+  - `Components.transfer_normals(objects, space: str = 'world')` *(static)* — Transfer vertex normals from the first mesh of *objects* to the rest
   - `Components.filter_components_by_connection_count(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')` *(class)* — Get a list of components filtered by the number of their connected components.
   - `Components.get_vertex_normal(cls, vertex, angle_weighted=False)` *(class)* — Return the normal at the given vertex.
   - `Components.get_vector_from_components(components)` *(static)* — Get a vector representing the averaged and normalized vertex-face normals.
@@ -1971,7 +1975,7 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1944)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1926)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1980,12 +1984,12 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2107)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2089)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2143)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2125)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2170)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2152)**
 
 <a id="edit_utils--mirror"></a>
 ### `edit_utils/mirror.py`

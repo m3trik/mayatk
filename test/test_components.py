@@ -1188,5 +1188,81 @@ class TestTransferNormalsPreservesDeformers(MayaTkTestCase):
         self.assertLess(max(abs(a - b) for a, b in zip(before, after)), 1e-5)
 
 
+class TestNormalsOperations(MayaTkTestCase):
+    """The normals operations a panel shared by both hosts calls: each takes
+    objects or components, ``None`` takes the selection, one undo each."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="nrmCube")[0]
+
+    def _hard_edges(self, node):
+        info = cmds.polyInfo(f"{node}.e[*]", edgeToVertex=True) or []
+        return sum("Hard" in line for line in info)
+
+    def test_set_edge_softness_hardens_then_softens(self):
+        Components.set_edge_softness(self.cube, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        Components.set_edge_softness(self.cube, soft=True)
+        self.assertEqual(self._hard_edges(self.cube), 0)
+
+    def test_set_edge_softness_acts_on_the_given_edges_only(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        Components.set_edge_softness([f"{self.cube}.e[0]"], soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 1)
+
+    def test_none_takes_the_selection_and_leaves_it(self):
+        cmds.select(self.cube, replace=True)
+        Components.set_edge_softness(None, soft=False)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+        self.assertEqual(cmds.ls(sl=True), [self.cube])
+
+    def test_set_edge_hardness_takes_the_selection_too(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.select(self.cube, replace=True)
+        Components.set_edge_hardness(None, 45, upper_hardness=0)
+        self.assertEqual(self._hard_edges(self.cube), 12)
+
+    def test_set_to_face_normals_facets_a_softened_mesh(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.select(clear=True)
+        Components.set_to_face_normals(self.cube)
+        normals = cmds.polyNormalPerVertex(f"{self.cube}.vtx[0]", q=True, xyz=True)
+        distinct = {tuple(round(v, 3) for v in normals[i : i + 3]) for i in range(0, len(normals), 3)}
+        self.assertEqual(len(distinct), 3, "a cube corner faceted has three normals")
+        self.assertEqual(cmds.ls(sl=True), [], "the selection is left as it was")
+
+    def test_reverse_normals_flips_the_given_face(self):
+        def normal(face):
+            return [float(v) for v in cmds.polyInfo(face, faceNormals=True)[0].split()[2:5]]
+
+        face = f"{self.cube}.f[0]"
+        before = normal(face)
+        Components.reverse_normals([face], mode=0)
+        after = normal(face)
+        # polyInfo's face normal is not unit length: compare it negated.
+        for b, a in zip(before, after):
+            self.assertAlmostEqual(a, -b, places=3)
+
+    def test_toggle_normal_lock_locks_then_unlocks(self):
+        def locked():
+            return all(cmds.polyNormalPerVertex(f"{self.cube}.vtx[*]", q=True, freezeNormal=True))
+
+        self.assertIs(Components.toggle_normal_lock(self.cube), True)
+        self.assertTrue(locked())
+        self.assertIs(Components.toggle_normal_lock(self.cube), False)
+        self.assertFalse(locked())
+
+    def test_toggle_normal_lock_on_nothing_reports_none(self):
+        self.assertIsNone(Components.toggle_normal_lock([]))
+
+    def test_each_operation_is_one_undo(self):
+        Components.set_edge_softness(self.cube, soft=True)
+        cmds.undoInfo(state=True)
+        Components.set_edge_softness(self.cube, soft=False)
+        cmds.undo()
+        self.assertEqual(self._hard_edges(self.cube), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

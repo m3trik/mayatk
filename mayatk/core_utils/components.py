@@ -1333,6 +1333,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
     @classmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
     def set_edge_hardness(
         cls,
         objects,
@@ -1441,6 +1442,11 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
             if lower_edges:
                 cmds.polySoftEdge(lower_edges, angle=lower_hardness, ch=True)
 
+        # Soft edges display dotted, so the new hardness reads in the viewport.
+        shown = [path for paths in object_to_paths.values() for path in paths]
+        if shown:
+            cmds.polyOptions(shown, se=True)
+
         # polySoftEdge / polySetToFaceNormal mutate the active selection.
         # Restore the caller's selection so downstream UI (HUD counts, etc.)
         # don't see thousands of accidentally-selected edges.
@@ -1522,8 +1528,9 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
 
     @classmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
     def average_normals(cls, objects, by_uv_shell=False):
-        """Average the normals of the given objects."""
+        """Average the normals of the given objects (``None``: the selection)."""
         from mayatk.uv_utils._uv_utils import UvUtils
 
         components_dict = cls.map_components_to_objects(objects)
@@ -1539,10 +1546,82 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 else:
                     cmds.polySoftEdge(obj, a=180)
 
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def set_edge_softness(cls, objects, soft: bool = True) -> None:
+        """Soften (``soft=True``) or harden the edge normals of *objects*.
+
+        Whole meshes, or just the given components; ``None`` takes the
+        selection. Soft edges then display dotted, so the result reads in the
+        viewport, and the selection is left as it was.
+        """
+        saved = cmds.ls(sl=True, long=True) or []
+        for components in cls.map_components_to_objects(objects).values():
+            cmds.polySoftEdge(components, angle=180 if soft else 0)
+            shapes = cmds.ls(components, objectsOnly=True, long=True) or []
+            if shapes:
+                cmds.polyOptions(shapes, se=True)
+        if saved:
+            cmds.select(saved, replace=True)
+
     @staticmethod
     @CoreUtils.undoable
+    @CoreUtils.selected
+    def set_to_face_normals(objects) -> None:
+        """Set the vertex normals of *objects* to their faces' (faceted shading).
+
+        ``None`` takes the selection, which is left as it was.
+        """
+        with CoreUtils.preserved_selection():
+            # polySetToFaceNormal acts on the active selection.
+            cmds.select(CoreUtils.as_strings(objects), replace=True)
+            cmds.polySetToFaceNormal()
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def reverse_normals(cls, objects, mode: int = 0) -> None:
+        """Reverse the normals of *objects* (meshes, or just the given faces).
+
+        ``mode`` is ``polyNormal``'s: 0 Reverse, 1 Propagate, 2 Conform,
+        3 Reverse and Extract, 4 Reverse and Propagate. ``None`` takes the
+        selection.
+        """
+        for components in cls.map_components_to_objects(objects).values():
+            cmds.polyNormal(components, normalMode=mode, userNormalMode=1)
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def toggle_normal_lock(objects) -> Optional[bool]:
+        """Lock the vertex normals of *objects*, or unlock them when every one
+        is locked already.
+
+        Objects take all their vertices, components their own (as vertices);
+        ``None`` takes the selection.
+
+        Returns:
+            True when the normals are now locked, False when unlocked, None when
+            *objects* hold no vertices.
+        """
+        vertices = cmds.polyListComponentConversion(
+            CoreUtils.as_strings(objects), toVertex=True
+        )
+        if not vertices:
+            return None
+        if all(cmds.polyNormalPerVertex(vertices, q=True, freezeNormal=True) or []):
+            cmds.polyNormalPerVertex(vertices, unFreezeNormal=True)
+            return False
+        cmds.polyNormalPerVertex(vertices, freezeNormal=True)
+        return True
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
     def transfer_normals(objects, space: str = "world"):
-        """Transfer vertex normals from source mesh to target meshes.
+        """Transfer vertex normals from the first mesh of *objects* to the rest
+        (``None``: the selection, in selection order).
 
         A target carrying deformers keeps them: the normals are baked into its
         input shape rather than the transfer being flattened with a Delete

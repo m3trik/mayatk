@@ -1775,34 +1775,16 @@ class EditMacros:
             )
             return
 
-        # Check if the current selection mode is object mode
-        is_object_mode = cmds.selectMode(q=True, object=True)
+        from mayatk.core_utils.components import Components
 
-        if is_object_mode:  # Use the .vtx[:] notation directly
-            objs = [f"{obj}.vtx[:]" for obj in objects]
-        else:  # Convert selected components to vertices if in component mode
-            converted = cmds.polyListComponentConversion(objects, toVertex=True)
-            objs = cmds.ls(converted, flatten=True) if converted else []
-
-        if not objs:
+        locked = Components.toggle_normal_lock(objects)
+        if locked is None:
             print("No valid objects or components given.")
             return
-
-        # Determine the current normal state by querying the first vertex
-        current_state = all(cmds.polyNormalPerVertex(objs, q=True, freezeNormal=True))
-
-        if current_state:
-            # If normals are currently locked, unlock them
-            cmds.polyNormalPerVertex(objs, unFreezeNormal=True)
-            cmds.inViewMessage(
-                statusMessage="Normals <hl>UnLocked</hl>.", pos="topCenter", fade=True
-            )
-        else:
-            # If normals are currently unlocked, lock them
-            cmds.polyNormalPerVertex(objs, freezeNormal=True)
-            cmds.inViewMessage(
-                statusMessage="Normals <hl>Locked</hl>.", pos="topCenter", fade=True
-            )
+        state = "Locked" if locked else "UnLocked"
+        cmds.inViewMessage(
+            statusMessage=f"Normals <hl>{state}</hl>.", pos="topCenter", fade=True
+        )
 
     @staticmethod
     def m_paste_and_rename() -> None:
