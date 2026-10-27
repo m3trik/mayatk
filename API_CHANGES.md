@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (7)
+## Moved out (26)
 
 - `edit_utils/duplicate_radial.py::DuplicateRadialSlots` → `tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots` (from 0.30.0)
 - `edit_utils/duplicate_radial.py::DuplicateRadialSlots.b001_init` → `tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots` (from 0.30.0)
@@ -11,6 +11,25 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/duplicate_radial.py::DuplicateRadialSlots.regroup_copies` → `tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots` (from 0.30.0)
 - `edit_utils/duplicate_radial.py::DuplicateRadialSlots.s015_init` → `tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots` (from 0.30.0)
 - `edit_utils/duplicate_radial.py::DuplicateRadialSlots.s016_init` → `tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b000` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b001` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b002` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b003` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.compact_slots` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.header_init` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.key_weights` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.make_weights_keyable` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.remove_group` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.remove_keyable_weights` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.republish_export` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.select_members` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.tb000` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.tb000_init` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.tbl000_init` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.txt000_init` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_off` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
+- `mat_utils/emissive_groups.py::EmissiveGroupsSlots.weights_all_on` → `tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 
 ## Added (5)
 

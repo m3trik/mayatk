@@ -5,7 +5,9 @@ runtime with `emission * dot(mask, weights)`. This doc is the cross-package
 SSoT for the feature: concept, encodings, scene-data contract, wire schema,
 and what each package owns.
 
-Authoring lives in the **Emissive Groups** panel
+Authoring lives in the **Emissive Groups** panel, tentacle's
+(`tentacle/ui/panels/emissive_groups/`: one Slots class for both hosts), over
+each host's engine
 ([`mayatk/mat_utils/emissive_groups.py`](../mayatk/mat_utils/emissive_groups.py),
 mirrored 1:1 in `blendertk/mat_utils/emissive_groups.py`); the shared model is
 pythontk's region-mask engine
@@ -172,9 +174,10 @@ Transport per DCC:
 
 Verified: pythontk engine tests (37); mayatk engine suite (37, fresh mayapy);
 Maya→FBX→Maya round-trips (color-set values + user property + **keyed weight
-curves**); panel wiring (`test_emissive_groups_panel.py`, 20, GUI-Maya pass —
-the uitk `TableWidget` hard-crashes mayapy in batch, so it is registered in
-the runner's `GUI_REQUIRED`); blendertk suite (53 checks, fresh Blender 5.1,
+curves**); panel wiring (tentacle's `test_emissive_groups_panel.py`, 21, in a
+fresh GUI Maya — the uitk `TableWidget` hard-crashes mayapy in batch); the
+panel loads and shows in a fresh GUI Blender (tentacle's
+`test/blender/menus_load_check.py`); blendertk suite (53 checks, fresh Blender 5.1,
 including the curve-proxy FBX round-trip whose imported `scale.x` evaluates
 1.0→0.0); the full Scene Exporter pipeline (`test_scene_exporter.py`:
 `perform_export` ships the animated proxy + manifest join key, leaves the
@@ -185,10 +188,9 @@ model's animation); full suites green after the fix — blendertk 2517 checks /
 (2022.3.40f1, and 6000.3.10f1 for the keyable-weights revisions); panel
 parity sweep 0 deltas.
 
-**Owed live**: the Blender panel pass — headless Blender ships no Qt binding,
-so panel wiring can't be exercised there at all; the Maya panel test plus the
-parity sweep (the two Slots classes are character-identical) are the standing
-proxy. Unity in-editor import + shader compile is blocked by a license wall
+**Owed live**: the Blender panel's button flows — headless Blender ships no Qt
+binding, so they are exercised only through the one Slots class both hosts
+share (its Maya test drives every button). Unity in-editor import + shader compile is blocked by a license wall
 on this machine (every batch launch, both 2022.3 and 6000, exits 198 /
 "Machine bindings don't match" — needs a Hub sign-in), as is the real-project
 bloom check and the in-editor half of the keyable-weights path (the curve

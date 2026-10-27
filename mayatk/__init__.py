@@ -206,8 +206,7 @@ DEFAULT_INCLUDE = {
     "mat_utils.substance_bridge._substance_bridge": "SubstanceBridge",
     # Texture baking (bake an object's shaded surface to a texture)
     "mat_utils.texture_baker": "TextureBaker",
-    # Emissive groups — engine + co-located panel. The ``EmissiveGroupsSlots``
-    # class is discovered by MayaUiHandler, not registered here.
+    # Emissive groups (the engine; its panel is tentacle's).
     "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
@@ -256,6 +255,10 @@ DEFAULT_INCLUDE = {
 MOVED_NAMES = {
     "DuplicateRadialSlots": (
         "tentacle.ui.panels.duplicate_radial.duplicate_radial.DuplicateRadialSlots",
+        "0.30.0",
+    ),
+    "EmissiveGroupsSlots": (
+        "tentacle.ui.panels.emissive_groups.emissive_groups.EmissiveGroupsSlots",
         "0.30.0",
     ),
 }

@@ -846,8 +846,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `mat_utils/emissive_groups.py` — Emissive groups — named face sets that gate emissive regions at runtime.
 - `class EmissiveGroups(_EmissiveGroupsInternal, pythontk.LoggingMixin, pythontk.HelpMixin)`
   - methods: add_group, remove_group, list_groups, select_group, set_default, make_weights_keyable, remove_keyable_weights, key_weight, compact_slots, validate, bake_vertex_colors, bake_mask, transfer_out, transfer_in, merge_carrier, discard_carrier, export_record, refresh_export_metadata
-- `class EmissiveGroupsSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, txt000_init, tbl000_init, b000, b001, b002, b003, tb000_init, tb000, select_members, remove_group, weights_all_on, weights_all_off, make_weights_keyable, key_weights, remove_keyable_weights, compact_slots, republish_export
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`

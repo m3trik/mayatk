@@ -144,10 +144,6 @@ GUI_REQUIRED = {
         "loads the texture_combine panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
     ),
-    "test_emissive_groups_panel": (
-        "loads the emissive_groups panel; its uitk TableWidget hard-crashes "
-        "mayapy in batch (same 0xC0000409 as test_sequencer)"
-    ),
     "test_lightmap_baker_panel": (
         "loads the lightmap_baker panel through MayaUiHandler; native-crashes "
         "mayapy on load (re-confirmed ALONE, 2026-10-21)"
@@ -187,7 +183,7 @@ GUI_REQUIRED = {
     ),
     "test_articulated_rig_panel": (
         "loads the articulated_rig panel; its uitk TableWidget hard-crashes "
-        "mayapy (see test_emissive_groups_panel)"
+        "mayapy (see test_texture_combine_panel)"
     ),
     "test_script_output": "Qt console embed; native-crashes mayapy",
     "test_sequencer_gui": "Qt sequencer widgets; native-crashes mayapy",
