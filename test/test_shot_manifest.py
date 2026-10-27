@@ -4986,7 +4986,7 @@ class TestExportButton(unittest.TestCase, _ControllerHarness):
 
 # ---------------------------------------------------------------------------
 # Tests: the panel over the reconciliation (pairing, no bulk removal, undo,
-# placement, retired templates)
+# placement)
 # ---------------------------------------------------------------------------
 
 
@@ -5091,48 +5091,6 @@ class TestReconcilePanel(unittest.TestCase, _ControllerHarness):
         sequential = self.ctrl._resolve_ranges(regions=False)
         self.assertEqual(on_regions[0][1], 500.0)
         self.assertNotEqual(sequential[0][1], 500.0)
-
-    def test_a_saved_retired_template_migrates_to_its_replacement(self):
-        import json
-
-        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
-
-        key = "mapping_options/default"
-        saved = self.ctrl._settings.value(key, "")
-        self.addCleanup(self.ctrl._settings.setValue, key, saved)
-        self.ctrl._settings.setValue(key, "")
-        retired = Mapping.retired("speedrun")
-        templates = types.SimpleNamespace(active="speedrun")
-        with patch.object(Mapping, "templates", return_value=templates):
-            target = self.ctrl._migrate_retired_mapping("speedrun", *retired)
-        self.assertEqual(templates.active, "default")  # the saved pointer moves
-        self.assertEqual(target, "default")
-        self.assertEqual(
-            json.loads(self.ctrl._settings.value(key)), {"audio": "derive"}
-        )
-
-    def test_a_retired_templates_options_join_the_saved_ones(self):
-        """Bug: the retired template's options were carried only when its
-        replacement had none saved, so a user with saved ``default`` options
-        silently lost ``audio: derive`` -- while the log said it was carried.
-        Fixed: 2026-10-04
-        """
-        import json
-
-        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
-
-        key = "mapping_options/default"
-        saved = self.ctrl._settings.value(key, "")
-        self.addCleanup(self.ctrl._settings.setValue, key, saved)
-        self.ctrl._settings.setValue(key, json.dumps({"fill_missing_assets": True}))
-        retired = Mapping.retired("speedrun")
-        templates = types.SimpleNamespace(active="speedrun")
-        with patch.object(Mapping, "templates", return_value=templates):
-            self.ctrl._migrate_retired_mapping("speedrun", *retired)
-        self.assertEqual(
-            json.loads(self.ctrl._settings.value(key)),
-            {"fill_missing_assets": True, "audio": "derive"},
-        )
 
 
 class TestShotsTheDocDoesNotList(unittest.TestCase, _ControllerHarness):

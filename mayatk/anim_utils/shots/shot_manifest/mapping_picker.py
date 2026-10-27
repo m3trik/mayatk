@@ -9,7 +9,7 @@ Shared text: blendertk carries this module identical
 (``m3trik/scripts/check_dcc_twins.py``); mayatk's is the one edited, then
 copied over.  Only the modules that answer to their host differ:
 ``manifest_host.py`` (every host call goes through it), ``_shot_manifest.py``,
-``range_resolver.py``, ``export_menu.py``, ``__init__.py`` and ``behaviors/``.
+``range_resolver.py``, ``__init__.py`` and ``behaviors/``.
 """
 
 from typing import Dict, Optional
@@ -152,9 +152,6 @@ class MappingPickerMixin:
         target = select
         if target is None and not self._mapping_dir:
             target = Mapping.templates().active
-            retired = Mapping.retired(target) if target else None
-            if retired is not None:
-                target = self._migrate_retired_mapping(target, *retired)
         idx = self._combo_data_index(target) if target else -1
         if idx < 0 and "default" in names:
             idx = self._combo_data_index("default")
@@ -163,28 +160,6 @@ class MappingPickerMixin:
         # Programmatic refresh: apply but don't persist — rebuilding the list
         # must not overwrite the user's last-used pointer.
         self._apply_mapping(cmb.currentData(), persist=False)
-
-    def _migrate_retired_mapping(
-        self, name: str, replacement: str, values: dict
-    ) -> str:
-        """Point a saved selection of retired template *name* at its
-        replacement, carrying the option *values* it stood for into the
-        replacement's saved ones -- over a saved value of the same option, as
-        the retired template was the one last chosen.  Returns the
-        replacement."""
-        import json
-        from pythontk.core_utils.engines.shots.manifest.mapping import Mapping
-
-        options = {**self._user_option_values(replacement), **values}
-        self._settings.setValue(f"mapping_options/{replacement}", json.dumps(options))
-        try:
-            Mapping.templates().active = replacement
-        except Exception:
-            pass
-        self.logger.info(
-            "Mapping %r is retired; using %r with %s.", name, replacement, options
-        )
-        return replacement
 
     def _combo_data_index(self, name) -> int:
         """Index of the combo item whose data == *name*, or -1."""
