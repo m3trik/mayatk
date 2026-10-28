@@ -111,6 +111,38 @@ class UiUtils:
             return None
         return command
 
+    @staticmethod
+    def annotate() -> Optional[str]:
+        """Annotate the host's way: Maya's Create > Annotation
+        (``CreateAnnotateNode``), which prompts for the text and attaches an
+        annotation node to the selected object. Twin of blendertk's
+        ``UiUtils.annotate`` (the Annotate tool there).
+
+        Returns:
+            None: Maya annotates without arming a tool (the blendertk twin returns
+                the tool it armed, for a panel to confirm).
+
+        Raises:
+            RuntimeError: Maya refused it.
+        """
+        mel.eval("CreateAnnotateNode")
+        return None
+
+    @staticmethod
+    def open_pencil() -> str:
+        """Open Blue Pencil, Maya's 2D sketching over the viewport
+        (``OpenBluePencil``). Twin of blendertk's ``UiUtils.open_pencil`` (a new
+        Grease Pencil object there).
+
+        Returns:
+            str: The runtime command that ran.
+
+        Raises:
+            RuntimeError: Maya refused it.
+        """
+        mel.eval("OpenBluePencil")
+        return "OpenBluePencil"
+
     #: Friendly tool name -> the MEL that activates it (a runtime command, or
     #: ``setToolTo`` a tool context): the registry behind :meth:`get_tool_types`
     #: / :meth:`set_tool`, named as the shared ``.ui`` names the tools. Mirror

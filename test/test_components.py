@@ -1289,5 +1289,65 @@ class TestNormalsOperations(MayaTkTestCase):
         self.assertEqual(self._hard_edges(self.cube), 0)
 
 
+class TestCreaseOperations(MayaTkTestCase):
+    """crease_edges / transfer_creased_edges as tentacle's composed crease panel
+    calls them: ``None`` for the selection, ``[]`` back when it is empty."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="crs_cube")[0]
+
+    def _creases(self, node):
+        return cmds.polyCrease(f"{node}.e[*]", query=True, value=True) or []
+
+    def test_none_creases_every_edge_of_a_selected_object(self):
+        cmds.select(self.cube)
+        self.assertEqual(len(Components.crease_edges(None, amount=5)), 12)
+        self.assertEqual(self._creases(self.cube), [5.0] * 12)
+
+    def test_none_creases_only_the_selected_edges(self):
+        cmds.select(f"{self.cube}.e[0:2]")
+        self.assertEqual(len(Components.crease_edges(None, amount=3)), 3)
+        values = self._creases(self.cube)
+        self.assertEqual(values[:3], [3.0] * 3)
+        self.assertTrue(all(v <= 0 for v in values[3:]), values)
+
+    def test_an_explicit_object_takes_all_its_edges(self):
+        self.assertEqual(len(Components.crease_edges(self.cube, amount=2)), 12)
+        self.assertEqual(self._creases(self.cube), [2.0] * 12)
+
+    def test_nothing_selected_returns_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.crease_edges(None, amount=5), [])
+
+    def test_amount_none_leaves_the_crease(self):
+        Components.crease_edges(self.cube, amount=4)
+        Components.crease_edges(self.cube, angle=0)
+        self.assertEqual(self._creases(self.cube), [4.0] * 12)
+
+    def test_crease_is_one_undo(self):
+        cmds.undoInfo(state=True)
+        Components.crease_edges(self.cube, amount=5, angle=30)
+        cmds.undo()
+        self.assertTrue(all(v <= 0 for v in self._creases(self.cube)))
+
+    def test_transfer_from_the_first_selected(self):
+        tgt = cmds.polyCube(name="crs_tgt")[0]
+        cmds.polyCrease(f"{self.cube}.e[0]", value=5.0)
+        cmds.select([self.cube, tgt])
+        self.assertEqual(Components.transfer_creased_edges(None), [tgt])
+        self.assertEqual(self._creases(tgt)[0], 5.0)
+
+    def test_transfer_with_nothing_selected_returns_an_empty_list(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.transfer_creased_edges(None), [])
+
+    def test_transfer_of_one_object_asks_for_a_target(self):
+        cmds.select(self.cube)
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer_creased_edges(None)
+        self.assertIn("target", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

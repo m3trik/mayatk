@@ -23,6 +23,7 @@ DEFAULT_INCLUDE = {
     # only). Prefer explicit full-path + name-list entries for NEW modules.
     "anim_utils._anim_utils": "*",
     "cam_utils._cam_utils": "*",
+    "cam_utils.camera_visibility": ["CameraVisibility"],
     "core_utils._core_utils": "*",
     "display_utils._display_utils": "*",
     "edit_utils._edit_utils": "*",

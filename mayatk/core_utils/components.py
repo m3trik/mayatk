@@ -1794,28 +1794,49 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
         return normal_vector
 
     @staticmethod
+    @CoreUtils.undoable
     def crease_edges(edges=None, amount=None, angle=None):
-        """Adjust properties of the given edges with optional crease and edge softening/hardening."""
-        if edges is None:
-            if cmds.selectMode(q=True, object=True):
-                selected_objects = cmds.ls(sl=True, o=True) or []
-                edges = (
-                    cmds.polyListComponentConversion(selected_objects, toEdge=True)
-                    or []
-                )
-            else:
-                edges = cmds.ls(sl=True, fl=True) or []
+        """Crease *edges* (subdivision sharpness), optionally softening or hardening
+        them by angle. One undo step.
 
-        edges = cmds.ls(edges, flatten=True) or []
+        Twin of blendertk's ``Components.crease_edges`` (the Subdivision Surface
+        edge crease there): what tentacle's crease panel calls with ``None``.
 
-        if not edges:
-            return
+        Parameters:
+            edges (str/list, optional): Edges (or vertices, for a vertex crease),
+                or objects for all their edges. ``None`` takes the selection: the
+                selected components, else every edge of the selected objects.
+            amount (float, optional): The crease (``polyCrease``), 0 (none) to 10
+                (full); ``None`` leaves it.
+            angle (float, optional): Harden the edges whose angle exceeds it and
+                soften the rest (``polySoftEdge``), in degrees; ``None`` leaves
+                them.
+
+        Returns:
+            list: The edges acted on, flattened; ``[]`` when there were none.
+        """
+        nodes = (
+            CoreUtils.as_strings(edges)
+            if edges is not None
+            else cmds.ls(selection=True) or []
+        )
+        # Guarded: ``cmds.ls`` given an empty list answers as if given nothing.
+        nodes = (cmds.ls(nodes, flatten=True) or []) if nodes else []
+        components = [n for n in nodes if "." in n]
+        objects = [n for n in nodes if "." not in n]
+        if objects:
+            converted = cmds.polyListComponentConversion(objects, toEdge=True) or []
+            if converted:
+                components += cmds.ls(converted, flatten=True) or []
+        if not components:
+            return []
 
         if amount is not None:
-            cmds.polyCrease(edges, value=amount, vertexValue=amount)
+            cmds.polyCrease(components, value=amount, vertexValue=amount)
 
         if angle is not None:
-            cmds.polySoftEdge(edges, angle=angle)
+            cmds.polySoftEdge(components, angle=angle)
+        return components
 
     @staticmethod
     def get_creased_edges(edges):
@@ -1831,13 +1852,38 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
         return creased_edges
 
     @staticmethod
-    def transfer_creased_edges(frm, to):
-        """Transfer creased edges from the 'frm' object to the 'to' objects."""
-        source = cmds.ls(CoreUtils.as_strings(frm), objectsOnly=True) or []
-        targets = cmds.ls(CoreUtils.as_strings(to), objectsOnly=True) or []
+    @CoreUtils.undoable
+    def transfer_creased_edges(frm=None, to=None):
+        """Copy the edge creases of *frm* to the same edge ids on each of *to*
+        (meshes of one topology). One undo step.
+
+        ``frm`` ``None`` takes the selection in selection order: the first object
+        is the source, the rest the targets (``to`` ``None``). Twin of blendertk's
+        ``Components.transfer_creased_edges`` (nearest edge there, the active
+        mesh the source: Blender's convention).
+
+        Returns:
+            list: The targets; ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: No source or no target.
+        """
+        if frm is None:
+            selection = cmds.ls(orderedSelection=True, objectsOnly=True) or []
+            if not selection:
+                return []
+            frm = selection[0]
+            if to is None:
+                to = selection[1:]
+        # Guarded: ``cmds.ls`` given an empty list answers as if given nothing.
+        frm, to = CoreUtils.as_strings(frm), CoreUtils.as_strings(to)
+        source = (cmds.ls(frm, objectsOnly=True) or []) if frm else []
+        targets = (cmds.ls(to, objectsOnly=True) or []) if to else []
 
         if not (source and targets):
-            raise ValueError("Both source and target objects must exist.")
+            raise ValueError(
+                "Transfer needs a source object and one or more target objects."
+            )
 
         src = source[0]
         try:
@@ -1849,6 +1895,7 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
             for edge_id, crease_value in enumerate(crease_values):
                 if crease_value > 0:
                     cmds.polyCrease(f"{target}.e[{edge_id}]", value=crease_value)
+        return targets
 
 
 # -----------------------------------------------------------------------------

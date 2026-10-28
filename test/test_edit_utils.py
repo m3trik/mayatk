@@ -1656,5 +1656,49 @@ class TestOriginalAxisFrame(MayaTkTestCase):
         )
 
 
+class TestSymmetry(MayaTkTestCase):
+    """get_symmetry / set_symmetry: Maya's modeling symmetry as tentacle's
+    composed symmetry panel reads and sets it (blendertk's twins: mesh flags)."""
+
+    @staticmethod
+    def _off():
+        cmds.symmetricModelling(edit=True, symmetry=False, about="world", axis="x")
+
+    def setUp(self):
+        super().setUp()
+        self._off()
+
+    def tearDown(self):
+        self._off()
+        super().tearDown()
+
+    def test_an_axis_on_reads_back(self):
+        state = EditUtils.set_symmetry(axis="y", state=True)
+        self.assertEqual(state["axes"], ["y"])
+        self.assertTrue(state["enabled"] and state["by_axis"])
+        self.assertTrue(cmds.symmetricModelling(query=True, symmetry=True))
+
+    def test_turning_off_another_axis_changes_nothing(self):
+        EditUtils.set_symmetry(axis="y", state=True)
+        self.assertEqual(EditUtils.set_symmetry(axis="x", state=False)["axes"], ["y"])
+        self.assertFalse(EditUtils.set_symmetry(axis="y", state=False)["enabled"])
+
+    def test_off_reads_no_axis(self):
+        self.assertEqual(EditUtils.get_symmetry()["axes"], [])
+        self.assertFalse(EditUtils.get_symmetry()["enabled"])
+
+    def test_object_space(self):
+        EditUtils.set_symmetry(axis="x", state=True)
+        state = EditUtils.set_symmetry(space="object")
+        self.assertEqual((state["space"], state["axes"]), ("object", ["x"]))
+
+    def test_topology_without_an_edge_raises_and_changes_nothing(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError) as caught:
+            EditUtils.set_symmetry(space="topo")
+        self.assertIn("edge", str(caught.exception))
+        self.assertNotEqual(EditUtils.get_symmetry()["space"], "topo")
+
+
 if __name__ == "__main__":
     unittest.main()

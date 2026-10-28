@@ -42,6 +42,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`audio_utils/nodes.py`](#audio_utils--nodes) — Low-level DG audio node primitives.
 - [`audio_utils/segments.py`](#audio_utils--segments) — Consumer-facing segment discovery for sequencer + manifest.
 - [`cam_utils/_cam_utils.py`](#cam_utils--_cam_utils)
+- [`cam_utils/camera_visibility.py`](#cam_utils--camera_visibility) — Per-camera visibility: Maya's Display > Per Camera Visibility
 - [`core_utils/_core_utils.py`](#core_utils--_core_utils)
 - [`core_utils/auto_instancer/_auto_instancer.py`](#core_utils--auto_instancer--_auto_instancer) — Scene auto-instancer: convert geometrically identical meshes to instances.
 - [`core_utils/auto_instancer/assembly_reconstructor.py`](#core_utils--auto_instancer--assembly_reconstructor) — Logic for separating and reassembling mesh assemblies.
@@ -218,7 +219,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L267) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L268) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -926,6 +927,24 @@ Consumer-facing segment discovery for sequencer + manifest.
   - `CamUtils.fit_camera_clipping(cls, objects=None, camera=None, buffer=0.25)` *(class)* — Widen a camera's clip planes until `objects` can't be clipped by them.
   - `CamUtils.adjust_camera_clipping(cls, camera=None, near_clip=None, far_clip=None)` *(class)* — Adjusts the near and far clipping planes of one or multiple cameras.
   - `CamUtils.switch_viewport_camera(cls, camera_name)` *(class)* — Unified method to switch to a camera, creating custom ones if needed.
+  - `CamUtils.get_cameras() -> list` *(static)* — The cameras a user picks from: each camera's transform, named as
+  - `CamUtils.create_camera(focal_length: float = 35.0) -> str` *(static)* — Create a camera with *focal_length* (mm), selected.
+  - `CamUtils.look_through(camera: str, select: bool = False) -> str` *(static)* — Look through *camera* in the active viewport (``lookThru``), selecting
+  - `CamUtils.align_view_to_selection() -> list` *(static)* — Look along the selected polygon's normal and frame the selection
+  - `CamUtils.navigate_view(cls, mode: str = 'ORBIT') -> bool` *(class)* — Arm Maya's interactive camera tool for *mode*: drag in a view to orbit
+
+<a id="cam_utils--camera_visibility"></a>
+### `cam_utils/camera_visibility.py`
+
+Per-camera visibility: Maya's Display > Per Camera Visibility
+
+- **[`class CameraVisibility(_CameraVisibilityInternal)`](mayatk/mayatk/cam_utils/camera_visibility.py#L74)** — Per-camera exclusive / hidden visibility (see the module docstring).
+  - `CameraVisibility.set_exclusive(cls, camera=None, objects=None) -> List[str]` *(class)* — Make *objects* exclusive to *camera*: they show only in a view looking
+  - `CameraVisibility.set_hidden(cls, camera=None, objects=None) -> List[str]` *(class)* — Hide *objects* from *camera* (Maya ``SetHiddenFromCamera``).
+  - `CameraVisibility.remove_from_exclusive(cls, camera=None, objects=None) -> List[str]` *(class)* — Take *objects* out of *camera*'s exclusive set (Maya
+  - `CameraVisibility.remove_from_hidden(cls, camera=None, objects=None) -> List[str]` *(class)* — Take *objects* out of *camera*'s hidden set (Maya
+  - `CameraVisibility.remove_all(cls, camera=None) -> None` *(class)* — Clear both sets of *camera* (Maya ``CameraRemoveAll``).
+  - `CameraVisibility.remove_all_for_all() -> None` *(static)* — Clear both sets of every camera (Maya ``CameraRemoveAllForAll``).
 
 <a id="core_utils--_core_utils"></a>
 ### `core_utils/_core_utils.py`
@@ -1074,9 +1093,9 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `Components.filter_components_by_connection_count(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')` *(class)* — Get a list of components filtered by the number of their connected components.
   - `Components.get_vertex_normal(cls, vertex, angle_weighted=False)` *(class)* — Return the normal at the given vertex.
   - `Components.get_vector_from_components(components)` *(static)* — Get a vector representing the averaged and normalized vertex-face normals.
-  - `Components.crease_edges(edges=None, amount=None, angle=None)` *(static)* — Adjust properties of the given edges with optional crease and edge softening/hardening.
+  - `Components.crease_edges(edges=None, amount=None, angle=None)` *(static)* — Crease *edges* (subdivision sharpness), optionally softening or hardening
   - `Components.get_creased_edges(edges)` *(static)* — Return any creased edges from a list of edges.
-  - `Components.transfer_creased_edges(frm, to)` *(static)* — Transfer creased edges from the 'frm' object to the 'to' objects.
+  - `Components.transfer_creased_edges(frm=None, to=None)` *(static)* — Copy the edge creases of *frm* to the same edge ids on each of *to*
 
 <a id="core_utils--diagnostics--animation_diag"></a>
 ### `core_utils/diagnostics/animation_diag.py`
@@ -1345,6 +1364,8 @@ Maya's lengths and angles, converted by the kind of query that read them.
 ### `edit_utils/_edit_utils.py`
 
 - **[`class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L674)**
+  - `EditUtils.get_symmetry() -> dict` *(static)* — Maya's modeling symmetry (``symmetricModelling``): what tentacle's
+  - `EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict` *(static)* — Set Maya's modeling symmetry: an axis on or off, and/or its space.
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
   - `EditUtils.group_objects(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditUtils.ungroup_objects(objects=None) -> List[str]` *(static)* — Inverse of `group_objects` — dissolve the given group(s) (or selection).
@@ -3986,6 +4007,8 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 - **[`class UiUtils`](mayatk/mayatk/ui_utils/_ui_utils.py#L12)**
   - `UiUtils.get_editor_types(cls) -> dict` *(class)* — The friendly-name -> runtime-command map understood by :meth:`open_editor`.
   - `UiUtils.open_editor(cls, editor: str) -> Optional[str]` *(class)* — Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a
+  - `UiUtils.annotate() -> Optional[str]` *(static)* — Annotate the host's way: Maya's Create > Annotation
+  - `UiUtils.open_pencil() -> str` *(static)* — Open Blue Pencil, Maya's 2D sketching over the viewport
   - `UiUtils.get_tool_types(cls) -> dict` *(class)* — The friendly-name -> MEL map understood by :meth:`set_tool`.
   - `UiUtils.set_tool(cls, tool: str) -> str` *(class)* — Activate a viewport tool: a friendly name from :meth:`get_tool_types`,
   - `UiUtils.current_tool(cls) -> Optional[str]` *(class)* — The active tool: its friendly name from :meth:`get_tool_types` when

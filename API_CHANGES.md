@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (330)
+## Added (346)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1020,6 +1020,18 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.tracks_at(frame: float) -> List[str]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]`
+- `cam_utils/_cam_utils.py::CamUtils.align_view_to_selection() -> list`
+- `cam_utils/_cam_utils.py::CamUtils.create_camera(focal_length: float = 35.0) -> str`
+- `cam_utils/_cam_utils.py::CamUtils.get_cameras() -> list`
+- `cam_utils/_cam_utils.py::CamUtils.look_through(camera: str, select: bool = False) -> str`
+- `cam_utils/_cam_utils.py::CamUtils.navigate_view(cls, mode: str = 'ORBIT') -> bool`
+- `cam_utils/camera_visibility.py::CameraVisibility(class)`
+- `cam_utils/camera_visibility.py::CameraVisibility.remove_all(cls, camera=None) -> None`
+- `cam_utils/camera_visibility.py::CameraVisibility.remove_all_for_all() -> None`
+- `cam_utils/camera_visibility.py::CameraVisibility.remove_from_exclusive(cls, camera=None, objects=None) -> List[str]`
+- `cam_utils/camera_visibility.py::CameraVisibility.remove_from_hidden(cls, camera=None, objects=None) -> List[str]`
+- `cam_utils/camera_visibility.py::CameraVisibility.set_exclusive(cls, camera=None, objects=None) -> List[str]`
+- `cam_utils/camera_visibility.py::CameraVisibility.set_hidden(cls, camera=None, objects=None) -> List[str]`
 - `core_utils/_core_utils.py::CoreUtils.active_object() -> Optional[str]`
 - `core_utils/_core_utils.py::CoreUtils.ensure_component_mode(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]`
 - `core_utils/_core_utils.py::CoreUtils.ensure_object_mode() -> bool`
@@ -1034,6 +1046,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/color_id.py::ColorId.select_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]`
 - `display_utils/color_id.py::ColorUtils.get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]`
 - `display_utils/color_id.py::ColorUtils.get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]`
+- `edit_utils/_edit_utils.py::EditUtils.get_symmetry() -> dict`
+- `edit_utils/_edit_utils.py::EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict`
 - `edit_utils/curtain/_curtain.py::Curtain(class)`
 - `edit_utils/curtain/_curtain.py::Curtain.create(rail: Sequence[Vec], **opts) -> str`
 - `edit_utils/curtain/_curtain.py::Curtain.delete_rail_curve(curve: Optional[str]) -> None`
@@ -1227,8 +1241,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `rig_utils/wheel_rig.py::WheelRig.default_rig_name(cls, control=None) -> Optional[str]`
 - `rig_utils/wheel_rig.py::WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'`
 - `rig_utils/wheel_rig.py::WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]`
+- `ui_utils/_ui_utils.py::UiUtils.annotate() -> Optional[str]`
 - `ui_utils/_ui_utils.py::UiUtils.current_tool(cls) -> Optional[str]`
 - `ui_utils/_ui_utils.py::UiUtils.get_tool_types(cls) -> dict`
+- `ui_utils/_ui_utils.py::UiUtils.open_pencil() -> str`
 - `ui_utils/_ui_utils.py::UiUtils.set_tool(cls, tool: str) -> str`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_utils.py::UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int`
@@ -1297,8 +1313,11 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (5)
+## Signature changed (6)
 
+- `core_utils/components.py::Components.transfer_creased_edges`
+  - was: `(frm, to)`
+  - now: `(frm=None, to=None)`
 - `edit_utils/bridge.py::Bridge.bridge`
   - was: `(edges, **kwargs)`
   - now: `(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)`

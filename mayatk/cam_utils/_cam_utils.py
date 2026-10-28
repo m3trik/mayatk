@@ -561,6 +561,120 @@ class CamUtils(ptk.HelpMixin):
 
         return camera_used
 
+    @staticmethod
+    def get_cameras() -> list:
+        """The cameras a user picks from: each camera's transform, named as
+        ``cmds.ls`` names it, without Maya's startup cameras (persp, top, front,
+        side). Twin of blendertk's ``CamUtils.get_cameras`` (the scene's camera
+        objects there, by name).
+        """
+        cameras = []
+        for shape in cmds.ls(type="camera", long=True) or []:
+            try:
+                if cmds.camera(shape, query=True, startupCamera=True):
+                    continue
+            except RuntimeError:
+                continue
+            parent = cmds.listRelatives(shape, parent=True, fullPath=True) or []
+            if parent:
+                cameras.extend(cmds.ls(parent[0]) or [])
+        return cameras
+
+    @staticmethod
+    @CoreUtils.undoable
+    def create_camera(focal_length: float = 35.0) -> str:
+        """Create a camera with *focal_length* (mm), selected. Twin of blendertk's
+        ``CamUtils.create_camera`` (Blender's Add > Camera there). One undo step.
+
+        Returns:
+            str: The new camera's transform.
+        """
+        transform, _shape = cmds.camera(focalLength=focal_length)
+        cmds.select(transform, replace=True)
+        return transform
+
+    @staticmethod
+    @CoreUtils.undoable
+    def look_through(camera: str, select: bool = False) -> str:
+        """Look through *camera* in the active viewport (``lookThru``), selecting
+        it first when *select*. Twin of blendertk's ``CamUtils.look_through``
+        (the scene camera, in camera view, there).
+
+        Returns:
+            str: *camera*.
+
+        Raises:
+            ValueError: No such camera.
+        """
+        if not camera or not cmds.objExists(camera):
+            raise ValueError(f"No camera named {camera!r}.")
+        if select:
+            cmds.select(camera, replace=True)
+        cmds.lookThru(camera)
+        return camera
+
+    @staticmethod
+    @CoreUtils.undoable
+    def align_view_to_selection() -> list:
+        """Look along the selected polygon's normal and frame the selection
+        (``AlignCameraToPolygon``) through the hidden orthographic ``alignToPoly``
+        camera, made on first use and reused after. Twin of blendertk's
+        ``CamUtils.align_view_to_selection`` (Align View to Active there). One
+        undo step.
+
+        Returns:
+            list: The selection it aligned to; ``[]`` with nothing selected.
+        """
+        import maya.mel as mel  # this path only; the module top imports cmds / om
+
+        selection = cmds.ls(selection=True) or []
+        if not selection:
+            return []
+        if not cmds.objExists("alignToPoly"):
+            camera = cmds.camera()[0]
+            cmds.hide(camera)
+            cmds.rename(camera, "alignToPoly")
+            cmds.select(selection, replace=True)  # making the camera selected it
+        if not cmds.camera("alignToPoly", query=True, orthographic=True):
+            cmds.viewPlace("alignToPoly", ortho=True)
+        cmds.lookThru("alignToPoly")
+        mel.eval("AlignCameraToPolygon")
+        cmds.viewFit(fitFactor=5.0)
+        return selection
+
+    #: :meth:`navigate_view` modes -> Maya's camera tool contexts (View > Camera Tools).
+    _NAV_CONTEXTS = {
+        "ORBIT": "tumbleContext",
+        "DOLLY": "dollyContext",
+        "TRACK": "trackContext",
+        "ROLL": "rollContext",
+    }
+
+    @classmethod
+    def navigate_view(cls, mode: str = "ORBIT") -> bool:
+        """Arm Maya's interactive camera tool for *mode*: drag in a view to orbit
+        (Tumble), dolly, track or roll it. Twin of blendertk's
+        ``CamUtils.navigate_view`` (a modal drag operator there: Blender has no
+        armable navigation tool).
+
+        Parameters:
+            mode (str): ``"ORBIT"``, ``"DOLLY"``, ``"TRACK"`` or ``"ROLL"``.
+
+        Returns:
+            bool: True once the tool is active.
+
+        Raises:
+            ValueError: An unknown mode.
+            RuntimeError: Maya refused the tool (batch has no camera tools).
+        """
+        context = cls._NAV_CONTEXTS.get(str(mode).upper())
+        if context is None:
+            raise ValueError(
+                f"mode must be one of {', '.join(cls._NAV_CONTEXTS)}, not {mode!r}."
+            )
+        cmds.setToolTo(context)
+        return True
+
 
 # --------------------------------------------------------------------------------------------
 

@@ -151,7 +151,7 @@ class TestCamUtils(MayaTkTestCase):
             if cmds.objExists(cam_name):
                 cmds.delete(cam_name)
 
-            result = mtk.switch_viewport_camera(cam_name)
+            self.assertEqual(mtk.switch_viewport_camera(cam_name), cam_name)
             self.assertTrue(cmds.objExists(cam_name))
         except RuntimeError:
             pass  # Expected in batch mode
@@ -341,6 +341,99 @@ class TestViewStateAndClipFitting(MayaTkTestCase):
 
         self.assertIsNone(mtk.fit_camera_clipping(camera=self.cam))
         self.assertAlmostEqual(cmds.getAttr(f"{self.cam_shape}.farClipPlane"), 100)
+
+
+from base_test import skipIfBatch  # noqa: E402 - for the classes below
+from mayatk.cam_utils.camera_visibility import CameraVisibility  # noqa: E402
+
+
+class TestCameraPanelOperations(MayaTkTestCase):
+    """get_cameras / create_camera / look_through / align_view_to_selection /
+    navigate_view: what tentacle's composed cameras panel calls (blendertk's
+    twins answer to the same names)."""
+
+    def test_get_cameras_leaves_out_the_startup_cameras(self):
+        cam = cmds.camera(name="panel_cam")[0]
+        names = mtk.CamUtils.get_cameras()
+        self.assertIn(cam, names)
+        for startup in ("persp", "top", "front", "side"):
+            self.assertNotIn(startup, names)
+
+    def test_create_camera_sets_the_focal_length_and_selects_it(self):
+        cam = mtk.CamUtils.create_camera(focal_length=85)
+        self.assertAlmostEqual(cmds.camera(cam, query=True, focalLength=True), 85.0)
+        self.assertEqual(cmds.ls(selection=True), [cam])
+
+    def test_look_through_an_unknown_camera_raises(self):
+        with self.assertRaises(ValueError):
+            mtk.CamUtils.look_through("no_such_cam")
+
+    def test_align_with_nothing_selected_is_empty_and_makes_no_camera(self):
+        cmds.select(clear=True)
+        self.assertEqual(mtk.CamUtils.align_view_to_selection(), [])
+        self.assertFalse(cmds.objExists("alignToPoly"))
+
+    def test_navigate_view_rejects_an_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            mtk.CamUtils.navigate_view("SPIN")
+
+    @skipIfBatch("the camera tool contexts are created by the GUI")
+    def test_navigate_view_arms_each_camera_tool(self):
+        prior = cmds.currentCtx()
+        try:
+            for mode, context in (
+                ("ORBIT", "tumbleContext"),
+                ("DOLLY", "dollyContext"),
+                ("TRACK", "trackContext"),
+                ("ROLL", "rollContext"),
+            ):
+                self.assertTrue(mtk.CamUtils.navigate_view(mode))
+                self.assertEqual(cmds.currentCtx(), context)
+        finally:
+            cmds.setToolTo(prior)
+
+    @skipIfBatch("lookThru needs a model panel")
+    def test_look_through_selects_when_asked(self):
+        cam = cmds.camera(name="lt_cam")[0]
+        cmds.select(clear=True)
+        try:
+            self.assertEqual(mtk.CamUtils.look_through(cam, select=True), cam)
+            self.assertEqual(cmds.ls(selection=True), [cam])
+        finally:
+            mtk.CamUtils.switch_viewport_camera("persp")
+
+
+class TestCameraVisibility(MayaTkTestCase):
+    """CameraVisibility over perCameraVisibility, by blendertk's names."""
+
+    def setUp(self):
+        super().setUp()
+        self.cam = cmds.camera(name="vis_cam")[0]
+        self.cube = cmds.polyCube(name="vis_cube")[0]
+
+    def tearDown(self):
+        CameraVisibility.remove_all_for_all()
+        super().tearDown()
+
+    def test_explicit_edits_return_the_objects(self):
+        self.assertEqual(CameraVisibility.set_exclusive(self.cam, [self.cube]), [self.cube])
+        self.assertEqual(
+            CameraVisibility.remove_from_exclusive(self.cam, [self.cube]), [self.cube]
+        )
+        self.assertEqual(CameraVisibility.set_hidden(self.cam, [self.cube]), [self.cube])
+        self.assertEqual(
+            CameraVisibility.remove_from_hidden(self.cam, [self.cube]), [self.cube]
+        )
+        CameraVisibility.remove_all(self.cam)
+
+    def test_the_selection_splits_into_cameras_and_objects(self):
+        cmds.select([self.cube, self.cam])
+        self.assertEqual(CameraVisibility.set_hidden(), [self.cube])
+
+    def test_no_objects_raises(self):
+        cmds.select(self.cam)
+        with self.assertRaises(ValueError):
+            CameraVisibility.set_exclusive()
 
 
 if __name__ == "__main__":

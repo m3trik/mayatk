@@ -167,7 +167,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `cam_utils/_cam_utils.py`
 - `class CamUtils(pythontk.HelpMixin)`
-  - methods: group_cameras, toggle_safe_frames, get_current_cam, create_camera_from_view, get_view_state, set_view_state, zoom_view, fit_camera_clipping, adjust_camera_clipping, switch_viewport_camera
+  - methods: group_cameras, toggle_safe_frames, get_current_cam, create_camera_from_view, get_view_state, set_view_state, zoom_view, fit_camera_clipping, adjust_camera_clipping, switch_viewport_camera, get_cameras, create_camera, look_through, align_view_to_selection, navigate_view
+
+### `cam_utils/camera_visibility.py` — Per-camera visibility: Maya's Display > Per Camera Visibility
+- `class CameraVisibility(_CameraVisibilityInternal)`
+  - methods: set_exclusive, set_hidden, remove_from_exclusive, remove_from_hidden, remove_all, remove_all_for_all
 
 ### `core_utils/_core_utils.py`
 - `class BoundingBox`
@@ -305,7 +309,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`
-  - methods: combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
+  - methods: get_symmetry, set_symmetry, combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
 
 ### `edit_utils/bevel.py`
 - `class Bevel`
@@ -964,7 +968,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
-  - methods: get_editor_types, open_editor, get_tool_types, set_tool, current_tool, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
+  - methods: get_editor_types, open_editor, annotate, open_pencil, get_tool_types, set_tool, current_tool, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
 
 ### `ui_utils/calculator.py`
 - `class CalculatorController`

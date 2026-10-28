@@ -681,6 +681,75 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
     conform_to_surface = staticmethod(Snap.snap_to_surface)
 
     @staticmethod
+    def get_symmetry() -> dict:
+        """Maya's modeling symmetry (``symmetricModelling``): what tentacle's
+        symmetry panel mirrors. Twin of blendertk's ``EditUtils.get_symmetry``
+        (the active mesh's mirror flags there).
+
+        Returns:
+            dict: ``enabled`` (bool); ``axes`` (the mirrored axis, ``[]`` when off
+                or topological: Maya mirrors one axis at a time); ``space``
+                (``"world"``, ``"object"`` or ``"topo"``); ``by_axis`` (False
+                under topological symmetry, which a seam edge seeds and no axis
+                governs).
+        """
+        enabled = bool(cmds.symmetricModelling(query=True, symmetry=True))
+        space = cmds.symmetricModelling(query=True, about=True) or "world"
+        by_axis = space != "topo"
+        axis = (cmds.symmetricModelling(query=True, axis=True) or "x").lower()
+        return {
+            "enabled": enabled,
+            "axes": [axis] if enabled and by_axis else [],
+            "space": space,
+            "by_axis": by_axis,
+        }
+
+    @staticmethod
+    @CoreUtils.undoable
+    def set_symmetry(
+        axis: Optional[str] = None, state: bool = True, space: Optional[str] = None
+    ) -> dict:
+        """Set Maya's modeling symmetry: an axis on or off, and/or its space.
+
+        Twin of blendertk's ``EditUtils.set_symmetry`` (the selected meshes'
+        mirror flags there). Maya mirrors one axis at a time, scene-wide: turning
+        an axis on replaces the current one, and turning off an axis that is not
+        the current one changes nothing.
+
+        Parameters:
+            axis (str, optional): ``"x"``, ``"y"`` or ``"z"``.
+            state (bool): On or off, for *axis*.
+            space (str, optional): ``"world"``, ``"object"`` or ``"topo"``.
+                Topological symmetry is seeded by a selected seam edge, and turns
+                symmetry on.
+
+        Returns:
+            dict: The resulting :meth:`get_symmetry`.
+
+        Raises:
+            ValueError: ``"topo"`` with no edge selected, or Maya refusing it.
+        """
+        if space == "topo":
+            if not cmds.filterExpand(selectionMask=32):
+                raise ValueError("Select an edge first to seed topological symmetry.")
+            try:
+                cmds.symmetricModelling(edit=True, symmetry=True, about="topo")
+            except RuntimeError as error:
+                raise ValueError(
+                    "Topological symmetry could not be activated: "
+                    "select a seam edge before activation."
+                ) from error
+        elif space is not None:
+            cmds.symmetricModelling(edit=True, about=space)
+        if axis is not None:
+            axis = axis.lower()
+            if state:
+                cmds.symmetricModelling(edit=True, symmetry=True, axis=axis)
+            elif (cmds.symmetricModelling(query=True, axis=True) or "").lower() == axis:
+                cmds.symmetricModelling(edit=True, symmetry=False)
+        return EditUtils.get_symmetry()
+
+    @staticmethod
     @CoreUtils.undoable
     @CoreUtils.reparent
     @DisplayUtils.add_to_isolation

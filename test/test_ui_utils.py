@@ -241,5 +241,39 @@ class TestToolRegistry(MayaTkTestCase):
             cmds.setToolTo(prior)
 
 
+class TestAnnotateAndPencil(MayaTkTestCase):
+    """UiUtils.annotate / open_pencil: Maya's own annotation and pencil, what
+    tentacle's composed utilities panel calls. ``mel.eval`` is stubbed: the real
+    commands open a modal prompt (annotate) and a toolbar (Blue Pencil)."""
+
+    def test_annotate_runs_create_annotation_and_arms_no_tool(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertIsNone(mtk.UiUtils.annotate())
+        ev.assert_called_once_with("CreateAnnotateNode")
+
+    def test_open_pencil_runs_blue_pencil(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(_ui_utils.mel, "eval") as ev:
+            self.assertEqual(mtk.UiUtils.open_pencil(), "OpenBluePencil")
+        ev.assert_called_once_with("OpenBluePencil")
+
+    def test_a_refusal_raises(self):
+        from mayatk.ui_utils import _ui_utils
+
+        with mock.patch.object(
+            _ui_utils.mel, "eval", side_effect=RuntimeError("Cannot find procedure")
+        ):
+            with self.assertRaises(RuntimeError):
+                mtk.UiUtils.open_pencil()
+
+    @skipIfBatch("the runtime commands are registered by the GUI")
+    def test_both_runtime_commands_exist(self):
+        for command in ("CreateAnnotateNode", "OpenBluePencil"):
+            self.assertTrue(cmds.runTimeCommand(command, exists=True), command)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
