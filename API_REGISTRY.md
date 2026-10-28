@@ -263,7 +263,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L259) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L261) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -1614,12 +1614,6 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `ExplodedView.un_explode(self)` — Un-explode the objects.
   - `ExplodedView.toggle_explode(self)` — Toggle explode state of the objects.
   - `ExplodedView.un_explode_all(self)` — Un-explode all
-- **[`class ExplodedViewSlots(ExplodedView)`](mayatk/mayatk/display_utils/exploded_view.py#L240)** — Exploded View Slots
-  - `ExplodedViewSlots.header_init(self, widget)` — Configure header help text.
-  - `ExplodedViewSlots.b000(self)` — Explode button
-  - `ExplodedViewSlots.b001(self)` — Un-explode selected button
-  - `ExplodedViewSlots.b002(self)` — Un-explode all button
-  - `ExplodedViewSlots.b003(self)` — Toggle Exlode
 
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
@@ -1657,9 +1651,6 @@ Maya's lengths and angles, converted by the kind of query that read them.
 
 - **[`class Bevel`](mayatk/mayatk/edit_utils/bevel.py#L12)**
   - `Bevel.bevel(edges, width=0.5, segments=1, autoFit=True, depth=1, mitering=0, miterAlong=0, chamfer=True, worldSpace=True, smoothingAngle=30, fillNgons=True, mergeVertices=True, mergeVertexTolerance=0.0001, miteringAngle=180, angleTolerance=180)` *(static)* — Bevels the given edges with highly customizable options for topology,
-- **[`class BevelSlots`](mayatk/mayatk/edit_utils/bevel.py#L113)**
-  - `BevelSlots.header_init(self, widget)` — Configure header help text.
-  - `BevelSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--bridge"></a>
 ### `edit_utils/bridge.py`
@@ -1711,33 +1702,20 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
 <a id="edit_utils--cut_on_axis"></a>
 ### `edit_utils/cut_on_axis.py`
 
-- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L14)**
+- **[`class CutOnAxis`](mayatk/mayatk/edit_utils/cut_on_axis.py#L12)**
   - `CutOnAxis.perform_cut_on_axis(objects, axis='-x', cuts=0, cut_offset=0, cut_spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, delete=False, mirror=False, pivot='manip', axis_frame=None)` *(static)* — Iterates over provided objects and performs cut or delete operations based on the axis specified.
-- **[`class CutOnAxisSlots`](mayatk/mayatk/edit_utils/cut_on_axis.py#L73)**
-  - `CutOnAxisSlots.header_init(self, widget)` — Configure header help text.
-  - `CutOnAxisSlots.toggle_weight_ui(self)` — Enable the weight fields only for the modes that consume them.
-  - `CutOnAxisSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--duplicate_grid"></a>
 ### `edit_utils/duplicate_grid.py`
 
-- **[`class DuplicateGrid(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L17)**
+- **[`class DuplicateGrid(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L16)**
   - `DuplicateGrid.duplicate_grid(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: Union[float, Tuple[float, float, float]] = 0, mode: str = 'instance') -> Union[str, List[str]]` *(class)* — Duplicate objects in a grid pattern.
-- **[`class DuplicateGridSlots(pythontk.LoggingMixin)`](mayatk/mayatk/edit_utils/duplicate_grid.py#L259)**
-  - `DuplicateGridSlots.header_init(self, widget)` — Configure header help text.
-  - `DuplicateGridSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-  - `DuplicateGridSlots.perform_operation(self, objects, contract)`
 
 <a id="edit_utils--duplicate_linear"></a>
 ### `edit_utils/duplicate_linear.py`
 
-- **[`class DuplicateLinear`](mayatk/mayatk/edit_utils/duplicate_linear.py#L22)**
+- **[`class DuplicateLinear`](mayatk/mayatk/edit_utils/duplicate_linear.py#L17)**
   - `DuplicateLinear.duplicate_linear(objects, num_copies, translate=(0, 0, 0), rotate=(0, 0, 0), scale=(1, 1, 1), weight_bias=0.5, weight_curve=4, pivot='object', calculation_mode='weighted', instance=True)` *(static)*
-- **[`class DuplicateLinearSlots`](mayatk/mayatk/edit_utils/duplicate_linear.py#L134)**
-  - `DuplicateLinearSlots.header_init(self, widget)` — Configure header help text.
-  - `DuplicateLinearSlots.toggle_weight_ui(self)` — Disable weight UI components if the current calculation mode doesn't use them.
-  - `DuplicateLinearSlots.b001_init(self, widget)` — Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the
-  - `DuplicateLinearSlots.perform_operation(self, objects, contract)` — Perform the linear duplication operation.
 
 <a id="edit_utils--duplicate_radial"></a>
 ### `edit_utils/duplicate_radial.py`
@@ -1750,10 +1728,8 @@ Curtain panel — the Switchboard slots for ``curtain.ui``.
 ### `edit_utils/dynamic_pipe.py`
 
 - **[`class DynamicPipe`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L9)** — Build a pipe-style mesh by lofting NURBS circles parented to a chain of locators.
+  - `DynamicPipe.from_selection(cls, **kwargs) -> 'DynamicPipe'` *(class)* — A pipe through the selected transforms in the order they were
   - `DynamicPipe.create_pipe_geometry(self, segments_to_loft: Optional[Sequence[int]] = None) -> List[str]` — Loft consecutive circle pairs to produce pipe segments.
-- **[`class DynamicPipeSlots`](mayatk/mayatk/edit_utils/dynamic_pipe.py#L139)** — Switchboard slot wiring for the dynamic_pipe UI.
-  - `DynamicPipeSlots.header_init(self, widget)` — Configure header help text.
-  - `DynamicPipeSlots.b000(self)` — Initialize Pipe — build pipe from the current ordered selection.
 
 <a id="edit_utils--macros--_macros"></a>
 ### `edit_utils/macros/_macros.py`
@@ -1923,17 +1899,10 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 ### `edit_utils/snap.py`
 
 - **[`class Snap(pythontk.HelpMixin)`](mayatk/mayatk/edit_utils/snap.py#L16)** — Vertex and mesh snapping utilities.
+  - `Snap.source_and_target()` *(static)* — The selection as ``(sources, target)``: the last selected node is the
   - `Snap.snap_to_closest_vertex(obj1, obj2, tolerance=10.0, freeze_transforms=False)` *(static)* — Snap the vertices from object one to the closest verts on object two.
   - `Snap.snap_to_surface(source_meshes, target_mesh, offset: float = None, threshold: float = None, invert: bool = False) -> int` *(static)* — Snap source mesh vertices to the closest point on a target surface.
   - `Snap.snap_to_grid(objects=None, grid_size: float = 1.0, axes: str = 'xyz') -> int` *(static)* — Snap object pivots or vertices to the nearest grid point.
-- **[`class SnapSlots`](mayatk/mayatk/edit_utils/snap.py#L271)** — UI slots for the Snap tool.
-  - `SnapSlots.header_init(self, widget)` — Configure header help text.
-  - `SnapSlots.b000_init(self, widget)` — Initialize Snap to Surface button option box.
-  - `SnapSlots.b000(self)` — Snap to Surface button.
-  - `SnapSlots.b001_init(self, widget)` — Initialize Snap to Closest Vertex button option box.
-  - `SnapSlots.b001(self)` — Snap to Closest Vertex button.
-  - `SnapSlots.b002_init(self, widget)` — Initialize Snap to Grid button option box.
-  - `SnapSlots.b002(self)` — Snap to Grid button.
 
 <a id="env_utils--_env_utils"></a>
 ### `env_utils/_env_utils.py`
@@ -4735,24 +4704,13 @@ Tube Rig panel — the Switchboard slots for ``tube_rig.ui``.
 <a id="ui_utils--calculator"></a>
 ### `ui_utils/calculator.py`
 
-- **[`class CalculatorController`](mayatk/mayatk/ui_utils/calculator.py#L14)**
+- **[`class CalculatorController`](mayatk/mayatk/ui_utils/calculator.py#L13)**
   - `CalculatorController.calculate(expression)` *(static)* — Safely evaluate a math expression (delegates to the shared engine).
   - `CalculatorController.get_fps_value()` *(static)*
   - `CalculatorController.get_current_time()` *(static)*
   - `CalculatorController.frames_to_sec(cls, frames)` *(class)*
   - `CalculatorController.sec_to_frames(cls, seconds)` *(class)*
   - `CalculatorController.convert_unit(value, from_unit, to_unit)` *(static)* — Convert a length value between units (delegates to the shared engine).
-- **[`class CalculatorSlots`](mayatk/mayatk/ui_utils/calculator.py#L74)**
-  - `CalculatorSlots.header_init(self, widget)` — Configure header help text.
-  - `CalculatorSlots.on_convert_units(self)`
-  - `CalculatorSlots.on_input(self, text)`
-  - `CalculatorSlots.on_clear(self)`
-  - `CalculatorSlots.on_backspace(self)`
-  - `CalculatorSlots.on_equal(self)`
-  - `CalculatorSlots.get_fps(self)`
-  - `CalculatorSlots.get_current_time(self)`
-  - `CalculatorSlots.frames_to_sec(self)`
-  - `CalculatorSlots.sec_to_frames(self)`
 
 <a id="ui_utils--cancel_provider"></a>
 ### `ui_utils/cancel_provider.py`

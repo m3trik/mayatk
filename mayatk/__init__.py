@@ -145,6 +145,7 @@ DEFAULT_INCLUDE = {
     # AttributeError; blendertk's twin correctly registers nothing.
     # Display utils
     "display_utils.color_id": "ColorId",
+    "display_utils.exploded_view": "ExplodedView",
     # Environment utilities
     "env_utils.devtools": "*",
     "env_utils.maya_connection": "MayaConnection",
@@ -221,6 +222,7 @@ DEFAULT_INCLUDE = {
     "light_utils.light_rig": "LightRig",
     "light_utils.light_layer_baker": "LightLayerBaker",
     # UI utils
+    "ui_utils.calculator": "CalculatorController",
     "ui_utils.cancel_provider": "MayaCancelProvider",
     "ui_utils.channel_box": "ChannelBox",
     "ui_utils.hotkey_collisions": "HotkeyCollisions",
@@ -361,6 +363,39 @@ MOVED_NAMES = {
     ),
     "ERROR_COLOR": (
         "tentacle.slots.tools._shot_manifest.manifest_data.ERROR_COLOR",
+        "0.30.0",
+    ),
+    # Small shared tools (tentacle's slots/tools/<tool>.py, the .ui in ui/tools/).
+    "BevelSlots": (
+        "tentacle.slots.tools.bevel.BevelSlots",
+        "0.30.0",
+    ),
+    "DuplicateLinearSlots": (
+        "tentacle.slots.tools.duplicate_linear.DuplicateLinearSlots",
+        "0.30.0",
+    ),
+    "DuplicateGridSlots": (
+        "tentacle.slots.tools.duplicate_grid.DuplicateGridSlots",
+        "0.30.0",
+    ),
+    "ExplodedViewSlots": (
+        "tentacle.slots.tools.exploded_view.ExplodedViewSlots",
+        "0.30.0",
+    ),
+    "DynamicPipeSlots": (
+        "tentacle.slots.tools.dynamic_pipe.DynamicPipeSlots",
+        "0.30.0",
+    ),
+    "CalculatorSlots": (
+        "tentacle.slots.tools.calculator.CalculatorSlots",
+        "0.30.0",
+    ),
+    "SnapSlots": (
+        "tentacle.slots.tools.snap.SnapSlots",
+        "0.30.0",
+    ),
+    "CutOnAxisSlots": (
+        "tentacle.slots.tools.cut_on_axis.CutOnAxisSlots",
         "0.30.0",
     ),
 }

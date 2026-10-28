@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 259,
+          "line": 261,
           "deprecated": false
         }
       ]
@@ -8671,61 +8671,6 @@
               "deprecated": false
             }
           ]
-        },
-        {
-          "name": "ExplodedViewSlots",
-          "summary": "Exploded View Slots",
-          "line": 240,
-          "bases": [
-            "ExplodedView"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ExplodedViewSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 249,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "ExplodedViewSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Explode button",
-              "line": 278,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "ExplodedViewSlots.b001",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Un-explode selected button",
-              "line": 282,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "ExplodedViewSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Un-explode all button",
-              "line": 286,
-              "deprecated": false
-            },
-            {
-              "name": "b003",
-              "qualname": "ExplodedViewSlots.b003",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Toggle Exlode",
-              "line": 290,
-              "deprecated": false
-            }
-          ]
         }
       ],
       "constants": []
@@ -9004,32 +8949,6 @@
               "deprecated": false
             }
           ]
-        },
-        {
-          "name": "BevelSlots",
-          "summary": "",
-          "line": 113,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "BevelSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 140,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "BevelSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "",
-              "line": 160,
-              "deprecated": false
-            }
-          ]
         }
       ],
       "constants": []
@@ -9300,7 +9219,7 @@
         {
           "name": "CutOnAxis",
           "summary": "",
-          "line": 14,
+          "line": 12,
           "bases": [],
           "members": [
             {
@@ -9309,42 +9228,7 @@
               "kind": "staticmethod",
               "signature": "(objects, axis='-x', cuts=0, cut_offset=0, cut_spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, delete=False, mirror=False, pivot='manip', axis_frame=None)",
               "summary": "Iterates over provided objects and performs cut or delete operations based on the axis specified.",
-              "line": 17,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "CutOnAxisSlots",
-          "summary": "",
-          "line": 73,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "CutOnAxisSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 143,
-              "deprecated": false
-            },
-            {
-              "name": "toggle_weight_ui",
-              "qualname": "CutOnAxisSlots.toggle_weight_ui",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Enable the weight fields only for the modes that consume them.",
-              "line": 182,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "CutOnAxisSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "",
-              "line": 195,
+              "line": 15,
               "deprecated": false
             }
           ]
@@ -9360,7 +9244,7 @@
         {
           "name": "DuplicateGrid",
           "summary": "",
-          "line": 17,
+          "line": 16,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -9371,44 +9255,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: List[str], dimensions: Tuple[int, int, int], spacing: Union[float, Tuple[float, float, float]] = 0, mode: str = 'instance') -> Union[str, List[str]]",
               "summary": "Duplicate objects in a grid pattern.",
-              "line": 27,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "DuplicateGridSlots",
-          "summary": "",
-          "line": 259,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "DuplicateGridSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 323,
-              "deprecated": false
-            },
-            {
-              "name": "b001_init",
-              "qualname": "DuplicateGridSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the",
-              "line": 360,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "DuplicateGridSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "",
-              "line": 370,
+              "line": 26,
               "deprecated": false
             }
           ]
@@ -9424,7 +9271,7 @@
         {
           "name": "DuplicateLinear",
           "summary": "",
-          "line": 22,
+          "line": 17,
           "bases": [],
           "members": [
             {
@@ -9433,51 +9280,7 @@
               "kind": "staticmethod",
               "signature": "(objects, num_copies, translate=(0, 0, 0), rotate=(0, 0, 0), scale=(1, 1, 1), weight_bias=0.5, weight_curve=4, pivot='object', calculation_mode='weighted', instance=True)",
               "summary": "",
-              "line": 24,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "DuplicateLinearSlots",
-          "summary": "",
-          "line": 134,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "DuplicateLinearSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 228,
-              "deprecated": false
-            },
-            {
-              "name": "toggle_weight_ui",
-              "qualname": "DuplicateLinearSlots.toggle_weight_ui",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Disable weight UI components if the current calculation mode doesn't use them.",
-              "line": 253,
-              "deprecated": false
-            },
-            {
-              "name": "b001_init",
-              "qualname": "DuplicateLinearSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Reset to Defaults, on uitk's shared reset grammar (Shift+Click saves the",
-              "line": 279,
-              "deprecated": false
-            },
-            {
-              "name": "perform_operation",
-              "qualname": "DuplicateLinearSlots.perform_operation",
-              "kind": "method",
-              "signature": "(self, objects, contract)",
-              "summary": "Perform the linear duplication operation.",
-              "line": 286,
+              "line": 19,
               "deprecated": false
             }
           ]
@@ -9533,38 +9336,21 @@
           "bases": [],
           "members": [
             {
+              "name": "from_selection",
+              "qualname": "DynamicPipe.from_selection",
+              "kind": "classmethod",
+              "signature": "(cls, **kwargs) -> 'DynamicPipe'",
+              "summary": "A pipe through the selected transforms in the order they were",
+              "line": 48,
+              "deprecated": false
+            },
+            {
               "name": "create_pipe_geometry",
               "qualname": "DynamicPipe.create_pipe_geometry",
               "kind": "method",
               "signature": "(self, segments_to_loft: Optional[Sequence[int]] = None) -> List[str]",
               "summary": "Loft consecutive circle pairs to produce pipe segments.",
-              "line": 97,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "DynamicPipeSlots",
-          "summary": "Switchboard slot wiring for the dynamic_pipe UI.",
-          "line": 139,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "DynamicPipeSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 147,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "DynamicPipeSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Initialize Pipe — build pipe from the current ordered selection.",
-              "line": 170,
+              "line": 127,
               "deprecated": false
             }
           ]
@@ -10818,12 +10604,21 @@
           ],
           "members": [
             {
+              "name": "source_and_target",
+              "qualname": "Snap.source_and_target",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "The selection as ``(sources, target)``: the last selected node is the",
+              "line": 20,
+              "deprecated": false
+            },
+            {
               "name": "snap_to_closest_vertex",
               "qualname": "Snap.snap_to_closest_vertex",
               "kind": "staticmethod",
               "signature": "(obj1, obj2, tolerance=10.0, freeze_transforms=False)",
               "summary": "Snap the vertices from object one to the closest verts on object two.",
-              "line": 21,
+              "line": 30,
               "deprecated": false
             },
             {
@@ -10832,7 +10627,7 @@
               "kind": "staticmethod",
               "signature": "(source_meshes, target_mesh, offset: float = None, threshold: float = None, invert: bool = False) -> int",
               "summary": "Snap source mesh vertices to the closest point on a target surface.",
-              "line": 65,
+              "line": 74,
               "deprecated": false
             },
             {
@@ -10841,78 +10636,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, grid_size: float = 1.0, axes: str = 'xyz') -> int",
               "summary": "Snap object pivots or vertices to the nearest grid point.",
-              "line": 205,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "SnapSlots",
-          "summary": "UI slots for the Snap tool.",
-          "line": 271,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "SnapSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 278,
-              "deprecated": false
-            },
-            {
-              "name": "b000_init",
-              "qualname": "SnapSlots.b000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Snap to Surface button option box.",
-              "line": 314,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "SnapSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Snap to Surface button.",
-              "line": 341,
-              "deprecated": false
-            },
-            {
-              "name": "b001_init",
-              "qualname": "SnapSlots.b001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Snap to Closest Vertex button option box.",
-              "line": 364,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "SnapSlots.b001",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Snap to Closest Vertex button.",
-              "line": 376,
-              "deprecated": false
-            },
-            {
-              "name": "b002_init",
-              "qualname": "SnapSlots.b002_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Snap to Grid button option box.",
-              "line": 389,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "SnapSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Snap to Grid button.",
-              "line": 408,
+              "line": 214,
               "deprecated": false
             }
           ]
@@ -30734,7 +30458,7 @@
         {
           "name": "CalculatorController",
           "summary": "",
-          "line": 14,
+          "line": 13,
           "bases": [],
           "members": [
             {
@@ -30743,7 +30467,7 @@
               "kind": "staticmethod",
               "signature": "(expression)",
               "summary": "Safely evaluate a math expression (delegates to the shared engine).",
-              "line": 16,
+              "line": 15,
               "deprecated": false
             },
             {
@@ -30752,7 +30476,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "",
-              "line": 21,
+              "line": 20,
               "deprecated": false
             },
             {
@@ -30761,7 +30485,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "",
-              "line": 45,
+              "line": 44,
               "deprecated": false
             },
             {
@@ -30770,7 +30494,7 @@
               "kind": "classmethod",
               "signature": "(cls, frames)",
               "summary": "",
-              "line": 51,
+              "line": 50,
               "deprecated": false
             },
             {
@@ -30779,7 +30503,7 @@
               "kind": "classmethod",
               "signature": "(cls, seconds)",
               "summary": "",
-              "line": 60,
+              "line": 59,
               "deprecated": false
             },
             {
@@ -30788,105 +30512,7 @@
               "kind": "staticmethod",
               "signature": "(value, from_unit, to_unit)",
               "summary": "Convert a length value between units (delegates to the shared engine).",
-              "line": 69,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "CalculatorSlots",
-          "summary": "",
-          "line": 74,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "CalculatorSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 86,
-              "deprecated": false
-            },
-            {
-              "name": "on_convert_units",
-              "qualname": "CalculatorSlots.on_convert_units",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 139,
-              "deprecated": false
-            },
-            {
-              "name": "on_input",
-              "qualname": "CalculatorSlots.on_input",
-              "kind": "method",
-              "signature": "(self, text)",
-              "summary": "",
-              "line": 233,
-              "deprecated": false
-            },
-            {
-              "name": "on_clear",
-              "qualname": "CalculatorSlots.on_clear",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 237,
-              "deprecated": false
-            },
-            {
-              "name": "on_backspace",
-              "qualname": "CalculatorSlots.on_backspace",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 240,
-              "deprecated": false
-            },
-            {
-              "name": "on_equal",
-              "qualname": "CalculatorSlots.on_equal",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 245,
-              "deprecated": false
-            },
-            {
-              "name": "get_fps",
-              "qualname": "CalculatorSlots.get_fps",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 251,
-              "deprecated": false
-            },
-            {
-              "name": "get_current_time",
-              "qualname": "CalculatorSlots.get_current_time",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 255,
-              "deprecated": false
-            },
-            {
-              "name": "frames_to_sec",
-              "qualname": "CalculatorSlots.frames_to_sec",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 259,
-              "deprecated": false
-            },
-            {
-              "name": "sec_to_frames",
-              "qualname": "CalculatorSlots.sec_to_frames",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 273,
+              "line": 68,
               "deprecated": false
             }
           ]

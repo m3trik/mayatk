@@ -14,7 +14,7 @@ import unittest
 
 import maya.cmds as cmds
 
-from mayatk.edit_utils.duplicate_linear import DuplicateLinear, DuplicateLinearSlots
+from mayatk.edit_utils.duplicate_linear import DuplicateLinear
 from mayatk.edit_utils.duplicate_radial import DuplicateRadial
 from mayatk.edit_utils.duplicate_grid import DuplicateGrid
 from mayatk.core_utils.preview import Preview
@@ -568,30 +568,6 @@ class TestDuplicateGrid(MayaTkTestCase):
         }
         self.assertEqual(len(copy_uuids), 1)
         self.assertNotIn(src_uuid, copy_uuids)
-
-    def test_grid_slots_declares_mutates_selection(self):
-        """MUTATES_SELECTION=True keeps Preview's UUID-restore backstop (a cheap
-        defensive guard, matching linear/radial) even though the grid no longer
-        mutates the source."""
-        from mayatk.edit_utils.duplicate_grid import DuplicateGridSlots
-
-        self.assertTrue(getattr(DuplicateGridSlots, "MUTATES_SELECTION", False))
-
-
-class TestDuplicateSlotsContract(QuickTestCase):
-    """Regression: Preview contract for ops that delete or invalidate the
-    captured selection between refreshes.
-
-    Pure-Python attribute check — no Maya needed.
-    """
-
-    def test_linear_slots_declares_mutates_selection(self):
-        """Defensive: linear shouldn't delete its input, but the captured
-        selection can be invalidated by external mutations between
-        refreshes. MUTATES_SELECTION=True turns those into recoverable
-        no-ops via rollback's UUID restore path.
-        """
-        self.assertTrue(getattr(DuplicateLinearSlots, "MUTATES_SELECTION", False))
 
 
 class _MockSignal:

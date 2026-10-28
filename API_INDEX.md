@@ -392,8 +392,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `display_utils/exploded_view.py`
 - `class ExplodedView`
   - methods: objects, calculate_repulsive_force_vectorized, arrange_objects, explode, un_explode, toggle_explode, un_explode_all
-- `class ExplodedViewSlots(ExplodedView)`
-  - methods: header_init, b000, b001, b002, b003
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`
@@ -402,8 +400,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `edit_utils/bevel.py`
 - `class Bevel`
   - methods: bevel
-- `class BevelSlots`
-  - methods: header_init, perform_operation
 
 ### `edit_utils/bridge.py`
 - `class Bridge`
@@ -430,20 +426,14 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `edit_utils/cut_on_axis.py`
 - `class CutOnAxis`
   - methods: perform_cut_on_axis
-- `class CutOnAxisSlots`
-  - methods: header_init, toggle_weight_ui, perform_operation
 
 ### `edit_utils/duplicate_grid.py`
 - `class DuplicateGrid(pythontk.LoggingMixin)`
   - methods: duplicate_grid
-- `class DuplicateGridSlots(pythontk.LoggingMixin)`
-  - methods: header_init, b001_init, perform_operation
 
 ### `edit_utils/duplicate_linear.py`
 - `class DuplicateLinear`
   - methods: duplicate_linear
-- `class DuplicateLinearSlots`
-  - methods: header_init, toggle_weight_ui, b001_init, perform_operation
 
 ### `edit_utils/duplicate_radial.py`
 - `class DuplicateRadial(pythontk.LoggingMixin)`
@@ -451,9 +441,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/dynamic_pipe.py`
 - `class DynamicPipe`
-  - methods: create_pipe_geometry
-- `class DynamicPipeSlots`
-  - methods: header_init, b000
+  - methods: from_selection, create_pipe_geometry
 
 ### `edit_utils/macros/_macros.py`
 - `class MacroManager(pythontk.HelpMixin)`
@@ -501,9 +489,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/snap.py`
 - `class Snap(pythontk.HelpMixin)`
-  - methods: snap_to_closest_vertex, snap_to_surface, snap_to_grid
-- `class SnapSlots`
-  - methods: header_init, b000_init, b000, b001_init, b001, b002_init, b002
+  - methods: source_and_target, snap_to_closest_vertex, snap_to_surface, snap_to_grid
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
@@ -1179,8 +1165,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `ui_utils/calculator.py`
 - `class CalculatorController`
   - methods: calculate, get_fps_value, get_current_time, frames_to_sec, sec_to_frames, convert_unit
-- `class CalculatorSlots`
-  - methods: header_init, on_convert_units, on_input, on_clear, on_backspace, on_equal, get_fps, get_current_time, frames_to_sec, sec_to_frames
 
 ### `ui_utils/cancel_provider.py` — Maya's answers to uitk's cancellation contract.
 - `class MayaCancelProvider(CancelProvider)`

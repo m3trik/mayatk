@@ -17,6 +17,15 @@ class Snap(ptk.HelpMixin):
     """Vertex and mesh snapping utilities."""
 
     @staticmethod
+    def source_and_target():
+        """The selection as ``(sources, target)``: the last selected node is the
+        target, the rest the sources; ``([], None)`` with fewer than two."""
+        sel = cmds.ls(selection=True) or []
+        if len(sel) < 2:
+            return [], None
+        return sel[:-1], sel[-1]
+
+    @staticmethod
     @CoreUtils.undoable
     def snap_to_closest_vertex(obj1, obj2, tolerance=10.0, freeze_transforms=False):
         """Snap the vertices from object one to the closest verts on object two.
@@ -268,156 +277,8 @@ class Snap(ptk.HelpMixin):
         return snap_count
 
 
-class SnapSlots:
-    """UI slots for the Snap tool."""
-
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.snap
-
-    def header_init(self, widget):
-        """Configure header help text."""
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Snap",
-                body="Snap vertices to other vertices, surfaces, or world grid. "
-                "Each button has an option box (▸) for its per-tool parameters.",
-                sections=[
-                    (
-                        "Snap to Surface",
-                        [
-                            "Select source mesh(es) first, then the target mesh last.",
-                            "Source verts are projected onto the target surface.",
-                            "Option box: <b>Offset</b>, <b>Threshold</b>, <b>Invert</b>.",
-                        ],
-                    ),
-                    (
-                        "Snap to Closest Vertex",
-                        [
-                            "Select exactly two meshes: source first, target last.",
-                            "Source verts within <b>Tolerance</b> snap to the "
-                            "closest target vert.",
-                        ],
-                    ),
-                    (
-                        "Snap to Grid",
-                        [
-                            "Select transforms or components.",
-                            "Option box: <b>Grid Size</b> + per-axis filter (X/Y/Z).",
-                            "Components snap their positions; transforms snap their pivots.",
-                        ],
-                    ),
-                ],
-            )
-        )
-
-    def b000_init(self, widget):
-        """Initialize Snap to Surface button option box."""
-        widget.option_box.menu.setTitle("Snap to Surface")
-        widget.option_box.menu.add(
-            "QDoubleSpinBox",
-            setPrefix="Offset: ",
-            setObjectName="s000",
-            set_limits=[0, 100, 0.01, 1],
-            setValue=0.0,
-            setToolTip="Distance from surface to place affected vertices.",
-        )
-        widget.option_box.menu.add(
-            "QDoubleSpinBox",
-            setPrefix="Threshold: ",
-            setObjectName="s001",
-            set_limits=[0, 1000, 0.1, 1],
-            setValue=0.0,
-            setToolTip="Only process vertices within this distance. 0 = no limit.",
-        )
-        widget.option_box.menu.add(
-            "QCheckBox",
-            setText="Invert",
-            setObjectName="chk000",
-            setChecked=False,
-            setToolTip="Invert direction (use if target normals point inward).",
-        )
-
-    def b000(self):
-        """Snap to Surface button."""
-        sel = cmds.ls(selection=True) or []
-        if len(sel) < 2:
-            cmds.warning("Select source mesh(es) first, then the target mesh last.")
-            return
-
-        source_meshes = sel[:-1]
-        target_mesh = sel[-1]
-
-        offset = self.ui.b000.menu.s000.value()
-        threshold = self.ui.b000.menu.s001.value() or None  # 0 means no limit
-        invert = self.ui.b000.menu.chk000.isChecked()
-
-        count = Snap.snap_to_surface(
-            source_meshes,
-            target_mesh,
-            offset=offset,
-            threshold=threshold,
-            invert=invert,
-        )
-        self.sb.message_box(f"<hl>Snapped {count} vertices to surface.</hl>")
-
-    def b001_init(self, widget):
-        """Initialize Snap to Closest Vertex button option box."""
-        widget.option_box.menu.setTitle("Snap to Closest Vertex")
-        widget.option_box.menu.add(
-            "QDoubleSpinBox",
-            setPrefix="Tolerance: ",
-            setObjectName="s002",
-            set_limits=[0, 1000, 0.1, 1],
-            setValue=10.0,
-            setToolTip="Maximum search distance for matching vertices.",
-        )
-
-    def b001(self):
-        """Snap to Closest Vertex button."""
-        sel = cmds.ls(selection=True) or []
-        if len(sel) != 2:
-            cmds.warning("Select exactly two meshes: source first, then target.")
-            return
-
-        obj1, obj2 = sel
-        tolerance = self.ui.b001.menu.s002.value()
-
-        count = Snap.snap_to_closest_vertex(obj1, obj2, tolerance=tolerance)
-        self.sb.message_box(f"<hl>Snapped {count} vertices.</hl>")
-
-    def b002_init(self, widget):
-        """Initialize Snap to Grid button option box."""
-        widget.option_box.menu.setTitle("Snap to Grid")
-        widget.option_box.menu.add(
-            "QDoubleSpinBox",
-            setPrefix="Grid Size: ",
-            setObjectName="s003",
-            set_limits=[0.001, 1000, 0.1, 3],
-            setValue=1.0,
-            setToolTip="Grid spacing to snap to.",
-        )
-        widget.option_box.menu.add(
-            "QLineEdit",
-            setPlaceholderText="Axes (xyz)...",
-            setObjectName="txt000",
-            setText="xyz",
-            setToolTip="Which axes to snap: x, y, z, or combinations like xy.",
-        )
-
-    def b002(self):
-        """Snap to Grid button."""
-        grid_size = self.ui.b002.menu.s003.value()
-        axes = self.ui.b002.menu.txt000.text() or "xyz"
-
-        count = Snap.snap_to_grid(grid_size=grid_size, axes=axes)
-        self.sb.message_box(f"<hl>Snapped {count} items to grid.</hl>")
-
-
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    pass
 
 # -----------------------------------------------------------------------------
 # Notes

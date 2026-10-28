@@ -18,10 +18,10 @@ from unittest import mock
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 
-from mayatk.edit_utils.bevel import Bevel, BevelSlots
+from mayatk.edit_utils.bevel import Bevel
 from mayatk.edit_utils.bridge import Bridge
 from mayatk.edit_utils.snap import Snap
-from mayatk.edit_utils.cut_on_axis import CutOnAxis, CutOnAxisSlots
+from mayatk.edit_utils.cut_on_axis import CutOnAxis
 from mayatk.edit_utils.mirror import MirrorSlots
 from mayatk.edit_utils._edit_utils import EditUtils
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -671,13 +671,6 @@ class TestCutOnAxisPreviewRollback(MayaTkTestCase):
         pv.disable()
         return result
 
-    def test_slots_class_opts_into_geometry_preservation(self):
-        """CutOnAxisSlots must declare PRESERVE_GEOMETRY so the preview
-        snapshots geometry for robust rollback."""
-        self.assertTrue(
-            getattr(CutOnAxisSlots, "PRESERVE_GEOMETRY", False),
-            "CutOnAxisSlots must set PRESERVE_GEOMETRY = True",
-        )
 
     def test_refresh_does_not_accumulate_on_historyless_mesh(self):
         cube = self._historyless_cube()
@@ -921,13 +914,6 @@ class TestBevelPreviewRollback(MayaTkTestCase):
         pv.disable()
         return result
 
-    def test_slots_class_opts_into_geometry_preservation(self):
-        """BevelSlots must declare PRESERVE_GEOMETRY so the preview snapshots
-        geometry for robust rollback."""
-        self.assertTrue(
-            getattr(BevelSlots, "PRESERVE_GEOMETRY", False),
-            "BevelSlots must set PRESERVE_GEOMETRY = True",
-        )
 
     def test_refresh_reverts_topology_and_preserves_material(self):
         cube = self._historyless_cube("bvl_preview")
