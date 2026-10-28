@@ -772,9 +772,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/game_shader.py`
 - `class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`
-  - methods: create_network, resolve_opacity_sources, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
-- `class GameShaderSlots(GameShader)`
-  - methods: source_images_dir, header_init, lbl_graph_material, mat_name, mat_prefix, mat_suffix, normal_map_type, output_extension, shader_type, opacity_mode, cmb002_init, cmb003_init, txt000_init, txt002_init, b000
+  - methods: shader_type_choices, create_network, assign_network, resolve_opacity_sources, setup_stringray_node, setup_standard_surface_node, setup_open_pbr_node, connect_stingray_nodes, connect_standard_surface_nodes, connect_open_pbr_nodes, filter_for_correct_metallic_map, filter_for_mask_map, filter_for_correct_base_color_map
 
 ### `mat_utils/image_to_plane/_image_to_plane.py` — Map image files to textured polygon planes in Maya.
 - `class ImageToPlane(pythontk.LoggingMixin)`
@@ -867,9 +865,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/mat_updater.py`
 - `class MatUpdater(pythontk.LoggingMixin)`
-  - methods: update_materials, disconnect_associated_attributes, update_network
-- `class MatUpdaterSlots(MatUpdater)`
-  - methods: header_init, selection_mode, move_to_folder, shader_type, acceptable_types, cmb001_init, b001
+  - methods: update_materials, disconnect_associated_attributes, update_network, shader_type_choices, texture_root, selected_materials, materials_using_textures
 
 ### `mat_utils/render_opacity/attribute_mode.py`
 - `class OpacityAttributeMode(pythontk.LoggingMixin)`

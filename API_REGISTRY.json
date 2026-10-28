@@ -20069,19 +20069,37 @@
         {
           "name": "GameShader",
           "summary": "A class to manage the creation of a shader network using StingrayPBS, Standard Surface or OpenPBR S…",
-          "line": 796,
+          "line": 795,
           "bases": [
             "pythontk.LoggingMixin",
             "_GameShaderInternal"
           ],
           "members": [
             {
+              "name": "shader_type_choices",
+              "qualname": "GameShader.shader_type_choices",
+              "kind": "staticmethod",
+              "signature": "() -> List[Tuple[str, str]]",
+              "summary": "The surface shaders :meth:`create_network` builds (its ``shader_type``).",
+              "line": 812,
+              "deprecated": false
+            },
+            {
               "name": "create_network",
               "qualname": "GameShader.create_network",
               "kind": "method",
               "signature": "(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]",
               "summary": "Create a PBR shader network with textures.",
-              "line": 813,
+              "line": 827,
+              "deprecated": false
+            },
+            {
+              "name": "assign_network",
+              "qualname": "GameShader.assign_network",
+              "kind": "method",
+              "signature": "(self, network, objects) -> bool",
+              "summary": "Assign the one material a :meth:`create_network` call built to *objects*.",
+              "line": 1017,
               "deprecated": false
             },
             {
@@ -20090,7 +20108,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], type_cache: Dict[str, Optional[str]], config: Dict[str, Any] = None, shader_type: str = 'stingray', name: str = '') -> Tuple[List[str], List[str], List[tuple]]",
               "summary": "Settle where this set's opacity lives, before anything is wired.",
-              "line": 1101,
+              "line": 1159,
               "deprecated": false
             },
             {
@@ -20099,7 +20117,7 @@
               "kind": "method",
               "signature": "(self, name: str, *, opacity_mode: str = None) -> object",
               "summary": "Create a StingrayPBS shader node with the right ShaderFX graph loaded.",
-              "line": 1381,
+              "line": 1439,
               "deprecated": false
             },
             {
@@ -20108,7 +20126,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya Standard Surface shader node.",
-              "line": 1407,
+              "line": 1465,
               "deprecated": false
             },
             {
@@ -20117,7 +20135,7 @@
               "kind": "method",
               "signature": "(self, name: str, opacity: bool) -> object",
               "summary": "Creates and sets up a Maya OpenPBR Surface shader node.",
-              "line": 1439,
+              "line": 1497,
               "deprecated": false
             },
             {
@@ -20126,7 +20144,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, sr_node: object) -> bool",
               "summary": "Connects texture files to the corresponding slots in the StingrayPBS shader node",
-              "line": 1516,
+              "line": 1574,
               "deprecated": false
             },
             {
@@ -20135,7 +20153,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, std_node: object) -> bool",
               "summary": "Connects texture files to Maya Standard Surface shader slots.",
-              "line": 1651,
+              "line": 1709,
               "deprecated": false
             },
             {
@@ -20144,7 +20162,7 @@
               "kind": "method",
               "signature": "(self, texture: str, texture_type: str, op_node: object) -> bool",
               "summary": "Connects texture files to Maya OpenPBR Surface shader slots.",
-              "line": 1886,
+              "line": 1944,
               "deprecated": false
             },
             {
@@ -20153,7 +20171,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]",
               "summary": "Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…",
-              "line": 2144,
+              "line": 2202,
               "deprecated": false
             },
             {
@@ -20162,7 +20180,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], output_extension: str = 'png') -> List[str]",
               "summary": "Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.",
-              "line": 2288,
+              "line": 2346,
               "deprecated": false
             },
             {
@@ -20171,152 +20189,7 @@
               "kind": "method",
               "signature": "(self, textures: List[str], use_albedo_transparency: bool) -> List[str]",
               "summary": "Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…",
-              "line": 2392,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "GameShaderSlots",
-          "summary": "",
-          "line": 2437,
-          "bases": [
-            "GameShader"
-          ],
-          "members": [
-            {
-              "name": "source_images_dir",
-              "qualname": "GameShaderSlots.source_images_dir",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Where Browse opens: the scene project's texture folder, resolved",
-              "line": 2447,
-              "deprecated": false
-            },
-            {
-              "name": "header_init",
-              "qualname": "GameShaderSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget.",
-              "line": 2487,
-              "deprecated": false
-            },
-            {
-              "name": "lbl_graph_material",
-              "qualname": "GameShaderSlots.lbl_graph_material",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Graph the material in the Hypershade.",
-              "line": 2531,
-              "deprecated": false
-            },
-            {
-              "name": "mat_name",
-              "qualname": "GameShaderSlots.mat_name",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Get the mat name from the user input text field.",
-              "line": 2541,
-              "deprecated": false
-            },
-            {
-              "name": "mat_prefix",
-              "qualname": "GameShaderSlots.mat_prefix",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Return the affix text when it resolves as a prefix, else empty string.",
-              "line": 2551,
-              "deprecated": false
-            },
-            {
-              "name": "mat_suffix",
-              "qualname": "GameShaderSlots.mat_suffix",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Return the affix text when it resolves as a suffix, else empty string.",
-              "line": 2559,
-              "deprecated": false
-            },
-            {
-              "name": "normal_map_type",
-              "qualname": "GameShaderSlots.normal_map_type",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Get the normal map type from the comboBoxes current text.",
-              "line": 2567,
-              "deprecated": false
-            },
-            {
-              "name": "output_extension",
-              "qualname": "GameShaderSlots.output_extension",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Selected output extension, or '' when 'Profile default' is chosen.",
-              "line": 2577,
-              "deprecated": false
-            },
-            {
-              "name": "shader_type",
-              "qualname": "GameShaderSlots.shader_type",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Get the shader type selection.",
-              "line": 2590,
-              "deprecated": false
-            },
-            {
-              "name": "opacity_mode",
-              "qualname": "GameShaderSlots.opacity_mode",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "The opacity graph the panel asks for.",
-              "line": 2605,
-              "deprecated": false
-            },
-            {
-              "name": "cmb002_init",
-              "qualname": "GameShaderSlots.cmb002_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Presets",
-              "line": 2625,
-              "deprecated": false
-            },
-            {
-              "name": "cmb003_init",
-              "qualname": "GameShaderSlots.cmb003_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Output Format.",
-              "line": 2639,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "GameShaderSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Material-name field — clearable back to the auto-derived name.",
-              "line": 2656,
-              "deprecated": false
-            },
-            {
-              "name": "txt002_init",
-              "qualname": "GameShaderSlots.txt002_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Add a prefix/suffix/auto-mode picker to the affix field.",
-              "line": 2660,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "GameShaderSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Create network.",
-              "line": 2738,
+              "line": 2450,
               "deprecated": false
             }
           ]
@@ -22015,7 +21888,7 @@
         {
           "name": "MatUpdater",
           "summary": "Updates existing materials with processed textures.",
-          "line": 26,
+          "line": 23,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -22026,7 +21899,7 @@
               "kind": "classmethod",
               "signature": "(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, shader_type: Optional[str] = None) -> Dict[str, Any]",
               "summary": "Update materials with processed textures.",
-              "line": 86,
+              "line": 90,
               "deprecated": false
             },
             {
@@ -22035,7 +21908,7 @@
               "kind": "classmethod",
               "signature": "(cls, material, file_paths, config=None)",
               "summary": "Disconnects PBR attributes if they are driven by the specified files.",
-              "line": 774,
+              "line": 779,
               "deprecated": false
             },
             {
@@ -22044,80 +21917,43 @@
               "kind": "classmethod",
               "signature": "(cls, material, texture_paths, config) -> Dict[str, str]",
               "summary": "Connect processed textures to the material.",
-              "line": 863,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "MatUpdaterSlots",
-          "summary": "",
-          "line": 991,
-          "bases": [
-            "MatUpdater"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "MatUpdaterSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Format global options in the header menu.",
-              "line": 1115,
+              "line": 868,
               "deprecated": false
             },
             {
-              "name": "selection_mode",
-              "qualname": "MatUpdaterSlots.selection_mode",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "",
-              "line": 1343,
+              "name": "shader_type_choices",
+              "qualname": "MatUpdater.shader_type_choices",
+              "kind": "staticmethod",
+              "signature": "() -> List[Tuple[str, str]]",
+              "summary": "The retype targets ``update_materials(shader_type=...)`` takes.",
+              "line": 996,
               "deprecated": false
             },
             {
-              "name": "move_to_folder",
-              "qualname": "MatUpdaterSlots.move_to_folder",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "",
-              "line": 1347,
+              "name": "texture_root",
+              "qualname": "MatUpdater.texture_root",
+              "kind": "staticmethod",
+              "signature": "() -> str",
+              "summary": "Where a run resolves a relative ``move_to_folder`` and discovers",
+              "line": 1010,
               "deprecated": false
             },
             {
-              "name": "shader_type",
-              "qualname": "MatUpdaterSlots.shader_type",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "The selected retype target, or None for \"keep the current type\".",
-              "line": 1351,
+              "name": "selected_materials",
+              "qualname": "MatUpdater.selected_materials",
+              "kind": "classmethod",
+              "signature": "(cls, shader_type: Optional[str] = None) -> List[str]",
+              "summary": "The materials a run over the selection acts on.",
+              "line": 1021,
               "deprecated": false
             },
             {
-              "name": "acceptable_types",
-              "qualname": "MatUpdaterSlots.acceptable_types",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "Node types this run can act on -- what it can wire, plus what it can retype.",
-              "line": 1356,
-              "deprecated": false
-            },
-            {
-              "name": "cmb001_init",
-              "qualname": "MatUpdaterSlots.cmb001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize Presets.",
-              "line": 1368,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "MatUpdaterSlots.b001",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Update Materials",
-              "line": 1433,
+              "name": "materials_using_textures",
+              "qualname": "MatUpdater.materials_using_textures",
+              "kind": "classmethod",
+              "signature": "(cls, paths: List[str], shader_type: Optional[str] = None) -> List[str]",
+              "summary": "The scene materials whose file nodes read any of *paths*, kept to the",
+              "line": 1074,
               "deprecated": false
             }
           ]

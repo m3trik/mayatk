@@ -3,7 +3,6 @@
 import os
 import logging
 from typing import List, Optional, Callable, Union, Dict, Any, Tuple
-from qtpy import QtCore
 
 try:
     import maya.cmds as cmds
@@ -809,6 +808,21 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
         "Albedo_Transparency": "alpha → opacity",
     }
 
+    @staticmethod
+    def shader_type_choices() -> List[Tuple[str, str]]:
+        """The surface shaders :meth:`create_network` builds (its ``shader_type``).
+
+        Returns:
+            ``(label, shader_type)`` pairs, in the Game Shader panel's Shader
+            Type order: the combo saves its INDEX, so a new type lands at the
+            END. Twin of blendertk's, which has none (one surface shader).
+        """
+        return [
+            ("Stingray PBS", "stingray"),
+            ("Standard Surface", "standard_surface"),
+            ("Open PBR", "open_pbr"),
+        ]
+
     @CoreUtils.undoable
     def create_network(
         self,
@@ -998,6 +1012,50 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
                 progress_callback(100, "Completed")
 
             return node
+
+    @CoreUtils.undoable
+    def assign_network(self, network, objects) -> bool:
+        """Assign the one material a :meth:`create_network` call built to *objects*.
+
+        The Game Shader panel's Assign to Selection step. Twin of blendertk's.
+
+        Parameters:
+            network: The ``create_network`` result: a network's shading group
+                (or its shader), or a list of them, one per texture set.
+            objects: The objects or faces to assign it to (``assign_mat``
+                flattens components itself).
+
+        Returns:
+            True when the material was assigned. Nothing built, nothing
+            selected, several materials built (no ONE material to assign) or a
+            failed assignment returns False; all but the first are logged.
+        """
+        made = [n for n in ptk.make_iterable(network) if n]
+        if not made:
+            return False
+        if not objects:
+            self.logger.warning("Assign to Selection: nothing was selected.")
+            return False
+        if len(made) > 1:
+            self.logger.warning(
+                f"Assign to Selection skipped: {len(made)} materials were built. "
+                "Set a Material Name to merge them into one."
+            )
+            return False
+        material = str(made[0])
+        # ``assign_mat`` takes the MATERIAL. Handed the network's shading group
+        # (what ``create_network`` returns), it built a ``<group>SG`` beside it
+        # and failed wiring the group's absent ``outColor``: nothing assigned.
+        if cmds.ls(material, type="shadingEngine"):
+            material = next(iter(MatUtils._sg_shaders(material)), material)
+        shader = CoreUtils.short_name(material)
+        try:
+            MatUtils.assign_mat(objects, material)
+        except Exception as e:
+            self.logger.error(f"Assign to Selection failed: {shader}: {e}")
+            return False
+        self.logger.success(f"Assigned {shader} to {len(objects)} item(s).")
+        return True
 
     def _resolve_map_conflicts(
         self,
@@ -2432,369 +2490,3 @@ class GameShader(ptk.LoggingMixin, _GameShaderInternal):
 
         # If no base color or diffuse map is found, return the list unchanged
         return textures
-
-
-class GameShaderSlots(GameShader):
-    msg_intro = """<u>To setup the material:</u>
-        <br>• Click the <b>Create Network</b> button to select texture maps and create the shader connections. This will build a shading network from the provided textures and manage OpenGL and DirectX normal map conversions.
-
-        <p><b>Note:</b> To correctly render opacity and transmission in Maya, the Opaque setting needs to be disabled on the Shape node.
-        If Opaque is enabled, opacity will not work at all. Transmission will work, however any shadows cast by
-        the object will always be solid and not pick up the Transparent Color or density of the shader.</p>
-    """
-
-    @property
-    def source_images_dir(self) -> str:
-        """Where Browse opens: the scene project's texture folder, resolved
-        when asked (the scene can change while the panel stays open)."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        return DataNodes.scene_source_images_dir()
-
-    def __init__(self, switchboard):
-        super().__init__()
-
-        self.sb = switchboard
-        self.ui = self.sb.loaded_ui.game_shader
-
-        # Don't keep this window glued above other tools — user can use the
-        # pin button to toggle stay-on-top when needed.
-        if hasattr(self.ui, "set_flags"):
-            self.ui.set_flags(WindowStaysOnTopHint=False)
-
-        self.image_files = None
-        self.last_created_shader = None
-
-        self.ui.txt001.setText(self.msg_intro)
-
-        # Route the shared logger into the txt001 QTextBrowser with HTML
-        # colorization. Using setup_logging_redirect (instead of the old
-        # CallbackLogHandler) is what enables clickable <a href="action://…">
-        # links inside log messages.
-        self.logger.set_text_handler(self.sb.registered_widgets.TextEditLogHandler)
-        self.logger.setup_logging_redirect(self.ui.txt001)
-
-        # Dispatch action:// links (e.g. select the created shader).
-        if hasattr(self.ui.txt001, "anchorClicked"):
-            self.ui.txt001.anchorClicked.connect(self._on_log_link_clicked)
-
-    def _on_log_link_clicked(self, url) -> None:
-        """Dispatch clickable ``action://`` links from the log panel."""
-        from mayatk.ui_utils._ui_utils import UiUtils
-
-        UiUtils.dispatch_log_link(url, self.logger)
-
-    def header_init(self, widget):
-        """Initialize the header widget."""
-        widget.menu.add(
-            self.sb.registered_widgets.Label,
-            setObjectName="lbl_graph_material",
-            setText="Open in Editor",
-            setToolTip="Graph the material in the Hypershade.",
-        )
-        widget.menu.add(
-            "QCheckBox",
-            setText="Assign to Selection",
-            setObjectName="chk_assign_to_selection",
-            setChecked=False,
-            setToolTip="Assign the created material to the objects (or faces) "
-            "selected when Create Network is pressed.\n"
-            "Skipped when the textures build several materials — set a "
-            "Material Name to merge them into one.",
-        )
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Game Shader",
-                body="Build complete PBR shader networks from a folder of "
-                "texture maps. Map types (Base Color, Normal, Roughness, "
-                "Metallic, AO, etc.) are auto-detected from file names.",
-                steps=[
-                    "Set <b>Material Name</b> and the <b>Prefix / Suffix</b> "
-                    "(affix-mode option box selects placement).",
-                    "Pick a <b>Shader Type</b> — Stingray PBS / Standard "
-                    "Surface / OpenPBR Surface.",
-                    "Pick a <b>Preset</b> — the preset's tooltip names its "
-                    "target workflow and the platforms it ships to "
-                    "(UE / Unity / Godot / film, or glTF 2.0 for WebXR).",
-                    "Press <b>Create</b> and select a folder; results stream "
-                    "into the log panel.",
-                ],
-                notes=[
-                    "Use <b>Open in Editor</b> from the header menu to graph "
-                    "the resulting material in the Hypershade.",
-                    "Check <b>Assign to Selection</b> in the header menu to "
-                    "assign the new material to the current selection.",
-                ],
-            )
-        )
-
-    def lbl_graph_material(self):
-        """Graph the material in the Hypershade."""
-        if self.last_created_shader:
-            MatUtils.graph_materials(self.last_created_shader)
-        elif cmds.objExists(self.mat_name):
-            MatUtils.graph_materials(self.mat_name)
-        else:
-            cmds.warning(f"Material '{self.mat_name}' not found.")
-
-    @property
-    def mat_name(self) -> str:
-        """Get the mat name from the user input text field.
-
-        Returns:
-            (str)
-        """
-        text = self.ui.txt000.text()
-        return text
-
-    @property
-    def mat_prefix(self) -> str:
-        """Return the affix text when it resolves as a prefix, else empty string."""
-        if not hasattr(self.ui, "txt002"):
-            return ""
-        prefix, _ = self.ui.txt002.option_box.resolve_affix(default="prefix")
-        return prefix
-
-    @property
-    def mat_suffix(self) -> str:
-        """Return the affix text when it resolves as a suffix, else empty string."""
-        if not hasattr(self.ui, "txt002"):
-            return ""
-        _, suffix = self.ui.txt002.option_box.resolve_affix(default="prefix")
-        return suffix
-
-    @property
-    def normal_map_type(self) -> str:
-        """Get the normal map type from the comboBoxes current text.
-
-        Returns:
-            (str)
-        """
-        text = self.ui.cmb001.currentText()
-        return text
-
-    @property
-    def output_extension(self) -> str:
-        """Selected output extension, or '' when 'Profile default' is chosen.
-
-        An empty string signals the caller to defer per-map format to the selected
-        workflow profile's template rather than forcing one container for all maps.
-
-        Returns:
-            (str) The file extension in lowercase (e.g., 'png', 'jpg'), or ''.
-        """
-        text = self.ui.cmb003.currentText().lower()
-        return "" if text.startswith("profile") else text
-
-    @property
-    def shader_type(self) -> str:
-        """Get the shader type selection.
-
-        Returns:
-            (str) One of 'stingray', 'standard_surface', or 'open_pbr'.
-        """
-        if hasattr(self.ui, "cmb004"):
-            text = self.ui.cmb004.currentText()
-            if "Open PBR" in text or "OpenPBR" in text:
-                return "open_pbr"
-            if "Standard Surface" in text:
-                return "standard_surface"
-        return "stingray"
-
-    @property
-    def opacity_mode(self) -> Optional[str]:
-        """The opacity graph the panel asks for.
-
-        Returns:
-            str | None: ``"transparent"`` (alpha blend), ``"masked"`` (alpha
-            cutout), or ``"none"`` -- opacity ruled out, which retires the
-            set's opacity sources instead of letting them pick the graph.
-            None for Auto: a usable opacity source then builds as transparent,
-            as it always has.
-        """
-        if hasattr(self.ui, "cmb005"):
-            text = self.ui.cmb005.currentText().lower()
-            if "masked" in text:
-                return "masked"
-            if "transparent" in text:
-                return "transparent"
-            if "none" in text:
-                return "none"
-        return None
-
-    def cmb002_init(self, widget):
-        """Initialize Presets"""
-        if not widget.is_initialized:
-            # Names + tooltips come from the OutputTemplates SSoT, shared with the
-            # converter / compositor / mat_updater / scene exporter, so none of
-            # them depends on the preset dict's internal shape.
-            widget.clear()
-            for name, description in ptk.OutputTemplates.profile_choices():
-                widget.addItem(name)
-                if description:
-                    widget.setItemData(
-                        widget.count() - 1, description, QtCore.Qt.ToolTipRole
-                    )
-
-    def cmb003_init(self, widget):
-        """Initialize Output Format.
-
-        Selecting 'Profile default' defers each map's container/bit-depth to the
-        selected workflow profile's output template; a concrete format forces that
-        container for all maps.
-        """
-        if not widget.is_initialized:
-            # format_choices appends the sentinel LAST, preserving the existing
-            # format indices — combobox state is persisted by index, so moving it
-            # to the front would silently shift every saved selection by one.
-            widget.add(
-                ptk.OutputTemplates.format_choices(
-                    sentinel=ptk.OutputTemplates.PROFILE_DEFAULT_LABEL
-                )
-            )
-
-    def txt000_init(self, widget):
-        """Material-name field — clearable back to the auto-derived name."""
-        widget.option_box.clear_option = True
-
-    def txt002_init(self, widget):
-        """Add a prefix/suffix/auto-mode picker to the affix field."""
-        widget.option_box.set_affix(
-            default="prefix",
-            on_change=lambda _mode, w=widget: self._apply_affix_placeholder(w),
-            settings_key="game_shader_affix",  # ``txt002`` alone is too generic
-            convention_key="material",  # fourth state: the shared convention
-        )
-        self._apply_affix_placeholder(widget)
-
-    @staticmethod
-    def _apply_affix_placeholder(widget):
-        mode = widget.option_box.affix_mode
-        if mode == "prefix":
-            widget.setPlaceholderText("Prefix")
-            widget.setToolTip(
-                "Prefix prepended to the base name.\n"
-                'Example: "MAT_" + "brick" → "MAT_brick".'
-            )
-        elif mode == "suffix":
-            widget.setPlaceholderText("Suffix")
-            widget.setToolTip(
-                "Suffix appended to the base name.\n"
-                'Example: "brick" + "_MAT" → "brick_MAT".'
-            )
-        elif mode == "convention":
-            # The field is showing (and locked to) the shared convention, so
-            # the placeholder would never be seen — name the source instead, so
-            # a user wondering why they cannot type has the answer in the tip.
-            widget.setPlaceholderText("Scene Convention")
-            widget.setToolTip(
-                "Following the shared naming convention for materials.\n"
-                "Edit it in the Naming panel (Suffix By Type); every tool set "
-                "to this mode follows.\n"
-                "Click the button beside the field to type your own instead."
-            )
-        else:  # auto
-            widget.setPlaceholderText("Affix")
-            widget.setToolTip(
-                "Affix — placement inferred from '_' position.\n"
-                "  '_MAT' → suffix (appended)\n"
-                "  'MAT_' → prefix (prepended)"
-            )
-
-    def _assign_to_selection(self, shaders, selection) -> None:
-        """Assign the one material just built to ``selection``.
-
-        Parameters:
-            shaders: The ``create_network`` result (a node or a list of them):
-                each network's shading group, or a material.
-            selection: The objects/components selected before the build.
-        """
-        made = [s for s in ptk.make_iterable(shaders) if s]
-        if not made:
-            return
-        if not selection:
-            self.logger.warning("Assign to Selection: nothing was selected.")
-            return
-        if len(made) > 1:
-            self.logger.warning(
-                f"Assign to Selection skipped: {len(made)} materials were built. "
-                "Set a Material Name to merge them into one."
-            )
-            return
-        material = str(made[0])
-        # ``assign_mat`` takes the MATERIAL. Handed the network's shading group
-        # (what ``create_network`` returns), it built a ``<group>SG`` beside it
-        # and failed wiring the group's absent ``outColor``: nothing assigned.
-        if cmds.ls(material, type="shadingEngine"):
-            material = next(iter(MatUtils._sg_shaders(material)), material)
-        shader = CoreUtils.short_name(material)
-        try:
-            MatUtils.assign_mat(selection, material)
-        except Exception as e:
-            self.logger.error(f"Assign to Selection failed: {shader}: {e}")
-            return
-        self.logger.success(f"Assigned {shader} to {len(selection)} item(s).")
-
-    def b000(self):
-        """Create network."""
-        # Snapshot before the file dialog, so the assignment targets what was
-        # selected when the button was pressed.
-        selection = (
-            cmds.ls(sl=True) or []  # assign_mat flattens components itself
-            if self.ui.header.menu.chk_assign_to_selection.isChecked()
-            else None
-        )
-
-        image_files = self.sb.file_dialog(
-            file_types=[f"*.{ext}" for ext in ptk.ImgUtils.texture_file_types],
-            title="Select one or more image files to open.",
-            start_dir=self.source_images_dir,
-        )
-
-        if not image_files:
-            return
-
-        self.image_files = image_files
-        self.ui.txt001.clear()
-
-        # Get template configuration using combo box text
-        template_name = self.ui.cmb002.currentText()
-
-        # 'Profile default' (empty ext) → let the workflow profile drive per-map
-        # format; a concrete ext overrides it for all maps.
-        ext = self.output_extension
-        output_profile = template_name if not ext else None
-
-        def progress_adapter(p, m):
-            # Surface progress in the footer (the .ui has no progressBar —
-            # the old setValue branch was dead) and keep the UI responsive
-            # during the long network build.
-            self.ui.footer.setText(f"{m} ({int(p)}%)" if m else f"{int(p)}%")
-            self.sb.QtWidgets.QApplication.instance().processEvents()
-
-        self.last_created_shader = self.create_network(
-            self.image_files,
-            self.mat_name,
-            prefix=self.mat_prefix,
-            suffix=self.mat_suffix,
-            config=template_name,
-            shader_type=self.shader_type,
-            normal_type=self.normal_map_type,
-            opacity_mode=self.opacity_mode,
-            cleanup_base_color=False,  # Can be exposed in UI later if needed
-            output_extension=ext or None,
-            output_profile=output_profile,
-            progress_callback=progress_adapter,
-        )
-
-        if selection is not None:
-            self._assign_to_selection(self.last_created_shader, selection)
-
-
-# -----------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("game_shader", reload=True)
-    ui.show(pos="screen", app_exec=True)

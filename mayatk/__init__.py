@@ -436,6 +436,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools.smart_bake.SmartBakeSlots",
         "0.30.0",
     ),
+    "GameShaderSlots": (
+        "tentacle.slots.tools.game_shader.GameShaderSlots",
+        "0.30.0",
+    ),
+    "MatUpdaterSlots": (
+        "tentacle.slots.tools.mat_updater.MatUpdaterSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

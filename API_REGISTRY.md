@@ -3173,8 +3173,10 @@ Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
 <a id="mat_utils--game_shader"></a>
 ### `mat_utils/game_shader.py`
 
-- **[`class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L796)** — A class to manage the creation of a shader network using StingrayPBS, Standard Surface or OpenPBR S…
+- **[`class GameShader(pythontk.LoggingMixin, _GameShaderInternal)`](mayatk/mayatk/mat_utils/game_shader.py#L795)** — A class to manage the creation of a shader network using StingrayPBS, Standard Surface or OpenPBR S…
+  - `GameShader.shader_type_choices() -> List[Tuple[str, str]]` *(static)* — The surface shaders :meth:`create_network` builds (its ``shader_type``).
   - `GameShader.create_network(self, textures: List[str], name: str = '', prefix: str = '', suffix: str = '', config: Union[str, Dict[str, Any]] = None, progress_callback: Callable = None, **kwargs) -> Union[Optional[object], List[Optional[object]]]` — Create a PBR shader network with textures.
+  - `GameShader.assign_network(self, network, objects) -> bool` — Assign the one material a :meth:`create_network` call built to *objects*.
   - `GameShader.resolve_opacity_sources(self, textures: List[str], type_cache: Dict[str, Optional[str]], config: Dict[str, Any] = None, shader_type: str = 'stingray', name: str = '') -> Tuple[List[str], List[str], List[tuple]]` — Settle where this set's opacity lives, before anything is wired.
   - `GameShader.setup_stringray_node(self, name: str, *, opacity_mode: str = None) -> object` — Create a StingrayPBS shader node with the right ShaderFX graph loaded.
   - `GameShader.setup_standard_surface_node(self, name: str, opacity: bool) -> object` — Creates and sets up a Maya Standard Surface shader node.
@@ -3185,22 +3187,6 @@ Emissive Groups' Maya half: one ``objectSet`` of faces per group, keyable
   - `GameShader.filter_for_correct_metallic_map(self, textures: List[str], use_metallic_smoothness: bool, output_extension: str = 'png') -> List[str]` — Filters textures to ensure the correct handling of metallic maps based on the use_metallic_smoothne…
   - `GameShader.filter_for_mask_map(self, textures: List[str], output_extension: str = 'png') -> List[str]` — Creates Unity HDRP Mask Map (MSAO) by packing Metallic, AO, Detail, and Smoothness.
   - `GameShader.filter_for_correct_base_color_map(self, textures: List[str], use_albedo_transparency: bool) -> List[str]` — Filters textures to ensure the correct handling of albedo maps based on the use_albedo_transparency…
-- **[`class GameShaderSlots(GameShader)`](mayatk/mayatk/mat_utils/game_shader.py#L2437)**
-  - `GameShaderSlots.source_images_dir(self) -> str` *(property)* — Where Browse opens: the scene project's texture folder, resolved
-  - `GameShaderSlots.header_init(self, widget)` — Initialize the header widget.
-  - `GameShaderSlots.lbl_graph_material(self)` — Graph the material in the Hypershade.
-  - `GameShaderSlots.mat_name(self) -> str` *(property)* — Get the mat name from the user input text field.
-  - `GameShaderSlots.mat_prefix(self) -> str` *(property)* — Return the affix text when it resolves as a prefix, else empty string.
-  - `GameShaderSlots.mat_suffix(self) -> str` *(property)* — Return the affix text when it resolves as a suffix, else empty string.
-  - `GameShaderSlots.normal_map_type(self) -> str` *(property)* — Get the normal map type from the comboBoxes current text.
-  - `GameShaderSlots.output_extension(self) -> str` *(property)* — Selected output extension, or '' when 'Profile default' is chosen.
-  - `GameShaderSlots.shader_type(self) -> str` *(property)* — Get the shader type selection.
-  - `GameShaderSlots.opacity_mode(self) -> Optional[str]` *(property)* — The opacity graph the panel asks for.
-  - `GameShaderSlots.cmb002_init(self, widget)` — Initialize Presets
-  - `GameShaderSlots.cmb003_init(self, widget)` — Initialize Output Format.
-  - `GameShaderSlots.txt000_init(self, widget)` — Material-name field — clearable back to the auto-derived name.
-  - `GameShaderSlots.txt002_init(self, widget)` — Add a prefix/suffix/auto-mode picker to the affix field.
-  - `GameShaderSlots.b000(self)` — Create network.
 
 <a id="mat_utils--image_to_plane--_image_to_plane"></a>
 ### `mat_utils/image_to_plane/_image_to_plane.py`
@@ -3490,18 +3476,14 @@ Lightweight material state snapshot and restore.
 <a id="mat_utils--mat_updater"></a>
 ### `mat_utils/mat_updater.py`
 
-- **[`class MatUpdater(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L26)** — Updates existing materials with processed textures.
+- **[`class MatUpdater(pythontk.LoggingMixin)`](mayatk/mayatk/mat_utils/mat_updater.py#L23)** — Updates existing materials with processed textures.
   - `MatUpdater.update_materials(cls, materials: List[Any] = None, config: Union[str, Dict[str, Any]] = None, verbose: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, shader_type: Optional[str] = None) -> Dict[str, Any]` *(class)* — Update materials with processed textures.
   - `MatUpdater.disconnect_associated_attributes(cls, material, file_paths, config=None)` *(class)* — Disconnects PBR attributes if they are driven by the specified files.
   - `MatUpdater.update_network(cls, material, texture_paths, config) -> Dict[str, str]` *(class)* — Connect processed textures to the material.
-- **[`class MatUpdaterSlots(MatUpdater)`](mayatk/mayatk/mat_utils/mat_updater.py#L991)**
-  - `MatUpdaterSlots.header_init(self, widget)` — Format global options in the header menu.
-  - `MatUpdaterSlots.selection_mode(self)` *(property)*
-  - `MatUpdaterSlots.move_to_folder(self)` *(property)*
-  - `MatUpdaterSlots.shader_type(self)` *(property)* — The selected retype target, or None for "keep the current type".
-  - `MatUpdaterSlots.acceptable_types(self)` *(property)* — Node types this run can act on -- what it can wire, plus what it can retype.
-  - `MatUpdaterSlots.cmb001_init(self, widget)` — Initialize Presets.
-  - `MatUpdaterSlots.b001(self, widget)` — Update Materials
+  - `MatUpdater.shader_type_choices() -> List[Tuple[str, str]]` *(static)* — The retype targets ``update_materials(shader_type=...)`` takes.
+  - `MatUpdater.texture_root() -> str` *(static)* — Where a run resolves a relative ``move_to_folder`` and discovers
+  - `MatUpdater.selected_materials(cls, shader_type: Optional[str] = None) -> List[str]` *(class)* — The materials a run over the selection acts on.
+  - `MatUpdater.materials_using_textures(cls, paths: List[str], shader_type: Optional[str] = None) -> List[str]` *(class)* — The scene materials whose file nodes read any of *paths*, kept to the
 
 <a id="mat_utils--render_opacity--attribute_mode"></a>
 ### `mat_utils/render_opacity/attribute_mode.py`

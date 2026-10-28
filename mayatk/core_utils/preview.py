@@ -606,7 +606,7 @@ class Preview(_PreviewInternal):
         self.reselect_on_disable = reselect_on_disable
         # Previewing is opt-in, not a prerequisite: Create commits straight onto
         # the live selection when no preview is running (see _commit_direct), so
-        # the button is live from the start. The co-located .ui files ship it
+        # the button is live from the start. The tools' .ui files ship it
         # `enabled=false` (the old gated contract), so the state is asserted here
         # rather than left to whatever each .ui happens to carry.
         # require_preview=True restores the gate for panels that must not commit
