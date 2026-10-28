@@ -570,6 +570,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin",
         "0.30.0",
     ),
+    "ShotsSlots": (
+        "tentacle.slots.tools.shots.ShotsSlots",
+        "0.30.0",
+    ),
+    "ShotsController": (
+        "tentacle.slots.tools._shots.controller.ShotsController",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

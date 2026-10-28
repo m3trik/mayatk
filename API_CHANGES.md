@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (614)
+## Moved out (686)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -110,6 +110,78 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_extra` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_missing` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/view_combos.py::ViewCombosMixin` → `tentacle.slots.tools._shot_manifest.view_combos.ViewCombosMixin` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.confirm_removal` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.confirm_stale_removal` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.delete_scope` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.label_apply_gap` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.label_delete_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.label_shift_all` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.label_swap_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_add_space` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_all_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_delete_stale_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_detection_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_detection_mode_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_drop_stale_shots_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_fit_mode_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_gap_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_initial_length_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_move_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_navigate_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_new_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shift_all_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shot_desc_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shot_end_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shot_name_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shot_selected` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_shot_start_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_snap_whole_frames_changed` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_swap_shot` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_trim_all_shots` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.on_trim_empty` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.refresh_state` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.remove_callbacks` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.scope_count` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.scope_label` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.shot_label` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.swap_mode` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.swap_retain` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsController.swap_target` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.b000` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_add_leading_space` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_add_trailing_space` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_apply_gap` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_delete_shots` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_move_shot` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_shift_all` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_swap_shot` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_both` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_leading` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_all_trailing` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_both` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_empty` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_leading` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.btn_trim_trailing` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.chk_drop_stale_shots` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.chk_snap_whole_frames` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_delete_scope` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_detection_mode` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_fit_mode` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_shot_select` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_swap_mode` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.cmb_swap_with` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.header_init` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.spn_detection` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.spn_initial_length` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.spn_shot_end` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.spn_shot_start` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.txt_shot_desc` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
+- `anim_utils/shots/shots_slots.py::ShotsSlots.txt_shot_name` → `tentacle.slots.tools.shots.ShotsSlots` (from 0.30.0)
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b000` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.b001` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
@@ -821,16 +893,13 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_transfer.py::TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
 
-## Deprecations (17)
+## Deprecations (14)
 
 _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its window: delete the alias and its tests rather than moving the date. A **HELD** row is due by version, but its notice has not yet had its calendar window._
 
 - **HELD** `env_utils/_env_utils.py::EnvUtils.is_plugin_loaded` — remove in 0.23.0, not before 2026-11-02
 - **HELD** `env_utils/_env_utils.py::EnvUtils.load_plugin` — remove in 0.23.0, not before 2026-11-02
 - **HELD** `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_stale_shots` — remove in 0.23.0, not before 2026-11-06
-- **HELD** `anim_utils/shots/shots_slots.py::ShotsController.confirm_stale_removal` — remove in 0.23.0, not before 2026-11-06
-- **HELD** `anim_utils/shots/shots_slots.py::ShotsController.on_delete_all_shots` — remove in 0.23.0, not before 2026-11-06
-- **HELD** `anim_utils/shots/shots_slots.py::ShotsController.on_delete_stale_shots` — remove in 0.23.0, not before 2026-11-06
 - **HELD** `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS` — remove in 0.23.0, not before 2026-11-03
 - **HELD** `env_utils/scene_exporter/task_manager.py::TaskManager.check_uv_snapshots` — remove in 0.24.0, not before 2026-11-07
 - **HELD** `env_utils/scene_state.py::SceneState.read` — remove in 0.29.0, not before 2026-11-23

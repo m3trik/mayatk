@@ -144,7 +144,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         # _sync_combobox each sync), never a persisted UI value — opt out of
         # cross-session index restore, or a stale index auto-selects (and
         # fires cmb_shot on) the wrong shot next session. Mirrors
-        # ShotsController's cmb_shot_select opt-out.
+        # the Shots panel's cmb_shot_select opt-out.
         cmb_shot = getattr(self.ui, "cmb_shot", None)
         if cmb_shot is not None:
             cmb_shot.restore_state = False
@@ -574,14 +574,13 @@ class ShotSequencerSlots(ptk.LoggingMixin):
         menu.add("Generate Next Shot\u2026", callback=self._detect_next_shot)
         menu.add_separator()
         menu.add("Delete Shot\u2026", callback=self._delete_shot, setEnabled=has_shot)
-        # The Shots window's Delete Shots, scope by scope: each row names how
-        # many shots it would take, and is off when that is none.
-        from mayatk.anim_utils.shots.shots_slots import ShotsController
-
+        # The Shots window's Delete Shots, scope by scope (``ShotReport`` words
+        # both): each row names how many shots it would take, and is off when
+        # that is none.
         seq = self.controller.sequencer
         store = seq.store if seq is not None else None
         scoped = menu.add("Delete Shots", setEnabled=bool(store and store.shots))
-        for label, scope in ShotsController.DELETE_SCOPES:
+        for label, scope in ptk.ShotReport.SCOPE_LABELS:
             doomed = store.shots_in_scope(scope) if store is not None else []
             menu.add(
                 f"{label}\u2026",
@@ -589,7 +588,7 @@ class ShotSequencerSlots(ptk.LoggingMixin):
                 callback=lambda s=scope: self.controller.delete_shots(s),
                 setEnabled=bool(doomed),
                 setToolTip=(
-                    f"Delete {ShotsController.scope_count(doomed, scope)}.\n"
+                    f"Delete {ptk.ShotReport.scope_count(doomed, scope)}.\n"
                     "Their records only: no keyframe is touched, no shot moves."
                     if doomed
                     else f"No {'' if scope == 'all' else label.lower() + ' '}shots."

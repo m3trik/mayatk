@@ -172,12 +172,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class WidgetSyncMixin`
   - methods: refresh
 
-### `anim_utils/shots/shots_slots.py` — Switchboard slots for the Shots settings UI.
-- `class ShotsController(pythontk.LoggingMixin)`
-  - methods: remove_callbacks, refresh_state, shot_label, on_navigate_shot, on_new_shot, on_detection_changed, on_detection_mode_changed, on_initial_length_changed, on_snap_whole_frames_changed, on_drop_stale_shots_changed, on_fit_mode_changed, on_gap_changed, on_shot_selected, on_shot_name_changed, on_shot_start_changed, on_shot_end_changed, on_shot_desc_changed, scope_label, scope_count, delete_scope, label_delete_shots, swap_mode, swap_target, swap_retain, label_swap_shot, label_shift_all, label_apply_gap, on_delete_shot, confirm_removal, confirm_stale_removal, on_delete_shots, on_delete_stale_shots, on_delete_all_shots, on_move_shot, on_swap_shot, on_trim_empty, on_trim_all_shots, on_shift_all_shots, on_add_space
-- `class ShotsSlots(pythontk.LoggingMixin)`
-  - methods: header_init, spn_detection, cmb_detection_mode, spn_initial_length, cmb_fit_mode, chk_snap_whole_frames, cmb_shot_select, txt_shot_name, spn_shot_start, spn_shot_end, txt_shot_desc, b000, btn_delete_shots, cmb_delete_scope, chk_drop_stale_shots, btn_move_shot, btn_swap_shot, cmb_swap_with, cmb_swap_mode, btn_apply_gap, btn_shift_all, btn_trim_empty, btn_trim_leading, btn_trim_trailing, btn_trim_both, btn_trim_all, btn_trim_all_leading, btn_trim_all_trailing, btn_trim_all_both, btn_add_leading_space, btn_add_trailing_space
-
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`
   - methods: requires_bake, all_driven_channels

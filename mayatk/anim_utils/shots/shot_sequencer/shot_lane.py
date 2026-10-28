@@ -349,23 +349,27 @@ class ShotLaneMixin:
 
         ``"stale"``, ``"empty"`` or ``"all"`` (``ShotStore.shots_in_scope``) --
         the scopes of the Shots window's Delete Shots, asked the same question
-        (``ShotsController.confirm_removal``).  Records only: no key is touched
+        (``ShotReport.removal_question``).  Records only: no key is touched
         and no shot moves, where :meth:`delete_shot` cuts a shot's keys and
         closes the gap behind it, which would retime every shot after it.  One
         undo.
         """
         if self.sequencer is None:
             return
-        from mayatk.anim_utils.shots.shots_slots import ShotsController
-
         store = self.sequencer.store
         kind = "" if scope == "all" else f"{scope} "
         doomed = store.shots_in_scope(scope)
         if not doomed:
             self._set_footer(f"No {kind}shots")
             return
-        parent = self._get_sequencer_widget() or self.ui
-        if not ShotsController.confirm_removal(doomed, scope, parent):
+        title, text = ptk.ShotReport.removal_question(doomed, scope)
+        reply = QtWidgets.QMessageBox.question(
+            self._get_sequencer_widget() or self.ui,
+            title,
+            text,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
             return
         try:
             with store.scene_edit(f"del{scope}"):

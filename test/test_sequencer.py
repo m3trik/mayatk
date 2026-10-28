@@ -10838,19 +10838,19 @@ class TestTheStoreFollowsMayasUndo(unittest.TestCase):
         )
 
     def test_a_shots_window_resize_is_undone_in_its_bounds(self):
-        """The Shots window's End field (``ShotsController.on_shot_end_changed``)
-        moves the bound and ripples the keys after it; Ctrl+Z undid the keys
-        and kept the bound."""
-        from mayatk.anim_utils.shots.shots_slots import ShotsController
-
-        shots = ShotsController.__new__(ShotsController)
-        shots._refreshing_editor = False
-        shots.logger = logging.getLogger("test.shots_window")
-        shots._set_footer = lambda *_a, **_k: None
+        """The Shots window's End field (tentacle's Shots panel) moves the bound
+        and ripples the keys after it -- ``update_shot`` then
+        ``ripple_downstream`` in one ``scene_edit``, the panel's own edit;
+        Ctrl+Z undid the keys and kept the bound.  The panel driving it is
+        tentacle's ``test_shots_panel`` (``TestShotsPanelInMaya``)."""
         a = self.store.shot_by_name("A")
-        self.store.set_active_shot(a.shot_id)
         before = (a.end, self.store.shot_by_name("B").start)
-        shots.on_shot_end_changed(40.0)
+        old_end = a.end
+        with self.store.scene_edit("shotend"):
+            self.store.update_shot(a.shot_id, end=40.0)
+            ShotSequencer(store=self.store).ripple_downstream(
+                a.shot_id, old_end, 40.0 - old_end
+            )
         self.assertEqual(self.store.shot_by_id(a.shot_id).end, 40.0)
         cmds.undo()
         self.assertEqual(
