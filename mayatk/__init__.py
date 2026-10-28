@@ -694,6 +694,10 @@ MOVED_NAMES = {
         "tentacle.slots.tools._shot_sequencer.gap_manager.TIME_SNAP_EPS",
         "0.30.0",
     ),
+    "MayaBridgeSlotsBase": (
+        "tentacle.slots.tools._app_bridge.host_bridge.HostBridge",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

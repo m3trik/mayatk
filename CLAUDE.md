@@ -51,14 +51,9 @@ $env:PYTHONPATH = "$PWD\mayatk;$PWD\pythontk;$PWD\uitk;$PWD\tentacle"
 
 Runner notes: the console shows non-passing modules + SUMMARY + `SLOWEST MODULES` (`--full-results`: all); the badge only updates on a full `--all`; `--jobs N` runs chunks concurrently — drop to 1 if a run stalls at init (FlexLM reclaim after a killed mayapy).
 
-## Tool panels — moving to tentacle
+## Tool panels — tentacle's
 
-Every panel and its Slots class moves to tentacle (`ui/tools/<tool>.ui` + `slots/tools/<tool>.py`, one Slots class both hosts share; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14); mayatk keeps every tool's API half (its operations and record rows) and no UI. New panels start in tentacle. Until a panel moves, it keeps this contract (blendertk mirrors it):
-
-- `<tool>.ui` + `<Tool>Slots` beside the domain module they act on; the `.ui` is the tracked SSoT, runtime-loaded (no compiled `_ui.py`).
-- `<Tool>Slots` is tentacle-independent: base `ptk.LoggingMixin`, `__init__(self, switchboard, log_level=...)` sets `self.sb`; a thin driver calling the engine directly. Guard the uitk import in the *logic* module so the headless surface stays uitk-free.
-- Discovery: `MayaUiHandler` (`ui_utils/maya_ui_handler.py`, `discover_slots=True, recursive=True`) finds the `.ui` and the slots class; no `DEFAULT_INCLUDE` entry.
-- tentacle only links to it: a `bNNN` slot in `tentacle/slots/maya/<panel>.py` calls `self.sb.handlers.marking_menu.show("<tool>")`.
+Every tool's panel is tentacle's (`ui/tools/<tool>.ui` + one shared Slots class in `slots/tools/<tool>.py`; [CODE_STANDARD](../m3trik/docs/CODE_STANDARD.md) §3, §14). mayatk holds each tool's API half (its operations and record rows) and no UI: no `.ui`, no `*Slots` class. A scene call the panel makes is a method on the tool's class or its host facade (`SequencerHost`, `ManifestHost`, `BridgeHost`), named as blendertk names it. `MayaUiHandler` registers no UI source of its own; it wraps Maya's native menus and names `sb.tk`.
 
 ## Style
 

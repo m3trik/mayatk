@@ -263,7 +263,10 @@ class TestLoadMayaUiEviction(unittest.TestCase):
 
 
 class DefaultPersistence(unittest.TestCase):
-    """mayatk-sourced UIs declare a sticky *default* (hide button, not pin).
+    """Tool panels default to sticky (hide button, not pin) by uitk's panel tag.
+
+    mayatk ships no panels and adds no rule: tentacle registers its tools under
+    ``UiHandler.PANEL_TAG``, and a mayatk tag alone means nothing.
 
     Declared through ``UiHandler.default_persistence`` rather than by swapping
     ``header_buttons`` in ``apply_styles``: a hardcoded button set is a value a
@@ -280,14 +283,21 @@ class DefaultPersistence(unittest.TestCase):
         ui.has_tags = lambda t: bool(set(tags) & set(t))
         return ui
 
-    def test_mayatk_tagged_ui_is_sticky(self):
+    def test_panel_tagged_ui_is_sticky(self):
         self.assertEqual(
-            self.handler.default_persistence(self._ui("mayatk")),
+            self.handler.default_persistence(self._ui(MayaUiHandler.PANEL_TAG)),
             MayaUiHandler.PERSISTENCE_STICKY,
         )
 
+    def test_the_handler_adds_no_rule_of_its_own(self):
+        self.assertNotIn("default_persistence", vars(MayaUiHandler))
+        self.assertEqual(
+            self.handler.default_persistence(self._ui("mayatk")),
+            MayaUiHandler.PERSISTENCE_TRANSIENT,
+        )
+
     def test_untagged_ui_keeps_the_base_default(self):
-        # Native-menu wrappers ("maya_menu") are not mayatk-sourced panels.
+        # Native-menu wrappers ("maya_menu") are not tool panels.
         self.assertEqual(
             self.handler.default_persistence(self._ui("maya_menu")),
             MayaUiHandler.PERSISTENCE_TRANSIENT,

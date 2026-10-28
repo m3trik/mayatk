@@ -2,8 +2,7 @@
 # coding=utf-8
 """``BridgeHost.resolve_scope`` precedence, with no Maya.
 
-The resolver tentacle's bridge panels call (``mtk.BridgeHost``) and
-``MayaBridgeSlotsBase.resolve_scope_objects`` delegates to.
+The resolver tentacle's bridge panels call (``mtk.BridgeHost``).
 
 The scene reads are mocked (``maya.cmds`` from this dir's conftest, the export
 mixin's static visible read patched); what is pinned is WHICH read answers each
@@ -83,16 +82,6 @@ class TestScopePrecedence(unittest.TestCase):
         nothing, so Entire Scene is the scene's meshes."""
         owner = types.SimpleNamespace(bridge=types.SimpleNamespace())
         self.assertEqual(self._resolve("all", owner), ["|meshShape"])
-
-    def test_the_slots_base_delegates_to_the_host(self):
-        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
-
-        owner = types.SimpleNamespace(
-            bridge=types.SimpleNamespace(_scene_objects=lambda: ["|root"])
-        )
-        self.assertEqual(
-            MayaBridgeSlotsBase.resolve_scope_objects(owner, "all"), ["|root"]
-        )
 
 
 if __name__ == "__main__":

@@ -983,17 +983,13 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class HotkeyCollisions(_HotkeyCollisionsInternal)`
   - methods: parse_qt_sequence, keystring_to_token, live_hotkey_map, ensure_editable_hotkey_set, maya_collision_checker
 
-### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
-- `class MayaBridgeSlotsBase(BridgeSlotsBase)`
-  - methods: resolve_scope_objects
-
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(pythontk.LoggingMixin)`
   - methods: get_menu, display_menu
 
 ### `ui_utils/maya_ui_handler.py`
 - `class MayaUiHandler(UiHandler)`
-  - methods: instance, can_resolve, get, default_persistence
+  - methods: instance, can_resolve, get
 
 ### `ui_utils/node_icons.py` — Reusable helper for resolving Maya node icons at runtime.
 - `class NodeIcons`

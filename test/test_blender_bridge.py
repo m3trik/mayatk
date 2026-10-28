@@ -2744,16 +2744,15 @@ class TestBridgePerInstanceLightmaps(MayaTkTestCase):
 
     def test_visible_scope_keeps_every_instance_sibling(self):
         """The shape->first-parent coercion silently dropped instance siblings."""
-        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+        from mayatk.env_utils.handoff_export import BridgeHost
 
         src, copy = self._instanced_pair()
-        slots = mock.Mock(spec=[])  # no .bridge -- the visible path needs none
-        got = MayaBridgeSlotsBase.resolve_scope_objects(slots, "visible")
+        got = BridgeHost.resolve_scope("visible")  # the visible path needs no bridge
         self.assertIn(src, got)
         self.assertIn(copy, got)
         # A hidden sibling must not ride in on its visible twin's shape.
         cmds.setAttr(f"{copy}.visibility", 0)
-        got = MayaBridgeSlotsBase.resolve_scope_objects(slots, "visible")
+        got = BridgeHost.resolve_scope("visible")
         self.assertIn(src, got)
         self.assertNotIn(copy, got)
 

@@ -1,7 +1,6 @@
 # !/usr/bin/python
 # coding=utf-8
 import sys
-import os
 from typing import Optional, TYPE_CHECKING
 from uitk import Switchboard
 from uitk.handlers.ui_handler import UiHandler
@@ -18,8 +17,10 @@ if TYPE_CHECKING:
 class MayaUiHandler(UiHandler):
     """UI Handler for Maya applications.
 
-    Extends the generic UiHandler with Maya-specific menu wrapping
-    and discovery of mayatk UI files.
+    Extends the generic UiHandler with Maya-specific menu wrapping. mayatk
+    ships no panels (every tool's UI is tentacle's), so it registers no UI
+    source of its own; tentacle's launcher registers its tools on the same
+    switchboard.
     """
 
     def __init__(
@@ -36,8 +37,6 @@ class MayaUiHandler(UiHandler):
         ``tcl_maya``) still pass an explicit instance to share state
         with the rest of the application.
         """
-        self.root_dir = os.path.dirname(sys.modules["mayatk"].__file__)
-
         if switchboard is None:
             from uitk import Switchboard as _Switchboard
 
@@ -47,12 +46,7 @@ class MayaUiHandler(UiHandler):
 
         super().__init__(
             switchboard=switchboard,
-            ui_root=self.root_dir,
-            slot_root=self.root_dir,
-            discover_slots=True,
-            recursive=True,
             log_level=log_level,
-            source_tags={"mayatk"},
             **kwargs,
         )
         # A Slots class written for either host reaches its host through the
@@ -64,7 +58,7 @@ class MayaUiHandler(UiHandler):
 
         # Maya's main window owns application-scoped shortcuts (it is always
         # up); uitk names no host, so the host declares it -- here, not only
-        # in tentacle's launcher, so mayatk's own panels get it too.
+        # in tentacle's launcher, so a window this handler stands up alone gets it too.
         from uitk import PresetEditor
         from uitk.managers.shortcut_manager import ShortcutManager
 
@@ -199,21 +193,6 @@ class MayaUiHandler(UiHandler):
             return self._load_maya_ui(menu_key=name, **kwargs)
 
         return super().get(name, reload=reload, **kwargs)
-
-    def default_persistence(self, ui) -> str:
-        """mayatk-sourced UIs stay open by default (hide button, not pin).
-
-        A tool panel popped from a marking-menu button is doing work the user
-        came for, so it shouldn't vanish when they leave the menu. This is a
-        *default*, not a hardcode: the UI Browser's global setting and its
-        per-window overrides both outrank it (see ``UiHandler.resolve_persistence``).
-        """
-        try:
-            if ui.has_tags(["mayatk"]):
-                return self.PERSISTENCE_STICKY
-        except AttributeError:
-            pass
-        return super().default_persistence(ui)
 
     def _load_maya_ui(
         self,

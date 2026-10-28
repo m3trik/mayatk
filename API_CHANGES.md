@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (913)
+## Moved out (916)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -836,6 +836,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/calculator.py::CalculatorSlots.on_equal` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.on_input` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.sec_to_frames` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase` → `tentacle.slots.tools._app_bridge.host_bridge.HostBridge` (from 0.30.0)
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.live_param_tooltip_blocks` → `tentacle.slots.tools._app_bridge.host_bridge.HostBridge` (from 0.30.0)
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.resolve_scope_objects` → `tentacle.slots.tools._app_bridge.host_bridge.HostBridge` (from 0.30.0)
 - `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
 - `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.b000` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
 - `uv_utils/rizom_bridge/rizom_bridge_slots.py::RizomBridgeSlots.list_template_modes` → `tentacle.slots.tools.rizom_bridge.RizomBridgeSlots` (from 0.30.0)
@@ -1286,7 +1289,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_out`
 - `mat_utils/emissive_groups.py::EmissiveGroups.validate`
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
-- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.live_param_tooltip_blocks`
+- `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
 ## Signature changed (5)
 

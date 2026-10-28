@@ -547,7 +547,7 @@ class TestNodeUtils(MayaTkTestCase):
         ``visible=True`` filters SHAPES, but visibility lives on the transform
         chain -- so expanding one visible shape to all its parents would drag
         every hidden sibling in with it. Same trap, and same per-path rule, as
-        ``MayaBridgeSlotsBase.resolve_scope_objects("visible")``.
+        ``BridgeHost.resolve_scope("visible")``.
         """
         src = cmds.polyCube(name="visSrc")[0]
         shown = cmds.instance(src, name="visShown")[0]

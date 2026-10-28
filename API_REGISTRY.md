@@ -196,7 +196,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`ui_utils/cancel_provider.py`](#ui_utils--cancel_provider) — Maya's answers to uitk's cancellation contract.
 - [`ui_utils/channel_box.py`](#ui_utils--channel_box) — Programmatic access to Maya's Channel Box.
 - [`ui_utils/hotkey_collisions.py`](#ui_utils--hotkey_collisions) — Maya hotkey collision checker for the uitk ShortcutEditor.
-- [`ui_utils/maya_bridge_slots_base.py`](#ui_utils--maya_bridge_slots_base) — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - [`ui_utils/maya_native_menus.py`](#ui_utils--maya_native_menus)
 - [`ui_utils/maya_ui_handler.py`](#ui_utils--maya_ui_handler)
 - [`ui_utils/node_icons.py`](#ui_utils--node_icons) — Reusable helper for resolving Maya node icons at runtime.
@@ -4063,14 +4062,6 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
   - `HotkeyCollisions.ensure_editable_hotkey_set(name: str = MACRO_HOTKEY_SET) -> str` *(static)* — Make the *current* hotkey set editable;
   - `HotkeyCollisions.maya_collision_checker(sequence, scope, ui_name, method_name, ignore=None)` *(static)* — Check a proposed binding against Maya's active hotkey set.
 
-<a id="ui_utils--maya_bridge_slots_base"></a>
-### `ui_utils/maya_bridge_slots_base.py`
-
-Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
-
-- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L28)** — Adds the Maya-side Scope resolution to :class:`BridgeSlotsBase`.
-  - `MayaBridgeSlotsBase.resolve_scope_objects(self, scope: str)` — Objects to export for the chosen ``SCOPE`` param.
-
 <a id="ui_utils--maya_native_menus"></a>
 ### `ui_utils/maya_native_menus.py`
 
@@ -4081,11 +4072,10 @@ Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 <a id="ui_utils--maya_ui_handler"></a>
 ### `ui_utils/maya_ui_handler.py`
 
-- **[`class MayaUiHandler(UiHandler)`](mayatk/mayatk/ui_utils/maya_ui_handler.py#L18)** — UI Handler for Maya applications.
+- **[`class MayaUiHandler(UiHandler)`](mayatk/mayatk/ui_utils/maya_ui_handler.py#L17)** — UI Handler for Maya applications.
   - `MayaUiHandler.instance(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'` *(class)* — Return the MayaUiHandler singleton, bootstrapping if needed.
   - `MayaUiHandler.can_resolve(self, name: str) -> bool` — Recognise the native Maya menus this handler builds on demand.
   - `MayaUiHandler.get(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'` — Retrieve a UI, checking Maya menus first.
-  - `MayaUiHandler.default_persistence(self, ui) -> str` — mayatk-sourced UIs stay open by default (hide button, not pin).
 
 <a id="ui_utils--node_icons"></a>
 ### `ui_utils/node_icons.py`

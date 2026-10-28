@@ -26708,33 +26708,6 @@
       ]
     },
     {
-      "relpath": "ui_utils/maya_bridge_slots_base.py",
-      "summary": "Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MayaBridgeSlotsBase",
-          "summary": "Adds the Maya-side Scope resolution to :class:`BridgeSlotsBase`.",
-          "line": 28,
-          "bases": [
-            "BridgeSlotsBase"
-          ],
-          "members": [
-            {
-              "name": "resolve_scope_objects",
-              "qualname": "MayaBridgeSlotsBase.resolve_scope_objects",
-              "kind": "method",
-              "signature": "(self, scope: str)",
-              "summary": "Objects to export for the chosen ``SCOPE`` param.",
-              "line": 32,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
       "relpath": "ui_utils/maya_native_menus.py",
       "summary": "",
       "functions": [],
@@ -26778,7 +26751,7 @@
         {
           "name": "MayaUiHandler",
           "summary": "UI Handler for Maya applications.",
-          "line": 18,
+          "line": 17,
           "bases": [
             "UiHandler"
           ],
@@ -26789,7 +26762,7 @@
               "kind": "classmethod",
               "signature": "(cls, switchboard: Switchboard = None, **kwargs) -> 'MayaUiHandler'",
               "summary": "Return the MayaUiHandler singleton, bootstrapping if needed.",
-              "line": 132,
+              "line": 126,
               "deprecated": false
             },
             {
@@ -26798,7 +26771,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> bool",
               "summary": "Recognise the native Maya menus this handler builds on demand.",
-              "line": 178,
+              "line": 172,
               "deprecated": false
             },
             {
@@ -26807,16 +26780,7 @@
               "kind": "method",
               "signature": "(self, name: str, reload: bool = False, **kwargs) -> 'QtWidgets.QMainWindow'",
               "summary": "Retrieve a UI, checking Maya menus first.",
-              "line": 191,
-              "deprecated": false
-            },
-            {
-              "name": "default_persistence",
-              "qualname": "MayaUiHandler.default_persistence",
-              "kind": "method",
-              "signature": "(self, ui) -> str",
-              "summary": "mayatk-sourced UIs stay open by default (hide button, not pin).",
-              "line": 203,
+              "line": 185,
               "deprecated": false
             }
           ]
