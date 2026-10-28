@@ -7,7 +7,6 @@ standalone session via ``MayaConnection`` so they can run from a normal
 ``python -m pytest`` invocation (provided Maya is installed).
 """
 
-import logging
 import pythontk as ptk
 import unittest
 import os
@@ -21,6 +20,7 @@ from mayatk.anim_utils.shots.shot_sequencer._shot_sequencer import (
 )
 from mayatk.anim_utils.shots._shots import ShotStore
 from mayatk.anim_utils.shots._shot_apply import ShotApply
+from mayatk.anim_utils.shots.shot_sequencer.sequencer_host import SequencerHost
 from mayatk.anim_utils.shots.shot_manifest._shot_manifest import ColumnMap
 from mayatk.anim_utils.shots.shot_manifest.behaviors import Behaviors
 from mayatk.audio_utils._audio_utils import AudioUtils
@@ -2342,175 +2342,6 @@ class TestShotStore(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestKeysBatchAuditRegressions(unittest.TestCase):
-    """Audit regressions: expansion order and same-curve gesture merging."""
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-
-    class _Clip:
-        def __init__(self, data):
-            self.data = data
-
-    class _Widget:
-        def __init__(self, clips):
-            self._clips = clips
-
-        def get_clip(self, clip_id):
-            return self._clips.get(clip_id)
-
-    def _host(self, clips, seq):
-        import logging
-
-        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
-
-        outer = self
-
-        class Host(ClipMotionMixin):
-            def __init__(self):
-                self.sequencer = seq
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._syncing = False
-                self.logger = logging.getLogger("test.keys_audit_host")
-                self.synced = []
-                self.footers = []
-                self._widget = outer._Widget(clips)
-
-            def _get_sequencer_widget(self):
-                return self._widget
-
-            def _save_shot_state(self):
-                self.sequencer.store.push_boundary_snapshot()
-
-            def _discard_shot_state(self):
-                self.sequencer.store.discard_boundary_snapshot()
-
-            def _sync_to_widget(self, shot_id=None):
-                self.synced.append(shot_id)
-
-            def _sync_combobox(self):
-                pass
-
-            def _set_footer(self, text, *a, **k):
-                self.footers.append(text)
-
-        return Host()
-
-    def test_expansion_cannot_double_move_a_landed_key(self):
-        """The S1: at zero gap, a key dragged onto the NEXT shot's start on
-        an object that is a member of BOTH shots.  Committing first and
-        expanding after let the expansion's downstream ripple sweep the
-        freshly-landed key a second time (the next shot's envelope starts at
-        its .start).  Expansion now runs BEFORE the commit."""
-        cube = cmds.polyCube(name="dm_shared")[0]
-        # Keys in shot A (0-30) and in shot B (30-60) on the SAME object.
-        for t, v in ((10, 0.0), (20, 1.0), (40, 2.0), (55, 3.0)):
-            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 30, [cube]),
-                ShotBlock(1, "B", 30, 60, [cube]),
-            ]
-        )
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-
-        # Drag A's key at 20 exactly onto B's start (30).
-        host.on_keys_batch_moved([(1, [(20.0, 30.0)])])
-
-        times = sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
-        self.assertIn(
-            30.0,
-            times,
-            f"the landed key must sit AT 30, not swept further: {times}",
-        )
-        shot_a = seq.shot_by_id(0)
-        self.assertGreaterEqual(shot_a.end, 30.0, "shot A grew to own the landed key")
-        # B's own keys rippled right by A's expansion (0 here since 30 was
-        # already A's end)… with a zero-delta expansion nothing else moves.
-        self.assertEqual(
-            times, [10.0, 30.0, 40.0, 55.0], f"no other key may move: {times}"
-        )
-
-    def test_expansion_past_the_boundary_ripples_but_never_double_moves(self):
-        """Land at 35 — INSIDE B's territory.  A must grow to 35, B must
-        ripple right by 5, and the landed key must sit exactly at 35."""
-        cube = cmds.polyCube(name="dm_shared2")[0]
-        for t, v in ((10, 0.0), (20, 1.0), (40, 2.0), (55, 3.0)):
-            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 30, [cube]),
-                ShotBlock(1, "B", 30, 60, [cube]),
-            ]
-        )
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-
-        host.on_keys_batch_moved([(1, [(20.0, 35.0)])])
-
-        times = sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
-        self.assertIn(35.0, times, f"landed key must sit at 35: {times}")
-        self.assertEqual(
-            times,
-            [10.0, 35.0, 45.0, 60.0],
-            f"B's keys ride the +5 ripple exactly once: {times}",
-        )
-        self.assertAlmostEqual(seq.shot_by_id(0).end, 35.0)
-        self.assertAlmostEqual(seq.shot_by_id(1).start, 35.0)
-
-    def test_same_curve_two_clips_one_gesture_commits_once(self):
-        """The S1: two clips backed by the SAME anim curve (split_static
-        segments of one obj.attr).  Sequential per-clip commits let group
-        1's landed key be re-grabbed or overwritten by group 2's window;
-        the gesture is now merged per curve before any commit."""
-        cube = cmds.polyCube(name="dm_samecurve")[0]
-        for t, v in ((10, 0.0), (20, 5.0), (40, 5.0), (50, 9.0)):
-            cmds.setKeyframe(cube, at="translateX", t=t, v=v)
-        seq = ShotSequencer([ShotBlock(0, "A", 0, 100, [cube])])
-        clips = {
-            1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0}),
-            2: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0}),
-        }
-        host = self._host(clips, seq)
-
-        # One drag, +20 on both clips' keys: clip 1 moves (10,20), clip 2
-        # moves (40,50).  Clip 1's key at 20 lands at 40 — exactly clip 2's
-        # origin.  Per-clip commits collapsed the two; merged they slide.
-        host.on_keys_batch_moved(
-            [(1, [(10.0, 30.0), (20.0, 40.0)]), (2, [(40.0, 60.0), (50.0, 70.0)])]
-        )
-
-        times = sorted(cmds.keyframe(cube, q=True, at="translateX") or [])
-        vals = cmds.keyframe(cube, q=True, at="translateX", valueChange=True)
-        self.assertEqual(
-            times,
-            [30.0, 40.0, 60.0, 70.0],
-            f"all four keys must survive at +20: {times}",
-        )
-        self.assertEqual(
-            sorted(vals), [0.0, 5.0, 5.0, 9.0], f"no value may be lost: {vals}"
-        )
-
-    def test_gesture_is_one_undo_step_and_syncing_guard_restores(self):
-        cube = cmds.polyCube(name="dm_chunk")[0]
-        for t in (10, 20):
-            cmds.setKeyframe(cube, at="translateX", t=t, v=float(t))
-        seq = ShotSequencer([ShotBlock(0, "A", 0, 100, [cube])])
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-        host.on_keys_batch_moved([(1, [(10.0, 15.0), (20.0, 25.0)])])
-        self.assertFalse(host._syncing, "guard must restore after the commit")
-        cmds.undo()
-        self.assertEqual(
-            sorted(cmds.keyframe(cube, q=True, at="translateX") or []),
-            [10.0, 20.0],
-            "one Ctrl+Z reverses the whole gesture",
-        )
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
 class TestResizeShotBoundsRipple(unittest.TestCase):
     """Every edge move ripples, so the gap keeps its width — and the pivot's
     OWN keys, including the ones a shrink strands outside the new bounds,
@@ -2981,187 +2812,6 @@ class TestTerminalRedundantKeys(unittest.TestCase):
         self.assertEqual(self._keys(b), [60.0, 100.0])
 
 
-class TestKeysBatchMoved(unittest.TestCase):
-    """One key drag == one commit: a single undo chunk, a snapshot taken
-    BEFORE the boundary follow-up, and the panel left showing the shot the
-    drag started in."""
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-
-    class _Clip:
-        def __init__(self, data):
-            self.data = data
-
-    class _Widget:
-        def __init__(self, clips):
-            self._clips = clips
-
-        def get_clip(self, clip_id):
-            return self._clips.get(clip_id)
-
-    def _host(self, clips, seq):
-        import logging
-
-        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
-
-        outer = self
-
-        class Host(ClipMotionMixin):
-            """Uses the REAL snapshot push/pop so ordering is observable."""
-
-            def __init__(self):
-                self.sequencer = seq
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._syncing = False
-                self.logger = logging.getLogger("test.keys_batch_host")
-                self._shot_undo_stack = []
-                self.synced = []
-                self.footers = []
-                self._widget = outer._Widget(clips)
-
-            def _get_sequencer_widget(self):
-                return self._widget
-
-            def _save_shot_state(self):
-                self._shot_undo_stack.append(
-                    [(sh.shot_id, sh.start, sh.end) for sh in self.sequencer.shots]
-                )
-
-            def _discard_shot_state(self):
-                if self._shot_undo_stack:
-                    self._shot_undo_stack.pop()
-
-            def _sync_to_widget(self, shot_id=None):
-                self.synced.append(shot_id)
-
-            def _sync_combobox(self):
-                pass
-
-            def _set_footer(self, text, *a, **k):
-                self.footers.append(text)
-
-        return Host()
-
-    def _keyed_cube(self, name, times):
-        cube = cmds.polyCube(name=name)[0]
-        for i, t in enumerate(times):
-            cmds.setKeyframe(cube, at="translateX", t=t, v=float(i))
-        return str(cube)
-
-    def test_snapshot_predates_the_boundary_expansion(self):
-        """The snapshot must hold the PRE-drag bounds.
-
-        The boundary follow-up runs inside the same commit, so a snapshot
-        taken afterwards records the expanded bounds and undo would re-apply
-        the very expansion it is meant to reverse.
-        """
-        cube = self._keyed_cube("kb_expand", (10, 20))
-        seq = ShotSequencer([ShotBlock(0, "S0", 0, 30, [cube])])
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-
-        # Drag the key at 20 out to 60 — past the shot's end at 30.
-        host.on_keys_batch_moved([(1, [(20.0, 60.0)])])
-
-        self.assertGreaterEqual(
-            seq.shot_by_id(0).end, 60.0, "the shot must follow the key out"
-        )
-        # The restore point lives on the store's ledger (scene_edit pushes it
-        # before any mutation); assert it through behaviour, not internals.
-        self.assertTrue(seq.store.has_boundary_snapshot())
-        self.assertEqual(
-            seq.store.peek_boundary_tag()[0],
-            True,
-            "a key commit reaches Maya's queue, so the restore point is paired",
-        )
-        self.assertTrue(seq.store.restore_boundary_snapshot())
-        self.assertEqual(
-            (seq.shot_by_id(0).start, seq.shot_by_id(0).end),
-            (0.0, 30.0),
-            "the snapshot must hold the PRE-drag bounds",
-        )
-
-    def test_noop_drag_leaves_no_snapshot_behind(self):
-        cube = self._keyed_cube("kb_noop", (10, 20))
-        seq = ShotSequencer([ShotBlock(0, "S0", 0, 30, [cube])])
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-
-        host.on_keys_batch_moved([(1, [(20.0, 20.0)])])  # zero delta
-
-        self.assertFalse(
-            seq.store.has_boundary_snapshot(),
-            "a no-op must not leave a restore point for an edit that never happened",
-        )
-        self.assertEqual(host.synced, [], "and must not rebuild")
-
-    def test_rebuild_targets_the_originating_shot(self):
-        """A drag spanning two shots must not retarget the panel.
-
-        The originating clip contributes nothing here (zero delta), so the
-        only shot that RECORDS a change is the other one -- which is exactly
-        the case where deriving the target from the changed set sends the
-        panel to a shot the user was not looking at.
-        """
-        a = self._keyed_cube("kb_a", (10, 20))
-        b = self._keyed_cube("kb_b", (110, 120))
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "S0", 0, 50, [a]),
-                ShotBlock(1, "S1", 100, 150, [b]),
-            ]
-        )
-        clips = {
-            1: self._Clip({"obj": a, "attr_name": "translateX", "shot_id": 0}),
-            2: self._Clip({"obj": b, "attr_name": "translateX", "shot_id": 1}),
-        }
-        host = self._host(clips, seq)
-
-        host.on_keys_batch_moved([(1, [(20.0, 20.0)]), (2, [(120.0, 125.0)])])
-
-        self.assertEqual(
-            host.synced,
-            [0],
-            "the shot on screen is the one the drag started in",
-        )
-
-    def test_whole_gesture_is_one_undo_chunk(self):
-        a = self._keyed_cube("kb_c1", (10, 20))
-        b = self._keyed_cube("kb_c2", (10, 20))
-        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [a, b])])
-        clips = {
-            1: self._Clip({"obj": a, "attr_name": "translateX", "shot_id": 0}),
-            2: self._Clip({"obj": b, "attr_name": "translateX", "shot_id": 0}),
-        }
-        host = self._host(clips, seq)
-
-        host.on_keys_batch_moved([(1, [(20.0, 25.0)]), (2, [(20.0, 25.0)])])
-        self.assertEqual(cmds.keyframe(a, q=True, at="translateX"), [10.0, 25.0])
-        self.assertEqual(cmds.keyframe(b, q=True, at="translateX"), [10.0, 25.0])
-
-        cmds.undo()
-        self.assertEqual(
-            (
-                cmds.keyframe(a, q=True, at="translateX"),
-                cmds.keyframe(b, q=True, at="translateX"),
-            ),
-            ([10.0, 20.0], [10.0, 20.0]),
-            "one Ctrl+Z must reverse the whole drag, not one curve of it",
-        )
-
-    def test_on_keys_moved_routes_through_the_batch_path(self):
-        cube = self._keyed_cube("kb_single", (10, 20))
-        seq = ShotSequencer([ShotBlock(0, "S0", 0, 50, [cube])])
-        clips = {1: self._Clip({"obj": cube, "attr_name": "translateX", "shot_id": 0})}
-        host = self._host(clips, seq)
-
-        host.on_keys_moved(1, [(20.0, 25.0)])
-        self.assertEqual(cmds.keyframe(cube, q=True, at="translateX"), [10.0, 25.0])
-        self.assertEqual(host.synced, [0])
-
-
 class TestBoundsGrowRipplesTheNeighbourWhole(unittest.TestCase):
     """A plain bound drag changes ONE shot's span; everything beyond the
     bound moves whole (the user, 2026-09-06: "we should only be modifying
@@ -3529,595 +3179,6 @@ class TestASlideStopsShortOfTheNeighboursContent(unittest.TestCase):
         self.assertEqual(
             cmds.keyframe(other, q=True, at="translateX"), [60.0, 70.0], "untouched"
         )
-
-
-class TestAKeyDraggedOntoTheSeamSplitsNothing(unittest.TestCase):
-    """Dragging a key onto the next shot's start grows the shot to it and
-    ripples the neighbour away.  Writing the grown bound BEFORE that ripple
-    made the store read the two shots as contiguous for a moment, and the
-    planner then "split" a shared sample that never was one -- re-keying the
-    neighbour's opening pose at its new start.  Measured 2026-09-05: every
-    FAILED_CMPT_LOC curve gained one key (31 -> 32).
-
-    The handlers expand BEFORE the dragged keys land, so the key on B's start
-    is B's own opening pose.  (Until 2026-09-22 this fixture modelled the
-    dragged key as already landed there, which pinned that pose staying
-    behind while B moved away -- see the class below.)"""
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        self.loc = cmds.spaceLocator(name="seam_loc")[0]
-        # 60 is B's opening pose; the dragged key has not landed yet
-        for t, v in ((10, 0), (40, 5), (60, 7), (70, 9), (90, 9)):
-            cmds.setKeyframe(self.loc, at="translateX", t=t, v=v)
-        self.seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 50, [self.loc]),
-                ShotBlock(1, "B", 60, 100, [self.loc]),
-            ]
-        )
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_the_neighbour_ripples_whole_and_gains_no_key(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        seq = self.seq
-
-        class _Widget:
-            ctrl_held_at_press = False
-            shift_held_at_press = False
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-
-            sequencer = seq
-
-            def _get_sequencer_widget(self):
-                return _Widget()
-
-        _Ctl()._expand_shot_range(0, 0, 60)
-
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()], [(0.0, 60.0), (70.0, 110.0)]
-        )
-        self.assertEqual(
-            cmds.keyframe(self.loc, q=True, at="translateX"),
-            [10.0, 40.0, 70.0, 80.0, 100.0],
-            "B moved whole, its opening pose included, and gained nothing",
-        )
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestADragOntoAKeyedNeighbourLeavesItWhole(unittest.TestCase):
-    """A drag that grows a shot ONTO a keyed neighbour's boundary, or into
-    the neighbour, ripples that neighbour away WHOLE: its boundary pose goes
-    with it.
-
-    Measured 2026-09-22 (BACKLOG 2026-09-05): the handlers ripple before the
-    dragged keys land, but the planner's carried window treated the sample on
-    the new bound as the dragged shot's, so the neighbour's own pose stayed
-    behind -- nudged a frame into the gap by the landing key -- and the
-    neighbour opened on nothing.  On the production chain it read as
-    ``FAILED_CMPT_LOC_opacity`` 16 -> 15 keys.  The clip paths landed FIRST
-    and expanded after, which stacked the landed key and the pose on one
-    frame instead."""
-
-    _Clip = TestKeysBatchAuditRegressions._Clip
-    _Widget = TestKeysBatchAuditRegressions._Widget
-    _host = TestKeysBatchAuditRegressions._host
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    @staticmethod
-    def _keys(node):
-        t = cmds.keyframe(node, q=True, at="translateX") or []
-        v = cmds.keyframe(node, q=True, at="translateX", valueChange=True) or []
-        return [(round(a, 3), round(b, 3)) for a, b in zip(t, v)]
-
-    def _scene(self, shots, keys):
-        node = cmds.polyCube(name="seamNb")[0]
-        for t, v in keys:
-            cmds.setKeyframe(node, at="translateX", t=t, v=v)
-        seq = ShotSequencer(
-            [ShotBlock(i, n, s, e, [node]) for i, (n, s, e) in enumerate(shots)]
-        )
-        return node, seq
-
-    def _drag_keys(self, shots, keys, shot_id, changes):
-        node, seq = self._scene(shots, keys)
-        clips = {
-            1: self._Clip({"obj": node, "attr_name": "translateX", "shot_id": shot_id})
-        }
-        self._host(clips, seq).on_keys_batch_moved([(1, changes)])
-        return seq, self._keys(node)
-
-    def test_a_key_onto_the_next_shot_s_keyed_start(self):
-        seq, got = self._drag_keys(
-            [("A", 0, 50), ("B", 65, 100)],
-            ((10, 0), (40, 1), (65, 1), (80, 2)),
-            0,
-            [(40.0, 65.0)],
-        )
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0.0, 65.0), (80.0, 115.0)],
-        )
-        self.assertEqual(got, [(10.0, 0.0), (65.0, 1.0), (80.0, 1.0), (95.0, 2.0)])
-
-    def test_an_unequal_opening_pose_stays_on_the_neighbour_s_start(self):
-        _seq, got = self._drag_keys(
-            [("A", 0, 50), ("B", 65, 100)],
-            ((10, 0), (40, 1), (65, 7), (80, 2)),
-            0,
-            [(40.0, 65.0)],
-        )
-        self.assertEqual(
-            got,
-            [(10.0, 0.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
-            "B opens on its own pose at its new start",
-        )
-
-    def test_a_key_onto_the_previous_shot_s_keyed_end(self):
-        seq, got = self._drag_keys(
-            [("P", 0, 35), ("A", 50, 100)],
-            ((5, 0), (35, 4), (60, 2), (90, 3)),
-            1,
-            [(60.0, 35.0)],
-        )
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(-15.0, 20.0), (35.0, 100.0)],
-        )
-        self.assertEqual(
-            got,
-            [(-10.0, 0.0), (20.0, 4.0), (35.0, 2.0), (90.0, 3.0)],
-            "P closes on its own pose at its new end",
-        )
-
-    def test_a_key_dragged_inside_the_next_shot_moves_it_whole(self):
-        _seq, got = self._drag_keys(
-            [("A", 0, 50), ("B", 65, 100)],
-            ((10, 0), (40, 1), (65, 1), (70, 2), (80, 3)),
-            0,
-            [(40.0, 70.0)],
-        )
-        self.assertEqual(
-            got,
-            [(10.0, 0.0), (70.0, 1.0), (85.0, 1.0), (90.0, 2.0), (100.0, 3.0)],
-            "the keys the bound now covers are B's, not A's to keep",
-        )
-
-    def test_a_sub_row_clip_landing_on_the_keyed_start(self):
-        node, seq = self._scene(
-            [("A", 0, 50), ("B", 65, 100)],
-            ((10, 0), (30, 5), (40, 1), (65, 7), (80, 2)),
-        )
-        clips = {
-            1: self._Clip(
-                {
-                    "obj": node,
-                    "attr_name": "translateX",
-                    "shot_id": 0,
-                    "orig_start": 30.0,
-                    "orig_end": 40.0,
-                }
-            )
-        }
-        host = self._host(clips, seq)
-        host._shifted_out_keys = {}
-        host.on_clip_moved(1, 55.0)
-        self.assertEqual(
-            self._keys(node),
-            [(10.0, 0.0), (55.0, 5.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
-            "the clip lands after B has moved: nothing stacks on 65",
-        )
-
-    def test_a_stepped_clip_landing_on_the_keyed_start(self):
-        node, seq = self._scene(
-            [("A", 0, 50), ("B", 65, 100)], ((10, 0), (40, 1), (65, 7), (80, 2))
-        )
-        # A stepped clip is a held key: move_stepped_keys moves only those.
-        cmds.keyTangent(node, at="translateX", time=(40, 40), outTangentType="step")
-        clips = {
-            1: self._Clip(
-                {
-                    "obj": node,
-                    "shot_id": 0,
-                    "orig_start": 40.0,
-                    "orig_end": 40.0,
-                    "is_stepped": True,
-                }
-            )
-        }
-        host = self._host(clips, seq)
-        host._shifted_out_keys = {}
-        host.on_clip_moved(1, 65.0)
-        self.assertEqual(
-            self._keys(node),
-            [(10.0, 0.0), (65.0, 1.0), (80.0, 7.0), (95.0, 2.0)],
-            "the stepped key lands after B has moved: B's pose is not overwritten",
-        )
-
-    def _clip_host(self, seq, data):
-        host = self._host({1: self._Clip(data)}, seq)
-        host._shifted_out_keys = {}
-        host._audio_segments_cache = None
-        return host
-
-    # -- point (stepped) clips: the drag moves what the mark was drawn from --
-
-    def _point_scene(self, build):
-        """A flat member (every curve holds still in A) drawn as one point
-        clip at 25.  Each curve carries an equal key before every shot (where no
-        ripple reaches): a single-key curve is a zero-length SPAN, not a mark."""
-        mover = cmds.spaceLocator(name="ptMover")[0]
-        for t, v in ((0, 0.0), (50, 10.0), (60, 0.0), (100, 5.0)):
-            cmds.setKeyframe(mover, at="translateX", t=t, v=v)
-        hold = cmds.spaceLocator(name="ptHold")[0]
-        build(hold)
-        seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 50, [mover, hold]),
-                ShotBlock(1, "B", 60, 100, [mover]),
-            ]
-        )
-        drawn = [s for s in seq.collect_object_segments(0) if s["obj"] == hold]
-        self.assertEqual(
-            [(s["start"], s.get("is_stepped")) for s in drawn],
-            [(25.0, True)],
-            "fixture: one point clip is drawn at 25",
-        )
-        return hold, seq
-
-    def _drag_point(self, hold, seq, to):
-        data = {
-            "obj": hold,
-            "shot_id": 0,
-            "orig_start": 25.0,
-            "orig_end": 25.0,
-            "is_stepped": True,
-            "stepped_key_time": 25.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, to)
-
-    @staticmethod
-    def _plain(node):
-        for t in (-300, 25):  # Move to Shot's lone arrival, flat to a far key
-            cmds.setKeyframe(node, at="translateY", t=t, v=3.0)
-
-    @staticmethod
-    def _stepped(node):
-        for t in (-300, 25):
-            cmds.setKeyframe(node, at="visibility", t=t, v=1.0)
-        cmds.keyTangent(f"{node}.visibility", e=True, outTangentType="step")
-
-    @staticmethod
-    def _times(node, attr):
-        return cmds.keyframe(f"{node}.{attr}", q=True, timeChange=True) or []
-
-    def test_a_point_clip_on_a_plain_key_moves_it(self):
-        """BACKLOG 2026-10-04, reproduced in a fresh mayapy: the drag moved
-        only keys with a ``step`` out-tangent, so a mark on a plain key -- a
-        Move to Shot arrival -- moved nothing and snapped back."""
-        hold, seq = self._point_scene(self._plain)
-        self._drag_point(hold, seq, 30.0)
-        self.assertEqual(self._times(hold, "translateY"), [-300.0, 30.0])
-
-    def test_a_point_clip_dragged_past_the_end_lands_where_the_shot_grew(self):
-        """The same drag past A's end grew A and rippled B -- for a key that
-        then stayed where it was."""
-        hold, seq = self._point_scene(self._plain)
-        self._drag_point(hold, seq, 55.0)
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0.0, 55.0), (65.0, 105.0)],
-        )
-        self.assertEqual(self._times(hold, "translateY"), [-300.0, 55.0])
-
-    def test_a_point_clip_moves_every_key_its_mark_was_drawn_from(self):
-        """A stepped and a plain key share the mark: both go, so the mark
-        does not split in two."""
-
-        def build(node):
-            self._stepped(node)
-            self._plain(node)
-
-        hold, seq = self._point_scene(build)
-        self._drag_point(hold, seq, 30.0)
-        self.assertEqual(self._times(hold, "visibility"), [-300.0, 30.0])
-        self.assertEqual(self._times(hold, "translateY"), [-300.0, 30.0])
-
-    def test_a_point_clip_keeps_its_keys_tangents(self):
-        """The drag recreates the key twice (lifted clear, then landed), and
-        restored only its tangent TYPES: a fixed, weighted tangent lost its
-        angles and weights on the way.  Only stepped keys took this path
-        before any mark could be dragged (review 2026-10-05)."""
-
-        def build(node):
-            self._plain(node)
-            crv = cmds.listConnections(f"{node}.translateY", type="animCurve")[0]
-            cmds.keyTangent(crv, e=True, weightedTangents=True)
-            tt = (25, 25)
-            cmds.keyTangent(crv, e=True, time=tt, lock=False, weightLock=False)
-            cmds.keyTangent(crv, e=True, time=tt, itt="fixed", ott="fixed")
-            cmds.keyTangent(crv, e=True, time=tt, inAngle=-10.0, outAngle=30.0)
-            cmds.keyTangent(crv, e=True, time=tt, inWeight=4.0, outWeight=7.5)
-
-        def record(node, t):
-            flags = ("itt", "ott", "inAngle", "outAngle", "inWeight", "outWeight")
-            out = []
-            for flag in flags:
-                got = cmds.keyTangent(
-                    f"{node}.translateY", q=True, time=(t, t), **{flag: True}
-                )[0]
-                out.append(round(got, 3) if isinstance(got, float) else got)
-            return out
-
-        hold, seq = self._point_scene(build)
-        before = record(hold, 25)
-        self.assertEqual(before, ["fixed", "fixed", -10.0, 30.0, 4.0, 7.5], "fixture")
-        self._drag_point(hold, seq, 30.0)
-        self.assertEqual(self._times(hold, "translateY"), [-300.0, 30.0])
-        self.assertEqual(record(hold, 30), before, "angles and weights arrive")
-
-    def test_a_point_clip_on_a_stepped_key_moves_as_it_did(self):
-        """Real stepped keys keep their established drag: the key and its
-        ``step`` arrive together."""
-        hold, seq = self._point_scene(self._stepped)
-        self._drag_point(hold, seq, 30.0)
-        self.assertEqual(self._times(hold, "visibility"), [-300.0, 30.0])
-        self.assertEqual(
-            cmds.keyTangent(
-                f"{hold}.visibility", q=True, time=(30, 30), outTangentType=True
-            ),
-            ["step"],
-        )
-
-    def test_a_sub_row_clip_reaching_into_the_neighbour_moves_as_one(self):
-        """Review 2026-09-22: a sub-row run can outlast its shot.  Made room
-        for before it moved, the part inside the neighbour's envelope rode the
-        neighbour's ripple (+17) instead of the drag (+2); the clip is now
-        lifted out of every ripple window first."""
-        node, seq = self._scene(
-            [("A", 0, 50), ("B", 60, 100)],
-            ((10, 0), (45, 1), (65, 2), (80, 3)),
-        )
-        data = {
-            "obj": node,
-            "attr_name": "translateX",
-            "shot_id": 0,
-            "orig_start": 45.0,
-            "orig_end": 65.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, 47.0)
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0.0, 67.0), (77.0, 117.0)],
-        )
-        self.assertEqual(
-            self._keys(node), [(10.0, 0.0), (47.0, 1.0), (67.0, 2.0), (97.0, 3.0)]
-        )
-
-    def test_a_clip_dragged_far_back_is_not_met_by_the_ripple(self):
-        """Dragged back past its shot's start, a clip grows the shot's head,
-        and that ripples the shots before it back as far.  Lifted only below
-        every shot's start, the clip sat where a long enough drag rippled the
-        previous shot onto it -- the planner refused that ripple, and the drag
-        came back declined."""
-        node, seq = self._scene(
-            [("A", 0, 50), ("B", 60, 100)], ((10, 0), (40, 1), (70, 5), (90, 6))
-        )
-        data = {
-            "obj": node,
-            "attr_name": "translateX",
-            "shot_id": 1,
-            "orig_start": 70.0,
-            "orig_end": 90.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, -980.0)
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(-1040.0, -990.0), (-980.0, 100.0)],
-        )
-        self.assertEqual(
-            self._keys(node),
-            [(-1030.0, 0.0), (-1000.0, 1.0), (-980.0, 5.0), (-960.0, 6.0)],
-        )
-
-    def test_a_sub_row_clip_carries_its_keys_claims(self):
-        """A claim is a (curve, time) pair, so it moves with its key -- as the
-        key drag's always did.  The sub-row move shifted the keys alone, and
-        the system could no longer find its own sample where it now sits."""
-        node, seq = self._scene(
-            [("A", 0, 50), ("B", 60, 100)], ((10, 0), (30, 5), (40, 1), (80, 2))
-        )
-        crv = cmds.listConnections(f"{node}.translateX", type="animCurve")[0]
-        seq.ledger.record_key(crv, 40.0)
-        data = {
-            "obj": node,
-            "attr_name": "translateX",
-            "shot_id": 0,
-            "orig_start": 30.0,
-            "orig_end": 40.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, 32.0)
-        self.assertEqual(
-            self._keys(node), [(10.0, 0.0), (32.0, 5.0), (42.0, 1.0), (80.0, 2.0)]
-        )
-        self.assertEqual(seq.ledger.key_times(crv), [42.0])
-
-    def _audio_scene(self, shots, keys, track="vo"):
-        seq = ShotSequencer(
-            [ShotBlock(i, n, s, e, []) for i, (n, s, e) in enumerate(shots)]
-        )
-        AudioUtils.ensure_track_attr(track)
-        for frame, value in keys:
-            AudioUtils.write_key(track, frame, value=value)
-        return seq
-
-    def test_an_audio_clip_reaching_into_the_neighbour_moves_as_one(self):
-        """Review 2026-09-22: an audio segment is track-wide -- its clip shows
-        only the part inside the shot -- so its stop key can sit in the next
-        shot's envelope, where the ripple moved it +17 while the drag was +2."""
-        seq = self._audio_scene([("A", 0, 50), ("B", 60, 100)], ((45, 1), (65, 0)))
-        data = {
-            "is_audio": True,
-            "audio_track_id": "vo",
-            "shot_id": 0,
-            "orig_start": 45.0,
-            "orig_end": 65.0,
-            "vis_start": 45.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, 47.0)
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0.0, 67.0), (77.0, 117.0)],
-        )
-        self.assertEqual(AudioUtils.read_keys("vo"), [(47.0, 1.0), (67.0, 0.0)])
-
-    def test_an_audio_clip_moves_by_what_its_visible_part_moved(self):
-        """The clip draws the segment's part inside its shot and a drag
-        reports where THAT landed; measured from the segment's own start the
-        move was off by the part before the shot (+7 for a +2 drag here).  Nor
-        does the shot grow back over that earlier part: enclosing the
-        segment's own start (57) rippled the previous shot the other way."""
-        seq = self._audio_scene(
-            [("A", 0, 50), ("B", 60, 100)], ((55, 1), (70, 0)), track="sfx"
-        )
-        data = {
-            "is_audio": True,
-            "audio_track_id": "sfx",
-            "shot_id": 1,
-            "orig_start": 55.0,
-            "orig_end": 70.0,
-            "vis_start": 60.0,
-        }
-        self._clip_host(seq, data).on_clip_moved(1, 62.0)
-        self.assertEqual(AudioUtils.read_keys("sfx"), [(57.0, 1.0), (72.0, 0.0)])
-        self.assertEqual(
-            [(s.start, s.end) for s in seq.sorted_shots()],
-            [(0.0, 50.0), (60.0, 100.0)],
-            "no shot moved",
-        )
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestALandingOnAContiguousSeamGrowsItsShotAFrame(unittest.TestCase):
-    """Two shots that touch share ONE sample, the preceding shot's, so a key
-    landing on that frame takes the neighbour's opening pose.
-
-    Measured 2026-09-23 through this handler (BACKLOG 2026-09-22): A [0,50]
-    and B [50,100], A's key dragged 40 -> 60 grew A to 60 and rippled B to
-    [60,110] -- the key landed on B's first frame, B opened on A's pose and its
-    own slipped to 61; equal poses still left a duplicate. Decided by the
-    maintainer: the shot grows ONE frame past the seam
-    (``ShotStore.enclosing_bounds``), so the shots still touch and the
-    neighbour keeps its pose. A landing on the existing seam also needed the
-    push to MERGE the old seam pose into the neighbour's identical opening
-    pose rather than shove both a frame on (``_clear_destination``)."""
-
-    _Clip = TestKeysBatchAuditRegressions._Clip
-    _Widget = TestKeysBatchAuditRegressions._Widget
-    _host = TestKeysBatchAuditRegressions._host
-    _keys = staticmethod(TestADragOntoAKeyedNeighbourLeavesItWhole._keys)
-    _scene = TestADragOntoAKeyedNeighbourLeavesItWhole._scene
-    _drag_keys = TestADragOntoAKeyedNeighbourLeavesItWhole._drag_keys
-
-    KEYS = ((10, 0), (40, 5), (50, 3), (70, 9), (90, 2))
-    SHOTS = [("A", 0, 50), ("B", 50, 100)]
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _bounds(self, seq):
-        return [(s.start, s.end) for s in seq.sorted_shots()]
-
-    def test_a_key_past_the_end_leaves_the_neighbour_its_opening_pose(self):
-        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 60.0)])
-        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
-        self.assertEqual(got, [(10, 0), (50, 3), (60, 5), (61, 3), (81, 9), (101, 2)])
-
-    def test_equal_poses_keep_their_frames(self):
-        keys = ((10, 0), (40, 5), (50, 5), (70, 9), (90, 2))
-        seq, got = self._drag_keys(self.SHOTS, keys, 0, [(40.0, 60.0)])
-        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
-        self.assertEqual(got, [(10, 0), (50, 5), (60, 5), (61, 5), (81, 9), (101, 2)])
-
-    def test_a_key_onto_the_existing_seam_leaves_the_neighbour_whole(self):
-        """The old seam pose merges into the neighbour's identical opening
-        pose; pushed instead, it shoved that pose a frame into B's motion."""
-        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 50.0)])
-        self.assertEqual(self._bounds(seq), [(0.0, 51.0), (51.0, 101.0)])
-        self.assertEqual(got, [(10, 0), (50, 5), (51, 3), (71, 9), (91, 2)])
-
-    def test_a_key_dragged_back_over_the_seam_mirrors_it(self):
-        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 1, [(70.0, 45.0)])
-        self.assertEqual(self._bounds(seq), [(-6.0, 44.0), (44.0, 100.0)])
-        self.assertEqual(got, [(4, 0), (34, 5), (44, 3), (45, 9), (50, 3), (90, 2)])
-
-    def test_a_landing_off_the_seam_is_unchanged(self):
-        seq, got = self._drag_keys(self.SHOTS, self.KEYS, 0, [(40.0, 59.5)])
-        self.assertEqual(self._bounds(seq), [(0.0, 60.0), (60.0, 110.0)])
-        self.assertEqual(got, [(10, 0), (50, 3), (59.5, 5), (60, 3), (80, 9), (100, 2)])
-
-    def _drag_object_clip(self, shots, keys, orig, new_start):
-        """A main-track (object) clip drag: ``move_object_in_shot``."""
-        node, seq = self._scene(shots, keys)
-        data = {"obj": node, "shot_id": 0, "orig_start": orig[0], "orig_end": orig[1]}
-        host = self._host({1: self._Clip(data)}, seq)
-        host._shifted_out_keys = {}
-        host.on_clip_moved(1, new_start)
-        return seq, self._keys(node)
-
-    def test_an_object_clip_past_the_end_leaves_the_neighbour_its_opening_pose(self):
-        """A main-track clip grows through ``move_object_in_shot``, which sized
-        the bound itself -- rounded, never stepped -- so the same landing
-        opened B on the dragged pose (in blendertk, one of the two was lost)."""
-        seq, got = self._drag_object_clip(self.SHOTS, self.KEYS, (10.0, 40.0), 30.0)
-        self.assertEqual(self._bounds(seq), [(0.0, 61.0), (61.0, 111.0)])
-        self.assertEqual(got, [(30, 0), (60, 5), (61, 3), (81, 9), (101, 2)])
-
-    def test_an_object_clip_onto_the_existing_seam_leaves_the_neighbour_whole(self):
-        seq, got = self._drag_object_clip(self.SHOTS, self.KEYS, (10.0, 40.0), 20.0)
-        self.assertEqual(self._bounds(seq), [(0.0, 51.0), (51.0, 101.0)])
-        self.assertEqual(got, [(20, 0), (50, 5), (51, 3), (71, 9), (91, 2)])
-
-    def test_an_object_clip_dragged_back_over_the_seam_mirrors_it(self):
-        """B's clip back to 45: B grows to 44 and A ripples to [-6, 44], its
-        closing pose -- left in B's landing zone -- pushed onto its new end."""
-        node, seq = self._scene(self.SHOTS, self.KEYS)
-        data = {"obj": node, "shot_id": 1, "orig_start": 70.0, "orig_end": 90.0}
-        host = self._host({1: self._Clip(data)}, seq)
-        host._shifted_out_keys = {}
-        host.on_clip_moved(1, 45.0)
-        self.assertEqual(self._bounds(seq), [(-6.0, 44.0), (44.0, 100.0)])
-        self.assertEqual(self._keys(node), [(4, 0), (34, 5), (44, 3), (45, 9), (65, 2)])
-
-    def test_an_object_clip_onto_an_unkeyed_seam_steps_nothing(self):
-        seq, got = self._drag_object_clip(
-            [("A", 0, 30), ("B", 30, 60)],
-            ((10, 0), (20, 1), (40, 2), (55, 3)),
-            (10.0, 20.0),
-            20.0,
-        )
-        self.assertEqual(self._bounds(seq), [(0.0, 30.0), (30.0, 60.0)])
-        self.assertEqual([t for t, _v in got], [20.0, 30.0, 40.0, 55.0])
 
 
 class TestASplitSeamPlaysOnAsItDid(unittest.TestCase):
@@ -5900,323 +4961,6 @@ class TestAHoldClaimedInBlenderReleases(unittest.TestCase):
         )
 
 
-class TestMoveToShotTakesEveryVisibleClip(unittest.TestCase):
-    """ "Move to shot sometimes fails" (2026-08-29): the converter dropped
-    stepped clips and clips of a non-active visible shot, so a selection made
-    of those produced nothing to move -- "you cannot move a clip you can see".
-    A stepped clip is one key and moves as one; a read-only clip is only
-    read-only for DRAGS, which assume the active shot."""
-
-    class _Clip:
-        def __init__(self, **data):
-            self.data = data
-
-    class _Widget:
-        def __init__(self, clips):
-            self._clips = clips
-
-        def get_clip(self, cid):
-            return self._clips.get(cid)
-
-    def _ctl(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):
-                pass
-
-        return _Ctl()
-
-    def test_stepped_and_read_only_clips_become_sequences(self):
-        widget = self._Widget(
-            {
-                1: self._Clip(obj="a", orig_start=10.0, orig_end=30.0),
-                2: self._Clip(obj="a", is_stepped=True, orig_start=45.0, orig_end=45.0),
-                3: self._Clip(obj="b", read_only=True, orig_start=70.0, orig_end=90.0),
-                4: self._Clip(obj="c", orig_start=5.0, orig_end=5.0),  # empty span
-            }
-        )
-        ctl = self._ctl()
-        seqs = ctl._clips_to_sequences(widget, [1, 2, 3, 4], include_read_only=True)
-        self.assertEqual([q["obj"] for q in seqs], ["a", "a", "b"])
-        stepped = seqs[1]
-        self.assertEqual(
-            (stepped["times"], stepped["start"], stepped["end"]), ([45.0], 45.0, 45.0)
-        )
-        self.assertNotIn("times", seqs[0], "a span moves as a span")
-
-    def test_drags_still_leave_other_shots_clips_alone(self):
-        widget = self._Widget(
-            {3: self._Clip(obj="b", read_only=True, orig_start=70.0, orig_end=90.0)}
-        )
-        self.assertEqual(self._ctl()._clips_to_sequences(widget, [3]), [])
-
-
-class TestBoundHandleGrammar(unittest.TestCase):
-    """The modifier grammar as the controller applies it.  The shot's own
-    edge never moves the shot's keys: a plain drag moves the bound and the
-    neighbours ripple with their keys (gaps kept); Ctrl moves the bound and
-    nothing else (the shot grows into the gap over the keys there, or leaves
-    keys behind); Shift retimes.  A gap's edge belongs to the shot beyond
-    it: a plain drag slides that shot alone, Ctrl moves that bound only,
-    Shift retimes it.  Set 2026-09-06, after a first cut made the plain
-    edge drag slide the whole shot."""
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        self.a = cmds.spaceLocator(name="grammar_a")[0]
-        self.b = cmds.spaceLocator(name="grammar_b")[0]
-        for t, v in ((10, 0), (40, 5)):
-            cmds.setKeyframe(self.a, at="translateX", t=t, v=v)
-        for t, v in ((70, 0), (90, 5)):
-            cmds.setKeyframe(self.b, at="translateX", t=t, v=v)
-        self.seq = ShotSequencer(
-            [ShotBlock(0, "A", 0, 50, [self.a]), ShotBlock(1, "B", 60, 100, [self.b])]
-        )
-        self.ctl = self._ctl()
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _ctl(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        seq = self.seq
-
-        class _Widget:
-            ctrl_held_at_press = False
-            shift_held_at_press = False
-
-        widget = _Widget()
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):  # bypass the panel's __init__
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-
-            sequencer = seq
-            active_shot_id = 0
-
-            def _get_sequencer_widget(self):
-                return widget
-
-            def _gap_edit_epilogue(self):
-                pass
-
-        ctl = _Ctl()
-        ctl.widget = widget
-        return ctl
-
-    def _keys(self, obj):
-        return cmds.keyframe(obj, q=True, at="translateX") or []
-
-    def _bounds(self):
-        return [(s.start, s.end) for s in self.seq.sorted_shots()]
-
-    @staticmethod
-    def _node(name):
-        return cmds.ls(name, long=True)[0]
-
-    def _members(self, shot_id):
-        """The shot's members as long paths: one node may be listed short or long."""
-        return cmds.ls(self.seq.shot_by_id(shot_id).objects, long=True) or []
-
-    def _hold(self, ctrl=False, shift=False):
-        self.ctl.widget.ctrl_held_at_press = ctrl
-        self.ctl.widget.shift_held_at_press = shift
-
-    # ---- the active shot's own edge (range highlight) ---------------------
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_plain_edge_drag_moves_the_bound_and_ripples_the_neighbours(self):
-        self._hold()
-        self.ctl.on_range_highlight_changed(0, 60)  # end +10, start untouched
-        self.assertEqual(self._bounds(), [(0.0, 60.0), (70.0, 110.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0], "the shot's keys stay")
-        self.assertEqual(self._keys(self.b), [80.0, 100.0], "B rippled, gap kept")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_edge_drag_moves_the_bound_and_nothing_else(self):
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(0, 58)  # end +8, into the gap
-        self.assertEqual(self._bounds(), [(0.0, 58.0), (60.0, 100.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0])
-        self.assertEqual(self._keys(self.b), [70.0, 90.0], "B did not move")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_edge_drag_pushes_into_the_next_shot(self):
-        """Dragged past the neighbour's start, the bound takes the gap AND the
-        neighbour's head: the neighbour's start gives way, every key stays,
-        and the object moving in the frames taken becomes this shot's member.
-        It used to hold at the neighbour, which at a gap of zero meant Ctrl
-        could not grow the shot at all (2026-10-06: "neither holding shift or
-        ctrl ... allows for me to drag to encompass keys in the adjacent
-        shot so they become members of the current shot")."""
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(0, 75)
-        self.assertEqual(self._bounds(), [(0.0, 75.0), (75.0, 100.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0])
-        self.assertEqual(self._keys(self.b), [70.0, 90.0], "no key moved")
-        self.assertIn(self._node(self.b), self._members(0))
-        self.assertIn(self._node(self.b), self._members(1), "still moves in B")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_edge_drag_at_a_zero_gap_moves_the_seam(self):
-        """Flush shots share their bound, so Ctrl moves the seam: growing takes
-        the neighbour's head, shrinking hands this shot's tail to it."""
-        self.seq.shot_by_id(1).start = 50.0
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(0, 75)
-        self.assertEqual(self._bounds(), [(0.0, 75.0), (75.0, 100.0)])
-        self.ctl.on_range_highlight_changed(0, 30)
-        self.assertEqual(self._bounds(), [(0.0, 30.0), (30.0, 100.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0])
-        self.assertIn(self._node(self.a), self._members(1), "A's tail went to B")
-        self.assertIn(self._node(self.a), self._members(0), "A's head stayed")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_edge_drag_leaves_the_neighbour_a_frame(self):
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(0, 140)
-        self.assertEqual(self._bounds(), [(0.0, 99.0), (99.0, 100.0)])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_edge_drag_takes_the_keys_it_covers(self):
-        """A key in the gap becomes this shot's once the bound covers it."""
-        cmds.setKeyframe(self.b, at="translateX", t=55, v=1)  # a key in the gap
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(0, 58)
-        self.assertEqual(self._bounds()[0], (0.0, 58.0))
-        self.assertEqual(
-            self.seq._source_shot_id_for({"start": 55.0, "end": 55.0}),
-            0,
-            "the covered key is this shot's now",
-        )
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_shift_edge_drag_retimes_the_keys_into_the_new_span(self):
-        self._hold(shift=True)
-        self.ctl.on_range_highlight_changed(0, 100)  # doubled
-        self.assertEqual(self._bounds()[0], (0.0, 100.0))
-        self.assertEqual(self._keys(self.a), [20.0, 80.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_band_body_drag_is_a_move_whatever_is_held(self):
-        self._hold(ctrl=True)
-        self.ctl.on_range_highlight_changed(5, 55)  # both edges +5
-        self.assertEqual(self._bounds()[0], (5.0, 55.0))
-        self.assertEqual(self._keys(self.a), [15.0, 45.0])
-
-    # ---- a gap's edges, on a shot that is NOT active -----------------------
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_plain_gap_edge_drag_slides_the_shot_beyond_it(self):
-        self._hold()
-        self.ctl.on_gap_resized(60, 70)  # B's start dragged +10
-        self.assertEqual(self._bounds(), [(0.0, 50.0), (70.0, 110.0)])
-        self.assertEqual(self._keys(self.b), [80.0, 100.0])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0], "A untouched")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_plain_gap_edge_drag_moves_that_shot_alone(self):
-        """A gap handle changes the gap and nothing else: the shot beyond it
-        slides, the shots beyond THAT stay -- the ripple is the shot handle's."""
-        c = cmds.spaceLocator(name="grammar_c")[0]
-        cmds.setKeyframe(c, at="translateX", t=130, v=1)
-        self.seq.store.define_shot("C", 120, 150, objects=[c])
-        self._hold()
-        self.ctl.on_gap_resized(60, 70)
-        self.assertEqual(self._bounds(), [(0.0, 50.0), (70.0, 110.0), (120.0, 150.0)])
-        self.assertEqual(self._keys(c), [130.0])
-        self.ctl.on_gap_resized(70, 100)  # asked past C: clamped against it
-        self.assertEqual(self._bounds()[1], (80.0, 120.0))
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_retime_scales_content_the_list_never_named(self):
-        """Membership is a label: the Shift retime acts on what is keyed in
-        the span, listed or not (the production pulse was not)."""
-        loose = cmds.spaceLocator(name="grammar_loose")[0]
-        for t, v in ((10, 0), (40, 1)):
-            cmds.setKeyframe(loose, at="translateX", t=t, v=v)
-        self._hold(shift=True)
-        self.ctl.on_range_highlight_changed(0, 100)
-        self.assertEqual(self._keys(loose), [20.0, 80.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_set_shot_duration_ripples_before_it_scales(self):
-        """The other two retimes share resize_shot's order: a key scaled past
-        the old end into the neighbour's window must not ride the ripple."""
-        self.seq.set_shot_duration(0, 100)
-        self.assertEqual(self._bounds(), [(0.0, 100.0), (110.0, 150.0)])
-        self.assertEqual(self._keys(self.a), [20.0, 80.0])
-        self.assertEqual(self._keys(self.b), [120.0, 140.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_resize_object_ripples_before_it_scales(self):
-        self.seq.resize_object(0, self.a, 10, 40, 10, 80)
-        self.assertEqual(self._bounds(), [(0.0, 80.0), (90.0, 130.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 80.0])
-        self.assertEqual(self._keys(self.b), [100.0, 120.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_gap_edge_drag_moves_that_bound_only(self):
-        self._hold(ctrl=True)
-        self.ctl.on_gap_resized(60, 70)
-        self.assertEqual(self._bounds(), [(0.0, 50.0), (70.0, 100.0)])
-        self.assertEqual(self._keys(self.b), [70.0, 90.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_gap_edge_drag_pushes_past_the_shot_before(self):
-        """The same Ctrl rule from the gap's side: B's start dragged over the
-        whole gap and into A takes A's tail, A's end giving way."""
-        self._hold(ctrl=True)
-        self.ctl.on_gap_resized(60, 30)
-        self.assertEqual(self._bounds(), [(0.0, 30.0), (30.0, 100.0)])
-        self.assertEqual(self._keys(self.a), [10.0, 40.0])
-        self.assertIn(self._node(self.a), self._members(1))
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_shift_gap_edge_drag_retimes_that_shot(self):
-        self._hold(shift=True)
-        self.ctl.on_gap_resized(60, 80)  # B [60,100] -> [80,100]: half as long
-        self.assertEqual(self._bounds()[1], (80.0, 100.0))
-        self.assertEqual(self._keys(self.b), [85.0, 95.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_the_active_shot_follows_the_same_grammar_on_a_gap_edge(self):
-        """The old inner/outer split -- the ACTIVE shot's edge was a bound
-        move, any other shot slid -- is gone: the modifier decides."""
-        self._hold()
-        self.ctl.on_gap_left_resized(50, 60)  # A's end (A is active) +10
-        self.assertEqual(self._bounds()[0], (10.0, 60.0))
-        self.assertEqual(self._keys(self.a), [20.0, 50.0])
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_the_tail_cap_moves_the_last_shots_end_only(self):
-        """The cap after the last shot is that shot's OWN bound, not a gap
-        edge: a plain drag moves the bound and nothing else -- it used to
-        slide the whole shot, which read as the border misbehaving
-        (2026-09-09)."""
-        self._hold()
-        self.ctl.on_gap_left_resized(100, 110)  # B's end, nothing beyond it
-        self.assertEqual(self._bounds(), [(0.0, 50.0), (60.0, 110.0)])
-        self.assertEqual(self._keys(self.b), [70.0, 90.0], "B's keys stay")
-        self.assertEqual(self._keys(self.a), [10.0, 40.0], "the timeline did not walk")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_tail_handle_drag_moves_the_end_only(self):
-        self._hold(ctrl=True)
-        self.ctl.on_gap_left_resized(100, 110)
-        self.assertEqual(self._bounds()[1], (60.0, 110.0))
-        self.assertEqual(self._keys(self.b), [70.0, 90.0])
-
-
 class TestABoundEnclosesFractionalContent(unittest.TestCase):
     """A bound snapped to a whole frame must still ENCLOSE the shot's content.
 
@@ -6262,21 +5006,6 @@ class TestABoundEnclosesFractionalContent(unittest.TestCase):
         self.assertEqual(self.seq.shot_by_id(0).end, 41.0)
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_key_dragged_past_the_end_is_enclosed(self):
-        # The drag landed a key at 50.4, past A's end: A grows around it.
-        cmds.setKeyframe(self.a, at="translateX", t=50.4, v=3)
-        TestBoundHandleGrammar._ctl(self)._expand_shot_range(0, 10.6, 50.4)
-        self.assertEqual(
-            [(s.start, s.end) for s in self.seq.sorted_shots()],
-            [(0.0, 51.0), (61.0, 101.0)],
-        )
-        self.assertEqual(
-            cmds.keyframe(self.b, q=True, at="translateX"),
-            [71.0, 91.0],
-            "B rode the ripple whole",
-        )
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_move_to_shot_grows_the_destination_around_what_landed(self):
         c = cmds.polyCube(name="frMove")[0]
         for t, v in ((110, 0), (160.4, 5)):
@@ -6319,84 +5048,6 @@ class TestABoundEnclosesFractionalContent(unittest.TestCase):
             [(round(t, 3), round(v)) for t, v in zip(times, values)],
             [(200.0, 2), (201.0, 0), (240.4, 5), (290.35, 2), (291.2, 7), (321.0, 1)],
         )
-
-
-class TestACtrlEdgeDragMovesNoSample(unittest.TestCase):
-    """Ctrl on a shot's edge: the bound moves and NOTHING else does -- not the
-    animator's keys, and not the shot system's own samples either.
-
-    Bug: the Ctrl path reconciled with the default rule, under which a claimed
-    sample FOLLOWS its bound.  A respace pin is a shape-preserving insert on a
-    ramp, so moving it re-times the ramp: measured on a synthetic curve, a
-    Ctrl grow of 3 frames changed 27 frames of playback, and one dragged past
-    a gap key slid the pin OVER that key, reordering the curve.  Nothing moves
-    in a Ctrl drag, so nothing can be in a sample's way: it stays, disowned.
-    Fixed: 2026-09-19
-    """
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def setUp(self):
-        from mayatk.anim_utils._anim_utils import AnimUtils
-
-        cmds.file(new=True, force=True)
-        self.cube = cmds.polyCube(name="ctrl_pin_cube")[0]
-        # A's content 10..40, a key in A's gap at 55, B's content 70..90.
-        for t, v in ((10, 0), (40, 5), (55, 1), (70, 2), (90, 8)):
-            cmds.setKeyframe(self.cube, at="translateX", t=t, v=v)
-        self.crv = cmds.listConnections(f"{self.cube}.translateX", type="animCurve")[0]
-        self.seq = ShotSequencer(
-            [
-                ShotBlock(0, "A", 0, 50, [self.cube]),
-                ShotBlock(1, "B", 60, 100, [self.cube]),
-            ]
-        )
-        # A claimed shape pin on A's end, planted as the respace plants one.
-        for crv, t in AnimUtils.insert_keys([self.crv], [50.0], report=True):
-            self.seq.ledger.record_key(crv, t, 0, "end")
-        self.seq._enforce_gap_holds()  # so only the gesture is measured
-        self.before = self._play()
-        self.ctl = TestBoundHandleGrammar._ctl(self)
-        self.ctl.widget.ctrl_held_at_press = True
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _play(self):
-        return [
-            round(cmds.keyframe(self.crv, q=True, eval=True, time=(f, f))[0], 4)
-            for f in range(0, 101)
-        ]
-
-    def _assert_nothing_moved(self, label):
-        now = self._play()
-        off = [f for f, (a, b) in enumerate(zip(self.before, now)) if a != b]
-        self.assertEqual(off, [], f"{label}: the curve plays differently")
-        self.assertIn(50.0, cmds.keyframe(self.crv, q=True), "the pin stayed")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_grow_moves_the_bound_and_no_sample(self):
-        self.ctl.on_range_highlight_changed(0, 53)
-        self.assertEqual(self.seq.shot_by_id(0).end, 53.0)
-        self._assert_nothing_moved("ctrl grow")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_grow_over_a_gap_key_reorders_nothing(self):
-        self.ctl.on_range_highlight_changed(0, 57)
-        self.assertEqual(self.seq.shot_by_id(0).end, 57.0)
-        self._assert_nothing_moved("ctrl grow over 55")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_shrink_moves_the_bound_and_no_sample(self):
-        self.ctl.on_range_highlight_changed(0, 45)
-        self.assertEqual(self.seq.shot_by_id(0).end, 45.0)
-        self._assert_nothing_moved("ctrl shrink")
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def test_a_ctrl_gap_edge_drag_moves_no_sample_either(self):
-        self.ctl.active_shot_id = 1
-        self.ctl.on_gap_left_resized(50, 45)  # A's end, from B's gap handle
-        self.assertEqual(self.seq.shot_by_id(0).end, 45.0)
-        self._assert_nothing_moved("ctrl gap edge")
 
 
 class TestARetimeCarriesTheSystemsClaims(unittest.TestCase):
@@ -6476,11 +5127,7 @@ class TestARetimeCarriesTheSystemsClaims(unittest.TestCase):
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_a_sub_row_clip_resize_carries_them_too(self):
-        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import (
-            scale_attribute_keys,
-        )
-
-        scale_attribute_keys(
+        SequencerHost.scale_attribute_keys(
             self.cube, "translateX", 0, 50, 0, 60, ledger=self.seq.ledger
         )
         self.assertIn(60.0, self._keys(), "fixture: the pin was scaled to 60")
@@ -7238,126 +5885,6 @@ class TestAGapKeepsItsWidth(unittest.TestCase):
         self.assertEqual(self.seq.shot_by_id(0).end, 80.0, "the escape hatch strands")
 
 
-class TestALockedGapDoesNotResize(unittest.TestCase):
-    """A lock is a statement about a gap's WIDTH.
-
-    Bug: the lock was consulted by the respace planner and the overlay
-    drawing, but by none of the drag handlers — so a locked gap resized
-    like any other.  Both edge handles now refuse; the body drag (constant
-    width) and a shot resize (which ripples, so the width survives) are
-    unaffected.
-    Fixed: 2026-09-03
-    """
-
-    @unittest.skipUnless(HAS_MAYA, "requires Maya")
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        ShotStore.clear_active()
-        self.store = ShotStore()
-        ShotStore.set_active(self.store)
-        self.seq = ShotSequencer(store=self.store)
-        self.a = self.store.define_shot("A", 0, 100)
-        self.b = self.store.define_shot("B", 115, 200)
-        self.ctl = self._ctl()
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _ctl(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        seq = self.seq
-        footers = []
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):  # bypass the panel's __init__
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-
-            sequencer = seq
-            active_shot_id = None
-
-            def _get_sequencer_widget(self):
-                return None
-
-            def _set_footer(self, text, **kw):
-                footers.append(text)
-
-            def _gap_edit_epilogue(self):
-                pass
-
-        ctl = _Ctl()
-        ctl.footers = footers
-        return ctl
-
-    def _bounds(self):
-        return [(s.start, s.end) for s in self.seq.sorted_shots()]
-
-    def test_a_locked_gaps_right_edge_refuses(self):
-        self.store.lock_gap(self.a.shot_id, self.b.shot_id)
-        before = self._bounds()
-        self.ctl.on_gap_resized(115, 130)
-        self.assertEqual(self._bounds(), before)
-        self.assertTrue(any("locked" in f for f in self.ctl.footers))
-
-    def test_a_locked_gaps_left_edge_refuses(self):
-        self.store.lock_gap(self.a.shot_id, self.b.shot_id)
-        before = self._bounds()
-        self.ctl.on_gap_left_resized(100, 85)
-        self.assertEqual(self._bounds(), before)
-        self.assertTrue(any("locked" in f for f in self.ctl.footers))
-
-    def test_an_unlocked_gap_still_resizes(self):
-        self.ctl.on_gap_resized(115, 130)
-        self.assertNotEqual(self._bounds(), [(0, 100), (115, 200)])
-
-    def test_the_tail_handle_flanks_no_gap_and_is_never_locked(self):
-        """The overlay after the LAST shot has no right-hand shot."""
-        self.store.lock_all_gaps()
-        self.ctl.on_gap_left_resized(200, 190)
-        self.assertAlmostEqual(self.seq.shot_by_id(self.b.shot_id).end, 190)
-
-    def test_the_lock_is_recorded_even_when_the_overlay_frames_have_drifted(self):
-        """Bug: each gap edge was matched against a shot frame on its own, so
-        an overlay whose cached span had drifted by more than a rounding
-        resolved to nothing — and a lock that resolves to nothing is never
-        written.  The overlay drew itself "[Locked]" while the store stayed
-        empty, so the next rebuild handed the lock straight back and the gap
-        dragged like any other.
-        Fixed: 2026-09-03
-        """
-        self.ctl.on_gap_lock_changed(100.4, 114.6, True)  # drifted by ~0.5
-        self.assertTrue(
-            self.store.is_gap_locked(self.a.shot_id, self.b.shot_id),
-            "the nearest pair is the gap the overlay is standing on",
-        )
-        self.ctl.on_gap_lock_changed(100.4, 114.6, False)
-        self.assertFalse(self.store.is_gap_locked(self.a.shot_id, self.b.shot_id))
-
-    def test_a_recorded_lock_then_refuses_the_drag(self):
-        """The two halves in one pass: record it, then try to drag it."""
-        self.ctl.on_gap_lock_changed(100.0, 115.0, True)
-        before = self._bounds()
-        self.ctl.on_gap_resized(115, 130)
-        self.assertEqual(self._bounds(), before)
-
-    def test_a_single_shot_timeline_flanks_no_gap(self):
-        self.store.remove_shot(self.b.shot_id)
-        self.ctl.on_gap_lock_changed(100.0, 115.0, True)
-        self.assertFalse(self.store.locked_gaps)
-
-    def test_locking_does_not_freeze_a_shot_resize(self):
-        """The ripple carries the gap along, so its width is never at risk."""
-        self.store.lock_gap(self.a.shot_id, self.b.shot_id)
-        self.seq.resize_shot_bounds(self.a.shot_id, 0, 80)
-        shots = self.seq.sorted_shots()
-        self.assertAlmostEqual(shots[1].start - shots[0].end, 15.0)
-
-
 class TestASlideNeverCrossesANeighbour(unittest.TestCase):
     """A slide ripples ONE side; the other has to hold.
 
@@ -7564,26 +6091,21 @@ class TestRenderEffectKeysAreShotContent(unittest.TestCase):
 
     @unittest.skipUnless(HAS_MAYA, "requires Maya")
     def test_keying_a_pulse_inside_the_shot_adds_the_object(self):
-        """The report itself: the key-edit auto-add, handed the pulse's curves
-        the way Maya's anim-curve callback banks them."""
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
+        """The report itself: the keying refresh's member rule
+        (``SequencerHost.newly_keyed_members``, which the Sequencer panel's
+        key-edit auto-add asks), handed the pulse's curves the way Maya's
+        anim-curve callback banks them."""
         store = ShotStore()
         shot = store.define_shot("S0", 0, 120)
         self.assertEqual(shot.objects, [], "a new shot has no members")
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        ctrl._edited_curves = set()
         try:
             board = self._pulsed_board()
-            ctrl._edited_curves.update(cmds.keyframe(board, q=True, name=True))
-            self.assertTrue(ctrl._auto_add_keyed_objects(shot.shot_id))
-            self.assertEqual(
-                [o.rsplit("|", 1)[-1] for o in store.shot_by_id(shot.shot_id).objects],
-                [board],
+            added = SequencerHost.newly_keyed_members(
+                set(cmds.keyframe(board, q=True, name=True)),
+                shot,
+                ShotSequencer(store=store),
             )
+            self.assertEqual([o.rsplit("|", 1)[-1] for o in added], [board])
         finally:
             ShotStore.clear_active()
 
@@ -8085,62 +6607,6 @@ class TestWaveformEnvelope(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # Maya-dependent audio tests
 # ---------------------------------------------------------------------------
-
-
-class TestMarkerPersistence(unittest.TestCase):
-    """A widget marker serializes into the store's marker dict
-    (``MarkerManagerMixin._marker_to_dict``) with every field it has.  The
-    reverse -- a legacy dict read with defaults -- is
-    ``test_sequencer_gui.TestToolMarkersOnTheTimeline``, through the real
-    widget sync.
-
-    Both tests asserted on a dict literal they had just built -- nothing under
-    test ran (rewritten 2026-10-11)."""
-
-    @staticmethod
-    def _to_dict(md):
-        from mayatk.anim_utils.shots.shot_sequencer.marker_manager import (
-            MarkerManagerMixin,
-        )
-
-        return MarkerManagerMixin._marker_to_dict(md)
-
-    def test_marker_dict_has_all_fields(self):
-        from uitk.widgets.sequencer._data import MarkerData
-
-        md = MarkerData(
-            marker_id=0,
-            time=10.0,
-            note="test",
-            color="#FF0000",
-            draggable=False,
-            style="bracket",
-            line_style="solid",
-            opacity=0.85,
-        )
-        self.assertEqual(
-            self._to_dict(md),
-            {
-                "time": 10.0,
-                "note": "test",
-                "color": "#FF0000",
-                "draggable": False,
-                "style": "bracket",
-                "line_style": "solid",
-                "opacity": 0.85,
-            },
-        )
-
-    def test_a_tools_payload_rides_along(self):
-        """The Shot Manifest's owner tag survives the store rewrite every
-        marker edit makes; a hand's marker gains no empty payload."""
-        from uitk.widgets.sequencer._data import MarkerData
-
-        tag = {"owner": "shot_manifest", "shot_id": 2}
-        out = self._to_dict(MarkerData(marker_id=0, time=1.0, data=tag))
-        self.assertEqual(out["data"], tag)
-        self.assertIsNot(out["data"], tag)
-        self.assertNotIn("data", self._to_dict(MarkerData(marker_id=1, time=2.0)))
 
 
 class TestDetectShots(unittest.TestCase):
@@ -9810,101 +8276,6 @@ class TestExtendReadsOnlyItsOwnEnvelope(unittest.TestCase):
         )
 
 
-class TestMarkerNavigation(unittest.TestCase):
-    """Prev/next in markers mode must jump the playhead to the marker time —
-    never feed the float marker time to select_shot, where the engine's
-    ``==`` compare makes marker time 3.0 match an unrelated shot id 3."""
-
-    class _FakeCombo:
-        def __init__(self, items, index=0):
-            self._items = list(items)
-            self._index = index
-
-        def currentIndex(self):
-            return self._index
-
-        def setCurrentIndex(self, index):
-            self._index = index
-
-        def count(self):
-            return len(self._items)
-
-        def itemData(self, index):
-            return self._items[index][1]
-
-        def blockSignals(self, block):
-            pass
-
-    class _FakeSignal:
-        def __init__(self):
-            self.emitted = []
-
-        def emit(self, *args):
-            self.emitted.append(args)
-
-    class _FakeWidget:
-        def __init__(self):
-            self.playhead = None
-            self.playhead_moved = TestMarkerNavigation._FakeSignal()
-
-        def set_playhead(self, time):
-            self.playhead = time
-
-    def _make_host(self, cmb, widget, sequencer):
-        import types
-
-        from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
-
-        class _Host(ShotNavMixin):
-            def __init__(self):
-                self.sequencer = sequencer
-                self.ui = types.SimpleNamespace(cmb_shot=cmb)
-                self._cmb_mode = "markers"
-                self._cmb_mode_widget = None
-                self._shifted_out_keys = {}
-                self._prev_action = None
-                self._next_action = None
-                self._syncing = False
-                self._playback_range_mode = "off"
-                self._widget = widget
-                self.synced = []
-
-            def _sync_to_widget(self, frame=False):
-                self.synced.append(frame)
-
-            def _get_sequencer_widget(self):
-                return self._widget
-
-            def _visible_shots(self, shot):
-                return [shot]
-
-        return _Host()
-
-    def test_marker_nav_does_not_select_shot_with_matching_id(self):
-        # Shot id 3 is unrelated to the marker at time 3.0.
-        seq = ShotSequencer([ShotBlock(3, "S3", 50, 60, ["cube1"])])
-        seq.store.select_on_load = False
-        selected = []
-        seq.store.set_active_shot = lambda sid: selected.append(sid)
-
-        cmb = self._FakeCombo([("@ 1", 1.0), ("@ 3", 3.0)], index=0)
-        widget = self._FakeWidget()
-        host = self._make_host(cmb, widget, seq)
-
-        host._navigate_shot(+1)
-
-        self.assertEqual(
-            selected,
-            [],
-            "markers-mode nav must not route the marker time into shot selection",
-        )
-        self.assertEqual(
-            widget.playhead, 3.0, "markers-mode nav must jump the playhead"
-        )
-        self.assertEqual(widget.playhead_moved.emitted, [(3.0,)])
-        self.assertEqual(cmb.currentIndex(), 1)
-
-
 # ---------------------------------------------------------------------------
 # Key-move tangent fidelity (2026-08-17 backlog: sequencer key moves dropped
 # tangent angles / weights / breakdown flags via cut-and-recreate)
@@ -10148,139 +8519,6 @@ class TestKeyMoveTangentFidelity(unittest.TestCase):
                 "breakdown",
             ),
         )
-
-    # -- clip_motion.on_keys_moved ----------------------------------------
-
-    class _FakeClip:
-        def __init__(self, data):
-            self.data = data
-
-    class _FakeWidget:
-        def __init__(self, clip):
-            self._clip = clip
-
-        def get_clip(self, clip_id):
-            return self._clip
-
-    def _clip_motion_host(self, obj, attr, seq):
-        """Minimal ClipMotionMixin host -- the members the mixin documents."""
-        import logging
-
-        from mayatk.anim_utils.shots.shot_sequencer.clip_motion import ClipMotionMixin
-
-        outer = self
-
-        class Host(ClipMotionMixin):
-            def __init__(self):
-                self.sequencer = seq
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._syncing = False
-                self.logger = logging.getLogger("test.clip_motion_host")
-                self.footers = []
-                self._clip = outer._FakeClip(
-                    {"obj": obj, "attr_name": attr, "shot_id": 0}
-                )
-
-            def _get_sequencer_widget(self):
-                return outer._FakeWidget(self._clip)
-
-            def _save_shot_state(self):
-                pass
-
-            def _discard_shot_state(self):
-                pass
-
-            def _sync_to_widget(self, shot_id=None):
-                pass
-
-            def _sync_combobox(self):
-                pass
-
-            def _set_footer(self, text, *args, **kwargs):
-                self.footers.append(text)
-
-        return Host()
-
-    def test_on_keys_moved_preserves_full_tangent_state(self):
-        """Dragging keys in the clip view must not reset their tangents."""
-        cube, crv = self._hand_tuned_cube("clipTanFidelity")
-        before = snapshot_curve(crv)
-        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
-
-        host.on_keys_moved(0, [(1.0, 21.0), (5.0, 25.0), (10.0, 30.0)])
-
-        after = snapshot_curve(self._curve_of(cube))
-        self._assert_shifted_identically(before, after, 20, "on_keys_moved")
-
-    def test_on_keys_moved_preserves_tangents_for_a_sparse_selection(self):
-        """Dragging some keys past one that stays put keeps every tangent."""
-        cube, crv = self._hand_tuned_cube("clipSparse")
-        before = snapshot_curve(crv)
-        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
-
-        # Keys 1 and 10 move +20; the key at 5 stays where it is.
-        host.on_keys_moved(0, [(1.0, 21.0), (10.0, 30.0)])
-
-        after = snapshot_curve(self._curve_of(cube))
-        self.assertEqual(
-            [round(r["time"], 4) for r in after],
-            [5.0, 21.0, 30.0],
-            "the unselected key must stay put while the others move past it",
-        )
-        stayed = [r for r in after if abs(r["time"] - 5.0) < 1e-6]
-        moved = [r for r in after if abs(r["time"] - 5.0) >= 1e-6]
-        self._assert_shifted_identically(
-            [before[0], before[2]], moved, 20, "sparse drag"
-        )
-        self._assert_shifted_identically(
-            [before[1]], stayed, 0, "sparse drag (untouched key)"
-        )
-
-    def test_on_keys_moved_tolerates_drag_times_off_by_rounding(self):
-        """Drag times arrive from the widget, so they match only to a tolerance.
-
-        Pairing a reported time with a curve key by equality (or by a rounded
-        equality) drops the key outright, and the whole drag silently becomes
-        a no-op.  Mixed deltas so this runs through the cut-and-recreate path,
-        which is where the pairing happens.
-        """
-        cube, crv = self._hand_tuned_cube("clipDrifted")
-        before = snapshot_curve(crv)
-        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
-
-        drift = 1e-5  # finer than the 1e-3 key window, coarser than 6dp rounding
-        host.on_keys_moved(
-            0, [(1.0 + drift, 21.0), (5.0 - drift, 26.0), (10.0 + drift, 32.0)]
-        )
-
-        after = snapshot_curve(self._curve_of(cube))
-        self.assertEqual(
-            [round(r["time"], 4) for r in after],
-            [21.0, 26.0, 32.0],
-            "a drag whose times differ from the curve's only by rounding must "
-            "still move the keys",
-        )
-        for b, a in zip(before, after):
-            self._assert_same_state(b, a, "drifted drag times")
-
-    def test_on_keys_moved_preserves_tangents_for_mixed_deltas(self):
-        """Per-key deltas that differ still have to carry the tangent state."""
-        cube, crv = self._hand_tuned_cube("clipMixedDelta")
-        before = snapshot_curve(crv)
-        host = self._clip_motion_host(str(cube), "translateX", ShotSequencer())
-
-        # 1 -> 21 (+20), 5 -> 26 (+21), 10 -> 32 (+22)
-        host.on_keys_moved(0, [(1.0, 21.0), (5.0, 26.0), (10.0, 32.0)])
-
-        after = snapshot_curve(self._curve_of(cube))
-        self.assertEqual(
-            [round(r["time"], 4) for r in after],
-            [21.0, 26.0, 32.0],
-            "mixed-delta drag must land every key on its own destination",
-        )
-        for b, a in zip(before, after):
-            self._assert_same_state(b, a, "on_keys_moved mixed deltas")
 
 
 # ===========================================================================
@@ -10911,7 +9149,9 @@ class TestTheSequencersOwnMembersAreNoHandEdit(unittest.TestCase):
     no object the scene holds, when it shows it; an object keyed in the active
     shot -- are tagged, so the Shot Manifest does not read them as a hand edit
     (BACKLOG 2026-10-10: such a shot became "edited" and every later Build
-    kept it, doc changes and all).  A hand's add still counts."""
+    kept it, doc changes and all).  A hand's add still counts.  The keying
+    refresh's add (an object keyed in the active shot) is the panel's:
+    tentacle's ``test_shot_sequencer_controller``."""
 
     def setUp(self):
         cmds.file(new=True, force=True)
@@ -10946,17 +9186,6 @@ class TestTheSequencersOwnMembersAreNoHandEdit(unittest.TestCase):
             "the doc's changes still apply",
         )
 
-    def test_an_object_keyed_in_the_active_shot_is_no_edit(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=self.store)
-        ctrl._edited_curves = set(cmds.keyframe(self.mover, q=True, name=True))
-        self.assertTrue(ctrl._auto_add_keyed_objects(self.shot.shot_id))
-        self.assertFalse(self._edited())
-
     def test_a_hand_add_still_counts(self):
         self.store.update_shot(
             self.shot.shot_id,
@@ -10975,7 +9204,8 @@ class TestUndoPlanRedoDirection(unittest.TestCase):
     directions.  Comparing an unpaired entry against the redo queue always
     mismatched, so redoing a bounds-only edit silently dropped the bounds
     restore AND called cmds.redo() on somebody else's undone operation.
-    Found by driving a real production scene.
+    Found by driving a real production scene.  The plan is the host's
+    (``SequencerHost._undo_plan``, which the panel's Undo / Redo step through).
     """
 
     def setUp(self):
@@ -10986,218 +9216,79 @@ class TestUndoPlanRedoDirection(unittest.TestCase):
     def tearDown(self):
         ShotStore.clear_active()
 
-    def _controller(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
+    def _store(self):
         store = ShotStore()
         store.define_shot("A", 0, 50)
         store.define_shot("B", 60, 100)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        return ctrl, store
+        return store
 
     def test_redo_of_an_unpaired_edit_applies_the_ledger(self):
-        ctrl, store = self._controller()
+        store = self._store()
         _unpaired_bounds_edit(store)
         store.restore_boundary_snapshot()
         self.assertEqual(
-            ctrl._undo_plan(redo=True),
+            SequencerHost._undo_plan(store, redo=True),
             (True, False),
             "an unpaired redo must apply the ledger and NOT touch Maya",
         )
 
     def test_redo_of_a_paired_edit_touches_mayas_queue(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = cmds.spaceLocator(name="paired_loc")[0]
         cmds.setKeyframe(loc, at="translateX", t=1, v=0)
         with store.scene_edit("keys"):
             cmds.setKeyframe(loc, at="translateX", t=20, v=5)
         cmds.undo()
         store.restore_boundary_snapshot()
-        self.assertEqual(ctrl._undo_plan(redo=True), (True, True))
+        self.assertEqual(SequencerHost._undo_plan(store, redo=True), (True, True))
 
     def test_an_unrelated_edit_after_the_undo_releases_the_redo(self):
         """A new edit clears Maya's redo stack, so our point must stand down."""
-        ctrl, store = self._controller()
+        store = self._store()
         _unpaired_bounds_edit(store)
         store.restore_boundary_snapshot()
         loc = cmds.spaceLocator(name="later_loc")[0]
         with CoreUtils.undo_chunk("unrelated_edit"):
             cmds.setKeyframe(loc, at="translateX", t=5, v=1)
         self.assertEqual(
-            ctrl._undo_plan(redo=True),
+            SequencerHost._undo_plan(store, redo=True),
             (False, True),
             "our restore point must stay put once an unrelated edit lands",
         )
 
     def test_undo_direction_is_unchanged_for_both_pairings(self):
-        ctrl, store = self._controller()
+        store = self._store()
         _unpaired_bounds_edit(store)
-        self.assertEqual(ctrl._undo_plan(), (True, False))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, False))
         loc = cmds.spaceLocator(name="both_loc")[0]
         with store.scene_edit("keys"):
             cmds.setKeyframe(loc, at="translateX", t=3, v=1)
-        self.assertEqual(ctrl._undo_plan(), (True, True))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, True))
 
     def test_bounds_survive_an_undo_redo_round_trip(self):
         """The user-visible half: shrink, undo, redo — the shrink comes back,
         Maya's queue moving with the ledger at each step."""
-        ctrl, store = self._controller()
+        store = self._store()
         with store.scene_edit("boundsonly"):
             store.update_shot(0, end=40)
-        self.assertEqual(ctrl._undo_plan(), (True, True))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, True))
         store.restore_boundary_snapshot()
         cmds.undo()
         self.assertEqual(store.shot_by_id(0).end, 50.0)
-        self.assertEqual(ctrl._undo_plan(redo=True), (True, True))
+        self.assertEqual(SequencerHost._undo_plan(store, redo=True), (True, True))
         store.redo_boundary_snapshot()
         cmds.redo()
         self.assertEqual(store.shot_by_id(0).end, 40.0)
 
     def test_an_unpaired_round_trip_leaves_mayas_queue_alone(self):
-        ctrl, store = self._controller()
+        store = self._store()
         _unpaired_bounds_edit(store)
-        self.assertEqual(ctrl._undo_plan(), (True, False))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, False))
         store.restore_boundary_snapshot()
         self.assertEqual(store.shot_by_id(0).end, 50.0)
-        self.assertEqual(ctrl._undo_plan(redo=True), (True, False))
+        self.assertEqual(SequencerHost._undo_plan(store, redo=True), (True, False))
         store.redo_boundary_snapshot()
         self.assertEqual(store.shot_by_id(0).end, 40.0)
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestDeleteKeysBracketing(unittest.TestCase):
-    """Both key-delete paths must bracket through scene_edit.
-
-    They were the last edit sites still opening a bare undo chunk and
-    pushing their restore point AFTER the mutation, untagged — so the point
-    could not restore anything, and being untagged the Maya Undo EVENT
-    callback claimed it for somebody else's undo.
-    """
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        cmds.undoInfo(state=True, infinity=True)
-        ShotStore.clear_active()
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _ctrl_with_clip(self):
-        from unittest.mock import MagicMock
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        loc = cmds.spaceLocator(name="del_loc")[0]
-        for t in (1, 5, 10):
-            cmds.setKeyframe(loc, at="translateX", t=t, v=float(t))
-
-        store = ShotStore()
-        store.define_shot("A", 0, 50, objects=cmds.ls(loc, long=True))
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        ctrl.logger = MagicMock()
-        ctrl._segment_cache = {}
-        ctrl._sub_row_cache = {}
-        # Part of the mixin contract (`_syncing` — the re-entrancy guard every
-        # edit path raises), so the stub has to carry it like the real object.
-        ctrl._syncing = False
-        ctrl._sync_to_widget = MagicMock()
-        ctrl._set_footer = MagicMock()
-        ctrl._resolve_full_name = MagicMock(side_effect=lambda n: n)
-
-        clip = MagicMock()
-        clip.data = {
-            "obj": cmds.ls(loc, long=True)[0],
-            "attr_name": "translateX",
-            "attributes": ["translateX"],
-            "orig_start": 0.0,
-            "orig_end": 50.0,
-        }
-        widget = MagicMock()
-        widget.get_clip = MagicMock(side_effect=lambda cid: clip if cid == 1 else None)
-        ctrl._get_sequencer_widget = MagicMock(return_value=widget)
-        return ctrl, store, loc
-
-    def test_delete_clip_keys_is_paired_and_predates_the_edit(self):
-        ctrl, store, loc = self._ctrl_with_clip()
-        ctrl._delete_clip_keys([1])
-        self.assertEqual(cmds.keyframe(loc, q=True, timeChange=True) or [], [])
-        tag = store.peek_boundary_tag()
-        self.assertIsInstance(tag, tuple, "the restore point must be tagged")
-        self.assertTrue(tag[0], "a key delete records a Maya undo step")
-        self.assertEqual(tag[1], cmds.undoInfo(q=True, undoName=True))
-
-    def test_a_delete_takes_the_system_claims_on_its_keys(self):
-        """A key delete is a key edit like any other, so it runs the bracket's
-        reconcile (``_key_scene_edit``): the claims on a deleted key -- a
-        sample's and a gap hold's -- go with it instead of waiting on the
-        frame for the next key that lands there to inherit them."""
-        ctrl, store, loc = self._ctrl_with_clip()
-        cmds.setKeyframe(loc, at="translateX", t=60, v=60.0)  # outside the clip
-        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
-        led = store.edit_ledger
-        led.record_key(crv, 10.0, 0, "end")
-        led.record_step(crv, 10.0, "auto", "auto")
-        ctrl._delete_clip_keys([1])
-        self.assertEqual(cmds.keyframe(crv, q=True), [60.0])
-        self.assertEqual((led.key_times(crv), led.step_times(crv)), ([], []))
-
-    def test_a_delete_takes_a_behaviors_authored_claim_too(self):
-        """...and every OTHER claim on a deleted key: a behavior's authored
-        claim is no sample, so the reconcile left it on the frame for the
-        next key that lands there to inherit."""
-        ctrl, store, loc = self._ctrl_with_clip()
-        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
-        led = store.edit_ledger
-        led.record_authored(crv, 5.0, 0, "fade_in", loc)
-        ctrl._delete_clip_keys([1])
-        self.assertEqual(cmds.keyframe(loc, q=True, timeChange=True) or [], [])
-        self.assertFalse(led.owns_any(crv, 5.0), led.to_dict())
-
-    def test_a_deleted_sample_on_its_bound_takes_its_claim(self):
-        """...a sample still ON its bound too -- where the system makes them.
-        The reconcile passed a claim on its bound before asking whether its
-        key was still there, so it waited on the frame for the next key."""
-        ctrl, store, loc = self._ctrl_with_clip()
-        for t in (50, 60):  # 50: A's end, inside the clip; 60: outside it
-            cmds.setKeyframe(loc, at="translateX", t=t, v=float(t))
-        crv = cmds.listConnections(f"{loc}.translateX", type="animCurve")[0]
-        led = store.edit_ledger
-        led.record_key(crv, 50.0, 0, "end")
-        ctrl._delete_clip_keys([1])
-        self.assertEqual(cmds.keyframe(crv, q=True), [60.0])
-        self.assertEqual(led.key_times(crv), [])
-
-    def test_a_delete_that_removes_nothing_leaves_no_restore_point(self):
-        ctrl, store, _loc = self._ctrl_with_clip()
-        depth = len(store._boundary_undo)
-        ctrl._delete_clip_keys([999])  # no such clip -> no ops at all
-        self.assertEqual(len(store._boundary_undo), depth)
-
-    def test_a_failed_delete_discards_its_restore_point(self):
-        """Every cutKey failing (locked/connected attrs on a referenced asset)
-        must leave the ledger exactly as it was — an orphan restore point
-        shifts every later undo by one, and losing the redo branch that the
-        up-front push cleared costs the user a redo they never spent."""
-        ctrl, store, loc = self._ctrl_with_clip()
-        store.push_boundary_snapshot(tag=(False, "earlier"))
-        store.update_shot(0, end=40)
-        store.restore_boundary_snapshot()  # -> a redo branch exists
-        depth = len(store._boundary_undo)
-
-        with patch.object(cmds, "cutKey", side_effect=RuntimeError("locked")):
-            ctrl._delete_clip_keys([1])
-
-        self.assertEqual(len(store._boundary_undo), depth)
-        self.assertTrue(
-            store.has_boundary_snapshot(redo=True),
-            "a failed delete must not cost the user their redo branch",
-        )
-        self.assertEqual(len(cmds.keyframe(loc, q=True, timeChange=True) or []), 3)
 
 
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
@@ -12708,154 +10799,6 @@ class TestMoveToShotPlacement(unittest.TestCase):
         )
 
 
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestMoveToShotMenu(unittest.TestCase):
-    """Next Shot / Previous Shot head the Move to Shot submenu.
-
-    Nudging a selection one shot along the sequence is the move an animator
-    makes most; by name it is a different entry every time, so the two
-    relative moves lead the list and the named shots follow a separator.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        from qtpy.QtWidgets import QApplication
-
-        cls._app = QApplication.instance() or QApplication([])
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        ShotStore.clear_active()
-        self.store = ShotStore()
-        self.a = self.store.define_shot("A", 0, 50)
-        self.b = self.store.define_shot("B", 60, 100)
-        self.c = self.store.define_shot("C", 110, 150)
-        self.seq = ShotSequencer(store=self.store)
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        self.ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        self.ctrl._sequencer = self.seq
-        self.ctrl.ui = None
-        self.ctrl._cmb_mode = "shots"
-        self.ctrl._copy_to_shot = False
-        self.moved = []
-        self.ctrl._send_to_shot = lambda seqs, sid, noun="clip", copy=False: (
-            self.moved.append((sid, noun, copy))
-        )
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    def _menu(self, seqs, noun="clip"):
-        from qtpy import QtWidgets
-
-        menu = QtWidgets.QMenu()
-        self.ctrl._populate_send_to_shot(menu, seqs, noun=noun)
-        return menu
-
-    @staticmethod
-    def _labels(menu):
-        return ["---" if a.isSeparator() else a.text() for a in menu.actions()]
-
-    @staticmethod
-    def _seq(start, end):
-        return {"kind": "anim", "obj": "x", "start": start, "end": end}
-
-    def test_the_neighbours_head_the_list(self):
-        labels = self._labels(self._menu([self._seq(70, 90)]))
-        self.assertEqual(labels[0], "Next Shot  (C)")
-        self.assertEqual(labels[1], "Previous Shot  (A)")
-        self.assertEqual(labels[2], "---")
-        self.assertEqual(
-            labels[3:],
-            ["A  [0\u201350]", "C  [110\u2013150]"],
-            "B is where it already is",
-        )
-
-    def test_the_first_shot_offers_no_previous(self):
-        labels = self._labels(self._menu([self._seq(10, 20)]))
-        self.assertEqual(labels[0], "Next Shot  (B)")
-        self.assertEqual(labels[1], "---")
-        self.assertNotIn("Previous Shot  (A)", labels)
-
-    def test_the_last_shot_offers_no_next(self):
-        labels = self._labels(self._menu([self._seq(120, 130)]))
-        self.assertEqual(labels[0], "Previous Shot  (B)")
-        self.assertNotIn("Next Shot", "".join(labels))
-
-    def test_a_selection_spanning_shots_anchors_on_the_active_shot(self):
-        self.store.set_active_shot(self.b.shot_id)
-        labels = self._labels(self._menu([self._seq(10, 20), self._seq(120, 130)]))
-        self.assertEqual(labels[:2], ["Next Shot  (C)", "Previous Shot  (A)"])
-        self.assertEqual(
-            labels[3:],
-            ["A  [0\u201350]", "B  [60\u2013100]", "C  [110\u2013150]"],
-            "no single source, so no shot is excluded",
-        )
-
-    def test_next_shot_moves_into_the_following_shot(self):
-        menu = self._menu([self._seq(70, 90)], noun="key")
-        next(a for a in menu.actions() if a.text().startswith("Next Shot")).trigger()
-        self.assertEqual(self.moved, [(self.c.shot_id, "key", False)])
-
-    def test_previous_shot_moves_into_the_preceding_shot(self):
-        menu = self._menu([self._seq(70, 90)])
-        next(
-            a for a in menu.actions() if a.text().startswith("Previous Shot")
-        ).trigger()
-        self.assertEqual(self.moved, [(self.a.shot_id, "clip", False)])
-
-    # -- Move / Copy: one submenu (2026-10-07) ------------------------------
-
-    def _send_menu(self, seqs, suffix=""):
-        from qtpy import QtWidgets
-
-        parent = QtWidgets.QMenu()
-        sub = self.ctrl._add_send_to_shot_menu(parent, seqs, suffix=suffix)
-        self.addCleanup(parent.deleteLater)
-        return parent, sub
-
-    @staticmethod
-    def _copy_box(sub):
-        """The checkbox of the submenu's first row (``None`` when it has none)."""
-        from qtpy import QtWidgets
-
-        row = sub.actions()[0]
-        if not isinstance(row, QtWidgets.QWidgetAction):
-            return None
-        return row.defaultWidget().findChild(QtWidgets.QCheckBox)
-
-    def test_move_and_copy_share_one_list_of_shots(self):
-        """Not a Move and a Copy submenu listing the same shots twice: one
-        submenu, a Copy toggle at its head (2026-10-07: "Is there a way to make
-        this less redundant?")."""
-        parent, sub = self._send_menu([self._seq(70, 90)], suffix=" (2)")
-        self.assertEqual([a.menu() for a in parent.actions()], [sub])
-        self.assertEqual(sub.title(), "Move to Shot (2)")
-        box = self._copy_box(sub)
-        self.assertIsNotNone(box, "no Copy toggle heads the submenu")
-        self.assertFalse(box.isChecked())
-        self.assertEqual(
-            self._labels(sub)[1:4], ["---", "Next Shot  (C)", "Previous Shot  (A)"]
-        )
-
-    def test_the_copy_toggle_turns_a_pick_into_a_copy(self):
-        _parent, sub = self._send_menu([self._seq(70, 90)])
-        self._copy_box(sub).setChecked(True)
-        self.assertEqual(sub.title(), "Copy to Shot", "the title says what a pick does")
-        next(a for a in sub.actions() if a.text().startswith("Next Shot")).trigger()
-        self.assertEqual(self.moved, [(self.c.shot_id, "clip", True)])
-
-    def test_the_toggle_holds_for_the_next_menu(self):
-        _parent, sub = self._send_menu([self._seq(70, 90)])
-        self._copy_box(sub).setChecked(True)
-        _parent2, sub2 = self._send_menu([self._seq(70, 90)])
-        self.assertEqual(sub2.title(), "Copy to Shot")
-        self.assertTrue(self._copy_box(sub2).isChecked())
-
-
 class TestMoveKeysToShot(unittest.TestCase):
     """A key selection travels as a sequence: only the named keys, only on the
     named attribute -- what the key context menu's Move to Shot sends."""
@@ -13581,7 +11524,10 @@ class TestClipOverrunIsNotRippledTwice(unittest.TestCase):
 @unittest.skipUnless(HAS_MAYA, "requires Maya")
 class TestKeyTangentDrag(unittest.TestCase):
     """A dragged tangent handle lands on the curve as the angle (and, on a
-    weighted curve, the weight) the handle vector stands for."""
+    weighted curve, the weight) the handle vector stands for: the vector's
+    reading (``SequencerHost.tangent_from_handle``) and the curve preview the
+    drag starts from.  The panel's drag handler, committing it, is tentacle's
+    ``test_shot_sequencer_controller``."""
 
     def setUp(self):
         cmds.file(new=True, force=True)
@@ -13593,69 +11539,14 @@ class TestKeyTangentDrag(unittest.TestCase):
         self.crv = cmds.listConnections(f"{self.obj}.translateX", type="animCurve")[0]
         self.seq.define_shot("A", 0, 20, objects=[self.obj])
 
-    def _ctl(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        obj, seq, footers = self.obj, self.seq, []
-
-        class _Clip:
-            data = {"obj": obj, "attr_name": "translateX", "shot_id": 0}
-
-        class _Widget:
-            @staticmethod
-            def get_clip(_cid):
-                return _Clip()
-
-            @staticmethod
-            def select_keys(_wanted):
-                return 0
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):  # bypass the panel's __init__
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-
-            sequencer = seq
-
-            def _get_sequencer_widget(self):
-                return _Widget()
-
-            def _set_footer(self, text, **kw):
-                footers.append(text)
-
-            def _sync_to_widget(self, **kw):
-                pass
-
-        ctl = _Ctl()
-        ctl.footers = footers
-        return ctl
-
-    def _tangent(self, t, **flag):
-        return cmds.keyTangent(self.crv, q=True, time=(t, t), **flag)[0]
-
     def test_the_vector_reads_as_the_preview_writes_it(self):
-        ctl = self._ctl()
-        self.assertEqual(ctl.tangent_from_handle("out", 5.0, 5.0), (45.0, 5.0 * 2**0.5))
-        angle, _w = ctl.tangent_from_handle("in", -5.0, 5.0)
+        self.assertEqual(
+            SequencerHost.tangent_from_handle("out", 5.0, 5.0), (45.0, 5.0 * 2**0.5)
+        )
+        angle, _w = SequencerHost.tangent_from_handle("in", -5.0, 5.0)
         self.assertAlmostEqual(
             angle, -45.0, msg="an IN vector points back along the tangent"
         )
-
-    def test_an_out_drag_sets_the_out_angle(self):
-        ctl = self._ctl()
-        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
-        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
-        self.assertEqual(self._tangent(10, outTangentType=True), "fixed")
-
-    def test_an_in_drag_sets_the_in_angle(self):
-        ctl = self._ctl()
-        cmds.keyTangent(self.crv, edit=True, time=(10, 10), lock=False)
-        ctl.on_keys_tangent_dragged([(1, [(10.0, -4.0, 4.0)])], "in", False)
-        self.assertAlmostEqual(self._tangent(10, inAngle=True), -45.0, places=3)
 
     def test_the_preview_reports_whether_handle_LENGTHS_mean_anything(self):
         """The widget swings a unified key's other side by it: an unweighted
@@ -13683,358 +11574,13 @@ class TestKeyTangentDrag(unittest.TestCase):
         preview = SegmentCollector.build_curve_preview(self.crv, 0, 20)
         self.assertEqual(preview["broken"], [False, True, False])
 
-    def test_a_weighted_curve_takes_the_handle_length_as_weight(self):
-        cmds.keyTangent(self.crv, edit=True, weightedTangents=True)
-        ctl = self._ctl()
-        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 4.0)])], "out", False)
-        self.assertAlmostEqual(self._tangent(10, outWeight=True), 5.0, places=3)
-        self.assertTrue(any("handle dragged" in f for f in ctl.footers))
-
-    def test_a_carried_selection_writes_a_vector_per_key(self):
-        """One gesture, one undo chunk, a different angle on each key: the
-        drag carried the whole key selection."""
-        ctl = self._ctl()
-        ctl.on_keys_tangent_dragged(
-            [(1, [(0.0, 3.0, 0.0), (10.0, 3.0, 3.0)])], "out", False
-        )
-        self.assertAlmostEqual(self._tangent(0, outAngle=True), 0.0, places=3)
-        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
-
-    def test_an_unbroken_drag_swings_the_other_side(self):
-        """uitk swings a unified key's other handle live, under the cursor.
-        Maya has to write the same thing, or the release would snap it back."""
-        ctl = self._ctl()
-        self.assertTrue(self._tangent(10, lock=True), "the fixture key is unified")
-        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
-        self.assertAlmostEqual(self._tangent(10, inAngle=True), 45.0, places=3)
-
-    def test_a_broken_drag_unlocks_the_key_and_leaves_the_other_side(self):
-        ctl = self._ctl()
-        before = self._tangent(10, inAngle=True)
-        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", True)
-        self.assertFalse(self._tangent(10, lock=True), "Alt breaks the key")
-        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
-        self.assertAlmostEqual(
-            self._tangent(10, inAngle=True),
-            before,
-            places=3,
-            msg="a broken key does not swing its partner",
-        )
-        self.assertTrue(any("handle broken" in f for f in ctl.footers))
-
-    def test_the_retired_single_key_handler_stays_removed(self):
-        """``on_key_tangent_dragged`` answered uitk's single-key signal, which
-        nothing connected; both were retired 2026-09-21. One handler takes
-        every tangent drag, a lone key included."""
-        ctl = self._ctl()
-        self.assertFalse(hasattr(type(ctl), "on_key_tangent_dragged"))
-        ctl.on_keys_tangent_dragged([(1, [(10.0, 3.0, 3.0)])], "out", False)
-        self.assertAlmostEqual(self._tangent(10, outAngle=True), 45.0, places=3)
-        self.assertTrue(self._tangent(10, lock=True), "unbroken: the key stays unified")
-
-
-class TestARefusedDragReportsInsteadOfRaising(unittest.TestCase):
-    """A clip dragged past the bound must never answer with a traceback.
-
-    Overrunning expands the shot and ripples the neighbour, and the planner
-    REFUSES that ripple when it would force two shots' disagreeing poses
-    onto one frame.  Measured on a production assembly: the refusal came
-    straight out of ``on_clip_moved`` as an unhandled
-    ``ShotBoundaryConflict``, i.e. a traceback at the end of a mouse drag.
-    """
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        ShotStore.clear_active()
-        self.store = ShotStore()
-        ShotStore.set_active(self.store)
-        self.seq = ShotSequencer(store=self.store)
-
-    def _ctl(self, clip_data):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-        from mayatk.anim_utils.shots._shot_plan import ShotBoundaryConflict
-
-        seq, footers, warned, raised = self.seq, [], [], []
-
-        class _Clip:
-            data = clip_data
-            start = clip_data["orig_start"]
-            end = clip_data["orig_end"]
-
-        class _Widget:
-            shift_held_at_press = False
-
-            @staticmethod
-            def get_clip(_cid):
-                return _Clip()
-
-        class _Log:
-            @staticmethod
-            def warning(msg):
-                warned.append(msg)
-
-            @staticmethod
-            def debug(*a, **kw):
-                pass
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):  # bypass the panel's __init__
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-                self._shifted_out_keys = {}
-
-            sequencer = seq
-            logger = _Log()
-
-            def _get_sequencer_widget(self):
-                return _Widget()
-
-            def _set_footer(self, text, **kw):
-                footers.append(text)
-
-            def _sync_to_widget(self, **kw):
-                pass
-
-            def _sync_combobox(self):
-                pass
-
-            def _discard_shot_state(self):
-                pass
-
-            def _expand_shot_range(self, *_a, **_kw):
-                # The refusal's real origin: expanding past the bound ripples
-                # the neighbour, and the planner declines the ripple.
-                exc = ShotBoundaryConflict(["p"])
-                raised.append(exc)
-                raise exc
-
-        ctl = _Ctl()
-        ctl.footers, ctl.warned, ctl.raised = footers, warned, raised
-        return ctl
-
-    def _cube(self, name, keys):
-        node = cmds.polyCube(name=name)[0]
-        for t, v in sorted(keys.items()):
-            cmds.setKeyframe(node, attribute="translateX", time=t, value=v)
-        return node
-
-    def _clip_data(self, obj, shot_id):
-        return {
-            "obj": obj,
-            "attr_name": "translateX",  # the sub-row path
-            "orig_start": 10.0,
-            "orig_end": 20.0,
-            "shot_id": shot_id,
-        }
-
-    def test_a_single_drag_reports_the_refusal(self):
-        a = self._cube("refuseA", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl(self._clip_data(a, shot.shot_id))
-
-        ctl.on_clip_moved(1, 40.0)  # must not raise
-
-        self.assertEqual(ctl.warned, [str(ctl.raised[0])], "the refusal is logged")
-        self.assertEqual(
-            ctl.footers[-1],
-            str(ctl.raised[0]),
-            "the refusal must be the notice left standing, not overwritten "
-            f"by a success message: {ctl.footers}",
-        )
-
-    def test_a_batch_drag_reports_the_refusal(self):
-        a = self._cube("refuseB", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl(self._clip_data(a, shot.shot_id))
-
-        ctl.on_clips_batch_moved([(1, 40.0)])  # must not raise
-
-        self.assertEqual(ctl.warned, [str(ctl.raised[0])])
-        self.assertEqual(ctl.footers[-1], str(ctl.raised[0]), f"{ctl.footers}")
-
-    def test_the_keys_that_already_moved_are_still_undoable(self):
-        """Each ripple declines before IT writes and a clip makes room before
-        it lands (2026-09-22), but ``_expand_shot_range`` ripples the head
-        before the tail -- a refused tail can follow a head that already
-        moved the scene, so the restore point must survive the refusal."""
-        a = self._cube("refuseC", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl(self._clip_data(a, shot.shot_id))
-        dropped = []
-        ctl._discard_shot_state = lambda: dropped.append(True)
-
-        ctl.on_clip_moved(1, 40.0)
-
-        self.assertEqual(
-            dropped, [], "the scene changed, so the undo step must be kept"
-        )
-
-
-class TestContextMenuPadding(unittest.TestCase):
-    """The context menu's Add Leading/Trailing Frames entries.
-
-    How much room a shot needs is the whole question the gesture asks, so the
-    entries prompt for it; the field opens on the last answer so a run of
-    shots padded by the same beat costs one keystroke each.
-    """
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        ShotStore.clear_active()
-        self.store = ShotStore()
-        ShotStore.set_active(self.store)
-        self.seq = ShotSequencer(store=self.store)
-
-    def _ctl(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        seq = self.seq
-        footers = []
-
-        class _Ctl(ShotSequencerController):
-            def __init__(self):  # bypass the panel's __init__
-                self._segment_cache = {}
-                self._sub_row_cache = {}
-                self._audio_segments_cache = None
-                self._syncing = False
-                self._context_space_frames = self.CONTEXT_SPACE_FRAMES
-
-            sequencer = seq
-
-            def _set_footer(self, text, **kw):
-                footers.append(text)
-
-            def _after_shot_change(self, shot_id=None):
-                pass
-
-            # _discard_shot_state is deliberately NOT stubbed: dropping the
-            # dead restore point is behaviour under test here, and the real
-            # one only needs ``sequencer``, which this host supplies.
-
-        ctl = _Ctl()
-        ctl.footers = footers
-        return ctl
-
-    def _cube(self, name, keys):
-        node = cmds.polyCube(name=name)[0]
-        for t, v in sorted(keys.items()):
-            cmds.setKeyframe(node, attribute="translateX", time=t, value=v)
-        return node
-
-    def test_the_prompt_opens_on_a_beat_of_room(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        self.assertEqual(ShotSequencerController.CONTEXT_SPACE_FRAMES, 15.0)
-
-    # -- the amount prompt -------------------------------------------------
-
-    def _prompting(self, answer):
-        """A controller whose ``input_dialog`` returns *answer*, kwargs recorded."""
-        import types
-
-        ctl = self._ctl()
-        seen = {}
-        padded = []
-
-        def _dialog(**kwargs):
-            seen.update(kwargs)
-            return answer
-
-        ctl.sb = types.SimpleNamespace(input_dialog=_dialog)
-        ctl.ui = None
-        ctl._get_sequencer_widget = lambda: None
-        ctl._add_shot_space = lambda shot_id, frames, edge: padded.append(
-            (shot_id, frames, edge)
-        )
-        return ctl, seen, padded
-
-    def test_the_typed_amount_is_what_gets_padded(self):
-        shot = self.seq.define_shot("A", 10, 20)
-        ctl, seen, padded = self._prompting("42")
-        ctl._prompt_shot_space(shot, edge="leading")
-        self.assertEqual(padded, [(shot.shot_id, 42.0, "leading")])
-        self.assertEqual(seen["text"], "15", "field opens on the class default")
-
-    def test_the_prompt_remembers_the_last_answer(self):
-        shot = self.seq.define_shot("A", 10, 20)
-        ctl, _seen, _padded = self._prompting("42")
-        ctl._prompt_shot_space(shot, edge="leading")
-        ctl2, seen2, _p2 = self._prompting("7")
-        ctl2._context_space_frames = ctl._context_space_frames
-        ctl2._prompt_shot_space(shot, edge="trailing")
-        self.assertEqual(seen2["text"], "42")
-
-    def test_cancelling_the_prompt_pads_nothing(self):
-        shot = self.seq.define_shot("A", 10, 20)
-        ctl, _seen, padded = self._prompting(None)
-        ctl._prompt_shot_space(shot, edge="leading")
-        self.assertEqual(padded, [])
-        self.assertEqual(ctl._context_space_frames, ctl.CONTEXT_SPACE_FRAMES)
-
-    def test_a_negative_amount_is_accepted(self):
-        """Removing room is the same control in the other direction —
-        ``add_shot_space`` clamps it to what is actually empty."""
-        shot = self.seq.define_shot("A", 10, 20)
-        ctl, seen, padded = self._prompting("-5")
-        ctl._prompt_shot_space(shot, edge="leading")
-        self.assertEqual(padded, [(shot.shot_id, -5.0, "leading")])
-        self.assertTrue(seen["validate"]("-5"))
-
-    def test_the_validator_rejects_junk_and_zero(self):
-        shot = self.seq.define_shot("A", 10, 20)
-        ctl, seen, _padded = self._prompting("1")
-        ctl._prompt_shot_space(shot, edge="leading")
-        validate = seen["validate"]
-        for bad in ("", "  ", "abc", "0", "0.0", "12f"):
-            self.assertFalse(validate(bad), f"{bad!r} should be rejected")
-        for good in ("1", " 2.5 ", "-3"):
-            self.assertTrue(validate(good), f"{good!r} should be accepted")
-
-    def test_leading_padding_holds_the_start_and_pushes_the_content(self):
-        a = self._cube("padMenuA", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl()
-        ctl._add_shot_space(shot.shot_id, ctl.CONTEXT_SPACE_FRAMES, edge="leading")
-        self.assertEqual((shot.start, shot.end), (10.0, 35.0))
-        self.assertEqual(
-            sorted(cmds.keyframe(f"{a}.translateX", q=True, timeChange=True)),
-            [25.0, 35.0],
-        )
-
-    def test_trailing_padding_leaves_the_content_alone(self):
-        a = self._cube("padMenuB", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl()
-        ctl._add_shot_space(shot.shot_id, ctl.CONTEXT_SPACE_FRAMES, edge="trailing")
-        self.assertEqual((shot.start, shot.end), (10.0, 35.0))
-        self.assertEqual(
-            sorted(cmds.keyframe(f"{a}.translateX", q=True, timeChange=True)),
-            [10.0, 20.0],
-        )
-
-    def test_a_no_op_pad_leaves_no_dead_restore_point(self):
-        """A restore point nothing moved would make the next undo do nothing
-        visible -- the same contract the trim actions already keep."""
-        a = self._cube("padMenuC", {10: 0, 20: 1})
-        shot = self.seq.define_shot("A", 10, 20, objects=[a])
-        ctl = self._ctl()
-        ctl._add_shot_space(shot.shot_id, 0.0, edge="leading")
-        self.assertFalse(self.store.has_boundary_snapshot())
-        self.assertTrue(any("nothing to do" in f for f in ctl.footers))
-
 
 class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
     """Following the panel's shot must not cost an undo step either.
 
-    ``_apply_view_playback_range`` runs after EVERY panel action -- shot
+    The Sequencer panel's ``_apply_view_playback_range`` (tentacle) sets the
+    range through ``SequencerHost.set_playback_range``, tested here, and runs
+    after EVERY panel action -- shot
     create/delete/insert/merge/split, every gap and range drag, every shot
     switch and view-mode change -- and ``cmds.playbackOptions`` is undoable.
     Unguarded it cost a Ctrl+Z per action, and it landed on the queue AFTER
@@ -14060,25 +11606,11 @@ class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
                 return i
         return -1
 
-    def _nav(self, mode="locked"):
-        """The mixin bound to the smallest host that satisfies its contract."""
-        from mayatk.anim_utils.shots.shot_sequencer.shot_nav import ShotNavMixin
-
-        seq, store = self.seq, self.store
-
-        class _Ctl(ShotNavMixin):
-            sequencer = seq
-            _playback_range_mode = mode
-            _shot_display_mode = "active"
-
-            @property
-            def active_shot_id(self):
-                return store.active_shot_id
-
-            def _visible_shots(self, shot):
-                return [shot]
-
-        return _Ctl()
+    @staticmethod
+    def _follow(shot):
+        """What the panel does after an action, locked to *shot*: the range
+        through the host's writer."""
+        SequencerHost.set_playback_range(shot.start, shot.end)
 
     def test_playback_options_is_undoable_at_all(self):
         """The premise: without the guard this really does cost a step."""
@@ -14094,13 +11626,13 @@ class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
         shot = self.seq.define_shot("A", 10, 60, objects=[])
         self.store.set_active_shot(shot.shot_id)
         cmds.polyCube(name="undoAnchor")
-        self._nav()._apply_view_playback_range()
+        self._follow(shot)
         self.assertEqual(self._undo_cost("undoAnchor"), 1)
 
     def test_the_guard_does_not_cost_the_feature(self):
         shot = self.seq.define_shot("A", 10, 60, objects=[])
         self.store.set_active_shot(shot.shot_id)
-        self._nav()._apply_view_playback_range()
+        self._follow(shot)
         self.assertEqual(
             (
                 cmds.playbackOptions(q=True, min=True),
@@ -14117,7 +11649,7 @@ class TestViewMirrorsStayOffTheUndoQueue(unittest.TestCase):
             shot = self.seq.insert_shot(name="Shot_1", duration=100.0, gap=5.0)
         self.store.set_active_shot(shot.shot_id)
         tag = self.store.peek_boundary_tag()
-        self._nav()._apply_view_playback_range()
+        self._follow(shot)
         self.assertIsInstance(tag, tuple)
         self.assertEqual(tag[1], self.store.undo_queue_top())
 
@@ -14132,7 +11664,9 @@ class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
     gesture (which mirrors one entry per curve per key) took many presses to
     reverse.  It also left the queue top owned by a selection, which is what
     ``_undo_plan``'s marker test reads to decide whether the shot-bounds
-    restore point is still ours.
+    restore point is still ours.  The guards are the host's writers
+    (``SequencerHost.select_keys`` / ``mirror_selection``); the panel's mirror,
+    end to end, is tentacle's ``test_shot_sequencer_controller``.
     """
 
     def setUp(self):
@@ -14173,88 +11707,25 @@ class TestSelectionMirrorsStayOffTheUndoQueue(unittest.TestCase):
         )
 
     def test_key_selection_mirror_costs_no_undo_step(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        class _Clip:
-            data = {"obj": None, "attr_name": "translateX"}
-
-        class _Widget:
-            def __init__(self, clip):
-                self._clip = clip
-
-            def get_clip(self, _cid):
-                return self._clip
-
-        class _Ctl(ShotSequencerController):
-            # Subclassed, not duck-typed: __init__ is skipped (there is no
-            # panel here) but every helper the mirror leans on comes along.
-            _syncing = False
-            ui = None  # no panel: the key line has no footer to go on
-
-            def __init__(self, widget):
-                self._widget = widget
-
-            def _get_sequencer_widget(self):
-                return self._widget
-
-        clip = _Clip()
-        clip.data = dict(clip.data, obj=self.obj)
-        ctl = _Ctl(_Widget(clip))
-
         before = self._times()
         self._edit()
-        ShotSequencerController.on_key_selection_changed(
-            ctl, [{"clip_id": 0, "times": self._times()}]
-        )
+        SequencerHost.select_keys([(self.obj, "translateX", self._times())])
         self.assertEqual(self._undo_cost(before), 1)
 
     def test_key_selection_mirror_still_selects(self):
         """The guard must not cost the feature it protects."""
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        class _Clip:
-            pass
-
-        clip = _Clip()
-        clip.data = {"obj": self.obj, "attr_name": "translateX"}
-
-        class _Widget:
-            def get_clip(self, _cid):
-                return clip
-
-        class _Ctl(ShotSequencerController):
-            _syncing = False
-            ui = None  # no panel: the key line has no footer to go on
-
-            def __init__(self):
-                pass  # no panel to build; the mirror needs none
-
-            def _get_sequencer_widget(self):
-                return _Widget()
-
         cmds.selectKey(clear=True)
-        ShotSequencerController.on_key_selection_changed(
-            _Ctl(), [{"clip_id": 0, "times": [5.0, 13.0]}]
-        )
+        n = SequencerHost.select_keys([(self.obj, "translateX", [5.0, 13.0])])
         selected = sorted(
             round(t, 3) for t in (cmds.keyframe(self.crv, q=True, selected=True) or [])
         )
         self.assertEqual(selected, [5.0, 13.0])
+        self.assertEqual(n, 2)
 
     def test_object_selection_mirror_costs_no_undo_step(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
         before = self._times()
         self._edit()
-        # _select_and_show touches no instance state, so it can be called
-        # unbound -- the point of the test is the cmds.select inside it.
-        ShotSequencerController._select_and_show(None, [self.obj])
+        SequencerHost.mirror_selection([self.obj])
         self.assertEqual(self._undo_cost(before), 1)
         self.assertIn(
             self.obj, [n.split("|")[-1] for n in (cmds.ls(selection=True) or [])]
@@ -14273,7 +11744,8 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
     read the noise as "an unrelated edit followed ours".
 
     A real edit on top is the case that must NOT change: the panel's undo
-    then belongs to that edit, exactly as before.
+    then belongs to that edit, exactly as before.  The walk and the split are
+    the host's (``SequencerHost.step_undo``, the panel's Undo / Redo).
     """
 
     def setUp(self):
@@ -14284,19 +11756,11 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
     def tearDown(self):
         ShotStore.clear_active()
 
-    def _controller(self):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
+    def _store(self):
         store = ShotStore()
         store.define_shot("A", 0, 50)
         store.define_shot("B", 60, 100)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        ctrl._syncing = False
-        ctrl.logger = logging.getLogger("test_sequencer.noise")
-        return ctrl, store
+        return store
 
     def _edit(self, store, name="noise_loc"):
         """A real shot edit, tagged and paired the way the panel's are."""
@@ -14316,326 +11780,74 @@ class TestBookkeepingEntriesDoNotCostAnUndo(unittest.TestCase):
             cmds.undoInfo(closeChunk=True)
 
     def test_the_edit_is_reachable_under_one_bookkeeping_entry(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._edit(store)
         marker = store.peek_boundary_tag()[1]
         self._noise(loc)
         self.assertNotEqual(store.undo_queue_top(), marker)
-        self.assertTrue(ctrl._step_past_queue_noise())
+        self.assertTrue(SequencerHost._step_past_queue_noise(store))
         self.assertEqual(store.undo_queue_top(), marker)
-        self.assertEqual(ctrl._undo_plan(), (True, True))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, True))
 
     def test_it_steps_past_several(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._edit(store)
         marker = store.peek_boundary_tag()[1]
         for _ in range(3):
             self._noise(loc)
-        self.assertTrue(ctrl._step_past_queue_noise())
+        self.assertTrue(SequencerHost._step_past_queue_noise(store))
         self.assertEqual(store.undo_queue_top(), marker)
 
     def test_a_real_edit_on_top_is_left_alone(self):
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._edit(store)
         with CoreUtils.undo_chunk("unrelated_edit"):
             cmds.setAttr(loc + ".translateY", 5)
         top = store.undo_queue_top()
-        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertFalse(SequencerHost._step_past_queue_noise(store))
         self.assertEqual(store.undo_queue_top(), top)
-        self.assertEqual(ctrl._undo_plan(), (False, True))
+        self.assertEqual(SequencerHost._undo_plan(store), (False, True))
 
     def test_noise_above_a_real_edit_is_put_back(self):
         """The marker is unreachable, so nothing may be consumed on the way."""
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._edit(store)
         with CoreUtils.undo_chunk("unrelated_edit"):
             cmds.setAttr(loc + ".translateY", 5)
         self._noise(loc)
         before = cmds.getAttr(loc + ".translateY")
-        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertFalse(SequencerHost._step_past_queue_noise(store))
         self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
         self.assertEqual(cmds.getAttr(loc + ".translateY"), before)
 
     def test_our_own_chunk_on_top_moves_nothing(self):
-        ctrl, store = self._controller()
+        store = self._store()
         self._edit(store)
-        self.assertFalse(ctrl._step_past_queue_noise())
-        self.assertEqual(ctrl._undo_plan(), (True, True))
+        self.assertFalse(SequencerHost._step_past_queue_noise(store))
+        self.assertEqual(SequencerHost._undo_plan(store), (True, True))
 
     def test_an_unpaired_restore_point_is_never_walked(self):
         """An edit made with undo off put nothing on the queue, so nothing
         below the top is ours to reach."""
-        ctrl, store = self._controller()
+        store = self._store()
         loc = cmds.spaceLocator(name="unpaired_loc")[0]
         _unpaired_bounds_edit(store)
         self._noise(loc)
-        self.assertFalse(ctrl._step_past_queue_noise())
+        self.assertFalse(SequencerHost._step_past_queue_noise(store))
         self.assertEqual(store.undo_queue_top(), "selectionMaskResetAll")
 
     def test_one_undo_reverses_the_edit_under_the_noise(self):
         """The whole point, end to end: one panel undo, edit reversed."""
-        ctrl, store = self._controller()
+        store = self._store()
         loc = self._edit(store)
         self._noise(loc)
         self._noise(loc)
-        ctrl._after_shot_change = lambda *a, **kw: None  # no panel to refresh
-        ctrl.on_undo()
+        SequencerHost.step_undo(store)  # the panel's Undo, its redraw aside
         self.assertEqual(
             cmds.keyframe(loc, at="translateX", q=True, timeChange=True),
             [1.0],
             "the key the edit added must be gone after ONE undo",
         )
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestGroupClipScaleIsOneEdit(unittest.TestCase):
-    """An edge drag that scaled several clips arrives as ONE payload.
-
-    The widget sends ``clips_batch_resized`` for a selection, already ordered
-    so committing them one at a time never lands a clip on a span another has
-    not left yet.  The controller must commit the whole list inside one
-    ``scene_edit`` -- the gesture is one edit, so it is one Ctrl+Z.
-    """
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        cmds.undoInfo(state=True, infinity=True)
-        ShotStore.clear_active()
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    class _Clip:
-        def __init__(self, data):
-            self.data = data
-
-    class _Widget:
-        def __init__(self, clips):
-            self._clips = clips
-
-        def get_clip(self, cid):
-            return self._clips.get(cid)
-
-    def _controller(self, clips):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        store = ShotStore()
-        store.define_shot("A", 0, 100)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        ctrl._syncing = False
-        ctrl._segment_cache = {}
-        ctrl._sub_row_cache = {}
-        ctrl.logger = logging.getLogger("test_sequencer.groupscale")
-        widget = self._Widget(clips)
-        ctrl._get_sequencer_widget = lambda: widget
-        ctrl._gap_edit_epilogue = lambda: None
-        ctrl._set_footer = lambda *a, **kw: None
-        ctrl._discard_shot_state = lambda: None
-        return ctrl, store
-
-    def _keyed(self, name, times):
-        loc = cmds.spaceLocator(name=name)[0]
-        for i, t in enumerate(times):
-            cmds.setKeyframe(loc, at="translateX", t=t, v=float(i))
-        return loc
-
-    def _clip(self, obj, lo, hi, attr="translateX"):
-        return self._Clip(
-            {
-                "obj": obj,
-                "attr_name": attr,
-                "shot_id": 0,
-                "orig_start": lo,
-                "orig_end": hi,
-            }
-        )
-
-    def test_two_clips_scale_and_reverse_in_one_undo(self):
-        a = self._keyed("scale_a", [0, 10])
-        b = self._keyed("scale_b", [20, 30])
-        clips = {1: self._clip(a, 0, 10), 2: self._clip(b, 20, 30)}
-        ctrl, store = self._controller(clips)
-        ctrl.on_clips_batch_resized([(1, 0.0, 5.0), (2, 10.0, 5.0)])
-        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 5.0])
-        self.assertEqual(cmds.keyframe(b, q=True, timeChange=True), [10.0, 15.0])
-        paired, marker = store.peek_boundary_tag()
-        self.assertTrue(paired)
-        self.assertEqual(marker, store.undo_queue_top())
-        cmds.undo()
-        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 10.0])
-        self.assertEqual(cmds.keyframe(b, q=True, timeChange=True), [20.0, 30.0])
-
-    def test_a_single_resize_still_goes_through_the_same_commit(self):
-        a = self._keyed("solo_a", [0, 10])
-        ctrl, store = self._controller({1: self._clip(a, 0, 10)})
-        ctrl.on_clip_resized(1, 0.0, 5.0)
-        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 5.0])
-        cmds.undo()
-        self.assertEqual(cmds.keyframe(a, q=True, timeChange=True), [0.0, 10.0])
-
-    def test_an_all_noop_batch_drops_its_restore_point(self):
-        clips = {1: self._Clip({"is_audio": True, "shot_id": 0, "obj": "snd"})}
-        ctrl, store = self._controller(clips)
-        dropped = []
-        ctrl._discard_shot_state = lambda: dropped.append(True)
-        ctrl.on_clips_batch_resized([(1, 0.0, 5.0)])
-        self.assertEqual(dropped, [True], "a batch that wrote nothing is not an edit")
-
-    def test_an_empty_batch_is_a_no_op(self):
-        ctrl, _store = self._controller({})
-        ctrl.on_clips_batch_resized([])
-
-
-@unittest.skipUnless(HAS_MAYA, "requires Maya")
-class TestKeyDeletePathsRaiseTheSyncGuard(unittest.TestCase):
-    """Every path that cuts keys must hold ``_syncing`` while it does.
-
-    ``cutKey`` fires the controller's ``MAnimMessage`` callbacks
-    SYNCHRONOUSLY, and an unguarded pass arms the 200 ms keyframe debounce
-    into a SECOND full rebuild on top of the explicit one the delete already
-    does -- two teardowns of the same key dots a fifth of a second apart,
-    from inside the Delete key's own dispatch.  Two of the three delete paths
-    had no guard until 2026-09-11; this is the invariant, so a fourth cannot
-    be written without one.
-
-    (``_delete_selected_clip_keys``, the third, reads the live scene
-    selection and so needs a real widget: it is covered end to end by
-    ``shot_sequencer_real_scene_check.py --only delete_highlighted_keys``.)
-    """
-
-    def setUp(self):
-        cmds.file(new=True, force=True)
-        cmds.undoInfo(state=True, infinity=True)
-        ShotStore.clear_active()
-
-    def tearDown(self):
-        ShotStore.clear_active()
-
-    class _Clip:
-        def __init__(self, data):
-            self.data = data
-
-    class _Widget:
-        def __init__(self, clips):
-            self._clips = clips
-
-        def get_clip(self, cid):
-            return self._clips.get(cid)
-
-    def _controller(self, clips):
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        store = ShotStore()
-        store.define_shot("A", 0, 100)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        ctrl._syncing = False
-        ctrl._segment_cache = {}
-        ctrl._sub_row_cache = {}
-        ctrl.logger = logging.getLogger("test_sequencer.deleteguard")
-        widget = self._Widget(clips)
-        ctrl._get_sequencer_widget = lambda: widget
-        ctrl._sync_to_widget = lambda *a, **kw: None
-        ctrl._set_footer = lambda *a, **kw: None
-        ctrl._discard_shot_state = lambda: None
-        ctrl._resolve_full_name = lambda name: name
-        return ctrl, store
-
-    @staticmethod
-    def _spy_guard(ctrl, store):
-        """Record ``_syncing`` as the edit's ``scene_edit`` opens."""
-        import contextlib
-
-        seen = []
-        real = store.scene_edit
-
-        @contextlib.contextmanager
-        def spy(label="edit", snapshot=True):
-            seen.append(ctrl._syncing)
-            with real(label, snapshot=snapshot):
-                yield
-
-        store.scene_edit = spy
-        return seen
-
-    def _keyed(self, name, times):
-        loc = cmds.spaceLocator(name=name)[0]
-        for i, t in enumerate(times):
-            cmds.setKeyframe(loc, at="translateX", t=t, v=float(i))
-        return loc
-
-    def test_delete_clip_keys_holds_the_guard(self):
-        obj = self._keyed("del_clip_loc", [0, 10, 20])
-        clips = {
-            1: self._Clip(
-                {
-                    "obj": obj,
-                    "attributes": ["translateX"],
-                    "orig_start": 0,
-                    "orig_end": 20,
-                }
-            )
-        }
-        ctrl, store = self._controller(clips)
-        seen = self._spy_guard(ctrl, store)
-        ctrl._delete_clip_keys([1])
-        self.assertEqual(seen, [True])
-        self.assertFalse(ctrl._syncing, "the guard must be released afterwards")
-        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True) or [], [])
-
-    def test_on_keys_deleted_holds_the_guard(self):
-        obj = self._keyed("del_keys_loc", [0, 10, 20])
-        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
-        ctrl, store = self._controller(clips)
-        seen = self._spy_guard(ctrl, store)
-        ctrl.on_keys_deleted(1, [10.0])
-        self.assertEqual(seen, [True])
-        self.assertFalse(ctrl._syncing)
-        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True), [0.0, 20.0])
-
-    def test_on_keys_deleted_takes_every_claim_on_the_key(self):
-        obj = self._keyed("del_claim_loc", [0, 10, 20])
-        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
-        ctrl, store = self._controller(clips)
-        crv = cmds.listConnections(f"{obj}.translateX", type="animCurve")[0]
-        store.edit_ledger.record_authored(crv, 10.0, 0, "fade_in", obj)
-
-        ctrl.on_keys_deleted(1, [10.0])
-
-        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True), [0.0, 20.0])
-        self.assertFalse(store.edit_ledger.owns_any(crv, 10.0))
-
-    def test_the_delete_key_takes_every_claim_on_the_keys_it_cuts(self):
-        """The Delete key over a KEY selection (``_delete_selected_clip_keys``),
-        the selection stood in for by the widget's ``selected_keys``."""
-        obj = self._keyed("del_sel_loc", [0, 10, 20])
-        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
-        ctrl, store = self._controller(clips)
-        crv = cmds.listConnections(f"{obj}.translateX", type="animCurve")[0]
-        store.edit_ledger.record_authored(crv, 10.0, 0, "fade_in", obj)
-
-        widget = ctrl._get_sequencer_widget()
-        widget.selected_keys = lambda: [{"clip_id": 1, "times": [10.0]}]
-        # No panel: the refresh after the edit reads the shot combo.
-        with patch.object(type(ctrl), "active_shot_id", None):
-            ctrl._delete_selected_clip_keys()
-
-        self.assertEqual(cmds.keyframe(obj, q=True, timeChange=True), [0.0, 20.0])
-        self.assertFalse(store.edit_ledger.owns_any(crv, 10.0))
-
-    def test_the_guard_is_restored_not_cleared(self):
-        """A caller already inside its own guarded edit keeps it afterwards."""
-        obj = self._keyed("nested_loc", [0, 10, 20])
-        clips = {1: self._Clip({"obj": obj, "attr_name": "translateX", "shot_id": 0})}
-        ctrl, _store = self._controller(clips)
-        ctrl._syncing = True
-        ctrl.on_keys_deleted(1, [10.0])
-        self.assertTrue(ctrl._syncing)
 
 
 class TestSegmentCollectorSummaryTimes(unittest.TestCase):
@@ -14681,64 +11893,6 @@ class TestSegmentCollectorSummaryTimes(unittest.TestCase):
         self.seq.ledger.record_key(self.tx, 50.0, 0, "end")
         self.seq.ledger.record_key(self.ty, 50.0, 0, "end")
         self.assertEqual(self._summary(), [1.0, 20.0])
-
-
-class TestResolveFullName(unittest.TestCase):
-    """``_resolve_full_name``: a name the shots already hold is its own
-    answer -- the graph outline names objects that way, and its row menu's
-    Hide / Delete Track carry those names -- before a leaf match that could
-    pick another object of the same leaf name."""
-
-    def _controller(self, *shots):
-        """A controller over one shot per *shots* entry (its objects)."""
-        from mayatk.anim_utils.shots.shot_sequencer.shot_sequencer_slots import (
-            ShotSequencerController,
-        )
-
-        store = ShotStore()
-        for i, objects in enumerate(shots):
-            store.define_shot(f"S{i}", i * 100, i * 100 + 50, objects=objects)
-        ctrl = ShotSequencerController.__new__(ShotSequencerController)
-        ctrl._sequencer = ShotSequencer(store=store)
-        return ctrl
-
-    def test_a_held_name_resolves_to_itself(self):
-        # The earlier shot's object shares the later one's leaf name.
-        ctrl = self._controller(["|grp|wrench"], ["wrench"])
-        self.assertEqual(ctrl._resolve_full_name("wrench"), "wrench")
-        self.assertEqual(ctrl._resolve_full_name("|grp|wrench"), "|grp|wrench")
-
-    def test_a_leaf_name_still_finds_its_object(self):
-        ctrl = self._controller(["|grp|nut"])
-        self.assertEqual(ctrl._resolve_full_name("nut"), "|grp|nut")
-
-    def test_every_track_label_resolves_back_to_its_object(self):
-        # The track header's Hide / Delete Track hand a track's label back
-        # through ``_resolve_full_name``.  Labelled by leaf name alone, two
-        # held objects of one leaf name (path-held, or one held bare) sent
-        # each other's actions to the same object.
-        cmds.file(new=True, force=True)
-        cmds.group(empty=True, name="grp")
-        for name in ("wrench", "bolt", "nut"):
-            cmds.createNode("transform", name=name, parent="grp")
-        for name in ("wrench", "bolt"):
-            cmds.createNode("transform", name=name)
-        ctrl = self._controller(
-            ["|grp|wrench", "|grp|bolt"], ["wrench", "|bolt", "|grp|nut"]
-        )
-        ctrl._track_order_scope = "global"
-        ctrl._try_load_maya_icons = lambda: None
-
-        class _Widget:
-            @staticmethod
-            def add_track(label, **_kw):
-                return label
-
-        objects = ["|grp|wrench", "wrench", "|grp|bolt", "|bolt", "|grp|nut"]
-        labels = ctrl._build_tracks(_Widget(), objects, objects)
-        self.assertEqual(labels["|grp|nut"], "nut")
-        for obj in objects:
-            self.assertEqual(ctrl._resolve_full_name(labels[obj]), obj)
 
 
 class TestSwapAndCopyShotKeys(unittest.TestCase):

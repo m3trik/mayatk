@@ -39,8 +39,27 @@ __all__ = ["GraphSync"]
 class GraphSync:
     """Feeds the sequencer's graph editor and commits its edits (module docstring).
 
+    The Shot Sequencer panel is tentacle's, one for both hosts; this class is
+    Maya's half of its graph view, built by the panel through
+    ``SequencerHost.graph_sync_cls()``.  It reaches the panel's controller
+    through this protocol and nothing else of it:
+
+    * state: ``sequencer``, ``active_shot_id``, ``_syncing`` (held around an
+      edit), ``_segment_cache`` / ``_sub_row_cache`` (cleared after one),
+      ``_content_stale`` (set when the track rows are left stale) and
+      ``_key_target_sources``;
+    * reads: ``_visible_shots(shot)``;
+    * the key path: ``_expand_and_compensate(curve_moves, shot_extents)`` and
+      ``_commit_curve_moves(curve_moves, ledger=...)`` with Maya's
+      ``curve_moves`` -- ``{curve: {"curve": curve, "pairs": [(old, new,
+      shot_id), ...], "plug": "obj.attr"}}`` -- ``register_key_targets(name,
+      source)`` and
+      ``_add_selection_key_actions(menu, targets, suffix)``;
+    * after an edit: ``_sync_to_widget()``, ``_sync_combobox()`` and
+      ``_set_footer(text)``.
+
     Parameters:
-        controller: The panel's ``ShotSequencerController``.
+        controller: The panel's controller (the protocol above).
         widget: Its ``SequencerWidget``.
     """
 
@@ -241,7 +260,7 @@ class GraphSync:
         out) and the frame window those shots span.
 
         Read from the store, not from the track rows: those are not built
-        while the graph shows (``WidgetSyncMixin._rebuild_content``).
+        while the graph shows (the panel's ``_rebuild_content``).
         """
         ctl = self.controller
         seq = ctl.sequencer
@@ -376,7 +395,7 @@ class GraphSync:
                     shot_extents[sid] = (min(lo, t + dt), max(hi, t + dt))
             if pairs:
                 plug = self._plugs.get(curve, curve)
-                curve_moves[curve] = {"pairs": pairs, "plug": plug}
+                curve_moves[curve] = {"curve": curve, "pairs": pairs, "plug": plug}
         if not values and not curve_moves:
             self._on_preview_cancelled()  # nothing to commit: hand live writes back
             return
@@ -407,24 +426,17 @@ class GraphSync:
         )
 
     def on_tangents_edited(self, rows) -> None:
-        """Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``."""
-        from mayatk.anim_utils.shots.shot_sequencer.key_menu import KeyMenuMixin
+        """Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``,
+        through the host's one handle writer (``SequencerHost.set_dragged_handles``,
+        which the track view's handle drag writes through too)."""
+        from mayatk.anim_utils.shots.shot_sequencer.sequencer_host import (
+            SequencerHost,
+        )
 
         n = 0
         with self._edit(None, "Graph tangents"):
             for curve, items in rows:
-                weighted = bool(cmds.getAttr(f"{curve}.weightedTangents"))
-                for t, side, dt, dv, broken in items:
-                    angle, weight = KeyMenuMixin.tangent_from_handle(side, dt, dv)
-                    flags = {f"{side}Angle": angle}
-                    if weighted:
-                        flags[f"{side}Weight"] = weight
-                    tt = (t - 1e-3, t + 1e-3)
-                    if broken:
-                        # Unlocked BEFORE the angle, or the other side swings too.
-                        cmds.keyTangent(curve, edit=True, time=tt, lock=False)
-                    cmds.keyTangent(curve, edit=True, time=tt, **flags)
-                    n += 1
+                n += SequencerHost.set_dragged_handles(curve, items)
         self._after(
             f"Tangents set on {n} key{'s' if n != 1 else ''}",
             bounds=False,
@@ -532,7 +544,7 @@ class GraphSync:
     def key_targets(self, groups=None) -> list:
         """``[(obj, attr, [times], shot_id), ...]`` for the graph's key
         selection (or *groups*, ``[(curve, [times])]``): the shape the key
-        menu and the key shortcuts act on (``KeyMenuMixin._key_targets``)."""
+        menu and the key shortcuts act on (the panel's ``_key_targets``)."""
         if groups is None:
             groups = self.editor.selected_keys()
         targets = []

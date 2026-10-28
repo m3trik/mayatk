@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 266,
+          "line": 267,
           "deprecated": false
         }
       ]
@@ -1835,7 +1835,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "True if the scene contains animCurves driving transforms.",
-              "line": 604,
+              "line": 615,
               "deprecated": false
             },
             {
@@ -1844,7 +1844,7 @@
               "kind": "method",
               "signature": "(self) -> List[Dict[str, Any]]",
               "summary": "Detect shot candidates using the store's detection settings.",
-              "line": 629,
+              "line": 640,
               "deprecated": false
             },
             {
@@ -1853,7 +1853,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[int, str]",
               "summary": "Lightweight assessment: check if shot objects exist in the scene.",
-              "line": 647,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -1862,7 +1862,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> List[str]",
               "summary": "Long names of every transform answering to a doc object *name*.",
-              "line": 848,
+              "line": 859,
               "deprecated": false
             },
             {
@@ -1871,7 +1871,7 @@
               "kind": "method",
               "signature": "(self, strategy: Optional[str] = None) -> Optional[str]",
               "summary": "Publish this store's shot records onto the shared ``data_export`` node.",
-              "line": 864,
+              "line": 875,
               "deprecated": false
             },
             {
@@ -1880,7 +1880,7 @@
               "kind": "classmethod",
               "signature": "(cls, spell=None, objects: Optional[List[str]] = None) -> Optional[Dict[str, Any]]",
               "summary": "The active store as a hand-off ``shots`` section (``None`` when empty).",
-              "line": 973,
+              "line": 984,
               "deprecated": false
             },
             {
@@ -1889,7 +1889,7 @@
               "kind": "classmethod",
               "signature": "(cls, section: Dict[str, Any], *, resolve=None, frame_offset: float = 0.0, replace: bool = False, converted=None, ctx: Optional['ptk.TransferContext'] = None) -> Optional['ShotStore']",
               "summary": "Rebuild the scene's shots from a hand-off ``shots`` section.",
-              "line": 1048,
+              "line": 1059,
               "deprecated": false
             },
             {
@@ -1898,7 +1898,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: 'ptk.TransferContext') -> Optional[Dict[str, Any]]",
               "summary": "The ``shot_store`` record's hand-off payload: :meth:`export_transfer`",
-              "line": 1116,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -1907,7 +1907,7 @@
               "kind": "classmethod",
               "signature": "(cls, payload: Dict[str, Any], ctx: 'ptk.TransferContext') -> None",
               "summary": "Land a received ``shots`` section: :meth:`apply_transfer`, names",
-              "line": 1122,
+              "line": 1133,
               "deprecated": false
             },
             {
@@ -1916,7 +1916,7 @@
               "kind": "classmethod",
               "signature": "(cls, carriers, other, ctx) -> None",
               "summary": "Another scene's shots merged into the record: reload the active",
-              "line": 1135,
+              "line": 1146,
               "deprecated": false
             },
             {
@@ -1925,7 +1925,7 @@
               "kind": "classmethod",
               "signature": "(cls, carriers, other, ctx) -> None",
               "summary": "Another scene's shots were dropped with their carrier: the same",
-              "line": 1142,
+              "line": 1153,
               "deprecated": false
             }
           ]
@@ -2256,7 +2256,7 @@
               "kind": "classmethod",
               "signature": "(cls, crv: str, pairs: list, plug: Optional[str] = None, eps: float = 0.001, ledger=None) -> None",
               "summary": "Cut the keys named by *pairs* and rebuild them at their new times.",
-              "line": 1583,
+              "line": 1584,
               "deprecated": false
             },
             {
@@ -2265,7 +2265,7 @@
               "kind": "method",
               "signature": "(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float, _scaled: Optional[set] = None) -> None",
               "summary": "Scale (and optionally shift) keyframes of *obj* from",
-              "line": 1816,
+              "line": 1817,
               "deprecated": false
             },
             {
@@ -2274,244 +2274,13 @@
               "kind": "method",
               "signature": "(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
               "summary": "Retime every key inside ``[old_start, old_end]`` into the new span.",
-              "line": 2636,
+              "line": 2637,
               "deprecated": false
             }
           ]
         }
       ],
       "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/clip_menu.py",
-      "summary": "Clip context menus and clip-level key operations.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ClipMenuMixin",
-          "summary": "Clip and gap context menus, and the clip-level key operations they run.",
-          "line": 17,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_clip_menu",
-              "qualname": "ClipMenuMixin.on_clip_menu",
-              "kind": "method",
-              "signature": "(self, menu, clip_id: int) -> None",
-              "summary": "Add domain-specific actions to a clip's context menu.",
-              "line": 22,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_menu",
-              "qualname": "ClipMenuMixin.on_gap_menu",
-              "kind": "method",
-              "signature": "(self, menu, gap_start: float, gap_end: float) -> None",
-              "summary": "Add domain-specific actions to a gap overlay's context menu.",
-              "line": 348,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/clip_motion.py",
-      "summary": "Clip motion, resize, and key-scaling logic for the shot sequencer.",
-      "functions": [
-        {
-          "name": "curves_for_attr",
-          "qualname": "curves_for_attr",
-          "kind": "function",
-          "signature": "(obj_name: str, attr_name: str) -> list",
-          "summary": "Return anim curves connected to a specific attribute on an object.",
-          "line": 38,
-          "deprecated": false
-        },
-        {
-          "name": "scale_attribute_keys",
-          "qualname": "scale_attribute_keys",
-          "kind": "function",
-          "signature": "(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool",
-          "summary": "Scale only the curves driving *attr_name* on *obj_name*.",
-          "line": 49,
-          "deprecated": false
-        }
-      ],
-      "classes": [
-        {
-          "name": "ClipMotionMixin",
-          "summary": "Mixin supplying clip move, resize, and batch-move handlers.",
-          "line": 103,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_clip_resized",
-              "qualname": "ClipMotionMixin.on_clip_resized",
-              "kind": "method",
-              "signature": "(self, clip_id: int, new_start: float, new_duration: float) -> None",
-              "summary": "Handle one clip's edge drag — see :meth:`_commit_clip_resizes`.",
-              "line": 124,
-              "deprecated": false
-            },
-            {
-              "name": "on_clips_batch_resized",
-              "qualname": "ClipMotionMixin.on_clips_batch_resized",
-              "kind": "method",
-              "signature": "(self, resizes) -> None",
-              "summary": "Handle an edge drag that scaled a SELECTION of clips as one unit.",
-              "line": 130,
-              "deprecated": false
-            },
-            {
-              "name": "on_clip_moved",
-              "qualname": "ClipMotionMixin.on_clip_moved",
-              "kind": "method",
-              "signature": "(self, clip_id: int, new_start: float) -> None",
-              "summary": "Handle clip move — routes to audio or shot-level logic.",
-              "line": 633,
-              "deprecated": false
-            },
-            {
-              "name": "on_clips_batch_moved",
-              "qualname": "ClipMotionMixin.on_clips_batch_moved",
-              "kind": "method",
-              "signature": "(self, moves) -> None",
-              "summary": "Handle a batch of clip moves (group drag), syncing once at the end.",
-              "line": 676,
-              "deprecated": false
-            },
-            {
-              "name": "on_keys_moved",
-              "qualname": "ClipMotionMixin.on_keys_moved",
-              "kind": "method",
-              "signature": "(self, clip_id: int, changes: list) -> None",
-              "summary": "Move individual keyframes on the Maya curves, then refresh.",
-              "line": 873,
-              "deprecated": false
-            },
-            {
-              "name": "on_keys_batch_moved",
-              "qualname": "ClipMotionMixin.on_keys_batch_moved",
-              "kind": "method",
-              "signature": "(self, groups) -> None",
-              "summary": "Commit one key drag that spanned any number of clips.",
-              "line": 885,
-              "deprecated": false
-            },
-            {
-              "name": "on_keys_deleted",
-              "qualname": "ClipMotionMixin.on_keys_deleted",
-              "kind": "method",
-              "signature": "(self, clip_id: int, times: list) -> None",
-              "summary": "Delete individual keyframes from the Maya curves, then refresh.",
-              "line": 943,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": [
-        {
-          "name": "FLOAT_ZERO_EPS",
-          "qualname": "FLOAT_ZERO_EPS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 28,
-          "deprecated": false
-        }
-      ]
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/gap_manager.py",
-      "summary": "Gap and range-highlight handlers for the shot sequencer controller.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "GapManagerMixin",
-          "summary": "Mixin supplying gap-overlay and range-highlight handlers.",
-          "line": 18,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_range_highlight_changed",
-              "qualname": "GapManagerMixin.on_range_highlight_changed",
-              "kind": "method",
-              "signature": "(self, start: float, end: float) -> None",
-              "summary": "Update the active shot when a range-highlight handle is dragged.",
-              "line": 39,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_resized",
-              "qualname": "GapManagerMixin.on_gap_resized",
-              "kind": "method",
-              "signature": "(self, original_next_start: float, new_next_start: float) -> None",
-              "summary": "Handle a right-edge gap drag: the following shot's ``.start``.",
-              "line": 177,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_left_resized",
-              "qualname": "GapManagerMixin.on_gap_left_resized",
-              "kind": "method",
-              "signature": "(self, original_prev_end: float, new_prev_end: float) -> None",
-              "summary": "Handle a left-edge gap drag: the preceding shot's ``.end``.",
-              "line": 237,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_moved",
-              "qualname": "GapManagerMixin.on_gap_moved",
-              "kind": "method",
-              "signature": "(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None",
-              "summary": "Handle body gap drag — slide the gap while preserving its width.",
-              "line": 296,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_lock_changed",
-              "qualname": "GapManagerMixin.on_gap_lock_changed",
-              "kind": "method",
-              "signature": "(self, gap_start: float, gap_end: float, locked: bool) -> None",
-              "summary": "Handle a single gap's lock state being toggled via context menu.",
-              "line": 414,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_lock_all",
-              "qualname": "GapManagerMixin.on_gap_lock_all",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Lock all gaps so they are preserved during respace.",
-              "line": 469,
-              "deprecated": false
-            },
-            {
-              "name": "on_gap_unlock_all",
-              "qualname": "GapManagerMixin.on_gap_unlock_all",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Unlock all gaps so they follow the global gap value.",
-              "line": 478,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": [
-        {
-          "name": "TIME_SNAP_EPS",
-          "qualname": "TIME_SNAP_EPS",
-          "kind": "constant",
-          "signature": "",
-          "summary": "",
-          "line": 13,
-          "deprecated": false
-        }
-      ]
     },
     {
       "relpath": "anim_utils/shots/shot_sequencer/graph_sync.py",
@@ -2530,7 +2299,7 @@
               "kind": "method",
               "signature": "(self) -> None",
               "summary": "Disconnect everything (a panel re-init builds a new one).",
-              "line": 184,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -2539,7 +2308,7 @@
               "kind": "method",
               "signature": "(self, full: bool = False) -> None",
               "summary": "Bring the graph in line with the scene.",
-              "line": 213,
+              "line": 232,
               "deprecated": false
             },
             {
@@ -2548,7 +2317,7 @@
               "kind": "method",
               "signature": "(self) -> List[dict]",
               "summary": "The visible shots' objects keyed inside their window, and their curves.",
-              "line": 260,
+              "line": 279,
               "deprecated": false
             },
             {
@@ -2557,7 +2326,7 @@
               "kind": "method",
               "signature": "(self, edits) -> None",
               "summary": "Commit a move / scale / typed stat: ``[(curve, [(t, dt, dv), ...])]``.",
-              "line": 354,
+              "line": 373,
               "deprecated": false
             },
             {
@@ -2565,8 +2334,8 @@
               "qualname": "GraphSync.on_tangents_edited",
               "kind": "method",
               "signature": "(self, rows) -> None",
-              "summary": "Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``.",
-              "line": 409,
+              "summary": "Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``,",
+              "line": 428,
               "deprecated": false
             },
             {
@@ -2575,7 +2344,7 @@
               "kind": "method",
               "signature": "(self, groups) -> None",
               "summary": "Cut keys: ``[(curve, [time, ...])]``;",
-              "line": 434,
+              "line": 446,
               "deprecated": false
             },
             {
@@ -2584,7 +2353,7 @@
               "kind": "method",
               "signature": "(self, items) -> None",
               "summary": "Key ``[(curve, time), ...]`` without changing the curves' shape.",
-              "line": 456,
+              "line": 468,
               "deprecated": false
             },
             {
@@ -2593,7 +2362,7 @@
               "kind": "method",
               "signature": "(self, type_id: str, groups) -> None",
               "summary": "Set tangent type *type_id* on ``[(curve, [times])]`` *groups* (an",
-              "line": 472,
+              "line": 484,
               "deprecated": false
             },
             {
@@ -2602,7 +2371,7 @@
               "kind": "method",
               "signature": "(self, broken: bool, groups) -> None",
               "summary": "Break (or unify) the tangents of ``[(curve, [times])]`` *groups*.",
-              "line": 480,
+              "line": 492,
               "deprecated": false
             },
             {
@@ -2611,7 +2380,7 @@
               "kind": "method",
               "signature": "(self, weighted: bool, curves) -> None",
               "summary": "Make *curves* weighted-tangent curves, or not.",
-              "line": 502,
+              "line": 514,
               "deprecated": false
             },
             {
@@ -2620,7 +2389,7 @@
               "kind": "method",
               "signature": "(self, side: str, mode: str, curves) -> None",
               "summary": "Set *curves*' ``pre`` / ``post`` (else both) infinity to *mode*,",
-              "line": 513,
+              "line": 525,
               "deprecated": false
             },
             {
@@ -2629,7 +2398,7 @@
               "kind": "method",
               "signature": "(self, groups=None) -> list",
               "summary": "``[(obj, attr, [times], shot_id), ...]`` for the graph's key",
-              "line": 532,
+              "line": 544,
               "deprecated": false
             },
             {
@@ -2638,7 +2407,7 @@
               "kind": "method",
               "signature": "(self, menu, groups) -> None",
               "summary": "The track view's key edits and Move / Copy to Shot, on the graph's",
-              "line": 547,
+              "line": 559,
               "deprecated": false
             },
             {
@@ -2647,253 +2416,7 @@
               "kind": "method",
               "signature": "(self, groups) -> None",
               "summary": "Mirror the graph's key selection into Maya's (not an undo step).",
-              "line": 585,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/key_menu.py",
-      "summary": "Key context menus and key-selection edits.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "KeyMenuMixin",
-          "summary": "Key context menus, tangent edits and drags, and the key-selection edits.",
-          "line": 24,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_key_menu",
-              "qualname": "KeyMenuMixin.on_key_menu",
-              "kind": "method",
-              "signature": "(self, menu, key_groups: list) -> None",
-              "summary": "Add the key actions to a key's context menu.",
-              "line": 76,
-              "deprecated": false
-            },
-            {
-              "name": "tangent_from_handle",
-              "qualname": "KeyMenuMixin.tangent_from_handle",
-              "kind": "staticmethod",
-              "signature": "(side: str, dt: float, dv: float) -> tuple",
-              "summary": "``(angle_degrees, weight)`` of the tangent a dragged handle stands for.",
-              "line": 155,
-              "deprecated": false
-            },
-            {
-              "name": "on_keys_tangent_dragged",
-              "qualname": "KeyMenuMixin.on_keys_tangent_dragged",
-              "kind": "method",
-              "signature": "(self, groups: list, side: str, broken: bool) -> None",
-              "summary": "Write the tangents a dragged handle asks for on the keys' curves.",
-              "line": 171,
-              "deprecated": false
-            },
-            {
-              "name": "register_key_targets",
-              "qualname": "KeyMenuMixin.register_key_targets",
-              "kind": "method",
-              "signature": "(self, editor_name: str, source) -> None",
-              "summary": "Resolve the key shortcuts' targets through *source* while the",
-              "line": 593,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/marker_manager.py",
-      "summary": "Marker persistence for the shot sequencer controller.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "MarkerManagerMixin",
-          "summary": "Mixin supplying marker CRUD persistence.",
-          "line": 40,
-          "bases": [
-            "_MarkerManagerMixinInternal"
-          ],
-          "members": [
-            {
-              "name": "on_marker_added",
-              "qualname": "MarkerManagerMixin.on_marker_added",
-              "kind": "method",
-              "signature": "(self, marker_id: int, time: float) -> None",
-              "summary": "Persist a newly added marker.",
-              "line": 49,
-              "deprecated": false
-            },
-            {
-              "name": "on_marker_moved",
-              "qualname": "MarkerManagerMixin.on_marker_moved",
-              "kind": "method",
-              "signature": "(self, marker_id: int, new_time: float) -> None",
-              "summary": "Update persisted marker time.",
-              "line": 64,
-              "deprecated": false
-            },
-            {
-              "name": "on_marker_changed",
-              "qualname": "MarkerManagerMixin.on_marker_changed",
-              "kind": "method",
-              "signature": "(self, marker_id: int) -> None",
-              "summary": "Update persisted marker note/color.",
-              "line": 68,
-              "deprecated": false
-            },
-            {
-              "name": "on_marker_removed",
-              "qualname": "MarkerManagerMixin.on_marker_removed",
-              "kind": "method",
-              "signature": "(self, marker_id: int) -> None",
-              "summary": "Remove marker from persistent store.",
-              "line": 72,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/scene_callbacks.py",
-      "summary": "Maya scene callbacks for the shot sequencer.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "SceneCallbacksMixin",
-          "summary": "Scene event hooks: undo/redo, key edits and time changes refresh the widget.",
-          "line": 25,
-          "bases": [],
-          "members": [
-            {
-              "name": "remove_callbacks",
-              "qualname": "SceneCallbacksMixin.remove_callbacks",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Remove Maya event callbacks and ShotStore listener (call on teardown).",
-              "line": 48,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/scene_selection.py",
-      "summary": "Tracks and the Maya selection.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "SceneSelectionMixin",
-          "summary": "Tracks, and the DCC selection that follows the sequencer's.",
-          "line": 25,
-          "bases": [],
-          "members": [
-            {
-              "name": "hide_track",
-              "qualname": "SceneSelectionMixin.hide_track",
-              "kind": "method",
-              "signature": "(self, track_names) -> None",
-              "summary": "Hide one or more tracks by name, persist, and rebuild the widget.",
-              "line": 28,
-              "deprecated": false
-            },
-            {
-              "name": "show_track",
-              "qualname": "SceneSelectionMixin.show_track",
-              "kind": "method",
-              "signature": "(self, track_name: str) -> None",
-              "summary": "Un-hide a track by object name, persist, and rebuild the widget.",
-              "line": 39,
-              "deprecated": false
-            },
-            {
-              "name": "delete_track",
-              "qualname": "SceneSelectionMixin.delete_track",
-              "kind": "method",
-              "signature": "(self, track_names) -> None",
-              "summary": "Permanently remove objects from all shots and rebuild the widget.",
-              "line": 46,
-              "deprecated": false
-            },
-            {
-              "name": "on_selection_changed",
-              "qualname": "SceneSelectionMixin.on_selection_changed",
-              "kind": "method",
-              "signature": "(self, clip_ids: list) -> None",
-              "summary": "Select the corresponding Maya objects when clips are clicked.",
-              "line": 57,
-              "deprecated": false
-            },
-            {
-              "name": "on_track_selected",
-              "qualname": "SceneSelectionMixin.on_track_selected",
-              "kind": "method",
-              "signature": "(self, track_names: list) -> None",
-              "summary": "Select Maya objects when track labels are clicked in the header.",
-              "line": 118,
-              "deprecated": false
-            },
-            {
-              "name": "on_sub_track_selected",
-              "qualname": "SceneSelectionMixin.on_sub_track_selected",
-              "kind": "method",
-              "signature": "(self, rows: list) -> None",
-              "summary": "Select a channel when its sub-row label is clicked in the header.",
-              "line": 136,
-              "deprecated": false
-            },
-            {
-              "name": "on_clip_locked",
-              "qualname": "SceneSelectionMixin.on_clip_locked",
-              "kind": "method",
-              "signature": "(self, clip_id: int, locked: bool) -> None",
-              "summary": "Persist per-object clip lock and propagate to sibling clips.",
-              "line": 160,
-              "deprecated": false
-            },
-            {
-              "name": "on_track_menu",
-              "qualname": "SceneSelectionMixin.on_track_menu",
-              "kind": "method",
-              "signature": "(self, menu, track_names) -> None",
-              "summary": "Add Maya-specific actions to the track header context menu.",
-              "line": 187,
-              "deprecated": false
-            },
-            {
-              "name": "on_header_menu",
-              "qualname": "SceneSelectionMixin.on_header_menu",
-              "kind": "method",
-              "signature": "(self, menu) -> None",
-              "summary": "Add settings actions to the header background context menu.",
-              "line": 220,
-              "deprecated": false
-            },
-            {
-              "name": "on_key_selection_changed",
-              "qualname": "SceneSelectionMixin.on_key_selection_changed",
-              "kind": "method",
-              "signature": "(self, key_groups: list) -> None",
-              "summary": "Sync the Maya Graph Editor selection to match the sequencer.",
-              "line": 303,
-              "deprecated": false
-            },
-            {
-              "name": "on_clip_renamed",
-              "qualname": "SceneSelectionMixin.on_clip_renamed",
-              "kind": "method",
-              "signature": "(self, clip_id: int, new_label: str) -> None",
-              "summary": "Handle inline rename — currently a no-op (shot clips removed).",
-              "line": 486,
+              "line": 597,
               "deprecated": false
             }
           ]
@@ -2931,12 +2454,21 @@
               "deprecated": false
             },
             {
+              "name": "abbreviate_attrs",
+              "qualname": "SegmentCollector.abbreviate_attrs",
+              "kind": "staticmethod",
+              "signature": "(attrs) -> str",
+              "summary": "Compact, sorted summary of attribute names for a clip's centre",
+              "line": 129,
+              "deprecated": false
+            },
+            {
               "name": "extract_attributes",
               "qualname": "SegmentCollector.extract_attributes",
               "kind": "staticmethod",
               "signature": "(segments) -> list",
               "summary": "Extract attribute names from animation curves in the given segments.",
-              "line": 129,
+              "line": 140,
               "deprecated": false
             },
             {
@@ -2945,7 +2477,7 @@
               "kind": "staticmethod",
               "signature": "(segments, claimed_times) -> list",
               "summary": "Every key time an object row ticks in the flat key style.",
-              "line": 200,
+              "line": 211,
               "deprecated": false
             },
             {
@@ -2954,7 +2486,7 @@
               "kind": "staticmethod",
               "signature": "(crv, t_start, t_end, hidden_times=())",
               "summary": "Bezier shape data for one anim curve, clipped to ``[t_start, t_end]``.",
-              "line": 249,
+              "line": 260,
               "deprecated": false
             }
           ]
@@ -2973,333 +2505,545 @@
       ]
     },
     {
-      "relpath": "anim_utils/shots/shot_sequencer/shot_lane.py",
-      "summary": "The shot lane: its context menu and the shot structure edits.",
+      "relpath": "anim_utils/shots/shot_sequencer/sequencer_host.py",
+      "summary": "What the Shot Sequencer panel needs from Maya: :class:`SequencerHost`.",
       "functions": [],
       "classes": [
         {
-          "name": "ShotLaneMixin",
-          "summary": "The shot lane's menus and the shot structure edits they run.",
-          "line": 15,
+          "name": "SequencerHost",
+          "summary": "Maya's answers to the Shot Sequencer panel's host calls.",
+          "line": 253,
           "bases": [],
           "members": [
             {
-              "name": "on_zone_context_menu",
-              "qualname": "ShotLaneMixin.on_zone_context_menu",
-              "kind": "method",
-              "signature": "(self, zone: str, time: float, global_pos) -> None",
-              "summary": "Build a context menu specific to the clicked zone.",
-              "line": 20,
+              "name": "current_time",
+              "qualname": "SequencerHost.current_time",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[float]",
+              "summary": "The playhead's frame, or ``None`` without a scene.",
+              "line": 268,
               "deprecated": false
             },
             {
-              "name": "delete_shot",
-              "qualname": "ShotLaneMixin.delete_shot",
-              "kind": "method",
-              "signature": "(self, shot_id: int) -> None",
-              "summary": "Delete *shot_id* with its contents, closing the timeline behind it.",
-              "line": 308,
+              "name": "set_current_time",
+              "qualname": "SequencerHost.set_current_time",
+              "kind": "staticmethod",
+              "signature": "(frame: float) -> None",
+              "summary": "Move the playhead to *frame*, recording no undo entry.",
+              "line": 278,
               "deprecated": false
             },
             {
-              "name": "delete_shots",
-              "qualname": "ShotLaneMixin.delete_shots",
-              "kind": "method",
-              "signature": "(self, scope: str = 'stale') -> None",
-              "summary": "Delete the shots of *scope*, after naming them.",
+              "name": "playback_range",
+              "qualname": "SequencerHost.playback_range",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[Tuple[float, float]]",
+              "summary": "Maya's playback range ``(min, max)``, or ``None`` without a scene.",
+              "line": 294,
+              "deprecated": false
+            },
+            {
+              "name": "set_playback_range",
+              "qualname": "SequencerHost.set_playback_range",
+              "kind": "staticmethod",
+              "signature": "(start: float, end: float) -> None",
+              "summary": "Set Maya's playback range, recording no undo entry: a view mirror",
+              "line": 307,
+              "deprecated": false
+            },
+            {
+              "name": "watch_scene",
+              "qualname": "SequencerHost.watch_scene",
+              "kind": "staticmethod",
+              "signature": "(*, busy: Callable[[], bool], on_keys_edited: Callable[[set], None], on_time_changed: Callable[[float], None], on_scene_changed: Callable[[], None], cap: int = 400) -> _SceneWatch",
+              "summary": "Attach the panel's scene hooks;",
+              "line": 316,
+              "deprecated": false
+            },
+            {
+              "name": "newly_keyed_members",
+              "qualname": "SequencerHost.newly_keyed_members",
+              "kind": "staticmethod",
+              "signature": "(edited: Iterable[str], shot, sequencer) -> List[str]",
+              "summary": "The objects keyed in *shot*'s frames that are not its members yet.",
               "line": 347,
               "deprecated": false
             },
             {
-              "name": "delete_stale_shots",
-              "qualname": "ShotLaneMixin.delete_stale_shots",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 388,
-              "deprecated": true,
-              "remove_in": "0.23.0"
-            },
-            {
-              "name": "move_shot_to_position",
-              "qualname": "ShotLaneMixin.move_shot_to_position",
-              "kind": "method",
-              "signature": "(self, shot_id: int, position: int) -> None",
-              "summary": "Re-slot *shot_id* at 1-based *position*, pushing the rest along.",
-              "line": 391,
+              "name": "step_undo",
+              "qualname": "SequencerHost.step_undo",
+              "kind": "classmethod",
+              "signature": "(cls, store, redo: bool = False) -> bool",
+              "summary": "One step of Maya's undo (*redo*: redo) for the panel's Undo / Redo,",
+              "line": 419,
               "deprecated": false
             },
             {
-              "name": "merge_shot_with",
-              "qualname": "ShotLaneMixin.merge_shot_with",
-              "kind": "method",
-              "signature": "(self, shot_id: int, other_id: int) -> None",
-              "summary": "Fuse two neighbouring shots into one spanning both.",
-              "line": 417,
-              "deprecated": false
-            },
-            {
-              "name": "split_shot_at",
-              "qualname": "ShotLaneMixin.split_shot_at",
-              "kind": "method",
-              "signature": "(self, shot_id: int, time: float) -> None",
-              "summary": "Cut *shot_id* in two at *time*, leaving its content where it is.",
-              "line": 433,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/shot_nav.py",
-      "summary": "Shot navigation and combobox synchronization.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShotNavMixin",
-          "summary": "Mixin supplying shot selection and navigation.",
-          "line": 20,
-          "bases": [],
-          "members": [
-            {
-              "name": "select_shot",
-              "qualname": "ShotNavMixin.select_shot",
-              "kind": "method",
-              "signature": "(self, shot_id: int) -> None",
-              "summary": "Set Maya's playback range to the shot and select its objects.",
-              "line": 39,
-              "deprecated": false
-            },
-            {
-              "name": "on_shot_block_clicked",
-              "qualname": "ShotNavMixin.on_shot_block_clicked",
-              "kind": "method",
-              "signature": "(self, shot_name: str) -> None",
-              "summary": "Select a shot by name when its block is clicked in the shot lane.",
-              "line": 336,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/shot_sequencer_controller.py",
-      "summary": "The Shot Sequencer panel's controller: :class:`ShotSequencerController`.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShotSequencerController",
-          "summary": "Business logic controller bridging SequencerWidget ↔ ShotSequencer.",
-          "line": 59,
-          "bases": [
-            "SceneCallbacksMixin",
-            "UndoLedgerMixin",
-            "ShotLaneMixin",
-            "ClipMenuMixin",
-            "KeyMenuMixin",
-            "WidgetSyncMixin",
-            "SceneSelectionMixin",
-            "TransportMixin",
-            "GapManagerMixin",
-            "ClipMotionMixin",
-            "ShotNavMixin",
-            "MarkerManagerMixin",
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "sequencer",
-              "qualname": "ShotSequencerController.sequencer",
-              "kind": "property",
-              "signature": "(self) -> Optional[ShotSequencer]",
-              "summary": "Return the ShotSequencer, lazily creating one from the active store.",
-              "line": 223,
-              "deprecated": false
-            },
-            {
-              "name": "active_shot_id",
-              "qualname": "ShotSequencerController.active_shot_id",
-              "kind": "property",
-              "signature": "(self) -> Optional[int]",
-              "summary": "Return the shot_id currently selected, or the first shot's id.",
-              "line": 341,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/shot_sequencer_slots.py",
-      "summary": "Switchboard slots for the Shot Sequencer UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ShotEditDialog",
-          "summary": "Lightweight dialog for creating or editing a shot.",
-          "line": 43,
-          "bases": [],
-          "members": [
-            {
-              "name": "show",
-              "qualname": "ShotEditDialog.show",
+              "name": "play_controller",
+              "qualname": "SequencerHost.play_controller",
               "kind": "staticmethod",
-              "signature": "(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot', validate=None)",
-              "summary": "Show a modal dialog and return the result tuple or ``None``.",
-              "line": 51,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "ShotSequencerSlots",
-          "summary": "Switchboard slot class — routes UI events to the controller.",
-          "line": 134,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "ShotSequencerSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header menu.",
-              "line": 599,
+              "signature": "(before_play: Optional[Callable[[], None]] = None)",
+              "summary": "The transport row's ``PlayController``: Maya's timeline through",
+              "line": 564,
               "deprecated": false
             },
             {
-              "name": "btn_colors",
-              "qualname": "ShotSequencerSlots.btn_colors",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the attribute color configuration dialog.",
-              "line": 763,
+              "name": "bind_timeline_audio",
+              "qualname": "SequencerHost.bind_timeline_audio",
+              "kind": "classmethod",
+              "signature": "(cls, current: str = '') -> str",
+              "summary": "Bind the scene's audio to Maya's Time Slider;",
+              "line": 570,
               "deprecated": false
             },
             {
-              "name": "cmb_shot",
-              "qualname": "ShotSequencerSlots.cmb_shot",
-              "kind": "method",
-              "signature": "(self, index)",
-              "summary": "Handle direct combobox selection of a shot or marker.",
-              "line": 782,
+              "name": "timeline_audio_wav",
+              "qualname": "SequencerHost.timeline_audio_wav",
+              "kind": "staticmethod",
+              "signature": "(source: str) -> str",
+              "summary": "The WAV path stored on *source* (the composite or a per-track node).",
+              "line": 598,
               "deprecated": false
             },
             {
-              "name": "spn_snap",
-              "qualname": "ShotSequencerSlots.spn_snap",
-              "kind": "method",
-              "signature": "(self, value)",
-              "summary": "Set the snap interval on the sequencer widget.",
-              "line": 898,
+              "name": "scene_fps",
+              "qualname": "SequencerHost.scene_fps",
+              "kind": "staticmethod",
+              "signature": "() -> float",
+              "summary": "The scene's frame rate (24.0 without Maya).",
+              "line": 615,
               "deprecated": false
             },
             {
-              "name": "btn_shortcuts",
-              "qualname": "ShotSequencerSlots.btn_shortcuts",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the sequencer shortcut editor.",
-              "line": 905,
+              "name": "segment_collector",
+              "qualname": "SequencerHost.segment_collector",
+              "kind": "staticmethod",
+              "signature": "() -> type",
+              "summary": "The library's ``SegmentCollector``: the shots' motion segments, a",
+              "line": 643,
               "deprecated": false
             },
             {
-              "name": "btn_shot_settings",
-              "qualname": "ShotSequencerSlots.btn_shot_settings",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Open the shared shots settings panel (pinned, as Edit Shot does).",
-              "line": 913,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/transport.py",
-      "summary": "Transport: the playhead, audio scrub and the transport row.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "TransportMixin",
-          "summary": "The playhead, audible scrubbing and the transport button row.",
-          "line": 68,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_playhead_moved",
-              "qualname": "TransportMixin.on_playhead_moved",
-              "kind": "method",
-              "signature": "(self, frame: float) -> None",
-              "summary": "Sync the Maya playhead to the widget playhead.",
-              "line": 71,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/undo_ledger.py",
-      "summary": "The shot sequencer's undo ledger.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "UndoLedgerMixin",
-          "summary": "Shot-boundary restore points, and how one undo/redo splits between them and the DCC.",
-          "line": 17,
-          "bases": [],
-          "members": [
-            {
-              "name": "on_undo",
-              "qualname": "UndoLedgerMixin.on_undo",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Handle undo_requested from the widget — delegate to Maya undo.",
-              "line": 176,
+              "name": "existing",
+              "qualname": "SequencerHost.existing",
+              "kind": "staticmethod",
+              "signature": "(names: Iterable[str]) -> set",
+              "summary": "The subset of *names* that resolve to a scene node.",
+              "line": 654,
               "deprecated": false
             },
             {
-              "name": "on_redo",
-              "qualname": "UndoLedgerMixin.on_redo",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Handle redo_requested from the widget — delegate to Maya redo",
-              "line": 207,
+              "name": "leaf_name",
+              "qualname": "SequencerHost.leaf_name",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> str",
+              "summary": "*name* without its DAG path (``|grp|cube`` -> ``cube``).",
+              "line": 686,
               "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "anim_utils/shots/shot_sequencer/widget_sync.py",
-      "summary": "Widget sync: rebuilding the sequencer from the scene.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "WidgetSyncMixin",
-          "summary": "Rebuilding the widget from the scene: tracks, clips, sub-rows, decoration.",
-          "line": 33,
-          "bases": [],
-          "members": [
+            },
             {
-              "name": "refresh",
-              "qualname": "WidgetSyncMixin.refresh",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Clear cached segments and rebuild the sequencer widget.",
-              "line": 235,
+              "name": "node_icon",
+              "qualname": "SequencerHost.node_icon",
+              "kind": "classmethod",
+              "signature": "(cls, name: str)",
+              "summary": "The node's type icon (a ``QIcon``), or ``None`` without Maya or for",
+              "line": 693,
+              "deprecated": false
+            },
+            {
+              "name": "select_objects",
+              "qualname": "SequencerHost.select_objects",
+              "kind": "staticmethod",
+              "signature": "(names: Iterable[str], add: bool = False) -> List[str]",
+              "summary": "Select *names* as a view mirror: no undo step.",
+              "line": 706,
+              "deprecated": false
+            },
+            {
+              "name": "claimed_key_times",
+              "qualname": "SequencerHost.claimed_key_times",
+              "kind": "staticmethod",
+              "signature": "(sequencer, obj: str, curve) -> List[float]",
+              "summary": "The samples the shot system created on *curve* (its ledger claims).",
+              "line": 739,
+              "deprecated": false
+            },
+            {
+              "name": "motion_segments",
+              "qualname": "SequencerHost.motion_segments",
+              "kind": "staticmethod",
+              "signature": "(objects: Iterable[str], time_range: Tuple[float, float], attributes: Optional[Iterable[str]] = None, ignore_holds: bool = True) -> List[Dict[str, Any]]",
+              "summary": "The motion segments of *objects* inside *time_range*.",
+              "line": 753,
+              "deprecated": false
+            },
+            {
+              "name": "attribute_curves",
+              "qualname": "SequencerHost.attribute_curves",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> Tuple[Optional[str], Dict[str, Any]]",
+              "summary": "*name*'s long DAG path and its animated attributes.",
+              "line": 797,
+              "deprecated": false
+            },
+            {
+              "name": "audio_segments",
+              "qualname": "SequencerHost.audio_segments",
+              "kind": "staticmethod",
+              "signature": "(start: float, end: float) -> list",
+              "summary": "The audio segments overlapping ``[start, end]``, waveforms included",
+              "line": 834,
+              "deprecated": false
+            },
+            {
+              "name": "audio_track_icon",
+              "qualname": "SequencerHost.audio_track_icon",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str)",
+              "summary": "The icon of an audio track: its DG audio node's, when it has one.",
+              "line": 846,
+              "deprecated": false
+            },
+            {
+              "name": "delete_span_keys",
+              "qualname": "SequencerHost.delete_span_keys",
+              "kind": "classmethod",
+              "signature": "(cls, obj: str, attrs: Sequence[str], start: float, end: float, release: Optional[Callable] = None) -> int",
+              "summary": "Cut *obj*'s keys on *attrs* inside ``[start, end]``.",
+              "line": 858,
+              "deprecated": false
+            },
+            {
+              "name": "stash_keys",
+              "qualname": "SequencerHost.stash_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: Sequence[Tuple[str, Sequence[str], float, float]], source_shot_id: Optional[int] = None)",
+              "summary": "Park the keys of *targets* in the scene's key stash as ONE clip.",
+              "line": 914,
+              "deprecated": false
+            },
+            {
+              "name": "curves_for_attr",
+              "qualname": "SequencerHost.curves_for_attr",
+              "kind": "staticmethod",
+              "signature": "(obj_name: str, attr_name: str) -> list",
+              "summary": "The anim curves (node names) connected to ``obj_name.attr_name``;",
+              "line": 948,
+              "deprecated": false
+            },
+            {
+              "name": "curves_for_attrs",
+              "qualname": "SequencerHost.curves_for_attrs",
+              "kind": "classmethod",
+              "signature": "(cls, obj_name: str, attr_names: Iterable[str]) -> list",
+              "summary": ":meth:`curves_for_attr` over several attributes: every curve behind",
+              "line": 962,
+              "deprecated": false
+            },
+            {
+              "name": "curve_id",
+              "qualname": "SequencerHost.curve_id",
+              "kind": "staticmethod",
+              "signature": "(curve) -> str",
+              "summary": "A curve's identity across reads (its node name): what merged key",
+              "line": 974,
+              "deprecated": false
+            },
+            {
+              "name": "object_curves",
+              "qualname": "SequencerHost.object_curves",
+              "kind": "staticmethod",
+              "signature": "(obj_name: str) -> list",
+              "summary": "Every anim curve keying *obj_name*.",
+              "line": 980,
+              "deprecated": false
+            },
+            {
+              "name": "first_key",
+              "qualname": "SequencerHost.first_key",
+              "kind": "staticmethod",
+              "signature": "(curves) -> Optional[float]",
+              "summary": "The earliest key time across *curves*, or ``None`` with no keys.",
+              "line": 990,
+              "deprecated": false
+            },
+            {
+              "name": "keyed_at",
+              "qualname": "SequencerHost.keyed_at",
+              "kind": "staticmethod",
+              "signature": "(curve, times: Iterable[float], eps: float = 0.001) -> List[bool]",
+              "summary": "Whether *curve* holds a key within *eps* of each of *times*.",
+              "line": 1002,
+              "deprecated": false
+            },
+            {
+              "name": "any_key_at",
+              "qualname": "SequencerHost.any_key_at",
+              "kind": "staticmethod",
+              "signature": "(curves, frame: float) -> bool",
+              "summary": "Whether any curve of *curves* holds a key on *frame*: the",
+              "line": 1012,
+              "deprecated": false
+            },
+            {
+              "name": "scale_attribute_keys",
+              "qualname": "SequencerHost.scale_attribute_keys",
+              "kind": "classmethod",
+              "signature": "(cls, obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool",
+              "summary": "Scale only the curves driving *attr_name* on *obj_name*.",
+              "line": 1023,
+              "deprecated": false
+            },
+            {
+              "name": "commit_curve_moves",
+              "qualname": "SequencerHost.commit_curve_moves",
+              "kind": "staticmethod",
+              "signature": "(curve_moves: Dict, ledger=None, eps: float = 0.001) -> None",
+              "summary": "Land merged key moves, one primitive call per curve.",
+              "line": 1081,
+              "deprecated": false
+            },
+            {
+              "name": "delete_keys_at",
+              "qualname": "SequencerHost.delete_keys_at",
+              "kind": "staticmethod",
+              "signature": "(curves, times: Iterable[float], release: Optional[Callable] = None) -> int",
+              "summary": "Cut the keys of *curves* on each of *times*.",
+              "line": 1117,
+              "deprecated": false
+            },
+            {
+              "name": "moving_audio_track",
+              "qualname": "SequencerHost.moving_audio_track",
+              "kind": "staticmethod",
+              "signature": "(track_id: str, ledger=None)",
+              "summary": "Yield ``(move, lowest)`` for moving an audio track's content.",
+              "line": 1151,
+              "deprecated": false
+            },
+            {
+              "name": "undo_chunk",
+              "qualname": "SequencerHost.undo_chunk",
+              "kind": "staticmethod",
+              "signature": "(label: str)",
+              "summary": "One named undo chunk (``CoreUtils.undo_chunk``) for an edit made",
+              "line": 1176,
+              "deprecated": false
+            },
+            {
+              "name": "tangent_from_handle",
+              "qualname": "SequencerHost.tangent_from_handle",
+              "kind": "staticmethod",
+              "signature": "(side: str, dt: float, dv: float) -> Tuple[float, float]",
+              "summary": "``(angle_degrees, weight)`` of the tangent a dragged handle stands for.",
+              "line": 1203,
+              "deprecated": false
+            },
+            {
+              "name": "tangent_type_edit",
+              "qualname": "SequencerHost.tangent_type_edit",
+              "kind": "staticmethod",
+              "signature": "(tangent: str, sides=('in', 'out')) -> dict",
+              "summary": "The edit that sets *tangent* (a :attr:`TANGENT_TYPES` type) on the",
+              "line": 1218,
+              "deprecated": false
+            },
+            {
+              "name": "interpolation_edit",
+              "qualname": "SequencerHost.interpolation_edit",
+              "kind": "staticmethod",
+              "signature": "(mode: str) -> dict",
+              "summary": "The edit for a Blender interpolation mode (``CONSTANT`` / ``LINEAR``",
+              "line": 1229,
+              "deprecated": false
+            },
+            {
+              "name": "tangent_lock_edit",
+              "qualname": "SequencerHost.tangent_lock_edit",
+              "kind": "staticmethod",
+              "signature": "(lock: bool) -> dict",
+              "summary": "The edit that unifies (``True``) or breaks the keys' tangents.",
+              "line": 1240,
+              "deprecated": false
+            },
+            {
+              "name": "handle_drag_edit",
+              "qualname": "SequencerHost.handle_drag_edit",
+              "kind": "classmethod",
+              "signature": "(cls, vectors: Dict, side: str, broken: bool) -> Callable",
+              "summary": "The edit a dragged tangent handle asks for.",
+              "line": 1245,
+              "deprecated": false
+            },
+            {
+              "name": "edit_key_tangents",
+              "qualname": "SequencerHost.edit_key_tangents",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, edit) -> int",
+              "summary": "Apply a tangent *edit* to *targets*' keys in one undo chunk.",
+              "line": 1283,
+              "deprecated": false
+            },
+            {
+              "name": "target_curves",
+              "qualname": "SequencerHost.target_curves",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list) -> list",
+              "summary": "The anim curves behind *targets*' (object, attribute) pairs, each",
+              "line": 1323,
+              "deprecated": false
+            },
+            {
+              "name": "simplify_keys",
+              "qualname": "SequencerHost.simplify_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, span: Tuple[float, float], on_delete=None) -> Tuple[int, int]",
+              "summary": "Drop the selected keys that carry neither a value nor a shape.",
+              "line": 1334,
+              "deprecated": false
+            },
+            {
+              "name": "thin_keys",
+              "qualname": "SequencerHost.thin_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, span: Tuple[float, float], on_delete=None) -> int",
+              "summary": "Keep only the first and last key of each selected attribute.",
+              "line": 1380,
+              "deprecated": false
+            },
+            {
+              "name": "snap_keys",
+              "qualname": "SequencerHost.snap_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, span: Tuple[float, float], on_move=None) -> int",
+              "summary": "Pull the selected keys (the Graph Editor selection the panel",
+              "line": 1404,
+              "deprecated": false
+            },
+            {
+              "name": "euler_filter_keys",
+              "qualname": "SequencerHost.euler_filter_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list) -> list",
+              "summary": "Unflip the rotation curves behind *targets* (whole curves).",
+              "line": 1424,
+              "deprecated": false
+            },
+            {
+              "name": "invert_keys",
+              "qualname": "SequencerHost.invert_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, on_replace=None, on_move=None) -> int",
+              "summary": "Mirror the selected keys in time, in place.",
+              "line": 1435,
+              "deprecated": false
+            },
+            {
+              "name": "align_keys",
+              "qualname": "SequencerHost.align_keys",
+              "kind": "classmethod",
+              "signature": "(cls, targets: list, on_replace=None, on_move=None) -> int",
+              "summary": "Line the selected keys up on the earliest one's frame.",
+              "line": 1454,
+              "deprecated": false
+            },
+            {
+              "name": "copy_keys",
+              "qualname": "SequencerHost.copy_keys",
+              "kind": "classmethod",
+              "signature": "(cls, sequencer, targets: list) -> dict",
+              "summary": "The panel's key clipboard for *targets*' keys.",
+              "line": 1469,
+              "deprecated": false
+            },
+            {
+              "name": "paste_keys",
+              "qualname": "SequencerHost.paste_keys",
+              "kind": "staticmethod",
+              "signature": "(clipboard: dict, pairs: list, now: float, on_replace=None) -> list",
+              "summary": "Paste :meth:`copy_keys` rows at the playhead.",
+              "line": 1536,
+              "deprecated": false
+            },
+            {
+              "name": "graph_sync_cls",
+              "qualname": "SequencerHost.graph_sync_cls",
+              "kind": "staticmethod",
+              "signature": "() -> type",
+              "summary": "The library's ``GraphSync`` (the graph view's host half).",
+              "line": 1576,
+              "deprecated": false
+            },
+            {
+              "name": "object_exists",
+              "qualname": "SequencerHost.object_exists",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> bool",
+              "summary": "Whether *name* names a scene node.",
+              "line": 1583,
+              "deprecated": false
+            },
+            {
+              "name": "full_name",
+              "qualname": "SequencerHost.full_name",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> str",
+              "summary": "*name* as the scene's unique long DAG path (an audio track's source",
+              "line": 1593,
+              "deprecated": false
+            },
+            {
+              "name": "undo_disabled",
+              "qualname": "SequencerHost.undo_disabled",
+              "kind": "staticmethod",
+              "signature": "()",
+              "summary": "A context in which scene changes record no undo step (a view",
+              "line": 1607,
+              "deprecated": false
+            },
+            {
+              "name": "mirror_selection",
+              "qualname": "SequencerHost.mirror_selection",
+              "kind": "staticmethod",
+              "signature": "(names) -> None",
+              "summary": "Put *names* on the scene selection as a view mirror.",
+              "line": 1613,
+              "deprecated": false
+            },
+            {
+              "name": "select_channels",
+              "qualname": "SequencerHost.select_channels",
+              "kind": "staticmethod",
+              "signature": "(objects, attrs=()) -> None",
+              "summary": "Put *attrs* on the Channel Box highlight;",
+              "line": 1643,
+              "deprecated": false
+            },
+            {
+              "name": "select_keys",
+              "qualname": "SequencerHost.select_keys",
+              "kind": "classmethod",
+              "signature": "(cls, rows) -> int",
+              "summary": "Select exactly the ``(obj, attr, times)`` *rows*' keys in the Graph",
+              "line": 1682,
+              "deprecated": false
+            },
+            {
+              "name": "open_attribute_spreadsheet",
+              "qualname": "SequencerHost.open_attribute_spreadsheet",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "Open Maya's Attribute Spread Sheet over the selection;",
+              "line": 1721,
+              "deprecated": false
+            },
+            {
+              "name": "set_dragged_handles",
+              "qualname": "SequencerHost.set_dragged_handles",
+              "kind": "classmethod",
+              "signature": "(cls, curve, items) -> int",
+              "summary": "Write dragged tangent handles on *curve*;",
+              "line": 1733,
               "deprecated": false
             }
           ]

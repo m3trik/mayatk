@@ -126,6 +126,17 @@ class SegmentCollector:
         return {seg["obj"] for seg in segments_by_shot.get(shot.shot_id, [])}
 
     @staticmethod
+    def abbreviate_attrs(attrs) -> str:
+        """Compact, sorted summary of attribute names for a clip's centre
+        label (``translateX`` -> ``tx``): :meth:`Attributes.abbreviate_attrs`,
+        its short-name overrides included.  blendertk's twin abbreviates its
+        Maya-style channel labels the same way.
+        """
+        from mayatk.node_utils.attributes._attributes import Attributes
+
+        return Attributes.abbreviate_attrs(attrs)
+
+    @staticmethod
     def extract_attributes(segments) -> list:
         """Extract attribute names from animation curves in the given segments.
 

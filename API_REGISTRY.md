@@ -27,22 +27,9 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/shots/shot_manifest/manifest_host.py`](#anim_utils--shots--shot_manifest--manifest_host) — What the Shot Manifest panel needs from Maya: its store, engine, detection,
 - [`anim_utils/shots/shot_manifest/range_resolver.py`](#anim_utils--shots--shot_manifest--range_resolver) — Range resolution for the Shot Manifest build pipeline (Maya-bound facade).
 - [`anim_utils/shots/shot_sequencer/_shot_sequencer.py`](#anim_utils--shots--shot_sequencer--_shot_sequencer) — Shot Sequencer — manages per-shot animation with ripple editing.
-- [`anim_utils/shots/shot_sequencer/clip_menu.py`](#anim_utils--shots--shot_sequencer--clip_menu) — Clip context menus and clip-level key operations.
-- [`anim_utils/shots/shot_sequencer/clip_motion.py`](#anim_utils--shots--shot_sequencer--clip_motion) — Clip motion, resize, and key-scaling logic for the shot sequencer.
-- [`anim_utils/shots/shot_sequencer/gap_manager.py`](#anim_utils--shots--shot_sequencer--gap_manager) — Gap and range-highlight handlers for the shot sequencer controller.
 - [`anim_utils/shots/shot_sequencer/graph_sync.py`](#anim_utils--shots--shot_sequencer--graph_sync) — Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
-- [`anim_utils/shots/shot_sequencer/key_menu.py`](#anim_utils--shots--shot_sequencer--key_menu) — Key context menus and key-selection edits.
-- [`anim_utils/shots/shot_sequencer/marker_manager.py`](#anim_utils--shots--shot_sequencer--marker_manager) — Marker persistence for the shot sequencer controller.
-- [`anim_utils/shots/shot_sequencer/scene_callbacks.py`](#anim_utils--shots--shot_sequencer--scene_callbacks) — Maya scene callbacks for the shot sequencer.
-- [`anim_utils/shots/shot_sequencer/scene_selection.py`](#anim_utils--shots--shot_sequencer--scene_selection) — Tracks and the Maya selection.
 - [`anim_utils/shots/shot_sequencer/segment_collector.py`](#anim_utils--shots--shot_sequencer--segment_collector) — Segment collection and attribute extraction for the shot sequencer.
-- [`anim_utils/shots/shot_sequencer/shot_lane.py`](#anim_utils--shots--shot_sequencer--shot_lane) — The shot lane: its context menu and the shot structure edits.
-- [`anim_utils/shots/shot_sequencer/shot_nav.py`](#anim_utils--shots--shot_sequencer--shot_nav) — Shot navigation and combobox synchronization.
-- [`anim_utils/shots/shot_sequencer/shot_sequencer_controller.py`](#anim_utils--shots--shot_sequencer--shot_sequencer_controller) — The Shot Sequencer panel's controller: :class:`ShotSequencerController`.
-- [`anim_utils/shots/shot_sequencer/shot_sequencer_slots.py`](#anim_utils--shots--shot_sequencer--shot_sequencer_slots) — Switchboard slots for the Shot Sequencer UI.
-- [`anim_utils/shots/shot_sequencer/transport.py`](#anim_utils--shots--shot_sequencer--transport) — Transport: the playhead, audio scrub and the transport row.
-- [`anim_utils/shots/shot_sequencer/undo_ledger.py`](#anim_utils--shots--shot_sequencer--undo_ledger) — The shot sequencer's undo ledger.
-- [`anim_utils/shots/shot_sequencer/widget_sync.py`](#anim_utils--shots--shot_sequencer--widget_sync) — Widget sync: rebuilding the sequencer from the scene.
+- [`anim_utils/shots/shot_sequencer/sequencer_host.py`](#anim_utils--shots--shot_sequencer--sequencer_host) — What the Shot Sequencer panel needs from Maya: :class:`SequencerHost`.
 - [`anim_utils/smart_bake/_smart_bake.py`](#anim_utils--smart_bake--_smart_bake) — Smart bake module for intelligent pre-bake animation processing.
 - [`anim_utils/smart_bake/bake_session.py`](#anim_utils--smart_bake--bake_session) — Persistence and restore engine for SmartBake's nondestructive manifest.
 - [`anim_utils/stagger_keys.py`](#anim_utils--stagger_keys) — Dedicated stagger-keys module to keep AnimUtils lean and testable.
@@ -232,7 +219,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L266) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L267) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -593,47 +580,6 @@ Shot Sequencer — manages per-shot animation with ripple editing.
   - `ShotSequencer.scale_object_keys(self, obj: str, old_start: float, old_end: float, new_start: float, new_end: float, _scaled: Optional[set] = None) -> None` — Scale (and optionally shift) keyframes of *obj* from
   - `ShotSequencer.scale_shot_keys(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Retime every key inside ``[old_start, old_end]`` into the new span.
 
-<a id="anim_utils--shots--shot_sequencer--clip_menu"></a>
-### `anim_utils/shots/shot_sequencer/clip_menu.py`
-
-Clip context menus and clip-level key operations.
-
-- **[`class ClipMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_menu.py#L17)** — Clip and gap context menus, and the clip-level key operations they run.
-  - `ClipMenuMixin.on_clip_menu(self, menu, clip_id: int) -> None` — Add domain-specific actions to a clip's context menu.
-  - `ClipMenuMixin.on_gap_menu(self, menu, gap_start: float, gap_end: float) -> None` — Add domain-specific actions to a gap overlay's context menu.
-
-<a id="anim_utils--shots--shot_sequencer--clip_motion"></a>
-### `anim_utils/shots/shot_sequencer/clip_motion.py`
-
-Clip motion, resize, and key-scaling logic for the shot sequencer.
-
-- [`curves_for_attr(obj_name: str, attr_name: str) -> list`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L38) — Return anim curves connected to a specific attribute on an object.
-- [`scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L49) — Scale only the curves driving *attr_name* on *obj_name*.
-- [`FLOAT_ZERO_EPS`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L28) — constant
-- **[`class ClipMotionMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/clip_motion.py#L103)** — Mixin supplying clip move, resize, and batch-move handlers.
-  - `ClipMotionMixin.on_clip_resized(self, clip_id: int, new_start: float, new_duration: float) -> None` — Handle one clip's edge drag — see :meth:`_commit_clip_resizes`.
-  - `ClipMotionMixin.on_clips_batch_resized(self, resizes) -> None` — Handle an edge drag that scaled a SELECTION of clips as one unit.
-  - `ClipMotionMixin.on_clip_moved(self, clip_id: int, new_start: float) -> None` — Handle clip move — routes to audio or shot-level logic.
-  - `ClipMotionMixin.on_clips_batch_moved(self, moves) -> None` — Handle a batch of clip moves (group drag), syncing once at the end.
-  - `ClipMotionMixin.on_keys_moved(self, clip_id: int, changes: list) -> None` — Move individual keyframes on the Maya curves, then refresh.
-  - `ClipMotionMixin.on_keys_batch_moved(self, groups) -> None` — Commit one key drag that spanned any number of clips.
-  - `ClipMotionMixin.on_keys_deleted(self, clip_id: int, times: list) -> None` — Delete individual keyframes from the Maya curves, then refresh.
-
-<a id="anim_utils--shots--shot_sequencer--gap_manager"></a>
-### `anim_utils/shots/shot_sequencer/gap_manager.py`
-
-Gap and range-highlight handlers for the shot sequencer controller.
-
-- [`TIME_SNAP_EPS`](mayatk/mayatk/anim_utils/shots/shot_sequencer/gap_manager.py#L13) — constant
-- **[`class GapManagerMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/gap_manager.py#L18)** — Mixin supplying gap-overlay and range-highlight handlers.
-  - `GapManagerMixin.on_range_highlight_changed(self, start: float, end: float) -> None` — Update the active shot when a range-highlight handle is dragged.
-  - `GapManagerMixin.on_gap_resized(self, original_next_start: float, new_next_start: float) -> None` — Handle a right-edge gap drag: the following shot's ``.start``.
-  - `GapManagerMixin.on_gap_left_resized(self, original_prev_end: float, new_prev_end: float) -> None` — Handle a left-edge gap drag: the preceding shot's ``.end``.
-  - `GapManagerMixin.on_gap_moved(self, old_start: float, old_end: float, new_start: float, new_end: float) -> None` — Handle body gap drag — slide the gap while preserving its width.
-  - `GapManagerMixin.on_gap_lock_changed(self, gap_start: float, gap_end: float, locked: bool) -> None` — Handle a single gap's lock state being toggled via context menu.
-  - `GapManagerMixin.on_gap_lock_all(self) -> None` — Lock all gaps so they are preserved during respace.
-  - `GapManagerMixin.on_gap_unlock_all(self) -> None` — Unlock all gaps so they follow the global gap value.
-
 <a id="anim_utils--shots--shot_sequencer--graph_sync"></a>
 ### `anim_utils/shots/shot_sequencer/graph_sync.py`
 
@@ -644,7 +590,7 @@ Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
   - `GraphSync.sync(self, full: bool = False) -> None` — Bring the graph in line with the scene.
   - `GraphSync.outline(self) -> List[dict]` — The visible shots' objects keyed inside their window, and their curves.
   - `GraphSync.on_keys_edited(self, edits) -> None` — Commit a move / scale / typed stat: ``[(curve, [(t, dt, dv), ...])]``.
-  - `GraphSync.on_tangents_edited(self, rows) -> None` — Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``.
+  - `GraphSync.on_tangents_edited(self, rows) -> None` — Commit dragged handles: ``[(curve, [(t, side, dt, dv, broken), ...])]``,
   - `GraphSync.on_keys_deleted(self, groups) -> None` — Cut keys: ``[(curve, [time, ...])]``;
   - `GraphSync.on_keys_inserted(self, items) -> None` — Key ``[(curve, time), ...]`` without changing the curves' shape.
   - `GraphSync.on_tangent_type(self, type_id: str, groups) -> None` — Set tangent type *type_id* on ``[(curve, [times])]`` *groups* (an
@@ -655,54 +601,6 @@ Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
   - `GraphSync.on_key_menu(self, menu, groups) -> None` — The track view's key edits and Move / Copy to Shot, on the graph's
   - `GraphSync.on_key_selection(self, groups) -> None` — Mirror the graph's key selection into Maya's (not an undo step).
 
-<a id="anim_utils--shots--shot_sequencer--key_menu"></a>
-### `anim_utils/shots/shot_sequencer/key_menu.py`
-
-Key context menus and key-selection edits.
-
-- **[`class KeyMenuMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/key_menu.py#L24)** — Key context menus, tangent edits and drags, and the key-selection edits.
-  - `KeyMenuMixin.on_key_menu(self, menu, key_groups: list) -> None` — Add the key actions to a key's context menu.
-  - `KeyMenuMixin.tangent_from_handle(side: str, dt: float, dv: float) -> tuple` *(static)* — ``(angle_degrees, weight)`` of the tangent a dragged handle stands for.
-  - `KeyMenuMixin.on_keys_tangent_dragged(self, groups: list, side: str, broken: bool) -> None` — Write the tangents a dragged handle asks for on the keys' curves.
-  - `KeyMenuMixin.register_key_targets(self, editor_name: str, source) -> None` — Resolve the key shortcuts' targets through *source* while the
-
-<a id="anim_utils--shots--shot_sequencer--marker_manager"></a>
-### `anim_utils/shots/shot_sequencer/marker_manager.py`
-
-Marker persistence for the shot sequencer controller.
-
-- **[`class MarkerManagerMixin(_MarkerManagerMixinInternal)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/marker_manager.py#L40)** — Mixin supplying marker CRUD persistence.
-  - `MarkerManagerMixin.on_marker_added(self, marker_id: int, time: float) -> None` — Persist a newly added marker.
-  - `MarkerManagerMixin.on_marker_moved(self, marker_id: int, new_time: float) -> None` — Update persisted marker time.
-  - `MarkerManagerMixin.on_marker_changed(self, marker_id: int) -> None` — Update persisted marker note/color.
-  - `MarkerManagerMixin.on_marker_removed(self, marker_id: int) -> None` — Remove marker from persistent store.
-
-<a id="anim_utils--shots--shot_sequencer--scene_callbacks"></a>
-### `anim_utils/shots/shot_sequencer/scene_callbacks.py`
-
-Maya scene callbacks for the shot sequencer.
-
-- **[`class SceneCallbacksMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_callbacks.py#L25)** — Scene event hooks: undo/redo, key edits and time changes refresh the widget.
-  - `SceneCallbacksMixin.remove_callbacks(self) -> None` — Remove Maya event callbacks and ShotStore listener (call on teardown).
-
-<a id="anim_utils--shots--shot_sequencer--scene_selection"></a>
-### `anim_utils/shots/shot_sequencer/scene_selection.py`
-
-Tracks and the Maya selection.
-
-- **[`class SceneSelectionMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/scene_selection.py#L25)** — Tracks, and the DCC selection that follows the sequencer's.
-  - `SceneSelectionMixin.hide_track(self, track_names) -> None` — Hide one or more tracks by name, persist, and rebuild the widget.
-  - `SceneSelectionMixin.show_track(self, track_name: str) -> None` — Un-hide a track by object name, persist, and rebuild the widget.
-  - `SceneSelectionMixin.delete_track(self, track_names) -> None` — Permanently remove objects from all shots and rebuild the widget.
-  - `SceneSelectionMixin.on_selection_changed(self, clip_ids: list) -> None` — Select the corresponding Maya objects when clips are clicked.
-  - `SceneSelectionMixin.on_track_selected(self, track_names: list) -> None` — Select Maya objects when track labels are clicked in the header.
-  - `SceneSelectionMixin.on_sub_track_selected(self, rows: list) -> None` — Select a channel when its sub-row label is clicked in the header.
-  - `SceneSelectionMixin.on_clip_locked(self, clip_id: int, locked: bool) -> None` — Persist per-object clip lock and propagate to sibling clips.
-  - `SceneSelectionMixin.on_track_menu(self, menu, track_names) -> None` — Add Maya-specific actions to the track header context menu.
-  - `SceneSelectionMixin.on_header_menu(self, menu) -> None` — Add settings actions to the header background context menu.
-  - `SceneSelectionMixin.on_key_selection_changed(self, key_groups: list) -> None` — Sync the Maya Graph Editor selection to match the sequencer.
-  - `SceneSelectionMixin.on_clip_renamed(self, clip_id: int, new_label: str) -> None` — Handle inline rename — currently a no-op (shot clips removed).
-
 <a id="anim_utils--shots--shot_sequencer--segment_collector"></a>
 ### `anim_utils/shots/shot_sequencer/segment_collector.py`
 
@@ -712,81 +610,76 @@ Segment collection and attribute extraction for the shot sequencer.
 - **[`class SegmentCollector`](mayatk/mayatk/anim_utils/shots/shot_sequencer/segment_collector.py#L26)** — SegmentCollector — module namespace.
   - `SegmentCollector.collect_segments(sequencer, shot, visible_shots, segment_cache, shifted_out_keys, logger)` *(static)* — Collect animation segments for visible shots.
   - `SegmentCollector.active_object_set(shot, segments_by_shot) -> set` *(static)* — Return the set of objects that belong to the active shot.
+  - `SegmentCollector.abbreviate_attrs(attrs) -> str` *(static)* — Compact, sorted summary of attribute names for a clip's centre
   - `SegmentCollector.extract_attributes(segments) -> list` *(static)* — Extract attribute names from animation curves in the given segments.
   - `SegmentCollector.summary_times(segments, claimed_times) -> list` *(static)* — Every key time an object row ticks in the flat key style.
   - `SegmentCollector.build_curve_preview(crv, t_start, t_end, hidden_times=())` *(static)* — Bezier shape data for one anim curve, clipped to ``[t_start, t_end]``.
 
-<a id="anim_utils--shots--shot_sequencer--shot_lane"></a>
-### `anim_utils/shots/shot_sequencer/shot_lane.py`
+<a id="anim_utils--shots--shot_sequencer--sequencer_host"></a>
+### `anim_utils/shots/shot_sequencer/sequencer_host.py`
 
-The shot lane: its context menu and the shot structure edits.
+What the Shot Sequencer panel needs from Maya: :class:`SequencerHost`.
 
-- **[`class ShotLaneMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_lane.py#L15)** — The shot lane's menus and the shot structure edits they run.
-  - `ShotLaneMixin.on_zone_context_menu(self, zone: str, time: float, global_pos) -> None` — Build a context menu specific to the clicked zone.
-  - `ShotLaneMixin.delete_shot(self, shot_id: int) -> None` — Delete *shot_id* with its contents, closing the timeline behind it.
-  - `ShotLaneMixin.delete_shots(self, scope: str = 'stale') -> None` — Delete the shots of *scope*, after naming them.
-  - `ShotLaneMixin.delete_stale_shots(self) -> None` **DEPRECATED (remove in 0.23.0)**
-  - `ShotLaneMixin.move_shot_to_position(self, shot_id: int, position: int) -> None` — Re-slot *shot_id* at 1-based *position*, pushing the rest along.
-  - `ShotLaneMixin.merge_shot_with(self, shot_id: int, other_id: int) -> None` — Fuse two neighbouring shots into one spanning both.
-  - `ShotLaneMixin.split_shot_at(self, shot_id: int, time: float) -> None` — Cut *shot_id* in two at *time*, leaving its content where it is.
-
-<a id="anim_utils--shots--shot_sequencer--shot_nav"></a>
-### `anim_utils/shots/shot_sequencer/shot_nav.py`
-
-Shot navigation and combobox synchronization.
-
-- **[`class ShotNavMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_nav.py#L20)** — Mixin supplying shot selection and navigation.
-  - `ShotNavMixin.select_shot(self, shot_id: int) -> None` — Set Maya's playback range to the shot and select its objects.
-  - `ShotNavMixin.on_shot_block_clicked(self, shot_name: str) -> None` — Select a shot by name when its block is clicked in the shot lane.
-
-<a id="anim_utils--shots--shot_sequencer--shot_sequencer_controller"></a>
-### `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py`
-
-The Shot Sequencer panel's controller: :class:`ShotSequencerController`.
-
-- **[`class ShotSequencerController(SceneCallbacksMixin, UndoLedgerMixin, ShotLaneMixin, ClipMenuMixin, KeyMenuMixin, WidgetSyncMixin, SceneSelectionMixin, TransportMixin, GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_controller.py#L59)** — Business logic controller bridging SequencerWidget ↔ ShotSequencer.
-  - `ShotSequencerController.sequencer(self) -> Optional[ShotSequencer]` *(property)* — Return the ShotSequencer, lazily creating one from the active store.
-  - `ShotSequencerController.active_shot_id(self) -> Optional[int]` *(property)* — Return the shot_id currently selected, or the first shot's id.
-
-<a id="anim_utils--shots--shot_sequencer--shot_sequencer_slots"></a>
-### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py`
-
-Switchboard slots for the Shot Sequencer UI.
-
-- **[`class ShotEditDialog`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L43)** — Lightweight dialog for creating or editing a shot.
-  - `ShotEditDialog.show(parent=None, name: str = '', start: float = 1.0, end: float = 100.0, description: str = '', title: str = 'Shot', validate=None)` *(static)* — Show a modal dialog and return the result tuple or ``None``.
-- **[`class ShotSequencerSlots(pythontk.LoggingMixin)`](mayatk/mayatk/anim_utils/shots/shot_sequencer/shot_sequencer_slots.py#L134)** — Switchboard slot class — routes UI events to the controller.
-  - `ShotSequencerSlots.header_init(self, widget)` — Configure header menu.
-  - `ShotSequencerSlots.btn_colors(self)` — Open the attribute color configuration dialog.
-  - `ShotSequencerSlots.cmb_shot(self, index)` — Handle direct combobox selection of a shot or marker.
-  - `ShotSequencerSlots.spn_snap(self, value)` — Set the snap interval on the sequencer widget.
-  - `ShotSequencerSlots.btn_shortcuts(self)` — Open the sequencer shortcut editor.
-  - `ShotSequencerSlots.btn_shot_settings(self)` — Open the shared shots settings panel (pinned, as Edit Shot does).
-
-<a id="anim_utils--shots--shot_sequencer--transport"></a>
-### `anim_utils/shots/shot_sequencer/transport.py`
-
-Transport: the playhead, audio scrub and the transport row.
-
-- **[`class TransportMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/transport.py#L68)** — The playhead, audible scrubbing and the transport button row.
-  - `TransportMixin.on_playhead_moved(self, frame: float) -> None` — Sync the Maya playhead to the widget playhead.
-
-<a id="anim_utils--shots--shot_sequencer--undo_ledger"></a>
-### `anim_utils/shots/shot_sequencer/undo_ledger.py`
-
-The shot sequencer's undo ledger.
-
-- **[`class UndoLedgerMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/undo_ledger.py#L17)** — Shot-boundary restore points, and how one undo/redo splits between them and the DCC.
-  - `UndoLedgerMixin.on_undo(self) -> None` — Handle undo_requested from the widget — delegate to Maya undo.
-  - `UndoLedgerMixin.on_redo(self) -> None` — Handle redo_requested from the widget — delegate to Maya redo
-
-<a id="anim_utils--shots--shot_sequencer--widget_sync"></a>
-### `anim_utils/shots/shot_sequencer/widget_sync.py`
-
-Widget sync: rebuilding the sequencer from the scene.
-
-- **[`class WidgetSyncMixin`](mayatk/mayatk/anim_utils/shots/shot_sequencer/widget_sync.py#L33)** — Rebuilding the widget from the scene: tracks, clips, sub-rows, decoration.
-  - `WidgetSyncMixin.refresh(self) -> None` — Clear cached segments and rebuild the sequencer widget.
+- **[`class SequencerHost`](mayatk/mayatk/anim_utils/shots/shot_sequencer/sequencer_host.py#L253)** — Maya's answers to the Shot Sequencer panel's host calls.
+  - `SequencerHost.current_time() -> Optional[float]` *(static)* — The playhead's frame, or ``None`` without a scene.
+  - `SequencerHost.set_current_time(frame: float) -> None` *(static)* — Move the playhead to *frame*, recording no undo entry.
+  - `SequencerHost.playback_range() -> Optional[Tuple[float, float]]` *(static)* — Maya's playback range ``(min, max)``, or ``None`` without a scene.
+  - `SequencerHost.set_playback_range(start: float, end: float) -> None` *(static)* — Set Maya's playback range, recording no undo entry: a view mirror
+  - `SequencerHost.watch_scene(*, busy: Callable[[], bool], on_keys_edited: Callable[[set], None], on_time_changed: Callable[[float], None], on_scene_changed: Callable[[], None], cap: int = 400) -> _SceneWatch` *(static)* — Attach the panel's scene hooks;
+  - `SequencerHost.newly_keyed_members(edited: Iterable[str], shot, sequencer) -> List[str]` *(static)* — The objects keyed in *shot*'s frames that are not its members yet.
+  - `SequencerHost.step_undo(cls, store, redo: bool = False) -> bool` *(class)* — One step of Maya's undo (*redo*: redo) for the panel's Undo / Redo,
+  - `SequencerHost.play_controller(before_play: Optional[Callable[[], None]] = None)` *(static)* — The transport row's ``PlayController``: Maya's timeline through
+  - `SequencerHost.bind_timeline_audio(cls, current: str = '') -> str` *(class)* — Bind the scene's audio to Maya's Time Slider;
+  - `SequencerHost.timeline_audio_wav(source: str) -> str` *(static)* — The WAV path stored on *source* (the composite or a per-track node).
+  - `SequencerHost.scene_fps() -> float` *(static)* — The scene's frame rate (24.0 without Maya).
+  - `SequencerHost.segment_collector() -> type` *(static)* — The library's ``SegmentCollector``: the shots' motion segments, a
+  - `SequencerHost.existing(names: Iterable[str]) -> set` *(static)* — The subset of *names* that resolve to a scene node.
+  - `SequencerHost.leaf_name(name: str) -> str` *(static)* — *name* without its DAG path (``|grp|cube`` -> ``cube``).
+  - `SequencerHost.node_icon(cls, name: str)` *(class)* — The node's type icon (a ``QIcon``), or ``None`` without Maya or for
+  - `SequencerHost.select_objects(names: Iterable[str], add: bool = False) -> List[str]` *(static)* — Select *names* as a view mirror: no undo step.
+  - `SequencerHost.claimed_key_times(sequencer, obj: str, curve) -> List[float]` *(static)* — The samples the shot system created on *curve* (its ledger claims).
+  - `SequencerHost.motion_segments(objects: Iterable[str], time_range: Tuple[float, float], attributes: Optional[Iterable[str]] = None, ignore_holds: bool = True) -> List[Dict[str, Any]]` *(static)* — The motion segments of *objects* inside *time_range*.
+  - `SequencerHost.attribute_curves(name: str) -> Tuple[Optional[str], Dict[str, Any]]` *(static)* — *name*'s long DAG path and its animated attributes.
+  - `SequencerHost.audio_segments(start: float, end: float) -> list` *(static)* — The audio segments overlapping ``[start, end]``, waveforms included
+  - `SequencerHost.audio_track_icon(cls, track_id: str)` *(class)* — The icon of an audio track: its DG audio node's, when it has one.
+  - `SequencerHost.delete_span_keys(cls, obj: str, attrs: Sequence[str], start: float, end: float, release: Optional[Callable] = None) -> int` *(class)* — Cut *obj*'s keys on *attrs* inside ``[start, end]``.
+  - `SequencerHost.stash_keys(cls, targets: Sequence[Tuple[str, Sequence[str], float, float]], source_shot_id: Optional[int] = None)` *(class)* — Park the keys of *targets* in the scene's key stash as ONE clip.
+  - `SequencerHost.curves_for_attr(obj_name: str, attr_name: str) -> list` *(static)* — The anim curves (node names) connected to ``obj_name.attr_name``;
+  - `SequencerHost.curves_for_attrs(cls, obj_name: str, attr_names: Iterable[str]) -> list` *(class)* — :meth:`curves_for_attr` over several attributes: every curve behind
+  - `SequencerHost.curve_id(curve) -> str` *(static)* — A curve's identity across reads (its node name): what merged key
+  - `SequencerHost.object_curves(obj_name: str) -> list` *(static)* — Every anim curve keying *obj_name*.
+  - `SequencerHost.first_key(curves) -> Optional[float]` *(static)* — The earliest key time across *curves*, or ``None`` with no keys.
+  - `SequencerHost.keyed_at(curve, times: Iterable[float], eps: float = 0.001) -> List[bool]` *(static)* — Whether *curve* holds a key within *eps* of each of *times*.
+  - `SequencerHost.any_key_at(curves, frame: float) -> bool` *(static)* — Whether any curve of *curves* holds a key on *frame*: the
+  - `SequencerHost.scale_attribute_keys(cls, obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool` *(class)* — Scale only the curves driving *attr_name* on *obj_name*.
+  - `SequencerHost.commit_curve_moves(curve_moves: Dict, ledger=None, eps: float = 0.001) -> None` *(static)* — Land merged key moves, one primitive call per curve.
+  - `SequencerHost.delete_keys_at(curves, times: Iterable[float], release: Optional[Callable] = None) -> int` *(static)* — Cut the keys of *curves* on each of *times*.
+  - `SequencerHost.moving_audio_track(track_id: str, ledger=None)` *(static)* — Yield ``(move, lowest)`` for moving an audio track's content.
+  - `SequencerHost.undo_chunk(label: str)` *(static)* — One named undo chunk (``CoreUtils.undo_chunk``) for an edit made
+  - `SequencerHost.tangent_from_handle(side: str, dt: float, dv: float) -> Tuple[float, float]` *(static)* — ``(angle_degrees, weight)`` of the tangent a dragged handle stands for.
+  - `SequencerHost.tangent_type_edit(tangent: str, sides=('in', 'out')) -> dict` *(static)* — The edit that sets *tangent* (a :attr:`TANGENT_TYPES` type) on the
+  - `SequencerHost.interpolation_edit(mode: str) -> dict` *(static)* — The edit for a Blender interpolation mode (``CONSTANT`` / ``LINEAR``
+  - `SequencerHost.tangent_lock_edit(lock: bool) -> dict` *(static)* — The edit that unifies (``True``) or breaks the keys' tangents.
+  - `SequencerHost.handle_drag_edit(cls, vectors: Dict, side: str, broken: bool) -> Callable` *(class)* — The edit a dragged tangent handle asks for.
+  - `SequencerHost.edit_key_tangents(cls, targets: list, edit) -> int` *(class)* — Apply a tangent *edit* to *targets*' keys in one undo chunk.
+  - `SequencerHost.target_curves(cls, targets: list) -> list` *(class)* — The anim curves behind *targets*' (object, attribute) pairs, each
+  - `SequencerHost.simplify_keys(cls, targets: list, span: Tuple[float, float], on_delete=None) -> Tuple[int, int]` *(class)* — Drop the selected keys that carry neither a value nor a shape.
+  - `SequencerHost.thin_keys(cls, targets: list, span: Tuple[float, float], on_delete=None) -> int` *(class)* — Keep only the first and last key of each selected attribute.
+  - `SequencerHost.snap_keys(cls, targets: list, span: Tuple[float, float], on_move=None) -> int` *(class)* — Pull the selected keys (the Graph Editor selection the panel
+  - `SequencerHost.euler_filter_keys(cls, targets: list) -> list` *(class)* — Unflip the rotation curves behind *targets* (whole curves).
+  - `SequencerHost.invert_keys(cls, targets: list, on_replace=None, on_move=None) -> int` *(class)* — Mirror the selected keys in time, in place.
+  - `SequencerHost.align_keys(cls, targets: list, on_replace=None, on_move=None) -> int` *(class)* — Line the selected keys up on the earliest one's frame.
+  - `SequencerHost.copy_keys(cls, sequencer, targets: list) -> dict` *(class)* — The panel's key clipboard for *targets*' keys.
+  - `SequencerHost.paste_keys(clipboard: dict, pairs: list, now: float, on_replace=None) -> list` *(static)* — Paste :meth:`copy_keys` rows at the playhead.
+  - `SequencerHost.graph_sync_cls() -> type` *(static)* — The library's ``GraphSync`` (the graph view's host half).
+  - `SequencerHost.object_exists(name: str) -> bool` *(static)* — Whether *name* names a scene node.
+  - `SequencerHost.full_name(name: str) -> str` *(static)* — *name* as the scene's unique long DAG path (an audio track's source
+  - `SequencerHost.undo_disabled()` *(static)* — A context in which scene changes record no undo step (a view
+  - `SequencerHost.mirror_selection(names) -> None` *(static)* — Put *names* on the scene selection as a view mirror.
+  - `SequencerHost.select_channels(objects, attrs=()) -> None` *(static)* — Put *attrs* on the Channel Box highlight;
+  - `SequencerHost.select_keys(cls, rows) -> int` *(class)* — Select exactly the ``(obj, attr, times)`` *rows*' keys in the Graph
+  - `SequencerHost.open_attribute_spreadsheet() -> bool` *(static)* — Open Maya's Attribute Spread Sheet over the selection;
+  - `SequencerHost.set_dragged_handles(cls, curve, items) -> int` *(class)* — Write dragged tangent handles on *curve*;
 
 <a id="anim_utils--smart_bake--_smart_bake"></a>
 ### `anim_utils/smart_bake/_smart_bake.py`

@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (836)
+## Moved out (913)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -110,6 +110,83 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_extra` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/table_presenter.py::ManifestTableMixin.expand_missing` → `tentacle.slots.tools._shot_manifest.table_presenter.ManifestTableMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/view_combos.py::ViewCombosMixin` → `tentacle.slots.tools._shot_manifest.view_combos.ViewCombosMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin` → `tentacle.slots.tools._shot_sequencer.clip_menu.ClipMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin.on_clip_menu` → `tentacle.slots.tools._shot_sequencer.clip_menu.ClipMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_menu.py::ClipMenuMixin.on_gap_menu` → `tentacle.slots.tools._shot_sequencer.clip_menu.ClipMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_clip_moved` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_clip_resized` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_clips_batch_moved` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_clips_batch_resized` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_keys_batch_moved` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_keys_deleted` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::ClipMotionMixin.on_keys_moved` → `tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::FLOAT_ZERO_EPS` → `tentacle.slots.tools._shot_sequencer.clip_motion.FLOAT_ZERO_EPS` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::curves_for_attr` → `mayatk.SequencerHost.curves_for_attr` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/clip_motion.py::scale_attribute_keys` → `mayatk.SequencerHost.scale_attribute_keys` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_left_resized` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_lock_all` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_lock_changed` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_moved` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_resized` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_gap_unlock_all` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::GapManagerMixin.on_range_highlight_changed` → `tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/gap_manager.py::TIME_SNAP_EPS` → `tentacle.slots.tools._shot_sequencer.gap_manager.TIME_SNAP_EPS` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin` → `tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.on_key_menu` → `tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.on_keys_tangent_dragged` → `tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.register_key_targets` → `tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/key_menu.py::KeyMenuMixin.tangent_from_handle` → `tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/marker_manager.py::MarkerManagerMixin` → `tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/marker_manager.py::MarkerManagerMixin.on_marker_added` → `tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/marker_manager.py::MarkerManagerMixin.on_marker_changed` → `tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/marker_manager.py::MarkerManagerMixin.on_marker_moved` → `tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/marker_manager.py::MarkerManagerMixin.on_marker_removed` → `tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_callbacks.py::SceneCallbacksMixin` → `tentacle.slots.tools._shot_sequencer.scene_callbacks.SceneCallbacksMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_callbacks.py::SceneCallbacksMixin.remove_callbacks` → `tentacle.slots.tools._shot_sequencer.scene_callbacks.SceneCallbacksMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.delete_track` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.hide_track` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_clip_locked` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_clip_renamed` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_header_menu` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_key_selection_changed` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_selection_changed` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_sub_track_selected` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_track_menu` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.on_track_selected` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/scene_selection.py::SceneSelectionMixin.show_track` → `tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_shot` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_shots` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_stale_shots` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.merge_shot_with` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.move_shot_to_position` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.on_zone_context_menu` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.split_shot_at` → `tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_nav.py::ShotNavMixin` → `tentacle.slots.tools._shot_sequencer.shot_nav.ShotNavMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_nav.py::ShotNavMixin.on_shot_block_clicked` → `tentacle.slots.tools._shot_sequencer.shot_nav.ShotNavMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_nav.py::ShotNavMixin.select_shot` → `tentacle.slots.tools._shot_sequencer.shot_nav.ShotNavMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController` → `tentacle.slots.tools._shot_sequencer.controller.ShotSequencerController` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController.active_shot_id` → `tentacle.slots.tools._shot_sequencer.controller.ShotSequencerController` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py::ShotSequencerController.sequencer` → `tentacle.slots.tools._shot_sequencer.controller.ShotSequencerController` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotEditDialog` → `tentacle.slots.tools._shot_sequencer.shot_edit_dialog.ShotEditDialog` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotEditDialog.show` → `tentacle.slots.tools._shot_sequencer.shot_edit_dialog.ShotEditDialog` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.btn_colors` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.btn_shortcuts` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.btn_shot_settings` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.cmb_shot` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.header_init` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py::ShotSequencerSlots.spn_snap` → `tentacle.slots.tools.shot_sequencer.ShotSequencerSlots` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/transport.py::TransportMixin` → `tentacle.slots.tools._shot_sequencer.transport.TransportMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/transport.py::TransportMixin.on_playhead_moved` → `tentacle.slots.tools._shot_sequencer.transport.TransportMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin` → `tentacle.slots.tools._shot_sequencer.undo_ledger.UndoLedgerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin.on_redo` → `tentacle.slots.tools._shot_sequencer.undo_ledger.UndoLedgerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/undo_ledger.py::UndoLedgerMixin.on_undo` → `tentacle.slots.tools._shot_sequencer.undo_ledger.UndoLedgerMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/widget_sync.py::WidgetSyncMixin` → `tentacle.slots.tools._shot_sequencer.widget_sync.WidgetSyncMixin` (from 0.30.0)
+- `anim_utils/shots/shot_sequencer/widget_sync.py::WidgetSyncMixin.refresh` → `tentacle.slots.tools._shot_sequencer.widget_sync.WidgetSyncMixin` (from 0.30.0)
 - `anim_utils/shots/shots_slots.py::ShotsController` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
 - `anim_utils/shots/shots_slots.py::ShotsController.confirm_removal` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
 - `anim_utils/shots/shots_slots.py::ShotsController.confirm_stale_removal` → `tentacle.slots.tools._shots.controller.ShotsController` (from 0.30.0)
@@ -841,7 +918,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (263)
+## Added (324)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -855,6 +932,67 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/key_stash/_key_stash.py::KeyStash.watch_undo(cls, owner, widget=None) -> List[int]`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
+- `anim_utils/shots/shot_sequencer/segment_collector.py::SegmentCollector.abbreviate_attrs(attrs) -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost(class)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.align_keys(cls, targets: list, on_replace=None, on_move=None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.any_key_at(curves, frame: float) -> bool`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.attribute_curves(name: str) -> Tuple[Optional[str], Dict[str, Any]]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.audio_segments(start: float, end: float) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.audio_track_icon(cls, track_id: str)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.bind_timeline_audio(cls, current: str = '') -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.claimed_key_times(sequencer, obj: str, curve) -> List[float]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.commit_curve_moves(curve_moves: Dict, ledger=None, eps: float = 0.001) -> None`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.copy_keys(cls, sequencer, targets: list) -> dict`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.current_time() -> Optional[float]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.curve_id(curve) -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.curves_for_attr(obj_name: str, attr_name: str) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.curves_for_attrs(cls, obj_name: str, attr_names: Iterable[str]) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.delete_keys_at(curves, times: Iterable[float], release: Optional[Callable] = None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.delete_span_keys(cls, obj: str, attrs: Sequence[str], start: float, end: float, release: Optional[Callable] = None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.edit_key_tangents(cls, targets: list, edit) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.euler_filter_keys(cls, targets: list) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.existing(names: Iterable[str]) -> set`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.first_key(curves) -> Optional[float]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.full_name(name: str) -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.graph_sync_cls() -> type`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.handle_drag_edit(cls, vectors: Dict, side: str, broken: bool) -> Callable`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.interpolation_edit(mode: str) -> dict`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.invert_keys(cls, targets: list, on_replace=None, on_move=None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.keyed_at(curve, times: Iterable[float], eps: float = 0.001) -> List[bool]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.leaf_name(name: str) -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.mirror_selection(names) -> None`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.motion_segments(objects: Iterable[str], time_range: Tuple[float, float], attributes: Optional[Iterable[str]] = None, ignore_holds: bool = True) -> List[Dict[str, Any]]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.moving_audio_track(track_id: str, ledger=None)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.newly_keyed_members(edited: Iterable[str], shot, sequencer) -> List[str]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.node_icon(cls, name: str)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.object_curves(obj_name: str) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.object_exists(name: str) -> bool`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.open_attribute_spreadsheet() -> bool`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.paste_keys(clipboard: dict, pairs: list, now: float, on_replace=None) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.play_controller(before_play: Optional[Callable[[], None]] = None)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.playback_range() -> Optional[Tuple[float, float]]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.scale_attribute_keys(cls, obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.scene_fps() -> float`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.segment_collector() -> type`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.select_channels(objects, attrs=()) -> None`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.select_keys(cls, rows) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.select_objects(names: Iterable[str], add: bool = False) -> List[str]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.set_current_time(frame: float) -> None`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.set_dragged_handles(cls, curve, items) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.set_playback_range(start: float, end: float) -> None`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.simplify_keys(cls, targets: list, span: Tuple[float, float], on_delete=None) -> Tuple[int, int]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.snap_keys(cls, targets: list, span: Tuple[float, float], on_move=None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.stash_keys(cls, targets: Sequence[Tuple[str, Sequence[str], float, float]], source_shot_id: Optional[int] = None)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.step_undo(cls, store, redo: bool = False) -> bool`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.tangent_from_handle(side: str, dt: float, dv: float) -> Tuple[float, float]`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.tangent_lock_edit(lock: bool) -> dict`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.tangent_type_edit(tangent: str, sides=('in', 'out')) -> dict`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.target_curves(cls, targets: list) -> list`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.thin_keys(cls, targets: list, span: Tuple[float, float], on_delete=None) -> int`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.timeline_audio_wav(source: str) -> str`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.undo_chunk(label: str)`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.undo_disabled()`
+- `anim_utils/shots/shot_sequencer/sequencer_host.py::SequencerHost.watch_scene(*, busy: Callable[[], bool], on_keys_edited: Callable[[set], None], on_time_changed: Callable[[float], None], on_scene_changed: Callable[[], None], cap: int = 400) -> _SceneWatch`
 - `anim_utils/smart_bake/_smart_bake.py::BakeResult.describe(self) -> List[str]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.activate_track(cls, track_id: str) -> Optional[str]`
 - `audio_utils/audio_clips/_audio_clips.py::AudioClips.add_tracks(cls, audio_files: List[str]) -> List[str]`
@@ -1107,13 +1245,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_transfer.py::TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
 
-## Deprecations (14)
+## Deprecations (13)
 
 _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived its window: delete the alias and its tests rather than moving the date. A **HELD** row is due by version, but its notice has not yet had its calendar window._
 
 - **HELD** `env_utils/_env_utils.py::EnvUtils.is_plugin_loaded` — remove in 0.23.0, not before 2026-11-02
 - **HELD** `env_utils/_env_utils.py::EnvUtils.load_plugin` — remove in 0.23.0, not before 2026-11-02
-- **HELD** `anim_utils/shots/shot_sequencer/shot_lane.py::ShotLaneMixin.delete_stale_shots` — remove in 0.23.0, not before 2026-11-06
 - **HELD** `uv_utils/texture_transfer.py::TextureTransfer.CONSTANT_ATTRS` — remove in 0.23.0, not before 2026-11-03
 - **HELD** `env_utils/scene_exporter/task_manager.py::TaskManager.check_uv_snapshots` — remove in 0.24.0, not before 2026-11-07
 - **HELD** `env_utils/scene_state.py::SceneState.read` — remove in 0.29.0, not before 2026-11-23

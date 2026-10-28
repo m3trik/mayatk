@@ -101,76 +101,18 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class ShotSequencer(pythontk.ShotSequencer)`
   - methods: reconcile_all_shots, collect_object_segments, detect_shots, move_attribute_keys, copy_attribute_keys, move_curve_keys, recreate_curve_keys, scale_object_keys, scale_shot_keys
 
-### `anim_utils/shots/shot_sequencer/clip_menu.py` — Clip context menus and clip-level key operations.
-- `class ClipMenuMixin`
-  - methods: on_clip_menu, on_gap_menu
-
-### `anim_utils/shots/shot_sequencer/clip_motion.py` — Clip motion, resize, and key-scaling logic for the shot sequencer.
-- `curves_for_attr(obj_name: str, attr_name: str) -> list`
-- `scale_attribute_keys(obj_name: str, attr_name: str, old_start: float, old_end: float, new_start: float, new_end: float, ledger=None) -> bool`
-- constants: FLOAT_ZERO_EPS
-- `class ClipMotionMixin`
-  - methods: on_clip_resized, on_clips_batch_resized, on_clip_moved, on_clips_batch_moved, on_keys_moved, on_keys_batch_moved, on_keys_deleted
-
-### `anim_utils/shots/shot_sequencer/gap_manager.py` — Gap and range-highlight handlers for the shot sequencer controller.
-- constants: TIME_SNAP_EPS
-- `class GapManagerMixin`
-  - methods: on_range_highlight_changed, on_gap_resized, on_gap_left_resized, on_gap_moved, on_gap_lock_changed, on_gap_lock_all, on_gap_unlock_all
-
 ### `anim_utils/shots/shot_sequencer/graph_sync.py` — Graph editor glue: the shot sequencer's curves in uitk's graph editor (Maya).
 - `class GraphSync`
   - methods: detach, sync, outline, on_keys_edited, on_tangents_edited, on_keys_deleted, on_keys_inserted, on_tangent_type, on_tangents_broken, on_weighted, on_infinity, key_targets, on_key_menu, on_key_selection
 
-### `anim_utils/shots/shot_sequencer/key_menu.py` — Key context menus and key-selection edits.
-- `class KeyMenuMixin`
-  - methods: on_key_menu, tangent_from_handle, on_keys_tangent_dragged, register_key_targets
-
-### `anim_utils/shots/shot_sequencer/marker_manager.py` — Marker persistence for the shot sequencer controller.
-- `class MarkerManagerMixin(_MarkerManagerMixinInternal)`
-  - methods: on_marker_added, on_marker_moved, on_marker_changed, on_marker_removed
-
-### `anim_utils/shots/shot_sequencer/scene_callbacks.py` — Maya scene callbacks for the shot sequencer.
-- `class SceneCallbacksMixin`
-  - methods: remove_callbacks
-
-### `anim_utils/shots/shot_sequencer/scene_selection.py` — Tracks and the Maya selection.
-- `class SceneSelectionMixin`
-  - methods: hide_track, show_track, delete_track, on_selection_changed, on_track_selected, on_sub_track_selected, on_clip_locked, on_track_menu, on_header_menu, on_key_selection_changed, on_clip_renamed
-
 ### `anim_utils/shots/shot_sequencer/segment_collector.py` — Segment collection and attribute extraction for the shot sequencer.
 - constants: KEY_PROXIMITY_EPS
 - `class SegmentCollector`
-  - methods: collect_segments, active_object_set, extract_attributes, summary_times, build_curve_preview
+  - methods: collect_segments, active_object_set, abbreviate_attrs, extract_attributes, summary_times, build_curve_preview
 
-### `anim_utils/shots/shot_sequencer/shot_lane.py` — The shot lane: its context menu and the shot structure edits.
-- `class ShotLaneMixin`
-  - methods: on_zone_context_menu, delete_shot, delete_shots, delete_stale_shots, move_shot_to_position, merge_shot_with, split_shot_at
-
-### `anim_utils/shots/shot_sequencer/shot_nav.py` — Shot navigation and combobox synchronization.
-- `class ShotNavMixin`
-  - methods: select_shot, on_shot_block_clicked
-
-### `anim_utils/shots/shot_sequencer/shot_sequencer_controller.py` — The Shot Sequencer panel's controller: :class:`ShotSequencerController`.
-- `class ShotSequencerController(SceneCallbacksMixin, UndoLedgerMixin, ShotLaneMixin, ClipMenuMixin, KeyMenuMixin, WidgetSyncMixin, SceneSelectionMixin, TransportMixin, GapManagerMixin, ClipMotionMixin, ShotNavMixin, MarkerManagerMixin, pythontk.LoggingMixin)`
-  - methods: sequencer, active_shot_id
-
-### `anim_utils/shots/shot_sequencer/shot_sequencer_slots.py` — Switchboard slots for the Shot Sequencer UI.
-- `class ShotEditDialog`
-  - methods: show
-- `class ShotSequencerSlots(pythontk.LoggingMixin)`
-  - methods: header_init, btn_colors, cmb_shot, spn_snap, btn_shortcuts, btn_shot_settings
-
-### `anim_utils/shots/shot_sequencer/transport.py` — Transport: the playhead, audio scrub and the transport row.
-- `class TransportMixin`
-  - methods: on_playhead_moved
-
-### `anim_utils/shots/shot_sequencer/undo_ledger.py` — The shot sequencer's undo ledger.
-- `class UndoLedgerMixin`
-  - methods: on_undo, on_redo
-
-### `anim_utils/shots/shot_sequencer/widget_sync.py` — Widget sync: rebuilding the sequencer from the scene.
-- `class WidgetSyncMixin`
-  - methods: refresh
+### `anim_utils/shots/shot_sequencer/sequencer_host.py` — What the Shot Sequencer panel needs from Maya: :class:`SequencerHost`.
+- `class SequencerHost`
+  - methods: current_time, set_current_time, playback_range, set_playback_range, watch_scene, newly_keyed_members, step_undo, play_controller, bind_timeline_audio, timeline_audio_wav, scene_fps, segment_collector, existing, leaf_name, node_icon, select_objects, claimed_key_times, motion_segments, attribute_curves, audio_segments, audio_track_icon, delete_span_keys, stash_keys, curves_for_attr, curves_for_attrs, curve_id, object_curves, first_key, keyed_at, any_key_at, scale_attribute_keys, commit_curve_moves, delete_keys_at, moving_audio_track, undo_chunk, tangent_from_handle, tangent_type_edit, interpolation_edit, tangent_lock_edit, handle_drag_edit, edit_key_tangents, target_curves, simplify_keys, thin_keys, snap_keys, euler_filter_keys, invert_keys, align_keys, copy_keys, paste_keys, graph_sync_cls, object_exists, full_name, undo_disabled, mirror_selection, select_channels, select_keys, open_attribute_spreadsheet, set_dragged_handles
 
 ### `anim_utils/smart_bake/_smart_bake.py` — Smart bake module for intelligent pre-bake animation processing.
 - `class BakeAnalysis`

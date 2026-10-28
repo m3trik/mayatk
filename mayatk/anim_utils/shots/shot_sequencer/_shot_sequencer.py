@@ -1339,7 +1339,8 @@ class ShotSequencer(_ShotSequencerCore):
         it — both of which read as the animation coming apart.
 
         PUBLIC because it has two consumers -- this class's own shot moves and
-        ``ClipMotionMixin``'s drag handler -- so the underscore was describing
+        the Shot Sequencer panel's key drags (``SequencerHost.commit_curve_moves``)
+        -- so the underscore was describing
         a contract that no longer held. Not to be confused with the unrelated
         ``AnimUtils.move_curve_keys``, which takes
         ``(curve, time_pairs, allow_merge=...)``: that one moves keys to

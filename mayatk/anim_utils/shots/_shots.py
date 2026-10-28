@@ -445,25 +445,34 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
         holds what it held -- leaves no restore point either (a no-op Snap, a
         Simplify that removed nothing).  Left, the unpaired point sat on top of
         the ledger, and the native undo of the edit before it found it in the
-        way and restored nothing (BACKLOG 2026-10-05).  The caller's own
-        no-op discard after it then drops nothing: one discard per push
-        (``discard_boundary_snapshot``).
+        way and restored nothing (BACKLOG 2026-10-05).  A body that raises
+        takes the same rule: a refused drag that already rippled keeps the
+        point that undoes it.
+
+        Yields the store's :class:`~pythontk.ShotStore.EditHandle`:
+        ``cancel()`` declares the body a no-op, and its restore point goes
+        (``discard_boundary_snapshot``, at most once per push) -- the Shot
+        Sequencer panel's one idiom for both hosts (blendertk's handle also
+        skips its undo step; Maya drops an empty chunk itself).
 
         Pass ``snapshot=False`` for an edit that must not record a restore
         point (it then only supplies the named chunk).  An edit that changed
         the shot records ends by saying so (:class:`ShotsEdited`), as every
-        store's ``scene_edit`` does.
+        store's ``scene_edit`` does.  The chunk is named after *label* without
+        its spaces (``shotSeq_MoveShot_12``).
         """
+        edit = self.EditHandle()
         if cmds is None:
-            yield
+            yield edit
             return
         if snapshot:
             self.push_boundary_snapshot()
-        name = f"shotSeq_{label}_{next(ShotStore._chunk_seq)}"
+        name = f"shotSeq_{''.join(label.split())}_{next(ShotStore._chunk_seq)}"
         cmds.undoInfo(openChunk=True, chunkName=name)
+        changed = False
         try:
-            yield
-            changed = snapshot and self.changed_since_snapshot()
+            yield edit
+            changed = snapshot and not edit.cancelled and self.changed_since_snapshot()
             # Only for an edit that changed what the store alone holds: one
             # that changed nothing must not cost the user a dead Ctrl+Z.
             if changed:
@@ -472,7 +481,9 @@ class ShotStore(ptk.ShotStore, _ShotStoreInternal):
             cmds.undoInfo(closeChunk=True)
             if snapshot:
                 top = self.undo_queue_top()
-                if top != name and not self.changed_since_snapshot():
+                if edit.cancelled or (
+                    top != name and not self.changed_since_snapshot()
+                ):
                     self.discard_boundary_snapshot()
                 else:
                     self.tag_boundary_snapshot((top == name, top))

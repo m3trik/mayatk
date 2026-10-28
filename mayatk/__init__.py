@@ -47,6 +47,7 @@ DEFAULT_INCLUDE = {
     "anim_utils.world_fit_bake": "WorldFitBake",
     "anim_utils.smart_bake.bake_session": "RestoreResult",
     "anim_utils.shots.shot_sequencer._shot_sequencer": ["ShotSequencer", "ShotBlock"],
+    "anim_utils.shots.shot_sequencer.sequencer_host": "SequencerHost",
     "anim_utils.shots._shots": "ShotStore",
     "anim_utils.shots._detection": "Detection",
     "anim_utils.shots.shot_manifest.manifest_host": "ManifestHost",
@@ -621,6 +622,76 @@ MOVED_NAMES = {
     ),
     "BlenderBridgeSlots": (
         "tentacle.slots.tools.blender_bridge.BlenderBridgeSlots",
+        "0.30.0",
+    ),
+    "curves_for_attr": ("mayatk.SequencerHost.curves_for_attr", "0.30.0"),
+    "scale_attribute_keys": ("mayatk.SequencerHost.scale_attribute_keys", "0.30.0"),
+    "ShotSequencerSlots": (
+        "tentacle.slots.tools.shot_sequencer.ShotSequencerSlots",
+        "0.30.0",
+    ),
+    "ShotEditDialog": (
+        "tentacle.slots.tools._shot_sequencer.shot_edit_dialog.ShotEditDialog",
+        "0.30.0",
+    ),
+    "ShotSequencerController": (
+        "tentacle.slots.tools._shot_sequencer.controller.ShotSequencerController",
+        "0.30.0",
+    ),
+    "ClipMenuMixin": (
+        "tentacle.slots.tools._shot_sequencer.clip_menu.ClipMenuMixin",
+        "0.30.0",
+    ),
+    "ClipMotionMixin": (
+        "tentacle.slots.tools._shot_sequencer.clip_motion.ClipMotionMixin",
+        "0.30.0",
+    ),
+    "GapManagerMixin": (
+        "tentacle.slots.tools._shot_sequencer.gap_manager.GapManagerMixin",
+        "0.30.0",
+    ),
+    "KeyMenuMixin": (
+        "tentacle.slots.tools._shot_sequencer.key_menu.KeyMenuMixin",
+        "0.30.0",
+    ),
+    "MarkerManagerMixin": (
+        "tentacle.slots.tools._shot_sequencer.marker_manager.MarkerManagerMixin",
+        "0.30.0",
+    ),
+    "SceneCallbacksMixin": (
+        "tentacle.slots.tools._shot_sequencer.scene_callbacks.SceneCallbacksMixin",
+        "0.30.0",
+    ),
+    "SceneSelectionMixin": (
+        "tentacle.slots.tools._shot_sequencer.scene_selection.SceneSelectionMixin",
+        "0.30.0",
+    ),
+    "ShotLaneMixin": (
+        "tentacle.slots.tools._shot_sequencer.shot_lane.ShotLaneMixin",
+        "0.30.0",
+    ),
+    "ShotNavMixin": (
+        "tentacle.slots.tools._shot_sequencer.shot_nav.ShotNavMixin",
+        "0.30.0",
+    ),
+    "TransportMixin": (
+        "tentacle.slots.tools._shot_sequencer.transport.TransportMixin",
+        "0.30.0",
+    ),
+    "UndoLedgerMixin": (
+        "tentacle.slots.tools._shot_sequencer.undo_ledger.UndoLedgerMixin",
+        "0.30.0",
+    ),
+    "WidgetSyncMixin": (
+        "tentacle.slots.tools._shot_sequencer.widget_sync.WidgetSyncMixin",
+        "0.30.0",
+    ),
+    "FLOAT_ZERO_EPS": (
+        "tentacle.slots.tools._shot_sequencer.clip_motion.FLOAT_ZERO_EPS",
+        "0.30.0",
+    ),
+    "TIME_SNAP_EPS": (
+        "tentacle.slots.tools._shot_sequencer.gap_manager.TIME_SNAP_EPS",
         "0.30.0",
     ),
 }
