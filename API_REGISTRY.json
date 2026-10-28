@@ -5029,7 +5029,7 @@
         {
           "name": "AudioClips",
           "summary": "Scene-wide audio event facade.",
-          "line": 46,
+          "line": 51,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -5040,7 +5040,7 @@
               "kind": "classmethod",
               "signature": "(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]",
               "summary": "Reconcile DG nodes and rebuild the composite WAV.",
-              "line": 91,
+              "line": 118,
               "deprecated": false
             },
             {
@@ -5049,7 +5049,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Rebuild the scene-wide composite WAV from keyed start events.",
-              "line": 123,
+              "line": 150,
               "deprecated": false
             },
             {
@@ -5058,7 +5058,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> int",
               "summary": "Delete every managed DG node, the composite, and all tracks.",
-              "line": 163,
+              "line": 190,
               "deprecated": false
             },
             {
@@ -5067,7 +5067,214 @@
               "kind": "classmethod",
               "signature": "(cls, audio_files: List[str]) -> List[str]",
               "summary": "Register audio files as tracks (no keys authored).",
-              "line": 194,
+              "line": 221,
+              "deprecated": false
+            },
+            {
+              "name": "list_tracks",
+              "qualname": "AudioClips.list_tracks",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "Every track on the carrier, sorted (``[]`` outside Maya).",
+              "line": 274,
+              "deprecated": false
+            },
+            {
+              "name": "find_track",
+              "qualname": "AudioClips.find_track",
+              "kind": "staticmethod",
+              "signature": "(name: str) -> Optional[str]",
+              "summary": "The track answering to *name* -- the id it normalizes to -- or",
+              "line": 279,
+              "deprecated": false
+            },
+            {
+              "name": "tracks_at",
+              "qualname": "AudioClips.tracks_at",
+              "kind": "staticmethod",
+              "signature": "(frame: float) -> List[str]",
+              "summary": "The tracks playing at *frame* (``AudioUtils.tracks_on_at_frame``):",
+              "line": 289,
+              "deprecated": false
+            },
+            {
+              "name": "next_track",
+              "qualname": "AudioClips.next_track",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[str]",
+              "summary": "The track Next Event keys: the one after the most recently started",
+              "line": 295,
+              "deprecated": false
+            },
+            {
+              "name": "add_tracks",
+              "qualname": "AudioClips.add_tracks",
+              "kind": "classmethod",
+              "signature": "(cls, audio_files: List[str]) -> List[str]",
+              "summary": "Register *audio_files* as tracks (:meth:`load_tracks`;",
+              "line": 312,
+              "deprecated": false
+            },
+            {
+              "name": "rename_track",
+              "qualname": "AudioClips.rename_track",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str, new_name: str) -> str",
+              "summary": "Rename *track_id* to the id *new_name* normalizes to;",
+              "line": 339,
+              "deprecated": false
+            },
+            {
+              "name": "replace_track",
+              "qualname": "AudioClips.replace_track",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str, path: str) -> str",
+              "summary": "Point *track_id* at the audio file *path*, keeping its keys.",
+              "line": 360,
+              "deprecated": false
+            },
+            {
+              "name": "remove_track",
+              "qualname": "AudioClips.remove_track",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str) -> bool",
+              "summary": "Delete *track_id*: its attribute and keys, its file-map entry and",
+              "line": 384,
+              "deprecated": false
+            },
+            {
+              "name": "cleanup_unused",
+              "qualname": "AudioClips.cleanup_unused",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Delete every track that holds no key (registered, never placed),",
+              "line": 399,
+              "deprecated": false
+            },
+            {
+              "name": "key_track",
+              "qualname": "AudioClips.key_track",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str, frame: Optional[float] = None, auto_end: bool = False) -> float",
+              "summary": "Key an audio event: *track_id* ON at *frame* (the playhead when",
+              "line": 420,
+              "deprecated": false
+            },
+            {
+              "name": "key_all",
+              "qualname": "AudioClips.key_all",
+              "kind": "classmethod",
+              "signature": "(cls, frame: Optional[float] = None, auto_end: bool = False, stagger: int = 0) -> List[str]",
+              "summary": "Key every track once, end to end from *frame* (the playhead when",
+              "line": 439,
+              "deprecated": false
+            },
+            {
+              "name": "activate_track",
+              "qualname": "AudioClips.activate_track",
+              "kind": "classmethod",
+              "signature": "(cls, track_id: str) -> Optional[str]",
+              "summary": "Make *track_id*'s own sound node the Time Slider's (it writes no",
+              "line": 467,
+              "deprecated": false
+            },
+            {
+              "name": "attach_composite",
+              "qualname": "AudioClips.attach_composite",
+              "kind": "classmethod",
+              "signature": "(cls) -> Optional[str]",
+              "summary": "Reconcile the sound nodes without rebuilding the mix, then put an",
+              "line": 480,
+              "deprecated": false
+            },
+            {
+              "name": "reveal",
+              "qualname": "AudioClips.reveal",
+              "kind": "staticmethod",
+              "signature": "(track_id: Optional[str] = None) -> str",
+              "summary": "Select the carrier node every track's attribute lives on, so the",
+              "line": 494,
+              "deprecated": false
+            },
+            {
+              "name": "channels_config",
+              "qualname": "AudioClips.channels_config",
+              "kind": "staticmethod",
+              "signature": "() -> Dict[str, object]",
+              "summary": "How the Channels panel shows the tracks: pinned to the carrier and",
+              "line": 512,
+              "deprecated": false
+            },
+            {
+              "name": "has_legacy_data",
+              "qualname": "AudioClips.has_legacy_data",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "Whether the carrier still holds the legacy ``audio_trigger`` schema.",
+              "line": 533,
+              "deprecated": false
+            },
+            {
+              "name": "migrate_legacy",
+              "qualname": "AudioClips.migrate_legacy",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Move the carrier's legacy ``audio_trigger`` keys and file map onto",
+              "line": 542,
+              "deprecated": false
+            },
+            {
+              "name": "get_snap_frames",
+              "qualname": "AudioClips.get_snap_frames",
+              "kind": "staticmethod",
+              "signature": "() -> bool",
+              "summary": "Whether audio keys snap to whole frames: the scene's effect recipe",
+              "line": 554,
+              "deprecated": false
+            },
+            {
+              "name": "set_snap_frames",
+              "qualname": "AudioClips.set_snap_frames",
+              "kind": "staticmethod",
+              "signature": "(value: bool) -> None",
+              "summary": "Set the recipe's whole-frame snap (``AudioUtils.set_snap_frames``).",
+              "line": 560,
+              "deprecated": false
+            },
+            {
+              "name": "watch_snap",
+              "qualname": "AudioClips.watch_snap",
+              "kind": "staticmethod",
+              "signature": "(callback, widget=None) -> Optional[Callable[[], None]]",
+              "summary": "Call *callback* whenever the scene's recipe changes (another panel,",
+              "line": 569,
+              "deprecated": false
+            },
+            {
+              "name": "export_composite",
+              "qualname": "AudioClips.export_composite",
+              "kind": "classmethod",
+              "signature": "(cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True) -> Tuple[Optional[str], bool]",
+              "summary": "Write the scene's composite WAV where *choose_path* says, rebuilt",
+              "line": 593,
+              "deprecated": false
+            },
+            {
+              "name": "export_tracks",
+              "qualname": "AudioClips.export_tracks",
+              "kind": "classmethod",
+              "signature": "(cls, choose_dir: Callable[[str], Optional[str]], keyed_only: bool = True, suffix_range: bool = False) -> Tuple[int, List[str], Optional[str]]",
+              "summary": "Copy the tracks' source files into the folder *choose_dir* names.",
+              "line": 644,
+              "deprecated": false
+            },
+            {
+              "name": "watch",
+              "qualname": "AudioClips.watch",
+              "kind": "classmethod",
+              "signature": "(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]",
+              "summary": "Tell *owner* what happens to the scene's audio, through the",
+              "line": 730,
               "deprecated": false
             },
             {
@@ -5076,7 +5283,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]",
               "summary": "The ``audio`` record for this scene, or ``None`` when there",
-              "line": 237,
+              "line": 844,
               "deprecated": false
             },
             {
@@ -5085,7 +5292,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Bake the scene-wide audio manifest for FBX export.",
-              "line": 316,
+              "line": 923,
               "deprecated": false
             },
             {
@@ -5094,7 +5301,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Bake the audio manifest onto ``data_export`` before **every** FBX export.",
-              "line": 409,
+              "line": 1016,
               "deprecated": false
             },
             {
@@ -5103,7 +5310,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Opt the producer out of the before-export hook for the rest of the",
-              "line": 426,
+              "line": 1033,
               "deprecated": false
             },
             {
@@ -5112,7 +5319,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Return names of every managed DG audio node plus the composite.",
-              "line": 452,
+              "line": 1059,
               "deprecated": false
             },
             {
@@ -5121,168 +5328,10 @@
               "kind": "classmethod",
               "signature": "(cls, node_name: str, time_slider: bool = True) -> None",
               "summary": "Set an audio node as the active Time Slider sound.",
-              "line": 467,
+              "line": 1074,
               "deprecated": false
             }
           ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "audio_utils/audio_clips/audio_clips_slots.py",
-      "summary": "Switchboard slots for the Audio Clips UI.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "AudioClipsSlots",
-          "summary": "Switchboard slots for the Audio Clips UI.",
-          "line": 38,
-          "bases": [
-            "ExportMixin",
-            "CallbacksMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "AudioClipsSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header menu with tool description and workflow instructions.",
-              "line": 82,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "AudioClipsSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Init track combo with browse option_box and management menu.",
-              "line": 218,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000",
-              "qualname": "AudioClipsSlots.cmb000",
-              "kind": "method",
-              "signature": "(self, index, widget)",
-              "summary": "Track selection — activate the track's DG node on the Time Slider.",
-              "line": 415,
-              "deprecated": false
-            },
-            {
-              "name": "tb000",
-              "qualname": "AudioClipsSlots.tb000",
-              "kind": "method",
-              "signature": "(self, widget=None)",
-              "summary": "Sync Audio to Timeline — reconcile DG nodes and rebuild composite.",
-              "line": 443,
-              "deprecated": false
-            },
-            {
-              "name": "tb001_init",
-              "qualname": "AudioClipsSlots.tb001_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Init Key Audio Event option-box menu.",
-              "line": 466,
-              "deprecated": false
-            },
-            {
-              "name": "tb001",
-              "qualname": "AudioClipsSlots.tb001",
-              "kind": "method",
-              "signature": "(self, widget=None)",
-              "summary": "Key Audio Event — write ON (1) at current frame, optionally OFF at end.",
-              "line": 562,
-              "deprecated": false
-            },
-            {
-              "name": "select_track",
-              "qualname": "AudioClipsSlots.select_track",
-              "kind": "method",
-              "signature": "(self, name: str) -> bool",
-              "summary": "Show *name*'s track in the tracks combo (the Shot Manifest's",
-              "line": 670,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "AudioClipsSlots.b002",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Remove Audio — nuke every track, DG node, and the composite.",
-              "line": 717,
-              "deprecated": false
-            },
-            {
-              "name": "b004",
-              "qualname": "AudioClipsSlots.b004",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Cleanup Unused — delete unkeyed tracks and their DG nodes.",
-              "line": 725,
-              "deprecated": false
-            },
-            {
-              "name": "b005",
-              "qualname": "AudioClipsSlots.b005",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Replace Selected Track — swap the selected track's audio file.",
-              "line": 730,
-              "deprecated": false
-            },
-            {
-              "name": "b006",
-              "qualname": "AudioClipsSlots.b006",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Rename Track — rename the currently selected track's id.",
-              "line": 774,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "audio_utils/audio_clips/callbacks.py",
-      "summary": "Maya event lifecycle and hydration for Audio Clips.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "CallbacksMixin",
-          "summary": "Maya event lifecycle and hydration for single-scope audio.",
-          "line": 40,
-          "bases": [],
-          "members": [
-            {
-              "name": "remove_callbacks",
-              "qualname": "CallbacksMixin.remove_callbacks",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Tear down every SJM subscription owned by this instance.",
-              "line": 282,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "audio_utils/audio_clips/export_ops.py",
-      "summary": "Export operations for Audio Clips.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "ExportMixin",
-          "summary": "Composite and per-clip WAV export.",
-          "line": 34,
-          "bases": [],
-          "members": []
         }
       ],
       "constants": []
@@ -21592,12 +21641,39 @@
               "deprecated": false
             },
             {
+              "name": "selected_objects",
+              "qualname": "RenderEffects.selected_objects",
+              "kind": "staticmethod",
+              "signature": "(last_only: bool = False) -> List[str]",
+              "summary": "The objects the Render Effects actions act on: the selection, in",
+              "line": 808,
+              "deprecated": false
+            },
+            {
+              "name": "has_channel",
+              "qualname": "RenderEffects.has_channel",
+              "kind": "classmethod",
+              "signature": "(cls, obj, channel='opacity') -> bool",
+              "summary": "Whether *obj* carries *channel*'s attribute (twin of blendertk's).",
+              "line": 827,
+              "deprecated": false
+            },
+            {
+              "name": "select_objects",
+              "qualname": "RenderEffects.select_objects",
+              "kind": "staticmethod",
+              "signature": "(objects) -> List[str]",
+              "summary": "Make *objects* the selection without recording an undo step -- a",
+              "line": 840,
+              "deprecated": false
+            },
+            {
               "name": "objects_with_channel",
               "qualname": "RenderEffects.objects_with_channel",
               "kind": "classmethod",
               "signature": "(cls, channel='highlight') -> List[str]",
               "summary": "Every transform in the scene carrying the channel's attribute.",
-              "line": 808,
+              "line": 866,
               "deprecated": false
             },
             {
@@ -21606,7 +21682,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, channel='highlight', stop: str = 'hi') -> Dict[str, Tuple]",
               "summary": "What each object's channel colour is authored as right now.",
-              "line": 825,
+              "line": 883,
               "deprecated": false
             },
             {
@@ -21615,7 +21691,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, channel='highlight') -> Dict[str, Tuple]",
               "summary": "Both ends of each object's colour ramp, high first.",
-              "line": 854,
+              "line": 912,
               "deprecated": false
             },
             {
@@ -21624,7 +21700,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, color=None, channel='highlight', stop: str = 'hi') -> List[str]",
               "summary": "Restate an already-authored channel colour, leaving its keys alone.",
-              "line": 877,
+              "line": 935,
               "deprecated": false
             },
             {
@@ -21633,7 +21709,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[Dict]",
               "summary": "Every keyed-visibility transform in the scene, as stepped on/off tracks.",
-              "line": 932,
+              "line": 990,
               "deprecated": false
             },
             {
@@ -21642,7 +21718,7 @@
               "kind": "classmethod",
               "signature": "(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]",
               "summary": "The ``render_effects`` record for this scene, or ``None`` when it",
-              "line": 981,
+              "line": 1039,
               "deprecated": false
             },
             {
@@ -21651,7 +21727,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Republish the ``render_effects`` channel on the ``data_export`` carrier.",
-              "line": 1073,
+              "line": 1131,
               "deprecated": false
             },
             {
@@ -21660,122 +21736,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, mode: Optional[str] = None, channel=None) -> None",
               "summary": "Remove the channel attributes, and heal the retired preview's leftovers.",
-              "line": 1355,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "mat_utils/render_opacity/render_effects_slots.py",
-      "summary": "Switchboard slots for the Render Effects panel (``render_effects.ui``).",
-      "functions": [],
-      "classes": [
-        {
-          "name": "RenderEffectsSlots",
-          "summary": "Switchboard slots for the Render Effects UI.",
-          "line": 57,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "RenderEffectsSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header menu.",
-              "line": 162,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_effect_init",
-              "qualname": "RenderEffectsSlots.cmb_effect_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "The effect picker: one entry per page.",
-              "line": 259,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_effect",
-              "qualname": "RenderEffectsSlots.cmb_effect",
-              "kind": "method",
-              "signature": "(self, index, widget=None)",
-              "summary": "Show the picked effect's page.",
-              "line": 265,
-              "deprecated": false
-            },
-            {
-              "name": "stk_effects_init",
-              "qualname": "RenderEffectsSlots.stk_effects_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Build every page into the stack, bind the recipe, register the rows.",
-              "line": 278,
-              "deprecated": false
-            },
-            {
-              "name": "ui_field",
-              "qualname": "RenderEffectsSlots.ui_field",
-              "kind": "method",
-              "signature": "(self, name)",
-              "summary": "A page field by objectName, from whichever page holds it.",
-              "line": 323,
-              "deprecated": false
-            },
-            {
-              "name": "focus",
-              "qualname": "RenderEffectsSlots.focus",
-              "kind": "method",
-              "signature": "(self, channel, objects, title='', apply=None, apply_text='')",
-              "summary": "Open on one effect for *objects*, as the manifest's row actions do.",
-              "line": 423,
-              "deprecated": false
-            },
-            {
-              "name": "unfocus",
-              "qualname": "RenderEffectsSlots.unfocus",
-              "kind": "method",
-              "signature": "(self, *_args) -> None",
-              "summary": "Back to the standalone panel: the picker, its title, the Key texts",
-              "line": 469,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "RenderEffectsSlots.b000",
-              "kind": "method",
-              "signature": "(self, widget=None)",
-              "summary": "Key: the shown page's keyer (``PAGES``).",
-              "line": 531,
-              "deprecated": false
-            },
-            {
-              "name": "btn_remove",
-              "qualname": "RenderEffectsSlots.btn_remove",
-              "kind": "method",
-              "signature": "(self, widget=None)",
-              "summary": "Strip the shown page's channel from the selection.",
-              "line": 537,
-              "deprecated": false
-            },
-            {
-              "name": "btn_webxr_init",
-              "qualname": "RenderEffectsSlots.btn_webxr_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "",
-              "line": 543,
-              "deprecated": false
-            },
-            {
-              "name": "btn_webxr",
-              "qualname": "RenderEffectsSlots.btn_webxr",
-              "kind": "method",
-              "signature": "(self, widget=None)",
-              "summary": "Preview the shown page's effect in WebXR.",
-              "line": 564,
+              "line": 1413,
               "deprecated": false
             }
           ]

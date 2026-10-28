@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (440)
+## Moved out (467)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -116,6 +116,21 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_backup_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.cmb_scope_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
 - `anim_utils/smart_bake/smart_bake_slots.py::SmartBakeSlots.header_init` → `tentacle.slots.tools.smart_bake.SmartBakeSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.b002` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.b004` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.b005` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.b006` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.cmb000` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.cmb000_init` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.header_init` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.select_track` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.tb000` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.tb001` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/audio_clips_slots.py::AudioClipsSlots.tb001_init` → `tentacle.slots.tools.audio_clips.AudioClipsSlots` (from 0.30.0)
+- `audio_utils/audio_clips/callbacks.py::CallbacksMixin` → `mayatk.AudioClips` (from 0.30.0)
+- `audio_utils/audio_clips/callbacks.py::CallbacksMixin.remove_callbacks` → `mayatk.AudioClips` (from 0.30.0)
+- `audio_utils/audio_clips/export_ops.py::ExportMixin` → `mayatk.AudioClips` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b000` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
 - `display_utils/color_id.py::ColorIdSlots.b001` → `tentacle.slots.tools.color_id.ColorIdSlots` (from 0.30.0)
@@ -296,6 +311,18 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdaterSlots.move_to_folder` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.selection_mode` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
 - `mat_utils/mat_updater.py::MatUpdaterSlots.shader_type` → `tentacle.slots.tools.mat_updater.MatUpdaterSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.b000` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.btn_remove` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.btn_webxr` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.btn_webxr_init` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.cmb_effect` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.cmb_effect_init` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.focus` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.header_init` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.stk_effects_init` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.ui_field` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
+- `mat_utils/render_opacity/render_effects_slots.py::RenderEffectsSlots.unfocus` → `tentacle.slots.tools.render_effects.RenderEffectsSlots` (from 0.30.0)
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b000` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
 - `mat_utils/shader_templates/shader_templates_slots.py::ShaderTemplatesSlots.b001` → `tentacle.slots.tools.shader_templates.ShaderTemplatesSlots` (from 0.30.0)
@@ -445,7 +472,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 
-## Added (107)
+## Added (133)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -460,6 +487,29 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
 - `anim_utils/smart_bake/_smart_bake.py::BakeResult.describe(self) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.activate_track(cls, track_id: str) -> Optional[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.add_tracks(cls, audio_files: List[str]) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.attach_composite(cls) -> Optional[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.channels_config() -> Dict[str, object]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.cleanup_unused(cls) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.export_composite(cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True) -> Tuple[Optional[str], bool]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.export_tracks(cls, choose_dir: Callable[[str], Optional[str]], keyed_only: bool = True, suffix_range: bool = False) -> Tuple[int, List[str], Optional[str]]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.find_track(name: str) -> Optional[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.get_snap_frames() -> bool`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.has_legacy_data() -> bool`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.key_all(cls, frame: Optional[float] = None, auto_end: bool = False, stagger: int = 0) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.key_track(cls, track_id: str, frame: Optional[float] = None, auto_end: bool = False) -> float`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.list_tracks() -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.migrate_legacy(cls) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.next_track() -> Optional[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.remove_track(cls, track_id: str) -> bool`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.rename_track(cls, track_id: str, new_name: str) -> str`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.replace_track(cls, track_id: str, path: str) -> str`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.reveal(track_id: Optional[str] = None) -> str`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.set_snap_frames(value: bool) -> None`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.tracks_at(frame: float) -> List[str]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]`
+- `audio_utils/audio_clips/_audio_clips.py::AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]`
 - `core_utils/_core_utils.py::CoreUtils.selected_objects() -> List[str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
@@ -519,6 +569,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/mat_updater.py::MatUpdater.selected_materials(cls, shader_type: Optional[str] = None) -> List[str]`
 - `mat_utils/mat_updater.py::MatUpdater.shader_type_choices() -> List[Tuple[str, str]]`
 - `mat_utils/mat_updater.py::MatUpdater.texture_root() -> str`
+- `mat_utils/render_opacity/render_effects.py::RenderEffects.has_channel(cls, obj, channel='opacity') -> bool`
+- `mat_utils/render_opacity/render_effects.py::RenderEffects.select_objects(objects) -> List[str]`
+- `mat_utils/render_opacity/render_effects.py::RenderEffects.selected_objects(last_only: bool = False) -> List[str]`
 - `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.suggested_name(nodes) -> str`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`

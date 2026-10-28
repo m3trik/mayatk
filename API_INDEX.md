@@ -207,18 +207,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `audio_utils/audio_clips/_audio_clips.py` — Scene-wide audio event manager — thin facade over ``audio_utils``.
 - `class AudioClips(pythontk.LoggingMixin)`
-  - methods: sync, rebuild_composite, remove, load_tracks, export_record, prepare_for_export, enable_auto_export, disable_auto_export, list_nodes, set_active
-
-### `audio_utils/audio_clips/audio_clips_slots.py` — Switchboard slots for the Audio Clips UI.
-- `class AudioClipsSlots(ExportMixin, CallbacksMixin)`
-  - methods: header_init, cmb000_init, cmb000, tb000, tb001_init, tb001, select_track, b002, b004, b005, b006
-
-### `audio_utils/audio_clips/callbacks.py` — Maya event lifecycle and hydration for Audio Clips.
-- `class CallbacksMixin`
-  - methods: remove_callbacks
-
-### `audio_utils/audio_clips/export_ops.py` — Export operations for Audio Clips.
-- `class ExportMixin`
+  - methods: sync, rebuild_composite, remove, load_tracks, list_tracks, find_track, tracks_at, next_track, add_tracks, rename_track, replace_track, remove_track, cleanup_unused, key_track, key_all, activate_track, attach_composite, reveal, channels_config, has_legacy_data, migrate_legacy, get_snap_frames, set_snap_frames, watch_snap, export_composite, export_tracks, watch, export_record, prepare_for_export, enable_auto_export, disable_auto_export, list_nodes, set_active
 
 ### `audio_utils/batch.py` — Batch orchestration — undo chunk + dirty-track buffering.
 - `class Batch(_BatchInternal)`
@@ -866,11 +855,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/render_opacity/render_effects.py`
 - `class RenderEffects(pythontk.LoggingMixin)`
-  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, scene_store, scene_recipe, apply_effect, preview_channels, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
-
-### `mat_utils/render_opacity/render_effects_slots.py` — Switchboard slots for the Render Effects panel (``render_effects.ui``).
-- `class RenderEffectsSlots`
-  - methods: header_init, cmb_effect_init, cmb_effect, stk_effects_init, ui_field, focus, unfocus, b000, btn_remove, btn_webxr_init, btn_webxr
+  - methods: channel_records, apply_channel_records, objects_with_visibility_keys, create, ensure_connections, sync_visibility_from_opacity, key_fade, prepare_for_export, finish_export, stage_export_proxies, remove_export_proxies, key_pulse, scene_store, scene_recipe, apply_effect, preview_channels, selected_objects, has_channel, select_objects, objects_with_channel, channel_colors, channel_color_stops, set_channel_color, visibility_tracks, export_record, refresh_export_metadata, remove
 
 ### `mat_utils/shader_attribute_map.py` — Logical texture channel -> per-shader (attribute, output plug), and the one
 - constants: LOBE_CHANNELS

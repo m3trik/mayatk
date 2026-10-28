@@ -149,10 +149,6 @@ GUI_REQUIRED = {
         "shots adapters register OpenMaya/scriptJob callbacks that "
         "segfault without a real Maya event loop"
     ),
-    "test_render_opacity": (
-        "the pulse page embeds a live uitk ColorRampEditor, so building "
-        "it constructs real QWidgets (2026-09-11); crashes mayapy in batch"
-    ),
     "test_hotkey_collisions": (
         "cmds.hotkeySet raises RuntimeError under mayapy batch "
         "(hotkey infrastructure is GUI-only)"

@@ -516,6 +516,18 @@ MOVED_NAMES = {
         "tentacle.slots.tools.lightmap_baker.LightmapBakerSlots",
         "0.30.0",
     ),
+    "RenderEffectsSlots": (
+        "tentacle.slots.tools.render_effects.RenderEffectsSlots",
+        "0.30.0",
+    ),
+    "AudioClipsSlots": (
+        "tentacle.slots.tools.audio_clips.AudioClipsSlots",
+        "0.30.0",
+    ),
+    # The Audio Clips panel's two mixins: their scene work is AudioClips' API now
+    # (watch, key_all, export_tracks, ...).
+    "CallbacksMixin": ("mayatk.AudioClips", "0.30.0"),
+    "ExportMixin": ("mayatk.AudioClips", "0.30.0"),
 }
 
 bootstrap_package(

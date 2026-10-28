@@ -801,6 +801,64 @@ class RenderEffects(ptk.LoggingMixin):
         )
 
     # ------------------------------------------------------------------
+    # The selection the Render Effects panel acts on
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def selected_objects(last_only: bool = False) -> List[str]:
+        """The objects the Render Effects actions act on: the selection, in
+        the order it was made -- or, with *last_only*, its lead alone (the
+        last selected; blendertk's twin reads the active object, Blender
+        keeping no selection order).
+
+        Parameters:
+            last_only: Only the selection's lead.
+
+        Returns:
+            Node names as ``cmds.ls(selection=True)`` gives them; ``[]`` when
+            nothing is selected, or outside Maya.
+        """
+        if cmds is None:
+            return []
+        objects = cmds.ls(selection=True) or []
+        return objects[-1:] if last_only else objects
+
+    @classmethod
+    def has_channel(cls, obj, channel="opacity") -> bool:
+        """Whether *obj* carries *channel*'s attribute (twin of blendertk's).
+
+        Parameters:
+            obj: A node.
+            channel: The channel name or spec; ``"opacity"``.
+
+        Raises:
+            KeyError: An unknown channel.
+        """
+        return OpacityAttributeMode.has_channel(obj, spec_for(channel))
+
+    @staticmethod
+    def select_objects(objects) -> List[str]:
+        """Make *objects* the selection without recording an undo step -- a
+        view of them, not an edit (the Shot Manifest focusing the Render
+        Effects panel on one object) -- and return them resolved. Twin of
+        blendertk's.
+
+        Parameters:
+            objects: Nodes or names; the missing ones are dropped.
+
+        Returns:
+            Long names of the objects selected. With none resolved the
+            selection is left as it was (an empty ``cmds.ls`` would have
+            listed every node).
+        """
+        names = [str(o) for o in objects or ()]
+        resolved = (cmds.ls(names, long=True) or []) if names and cmds else []
+        if resolved:
+            with CoreUtils.undo_disabled():
+                cmds.select(resolved, replace=True)
+        return resolved
+
+    # ------------------------------------------------------------------
     # Colour revision
     # ------------------------------------------------------------------
 

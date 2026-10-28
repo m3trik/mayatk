@@ -7,8 +7,10 @@ All authoritative state lives on the canonical carrier
 plus a shared ``audio_file_map``.  :mod:`mayatk.audio_utils` manages the
 derived per-track DG nodes.
 
-This module adds exactly **one** concern on top of ``audio_utils``:
-the single scene-wide **composite WAV**.  Maya's Time Slider has only
+On top of ``audio_utils`` this module owns the single scene-wide
+**composite WAV**, and the Audio Clips panel's operations (tentacle's
+shared ``slots/tools/audio_clips.py``; blendertk's ``AudioClips`` mirrors
+them over the Sequencer).  Maya's Time Slider has only
 one audio slot, so during scrubbing we play a pre-mixed WAV of every
 keyed start event.  The composite is rebuilt on demand and stamped
 with a marker attr so ``audio_utils.sync`` leaves it alone.
@@ -27,8 +29,10 @@ Design
   ``composite=False`` flag for unit-tests or headless export flows.
 """
 
+import math
 import os
-from typing import Dict, List, Optional
+import shutil
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pythontk as ptk
 
@@ -40,6 +44,7 @@ except ImportError:
 
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.audio_utils._audio_utils import AudioUtils as _audio_utils
+from mayatk.audio_utils._audio_utils import LEGACY_CACHE_DIR_NAMES
 from mayatk.audio_utils import nodes as _nodes
 
 
@@ -81,6 +86,28 @@ class AudioClips(ptk.LoggingMixin):
     ``"12:footstep 24:jump"`` wire string (unscoped; consumers keep a legacy
     parser for pre-v2 FBX).
     """
+
+    # The Audio Clips panel's wording and formats -- one vocabulary with
+    # blendertk's ``AudioClips``, so the shared panel never asks which host.
+
+    ITEM_NOUN: str = "Track"
+    """What one entry is called here: a track keyed on the carrier (blendertk:
+    ``"Clip"``, a Sequencer strip)."""
+
+    PLACE_LABEL: str = "Key Audio Event"
+    """The panel's place action (:meth:`key_track`): a track keys an ON event
+    at the playhead and may play many times (blendertk moves its one strip)."""
+
+    REVEAL_LABEL: str = "Select Carrier Node"
+    """The panel's :meth:`reveal` action."""
+
+    END_KEYS: bool = True
+    """A placed track carries an explicit end: the OFF key :meth:`key_track`'s
+    *auto_end* writes (a strip's end is intrinsic; blendertk's is ``False``)."""
+
+    PLAYABLE_EXTENSIONS = frozenset(ptk.AudioUtils.PLAYABLE_EXTENSIONS)
+    """What the Time Slider plays as it is; any other
+    ``ptk.AudioUtils.SOURCE_EXTENSIONS`` file plays once FFmpeg converts it."""
 
     # ------------------------------------------------------------------
     # Public API
@@ -232,6 +259,586 @@ class AudioClips(ptk.LoggingMixin):
         if registered:
             cls.logger.info(f"Registered {len(registered)} track(s).")
         return registered
+
+    # ------------------------------------------------------------------
+    # The Audio Clips panel's operations (tentacle's shared panel calls
+    # these; blendertk's ``AudioClips`` mirrors the shared ones)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _current_frame() -> float:
+        """The Time Slider's current frame (0 outside Maya)."""
+        return float(cmds.currentTime(query=True)) if cmds is not None else 0.0
+
+    @staticmethod
+    def list_tracks() -> List[str]:
+        """Every track on the carrier, sorted (``[]`` outside Maya)."""
+        return _audio_utils.list_tracks()
+
+    @staticmethod
+    def find_track(name: str) -> Optional[str]:
+        """The track answering to *name* -- the id it normalizes to -- or
+        ``None`` when no track does (the Shot Manifest's "Open in Audio Clips")."""
+        try:
+            track_id = _audio_utils.normalize_track_id(name)
+        except ValueError:
+            return None
+        return track_id if track_id in _audio_utils.list_tracks() else None
+
+    @staticmethod
+    def tracks_at(frame: float) -> List[str]:
+        """The tracks playing at *frame* (``AudioUtils.tracks_on_at_frame``):
+        what the panel's list follows while the playhead moves."""
+        return _audio_utils.tracks_on_at_frame(frame)
+
+    @staticmethod
+    def next_track() -> Optional[str]:
+        """The track Next Event keys: the one after the most recently started
+        track (wrapping), the first when none is keyed, ``None`` with no tracks."""
+        tracks = _audio_utils.list_tracks()
+        if not tracks:
+            return None
+        latest, latest_frame = None, float("-inf")
+        for track_id in tracks:
+            for frame, value in _audio_utils.read_keys(track_id):
+                if int(round(value)) >= 1 and frame > latest_frame:
+                    latest, latest_frame = track_id, frame
+        if latest is None:
+            return tracks[0]
+        return tracks[(tracks.index(latest) + 1) % len(tracks)]
+
+    @classmethod
+    @CoreUtils.undoable
+    def add_tracks(cls, audio_files: List[str]) -> List[str]:
+        """Register *audio_files* as tracks (:meth:`load_tracks`; a file whose
+        stem is already a track swaps its path, keys kept) and, when a track is
+        keyed, re-sync so the composite plays the new files.
+
+        Returns:
+            The track ids registered or updated; a stem that makes no valid
+            id is skipped (logged).
+        """
+        track_ids = cls.load_tracks(audio_files)
+        if track_ids and any(
+            _audio_utils.read_keys(t) for t in _audio_utils.list_tracks()
+        ):
+            cls.sync()
+        return track_ids
+
+    @classmethod
+    def _retarget(cls, track_id: str, new_id: str) -> None:
+        """Rename *track_id* to *new_id* (keys follow), refusing in the user's words."""
+        if new_id != track_id and not _audio_utils.rename_track(track_id, new_id):
+            raise ValueError(
+                f"Cannot rename '{track_id}' to '{new_id}': the track is gone "
+                "or the name is taken."
+            )
+
+    @classmethod
+    @CoreUtils.undoable
+    def rename_track(cls, track_id: str, new_name: str) -> str:
+        """Rename *track_id* to the id *new_name* normalizes to; its keys, file
+        and sound node follow.
+
+        Returns:
+            The new track id.
+
+        Raises:
+            ValueError: *new_name* makes no valid id, or the track is gone or
+                the id taken -- worded for the user.
+        """
+        try:
+            new_id = _audio_utils.normalize_track_id(new_name)
+        except ValueError as error:
+            raise ValueError(f"Invalid track name: {error}") from error
+        cls._retarget(track_id, new_id)
+        cls.sync()
+        return new_id
+
+    @classmethod
+    @CoreUtils.undoable
+    def replace_track(cls, track_id: str, path: str) -> str:
+        """Point *track_id* at the audio file *path*, keeping its keys. A track
+        is named by its file, so a file of another stem renames the track to it
+        (blendertk's strip keeps its name).
+
+        Returns:
+            The track id afterwards.
+
+        Raises:
+            ValueError: The new stem makes no valid id, or it is taken.
+        """
+        path = path.replace("\\", "/")
+        stem = os.path.splitext(os.path.basename(path))[0]
+        try:
+            new_id = _audio_utils.normalize_track_id(stem)
+        except ValueError as error:
+            raise ValueError(f"Invalid track name: {error}") from error
+        cls._retarget(track_id, new_id)
+        _audio_utils.set_path(new_id, path)
+        cls.sync()
+        return new_id
+
+    @classmethod
+    @CoreUtils.undoable
+    def remove_track(cls, track_id: str) -> bool:
+        """Delete *track_id*: its attribute and keys, its file-map entry and
+        (on the sync after) its sound node; the composite is rebuilt.
+
+        Returns:
+            Whether the track existed.
+        """
+        with _audio_utils.batch():
+            removed = _audio_utils.delete_track(track_id)
+            _audio_utils.remove_path(track_id)
+        cls.sync()
+        return removed
+
+    @classmethod
+    @CoreUtils.undoable
+    def cleanup_unused(cls) -> List[str]:
+        """Delete every track that holds no key (registered, never placed),
+        with its sound node.
+
+        Returns:
+            The track ids removed.
+        """
+        unused = [
+            t for t in _audio_utils.list_tracks() if not _audio_utils.read_keys(t)
+        ]
+        if not unused:
+            return []
+        with _audio_utils.batch():
+            for track_id in unused:
+                _audio_utils.delete_track(track_id)
+                _audio_utils.remove_path(track_id)
+        cls.sync()
+        return unused
+
+    @classmethod
+    @CoreUtils.undoable
+    def key_track(
+        cls, track_id: str, frame: Optional[float] = None, auto_end: bool = False
+    ) -> float:
+        """Key an audio event: *track_id* ON at *frame* (the playhead when
+        omitted) and, with *auto_end*, OFF where its file ends -- through
+        ``AudioUtils.key_clip``, the writer the Shot Manifest's build uses --
+        then sync. A track may play any number of times (blendertk's strip is
+        one placement, so its twin moves it).
+
+        Returns:
+            The frame keyed.
+        """
+        frame = cls._current_frame() if frame is None else float(frame)
+        _audio_utils.key_clip(track_id, frame, auto_end=auto_end)
+        cls.sync()
+        return frame
+
+    @classmethod
+    @CoreUtils.undoable
+    def key_all(
+        cls, frame: Optional[float] = None, auto_end: bool = False, stagger: int = 0
+    ) -> List[str]:
+        """Key every track once, end to end from *frame* (the playhead when
+        omitted): each starts where the last one's file ended plus *stagger*
+        frames (*stagger*, at least one, after a track whose length is
+        unreadable); then sync.
+
+        Returns:
+            The track ids keyed, in order.
+        """
+        cursor = cls._current_frame() if frame is None else float(frame)
+        keyed: List[str] = []
+        with _audio_utils.batch():
+            for track_id in _audio_utils.list_tracks():
+                duration = _audio_utils.clip_length_frames(track_id)
+                _audio_utils.key_clip(
+                    track_id, cursor, duration=duration, auto_end=auto_end
+                )
+                keyed.append(track_id)
+                if duration > 0:
+                    cursor = math.ceil(cursor + duration) + stagger
+                else:
+                    cursor += max(stagger, 1)
+        cls.sync()
+        return keyed
+
+    @classmethod
+    def activate_track(cls, track_id: str) -> Optional[str]:
+        """Make *track_id*'s own sound node the Time Slider's (it writes no
+        attribute).
+
+        Returns:
+            The node, or ``None`` when the track has none yet (a sync makes it).
+        """
+        node = _audio_utils.find_dg_node_for_track(track_id)
+        if node:
+            cls.set_active(node)
+        return node or None
+
+    @classmethod
+    def attach_composite(cls) -> Optional[str]:
+        """Reconcile the sound nodes without rebuilding the mix, then put an
+        existing composite on the Time Slider (a scene just opened).
+
+        Returns:
+            The composite node, or ``None`` when there is none.
+        """
+        cls.sync(composite=False, activate=False)
+        node = cls._find_composite_node()
+        if node:
+            cls.set_active(node)
+        return node
+
+    @staticmethod
+    def reveal(track_id: Optional[str] = None) -> str:
+        """Select the carrier node every track's attribute lives on, so the
+        tracks show in the Channel Box (*track_id* is accepted for blendertk's
+        twin, which reveals that one strip in the Sequencer).
+
+        Returns:
+            The carrier's name.
+
+        Raises:
+            ValueError: No carrier yet (no track added), worded for the user.
+        """
+        carrier = _audio_utils.CARRIER_NODE
+        if cmds is None or not cmds.objExists(carrier):
+            raise ValueError(f"'{carrier}' does not exist yet: add a track first.")
+        cmds.select(carrier, replace=True)
+        return carrier
+
+    @staticmethod
+    def channels_config() -> Dict[str, object]:
+        """How the Channels panel shows the tracks: pinned to the carrier and
+        filtered to the per-track attributes -- its ``apply_launch_config``
+        keywords.
+
+        Raises:
+            ValueError: No carrier yet, worded for the user.
+        """
+        carrier = _audio_utils.CARRIER_NODE
+        if cmds is None or not cmds.objExists(carrier):
+            raise ValueError(
+                f"Carrier node '{carrier}' does not exist yet: add or key an "
+                "audio track first."
+            )
+        return {
+            "targets": [carrier],
+            "filter": "Custom",
+            "search": f"{_audio_utils.ATTR_PREFIX}*",
+        }
+
+    @staticmethod
+    def has_legacy_data() -> bool:
+        """Whether the carrier still holds the legacy ``audio_trigger`` schema."""
+        try:
+            return bool(_audio_utils.detect_legacy())
+        except Exception:
+            return False
+
+    @classmethod
+    @CoreUtils.undoable
+    def migrate_legacy(cls) -> List[str]:
+        """Move the carrier's legacy ``audio_trigger`` keys and file map onto
+        per-track attributes (``AudioUtils.migrate_legacy_triggers``), then sync.
+
+        Returns:
+            The track ids written.
+        """
+        migrated = _audio_utils.migrate_legacy_triggers(_audio_utils.CARRIER_NODE)
+        cls.sync()
+        return migrated
+
+    @staticmethod
+    def get_snap_frames() -> bool:
+        """Whether audio keys snap to whole frames: the scene's effect recipe
+        (``AudioUtils.get_snap_frames``)."""
+        return _audio_utils.get_snap_frames()
+
+    @staticmethod
+    def set_snap_frames(value: bool) -> None:
+        """Set the recipe's whole-frame snap (``AudioUtils.set_snap_frames``).
+
+        Raises:
+            RuntimeError: No shot store to hold the recipe.
+        """
+        _audio_utils.set_snap_frames(value)
+
+    @staticmethod
+    def watch_snap(callback, widget=None) -> Optional[Callable[[], None]]:
+        """Call *callback* whenever the scene's recipe changes (another panel,
+        an undo, a scene opened), so a Snap To Frame toggle shows it. The shot
+        store holds the recipe; it sits above this layer, so it is reached
+        through the record owners.
+
+        Parameters:
+            callback: Called with the store's change arguments.
+            widget: A Qt widget whose destruction ends the watch.
+
+        Returns:
+            The unwatch callable, or ``None`` without a shot store.
+        """
+        from mayatk.node_utils.data_nodes import DataNodes
+
+        store = DataNodes.owner(ptk.SceneRecords.SHOT_STORE.key)
+        if store is None:
+            return None
+        unwatch = store.watch_settings(callback)
+        if widget is not None:
+            widget.destroyed.connect(lambda *_: unwatch())
+        return unwatch
+
+    @classmethod
+    def export_composite(
+        cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True
+    ) -> Tuple[Optional[str], bool]:
+        """Write the scene's composite WAV where *choose_path* says, rebuilt
+        first so it holds the current keys.
+
+        Parameters:
+            choose_path: ``(suggested path) -> path or None`` -- the destination
+                (the panel's save dialog); ``None`` cancels. The suggestion is
+                in the project's sound folder, never the audio cache.
+            trim_silence: Trim the copy's leading and trailing silence.
+
+        Returns:
+            ``(destination, trimmed)``; ``(None, False)`` when cancelled.
+
+        Raises:
+            ValueError: Nothing keyed to mix, or the mix is missing on disk --
+                worded for the user.
+            OSError: The copy failed.
+        """
+        node = cls.sync(composite=True, activate=False).get("composite")
+        if not node:
+            raise ValueError("No composite WAV — key tracks and sync first.")
+        try:
+            source = cmds.getAttr(f"{node}.filename") or ""
+        except Exception:
+            source = ""
+        if not source or not os.path.isfile(source):
+            raise ValueError("Composite file not found on disk.")
+        folder = _nodes.Nodes.workspace_sound_dir() or ""
+        if not folder:
+            # An older scene's composite sits in a legacy cache folder beside
+            # its sources: step out of that one.
+            folder = os.path.dirname(source)
+            while os.path.basename(folder) in LEGACY_CACHE_DIR_NAMES:
+                folder = os.path.dirname(folder)
+        dest = choose_path(os.path.join(folder, "audio_composite.wav"))
+        if not dest:
+            return None, False
+        shutil.copy2(source, dest)
+        trimmed = False
+        if trim_silence:
+            try:
+                ptk.AudioUtils.trim_silence(dest)
+                trimmed = True
+            except Exception as error:
+                cls.logger.warning(f"Trimming {dest!r} failed: {error}")
+        cls.logger.info(f"Exported the composite to {dest!r}.")
+        return dest, trimmed
+
+    @classmethod
+    def export_tracks(
+        cls,
+        choose_dir: Callable[[str], Optional[str]],
+        keyed_only: bool = True,
+        suffix_range: bool = False,
+    ) -> Tuple[int, List[str], Optional[str]]:
+        """Copy the tracks' source files into the folder *choose_dir* names.
+
+        Parameters:
+            choose_dir: ``(suggested folder) -> folder or None`` (the panel's
+                folder dialog); ``None`` cancels.
+            keyed_only: Only tracks with a start key; otherwise every track.
+            suffix_range: With *keyed_only*, one copy per keying, its frame
+                range in the name (``Footstep_12-47.wav``).
+
+        Returns:
+            ``(files written, track ids whose source is missing, folder)``;
+            ``(0, [], None)`` when cancelled.
+
+        Raises:
+            ValueError: No tracks, or none keyed under *keyed_only* -- worded
+                for the user.
+        """
+        file_map = _audio_utils.load_file_map()
+        if not file_map:
+            raise ValueError("No audio tracks loaded.")
+        ranges: Dict[str, List[Tuple[int, int]]] = {}
+        if keyed_only:
+            fps = _audio_utils.get_fps()
+            for track_id in _audio_utils.list_tracks():
+                events = _audio_utils.read_events(track_id)
+                if not events:
+                    continue
+                duration = 0.0
+                if file_map.get(track_id):
+                    try:
+                        frames, _ = _audio_utils.audio_duration_frames(
+                            file_map[track_id], fps
+                        )
+                        duration = float(frames or 0.0)
+                    except Exception:
+                        duration = 0.0
+                spans = []
+                for event in events:
+                    start = int(event.start)
+                    if event.stop is not None:
+                        end = int(event.stop)
+                    elif duration > 0:
+                        end = int(math.ceil(event.start + duration))
+                    else:
+                        end = start
+                    spans.append((start, end))
+                ranges[track_id] = spans
+            if not ranges:
+                raise ValueError("No keyed tracks — nothing to export.")
+        else:
+            ranges = {track_id: [] for track_id in file_map}
+        folder = choose_dir(os.path.dirname(next(iter(file_map.values()), "")))
+        if not folder:
+            return 0, [], None
+        exported, missing = 0, []
+        for track_id, spans in ranges.items():
+            source = file_map.get(track_id)
+            if not source or not os.path.isfile(source):
+                missing.append(track_id)
+                continue
+            stem, ext = os.path.splitext(os.path.basename(source))
+            names = (
+                [f"{stem}_{start}-{end}{ext}" for start, end in spans]
+                if keyed_only and suffix_range and spans
+                else [f"{stem}{ext}"]
+            )
+            for name in names:
+                try:
+                    shutil.copy2(source, os.path.join(folder, name))
+                    exported += 1
+                except OSError as error:
+                    cls.logger.warning(f"Exporting {name!r} failed: {error}")
+        cls.logger.info(f"Exported {exported} audio file(s) to {folder!r}.")
+        return exported, missing, folder
+
+    # ------------------------------------------------------------------
+    # The scene's events, for the panel
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def watch(
+        cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None
+    ) -> List[int]:
+        """Tell *owner* what happens to the scene's audio, through the
+        ``ScriptJobManager``:
+
+        * *on_scene* -- a scene opened or a new one began (deferred to idle);
+        * *on_tracks* -- a track attribute on the carrier was set, added,
+          removed or disconnected (the Graph Editor, a script, an undo),
+          coalesced into one call per idle tick; the carrier watch is re-made
+          for each scene;
+        * *on_time(frame)* -- the playhead moved.
+
+        Every subscription is *owner*'s (``ScriptJobManager.unsubscribe_all``);
+        with *widget*, they end when it is destroyed. Outside Maya nothing is
+        subscribed. The time subscription persists across scenes (an
+        ephemeral one was pruned by the very scene change that re-made it).
+
+        Returns:
+            The scene and time subscription tokens.
+        """
+        if cmds is None:
+            return []
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        jobs = ScriptJobManager.instance()
+        carrier_tokens: List[int] = []
+        pending = [False]
+
+        def flush():
+            pending[0] = False
+            on_tracks()
+
+        def tracks_changed():
+            if pending[0]:
+                return
+            pending[0] = True
+            try:
+                cmds.evalDeferred(flush, lowestPriority=True)
+            except Exception:  # Maya not ready: the next edit retries
+                pending[0] = False
+
+        def watch_carrier():
+            for token in carrier_tokens:
+                jobs.unsubscribe(token)
+            carrier_tokens[:] = []
+            if on_tracks is not None:
+                token = cls._watch_carrier(tracks_changed, owner)
+                if token is not None:
+                    carrier_tokens.append(token)
+
+        def scene_opened():
+            watch_carrier()
+            if on_scene is not None:
+                cmds.evalDeferred(on_scene)
+
+        tokens = [
+            jobs.subscribe(event, scene_opened, owner=owner)
+            for event in ("SceneOpened", "NewSceneOpened")
+        ]
+        if on_time is not None:
+            tokens.append(
+                jobs.subscribe(
+                    "timeChanged",
+                    lambda: on_time(cls._current_frame()),
+                    owner=owner,
+                )
+            )
+        watch_carrier()
+        if widget is not None:
+            jobs.connect_cleanup(widget, owner=owner)
+        return tokens
+
+    @staticmethod
+    def _watch_carrier(callback, owner) -> Optional[int]:
+        """One ``MNodeMessage`` attribute-changed callback on the carrier,
+        calling *callback* when an ``audio_clip_*`` attribute is set, added,
+        removed or disconnected; ``None`` without a carrier yet."""
+        carrier = _audio_utils.CARRIER_NODE
+        if cmds is None or not cmds.objExists(carrier):
+            return None
+        try:
+            import maya.api.OpenMaya as om2
+
+            selection = om2.MSelectionList()
+            selection.add(carrier)
+            node = selection.getDependNode(0)
+        except Exception:  # no OpenMaya, or the carrier would not resolve
+            return None
+        message = om2.MNodeMessage
+        relevant = (
+            message.kAttributeSet
+            | message.kConnectionBroken
+            | message.kAttributeAdded
+            | message.kAttributeRemoved
+        )
+        prefix = _audio_utils.ATTR_PREFIX
+
+        def changed(msg, plug, *_args):
+            try:
+                if msg & relevant and plug.partialName(useLongNames=True).startswith(
+                    prefix
+                ):
+                    callback()
+            except RuntimeError:
+                pass  # the node went with its scene
+
+        from mayatk.core_utils.script_job_manager import ScriptJobManager
+
+        return ScriptJobManager.instance().add_om_callback(
+            message.addAttributeChangedCallback, node, changed, owner=owner
+        )
 
     @classmethod
     def export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]:

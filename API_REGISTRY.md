@@ -50,9 +50,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`anim_utils/world_fit_bake.py`](#anim_utils--world_fit_bake) — World-fitted transform bake: reparent nodes under a chosen target and key the
 - [`audio_utils/_audio_utils.py`](#audio_utils--_audio_utils) — Unified audio system for Maya scenes.
 - [`audio_utils/audio_clips/_audio_clips.py`](#audio_utils--audio_clips--_audio_clips) — Scene-wide audio event manager — thin facade over ``audio_utils``.
-- [`audio_utils/audio_clips/audio_clips_slots.py`](#audio_utils--audio_clips--audio_clips_slots) — Switchboard slots for the Audio Clips UI.
-- [`audio_utils/audio_clips/callbacks.py`](#audio_utils--audio_clips--callbacks) — Maya event lifecycle and hydration for Audio Clips.
-- [`audio_utils/audio_clips/export_ops.py`](#audio_utils--audio_clips--export_ops) — Export operations for Audio Clips.
 - [`audio_utils/batch.py`](#audio_utils--batch) — Batch orchestration — undo chunk + dirty-track buffering.
 - [`audio_utils/compositor.py`](#audio_utils--compositor) — Compositor — derives DG audio nodes from keyed track events.
 - [`audio_utils/migrate.py`](#audio_utils--migrate) — One-shot migration from legacy single-enum carriers to per-track schema.
@@ -174,7 +171,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`mat_utils/render_opacity/channels.py`](#mat_utils--render_opacity--channels) — The per-object render-effect channel table.
 - [`mat_utils/render_opacity/material_mode.py`](#mat_utils--render_opacity--material_mode) — Clean up what the retired viewport "material mode" left in a scene.
 - [`mat_utils/render_opacity/render_effects.py`](#mat_utils--render_opacity--render_effects)
-- [`mat_utils/render_opacity/render_effects_slots.py`](#mat_utils--render_opacity--render_effects_slots) — Switchboard slots for the Render Effects panel (``render_effects.ui``).
 - [`mat_utils/shader_attribute_map.py`](#mat_utils--shader_attribute_map) — Logical texture channel -> per-shader (attribute, output plug), and the one
 - [`mat_utils/shader_converter.py`](#mat_utils--shader_converter) — Retype a material in place — legacy Maya shaders to an exportable PBR one.
 - [`mat_utils/shader_templates/_shader_templates.py`](#mat_utils--shader_templates--_shader_templates)
@@ -1032,50 +1028,40 @@ Unified audio system for Maya scenes.
 
 Scene-wide audio event manager — thin facade over ``audio_utils``.
 
-- **[`class AudioClips(pythontk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L46)** — Scene-wide audio event facade.
+- **[`class AudioClips(pythontk.LoggingMixin)`](mayatk/mayatk/audio_utils/audio_clips/_audio_clips.py#L51)** — Scene-wide audio event facade.
   - `AudioClips.sync(cls, track_ids: Optional[List[str]] = None, composite: bool = True, activate: bool = True) -> Dict[str, list]` *(class)* — Reconcile DG nodes and rebuild the composite WAV.
   - `AudioClips.rebuild_composite(cls) -> Optional[str]` *(class)* — Rebuild the scene-wide composite WAV from keyed start events.
   - `AudioClips.remove(cls) -> int` *(class)* — Delete every managed DG node, the composite, and all tracks.
   - `AudioClips.load_tracks(cls, audio_files: List[str]) -> List[str]` *(class)* — Register audio files as tracks (no keys authored).
+  - `AudioClips.list_tracks() -> List[str]` *(static)* — Every track on the carrier, sorted (``[]`` outside Maya).
+  - `AudioClips.find_track(name: str) -> Optional[str]` *(static)* — The track answering to *name* -- the id it normalizes to -- or
+  - `AudioClips.tracks_at(frame: float) -> List[str]` *(static)* — The tracks playing at *frame* (``AudioUtils.tracks_on_at_frame``):
+  - `AudioClips.next_track() -> Optional[str]` *(static)* — The track Next Event keys: the one after the most recently started
+  - `AudioClips.add_tracks(cls, audio_files: List[str]) -> List[str]` *(class)* — Register *audio_files* as tracks (:meth:`load_tracks`;
+  - `AudioClips.rename_track(cls, track_id: str, new_name: str) -> str` *(class)* — Rename *track_id* to the id *new_name* normalizes to;
+  - `AudioClips.replace_track(cls, track_id: str, path: str) -> str` *(class)* — Point *track_id* at the audio file *path*, keeping its keys.
+  - `AudioClips.remove_track(cls, track_id: str) -> bool` *(class)* — Delete *track_id*: its attribute and keys, its file-map entry and
+  - `AudioClips.cleanup_unused(cls) -> List[str]` *(class)* — Delete every track that holds no key (registered, never placed),
+  - `AudioClips.key_track(cls, track_id: str, frame: Optional[float] = None, auto_end: bool = False) -> float` *(class)* — Key an audio event: *track_id* ON at *frame* (the playhead when
+  - `AudioClips.key_all(cls, frame: Optional[float] = None, auto_end: bool = False, stagger: int = 0) -> List[str]` *(class)* — Key every track once, end to end from *frame* (the playhead when
+  - `AudioClips.activate_track(cls, track_id: str) -> Optional[str]` *(class)* — Make *track_id*'s own sound node the Time Slider's (it writes no
+  - `AudioClips.attach_composite(cls) -> Optional[str]` *(class)* — Reconcile the sound nodes without rebuilding the mix, then put an
+  - `AudioClips.reveal(track_id: Optional[str] = None) -> str` *(static)* — Select the carrier node every track's attribute lives on, so the
+  - `AudioClips.channels_config() -> Dict[str, object]` *(static)* — How the Channels panel shows the tracks: pinned to the carrier and
+  - `AudioClips.has_legacy_data() -> bool` *(static)* — Whether the carrier still holds the legacy ``audio_trigger`` schema.
+  - `AudioClips.migrate_legacy(cls) -> List[str]` *(class)* — Move the carrier's legacy ``audio_trigger`` keys and file map onto
+  - `AudioClips.get_snap_frames() -> bool` *(static)* — Whether audio keys snap to whole frames: the scene's effect recipe
+  - `AudioClips.set_snap_frames(value: bool) -> None` *(static)* — Set the recipe's whole-frame snap (``AudioUtils.set_snap_frames``).
+  - `AudioClips.watch_snap(callback, widget=None) -> Optional[Callable[[], None]]` *(static)* — Call *callback* whenever the scene's recipe changes (another panel,
+  - `AudioClips.export_composite(cls, choose_path: Callable[[str], Optional[str]], trim_silence: bool = True) -> Tuple[Optional[str], bool]` *(class)* — Write the scene's composite WAV where *choose_path* says, rebuilt
+  - `AudioClips.export_tracks(cls, choose_dir: Callable[[str], Optional[str]], keyed_only: bool = True, suffix_range: bool = False) -> Tuple[int, List[str], Optional[str]]` *(class)* — Copy the tracks' source files into the folder *choose_dir* names.
+  - `AudioClips.watch(cls, owner, on_scene=None, on_tracks=None, on_time=None, widget=None) -> List[int]` *(class)* — Tell *owner* what happens to the scene's audio, through the
   - `AudioClips.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]` *(class)* — The ``audio`` record for this scene, or ``None`` when there
   - `AudioClips.prepare_for_export(cls) -> str` *(class)* — Bake the scene-wide audio manifest for FBX export.
   - `AudioClips.enable_auto_export(cls) -> None` *(class)* — Bake the audio manifest onto ``data_export`` before **every** FBX export.
   - `AudioClips.disable_auto_export(cls) -> None` *(class)* — Opt the producer out of the before-export hook for the rest of the
   - `AudioClips.list_nodes(cls) -> List[str]` *(class)* — Return names of every managed DG audio node plus the composite.
   - `AudioClips.set_active(cls, node_name: str, time_slider: bool = True) -> None` *(class)* — Set an audio node as the active Time Slider sound.
-
-<a id="audio_utils--audio_clips--audio_clips_slots"></a>
-### `audio_utils/audio_clips/audio_clips_slots.py`
-
-Switchboard slots for the Audio Clips UI.
-
-- **[`class AudioClipsSlots(ExportMixin, CallbacksMixin)`](mayatk/mayatk/audio_utils/audio_clips/audio_clips_slots.py#L38)** — Switchboard slots for the Audio Clips UI.
-  - `AudioClipsSlots.header_init(self, widget)` — Configure header menu with tool description and workflow instructions.
-  - `AudioClipsSlots.cmb000_init(self, widget)` — Init track combo with browse option_box and management menu.
-  - `AudioClipsSlots.cmb000(self, index, widget)` — Track selection — activate the track's DG node on the Time Slider.
-  - `AudioClipsSlots.tb000(self, widget=None)` — Sync Audio to Timeline — reconcile DG nodes and rebuild composite.
-  - `AudioClipsSlots.tb001_init(self, widget)` — Init Key Audio Event option-box menu.
-  - `AudioClipsSlots.tb001(self, widget=None)` — Key Audio Event — write ON (1) at current frame, optionally OFF at end.
-  - `AudioClipsSlots.select_track(self, name: str) -> bool` — Show *name*'s track in the tracks combo (the Shot Manifest's
-  - `AudioClipsSlots.b002(self)` — Remove Audio — nuke every track, DG node, and the composite.
-  - `AudioClipsSlots.b004(self)` — Cleanup Unused — delete unkeyed tracks and their DG nodes.
-  - `AudioClipsSlots.b005(self)` — Replace Selected Track — swap the selected track's audio file.
-  - `AudioClipsSlots.b006(self)` — Rename Track — rename the currently selected track's id.
-
-<a id="audio_utils--audio_clips--callbacks"></a>
-### `audio_utils/audio_clips/callbacks.py`
-
-Maya event lifecycle and hydration for Audio Clips.
-
-- **[`class CallbacksMixin`](mayatk/mayatk/audio_utils/audio_clips/callbacks.py#L40)** — Maya event lifecycle and hydration for single-scope audio.
-  - `CallbacksMixin.remove_callbacks(self)` — Tear down every SJM subscription owned by this instance.
-
-<a id="audio_utils--audio_clips--export_ops"></a>
-### `audio_utils/audio_clips/export_ops.py`
-
-Export operations for Audio Clips.
-
-- **[`class ExportMixin`](mayatk/mayatk/audio_utils/audio_clips/export_ops.py#L34)** — Composite and per-clip WAV export.
 
 <a id="audio_utils--batch"></a>
 ### `audio_utils/batch.py`
@@ -3432,6 +3418,9 @@ Clean up what the retired viewport "material mode" left in a scene.
   - `RenderEffects.scene_recipe(cls) -> ptk.EffectRecipe` *(class)* — The scene's effect recipe -- the shot store's, which the Render
   - `RenderEffects.apply_effect(cls, obj, effect: str, start: float, end: float, recipe: Optional[ptk.EffectRecipe] = None, fps: Optional[float] = None, place=None, anchor: Optional[float] = None) -> List[Tuple[str, float]]` *(class)* — Key one recipe effect on *obj*, placed in the range ``start..end``.
   - `RenderEffects.preview_channels(cls, objects, channel='highlight', keys=(), colors=None, fps: Optional[float] = None) -> Dict` *(class)* — The WebXR-push overlay that previews one effect on *objects* at *keys*.
+  - `RenderEffects.selected_objects(last_only: bool = False) -> List[str]` *(static)* — The objects the Render Effects actions act on: the selection, in
+  - `RenderEffects.has_channel(cls, obj, channel='opacity') -> bool` *(class)* — Whether *obj* carries *channel*'s attribute (twin of blendertk's).
+  - `RenderEffects.select_objects(objects) -> List[str]` *(static)* — Make *objects* the selection without recording an undo step -- a
   - `RenderEffects.objects_with_channel(cls, channel='highlight') -> List[str]` *(class)* — Every transform in the scene carrying the channel's attribute.
   - `RenderEffects.channel_colors(cls, objects=None, channel='highlight', stop: str = 'hi') -> Dict[str, Tuple]` *(class)* — What each object's channel colour is authored as right now.
   - `RenderEffects.channel_color_stops(cls, objects=None, channel='highlight') -> Dict[str, Tuple]` *(class)* — Both ends of each object's colour ramp, high first.
@@ -3440,24 +3429,6 @@ Clean up what the retired viewport "material mode" left in a scene.
   - `RenderEffects.export_record(cls, ctx: ptk.ExportContext) -> Optional[ptk.Record]` *(class)* — The ``render_effects`` record for this scene, or ``None`` when it
   - `RenderEffects.refresh_export_metadata(cls) -> Optional[str]` *(class)* — Republish the ``render_effects`` channel on the ``data_export`` carrier.
   - `RenderEffects.remove(cls, objects=None, mode: Optional[str] = None, channel=None) -> None` *(class)* — Remove the channel attributes, and heal the retired preview's leftovers.
-
-<a id="mat_utils--render_opacity--render_effects_slots"></a>
-### `mat_utils/render_opacity/render_effects_slots.py`
-
-Switchboard slots for the Render Effects panel (``render_effects.ui``).
-
-- **[`class RenderEffectsSlots`](mayatk/mayatk/mat_utils/render_opacity/render_effects_slots.py#L57)** — Switchboard slots for the Render Effects UI.
-  - `RenderEffectsSlots.header_init(self, widget)` — Configure header menu.
-  - `RenderEffectsSlots.cmb_effect_init(self, widget)` — The effect picker: one entry per page.
-  - `RenderEffectsSlots.cmb_effect(self, index, widget=None)` — Show the picked effect's page.
-  - `RenderEffectsSlots.stk_effects_init(self, widget)` — Build every page into the stack, bind the recipe, register the rows.
-  - `RenderEffectsSlots.ui_field(self, name)` — A page field by objectName, from whichever page holds it.
-  - `RenderEffectsSlots.focus(self, channel, objects, title='', apply=None, apply_text='')` — Open on one effect for *objects*, as the manifest's row actions do.
-  - `RenderEffectsSlots.unfocus(self, *_args) -> None` — Back to the standalone panel: the picker, its title, the Key texts
-  - `RenderEffectsSlots.b000(self, widget=None)` — Key: the shown page's keyer (``PAGES``).
-  - `RenderEffectsSlots.btn_remove(self, widget=None)` — Strip the shown page's channel from the selection.
-  - `RenderEffectsSlots.btn_webxr_init(self, widget)`
-  - `RenderEffectsSlots.btn_webxr(self, widget=None)` — Preview the shown page's effect in WebXR.
 
 <a id="mat_utils--shader_attribute_map"></a>
 ### `mat_utils/shader_attribute_map.py`
