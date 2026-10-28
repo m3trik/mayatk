@@ -122,7 +122,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/reference_manager/reference_manager_controller.py`](#env_utils--reference_manager--reference_manager_controller) — Reference Manager controller — the panel-facing layer over the engine.
 - [`env_utils/reference_manager/reference_manager_slots.py`](#env_utils--reference_manager--reference_manager_slots) — Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 - [`env_utils/scene_exporter/_scene_exporter.py`](#env_utils--scene_exporter--_scene_exporter)
-- [`env_utils/scene_exporter/scene_exporter_slots.py`](#env_utils--scene_exporter--scene_exporter_slots) — Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
 - [`env_utils/scene_exporter/task_manager.py`](#env_utils--scene_exporter--task_manager) — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - [`env_utils/scene_state.py`](#env_utils--scene_state) — Read named sections of live-scene state for transport.
 - [`env_utils/script_output.py`](#env_utils--script_output)
@@ -234,7 +233,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`uv_utils/rizom_bridge/parameters.py`](#uv_utils--rizom_bridge--parameters) — Registry of user-tunable RizomUV parameters exposed to the bridge UI.
 - [`uv_utils/rizom_bridge/rizom_bridge_slots.py`](#uv_utils--rizom_bridge--rizom_bridge_slots) — Slots for the RizomUV bridge panel.
 - [`uv_utils/texture_combine/texture_combine.py`](#uv_utils--texture_combine--texture_combine) — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
-- [`uv_utils/texture_combine/texture_combine_slots.py`](#uv_utils--texture_combine--texture_combine_slots) — The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.
 - [`uv_utils/texture_transfer.py`](#uv_utils--texture_transfer) — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - [`xform_utils/_xform_utils.py`](#xform_utils--_xform_utils) — ``XformUtils`` -- the public index of mayatk's transform operations.
 - [`xform_utils/matrices.py`](#xform_utils--matrices) — Matrix utilities for Maya rigging and animation.
@@ -246,7 +244,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L261) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L260) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -2477,45 +2475,20 @@ Reference Manager panel — the Switchboard slots for ``reference_manager.ui``.
 <a id="env_utils--scene_exporter--_scene_exporter"></a>
 ### `env_utils/scene_exporter/_scene_exporter.py`
 
-- **[`class SceneExporter(pythontk.SceneExporterBase)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L25)** — Maya's Scene Exporter: the export write, its scope and its FBX /
+- **[`class SceneExporter(pythontk.SceneExporterBase)`](mayatk/mayatk/env_utils/scene_exporter/_scene_exporter.py#L26)** — Maya's Scene Exporter: the export write, its scope and its FBX /
   - `SceneExporter.presets(self) -> Dict[str, Optional[str]]` *(property)* — Return available presets ({name: filepath}, plus a leading "None" entry).
+  - `SceneExporter.refresh_fbx_presets(self) -> Dict[str, Optional[str]]` — Re-scan the FBX preset directory now and return :attr:`presets` -- the
+  - `SceneExporter.fbx_preset_dir(self) -> Optional[str]` — Maya's own FBX preset folder (``FBX/Presets`` under the user app
+  - `SceneExporter.fbx_preset_metadata(self, preset: Optional[str]) -> Dict[str, str]` — *preset* -- a value of :attr:`presets`, its file path -- as metadata an
+  - `SceneExporter.restore_fbx_preset(self, metadata: Optional[Dict[str, str]]) -> Optional[str]` — Write the FBX preset an export preset embedded (:meth:`fbx_preset_metadata`)
+  - `SceneExporter.edit_fbx_preset(self, preset: Optional[str] = None) -> None` — Open the FBX plug-in's preset editor on *preset* -- a value of
+  - `SceneExporter.objects_to_export(export_mode: str = 'visible') -> List[str]` *(static)* — The objects an export scope names -- what the panel's Scope row hands
   - `SceneExporter.perform_export(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, *, log_level: Optional[str] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[int, int, Optional[str]], Any]] = None) -> bool` — Perform the export operation, including initialization and task management.
   - `SceneExporter.name_context(self) -> Dict[str, str]` — Live value for every token in :attr:`NAME_TOKENS` but the counter.
   - `SceneExporter.resolve_export_path(self, pattern: Optional[str] = None, export_dir: Optional[str] = None, output_format: str = 'fbx', *, report: bool = True) -> Dict[str, Any]` — Resolve the Output Filename field into the file(s) an export writes.
   - `SceneExporter.generate_export_path(self, *, extension: str = '.fbx', output_format: Optional[str] = None) -> str` — The full export path, from the fields :meth:`perform_export` stamps.
   - `SceneExporter.load_fbx_export_preset(self, preset_file: str = None, verify: bool = False) -> Optional[dict]` — Load an FBX export preset and optionally verify it.
   - `SceneExporter.verify_fbx_preset(self) -> dict` — Verify a set of predefined FBX export settings and log their values.
-
-<a id="env_utils--scene_exporter--scene_exporter_slots"></a>
-### `env_utils/scene_exporter/scene_exporter_slots.py`
-
-Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
-
-- **[`class SceneExporterSlots(SceneExporter)`](mayatk/mayatk/env_utils/scene_exporter/scene_exporter_slots.py#L31)**
-  - `SceneExporterSlots.confirm(self, question: str) -> bool` — The engine's consent seam as the panel's modal Yes/No.
-  - `SceneExporterSlots.decide_check_failure(self, check: str, messages: List[str], remaining: List[str]) -> str` — The engine's check-failure seam as the panel's three-button dialog.
-  - `SceneExporterSlots.workspace(self) -> Optional[str]` *(property)*
-  - `SceneExporterSlots.header_init(self, widget)` — Initialize the header widget (its help;
-  - `SceneExporterSlots.cmb000_init(self, widget) -> None` — Init FBX Preset — a Settings row (``cmb008``), created by
-  - `SceneExporterSlots.txt000_init(self, widget) -> None` — Init Output Directory
-  - `SceneExporterSlots.output_name_preview(self) -> str` — Live tooltip for the Output Filename field.
-  - `SceneExporterSlots.txt001_init(self, widget) -> None` — Init Output Name
-  - `SceneExporterSlots.cmb001_init(self, widget) -> None` — Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),
-  - `SceneExporterSlots.cmb002_init(self, widget) -> None` — Validation Checks — the gates that abort the write, grouped by tag.
-  - `SceneExporterSlots.cmb007_init(self, widget) -> None` — Export Preset — the whole panel's run configuration under a name.
-  - `SceneExporterSlots.cmb008_init(self, widget) -> None` — Settings — what is written and from what (the scene-prep steps are
-  - `SceneExporterSlots.ignore_groups_init(self, widget) -> None` — Init Ignore Groups — a Settings row (``cmb008``), created by
-  - `SceneExporterSlots.export_data_node_init(self, widget) -> None` — Init Export Scene Data Node — a Settings row (``cmb008``).
-  - `SceneExporterSlots.cmb004_init(self, widget) -> None` — Init Output Format — FBX (default), GLB, FBX + GLB, or USD.
-  - `SceneExporterSlots.cmb005_init(self, widget) -> None` — Init Texture Template — optionally convert textures to a registry workflow.
-  - `SceneExporterSlots.b000(self) -> None` — Export: run the scene export with the configured tasks and settings.
-  - `SceneExporterSlots.b010(self) -> None` — Set Output Directory
-  - `SceneExporterSlots.b012(self) -> None` — Browse for Output File -- name the export after an existing file.
-  - `SceneExporterSlots.b006(self) -> None` — Open Output Directory
-  - `SceneExporterSlots.b007(self) -> None` — Open Preset Directory.
-  - `SceneExporterSlots.b008(self) -> None` — Edit Preset
-  - `SceneExporterSlots.save_output_dir(self, output_dir: str) -> None` — Record the output directory into the recent values plugin.
-  - `SceneExporterSlots.save_output_name(self, output_name: str) -> None` — Record the output filename into the recent values plugin.
 
 <a id="env_utils--scene_exporter--task_manager"></a>
 ### `env_utils/scene_exporter/task_manager.py`
@@ -4650,63 +4623,18 @@ Several materials into ONE: one atlas, one material, in place -- no duplicated m
   - `TextureCombine.inputs_for(self, name: str) -> CombineInputs` — A stored combine's inputs AS THEY WERE before it ran.
   - `TextureCombine.apply_rows(self, inputs: CombineInputs, rows: Sequence[Dict[str, Any]] = ()) -> None` — Set every island's scale from the override *rows* -- the most
   - `TextureCombine.plan(self, inputs: CombineInputs, *, sizing: str = 'proportional', normalize: str = 'resolution')` — Estimate the atlas for *inputs* (nothing packed) -- a
-  - `TextureCombine.default_name(self, transforms: Sequence[str]) -> str` — What a blank name stands for: the meshes' common name.
+  - `TextureCombine.default_name(self, transforms: Sequence[str], fallback: str = 'combined') -> str` — What a blank name stands for: the meshes' common name, else
   - `TextureCombine.combine(self, objects=None, *, name: Optional[str] = None, rows: Sequence[Dict[str, Any]] = (), sizing: str = 'proportional', normalize: str = 'resolution', map_size: int = 4096, padding: Optional[int] = None, rotate: bool = True, supersample: int = 2, texture_padding: int = -1, output_dir: Optional[str] = None, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, lightmaps: bool = True, inputs: Optional[CombineInputs] = None) -> Dict[str, Any]` — Combine *objects*' materials into one atlas and one material.
   - `TextureCombine.recombine(self, name: str) -> Dict[str, Any]` — Re-read *name*'s source maps into its CURRENT layout -- a revision.
   - `TextureCombine.restore(self, name: str, forget: bool = True) -> List[str]` — Put *name*'s meshes back: original UVs and materials, exactly.
   - `TextureCombine.update(self, name: str, **changes) -> Dict[str, Any]` — Re-pack *name* with changed settings or rows, keeping its name.
   - `TextureCombine.forget(cls, name: str) -> bool` *(class)* — Drop *name*'s record entry, leaving the scene as it is.
+  - `TextureCombine.leaf_name(node) -> str` *(static)* — *node*'s own name, for a label: no DAG path, no component
+  - `TextureCombine.select(nodes) -> int` *(static)* — Replace the selection with those of *nodes* that exist --
+  - `TextureCombine.material_faces(inputs: CombineInputs, material) -> List[str]` *(static)* — The faces of *inputs*' meshes that wear *material*, as
+  - `TextureCombine.selected_faces() -> List[str]` *(static)* — The selected faces (long ``<mesh>.f[a:b]`` strings), for an island
   - `TextureCombine.consolidate_lightmaps(self, transforms: Sequence[str], name: str) -> Dict[str, Any]` — Bring the combined objects' committed lightmaps under the new material.
   - `TextureCombine.resolve_meshes(objects=None) -> List[str]` *(static)* — Mesh transforms (long names) under *objects*, order kept.
-
-<a id="uv_utils--texture_combine--texture_combine_slots"></a>
-### `uv_utils/texture_combine/texture_combine_slots.py`
-
-The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.
-
-- **[`class TextureCombineSlots(pythontk.LoggingMixin)`](mayatk/mayatk/uv_utils/texture_combine/texture_combine_slots.py#L39)** — Switchboard slots for the ``texture_combine.ui`` panel.
-  - `TextureCombineSlots.header_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_mode_init(self, widget) -> None`
-  - `TextureCombineSlots.open_output_folder(self) -> None`
-  - `TextureCombineSlots.cmb_set_init(self, widget) -> None`
-  - `TextureCombineSlots.select_set(self) -> None`
-  - `TextureCombineSlots.recombine_set(self) -> None`
-  - `TextureCombineSlots.restore_set(self) -> None`
-  - `TextureCombineSlots.forget_set(self) -> None`
-  - `TextureCombineSlots.tbl_sources_init(self, widget) -> None`
-  - `TextureCombineSlots.parse_scale(text: str) -> Optional[float]` *(static)* — ``0.33``, ``1/3`` or ``33%`` as a float, ``None`` when unreadable.
-  - `TextureCombineSlots.select_row_members(self) -> None`
-  - `TextureCombineSlots.remove_override(self) -> None`
-  - `TextureCombineSlots.reset_scales(self) -> None`
-  - `TextureCombineSlots.b001(self) -> None` — Add the selected meshes as one mesh override row.
-  - `TextureCombineSlots.b002(self) -> None` — Add the islands under the selected faces as an override row.
-  - `TextureCombineSlots.cmb_sizing_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_normalize_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_atlas_init(self, widget) -> None`
-  - `TextureCombineSlots.s_spacing_init(self, widget) -> None`
-  - `TextureCombineSlots.chk_rotate_init(self, widget) -> None`
-  - `TextureCombineSlots.chk_lightmaps_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_tt_transfer_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_tt_source_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_tt_targets_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_tt_resolution_init(self, widget) -> None`
-  - `TextureCombineSlots.t_tt_dst_uvset_init(self, widget) -> None`
-  - `TextureCombineSlots.chk_tt_lightmaps_init(self, widget) -> None`
-  - `TextureCombineSlots.t_name_init(self, widget) -> None`
-  - `TextureCombineSlots.record_name(self, name: str) -> None`
-  - `TextureCombineSlots.t_output_init(self, widget) -> None`
-  - `TextureCombineSlots.cmb_quality_init(self, widget) -> None`
-  - `TextureCombineSlots.s_padding_init(self, widget) -> None`
-  - `TextureCombineSlots.chk_assign_init(self, widget) -> None`
-  - `TextureCombineSlots.t_affix_init(self, widget) -> None`
-  - `TextureCombineSlots.material_affix(self)` — ``(assign_prefix, assign_suffix)`` from the affix row (blank: Auto).
-  - `TextureCombineSlots.cmb_shader_init(self, widget) -> None`
-  - `TextureCombineSlots.overwrites_target(self) -> bool` — Whether the Shader row re-uses the target's material in place --
-  - `TextureCombineSlots.assign_options(self) -> Dict[str, Any]`
-  - `TextureCombineSlots.sync_shared(self, textures: bool = True) -> None` — Transfer mode: the Output / Material rows follow the texture pass.
-  - `TextureCombineSlots.status(self, text: str) -> None`
-  - `TextureCombineSlots.b000(self) -> None` — Run the current mode.
-  - `TextureCombineSlots.combine(self) -> None`
 
 <a id="uv_utils--texture_transfer"></a>
 ### `uv_utils/texture_transfer.py`
@@ -4715,6 +4643,12 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 
 - **[`class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`](mayatk/mayatk/uv_utils/texture_transfer.py#L666)** — Move textures between UV layouts of the same mesh(es) -- see module doc.
   - `TextureTransfer.CONSTANT_ATTRS(cls) -> Dict[str, Dict[str, str]]` **DEPRECATED (remove in 0.23.0)** — The table moved to :attr:`ShaderAttributeMap.CONSTANT_ATTRS`, read
+  - `TextureTransfer.shader_types() -> Dict[str, str]` *(static)* — ``{assign_shader_type: label}``: the shader types a transfer (or a
+  - `TextureTransfer.meshes(objects) -> List[str]` *(static)* — Mesh transforms (long names) under *objects*: groups expand,
+  - `TextureTransfer.capture_sources(cls) -> List[str]` *(class)* — The selected meshes (groups expanded) as what a caller stores to
+  - `TextureTransfer.live_sources(names) -> List[str]` *(static)* — Those of the stored *names* still in the scene, order kept.
+  - `TextureTransfer.auto_source(cls, meshes, stored=()) -> Tuple[str, Optional[str]]` *(class)* — Source: Auto's reading of a selection's *meshes*: ``(mode, target)``.
+  - `TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]` *(class)* — Read the selection into a transfer's sides: ``(mode, source, targets)``.
   - `TextureTransfer.transfer(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, assign_from: str = 'target', source_materials: Optional[Dict[str, Tuple[Sequence, Sequence[int]]]] = None) -> Dict[str, Dict[str, str]]` — Transfer the source material(s)' maps onto the target UV layout.
   - `TextureTransfer.default_output_dir(cls) -> str` *(class)* — Where the maps go when the caller names no directory: the scene
   - `TextureTransfer.output_base_dir() -> Optional[str]` *(static)* — The directory a RELATIVE output entry is resolved against.

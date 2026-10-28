@@ -136,10 +136,6 @@ GUI_REQUIRED = {
         "loads the shots panel through MayaUiHandler, which is built against a GUI Maya"
     ),
     "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
-    "test_texture_combine_panel": (
-        "loads the texture_combine panel; its uitk TableWidget hard-crashes "
-        "mayapy in batch (same 0xC0000409 as test_sequencer)"
-    ),
     "test_reference_manager": (
         "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
         "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "

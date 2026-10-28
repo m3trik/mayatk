@@ -603,23 +603,6 @@ class TestExportRoundTrip(MayaTkTestCase):
         self.assertTrue(stale, logged.output)
         self.assertIn("action://show?ui=shots", stale[0])
 
-    def test_a_note_link_opens_the_panel_it_names(self):
-        """``action://show?ui=<panel>`` opens that panel through the Scene
-        Exporter's switchboard; every other action reaches UiUtils."""
-        from types import SimpleNamespace
-        from qtpy import QtCore
-        from mayatk.env_utils.scene_exporter.scene_exporter_slots import (
-            SceneExporterSlots,
-        )
-
-        shown = []
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = SimpleNamespace(
-            handlers=SimpleNamespace(marking_menu=SimpleNamespace(show=shown.append))
-        )
-        slots._on_log_link_clicked(QtCore.QUrl("action://show?ui=shots"))
-        self.assertEqual(shown, ["shots"])
-
 
 class TestCsvToFbxPipeline(MayaTkTestCase):
     """End-to-end: shot-manifest CSV → ShotStore → exporter task → FBX.

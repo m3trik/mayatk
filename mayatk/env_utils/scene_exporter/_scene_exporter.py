@@ -8,6 +8,7 @@ except ImportError:  # the surface must import without Maya (registry, docs tool
 
 import os
 import time
+import base64
 import contextlib
 import logging
 from typing import List, Dict, Optional, Callable, Union, Any
@@ -32,6 +33,14 @@ class SceneExporter(ptk.SceneExporterBase):
         "An export records none for undo — revert to the saved file if "
         "that is not what you want."
     )
+    #: Where the panel keeps its export presets (its whole configuration under
+    #: a name; uitk ``PresetManager.preset_dir``) -- each host its own store.
+    #: Twin of blendertk's.
+    EXPORT_PRESET_DIR = "mayatk/scene_exporter"
+    #: Whether Exclude HDR can act under the Visible scope. Maya's visible
+    #: geometry is surface shapes, never a skydome, so the panel hides the row
+    #: there; blendertk's is True (its exclusion also strips a visible mesh dome).
+    EXCLUDE_HDR_IN_VISIBLE_SCOPE = False
 
     def _saved_scene_path(self) -> str:
         """The open scene's saved path (``EnvUtils.saved_scene_path``)."""
@@ -131,14 +140,15 @@ class SceneExporter(ptk.SceneExporterBase):
     def presets(self) -> Dict[str, Optional[str]]:
         """Return available presets ({name: filepath}, plus a leading "None" entry).
 
-        Cached: ``cmb000_init`` re-runs on every panel show and the scan is recursive
+        Cached: the panel re-reads it on every show and the scan is recursive
         over the whole Maya user app directory. The cache key carries the directory's
         modification time alongside its path, so the *contents* changing invalidates it
         too — keying on the path alone meant a preset added or deleted (same directory)
         was served back from the stale dict, leaving the combo showing a preset that no
         longer existed. That covers changes made outside the panel (Maya's preset
         editor, files dropped in by hand); this class's own writers additionally call
-        :meth:`_invalidate_preset_cache`, which is not subject to mtime granularity.
+        :meth:`_invalidate_preset_cache` (and :meth:`refresh_fbx_presets` drops the
+        cache outright), which is not subject to mtime granularity.
         """
         preset_dir = self._get_preset_dir()
         try:  # A missing / unreadable dir stamps None: warn once, not every show.
@@ -188,6 +198,137 @@ class SceneExporter(ptk.SceneExporterBase):
 
         # Return the cached presets
         return getattr(self, "_cached_presets", {"None": None})
+
+    def refresh_fbx_presets(self) -> Dict[str, Optional[str]]:
+        """Re-scan the FBX preset directory now and return :attr:`presets` -- the
+        panel's refresh button, for a preset added, renamed or removed while it
+        sat open (Maya's own preset editor is the common case).
+
+        Drops the scan cache first rather than leaning on its mtime key: that key
+        is a filesystem timestamp (~15ms granularity on Windows), so a preset
+        dropped in and a refresh clicked in the same tick would be served the
+        stale dict -- a refresh has to mean "re-scan", unconditionally. Twin of
+        blendertk's.
+        """
+        self._invalidate_preset_cache()
+        return self.presets
+
+    def fbx_preset_dir(self) -> Optional[str]:
+        """Maya's own FBX preset folder (``FBX/Presets`` under the user app
+        directory): where a preset belongs -- what the panel's Open FBX Preset
+        Directory opens, and inside the scan, so a preset dropped there is
+        listed. ``None`` when Maya's user app directory is unknown. Twin of
+        blendertk's.
+        """
+        return self._preset_write_dir()
+
+    def fbx_preset_metadata(self, preset: Optional[str]) -> Dict[str, str]:
+        """*preset* -- a value of :attr:`presets`, its file path -- as metadata an
+        export preset embeds, so a preset shared to another machine brings its
+        FBX preset along (:meth:`restore_fbx_preset`).
+
+        Returns:
+            ``{"fbx_preset_name", "fbx_preset_data"}`` (the file, base64); ``{}``
+            for no preset or a file that is gone. Twin of blendertk's.
+        """
+        if not preset or not os.path.isfile(preset):
+            return {}
+        with open(preset, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return {
+            "fbx_preset_name": os.path.splitext(os.path.basename(preset))[0],
+            "fbx_preset_data": encoded,
+        }
+
+    def restore_fbx_preset(self, metadata: Optional[Dict[str, str]]) -> Optional[str]:
+        """Write the FBX preset an export preset embedded (:meth:`fbx_preset_metadata`)
+        into :meth:`fbx_preset_dir`, when no preset of its name exists here.
+
+        Asks the SCAN, not one path. :attr:`presets` searches the preset
+        directory RECURSIVELY -- Maya's own editor saves into a versioned
+        subfolder (``.../Presets/2020.3.6/export/``), and those presets are what
+        the combo lists -- where a check of ``<preset_dir>/<name>.fbxexportpreset``
+        alone wrote a SECOND copy at the root under the same name, and the
+        ``{name: path}`` scan collapses the two to whichever it reached last. That
+        copy is a frozen snapshot taken when the export preset was saved, so the
+        panel could silently export with stale FBX settings while the artist
+        edited the real preset in Maya's editor. A write invalidates the scan.
+
+        Parameters:
+            metadata: ``{"fbx_preset_name", "fbx_preset_data"}``.
+
+        Returns:
+            The path written; ``None`` when nothing was restored (incomplete
+            metadata, a local preset of that name, no preset directory). Twin of
+            blendertk's.
+        """
+        name = (metadata or {}).get("fbx_preset_name")
+        data = (metadata or {}).get("fbx_preset_data")
+        if not name or not data:
+            return None
+        write_dir = self.fbx_preset_dir()
+        if not write_dir:
+            return None
+        if name in self.presets:
+            return None  # Local copy is authoritative, wherever it lives
+        target = os.path.join(write_dir, f"{name}.fbxexportpreset")
+        os.makedirs(write_dir, exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(base64.b64decode(data))
+        self.logger.info(f"Restored embedded FBX preset: {target}")
+        self._invalidate_preset_cache()
+        return target
+
+    def edit_fbx_preset(self, preset: Optional[str] = None) -> None:
+        """Open the FBX plug-in's preset editor on *preset* -- a value of
+        :attr:`presets` (its file path); ``None`` edits the current FBX
+        settings. The panel's Edit FBX Preset; twin of blendertk's, which opens
+        the preset's JSON (Blender has no such editor).
+
+        The editor launches on Maya's idle queue (``evalDeferred``), once the
+        FBX UI has taken the loaded properties; an editor already open is left
+        as it is.
+        """
+        self.load_fbx_export_preset(preset)
+        # Reset the layout so the editor shows what was just loaded.
+        mel.eval("refresh")
+        mel.eval('FBXUICallBack -1 "updateUIWithProperties"')
+
+        def _launch_editor():
+            if not cmds.window("gameExporterWindow", exists=True):
+                try:
+                    mel.eval('FBXUICallBack -1 "editExportPresetInNewWindow" "fbx"')
+                except Exception as e:
+                    self.logger.error(
+                        f"Failed to open the FBX export preset editor: {e}"
+                    )
+
+        cmds.evalDeferred(_launch_editor, lowestPriority=True)
+
+    @staticmethod
+    def objects_to_export(export_mode: str = "visible") -> List[str]:
+        """The objects an export scope names -- what the panel's Scope row hands
+        :meth:`perform_export` (as a callable, so the run resolves it): twin of
+        blendertk's.
+
+        Parameters:
+            export_mode: ``"selected"`` the selection; ``"all"`` every transform
+                and geometry node; ``"visible"`` (the default, and any unknown
+                mode) the visible geometry -- templated objects hidden, a
+                parent's visibility inherited, animated visibility counted
+                visible.
+        """
+        from mayatk.display_utils._display_utils import DisplayUtils
+
+        if export_mode == "selected":
+            return cmds.ls(selection=True, long=True)
+        if export_mode == "all":
+            return cmds.ls(transforms=True, geometry=True, long=True)
+        return DisplayUtils.get_visible_geometry(
+            consider_templated_visible=False,
+            inherit_parent_visibility=True,
+            consider_animated_visible=True,
+        )
 
     @ptk.Deprecation.parameter(
         "hide_log_file",
@@ -266,7 +407,7 @@ class SceneExporter(ptk.SceneExporterBase):
         # the FBX alongside the current scene file. saved_scene_path owns the
         # phantom-"untitled" rule (batch reports an unsaved scene as an
         # extensionless path where the GUI returns "").
-        self.export_dir = self._resolve_export_dir(export_dir)
+        self.export_dir = self.resolve_export_dir(export_dir)
         if not self.export_dir:
             self.logger.error(
                 "Export directory not set and the scene is unsaved — save "

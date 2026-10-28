@@ -20,7 +20,10 @@ from PIL import Image
 
 from base_test import MayaTkTestCase
 from mayatk.light_utils.lightmap_baker.lightmap_records import LightmapRecords
-from mayatk.uv_utils.texture_combine.texture_combine import TextureCombine
+from mayatk.uv_utils.texture_combine.texture_combine import (
+    CombineInputs,
+    TextureCombine,
+)
 from mayatk.uv_utils.texture_transfer import TextureTransfer
 
 
@@ -321,6 +324,148 @@ class TestTextureCombine(MayaTkTestCase):
         moved = LightmapRecords.lightmap_info(a1)["map"]
         self.assertTrue(moved.startswith("kit_Lightmap"), moved)
         self.assertEqual(LightmapRecords.lightmap_info(b)["map"], "two_Lightmap.png")
+
+
+class TestPanelSelection(MayaTkTestCase):
+    """What the shared Texture Combine panel (tentacle's
+    ``slots/tools/texture_combine.py``, whose own tests are there) asks of the
+    host beside the combine: the selection it sets and reads, and a row label."""
+
+    @staticmethod
+    def _plane(name, x=0.0):
+        plane = cmds.polyPlane(name=name, sx=2, sy=1, w=1, h=1, ch=False)[0]
+        cmds.move(x, 0, 0, plane)
+        return cmds.ls(plane, long=True)[0]
+
+    def test_select_takes_objects_and_faces_and_counts_what_exists(self):
+        a, b = self._plane("selA"), self._plane("selB", 2)
+        self.assertEqual(TextureCombine.select([a, "|goneForever"]), 1)
+        self.assertEqual(cmds.ls(selection=True, long=True), [a])
+        self.assertEqual(TextureCombine.select([f"{b}.f[1]"]), 1)
+        self.assertEqual(cmds.ls(selection=True, long=True), [f"{b}.f[1]"])
+        # Nothing that exists: the selection stays as it is.
+        self.assertEqual(TextureCombine.select(["|goneForever"]), 0)
+        self.assertEqual(cmds.ls(selection=True, long=True), [f"{b}.f[1]"])
+
+    def test_selected_faces_reads_faces_or_converts_the_selection(self):
+        a = self._plane("sfA")
+        cmds.select(f"{a}.f[1]", replace=True)
+        self.assertEqual(TextureCombine.selected_faces(), [f"{a}.f[1]"])
+        cmds.select(f"{a}.map[0]", replace=True)
+        self.assertTrue(TextureCombine.selected_faces()[0].startswith(f"{a}.f["))
+        cmds.select(clear=True)
+        self.assertEqual(TextureCombine.selected_faces(), [])
+
+    def test_material_faces_names_a_materials_faces_on_each_mesh(self):
+        a = self._plane("mfA")
+        inputs = CombineInputs(transforms=[a])
+        inputs.shapes["shape"] = {
+            "materials": ["matX", "matY"],
+            "face_material": np.array([0, 1, 1]),
+            "transforms": [a],
+        }
+        self.assertEqual(TextureCombine.material_faces(inputs, "matY"), [f"{a}.f[1:2]"])
+        self.assertEqual(TextureCombine.material_faces(inputs, "other"), [])
+
+    def test_leaf_name_drops_the_path_and_the_component(self):
+        self.assertEqual(TextureCombine.leaf_name("|grp|pCube1.f[0:3]"), "pCube1")
+        self.assertEqual(TextureCombine.leaf_name("|grp|pCube1"), "pCube1")
+
+    def test_default_name_falls_back_to_the_callers_word(self):
+        engine = TextureCombine(log_level="WARNING")
+        self.assertEqual(engine.default_name([]), "combined")
+        self.assertEqual(engine.default_name([], fallback="transfer"), "transfer")
+        self.assertEqual(engine.default_name(["|hero_GRP|hero_body_GEO"]), "hero_body")
+
+
+class TestTransferSelectionSides(MayaTkTestCase):
+    """``TextureTransfer.selection_sides``: Maya's selection ORDER read into the
+    Transfer mode's source and targets (the panel's gates and report are
+    tentacle's ``test_texture_combine_panel``)."""
+
+    @staticmethod
+    def _cube(name, x=0.0):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.move(x, 0, 0, cube)
+        return cmds.ls(cube, long=True)[0]
+
+    def _joined(self):
+        """srcA (cube), srcB (sphere) and their combine under ``out``."""
+        a = cmds.polyCube(name="srcA")[0]
+        b = cmds.polySphere(name="srcB", sx=6, sy=4)[0]
+        cmds.move(3, 0, 0, b)
+        c = cmds.polyUnite(cmds.duplicate([b, a]), ch=False, name="comb")[0]
+        c = cmds.rename(cmds.parent(c, cmds.group(empty=True, name="out"))[0], a)
+        return [cmds.ls(n, long=True)[0] for n in (f"|{a}", f"|{b}", c)]
+
+    def test_first_selected_is_the_source_of_every_other(self):
+        a, b, c = (self._cube(f"tsFirst{n}", i * 2) for i, n in enumerate("abc"))
+        cmds.select([a, b, c], replace=True)
+        self.assertEqual(TextureTransfer.selection_sides("first"), ("first", [a], [b, c]))
+
+    def test_last_selected_is_the_target_of_every_other(self):
+        a, b, c = self._joined()
+        cmds.select([a, b, c], replace=True)
+        self.assertEqual(TextureTransfer.selection_sides("last"), ("last", [a, b], [c]))
+
+    def test_auto_finds_the_combined_target_wherever_it_was_picked(self):
+        a, b, c = self._joined()
+        cmds.select([c, a, b], replace=True)
+        self.assertEqual(TextureTransfer.selection_sides(), ("last", [a, b], [c]))
+
+    def test_auto_reads_one_mesh_as_its_own_uv_sets(self):
+        a, _, _ = self._joined()
+        cmds.select(a, replace=True)
+        self.assertEqual(TextureTransfer.selection_sides(), ("uvset", None, [a]))
+
+    def test_auto_falls_back_to_first_selected(self):
+        a, b, _ = self._joined()
+        cmds.select([b, a], replace=True)
+        self.assertEqual(TextureTransfer.selection_sides(), ("first", [b], [a]))
+
+    def test_auto_reads_stored_sources_that_match_the_selection(self):
+        a, b, c = self._joined()
+        cmds.select(c, replace=True)
+        self.assertEqual(
+            TextureTransfer.selection_sides("auto", stored=[a, b]),
+            ("stored", [a, b], [c]),
+        )
+
+    def test_auto_ignores_a_stale_capture_and_a_deleted_one(self):
+        a, _, _ = self._joined()
+        torus = cmds.ls(cmds.polyTorus()[0], long=True)[0]
+        cmds.select(a, replace=True)
+        for stored in ([torus], ["|goneForever"]):
+            self.assertEqual(
+                TextureTransfer.selection_sides("auto", stored=stored),
+                ("uvset", None, [a]),
+            )
+
+    def test_a_group_gives_its_meshes(self):
+        src = cmds.group(empty=True, name="tsKit_ORIG")
+        for n in ("pA", "pB"):
+            cmds.parent(cmds.polyCube(name=n)[0], src)
+        parts = cmds.listRelatives(src, children=True, fullPath=True)
+        tgt = self._cube("tsKitTarget", 4)
+        cmds.select([src, tgt], replace=True)
+        mode, source, targets = TextureTransfer.selection_sides("first")
+        self.assertEqual(sorted(source), sorted(parts))
+        self.assertEqual(targets, [tgt])
+
+    def test_capture_stores_long_names_and_live_skips_the_deleted(self):
+        a, b = self._cube("tsCapA"), self._cube("tsCapB", 2)
+        cmds.select([a, b], replace=True)
+        names = TextureTransfer.capture_sources()
+        self.assertEqual(names, [a, b])
+        cmds.delete(b)
+        self.assertEqual(TextureTransfer.live_sources(names), [a])
+
+    def test_shader_types_and_terms(self):
+        types = TextureTransfer.shader_types()
+        self.assertTrue(types)
+        self.assertTrue(all(isinstance(v, str) and v for v in types.values()))
+        self.assertEqual(TextureTransfer.TERMS["uv"], "UV Set")
+        self.assertEqual(TextureTransfer.TERMS["first"], "First Selected Mesh")
 
 
 if __name__ == "__main__":

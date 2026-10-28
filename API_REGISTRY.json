@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 261,
+          "line": 260,
           "deprecated": false
         }
       ]
@@ -15215,7 +15215,7 @@
         {
           "name": "SceneExporter",
           "summary": "Maya's Scene Exporter: the export write, its scope and its FBX /",
-          "line": 25,
+          "line": 26,
           "bases": [
             "pythontk.SceneExporterBase"
           ],
@@ -15226,7 +15226,61 @@
               "kind": "property",
               "signature": "(self) -> Dict[str, Optional[str]]",
               "summary": "Return available presets ({name: filepath}, plus a leading \"None\" entry).",
-              "line": 131,
+              "line": 140,
+              "deprecated": false
+            },
+            {
+              "name": "refresh_fbx_presets",
+              "qualname": "SceneExporter.refresh_fbx_presets",
+              "kind": "method",
+              "signature": "(self) -> Dict[str, Optional[str]]",
+              "summary": "Re-scan the FBX preset directory now and return :attr:`presets` -- the",
+              "line": 202,
+              "deprecated": false
+            },
+            {
+              "name": "fbx_preset_dir",
+              "qualname": "SceneExporter.fbx_preset_dir",
+              "kind": "method",
+              "signature": "(self) -> Optional[str]",
+              "summary": "Maya's own FBX preset folder (``FBX/Presets`` under the user app",
+              "line": 216,
+              "deprecated": false
+            },
+            {
+              "name": "fbx_preset_metadata",
+              "qualname": "SceneExporter.fbx_preset_metadata",
+              "kind": "method",
+              "signature": "(self, preset: Optional[str]) -> Dict[str, str]",
+              "summary": "*preset* -- a value of :attr:`presets`, its file path -- as metadata an",
+              "line": 225,
+              "deprecated": false
+            },
+            {
+              "name": "restore_fbx_preset",
+              "qualname": "SceneExporter.restore_fbx_preset",
+              "kind": "method",
+              "signature": "(self, metadata: Optional[Dict[str, str]]) -> Optional[str]",
+              "summary": "Write the FBX preset an export preset embedded (:meth:`fbx_preset_metadata`)",
+              "line": 243,
+              "deprecated": false
+            },
+            {
+              "name": "edit_fbx_preset",
+              "qualname": "SceneExporter.edit_fbx_preset",
+              "kind": "method",
+              "signature": "(self, preset: Optional[str] = None) -> None",
+              "summary": "Open the FBX plug-in's preset editor on *preset* -- a value of",
+              "line": 282,
+              "deprecated": false
+            },
+            {
+              "name": "objects_to_export",
+              "qualname": "SceneExporter.objects_to_export",
+              "kind": "staticmethod",
+              "signature": "(export_mode: str = 'visible') -> List[str]",
+              "summary": "The objects an export scope names -- what the panel's Scope row hands",
+              "line": 309,
               "deprecated": false
             },
             {
@@ -15235,7 +15289,7 @@
               "kind": "method",
               "signature": "(self, export_dir: str, objects: Optional[Union[List[str], Callable]] = None, preset_file: Optional[str] = None, output_name: Optional[str] = None, export_visible: bool = True, file_format: Optional[str] = 'FBX export', create_log_file: bool = False, *, log_level: Optional[str] = None, log_handler: Optional[object] = None, tasks: Optional[Dict[str, Any]] = None, usd_options: Optional[Dict[str, Any]] = None, progress_callback: Optional[Callable[[int, int, Optional[str]], Any]] = None) -> bool",
               "summary": "Perform the export operation, including initialization and task management.",
-              "line": 199,
+              "line": 340,
               "deprecated": false
             },
             {
@@ -15244,7 +15298,7 @@
               "kind": "method",
               "signature": "(self) -> Dict[str, str]",
               "summary": "Live value for every token in :attr:`NAME_TOKENS` but the counter.",
-              "line": 818,
+              "line": 959,
               "deprecated": false
             },
             {
@@ -15253,7 +15307,7 @@
               "kind": "method",
               "signature": "(self, pattern: Optional[str] = None, export_dir: Optional[str] = None, output_format: str = 'fbx', *, report: bool = True) -> Dict[str, Any]",
               "summary": "Resolve the Output Filename field into the file(s) an export writes.",
-              "line": 844,
+              "line": 985,
               "deprecated": false
             },
             {
@@ -15262,7 +15316,7 @@
               "kind": "method",
               "signature": "(self, *, extension: str = '.fbx', output_format: Optional[str] = None) -> str",
               "summary": "The full export path, from the fields :meth:`perform_export` stamps.",
-              "line": 886,
+              "line": 1027,
               "deprecated": false
             },
             {
@@ -15271,7 +15325,7 @@
               "kind": "method",
               "signature": "(self, preset_file: str = None, verify: bool = False) -> Optional[dict]",
               "summary": "Load an FBX export preset and optionally verify it.",
-              "line": 1213,
+              "line": 1354,
               "deprecated": false
             },
             {
@@ -15280,241 +15334,7 @@
               "kind": "method",
               "signature": "(self) -> dict",
               "summary": "Verify a set of predefined FBX export settings and log their values.",
-              "line": 1251,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "env_utils/scene_exporter/scene_exporter_slots.py",
-      "summary": "Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "SceneExporterSlots",
-          "summary": "",
-          "line": 31,
-          "bases": [
-            "SceneExporter"
-          ],
-          "members": [
-            {
-              "name": "confirm",
-              "qualname": "SceneExporterSlots.confirm",
-              "kind": "method",
-              "signature": "(self, question: str) -> bool",
-              "summary": "The engine's consent seam as the panel's modal Yes/No.",
-              "line": 149,
-              "deprecated": false
-            },
-            {
-              "name": "decide_check_failure",
-              "qualname": "SceneExporterSlots.decide_check_failure",
-              "kind": "method",
-              "signature": "(self, check: str, messages: List[str], remaining: List[str]) -> str",
-              "summary": "The engine's check-failure seam as the panel's three-button dialog.",
-              "line": 161,
-              "deprecated": false
-            },
-            {
-              "name": "workspace",
-              "qualname": "SceneExporterSlots.workspace",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "",
-              "line": 201,
-              "deprecated": false
-            },
-            {
-              "name": "header_init",
-              "qualname": "SceneExporterSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the header widget (its help;",
-              "line": 207,
-              "deprecated": false
-            },
-            {
-              "name": "cmb000_init",
-              "qualname": "SceneExporterSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init FBX Preset — a Settings row (``cmb008``), created by",
-              "line": 243,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "SceneExporterSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Output Directory",
-              "line": 327,
-              "deprecated": false
-            },
-            {
-              "name": "output_name_preview",
-              "qualname": "SceneExporterSlots.output_name_preview",
-              "kind": "method",
-              "signature": "(self) -> str",
-              "summary": "Live tooltip for the Output Filename field.",
-              "line": 365,
-              "deprecated": false
-            },
-            {
-              "name": "txt001_init",
-              "qualname": "SceneExporterSlots.txt001_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Output Name",
-              "line": 410,
-              "deprecated": false
-            },
-            {
-              "name": "cmb001_init",
-              "qualname": "SceneExporterSlots.cmb001_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Tasks — scene-prep steps the engine dispatches (``TASK_ORDER``),",
-              "line": 547,
-              "deprecated": false
-            },
-            {
-              "name": "cmb002_init",
-              "qualname": "SceneExporterSlots.cmb002_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Validation Checks — the gates that abort the write, grouped by tag.",
-              "line": 557,
-              "deprecated": false
-            },
-            {
-              "name": "cmb007_init",
-              "qualname": "SceneExporterSlots.cmb007_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Export Preset — the whole panel's run configuration under a name.",
-              "line": 565,
-              "deprecated": false
-            },
-            {
-              "name": "cmb008_init",
-              "qualname": "SceneExporterSlots.cmb008_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Settings — what is written and from what (the scene-prep steps are",
-              "line": 634,
-              "deprecated": false
-            },
-            {
-              "name": "ignore_groups_init",
-              "qualname": "SceneExporterSlots.ignore_groups_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Ignore Groups — a Settings row (``cmb008``), created by",
-              "line": 681,
-              "deprecated": false
-            },
-            {
-              "name": "export_data_node_init",
-              "qualname": "SceneExporterSlots.export_data_node_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Export Scene Data Node — a Settings row (``cmb008``).",
-              "line": 726,
-              "deprecated": false
-            },
-            {
-              "name": "cmb004_init",
-              "qualname": "SceneExporterSlots.cmb004_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Output Format — FBX (default), GLB, FBX + GLB, or USD.",
-              "line": 759,
-              "deprecated": false
-            },
-            {
-              "name": "cmb005_init",
-              "qualname": "SceneExporterSlots.cmb005_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Init Texture Template — optionally convert textures to a registry workflow.",
-              "line": 776,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "SceneExporterSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Export: run the scene export with the configured tasks and settings.",
-              "line": 805,
-              "deprecated": false
-            },
-            {
-              "name": "b010",
-              "qualname": "SceneExporterSlots.b010",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Set Output Directory",
-              "line": 886,
-              "deprecated": false
-            },
-            {
-              "name": "b012",
-              "qualname": "SceneExporterSlots.b012",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Browse for Output File -- name the export after an existing file.",
-              "line": 894,
-              "deprecated": false
-            },
-            {
-              "name": "b006",
-              "qualname": "SceneExporterSlots.b006",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open Output Directory",
-              "line": 934,
-              "deprecated": false
-            },
-            {
-              "name": "b007",
-              "qualname": "SceneExporterSlots.b007",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open Preset Directory.",
-              "line": 939,
-              "deprecated": false
-            },
-            {
-              "name": "b008",
-              "qualname": "SceneExporterSlots.b008",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Edit Preset",
-              "line": 953,
-              "deprecated": false
-            },
-            {
-              "name": "save_output_dir",
-              "qualname": "SceneExporterSlots.save_output_dir",
-              "kind": "method",
-              "signature": "(self, output_dir: str) -> None",
-              "summary": "Record the output directory into the recent values plugin.",
-              "line": 982,
-              "deprecated": false
-            },
-            {
-              "name": "save_output_name",
-              "qualname": "SceneExporterSlots.save_output_name",
-              "kind": "method",
-              "signature": "(self, output_name: str) -> None",
-              "summary": "Record the output filename into the recent values plugin.",
-              "line": 987,
+              "line": 1392,
               "deprecated": false
             }
           ]
@@ -30156,8 +29976,8 @@
               "name": "default_name",
               "qualname": "TextureCombine.default_name",
               "kind": "method",
-              "signature": "(self, transforms: Sequence[str]) -> str",
-              "summary": "What a blank name stands for: the meshes' common name.",
+              "signature": "(self, transforms: Sequence[str], fallback: str = 'combined') -> str",
+              "summary": "What a blank name stands for: the meshes' common name, else",
               "line": 592,
               "deprecated": false
             },
@@ -30167,7 +29987,7 @@
               "kind": "method",
               "signature": "(self, objects=None, *, name: Optional[str] = None, rows: Sequence[Dict[str, Any]] = (), sizing: str = 'proportional', normalize: str = 'resolution', map_size: int = 4096, padding: Optional[int] = None, rotate: bool = True, supersample: int = 2, texture_padding: int = -1, output_dir: Optional[str] = None, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, lightmaps: bool = True, inputs: Optional[CombineInputs] = None) -> Dict[str, Any]",
               "summary": "Combine *objects*' materials into one atlas and one material.",
-              "line": 599,
+              "line": 604,
               "deprecated": false
             },
             {
@@ -30176,7 +29996,7 @@
               "kind": "method",
               "signature": "(self, name: str) -> Dict[str, Any]",
               "summary": "Re-read *name*'s source maps into its CURRENT layout -- a revision.",
-              "line": 886,
+              "line": 891,
               "deprecated": false
             },
             {
@@ -30185,7 +30005,7 @@
               "kind": "method",
               "signature": "(self, name: str, forget: bool = True) -> List[str]",
               "summary": "Put *name*'s meshes back: original UVs and materials, exactly.",
-              "line": 940,
+              "line": 945,
               "deprecated": false
             },
             {
@@ -30194,7 +30014,7 @@
               "kind": "method",
               "signature": "(self, name: str, **changes) -> Dict[str, Any]",
               "summary": "Re-pack *name* with changed settings or rows, keeping its name.",
-              "line": 998,
+              "line": 1003,
               "deprecated": false
             },
             {
@@ -30203,7 +30023,43 @@
               "kind": "classmethod",
               "signature": "(cls, name: str) -> bool",
               "summary": "Drop *name*'s record entry, leaving the scene as it is.",
-              "line": 1018,
+              "line": 1023,
+              "deprecated": false
+            },
+            {
+              "name": "leaf_name",
+              "qualname": "TextureCombine.leaf_name",
+              "kind": "staticmethod",
+              "signature": "(node) -> str",
+              "summary": "*node*'s own name, for a label: no DAG path, no component",
+              "line": 1037,
+              "deprecated": false
+            },
+            {
+              "name": "select",
+              "qualname": "TextureCombine.select",
+              "kind": "staticmethod",
+              "signature": "(nodes) -> int",
+              "summary": "Replace the selection with those of *nodes* that exist --",
+              "line": 1043,
+              "deprecated": false
+            },
+            {
+              "name": "material_faces",
+              "qualname": "TextureCombine.material_faces",
+              "kind": "staticmethod",
+              "signature": "(inputs: CombineInputs, material) -> List[str]",
+              "summary": "The faces of *inputs*' meshes that wear *material*, as",
+              "line": 1059,
+              "deprecated": false
+            },
+            {
+              "name": "selected_faces",
+              "qualname": "TextureCombine.selected_faces",
+              "kind": "staticmethod",
+              "signature": "() -> List[str]",
+              "summary": "The selected faces (long ``<mesh>.f[a:b]`` strings), for an island",
+              "line": 1077,
               "deprecated": false
             },
             {
@@ -30212,7 +30068,7 @@
               "kind": "method",
               "signature": "(self, transforms: Sequence[str], name: str) -> Dict[str, Any]",
               "summary": "Bring the combined objects' committed lightmaps under the new material.",
-              "line": 1027,
+              "line": 1090,
               "deprecated": false
             },
             {
@@ -30222,402 +30078,6 @@
               "signature": "(objects=None) -> List[str]",
               "summary": "Mesh transforms (long names) under *objects*, order kept.",
               "line": 116,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "uv_utils/texture_combine/texture_combine_slots.py",
-      "summary": "The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "TextureCombineSlots",
-          "summary": "Switchboard slots for the ``texture_combine.ui`` panel.",
-          "line": 39,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "TextureCombineSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 148,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_mode_init",
-              "qualname": "TextureCombineSlots.cmb_mode_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 181,
-              "deprecated": false
-            },
-            {
-              "name": "open_output_folder",
-              "qualname": "TextureCombineSlots.open_output_folder",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 195,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_set_init",
-              "qualname": "TextureCombineSlots.cmb_set_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 210,
-              "deprecated": false
-            },
-            {
-              "name": "select_set",
-              "qualname": "TextureCombineSlots.select_set",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 322,
-              "deprecated": false
-            },
-            {
-              "name": "recombine_set",
-              "qualname": "TextureCombineSlots.recombine_set",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 330,
-              "deprecated": false
-            },
-            {
-              "name": "restore_set",
-              "qualname": "TextureCombineSlots.restore_set",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 347,
-              "deprecated": false
-            },
-            {
-              "name": "forget_set",
-              "qualname": "TextureCombineSlots.forget_set",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 362,
-              "deprecated": false
-            },
-            {
-              "name": "tbl_sources_init",
-              "qualname": "TextureCombineSlots.tbl_sources_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 372,
-              "deprecated": false
-            },
-            {
-              "name": "parse_scale",
-              "qualname": "TextureCombineSlots.parse_scale",
-              "kind": "staticmethod",
-              "signature": "(text: str) -> Optional[float]",
-              "summary": "``0.33``, ``1/3`` or ``33%`` as a float, ``None`` when unreadable.",
-              "line": 423,
-              "deprecated": false
-            },
-            {
-              "name": "select_row_members",
-              "qualname": "TextureCombineSlots.select_row_members",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 636,
-              "deprecated": false
-            },
-            {
-              "name": "remove_override",
-              "qualname": "TextureCombineSlots.remove_override",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 662,
-              "deprecated": false
-            },
-            {
-              "name": "reset_scales",
-              "qualname": "TextureCombineSlots.reset_scales",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 668,
-              "deprecated": false
-            },
-            {
-              "name": "b001",
-              "qualname": "TextureCombineSlots.b001",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Add the selected meshes as one mesh override row.",
-              "line": 672,
-              "deprecated": false
-            },
-            {
-              "name": "b002",
-              "qualname": "TextureCombineSlots.b002",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Add the islands under the selected faces as an override row.",
-              "line": 683,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_sizing_init",
-              "qualname": "TextureCombineSlots.cmb_sizing_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 707,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_normalize_init",
-              "qualname": "TextureCombineSlots.cmb_normalize_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 729,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_atlas_init",
-              "qualname": "TextureCombineSlots.cmb_atlas_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 753,
-              "deprecated": false
-            },
-            {
-              "name": "s_spacing_init",
-              "qualname": "TextureCombineSlots.s_spacing_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 768,
-              "deprecated": false
-            },
-            {
-              "name": "chk_rotate_init",
-              "qualname": "TextureCombineSlots.chk_rotate_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 781,
-              "deprecated": false
-            },
-            {
-              "name": "chk_lightmaps_init",
-              "qualname": "TextureCombineSlots.chk_lightmaps_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 784,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_tt_transfer_init",
-              "qualname": "TextureCombineSlots.cmb_tt_transfer_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 802,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_tt_source_init",
-              "qualname": "TextureCombineSlots.cmb_tt_source_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 805,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_tt_targets_init",
-              "qualname": "TextureCombineSlots.cmb_tt_targets_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 808,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_tt_resolution_init",
-              "qualname": "TextureCombineSlots.cmb_tt_resolution_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 811,
-              "deprecated": false
-            },
-            {
-              "name": "t_tt_dst_uvset_init",
-              "qualname": "TextureCombineSlots.t_tt_dst_uvset_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 814,
-              "deprecated": false
-            },
-            {
-              "name": "chk_tt_lightmaps_init",
-              "qualname": "TextureCombineSlots.chk_tt_lightmaps_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 817,
-              "deprecated": false
-            },
-            {
-              "name": "t_name_init",
-              "qualname": "TextureCombineSlots.t_name_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 823,
-              "deprecated": false
-            },
-            {
-              "name": "record_name",
-              "qualname": "TextureCombineSlots.record_name",
-              "kind": "method",
-              "signature": "(self, name: str) -> None",
-              "summary": "",
-              "line": 843,
-              "deprecated": false
-            },
-            {
-              "name": "t_output_init",
-              "qualname": "TextureCombineSlots.t_output_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 847,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_quality_init",
-              "qualname": "TextureCombineSlots.cmb_quality_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 881,
-              "deprecated": false
-            },
-            {
-              "name": "s_padding_init",
-              "qualname": "TextureCombineSlots.s_padding_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 905,
-              "deprecated": false
-            },
-            {
-              "name": "chk_assign_init",
-              "qualname": "TextureCombineSlots.chk_assign_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 921,
-              "deprecated": false
-            },
-            {
-              "name": "t_affix_init",
-              "qualname": "TextureCombineSlots.t_affix_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 925,
-              "deprecated": false
-            },
-            {
-              "name": "material_affix",
-              "qualname": "TextureCombineSlots.material_affix",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "``(assign_prefix, assign_suffix)`` from the affix row (blank: Auto).",
-              "line": 940,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_shader_init",
-              "qualname": "TextureCombineSlots.cmb_shader_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "",
-              "line": 952,
-              "deprecated": false
-            },
-            {
-              "name": "overwrites_target",
-              "qualname": "TextureCombineSlots.overwrites_target",
-              "kind": "method",
-              "signature": "(self) -> bool",
-              "summary": "Whether the Shader row re-uses the target's material in place --",
-              "line": 994,
-              "deprecated": false
-            },
-            {
-              "name": "assign_options",
-              "qualname": "TextureCombineSlots.assign_options",
-              "kind": "method",
-              "signature": "(self) -> Dict[str, Any]",
-              "summary": "",
-              "line": 1003,
-              "deprecated": false
-            },
-            {
-              "name": "sync_shared",
-              "qualname": "TextureCombineSlots.sync_shared",
-              "kind": "method",
-              "signature": "(self, textures: bool = True) -> None",
-              "summary": "Transfer mode: the Output / Material rows follow the texture pass.",
-              "line": 1009,
-              "deprecated": false
-            },
-            {
-              "name": "status",
-              "qualname": "TextureCombineSlots.status",
-              "kind": "method",
-              "signature": "(self, text: str) -> None",
-              "summary": "",
-              "line": 1021,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "TextureCombineSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Run the current mode.",
-              "line": 1033,
-              "deprecated": false
-            },
-            {
-              "name": "combine",
-              "qualname": "TextureCombineSlots.combine",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "",
-              "line": 1039,
               "deprecated": false
             }
           ]
@@ -30650,12 +30110,66 @@
               "remove_in": "0.23.0"
             },
             {
+              "name": "shader_types",
+              "qualname": "TextureTransfer.shader_types",
+              "kind": "staticmethod",
+              "signature": "() -> Dict[str, str]",
+              "summary": "``{assign_shader_type: label}``: the shader types a transfer (or a",
+              "line": 715,
+              "deprecated": false
+            },
+            {
+              "name": "meshes",
+              "qualname": "TextureTransfer.meshes",
+              "kind": "staticmethod",
+              "signature": "(objects) -> List[str]",
+              "summary": "Mesh transforms (long names) under *objects*: groups expand,",
+              "line": 725,
+              "deprecated": false
+            },
+            {
+              "name": "capture_sources",
+              "qualname": "TextureTransfer.capture_sources",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "The selected meshes (groups expanded) as what a caller stores to",
+              "line": 743,
+              "deprecated": false
+            },
+            {
+              "name": "live_sources",
+              "qualname": "TextureTransfer.live_sources",
+              "kind": "staticmethod",
+              "signature": "(names) -> List[str]",
+              "summary": "Those of the stored *names* still in the scene, order kept.",
+              "line": 750,
+              "deprecated": false
+            },
+            {
+              "name": "auto_source",
+              "qualname": "TextureTransfer.auto_source",
+              "kind": "classmethod",
+              "signature": "(cls, meshes, stored=()) -> Tuple[str, Optional[str]]",
+              "summary": "Source: Auto's reading of a selection's *meshes*: ``(mode, target)``.",
+              "line": 756,
+              "deprecated": false
+            },
+            {
+              "name": "selection_sides",
+              "qualname": "TextureTransfer.selection_sides",
+              "kind": "classmethod",
+              "signature": "(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]",
+              "summary": "Read the selection into a transfer's sides: ``(mode, source, targets)``.",
+              "line": 785,
+              "deprecated": false
+            },
+            {
               "name": "transfer",
               "qualname": "TextureTransfer.transfer",
               "kind": "method",
               "signature": "(self, targets, source=None, *, source_uv_set: Optional[str] = None, target_uv_set: Optional[str] = None, channels: Optional[Sequence[str]] = None, size: Optional[int] = None, supersample: int = 2, padding: int = -1, output_dir: Optional[str] = None, name_format: str = '{material}_{channel}', output_name: Optional[str] = None, normal_convention: Optional[str] = None, source_mask_from_uvs: bool = True, assign: bool = False, assign_prefix: str = '', assign_suffix: Optional[str] = None, assign_shader_type: Optional[str] = None, assign_from: str = 'target', source_materials: Optional[Dict[str, Tuple[Sequence, Sequence[int]]]] = None) -> Dict[str, Dict[str, str]]",
               "summary": "Transfer the source material(s)' maps onto the target UV layout.",
-              "line": 687,
+              "line": 837,
               "deprecated": false
             },
             {
@@ -30664,7 +30178,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Where the maps go when the caller names no directory: the scene",
-              "line": 1081,
+              "line": 1231,
               "deprecated": false
             },
             {
@@ -30673,7 +30187,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "The directory a RELATIVE output entry is resolved against.",
-              "line": 1099,
+              "line": 1249,
               "deprecated": false
             },
             {
@@ -30682,7 +30196,7 @@
               "kind": "classmethod",
               "signature": "(cls, entry: Optional[str] = None) -> str",
               "summary": "The absolute output directory for a user-typed *entry*.",
-              "line": 1113,
+              "line": 1263,
               "deprecated": false
             },
             {
@@ -30691,7 +30205,7 @@
               "kind": "method",
               "signature": "(self, results: Dict[str, Dict[str, str]], jobs: Dict[str, Dict[str, Any]], suffix: str = '_TRANSFER', base_name: Optional[str] = None, prefix: str = '', assign_from: str = 'target') -> Dict[str, str]",
               "summary": "One ``<prefix><layout><suffix>`` material per output, on its faces.",
-              "line": 1330,
+              "line": 1480,
               "deprecated": false
             },
             {

@@ -1,6 +1,6 @@
 # Texture Combine
 
-**Nav**: [← docs](README.md) · engine [`TextureCombine`](../mayatk/uv_utils/texture_combine/texture_combine.py) · panel [`TextureCombineSlots`](../mayatk/uv_utils/texture_combine/texture_combine_slots.py) · planner [`ptk.UvCombine`](https://github.com/m3trik/pythontk/blob/main/pythontk/geo_utils/uv/combine.py)
+**Nav**: [← docs](README.md) · engine [`TextureCombine`](../mayatk/uv_utils/texture_combine/texture_combine.py) · panel [`TextureCombineSlots`](https://github.com/m3trik/tentacle/blob/main/tentacle/slots/tools/texture_combine.py) (tentacle's, shared by both hosts) · planner [`ptk.UvCombine`](https://github.com/m3trik/pythontk/blob/main/pythontk/geo_utils/uv/combine.py)
 
 Merge several materials into **one atlas and one material, in place**: the meshes keep their geometry, their texture UV set is repacked so every source material's islands share one 0-1 layout, and they wear one material whose maps are resampled from every source into that layout. Nothing is duplicated and nothing is lost. The originals are recorded in the scene, so a combine can be restored exactly, or re-combined when a source map is revised.
 
@@ -73,9 +73,9 @@ Moves UVs **or** textures from a source mesh onto targets. The two are alternati
 
 **Targets** (Rest of Selection / Similar in Selection / Similar in Scene) applies to First Selected. **Include Lightmaps** carries each source's committed lightmap too.
 
-With **Assign Result** on, the **Shader** row says what the targets end up wearing:
+With **Assign Result** on, the **Material** row says what the targets end up wearing:
 
-| Shader | Result |
+| Material | Result |
 |:---|:---|
 | Same as source | a copy of the source material covering most of the layout, wired to the new maps |
 | Same as target | a copy of the target's own material, wired to the new maps |
@@ -118,4 +118,4 @@ tc.restore("tools")    # originals back, record dropped
 
 `TextureCombine.gather` + `plan` give the table's numbers without packing (`ptk.UvCombine.plan`). The planner is DCC-agnostic.
 
-Blender: blendertk mirrors the engine and the panel (`btk.TextureCombine`, opened from the Blender UV panel the same way). Its Material row offers Same as source / Same as target / Overwrite target in Transfer mode only: a Blender material has no shader type to rebuild a combine on.
+Blender: blendertk mirrors the engine (`btk.TextureCombine`), and the panel is the same one, opened from the Blender UV panel the same way; its Source row reads the active object where Maya's reads the selection order. Its Material row offers Same as source / Same as target / Overwrite target in Transfer mode only: a Blender material has no shader type to rebuild a combine on.

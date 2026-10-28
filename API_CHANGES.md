@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (467)
+## Moved out (535)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -212,6 +212,31 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::SnapSlots.b002` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.b002_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
 - `edit_utils/snap.py::SnapSlots.header_init` → `tentacle.slots.tools.snap.SnapSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b000` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b006` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b007` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b008` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b010` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.b012` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb000_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb001_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb002_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb004_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb005_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb007_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.cmb008_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.confirm` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.decide_check_failure` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.export_data_node_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.header_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.ignore_groups_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.output_name_preview` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.save_output_dir` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.save_output_name` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.txt000_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.txt001_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.workspace` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.add_hdr` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.clear_network` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
@@ -471,8 +496,51 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb006_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.assign_options` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.b000` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.b001` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.b002` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.chk_assign_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.chk_lightmaps_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.chk_rotate_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.chk_tt_lightmaps_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_atlas_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_mode_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_normalize_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_quality_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_set_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_shader_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_sizing_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_tt_resolution_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_tt_source_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_tt_targets_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.cmb_tt_transfer_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.combine` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.forget_set` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.header_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.material_affix` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.open_output_folder` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.overwrites_target` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.parse_scale` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.recombine_set` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.record_name` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.remove_override` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.reset_scales` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.restore_set` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.s_padding_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.s_spacing_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.select_row_members` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.select_set` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.status` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.sync_shared` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_affix_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_name_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_output_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
+- `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (133)
+## Added (149)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -533,6 +601,12 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.edit_fbx_preset(self, preset: Optional[str] = None) -> None`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_dir(self) -> Optional[str]`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.fbx_preset_metadata(self, preset: Optional[str]) -> Dict[str, str]`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.objects_to_export(export_mode: str = 'visible') -> List[str]`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.refresh_fbx_presets(self) -> Dict[str, Optional[str]]`
+- `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.restore_fbx_preset(self, metadata: Optional[Dict[str, str]]) -> Optional[str]`
 - `light_utils/hdr_manager.py::HdrManager.defer_apply(callback: Callable[[], None]) -> None`
 - `light_utils/hdr_manager.py::HdrManager.select(self, part: str = 'skydome') -> Optional[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.preset_name(cls, name: str) -> str`
@@ -607,6 +681,16 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/_uv_utils.py::UvUtils.rotate_uvs(cls, objects, angle: float) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uv_shells(cls, objects) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uvs(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.leaf_name(node) -> str`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.material_faces(inputs: CombineInputs, material) -> List[str]`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.select(nodes) -> int`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.selected_faces() -> List[str]`
+- `uv_utils/texture_transfer.py::TextureTransfer.auto_source(cls, meshes, stored=()) -> Tuple[str, Optional[str]]`
+- `uv_utils/texture_transfer.py::TextureTransfer.capture_sources(cls) -> List[str]`
+- `uv_utils/texture_transfer.py::TextureTransfer.live_sources(names) -> List[str]`
+- `uv_utils/texture_transfer.py::TextureTransfer.meshes(objects) -> List[str]`
+- `uv_utils/texture_transfer.py::TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]`
+- `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
 
 ## Deprecations (17)
 
@@ -654,7 +738,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `mat_utils/emissive_groups.py::EmissiveGroups.validate`
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 
-## Signature changed (4)
+## Signature changed (5)
 
 - `edit_utils/bridge.py::Bridge.bridge`
   - was: `(edges, **kwargs)`
@@ -668,3 +752,6 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `uv_utils/_uv_utils.py::UvUtils.orient_shells`
   - was: `(objects)`
   - now: `(objects, to_edge: bool = False) -> int`
+- `uv_utils/texture_combine/texture_combine.py::TextureCombine.default_name`
+  - was: `(self, transforms: Sequence[str]) -> str`
+  - now: `(self, transforms: Sequence[str], fallback: str = 'combined') -> str`

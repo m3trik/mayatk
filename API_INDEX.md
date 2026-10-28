@@ -633,11 +633,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/scene_exporter/_scene_exporter.py`
 - `class SceneExporter(pythontk.SceneExporterBase)`
-  - methods: presets, perform_export, name_context, resolve_export_path, generate_export_path, load_fbx_export_preset, verify_fbx_preset
-
-### `env_utils/scene_exporter/scene_exporter_slots.py` — Slots for the Scene Exporter panel -- the Qt half of ``SceneExporter``.
-- `class SceneExporterSlots(SceneExporter)`
-  - methods: confirm, decide_check_failure, workspace, header_init, cmb000_init, txt000_init, output_name_preview, txt001_init, cmb001_init, cmb002_init, cmb007_init, cmb008_init, ignore_groups_init, export_data_node_init, cmb004_init, cmb005_init, b000, b010, b012, b006, b007, b008, save_output_dir, save_output_name
+  - methods: presets, refresh_fbx_presets, fbx_preset_dir, fbx_preset_metadata, restore_fbx_preset, edit_fbx_preset, objects_to_export, perform_export, name_context, resolve_export_path, generate_export_path, load_fbx_export_preset, verify_fbx_preset
 
 ### `env_utils/scene_exporter/task_manager.py` — The Scene Exporter's task/check manager -- what ``perform_export`` drives.
 - `class TaskManager(TaskFactory, _SceneTasksMixin, _TextureTasksMixin, _AnimationTasksMixin, _TaskChecksMixin, _TaskDefinitionsMixin)`
@@ -1158,15 +1154,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `uv_utils/texture_combine/texture_combine.py` — Several materials into ONE: one atlas, one material, in place -- no duplicated meshes.
 - `class CombineInputs`
 - `class TextureCombine(pythontk.LoggingMixin, _TextureCombineInternal)`
-  - methods: names, entry, members, owner, stale, gather, inputs_for, apply_rows, plan, default_name, combine, recombine, restore, update, forget, consolidate_lightmaps, resolve_meshes
-
-### `uv_utils/texture_combine/texture_combine_slots.py` — The Texture Combine panel: Switchboard slots for ``texture_combine.ui``.
-- `class TextureCombineSlots(pythontk.LoggingMixin)`
-  - methods: header_init, cmb_mode_init, open_output_folder, cmb_set_init, select_set, recombine_set, restore_set, forget_set, tbl_sources_init, parse_scale, select_row_members, remove_override, reset_scales, b001, b002, cmb_sizing_init, cmb_normalize_init, cmb_atlas_init, s_spacing_init, chk_rotate_init, chk_lightmaps_init, cmb_tt_transfer_init, cmb_tt_source_init, cmb_tt_targets_init, cmb_tt_resolution_init, t_tt_dst_uvset_init, chk_tt_lightmaps_init, t_name_init, record_name, t_output_init, cmb_quality_init, s_padding_init, chk_assign_init, t_affix_init, material_affix, cmb_shader_init, overwrites_target, assign_options, sync_shared, status, b000, combine
+  - methods: names, entry, members, owner, stale, gather, inputs_for, apply_rows, plan, default_name, combine, recombine, restore, update, forget, leaf_name, select, material_faces, selected_faces, consolidate_lightmaps, resolve_meshes
 
 ### `uv_utils/texture_transfer.py` — Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - `class TextureTransfer(pythontk.LoggingMixin, _TextureTransferInternal)`
-  - methods: CONSTANT_ATTRS, transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name, pair_sources, find_combined
+  - methods: CONSTANT_ATTRS, shader_types, meshes, capture_sources, live_sources, auto_source, selection_sides, transfer, default_output_dir, output_base_dir, resolve_output_dir, assign_results, topology_matches, positions_match, auto_source_uv_set, correspondence, face_materials, material_maps, new_material_from, material_constant, pair_by_name, pair_sources, find_combined
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`

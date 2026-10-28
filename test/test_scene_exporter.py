@@ -52,7 +52,6 @@ def _pm_undo_chunk():
 
 # --- end shims ---
 from mayatk.env_utils.scene_exporter._scene_exporter import SceneExporter
-from mayatk.env_utils.scene_exporter.scene_exporter_slots import SceneExporterSlots
 from base_test import MayaTkTestCase, QuickTestCase
 
 
@@ -303,17 +302,10 @@ class TestSceneExporter(MayaTkTestCase):
     def test_version_and_timestamp_are_spelled_in_the_filename(self):
         """The Version row and the Timestamp checkbox each appended to the name
         the Output Filename already builds: the field spells both itself now
-        (*_v{n:03d}, *_{date}_{time})."""
-        import inspect
-
+        (*_v{n:03d}, *_{date}_{time}). The panel's side -- no such row, the
+        retired keys a preset still carries -- is tentacle's
+        ``test_scene_exporter_panel``."""
         self.assertNotIn("version", self.exporter.task_manager.task_definitions)
-        layout = [n for _, names in SceneExporterSlots._SETTINGS_LAYOUT for n in names]
-        self.assertNotIn("version", layout)
-        # Named only as a retired preset key (see the next test), never built.
-        self.assertIn("chk004", SceneExporterSlots._RETIRED_NAMING_KEYS)
-        self.assertNotIn(
-            'setObjectName="chk004"', inspect.getsource(SceneExporterSlots)
-        )
         self.assertIn("n", SceneExporter.NAME_TOKENS)
 
     def test_retired_version_and_timestamp_inputs_resolve_for_one_release(self):
@@ -366,54 +358,6 @@ class TestSceneExporter(MayaTkTestCase):
         ):
             with self.subTest(pattern=pattern):
                 self.assertEqual(self._stem_for(pattern), expected)
-
-    def test_the_field_tooltip_previews_the_path_the_export_would_write(self):
-        """The hover resolves through the same call as the write, so the two
-        cannot drift — and it resolves QUIETLY, since it renders the diagnostics
-        itself and a hover must not file a warning per mouse-over."""
-        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
-
-        slots = self._preview_slots("WIP_*_{nope}")
-        with self.assertLogs(slots.logger, level="WARNING") as caught:
-            slots.logger.warning("only this one")  # assertLogs needs a record
-            html = slots.output_name_preview()
-        self.assertEqual(len(caught.records), 1)
-
-        # Every token is taught, the wildcard reads first, and the resolved
-        # path is the one generate_export_path builds from the same field.
-        self.assertIn(">*</td>", html)
-        for token in slots.NAME_TOKENS:
-            self.assertIn("{" + token + "}", html)
-        self.assertIn("unknown", html)  # {nope} is flagged, not silently kept
-        self.assertIn(os.path.join(self.temp_dir, "WIP_test_scene_{nope}.fbx"), html)
-
-    def _preview_slots(self, pattern, output_format="fbx"):
-        """A panel stand-in whose fields hold *pattern* and a format."""
-        from pythontk import TooltipFormat
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = SimpleNamespace(tooltip=TooltipFormat)
-        slots.ui = SimpleNamespace(
-            txt000=SimpleNamespace(text=lambda: self.temp_dir),
-            txt001=SimpleNamespace(text=lambda: pattern),
-            cmb004=SimpleNamespace(currentData=lambda: output_format),
-        )
-        return slots
-
-    def test_the_preview_writes_line_is_the_file_the_export_writes(self):
-        """The regex on {scene}, the resolved counter and every file the format
-        ships -- the "writes" line names exactly what the next export writes."""
-        _pm_rename_file(os.path.join(self.temp_dir, "test_scene.ma"))
-        open(os.path.join(self.temp_dir, "prod_scene_v004.glb"), "w").close()
-
-        slots = self._preview_slots(
-            "{scene:test_->prod_}_v{n:03d}", output_format="fbx_glb"
-        )
-        html = slots.output_name_preview()
-        self.assertIn(
-            os.path.join(self.temp_dir, "prod_scene_v005.fbx") + " + .glb", html
-        )
-        self.assertNotIn("unknown", html)  # {n} is a token the field knows
 
     # ------------------------------------------------------------------
     # Export execution
@@ -1031,64 +975,6 @@ class TestSceneExporter(MayaTkTestCase):
         )
         self.assertIs(tm.check_path_length.__func__, real_check.__func__)
 
-    def test_the_panel_asks_with_three_named_buttons_and_cancel_on_enter(self):
-        """Override All / Override / Cancel, mapped back to the runner's
-        answers; Enter is Cancel, and anything unexpected stops the run.
-        Added: 2026-10-04
-        """
-        seen = {}
-
-        class _SB:
-            def message_box(self, string, *buttons, **kwargs):
-                seen.update(string=string, buttons=buttons, **kwargs)
-                return seen.get("reply")
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = _SB()
-        slots._overridden_checks = []
-        slots._definition_tables_cache = ({}, {})
-        for reply, answer in (
-            ("Override All", ptk.TaskFactory.CHECK_OVERRIDE_ALL),
-            ("Override", ptk.TaskFactory.CHECK_OVERRIDE),
-            ("Cancel", ptk.TaskFactory.CHECK_ABORT),
-            (None, ptk.TaskFactory.CHECK_ABORT),
-        ):
-            seen["reply"] = reply
-            got = slots.decide_check_failure(
-                "check_path_length", ["too long"], ["check_valid_paths"]
-            )
-            self.assertEqual(got, answer, reply)
-        self.assertEqual(seen["buttons"], ("Override All", "Override", "Cancel"))
-        self.assertEqual(seen["default"], "Cancel")
-        self.assertIsNone(seen["timeout"], "a question must not time out")
-        self.assertIn("Path Length", seen["string"])
-        self.assertIn("Valid Paths", seen["string"], "the remaining checks show")
-
-    def test_the_override_prompt_survives_the_panel_rich_text_engine(self):
-        """``sb.message_box`` hands its string to Qt's rich-text engine, which
-        collapses a newline to a space -- so the seam's plain text (documented
-        as "newlines allowed") arrived as one run-on paragraph, the KTX2
-        install prompt included. The panel's ``confirm`` translates instead of
-        making every caller author HTML.
-        Added: 2026-09-03
-        """
-        seen = {}
-
-        class _SB:
-            def message_box(self, string, *buttons):
-                seen["string"] = string
-                seen["buttons"] = buttons
-                return "Yes"
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = _SB()
-        self.assertTrue(slots.confirm("line one\n\nline two & <three>"))
-        self.assertIn("<br><br>", seen["string"])
-        self.assertNotIn("\n", seen["string"])
-        self.assertIn("&amp;", seen["string"])
-        self.assertNotIn("<three>", seen["string"])
-        self.assertEqual(seen["buttons"], ("Yes", "No"))
-
     def test_declining_the_override_still_aborts_the_export(self):
         """The offer is consent, never an automatic pass: declining keeps the
         pre-existing abort, and nothing is written.
@@ -1114,37 +1000,6 @@ class TestSceneExporter(MayaTkTestCase):
         self.assertFalse(
             os.path.exists(os.path.join(self.temp_dir, "OverrideDeclined.fbx"))
         )
-
-    def test_override_button_never_restores_its_armed_state(self):
-        """Override Checks is a per-run escape hatch, so it must not ride
-        QSettings into the next session: a registered widget persists by
-        default and its restore runs AFTER the slots ``__init__``, which used
-        to re-arm the toggle right over the ``setChecked(False)`` there --
-        silently disabling every validation check on the next launch.
-        Added: 2026-09-03
-        """
-
-        class _Button:
-            def __init__(self):
-                self.restore_state = True
-                self.checked = True
-                self.enabled = False
-                self.style = ""
-
-            def setEnabled(self, value):
-                self.enabled = value
-
-            def setChecked(self, value):
-                self.checked = value
-
-            def setStyleSheet(self, value):
-                self.style = value
-
-        button = _Button()
-        SceneExporterSlots._init_override_button(button)
-        self.assertFalse(button.restore_state)
-        self.assertFalse(button.checked)
-        self.assertTrue(button.enabled)
 
     def test_check_failure(self):
         """Test that a failing check returns False."""
@@ -1377,322 +1232,6 @@ class TestSceneExporter(MayaTkTestCase):
                     params.get("group") or params.get("panel") == "settings",
                     f"{kind} {name} has neither a group nor a settings tag",
                 )
-
-    def test_settings_layout_covers_every_settings_tagged_definition(self):
-        """A task tagged ``panel: settings`` leaves the Tasks popup — so it must
-        have a slot in ``_SETTINGS_LAYOUT`` or it renders nowhere; and every
-        layout name resolves to a widget spec or a definition (a name a DCC
-        lacks is skipped, which is how blendertk shares the layout)."""
-        defs = self.exporter.task_manager.task_definitions
-        laid_out = {
-            name
-            for _group, names in SceneExporterSlots._SETTINGS_LAYOUT
-            for name in names
-        }
-        settings_tagged = {n for n, p in defs.items() if p.get("panel") == "settings"}
-        self.assertEqual(settings_tagged - laid_out, set())
-        for name in laid_out:
-            self.assertTrue(
-                name in SceneExporterSlots._SETTINGS_WIDGETS or name in defs, name
-            )
-        # The FBX preset and output format rows keep the objectNames saved
-        # export presets already carry. The GLB-textures row (cmb006) folded
-        # into the general texture_file_type dial, and the texture template
-        # (cmb005) moved to the Tasks combo as ``convert_textures`` — both
-        # keeping their objectName, so old templates still restore.
-        self.assertEqual(
-            set(SceneExporterSlots._SETTINGS_WIDGETS), {"cmb000", "cmb004"}
-        )
-
-    def test_export_data_node_row_gets_a_viewer_action(self):
-        """The Export Scene Data Node row's option box carries one viewer
-        action, added once (a repeat init must not stack a second button).
-        Qt-free, like the row-builder test below; that a real QCheckBox takes an
-        option box at all is uitk's ``TestCheckBoxOptionBox``."""
-        actions = []
-        widget = SimpleNamespace(
-            is_initialized=False,
-            option_box=SimpleNamespace(add_action=lambda **kw: actions.append(kw)),
-        )
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.export_data_node_init(widget)
-        widget.is_initialized = True
-        slots.export_data_node_init(widget)
-        self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0]["callback"], slots._show_data_node)
-        icons = os.path.join(os.path.dirname(__import__("uitk").__file__), "icons")
-        self.assertTrue(
-            os.path.isfile(os.path.join(icons, f"{actions[0]['icon']}.svg"))
-        )
-
-    def test_show_data_node_hands_every_shipped_carrier_to_the_shared_viewer(self):
-        """The button opens the shared data viewer (``sb.data_view_dialog``,
-        tentacle's Scene Metadata viewer) on every data_export carrier the
-        export ships -- a referenced module's included -- decoded, and never
-        the private data_internal records."""
-        from mayatk.node_utils.data_nodes import DataNodes
-
-        shown = []
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = SimpleNamespace(
-            data_view_dialog=lambda data, **kw: shown.append((data, kw))
-        )
-        slots._show_data_node()
-        self.assertEqual(shown[-1][0], {})  # the viewer reports "empty" itself
-        self.assertFalse(cmds.objExists(DataNodes.EXPORT), "a view must not create it")
-
-        DataNodes.write(ptk.Scope.DELIVERABLE, "probe_channel", '{"a": [1, 2]}')
-        DataNodes.write(ptk.Scope.PRIVATE, "private_probe", "internal-only")
-        cmds.namespace(add="MODULE")
-        module = cmds.createNode("transform", name="MODULE:data_export")
-        cmds.addAttr(module, longName="module_channel", dataType="string")
-        cmds.setAttr(f"{module}.module_channel", '{"b": 3}', type="string")
-        slots._show_data_node()
-        data, kwargs = shown[-1]
-        self.assertEqual(
-            data,
-            {
-                "|data_export": {"probe_channel": {"a": [1, 2]}},
-                "|MODULE:data_export": {"module_channel": {"b": 3}},
-            },
-        )
-        self.assertTrue(kwargs["save_path"].endswith("_data_export.json"))
-        self.assertTrue(kwargs["empty_message"])
-
-    def test_definition_rows_emit_one_separator_per_group_change(self):
-        """The row builder: a titled Separator precedes each new group, rows
-        keep definition order, settings-tagged entries are filtered out of the
-        default panel, and captions come from row labels — the option text no
-        longer repeats them ("Scope  Export: All Visible Objects").
-
-        Qt-free on purpose: mayapy standalone owns a QGuiApplication, so a real
-        QWidget crashes the process (GUI tests get their own pass). The builder
-        only needs a class per ``widget_type`` and ``ui.set_attributes``, so
-        recording stubs cover its logic exactly.
-        """
-
-        class _Stub:
-            def __init__(self, **kwargs):
-                self.attrs = dict(kwargs)
-
-        class _Separator(_Stub):
-            pass
-
-        registry = SimpleNamespace(
-            Separator=_Separator, ComboBox=_Stub, SpinBox=_Stub, Header=_Stub
-        )
-        qt = SimpleNamespace(QCheckBox=_Stub, QLineEdit=_Stub)
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.task_manager = self.exporter.task_manager
-        slots.sb = SimpleNamespace(
-            QtWidgets=qt,
-            registered_widgets=registry,
-            convert_to_legal_name=lambda n: n,
-        )
-        slots.ui = SimpleNamespace(set_attributes=lambda w, **kw: w.attrs.update(kw))
-
-        rows = slots._definition_rows(self.exporter.task_manager.task_definitions)
-        labels = [label for _w, label in rows]
-        seps = [w.attrs["title"] for w, _l in rows if isinstance(w, _Separator)]
-        self.assertEqual(
-            seps, ["Materials", "Textures", "Animation", "Hierarchy"]
-        )
-        self.assertEqual(labels[0], "Materials")  # a group opens with its caption
-        self.assertNotIn("export_visible_objects", labels)  # settings-tagged
-        self.assertIn("smart_bake", labels)
-        by_label = {label: w for w, label in rows}
-        # Meta keys never reach the widget; the objectName always does.
-        for meta in ("widget_type", "panel", "group", "value_method"):
-            self.assertNotIn(meta, by_label["smart_bake"].attrs)
-        self.assertEqual(by_label["smart_bake"].attrs["setObjectName"], "smart_bake")
-        # A row-labelled combo carries its caption once, on the row.
-        size = by_label["optimize_textures"]
-        self.assertEqual(size.attrs["set_row_label"], "Optimize Textures")
-        self.assertEqual(next(iter(size.attrs["add"])), "OFF")
-        # The Textures group: the Texture Output gate first, its three
-        # dependants directly beneath — the gate and the gated read as one
-        # block (2026-08-20 move out of the Settings combo).
-        tex_start = labels.index("Textures")
-        self.assertEqual(
-            labels[tex_start : tex_start + 5],
-            [
-                "Textures",
-                "texture_write_back",
-                "convert_textures",
-                "optimize_textures",
-                "texture_file_type",
-            ],
-        )
-
-        checks = slots._definition_rows(self.exporter.task_manager.check_definitions)
-        check_seps = [w.attrs["title"] for w, _l in checks if isinstance(w, _Separator)]
-        self.assertEqual(
-            check_seps,
-            [
-                "General",
-                "Hierarchy & Naming",
-                "Geometry",
-                "Materials & Paths",
-                "Animation",
-                # The post-write pass sits under its own heading, last: every
-                # section above it aborts the write, this one reads the file
-                # the write produced.
-                "Deliverable (after the write)",
-            ],
-        )
-        check_labels = [label for _w, label in checks]
-        self.assertGreater(
-            check_labels.index("check_framerate"), check_labels.index("Animation")
-        )
-
-    def test_wire_dependencies_hides_irrelevant_settings(self):
-        """Every "irrelevant unless" relationship is ONE ``sb.show_when`` rule
-        declared in ``_wire_dependencies`` — hidden rather than greyed
-        (2026-09-14), no per-trigger slot, no ``_sync_*`` helper. Pins the
-        set of dependants, their triggers and the conditions; the rule engine
-        itself is covered by uitk's ``test_switchboard_toggle.py``."""
-        calls = []
-
-        class _SB:
-            def show_when(self, ui, targets, trigger, condition=True, **kw):
-                calls.append((targets, trigger, condition))
-
-            def enable_when(self, *args, **kw):
-                raise AssertionError("greyed out where it should be hidden")
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = _SB()
-        slots.ui = object()
-        slots._wire_dependencies()
-        by_target = {t: (trig, cond) for t, trig, cond in calls}
-        # No size-dial rule any more: the ceiling rides the Optimize Textures
-        # combo itself ("Optimize + Max …"), so a ceiling with nothing to
-        # apply it is unrepresentable rather than hidden (2026-08-20).
-        self.assertNotIn("texture_max_size", by_target)
-        # Texture File Type is NOT gated on Optimize Textures: a GLB
-        # deliverable is re-encoded to it whether or not the scene pass runs.
-        self.assertNotIn("texture_file_type", by_target)
-        self.assertEqual(
-            by_target["texture_write_back"][0], ["texture_optimize", "cmb005"]
-        )
-        self.assertEqual(by_target["exclude_hdr"][0], "export_visible_objects")
-        # A USD deliverable: the FBX-only knobs, the FBX/GLB verifier and the
-        # rig-helper pass (it edits a written FBX) go.
-        trigger, usd = by_target[
-            "cmb000,animation_clips,bake_range,verify_deliverables,drop_rig_apparatus"
-        ]
-        self.assertEqual(trigger, "cmb004")
-        self.assertEqual((usd("fbx"), usd("glb"), usd("usd")), (True, True, False))
-        # The GLB-only dials.
-        self.assertEqual(
-            by_target["secondary_max_size"], ("cmb004", {"glb", "fbx_glb"})
-        )
-        trigger, rdo = by_target["uastc_rdo"]
-        self.assertEqual(trigger, ["cmb004", "texture_file_type"])
-        self.assertEqual(
-            (rdo("glb", "ktx2"), rdo("fbx_glb", "ktx2+fallback"), rdo("fbx", "ktx2")),
-            (True, True, False),
-        )
-        self.assertFalse(rdo("glb", "png"), "RDO is a KTX2 encode dial")
-        trigger, keys = by_target["glb_key_tolerance"]
-        self.assertEqual(trigger, ["cmb004", "optimize_level"])
-        self.assertEqual(
-            (keys("glb", "extremes"), keys("glb", None), keys("fbx", "extremes")),
-            (True, False, False),
-        )
-        # The retired hand-rolled pair is gone for good.
-        for name in ("cmb004", "_sync_glb_texture_combo"):
-            self.assertFalse(hasattr(SceneExporterSlots, name), name)
-
-    def test_preset_manager_adopts_the_panel_logger(self):
-        """``cmb007_init`` hands the slots logger to the window's PresetManager.
-
-        The manager's class-shared logger never reaches the panel's txt003
-        sink (``setup_logging_redirect`` wires the SLOTS logger only), so its
-        user-facing schema-drift warning -- "preset doesn't cover N new panel
-        settings" -- was console-only. Pins the instance-scoped adoption AND
-        its ordering: it must precede ``wire_combo``, whose active-preset
-        restore is exactly the load that warns.
-        """
-        events = []
-
-        class _Mgr:
-            def use_logger(self, logger):
-                events.append(("use_logger", logger))
-
-            def setup(self, **kw):
-                events.append(("setup", None))
-
-            def exclude(self, *names):
-                events.append(("exclude", names))
-
-            def wire_combo(self, widget, placeholder=None):
-                events.append(("wire_combo", widget))
-
-        class _UI:
-            presets = _Mgr()
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.ui = _UI()
-        slots.cmb007_init(_StubPresetSelector())
-
-        kinds = [k for k, _ in events]
-        self.assertIn("use_logger", kinds)
-        self.assertLess(kinds.index("use_logger"), kinds.index("wire_combo"))
-        self.assertIs(events[kinds.index("use_logger")][1], SceneExporterSlots.logger)
-
-    def test_a_preset_asking_for_a_retired_naming_row_says_so(self):
-        """A preset saved while the Version row and the Timestamp checkbox
-        existed loads with both keys ignored -- no widget takes them -- and the
-        Output Filename is per-export, so a series it versioned stopped
-        versioning without a word. Picking it warns and names the spelling that
-        replaces each; a preset storing them empty stays quiet (2026-09-15)."""
-        stored = {
-            "legacy": {"version": "{stem}_v{n:03d}", "chk004": True, "cmb004": 1},
-            "current": {"version": "", "chk004": False, "cmb004": 1},
-            # The released default for the pair retired 2026-10-19: the check
-            # row on, its fix off -- the check would go without a word.
-            "released": {
-                "snap_keys_to_frame": False,
-                "check_floating_point_keys": True,
-            },
-        }
-
-        class _Mgr:
-            def use_logger(self, logger):
-                pass
-
-            def setup(self, **kw):
-                pass
-
-            def exclude(self, *names):
-                pass
-
-            def wire_combo(self, widget, placeholder=None):
-                pass
-
-            def read(self, name):
-                return stored.get(name)
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.ui = SimpleNamespace(presets=_Mgr())
-        slots.task_manager = self.exporter.task_manager
-        combo = _StubPresetSelector(stored)
-        slots.cmb007_init(combo)
-        with self.assertLogs(slots.logger, level="WARNING") as caught:
-            combo.activated.emit(0)
-        said = "\n".join(caught.output)
-        for expected in ("'legacy'", "*_v{n:03d}", "*_{date}_{time}"):
-            self.assertIn(expected, said)
-        with self.assertNoLogs(slots.logger, level="WARNING"):
-            combo.activated.emit(1)
-        # A check row retired 2026-10-19 is said the same way (pythontk's
-        # ExportProfile._retired_row_notes), naming the fix to turn on.
-        with self.assertLogs(slots.logger, level="WARNING") as caught:
-            combo.activated.emit(2)
-        said = "\n".join(caught.output)
-        for expected in ("'released'", "Floating Point Keys", "Snap Keys To Frame"):
-            self.assertIn(expected, said)
 
     # ------------------------------------------------------------------
     # optimize_keys forwarding to SmartBake
@@ -8140,46 +7679,6 @@ class TestTexturePathPipeline(MayaTkTestCase):
         self.assertTrue(status, f"non-surface shape flagged below floor: {msgs}")
 
 
-class _StubPresetCombo:
-    """Stand-in for cmb000 — the preset slots only touch these three members.
-
-    ``init_slot`` records what ``cmb000_init`` would repopulate the combo with, so a
-    test can assert on the list the user ends up seeing.
-    """
-
-    def __init__(self, slots, data=None):
-        self._slots = slots
-        self._data = data
-        self.items = None
-        self.current_text = None
-
-    def currentData(self):
-        return self._data
-
-    def setCurrentText(self, text):
-        self.current_text = text
-
-    def init_slot(self):
-        self.items = dict(self._slots.presets)
-
-
-class _StubPresetSelector:
-    """Stand-in for cmb007 — ``cmb007_init`` wires its ``activated`` signal and
-    reads the picked item's name; ``activated.emit(index)`` is a user's pick."""
-
-    def __init__(self, names=()):
-        self.names = list(names)
-        self._slots = []
-        self.activated = SimpleNamespace(connect=self._slots.append, emit=self._pick)
-
-    def _pick(self, index):
-        for slot in self._slots:
-            slot(index)
-
-    def itemText(self, index):
-        return self.names[index]
-
-
 class TestUnconfiguredFbxWrite(MayaTkTestCase):
     """A run that names no preset must not be shaped by the session it runs in.
 
@@ -8908,21 +8407,22 @@ class TestOffsetParentMatrixWrite(MayaTkTestCase):
 
 
 class TestPresetDirectoryScan(QuickTestCase):
-    """``SceneExporterSlots.presets`` — the dict backing the FBX preset combo (cmb000).
+    """``SceneExporter.presets`` -- the dict backing the panel's FBX Preset combo --
+    and the engine calls around it: the refresh, the preset folder, the embedding.
 
-    It is cached (``cmb000_init`` re-runs on every panel show and the scan is recursive
+    It is cached (the panel re-reads it on every show and the scan is recursive
     over the whole Maya user app dir), so the cache has to notice the directory's
     *contents* changing, not just its path: a deleted preset left the combo showing
-    the preset that no longer existed.
+    the preset that no longer existed. The panel side (the combo, its buttons) is
+    tentacle's ``test_scene_exporter_panel``.
     """
 
     def setUp(self):
         super().setUp()
         self.preset_dir = tempfile.mkdtemp()
-        # Bypass __init__ — the preset slots need `_get_preset_dir` and `ui.cmb000`,
-        # not a live switchboard.
-        self.slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        self.slots._get_preset_dir = lambda: self.preset_dir
+        # Bypass __init__ -- the scan needs only `_get_preset_dir` and a logger.
+        self.exporter = SceneExporter.__new__(SceneExporter)
+        self.exporter._get_preset_dir = lambda: self.preset_dir
 
     def tearDown(self):
         shutil.rmtree(self.preset_dir, ignore_errors=True)
@@ -8930,24 +8430,36 @@ class TestPresetDirectoryScan(QuickTestCase):
 
     def _write_preset(self, name):
         path = os.path.join(self.preset_dir, f"{name}.fbxexportpreset")
-        with open(path, "w") as f:
-            f.write("; fbx preset\n")
+        with open(path, "wb") as f:  # the bytes _embedded encodes (no CRLF)
+            f.write(b"; fbx preset\n")
         return path
 
-    def _attach_combo(self, data=None):
-        combo = _StubPresetCombo(self.slots, data)
-        self.slots.ui = SimpleNamespace(cmb000=combo)
-        return combo
+    def _write_preset_in(self, subdir, name, body=b"; fbx preset\n"):
+        """A preset in a SUBFOLDER -- where Maya's own editor saves them."""
+        folder = os.path.join(self.preset_dir, subdir)
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"{name}.fbxexportpreset")
+        with open(path, "wb") as f:
+            f.write(body)
+        return path
+
+    @staticmethod
+    def _embedded(name, body=b"; fbx preset\n"):
+        """What an export preset carries for its FBX preset."""
+        return {
+            "fbx_preset_name": name,
+            "fbx_preset_data": base64.b64encode(body).decode("ascii"),
+        }
 
     def _frozen_dir_mtime(self):
         """Context manager pinning the preset dir's mtime (other paths stat normally).
 
         Without it a writer test could pass on the mtime half of the cache key
-        instead of the writer's own `_invalidate_preset_cache` call — and mtime is
-        exactly what cannot be relied on here, since a filesystem timestamp is
-        quantized to the system clock tick (~15ms on Windows) and a write plus the
-        refresh that follows it land inside one. Frozen, only the explicit
-        invalidation can produce a fresh scan.
+        instead of the writer's own invalidation -- and mtime is exactly what
+        cannot be relied on here, since a filesystem timestamp is quantized to
+        the system clock tick (~15ms on Windows) and a write plus the refresh
+        that follows it land inside one. Frozen, only the explicit invalidation
+        can produce a fresh scan.
         """
         real_stat = os.stat
         frozen = real_stat(self.preset_dir)
@@ -8956,7 +8468,7 @@ class TestPresetDirectoryScan(QuickTestCase):
         def fake_stat(path, *args, **kwargs):
             try:
                 same = os.path.normcase(os.path.normpath(path)) == target
-            except TypeError:  # fd or bytes path — never the preset dir
+            except TypeError:  # fd or bytes path -- never the preset dir
                 same = False
             return frozen if same else real_stat(path, *args, **kwargs)
 
@@ -8968,17 +8480,11 @@ class TestPresetDirectoryScan(QuickTestCase):
         Stands in for the time that elapses before the next panel show: a
         filesystem timestamp is coarse (~15ms on Windows), so back-to-back
         writes in a test can share a tick where a user's edit-then-reopen
-        never would.
-
-        The advance is tracked rather than recomputed from the live stat each
-        call, because ``current + 1s`` is not monotonic: two agings whose
-        intervening filesystem op landed in the same coarse tick read the same
-        ``st_mtime_ns`` and therefore write the same aged value. The cache is
-        keyed on exactly that number, so the second aging left the key
-        unchanged and the rescan never happened -- a write-then-delete pair
-        would flakily report the deleted preset as still present (~1 run in 3).
-        Advancing past whichever is later, the real mtime or our last stamp,
-        guarantees every aging yields a distinct key.
+        never would. The advance is tracked rather than recomputed from the
+        live stat each call: two agings whose intervening filesystem op landed
+        in the same coarse tick would otherwise write the same aged value, the
+        cache key would not move, and a write-then-delete pair would flakily
+        report the deleted preset as still present.
         """
         st = os.stat(self.preset_dir)
         aged = max(st.st_mtime_ns, getattr(self, "_aged_dir_mtime_ns", 0)) + 10**9
@@ -8987,192 +8493,173 @@ class TestPresetDirectoryScan(QuickTestCase):
 
     def test_presets_lists_files_in_the_directory(self):
         self._write_preset("alpha")
-        self.assertEqual(sorted(self.slots.presets), ["None", "alpha"])
+        self.assertEqual(sorted(self.exporter.presets), ["None", "alpha"])
 
-    def test_no_add_or_delete_preset_slots(self):
-        """Adding and deleting presets is done in the preset directory itself.
+    def test_the_preset_directory_is_mayas_own_fbx_preset_folder(self):
+        """Where Open FBX Preset Directory points: Maya's FBX/Presets under the
+        scan root -- found by the scan, not loose among prefs and scripts."""
+        self.assertEqual(
+            os.path.normpath(self.exporter.fbx_preset_dir()),
+            os.path.normpath(os.path.join(self.preset_dir, "FBX", "Presets")),
+        )
+        self.exporter._get_preset_dir = lambda: None
+        self.assertIsNone(self.exporter.fbx_preset_dir())
 
-        The option box's "Add New Preset" (b003) and "Delete Current Preset"
-        (b004) one-shots were dropped in favour of b007 "Open Preset
-        Directory" — a .fbxexportpreset is a plain file, so the file browser
-        already does both, better. Changed: 2026-08-06
-        """
-        for name in ("b003", "b004"):
-            self.assertFalse(
-                hasattr(SceneExporterSlots, name),
-                f"{name} preset button handler should be removed",
-            )
+    def test_a_preset_embeds_as_its_name_and_file(self):
+        path = self._write_preset("alpha")
+        self.assertEqual(
+            self.exporter.fbx_preset_metadata(path), self._embedded("alpha")
+        )
+        self.assertEqual(self.exporter.fbx_preset_metadata(None), {})
+        gone = os.path.join(self.preset_dir, "gone.fbxexportpreset")
+        self.assertEqual(self.exporter.fbx_preset_metadata(gone), {})
 
-    def test_restored_embedded_preset_appears_in_the_refreshed_combo(self):
-        """A scene template carrying an embedded FBX preset writes it to disk and
-        refreshes — the third writer that has to invalidate the scan."""
+    def test_restored_embedded_preset_appears_in_the_next_scan(self):
+        """An export preset carrying an embedded FBX preset writes it to disk --
+        the writer that has to invalidate the scan."""
         self._write_preset("alpha")
-        self.assertNotIn("beta", self.slots.presets)  # populate the cache
-
-        combo = self._attach_combo()
+        self.assertNotIn("beta", self.exporter.presets)  # populate the cache
         with self._frozen_dir_mtime():
-            self.slots._on_fbx_preset_metadata_loaded(
-                {
-                    "fbx_preset_name": "beta",
-                    "fbx_preset_data": base64.b64encode(b"; fbx preset\n").decode(
-                        "ascii"
-                    ),
-                }
-            )
+            written = self.exporter.restore_fbx_preset(self._embedded("beta"))
+            self.assertTrue(written)
+            self.assertIn("beta", self.exporter.presets)
 
-        self.assertIn("beta", combo.items)
-
-    def _write_preset_in(self, subdir, name, body=b"; fbx preset\n"):
-        """A preset in a SUBFOLDER — where Maya's own editor saves them."""
-        folder = os.path.join(self.preset_dir, subdir)
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{name}.fbxexportpreset")
-        with open(path, "wb") as f:
-            f.write(body)
-        return path
-
-    def test_a_preset_found_in_a_subfolder_is_not_duplicated_at_the_root(self):
+    def test_a_preset_found_in_a_subfolder_is_not_duplicated(self):
         """Reported: the exporter "recreates a copy of the preset at root".
 
         Maya's own preset editor saves into a versioned subfolder
         (``Presets/2020.3.6/export/``) and the scan is RECURSIVE, so such a
-        preset is already available under its name. The restore's existence
-        check looked only at ``<preset_dir>/<name>.fbxexportpreset``, so
-        loading a template wrote a second copy at the root -- and since the
-        scan is a ``{name: path}`` dict, the two collapse to whichever it
-        reached last. The root copy is frozen at template-save time, so the
-        panel could then export with stale FBX settings while the artist
-        edited the real preset.
+        preset is already available under its name. A second copy restored
+        beside it would collapse with it in the ``{name: path}`` scan -- a
+        frozen snapshot the panel could export with while the artist edits the
+        real preset.
         """
         live = self._write_preset_in("2020.3.6/export", "shared", b"; the real one\n")
-        self.assertIn("shared", self.slots.presets)  # the scan already finds it
-
-        self._attach_combo()
+        self.assertIn("shared", self.exporter.presets)  # the scan already finds it
         with self._frozen_dir_mtime():
-            self.slots._on_fbx_preset_metadata_loaded(
-                {
-                    "fbx_preset_name": "shared",
-                    "fbx_preset_data": base64.b64encode(b"; stale snapshot\n").decode(
-                        "ascii"
-                    ),
-                }
+            written = self.exporter.restore_fbx_preset(
+                self._embedded("shared", b"; stale snapshot\n")
             )
-
-        self.assertFalse(
-            os.path.exists(os.path.join(self.preset_dir, "shared.fbxexportpreset")),
-            "a duplicate was written at the root, shadowing the real preset",
-        )
+        self.assertIsNone(written)
+        for folder in (
+            self.preset_dir,
+            os.path.join(self.preset_dir, "FBX", "Presets"),
+        ):
+            self.assertFalse(
+                os.path.exists(os.path.join(folder, "shared.fbxexportpreset")),
+                f"a duplicate was written in {folder}, shadowing the real preset",
+            )
         with open(live, "rb") as f:
             self.assertEqual(f.read(), b"; the real one\n")
 
     def test_a_preset_no_copy_of_which_exists_is_still_restored(self):
-        """The guard must not cost the feature it guards.
-
-        And it lands in Maya's own FBX preset folder rather than loose at the
-        top of the user app directory, which is the directory the SCAN walks —
-        full of prefs, scripts and projects.
-        """
-        self._attach_combo()
+        """The guard must not cost the feature it guards -- and the copy lands in
+        Maya's own FBX preset folder rather than loose at the top of the user app
+        directory, which is the directory the SCAN walks."""
         with self._frozen_dir_mtime():
-            self.slots._on_fbx_preset_metadata_loaded(
-                {
-                    "fbx_preset_name": "brand_new",
-                    "fbx_preset_data": base64.b64encode(b"; fbx preset\n").decode(
-                        "ascii"
-                    ),
-                }
-            )
-
-        written = os.path.join(
+            written = self.exporter.restore_fbx_preset(self._embedded("brand_new"))
+        expected = os.path.join(
             self.preset_dir, "FBX", "Presets", "brand_new.fbxexportpreset"
         )
-        self.assertTrue(os.path.exists(written), "not written to Maya's preset folder")
+        self.assertEqual(os.path.normpath(written), os.path.normpath(expected))
+        self.assertTrue(os.path.exists(expected), "not written to Maya's preset folder")
         self.assertFalse(
             os.path.exists(os.path.join(self.preset_dir, "brand_new.fbxexportpreset")),
             "written loose at the scan root",
         )
-        # ... and the scan still finds it there, which is what makes the
-        # placement free rather than a trade.
-        self.slots._invalidate_preset_cache()
-        self.assertIn("brand_new", self.slots.presets)
+        # ... and the scan finds it there, which is what makes the placement free.
+        self.assertIn("brand_new", self.exporter.refresh_fbx_presets())
+
+    def test_an_incomplete_embedding_restores_nothing(self):
+        for meta in (None, {}, {"fbx_preset_name": "x"}, {"fbx_preset_data": "eA=="}):
+            with self.subTest(meta=meta):
+                self.assertIsNone(self.exporter.restore_fbx_preset(meta))
+        self.exporter._get_preset_dir = lambda: None
+        self.assertIsNone(self.exporter.restore_fbx_preset(self._embedded("orphan")))
 
     def test_two_presets_sharing_a_name_are_reported(self):
         """One of them silently decides every export; the combo shows one row."""
         self._write_preset("twin")
         self._write_preset_in("2020.3.6/export", "twin")
-        self.slots.logger = MagicMock()
+        self.exporter.logger = MagicMock()
 
-        self.slots.presets
+        self.exporter.presets
 
-        warnings = [str(c.args[0]) for c in self.slots.logger.warning.call_args_list]
+        warnings = [str(c.args[0]) for c in self.exporter.logger.warning.call_args_list]
         self.assertTrue(
             any("Two FBX presets are named 'twin'" in w for w in warnings), warnings
         )
 
     def test_external_change_invalidates_the_cache(self):
         """Presets added or removed outside the panel (Maya's preset editor, the
-        file browser b007 opens) have no invalidation hook — the mtime in the
-        cache key is what picks them up on the next show.
-
-        This is now the ONLY add/delete path: the option box's own Add/Delete
-        buttons were dropped in favour of managing the directory directly.
-        """
+        file browser Open FBX Preset Directory opens) have no invalidation hook --
+        the mtime in the cache key is what picks them up on the next show."""
         self._write_preset("alpha")
-        self.assertNotIn("beta", self.slots.presets)  # populate the cache
+        self.assertNotIn("beta", self.exporter.presets)  # populate the cache
 
         beta = self._write_preset("beta")
         self._age_dir_mtime()
-        self.assertIn("beta", self.slots.presets)
+        self.assertIn("beta", self.exporter.presets)
 
         os.remove(beta)  # deleted in the file browser, not through the panel
         self._age_dir_mtime()
-        self.assertNotIn("beta", self.slots.presets)
-        self.assertIn("alpha", self.slots.presets)
+        self.assertNotIn("beta", self.exporter.presets)
+        self.assertIn("alpha", self.exporter.presets)
 
     def test_missing_directory_yields_only_none(self):
         """A directory that has gone away must not keep serving its old scan."""
         self._write_preset("alpha")
-        self.assertIn("alpha", self.slots.presets)
+        self.assertIn("alpha", self.exporter.presets)
 
         shutil.rmtree(self.preset_dir)
-        self.assertEqual(list(self.slots.presets), ["None"])
+        self.assertEqual(list(self.exporter.presets), ["None"])
 
-    def test_refresh_button_rescans_regardless_of_the_mtime(self):
-        """``_refresh_presets`` — the cmb000 option-box refresh button.
-
-        Its whole job is to pick up a directory change made while the panel sat
-        open, so it must not be gated on the cache's mtime half: that key is a
-        filesystem timestamp, and a preset dropped in then a refresh clicked can
-        land in one tick. Frozen mtime here, so only the explicit invalidation
-        can produce the fresh scan.
-        """
+    def test_refresh_rescans_regardless_of_the_mtime(self):
+        """``refresh_fbx_presets`` -- the panel's refresh button. Its whole job is
+        to pick up a directory change made while the panel sat open, so it must
+        not be gated on the cache's mtime half: a preset dropped in then a
+        refresh clicked can land in one tick. Frozen mtime here, so only the
+        explicit invalidation can produce the fresh scan."""
         self._write_preset("alpha")
-        self.assertNotIn("beta", self.slots.presets)  # populate the cache
-
-        combo = self._attach_combo()
-        # Write INSIDE the frozen context, so the dir's mtime never moves off
-        # the one already in the cache key -- the write and the refresh sharing
-        # one clock tick, which is the case the button has to survive.
+        self.assertNotIn("beta", self.exporter.presets)  # populate the cache
         with self._frozen_dir_mtime():
             self._write_preset("beta")
-            self.slots._refresh_presets()
+            refreshed = self.exporter.refresh_fbx_presets()
+        self.assertIn("beta", refreshed)
+        self.assertIn("alpha", refreshed)
 
-        self.assertIn("beta", combo.items)
-        self.assertIn("alpha", combo.items)
-
-    def test_refresh_button_drops_a_preset_removed_outside_the_panel(self):
+    def test_refresh_drops_a_preset_removed_outside_the_panel(self):
         """The other half: a refresh has to lose what the directory lost."""
         self._write_preset("alpha")
         beta = self._write_preset("beta")
-        self.assertIn("beta", self.slots.presets)  # populate the cache
-
-        combo = self._attach_combo()
+        self.assertIn("beta", self.exporter.presets)  # populate the cache
         with self._frozen_dir_mtime():
             os.remove(beta)
-            self.slots._refresh_presets()
+            refreshed = self.exporter.refresh_fbx_presets()
+        self.assertNotIn("beta", refreshed)
+        self.assertIn("alpha", refreshed)
 
-        self.assertNotIn("beta", combo.items)
-        self.assertIn("alpha", combo.items)
+
+class TestObjectsToExport(MayaTkTestCase):
+    """``SceneExporter.objects_to_export`` -- the object set the panel's Scope row
+    hands the export (it was a closure in the panel's ``b000``)."""
+
+    def test_each_scope_names_its_objects(self):
+        cube = cmds.polyCube(name="scopeCube")[0]
+        hidden = cmds.polySphere(name="scopeHidden")[0]
+        cmds.setAttr(f"{hidden}.visibility", False)
+        cmds.select(cube)
+        long_cube, long_hidden = cmds.ls([cube, hidden], long=True)
+
+        self.assertEqual(SceneExporter.objects_to_export("selected"), [long_cube])
+        everything = SceneExporter.objects_to_export("all")
+        self.assertIn(long_cube, everything)
+        self.assertIn(long_hidden, everything)
+        visible = SceneExporter.objects_to_export("visible")
+        self.assertIn(long_cube, visible)
+        self.assertNotIn(long_hidden, visible)
+        # An unknown mode reads as the default, Visible.
+        self.assertEqual(SceneExporter.objects_to_export("bogus"), visible)
 
 
 class TestGeneralTextureFileType(MayaTkTestCase):
@@ -9277,11 +8764,6 @@ class TestGeneralTextureFileType(MayaTkTestCase):
             "settings",
             "a Tasks-combo row, not a Settings row",
         )
-        # The Settings combo has no Textures section at all any more — the
-        # whole texture block (Texture Output included) lives in the Tasks
-        # combo's Textures group (2026-08-20).
-        settings = dict(SceneExporterSlots._SETTINGS_LAYOUT)
-        self.assertNotIn("Textures", settings)
 
     # -- the GLB half ----------------------------------------------------
 
@@ -10213,136 +9695,6 @@ class TestCheckScheduling(QuickTestCase):
         }
         schedule = [n for n in tm._schedule(tasks, checks) if n in tasks]
         self.assertEqual(schedule, list(tm.TASK_ORDER))
-
-
-class TestOverrideChecksDisarm(QuickTestCase):
-    """The Override Checks button (b009) is a per-run escape hatch, not a mode.
-
-    Nothing else resets it -- ``__init__`` clears it once, at panel build --
-    so an export forced past a failing check used to leave every later export
-    in the session unvalidated too, silently. ``b000`` disarms it once the
-    deliverable actually shipped; a failed export leaves it armed so a retry
-    does not have to re-arm it by hand.
-
-    Qt-free by the same rule as the other slot tests here: mayapy standalone
-    owns a QGuiApplication, so a real QWidget crashes the process. The slot
-    only calls ``isChecked``/``setChecked``, which a recording stub covers
-    exactly.
-    """
-
-    class _StubWidget:
-        """Stands in for every widget b000 reads -- one accessor per role."""
-
-        def __init__(self, value=None):
-            self._value = value
-            self._checked = False
-
-        def text(self):
-            return self._value or ""
-
-        def currentData(self):
-            return self._value
-
-        def isChecked(self):
-            return self._checked
-
-        def setChecked(self, state):
-            self._checked = bool(state)
-
-        def clear(self):
-            pass
-
-    _WIDGETS = (
-        "txt000",  # output dir
-        "txt001",  # output name
-        "txt003",  # log panel
-        "b009",  # Override Checks
-        "cmb000",  # fbx preset
-        "cmb004",  # output format
-    )
-
-    def _slots(self, export_result, armed=True):
-        """A panel with the override *armed* and the export stubbed to *export_result*."""
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        # No definitions: the payload-collection loops are covered elsewhere;
-        # this test is about what happens after perform_export returns.
-        import contextlib
-
-        slots.task_manager = SimpleNamespace(task_definitions={}, check_definitions={})
-        slots.sb = SimpleNamespace(
-            convert_to_legal_name=lambda n: n,
-            # The real Switchboard's footer-progress seam is a no-op on a UI
-            # without a footer (this one has none); the stub mirrors it.
-            progress=lambda **kw: contextlib.nullcontext(lambda *a: True),
-            progress_adapter=lambda update: update,
-        )
-        slots.ui = SimpleNamespace(
-            **{name: self._StubWidget() for name in self._WIDGETS}
-        )
-        slots.ui.b009.setChecked(armed)
-        slots.export_calls = []
-        slots.perform_export = lambda **kw: (
-            slots.export_calls.append(kw) or export_result
-        )
-        slots.save_output_dir = lambda *a: None
-        slots.save_output_name = lambda *a: None
-        return slots
-
-    def test_a_successful_export_disarms_the_override(self):
-        slots = self._slots(True)
-        slots.b000()
-        self.assertEqual(len(slots.export_calls), 1)
-        self.assertFalse(
-            slots.ui.b009.isChecked(),
-            "the next export must be validated again",
-        )
-
-    def test_every_export_keeps_the_run_log_and_sets_no_level(self):
-        """The panel has no log options (2026-10-14): it always keeps the
-        scene's run log and leaves the level to the panel's own INFO -- the
-        log records DEBUG by itself."""
-        slots = self._slots(True)
-        slots.b000()
-        self.assertIs(slots.export_calls[0]["create_log_file"], True)
-        self.assertNotIn("log_level", slots.export_calls[0])
-
-    def test_a_failed_export_leaves_the_override_armed(self):
-        slots = self._slots(False)
-        slots.b000()
-        self.assertEqual(len(slots.export_calls), 1, "the export must have run")
-        self.assertTrue(
-            slots.ui.b009.isChecked(),
-            "mid-troubleshooting: a retry must not need a re-arm",
-        )
-
-    def _with_one_check(self, armed):
-        """A panel whose only enabled row is the framerate check."""
-        slots = self._slots(True, armed=armed)
-        slots.task_manager.check_definitions = {
-            "check_framerate": {"object_name": "check_framerate"}
-        }
-        slots.ui.check_framerate = self._StubWidget()
-        slots.ui.check_framerate.setChecked(True)
-        slots.b000()
-        return slots
-
-    def test_the_override_still_reaches_the_payload_as_a_check_skip(self):
-        """Disarming happens AFTER the run -- the run itself still overrides.
-
-        The disarmed control is what makes the armed assertion mean anything:
-        without it, a payload missing the check proves only that the stub
-        never collected one.
-        """
-        control = self._with_one_check(armed=False)
-        self.assertIn(
-            "check_framerate",
-            control.export_calls[0]["tasks"],
-            "unarmed, the enabled check must ride the payload",
-        )
-
-        slots = self._with_one_check(armed=True)
-        self.assertNotIn("check_framerate", slots.export_calls[0]["tasks"])
-        self.assertFalse(slots.ui.b009.isChecked())
 
 
 class TestCheckValidPathsLightmaps(MayaTkTestCase):
@@ -12536,7 +11888,9 @@ class TestRetiredPanelState(unittest.TestCase):
     whose saved state had Snap Keys To Frame / Fix Mangled Names off kept them
     off and lost the checks those retired rows used to run, with nothing said
     (``HKCU\\...\\scene_exporter_maya`` held ``check_floating_point_keys`` on
-    and ``baked_reflections`` "Quarter"). The panel says it once when it opens.
+    and ``baked_reflections`` "Quarter"). The panel says it once when it opens
+    (that wiring, and the retired RegEx field's fold, are tentacle's
+    ``test_scene_exporter_panel``).
     """
 
     def _store(self):
@@ -12567,7 +11921,7 @@ class TestRetiredPanelState(unittest.TestCase):
         exporter = SceneExporter()
 
         with self.assertLogs(exporter.logger, level="INFO") as caught:
-            exporter._note_retired_panel_state(store)
+            exporter.note_retired_panel_state(store)
         said = "\n".join(caught.output)
         for expected in (
             "Floating Point Keys (Snap Keys To Frame)",
@@ -12585,125 +11939,7 @@ class TestRetiredPanelState(unittest.TestCase):
             ],
         )
         with self.assertNoLogs(exporter.logger, level="INFO"):
-            exporter._note_retired_panel_state(store)
-
-    def test_the_panel_says_it_when_it_opens(self):
-        """Wired in ``__init__``, with the window's own settings store."""
-        sb = MagicMock()
-        logger = SceneExporterSlots.logger
-        self.addCleanup(logger.setLevel, logger.level)
-        with patch.object(
-            SceneExporterSlots, "_note_retired_panel_state", autospec=True
-        ) as note, patch.object(logger, "set_text_handler"), patch.object(
-            logger, "setup_logging_redirect"
-        ), patch.object(
-            logger, "hide_logger_name"
-        ):
-            slots = SceneExporterSlots(sb, log_level=logger.level or "WARNING")
-        note.assert_called_once_with(slots, sb.loaded_ui.scene_exporter.settings)
-
-    def _open_panel(self, store):
-        """Open the panel over *store* in the switchboard's order
-        (``Switchboard._create_slots_instance``): the slots' ``__init__``, the
-        Output Filename's ``*_init``, then its default capture and restore --
-        a real ``StateManager`` over the same store.
-
-        Returns:
-            ``(field, state)``.
-        """
-        from qtpy import QtWidgets
-        from uitk.managers.state_manager import StateManager
-
-        class _Field:
-            """``txt001`` as ``MainWindow.register_widget`` registers it, over
-            the slice of a line edit the state manager reads and writes. Not a
-            QLineEdit: a QWidget native-crashes headless mayapy, which would
-            push this whole module into the GUI pass."""
-
-            restore_state = True
-            derived_type = QtWidgets.QLineEdit
-
-            def __init__(self):
-                self._text, self._blocked, self._props = "", False, {}
-                self.tooltip, self.option_box = MagicMock(), MagicMock()
-
-            def objectName(self):
-                return "txt001"
-
-            def default_signals(self):
-                return "textChanged"
-
-            def text(self):
-                return self._text
-
-            def setText(self, text):
-                self._text = text
-
-            def blockSignals(self, block):
-                was, self._blocked = self._blocked, block
-                return was
-
-            def signalsBlocked(self):
-                return self._blocked
-
-            def property(self, name):
-                return self._props.get(name)
-
-            def setProperty(self, name, value):
-                self._props[name] = value
-
-            def update(self):
-                pass
-
-        field = _Field()
-        sb = MagicMock()
-        ui = sb.loaded_ui.scene_exporter
-        ui.settings, ui.state, ui.txt001 = store, StateManager(store), field
-        logger = SceneExporterSlots.logger
-        self.addCleanup(logger.setLevel, logger.level)
-        with patch.object(logger, "set_text_handler"), patch.object(
-            logger, "setup_logging_redirect"
-        ), patch.object(logger, "hide_logger_name"), patch(
-            "uitk.widgets.optionBox.options.recent_values.RecentValuesOption"
-        ):
-            slots = SceneExporterSlots(sb, log_level="INFO")
-            slots.txt001_init(field)
-        ui.state.capture_default(field)
-        ui.state.load(field)
-        return field, ui.state
-
-    def test_a_saved_regex_field_folds_into_the_restored_output_filename_once(self):
-        """REGRESSION (2026-10-19): the retired RegEx field was read as
-        ``settings.value("txt002")``, but the switchboard saves a widget under
-        ``<objectName>/<signal>`` -- ``HKCU\\...\\scene_exporter_maya`` holds
-        ``txt002/textChanged`` -- so a saved rule was never migrated. Folded
-        into the widget at ``txt001_init`` it would not have survived either:
-        the switchboard restores the field's own saved pattern right after
-        that init, and captures the folded text as its reset default first."""
-        cases = (
-            ("WIP_*", "test_|prod_", "WIP_{scene:test_->prod_}"),
-            (None, "_bar.*", "{scene:_bar.*->}"),  # no pattern saved: the name
-        )
-        logger = SceneExporterSlots.logger
-        for pattern, regex, folded in cases:
-            with self.subTest(pattern=pattern, regex=regex):
-                store = self._store()
-                if pattern is not None:
-                    store.setValue("txt001/textChanged", pattern)
-                store.setValue("txt002/textChanged", regex)
-
-                with self.assertLogs(logger, level="INFO") as caught:
-                    field, state = self._open_panel(store)
-                self.assertEqual(field.text(), folded, "the restore shows the rule")
-                self.assertIn("RegEx field is retired", "\n".join(caught.output))
-                self.assertEqual(
-                    store.keys(), ["txt001/textChanged"], "the retired key is gone"
-                )
-                self.assertEqual(state.default_for(field), "", "a reset still empties it")
-
-                field, _ = self._open_panel(store)  # and the next session
-                self.assertEqual(field.text(), folded)
-                self.assertEqual(store.keys(), ["txt001/textChanged"])
+            exporter.note_retired_panel_state(store)
 
 
 class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
@@ -12735,43 +11971,6 @@ class TestRegistryDerivedCombosPersistByValue(unittest.TestCase):
                     defs[key].get("restore_by"),
                     "text",
                     f"{key} is registry-derived; an index would drift upstream",
-                )
-
-    def test_the_declaration_actually_reaches_the_widget(self):
-        """The declaration is worthless if the widget factory drops it.
-
-        ``_make_definition_widget`` strips ``_DEFINITION_META_KEYS`` before
-        handing the rest to ``set_attributes``; a key added to the wrong side of
-        that split is silently discarded, and a test that only inspects the
-        definition dict would still pass. This drives the real factory and
-        asserts the key arrives at the setter.
-        """
-        from types import SimpleNamespace
-
-        from mayatk.env_utils.scene_exporter.scene_exporter_slots import (
-            SceneExporterSlots,
-        )
-
-        class _Stub:
-            def __init__(self, **kwargs):
-                self.attrs = dict(kwargs)
-
-        slots = SceneExporterSlots.__new__(SceneExporterSlots)
-        slots.sb = SimpleNamespace(
-            QtWidgets=SimpleNamespace(QCheckBox=_Stub),
-            registered_widgets=SimpleNamespace(ComboBox=_Stub, SpinBox=_Stub),
-            convert_to_legal_name=lambda n: n,
-        )
-        slots.ui = SimpleNamespace(set_attributes=lambda w, **kw: w.attrs.update(kw))
-
-        defs = self._defs()
-        for key in ("texture_file_type", "optimize_textures"):
-            with self.subTest(row=key):
-                widget = slots._make_definition_widget(key, defs[key])
-                self.assertEqual(
-                    widget.attrs.get("restore_by"),
-                    "text",
-                    f"{key}: restore_by never reached set_attributes",
                 )
 
     def test_static_combos_are_left_on_index_persistence(self):

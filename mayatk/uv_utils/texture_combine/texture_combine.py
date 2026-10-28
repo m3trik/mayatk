@@ -589,12 +589,17 @@ class TextureCombine(ptk.LoggingMixin, _TextureCombineInternal):
         )
 
     # ------------------------------------------------------------ actions
-    def default_name(self, transforms: Sequence[str]) -> str:
-        """What a blank name stands for: the meshes' common name."""
+    def default_name(
+        self, transforms: Sequence[str], fallback: str = "combined"
+    ) -> str:
+        """What a blank name stands for: the meshes' common name, else
+        *fallback* (the Texture Combine panel's Transfer mode names its maps
+        after its source the same way, falling back to ``"transfer"``).
+        Twin of blendertk's."""
         name = ptk.StrUtils.common_name(
             list(transforms), strip=ptk.NamingConvention.all_affixes()
         )
-        return name or "combined"
+        return name or fallback
 
     def combine(
         self,
@@ -1022,6 +1027,64 @@ class TextureCombine(ptk.LoggingMixin, _TextureCombineInternal):
             return False
         cls._save(data)
         return True
+
+    # ------------------------------------------------------------ selection
+    # What the Texture Combine panel (tentacle's shared ``slots/tools/
+    # texture_combine.py``) sets and reads beside the combine itself: rows of
+    # its Sources table name meshes and face components, in Maya's spelling.
+
+    @staticmethod
+    def leaf_name(node) -> str:
+        """*node*'s own name, for a label: no DAG path, no component
+        (``|grp|pCube1.f[0:3]`` -> ``pCube1``). Twin of blendertk's."""
+        return str(node).split(".")[0].rsplit("|", 1)[-1]
+
+    @staticmethod
+    def select(nodes) -> int:
+        """Replace the selection with those of *nodes* that exist --
+        transforms and/or face components (``<mesh>.f[a:b]``, the spelling
+        :meth:`material_faces` and an island override row use). With none
+        that exists, the selection stays as it is. Twin of blendertk's
+        (objects there, faces in Edit Mode).
+
+        Returns:
+            How many of *nodes* were selected.
+        """
+        found = [n for n in ptk.make_iterable(nodes) if n and cmds.ls(n)]
+        if found:
+            cmds.select(found, replace=True)
+        return len(found)
+
+    @staticmethod
+    def material_faces(inputs: CombineInputs, material) -> List[str]:
+        """The faces of *inputs*' meshes that wear *material*, as
+        ``<mesh>.f[a:b]`` strings on every instance -- what a Sources table
+        row covers. Twin of blendertk's."""
+        faces: List[str] = []
+        for read in inputs.shapes.values():
+            try:
+                index = read["materials"].index(material)
+            except ValueError:
+                continue
+            ids = [
+                i for i, m in enumerate(read["face_material"].tolist()) if m == index
+            ]
+            for xf in read["transforms"]:
+                faces += _UvPackInternal._component_ranges(xf, sorted(ids), kind="f")
+        return faces
+
+    @staticmethod
+    def selected_faces() -> List[str]:
+        """The selected faces (long ``<mesh>.f[a:b]`` strings), for an island
+        override row: the faces picked, else the selection converted to faces
+        (UVs, edges, vertices -- or a whole mesh); ``[]`` when that yields
+        none. Twin of blendertk's (the faces selected in Edit Mode)."""
+        selection = cmds.ls(selection=True, long=True) or []
+        faces = cmds.filterExpand(selection, selectionMask=34) or []
+        if not faces:
+            faces = cmds.polyListComponentConversion(selection, toFace=True) or []
+        faces = cmds.ls(faces, long=True) or []
+        return faces if faces and "." in faces[0] else []
 
     # ------------------------------------------------------------ lightmaps
     def consolidate_lightmaps(

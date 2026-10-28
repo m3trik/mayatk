@@ -34,8 +34,7 @@ DEFAULT_INCLUDE = {
     "ui_utils._ui_utils": "*",
     "uv_utils._uv_utils": "*",
     "uv_utils.texture_transfer": "TextureTransfer",
-    # Texture Combine engine; its co-located ``TextureCombineSlots`` panel is
-    # discovered by ``MayaUiHandler``.
+    # Texture Combine engine (its panel is tentacle's shared Texture Combine tool).
     "uv_utils.texture_combine.texture_combine": ["TextureCombine", "CombineInputs"],
     "xform_utils._xform_utils": "*",
     "nurbs_utils._nurbs_utils": "*",
@@ -528,6 +527,14 @@ MOVED_NAMES = {
     # (watch, key_all, export_tracks, ...).
     "CallbacksMixin": ("mayatk.AudioClips", "0.30.0"),
     "ExportMixin": ("mayatk.AudioClips", "0.30.0"),
+    "SceneExporterSlots": (
+        "tentacle.slots.tools.scene_exporter.SceneExporterSlots",
+        "0.30.0",
+    ),
+    "TextureCombineSlots": (
+        "tentacle.slots.tools.texture_combine.TextureCombineSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(
