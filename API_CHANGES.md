@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (463)
+## Added (476)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1355,13 +1355,26 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/_ui_utils.py::UiUtils.set_tool(cls, tool: str) -> str`
 - `ui_utils/_ui_utils.py::UiUtils.toggle_editor(cls, editor: str) -> bool`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
+- `uv_utils/_uv_pack.py::PackUvsResult.objects(self) -> List[str]`
+- `uv_utils/_uv_utils.py::UnfoldResult(class)`
 - `uv_utils/_uv_utils.py::UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int`
+- `uv_utils/_uv_utils.py::UvUtils.auto_project(cls, objects=None, map_size: int = 4096, scale_mode: int = 1, angle_limit: float = 66.0, margin: Optional[float] = None, progress_callback=None)`
+- `uv_utils/_uv_utils.py::UvUtils.cut_hard_edges(cls, objects=None, low_angle: float = 70.0, high_angle: float = 180.0, uv_borders: bool = False, auto_seams: bool = False) -> List[str]`
+- `uv_utils/_uv_utils.py::UvUtils.cut_uvs(cls, objects=None) -> List[str]`
 - `uv_utils/_uv_utils.py::UvUtils.distribute_uv_shells(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int`
+- `uv_utils/_uv_utils.py::UvUtils.export_uv_image() -> str`
 - `uv_utils/_uv_utils.py::UvUtils.gather_uv_shells(cls, objects) -> int`
+- `uv_utils/_uv_utils.py::UvUtils.get_uv_coords(cls, objects, pins: bool = False) -> dict`
+- `uv_utils/_uv_utils.py::UvUtils.pin_uvs(cls, objects=None, pin: bool = True) -> List[str]`
 - `uv_utils/_uv_utils.py::UvUtils.randomize_uv_shells(cls, objects, seed: Optional[int] = None) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.rotate_uvs(cls, objects, angle: float) -> int`
+- `uv_utils/_uv_utils.py::UvUtils.set_uv_coords(cls, objects, snapshot) -> List[str]`
+- `uv_utils/_uv_utils.py::UvUtils.sew_uvs(cls, objects=None) -> List[str]`
+- `uv_utils/_uv_utils.py::UvUtils.stack_uv_shells(cls, objects=None, tolerance: Optional[float] = None, pin: bool = False) -> List[str]`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uv_shells(cls, objects) -> int`
 - `uv_utils/_uv_utils.py::UvUtils.straighten_uvs(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int`
+- `uv_utils/_uv_utils.py::UvUtils.unfold_uvs(cls, objects=None, optimize: bool = True, orient: bool = True, stack_similar: bool = True, tolerance: float = 1.0, map_size: int = 4096, repair: bool = False, method: str = 'angle_based', margin: float = 0.0)`
+- `uv_utils/_uv_utils.py::UvUtils.uv_scope_key(objects=None) -> tuple`
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.list_template_modes(self) -> 'list[tuple[str, str]]'`
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.pack_into_existing(self, objects, params=None)`
 - `uv_utils/rizom_bridge/_rizom_bridge.py::RizomUVBridge.params_registry(cls)`
@@ -1430,7 +1443,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (22)
+## Signature changed (23)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
@@ -1486,6 +1499,9 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `uv_utils/_uv_utils.py::UvUtils.orient_shells`
   - was: `(objects)`
   - now: `(objects, to_edge: bool = False) -> int`
+- `uv_utils/_uv_utils.py::UvUtils.pack_uvs`
+  - was: `(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))`
+  - now: `(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1), skip_instances: bool = False)`
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.default_name`
   - was: `(self, transforms: Sequence[str]) -> str`
   - now: `(self, transforms: Sequence[str], fallback: str = 'combined') -> str`

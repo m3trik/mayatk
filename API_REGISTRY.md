@@ -1223,8 +1223,8 @@ Transform diagnostics and repair helpers.
 
 UV diagnostics and repair helpers.
 
-- **[`class UvSetCleanupResult`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L21)** — Result of a UV set cleanup operation for a single mesh.
-- **[`class UvDiagnostics`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L43)** — Operations for inspecting and fixing common UV issues.
+- **[`class UvSetCleanupResult`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L24)** — Result of a UV set cleanup operation for a single mesh.
+- **[`class UvDiagnostics`](mayatk/mayatk/core_utils/diagnostics/uv_diag.py#L46)** — Operations for inspecting and fixing common UV issues.
   - `UvDiagnostics.find_non_manifold_uvs(objects: NodeSeq) -> dict` *(static)* — Map each mesh in *objects* to its non-manifold UVs, via ``polyInfo``.
   - `UvDiagnostics.repair_non_manifold_uvs(cls, objects: NodeSeq) -> dict` *(class)* — Repair non-manifold UVs on *objects* by re-mapping the affected faces.
   - `UvDiagnostics.find_lightmap_uv_set(cls, shape, all_sets=None, names=None)` *(class)* — Detect a lightmap UV set on *shape*, or ``None``.
@@ -4277,11 +4277,13 @@ The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 
 - [`RESIDUAL_TOLERANCE`](mayatk/mayatk/uv_utils/_uv_pack.py#L64) — constant
 - **[`class PackUvsResult`](mayatk/mayatk/uv_utils/_uv_pack.py#L68)** — Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.
+  - `PackUvsResult.objects(self) -> List[str]` *(property)* — The objects that packed, once each: a component-scoped pack reports
 
 <a id="uv_utils--_uv_utils"></a>
 ### `uv_utils/_uv_utils.py`
 
-- **[`class UvUtils(pythontk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L24)**
+- **[`class UnfoldResult`](mayatk/mayatk/uv_utils/_uv_utils.py#L26)** — What a :meth:`UvUtils.unfold_uvs` run did.
+- **[`class UvUtils(pythontk.HelpMixin)`](mayatk/mayatk/uv_utils/_uv_utils.py#L45)**
   - `UvUtils.calculate_uv_padding(map_size: int, normalize: bool = False, factor: int = 256) -> float` *(static)* — The texture gutter for a given map size — Maya-side name for the ecosystem rule.
   - `UvUtils.udim_to_tile(udim: int) -> Tuple[int, int]` *(static)* — UDIM tile number to its (u, v) tile offset — Maya-side name for the
   - `UvUtils.orient_shells(objects, to_edge: bool = False) -> int` *(static)* — Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.
@@ -4311,7 +4313,18 @@ The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
   - `UvUtils.cut_cylinder_seams(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Cut auto UV seams for cylinder / tube unwrapping on each mesh.
   - `UvUtils.cut_uv_edges(edges, history: bool = True)` *(static)* — Cut (split) UV shells along the given edges, spanning any number of objects.
   - `UvUtils.auto_unwrap(cls, objects=None, method: str = 'hard', map_size: int = 4096, pack: Optional[bool] = None, orient: bool = True, engine_params: Optional[dict] = None)` *(class)* — Automatically unwrap meshes with an external unwrapping engine.
-  - `UvUtils.pack_uvs(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))` *(class)* — Pack existing UV shells into a UDIM tile (or a grid of tiles).
+  - `UvUtils.pack_uvs(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1), skip_instances: bool = False)` *(class)* — Pack existing UV shells into a UDIM tile (or a grid of tiles).
+  - `UvUtils.auto_project(cls, objects=None, map_size: int = 4096, scale_mode: int = 1, angle_limit: float = 66.0, margin: Optional[float] = None, progress_callback=None)` *(class)* — Project UVs with the host's own automatic projection: Maya's
+  - `UvUtils.unfold_uvs(cls, objects=None, optimize: bool = True, orient: bool = True, stack_similar: bool = True, tolerance: float = 1.0, map_size: int = 4096, repair: bool = False, method: str = 'angle_based', margin: float = 0.0)` *(class)* — Unfold the meshes' UVs (``u3dUnfold``): flatten the existing shells
+  - `UvUtils.cut_uvs(cls, objects=None) -> List[str]` *(class)* — Cut UVs: split the UV shells along the edges in *objects*, or, with no
+  - `UvUtils.sew_uvs(cls, objects=None) -> List[str]` *(class)* — Sew UVs: stitch the UV shells back together along the edges in
+  - `UvUtils.cut_hard_edges(cls, objects=None, low_angle: float = 70.0, high_angle: float = 180.0, uv_borders: bool = False, auto_seams: bool = False) -> List[str]` *(class)* — Cut the UVs along the meshes' hard edges -- those whose normal angle
+  - `UvUtils.pin_uvs(cls, objects=None, pin: bool = True) -> List[str]` *(class)* — Pin (or unpin) the UVs of *objects*: an object pins its whole map, a
+  - `UvUtils.get_uv_coords(cls, objects, pins: bool = False) -> dict` *(class)* — ``{uv: (u, v)}`` for every UV *objects* hold (a component scopes it),
+  - `UvUtils.set_uv_coords(cls, objects, snapshot) -> List[str]` *(class)* — Put a :meth:`get_uv_coords` snapshot back.
+  - `UvUtils.stack_uv_shells(cls, objects=None, tolerance: Optional[float] = None, pin: bool = False) -> List[str]` *(class)* — Stack UV shells on top of each other.
+  - `UvUtils.uv_scope_key(objects=None) -> tuple` *(static)* — A key that changes when the UV scope *objects* name changes: the
+  - `UvUtils.export_uv_image() -> str` *(static)* — Export the UV layout as an image through the host's own dialog:
   - `UvUtils.classify_unfold3d_error(error) -> str` *(static)* — A short, human-readable reason for an Unfold3D failure.
   - `UvUtils.analyze_uv_budget(cls, objects=None, map_size: int = 4096, density: Optional[float] = None, scale: Optional[float] = None, pages: Optional[int] = None, density_from: str = 'preserve', group_by: str = 'mesh', collapse_stacked: bool = True, read_textures: bool = True, mip_levels: int = 0, padding_factor: int = 256, fill: Optional[float] = None, level: bool = False, alternates: bool = True)` *(class)* — How many texture maps these surfaces need, and at what texel density.
   - `UvUtils.unwrap_cylinder(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)` *(class)* — Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.

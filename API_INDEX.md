@@ -1024,10 +1024,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `uv_utils/_uv_pack.py` — The two engines behind :meth:`mayatk.UvUtils.pack_uvs`.
 - constants: RESIDUAL_TOLERANCE
 - `class PackUvsResult`
+  - methods: objects
 
 ### `uv_utils/_uv_utils.py`
+- `class UnfoldResult`
 - `class UvUtils(pythontk.HelpMixin)`
-  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, rotate_uvs, straighten_uvs, straighten_uv_shells, distribute_uv_shells, align_uvs, gather_uv_shells, randomize_uv_shells, get_uv_bounds, get_uv_triangles, get_uv_world_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, uv_snapshot, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
+  - methods: calculate_uv_padding, udim_to_tile, orient_shells, move_to_uv_space, rotate_uvs, straighten_uvs, straighten_uv_shells, distribute_uv_shells, align_uvs, gather_uv_shells, randomize_uv_shells, get_uv_bounds, get_uv_triangles, get_uv_world_triangles, gather_to_udim, get_neighbor_shell_bounds, mirror_uvs, get_uv_shell_sets, get_uv_pin_weights, set_uv_pin_weights, pins_lifted, stack_similar_uv_shells, get_similar_uv_shells, get_uv_shell_border_edges, get_cylinder_seam_edges, get_auto_seam_edges, cut_cylinder_seams, cut_uv_edges, auto_unwrap, pack_uvs, auto_project, unfold_uvs, cut_uvs, sew_uvs, cut_hard_edges, pin_uvs, get_uv_coords, set_uv_coords, stack_uv_shells, uv_scope_key, export_uv_image, classify_unfold3d_error, analyze_uv_budget, unwrap_cylinder, get_texel_density, set_texel_density, snapshot_uv_sets, uv_snapshot, restore_uv_snapshot, discard_uv_snapshot, find_uv_snapshots, transfer_uvs, transfer_uvs_to_similar, reorder_uv_sets, export_uv_layout, apply_uv_layout, create_lightmap_uvs, remove_empty_uv_sets
 
 ### `uv_utils/rizom_bridge/_rizom_bridge.py`
 - constants: APP

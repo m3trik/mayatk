@@ -21,6 +21,7 @@ from mayatk.core_utils._core_utils import CoreUtils
 
 from base_test import MayaTkTestCase
 import maya.cmds as cmds
+import maya.mel as mel
 
 from mayatk.core_utils.diagnostics.uv_diag import UvDiagnostics
 
@@ -3559,6 +3560,231 @@ class TestUvShellTools(MayaTkTestCase):
 
     def test_straighten_with_no_axis_runs_nothing(self):
         self.assertEqual(UvUtils.straighten_uvs(self.plane(), u=False, v=False), 0)
+
+
+class TestUvPanelOperations(MayaTkTestCase):
+    """The operations tentacle's composed UV panel calls (``slots/uv.py``): each
+    takes None for the selection, answers ``[]`` with nothing to act on and is
+    one undo step. The panel's wiring is ``tentacle/test/test_uv.py``."""
+
+    def setUp(self):
+        super().setUp()
+        cmds.file(new=True, force=True)
+        cmds.loadPlugin("Unfold3D", quiet=True)
+
+    @staticmethod
+    def shells(obj):
+        return cmds.polyEvaluate(obj, uvShell=True)
+
+    @staticmethod
+    def twins(rotate=37.0):
+        """Two identical 2x2 planes, B's shell turned and moved off A's."""
+        a = cmds.polyPlane(w=1, h=1, sx=2, sy=2, ch=False, name="twinA")[0]
+        b = cmds.polyPlane(w=1, h=1, sx=2, sy=2, ch=False, name="twinB")[0]
+        for plane in (a, b):
+            cmds.polyEditUV(f"{plane}.map[*]", pu=0.5, pv=0.5, su=0.3, sv=0.3, r=True)
+        cmds.polyEditUV(f"{b}.map[*]", pu=0.5, pv=0.5, a=rotate, r=True)
+        cmds.polyEditUV(f"{b}.map[*]", u=0.3, v=0.2, r=True)
+        return a, b
+
+    @staticmethod
+    def uvs(obj):
+        n = cmds.polyEvaluate(obj, uv=True)
+        return [tuple(cmds.polyEditUV(f"{obj}.map[{i}]", q=True)) for i in range(n)]
+
+    def test_nothing_selected_is_an_empty_list(self):
+        cmds.select(clear=True)
+        for op in (
+            UvUtils.cut_uvs,
+            UvUtils.sew_uvs,
+            UvUtils.cut_hard_edges,
+            UvUtils.pin_uvs,
+            UvUtils.stack_uv_shells,
+            UvUtils.unfold_uvs,
+            UvUtils.auto_project,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(), [])
+
+    def test_cut_uvs_on_a_mesh_cuts_every_edge(self):
+        cube = cmds.polyCube(ch=False)[0]
+        cmds.select(cube)
+        self.assertEqual(len(UvUtils.cut_uvs()), 1)
+        self.assertEqual(self.shells(cube), 6)
+
+    def test_cut_uvs_on_edges_reselects_them(self):
+        cube = cmds.polyCube(ch=False)[0]
+        edges = [f"{cube}.e[0]", f"{cube}.e[1]"]
+        cut = UvUtils.cut_uvs(edges)
+        self.assertEqual(sorted(cut), sorted(cmds.ls(edges, flatten=True)))
+        self.assertEqual(
+            sorted(cmds.ls(selection=True, flatten=True)), sorted(cut)
+        )
+
+    def test_sew_uvs_on_a_mesh_sews_its_cut_shells(self):
+        cube = cmds.polyCube(ch=False)[0]
+        cmds.polyMapCut(f"{cube}.e[*]", ch=False)
+        self.assertEqual(self.shells(cube), 6)
+        UvUtils.sew_uvs(cube)
+        self.assertLess(self.shells(cube), 6)
+
+    def test_cut_hard_edges_cuts_a_cube_into_its_faces(self):
+        cube = cmds.polyCube(ch=False)[0]
+        self.assertEqual(UvUtils.cut_hard_edges(cube), [cube])
+        self.assertEqual(self.shells(cube), 6)
+
+    def test_pin_uvs_pins_then_unpins(self):
+        plane = cmds.polyPlane(sx=1, sy=1, ch=False)[0]
+        UvUtils.pin_uvs(plane)
+        flat = cmds.ls(f"{plane}.map[*]", flatten=True)
+        self.assertEqual(UvUtils.get_uv_pin_weights(flat), [1.0] * 4)
+        UvUtils.pin_uvs(plane, pin=False)
+        self.assertEqual(UvUtils.get_uv_pin_weights(flat), [0.0] * 4)
+
+    def test_uv_coords_round_trip_restores_positions_and_pins(self):
+        plane = cmds.polyPlane(sx=1, sy=1, ch=False)[0]
+        cmds.polyPinUV(f"{plane}.map[0]", value=1.0)
+        snapshot = UvUtils.get_uv_coords(plane, pins=True)
+        self.assertEqual(len(snapshot), 4)
+        before = self.uvs(plane)
+        cmds.polyPinUV(f"{plane}.map[*]", value=0.0)
+        cmds.polyEditUV(f"{plane}.map[*]", u=2.0, v=1.0, r=True)
+        cmds.polyPinUV(f"{plane}.map[*]", value=1.0)  # pins block polyEditUV
+        UvUtils.set_uv_coords(plane, snapshot)
+        for got, want in zip(self.uvs(plane), before):
+            self.assertAlmostEqual(got[0], want[0], places=5)
+            self.assertAlmostEqual(got[1], want[1], places=5)
+        weights = UvUtils.get_uv_pin_weights(cmds.ls(f"{plane}.map[*]", flatten=True))
+        self.assertEqual(weights, [1.0, 0.0, 0.0, 0.0])
+
+    def test_stack_similar_overlaps_the_twins_and_pins_them(self):
+        a, b = self.twins()
+        stacked = UvUtils.stack_uv_shells([a, b], tolerance=1.0, pin=True)
+        self.assertTrue(stacked)
+        for pa, pb in zip(self.uvs(a), self.uvs(b)):
+            self.assertAlmostEqual(pa[0], pb[0], places=4)
+            self.assertAlmostEqual(pa[1], pb[1], places=4)
+        self.assertEqual((cmds.polyPinUV(f"{b}.map[4]", q=True, value=True) or [0])[0], 1.0)
+
+    def test_stack_similar_without_a_match_is_empty(self):
+        a = cmds.polyPlane(w=1, h=1, sx=2, sy=2, ch=False)[0]
+        c = cmds.polyPlane(w=1, h=1, sx=3, sy=1, ch=False)[0]
+        self.assertEqual(UvUtils.stack_uv_shells([a, c], tolerance=0.1), [])
+
+    def test_stack_center_runs_texStackShells_on_the_uvs(self):
+        """texStackShells is MEL over GUI selection masks (it fails headless):
+        the call is captured, with the selection it ran on."""
+        from unittest import mock
+
+        a, b = self.twins()
+        cmds.select(a, b)
+        seen = []
+        with mock.patch.object(
+            mel, "eval", side_effect=lambda cmd: seen.append((cmd, cmds.ls(sl=True)))
+        ):
+            stacked = UvUtils.stack_uv_shells([a, b])
+        self.assertEqual([cmd for cmd, _ in seen], ["texStackShells {}"])
+        self.assertTrue(all(".map[" in item for item in seen[0][1]), seen[0][1])
+        self.assertEqual(len(stacked), 18)
+        self.assertEqual(cmds.ls(sl=True), [a, b])  # the selection given back
+
+    def test_uv_scope_key_follows_the_components(self):
+        cube = cmds.polyCube(ch=False)[0]
+        self.assertNotEqual(
+            UvUtils.uv_scope_key([f"{cube}.f[0]"]), UvUtils.uv_scope_key([f"{cube}.f[1]"])
+        )
+        cmds.select(f"{cube}.f[0]")
+        self.assertEqual(UvUtils.uv_scope_key(), UvUtils.uv_scope_key(cmds.ls(sl=True)))
+
+    def test_unfold_uvs_unfolds_whole_meshes(self):
+        cube = cmds.polyCube(ch=False)[0]
+        cmds.select(f"{cube}.f[0]")  # a component names its mesh
+        result = UvUtils.unfold_uvs(orient=False, stack_similar=False)
+        self.assertTrue(result)
+        self.assertEqual(result.unfolded, cmds.ls(cube, long=True))
+        self.assertIsNone(result.blocked)
+
+    def test_unfold_uvs_words_another_failure(self):
+        from unittest import mock
+
+        cube = cmds.polyCube(ch=False)[0]
+        with mock.patch.object(cmds, "u3dUnfold", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError) as raised:
+                UvUtils.unfold_uvs(cube)
+        self.assertIn("Unfold failed", str(raised.exception))
+
+    def test_unfold_uvs_blocked_selects_the_problem(self):
+        from unittest import mock
+
+        p1 = cmds.polyPlane(w=1, h=1, sx=1, sy=1)[0]
+        p2 = cmds.polyPlane(w=1, h=1, sx=1, sy=1)[0]
+        cmds.move(1, 0, 1, p2)
+        bowtie = cmds.polyUnite(p1, p2, ch=False)[0]
+        cmds.polyMergeVertex(bowtie, d=0.001, ch=False)
+        error = RuntimeError("Mesh has non-manifold vertices.")
+        with mock.patch.object(cmds, "u3dUnfold", side_effect=error):
+            result = UvUtils.unfold_uvs(bowtie)
+        self.assertFalse(result)
+        self.assertEqual(result.blocked, "geometry")
+        self.assertTrue(result.components)
+        self.assertTrue(all(".vtx[" in s for s in cmds.ls(sl=True, flatten=True)))
+
+    def test_auto_project_projects_each_mesh_into_the_tile(self):
+        cubes = [cmds.polyCube(ch=False)[0] for _ in range(2)]
+        result = UvUtils.auto_project(cubes, map_size=1024)
+        self.assertEqual((result.engine, result.succeeded, result.failed), ("standard", cubes, []))
+        for cube in cubes:
+            u0, v0, u1, v1 = UvUtils.get_uv_bounds(cube)
+            self.assertGreaterEqual(min(u0, v0), -1e-4)
+            self.assertLessEqual(max(u1, v1), 1.0 + 1e-4)
+
+    def test_auto_project_progress_can_stop_the_run(self):
+        cubes = [cmds.polyCube(ch=False)[0] for _ in range(3)]
+        result = UvUtils.auto_project(cubes, progress_callback=lambda *a: False)
+        self.assertEqual(result.succeeded, cubes[:1])
+
+    def test_pack_uvs_standard_is_u3d_and_skips_instances(self):
+        from unittest import mock
+
+        from mayatk.uv_utils._uv_pack import PackUvsResult
+
+        cube = cmds.polyCube(ch=False)[0]
+        twin = cmds.instance(cube)[0]
+        seen = {}
+
+        def run(uv_utils, objects=None, **kwargs):
+            seen["objects"] = list(objects)
+            return PackUvsResult(engine="u3d")
+
+        with mock.patch.object(_U3dPackInternal, "run", side_effect=run):
+            UvUtils.pack_uvs([cube, twin], engine="standard", skip_instances=True)
+        self.assertEqual(len(seen["objects"]), 1)
+
+    def test_pack_result_counts_each_object_once(self):
+        from mayatk.uv_utils._uv_pack import PackUvsResult
+
+        result = PackUvsResult(engine="u3d", succeeded=["a.f[0:2]", "a.f[5]", "b"])
+        self.assertEqual(result.objects, ["a", "b"])
+
+    def test_pack_engines_name_pack_uvs_parameters(self):
+        import inspect
+
+        params = inspect.signature(UvUtils.pack_uvs).parameters
+        for engine, options in UvUtils.PACK_ENGINES.items():
+            for option in options:
+                with self.subTest(engine=engine, option=option):
+                    self.assertIn(option, params)
+
+    def test_camera_true_is_the_active_view_or_none(self):
+        eye = UvUtils._camera_eye(True)  # batch: no 3D view
+        self.assertTrue(eye is None or len(eye) == 3, eye)
+
+    def test_export_uv_image_opens_uv_snapshot(self):
+        from unittest import mock
+
+        with mock.patch.object(mel, "eval") as evaluate:
+            self.assertEqual(UvUtils.export_uv_image(), "UVCreateSnapshot")
+        evaluate.assert_called_once_with("UVCreateSnapshot")
 
 
 if __name__ == "__main__":

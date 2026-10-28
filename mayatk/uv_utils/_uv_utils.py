@@ -3,6 +3,7 @@
 import contextlib
 import uuid
 from typing import Iterator, List, Optional, Sequence, Tuple, Union
+from dataclasses import dataclass, field
 
 try:
     import maya.cmds as cmds
@@ -21,11 +22,49 @@ from mayatk.node_utils._node_utils import NodeUtils
 UvSnapshot = Tuple[str, str, str]  # (shape_path, original_set_name, snapshot_set_name)
 
 
+@dataclass
+class UnfoldResult:
+    """What a :meth:`UvUtils.unfold_uvs` run did.
+
+    ``unfolded`` holds the meshes unfolded; ``repaired`` the ``{"total",
+    "fixed", "remaining"}`` counts of a non-manifold repair that ran first;
+    ``blocked`` what stopped the unfold -- ``"geometry"`` or ``"uvs"`` -- with
+    ``components`` the problem components, left selected. Truthy when a mesh
+    unfolded.
+    """
+
+    unfolded: List = field(default_factory=list)
+    repaired: Optional[dict] = None
+    blocked: Optional[str] = None
+    components: List = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.unfolded)
+
+
 class UvUtils(ptk.HelpMixin):
     #: Stamped into every snapshot set's name (:meth:`snapshot_uv_sets`). A
     #: snapshot outlives its op only when the run dies, so one carrying
     #: another session's stamp is a leftover no running op can own.
     _SNAPSHOT_SESSION = uuid.uuid4().hex[:6]
+
+    #: The :meth:`pack_uvs` options each packer honors beyond the shared ones
+    #: (``map_size``, ``udim``, ``coverage``, ``preserve_3d``): a panel offers,
+    #: and sends, an option only while the chosen packer takes it. ``"standard"``
+    #: is the host's own packer (u3dLayout here). Twin of blendertk's.
+    PACK_ENGINES = {
+        "standard": (
+            "pre_rotate",
+            "rotate_step",
+            "rotate_min",
+            "rotate_max",
+            "mutations",
+            "scale_mode",
+            "tiles",
+            "skip_instances",
+        ),
+        "xatlas": ("rotate", "brute_force", "skip_instances"),
+    }
 
     @staticmethod
     def calculate_uv_padding(
@@ -1411,8 +1450,15 @@ class UvUtils(ptk.HelpMixin):
         """World-space eye position for a seam-hiding view, or ``None``.
 
         ``camera`` may be ``None``, an ``(x, y, z)`` position, or a camera
-        transform / shape name.
+        transform / shape name; ``True`` is the active 3D view's camera.
         """
+        if camera is True:  # the active 3D view's camera; none open (batch): None
+            try:
+                import maya.api.OpenMayaUI as omui
+
+                camera = omui.M3dView.active3dView().getCamera().fullPathName()
+            except RuntimeError:
+                return None
         if camera is None:
             return None
         if isinstance(camera, (tuple, list)):
@@ -1614,6 +1660,7 @@ class UvUtils(ptk.HelpMixin):
         )
 
     @classmethod
+    @CoreUtils.undoable(name="Pack UVs", suspend_refresh=True)
     def pack_uvs(
         cls,
         objects=None,
@@ -1632,6 +1679,7 @@ class UvUtils(ptk.HelpMixin):
         mutations: int = 1,
         scale_mode: int = 2,
         tiles: Tuple[int, int] = (1, 1),
+        skip_instances: bool = False,
     ):
         """Pack existing UV shells into a UDIM tile (or a grid of tiles).
 
@@ -1680,7 +1728,8 @@ class UvUtils(ptk.HelpMixin):
                 relative UV scale (Preserve UV).
             padding (float): Island gutter in pixels. None derives it from
                 *map_size* via :meth:`calculate_uv_padding`.
-            engine (str): ``"xatlas"`` or ``"u3d"`` (see above).
+            engine (str): ``"xatlas"`` or ``"u3d"`` (see above); ``"standard"``
+                is ``"u3d"``, the host's own packer (:attr:`PACK_ENGINES`).
             pre_rotate (int): u3d only -- ``-preRotateMode``: 0 Off,
                 1 Horizontal, 2 Vertical, 3-5 Axis X/Y/Z to V.
             rotate_step, rotate_min, rotate_max (int): u3d only -- the
@@ -1695,6 +1744,10 @@ class UvUtils(ptk.HelpMixin):
                 tiles anchored at *udim*, extending right/up. Coverage is forced
                 Full under a grid, and ``tiles_u`` is clamped so the grid stays
                 inside the UDIM row (the result's ``tiles`` says what ran).
+            skip_instances (bool): Pack one transform per instance group: an
+                instance shares its shape and UV set, so packing every copy
+                reserves tile space for identical shells. Object-level input
+                only; a component scope packs as given.
 
         Returns:
             (PackUvsResult): ``engine``, ``succeeded``, ``failed``
@@ -1712,7 +1765,9 @@ class UvUtils(ptk.HelpMixin):
         """
         from mayatk.uv_utils._uv_pack import _U3dPackInternal, _UvPackInternal
 
-        if engine == "u3d":
+        if skip_instances:
+            objects = cls._skip_instances(objects)
+        if engine in ("u3d", "standard"):
             return _U3dPackInternal.run(
                 cls,
                 objects=objects,
@@ -1730,7 +1785,9 @@ class UvUtils(ptk.HelpMixin):
                 tiles=tiles,
             )
         if engine != "xatlas":
-            raise ValueError(f"Unknown pack engine {engine!r}: 'xatlas' or 'u3d'.")
+            raise ValueError(
+                f"Unknown pack engine {engine!r}: 'xatlas', 'u3d' or 'standard'."
+            )
         return _UvPackInternal.run(
             cls,
             objects=objects,
@@ -1742,6 +1799,430 @@ class UvUtils(ptk.HelpMixin):
             preserve_3d=preserve_3d,
             padding=padding,
         )
+
+    @staticmethod
+    def _skip_instances(objects):
+        """*objects* (None: the selection) with one transform per instance group,
+        for :meth:`pack_uvs`; a component entry keeps the input as given (a
+        component scope packs exactly what it names)."""
+        entries = CoreUtils.as_strings(
+            objects if objects is not None else cmds.ls(selection=True) or []
+        )
+        if not entries or any("." in entry for entry in entries):
+            return objects
+        return NodeUtils.filter_duplicate_instances(entries)
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def auto_project(
+        cls,
+        objects=None,
+        map_size: int = 4096,
+        scale_mode: int = 1,
+        angle_limit: float = 66.0,
+        margin: Optional[float] = None,
+        progress_callback=None,
+    ):
+        """Project UVs with the host's own automatic projection: Maya's
+        ``polyAutoProjection`` (six planes, the shells laid out in a square),
+        each mesh into its own 0-1 tile -- Auto Unwrap's Standard method, beside
+        :meth:`auto_unwrap`'s external engines. One undo step. Twin of
+        blendertk's (Smart UV Project there).
+
+        Parameters:
+            objects (str/obj/list): Meshes to project. None uses the selection.
+            map_size (int): Texture size the island gutter derives from
+                (:meth:`calculate_uv_padding`, the Pack tool's and the RizomUV
+                bridge's rule), so a map projected here keeps its gutter when
+                repacked.
+            scale_mode (int): ``-scaleMode``: 0 none, 1 uniform, 2 stretch to
+                square.
+            angle_limit (float): Blender's Smart UV Project angle limit; Maya
+                projects from six planes and takes it for the shared signature.
+            margin (float): Blender's island margin; Maya derives its gutter
+                from *map_size* and takes it for the shared signature.
+            progress_callback (callable): ``(done, total, name)`` after each
+                mesh; a ``False`` return stops the run (the projections made
+                stay).
+
+        Returns:
+            (AutoUnwrapResult): ``engine`` ``"standard"``, ``succeeded`` and
+            ``failed`` ``(mesh, reason)`` pairs; ``[]`` with nothing selected.
+        """
+        from mayatk.uv_utils._auto_unwrap import AutoUnwrapResult
+
+        items = CoreUtils.as_strings(objects)
+        result = AutoUnwrapResult(engine="standard")
+        # percentageSpace is a percentage of the texture area; the normalized
+        # padding is map-size-invariant by design (1/256 -> 0.39%).
+        space = cls.calculate_uv_padding(map_size, normalize=True) * 100.0
+        for index, obj in enumerate(items):
+            try:
+                cmds.polyAutoProjection(
+                    obj,
+                    layoutMethod=0,
+                    optimize=1,
+                    insertBeforeDeformers=1,
+                    scaleMode=scale_mode,
+                    createNewMap=False,  # edit the current UV set
+                    projectBothDirections=0,  # no mirrored opposite faces
+                    layout=2,  # the shells moved into a square
+                    planes=6,
+                    percentageSpace=space,
+                    worldSpace=0,
+                )
+            except Exception as error:  # noqa: BLE001 - one bad mesh must not stop the rest
+                result.failed.append((obj, str(error)))
+            else:
+                result.succeeded.append(obj)
+            if progress_callback and progress_callback(index + 1, len(items), obj) is False:
+                break
+        return result
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def unfold_uvs(
+        cls,
+        objects=None,
+        optimize: bool = True,
+        orient: bool = True,
+        stack_similar: bool = True,
+        tolerance: float = 1.0,
+        map_size: int = 4096,
+        repair: bool = False,
+        method: str = "angle_based",
+        margin: float = 0.0,
+    ):
+        """Unfold the meshes' UVs (``u3dUnfold``): flatten the existing shells
+        along their borders, never cutting a new seam (:meth:`unwrap_cylinder`
+        seams), then optionally relax them (``u3dOptimize``), orient each to its
+        nearest U / V axis (``texOrientShells``) and stack the similar ones
+        (:meth:`stack_similar_uv_shells`). One undo step. Twin of blendertk's.
+
+        The meshes unfold whole, in object mode: a leftover component selection
+        would scope the unfold to a partial shell. Unfold rejects a non-manifold
+        mesh (vertices, or UVs: the same error) -- its own call, narrower than
+        ``polyInfo``'s flag, so nothing pre-empts it. On that refusal *repair*
+        runs Mesh Cleanup (``MeshDiagnostics.repair_non_manifold``) and retries
+        once; otherwise, or when the retry fails too, the problem components are
+        selected and the result says what blocked it.
+
+        Parameters:
+            objects (str/obj/list): Meshes or their components (their meshes
+                unfold). None uses the selection.
+            optimize, orient, stack_similar (bool): The passes after the unfold.
+            tolerance (float): Stack Similar's shape tolerance.
+            map_size (int): The texture size the unfold spaces against.
+            repair (bool): Repair a non-manifold mesh and retry.
+            method, margin: Blender's unwrap settings; Maya takes them for the
+                shared signature.
+
+        Returns:
+            (UnfoldResult): What ran; ``[]`` with nothing selected.
+
+        Raises:
+            RuntimeError: Unfold failed for another reason
+                (:meth:`classify_unfold3d_error` words it).
+        """
+        from mayatk.core_utils.diagnostics.mesh_diag import MeshDiagnostics
+
+        nodes = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True, long=True) or []
+        transforms = dict.fromkeys(CoreUtils._transform_of(node) for node in nodes)
+        meshes = cmds.ls(list(transforms), long=True) or []
+        if not meshes:
+            return []
+        Plugins.load("Unfold3D")
+        CoreUtils.ensure_object_mode()
+        result = UnfoldResult()
+        unfold = dict(
+            iterations=1,
+            pack=0,
+            borderintersection=1,
+            triangleflip=1,
+            mapsize=map_size,
+            roomspace=0,
+        )
+        try:
+            cmds.u3dUnfold(meshes, **unfold)
+        except RuntimeError as error:
+            if "non-manifold" not in str(error).lower():
+                raise RuntimeError(
+                    f"Unfold failed: {cls.classify_unfold3d_error(error)}."
+                ) from error
+            unfolded = False
+            if repair:
+                result.repaired = MeshDiagnostics.repair_non_manifold(meshes)
+                try:
+                    cmds.u3dUnfold(meshes, **unfold)
+                    unfolded = True
+                except RuntimeError:
+                    pass
+            if not unfolded:
+                kind, result.components = MeshDiagnostics.select_non_manifold(meshes)
+                result.blocked = "uvs" if kind == "uvs" else "geometry"
+                return result
+        if optimize:
+            cmds.u3dOptimize(
+                meshes,
+                iterations=10,
+                power=1,
+                surfangle=1,
+                borderintersection=0,
+                triangleflip=1,
+                mapsize=map_size,
+                roomspace=0,
+            )
+        if orient:
+            cls._run_on_selection(meshes, "texOrientShells")
+        if stack_similar:
+            cls.stack_similar_uv_shells(meshes, tolerance)
+        result.unfolded = meshes
+        return result
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def cut_uvs(cls, objects=None) -> List[str]:
+        """Cut UVs: split the UV shells along the edges in *objects*, or, with no
+        edge among them, along every edge of each mesh object. One undo step.
+        Twin of blendertk's (Edit-Mode seams there).
+
+        Parameters:
+            objects (str/obj/list): Edges and/or mesh objects. None uses the
+                selection.
+
+        Returns:
+            list: The edges cut, reselected (``<shape>.e[*]`` for a whole mesh);
+            ``[]`` when *objects* hold neither.
+        """
+        return cls._cut_or_sew(objects, cut=True)
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def sew_uvs(cls, objects=None) -> List[str]:
+        """Sew UVs: stitch the UV shells back together along the edges in
+        *objects*, or along every edge of each mesh object. One undo step. Twin
+        of blendertk's (clears the Edit-Mode seams there).
+
+        Returns:
+            list: The edges sewn (``<shape>.e[*]`` for a whole mesh); ``[]``
+            when *objects* hold neither edges nor meshes.
+        """
+        return cls._cut_or_sew(objects, cut=False)
+
+    @classmethod
+    def _cut_or_sew(cls, objects, cut: bool) -> List[str]:
+        """:meth:`cut_uvs` / :meth:`sew_uvs`. A whole mesh's shape resolves by
+        type and full path: a short shape name is ambiguous when two transforms
+        share a leaf name, where a per-shape ``objectType`` raises "No object
+        matches name"."""
+        items = CoreUtils.as_strings(objects)
+        if not items:
+            return []
+        edges = cmds.filterExpand(items, selectionMask=32, expand=True) or []
+        if edges:
+            if cut:  # grouped per object: polyMapCut refuses a multi-object list
+                cls.cut_uv_edges(edges)
+                cmds.select(edges)
+            else:
+                for edge in edges:
+                    cmds.polyMapSew(edge)
+            return edges
+        transforms = cmds.ls(items, type="transform") or []
+        if not transforms:
+            return []
+        shapes = (
+            cmds.listRelatives(
+                transforms, shapes=True, noIntermediate=True, type="mesh", fullPath=True
+            )
+            or []
+        )
+        command = cmds.polyMapCut if cut else cmds.polyMapSew
+        for shape in shapes:
+            command(f"{shape}.e[*]")
+        return [f"{shape}.e[*]" for shape in shapes]
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def cut_hard_edges(
+        cls,
+        objects=None,
+        low_angle: float = 70.0,
+        high_angle: float = 180.0,
+        uv_borders: bool = False,
+        auto_seams: bool = False,
+    ) -> List[str]:
+        """Cut the UVs along the meshes' hard edges -- those whose normal angle
+        is in ``[low_angle, high_angle]`` -- and optionally along their UV shell
+        borders and the seams ``u3dAutoSeam`` detects. One undo step. Twin of
+        blendertk's.
+
+        Parameters:
+            objects (str/obj/list): Meshes or their components (their meshes are
+                cut). None uses the selection.
+            low_angle, high_angle (float): The hard-edge band, in degrees.
+            uv_borders (bool): Also cut along the existing UV shell borders.
+            auto_seams (bool): Also cut along the auto-detected seams.
+
+        Returns:
+            list: The meshes cut; ``[]`` for none.
+        """
+        meshes = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True) or []
+        if not meshes:
+            return []
+        hard = Components.get_edges_by_normal_angle(
+            meshes, low_angle=low_angle, high_angle=high_angle
+        )
+        if hard:
+            cls.cut_uv_edges(hard)
+        if uv_borders:
+            border = cls.get_uv_shell_border_edges(meshes)
+            if border:
+                cls.cut_uv_edges(border)
+        if auto_seams:
+            Plugins.load("Unfold3D")
+            for mesh in meshes:
+                try:
+                    cmds.u3dAutoSeam(mesh, s=0, p=1)
+                except RuntimeError as error:
+                    cmds.warning(f"cut_hard_edges: no auto seams on {mesh} ({error}).")
+        return meshes
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def pin_uvs(cls, objects=None, pin: bool = True) -> List[str]:
+        """Pin (or unpin) the UVs of *objects*: an object pins its whole map, a
+        component the UVs it touches. Pinned UVs hold still through Unfold,
+        Optimize and Layout. One undo step. Twin of blendertk's.
+
+        Returns:
+            list: The UVs (ranges) pinned; ``[]`` when *objects* hold none.
+        """
+        items = CoreUtils.as_strings(objects)
+        uvs = (cmds.polyListComponentConversion(items, toUV=True) or []) if items else []
+        if uvs:
+            cmds.polyPinUV(uvs, value=1.0 if pin else 0.0)
+        return uvs
+
+    @classmethod
+    def get_uv_coords(cls, objects, pins: bool = False) -> dict:
+        """``{uv: (u, v)}`` for every UV *objects* hold (a component scopes it),
+        ``(u, v, pin weight)`` with *pins*; :meth:`set_uv_coords` puts it back --
+        a stack / unstack toggle's snapshot. Queried UV by UV: a bulk
+        ``polyEditUV`` query's ordering is ambiguous. Twin of blendertk's (keyed
+        by object there, one entry per face corner).
+        """
+        uvs = cls._flat_uvs(objects)
+        weights = cls.get_uv_pin_weights(uvs) if pins else None
+        snapshot = {}
+        for index, uv in enumerate(uvs):
+            position = cmds.polyEditUV(uv, query=True)
+            if position and len(position) >= 2:
+                snapshot[uv] = (
+                    (position[0], position[1], weights[index])
+                    if pins
+                    else (position[0], position[1])
+                )
+        return snapshot
+
+    @classmethod
+    @CoreUtils.undoable
+    def set_uv_coords(cls, objects, snapshot) -> List[str]:
+        """Put a :meth:`get_uv_coords` snapshot back. ``polyEditUV`` honors pin
+        weights (a stack command does not), so the pins are lifted for the move
+        and put back -- as captured, when the snapshot carries them. One undo
+        step. Twin of blendertk's.
+
+        Parameters:
+            objects: Kept for the shared signature: the snapshot names its UVs.
+            snapshot (dict): From :meth:`get_uv_coords`.
+
+        Returns:
+            list: The UVs restored (those that still exist).
+        """
+        existing = set(cmds.ls(list(snapshot or {}), flatten=True) or [])
+        live = [uv for uv in snapshot or {} if uv in existing]
+        if not live:
+            return []
+        with CoreUtils.suspended_refresh():
+            with cls.pins_lifted(live):
+                for uv in live:
+                    u, v = snapshot[uv][:2]
+                    cmds.polyEditUV(uv, uValue=u, vValue=v, relative=False)
+            if all(len(snapshot[uv]) > 2 for uv in live):
+                cls.set_uv_pin_weights(live, [snapshot[uv][2] for uv in live])
+        return live
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def stack_uv_shells(
+        cls, objects=None, tolerance: Optional[float] = None, pin: bool = False
+    ) -> List[str]:
+        """Stack UV shells on top of each other. One undo step. Twin of
+        blendertk's.
+
+        *tolerance* None: every shell of *objects* onto one shared center
+        regardless of shape (Maya's ``texStackShells``). A tolerance: the shells
+        of the same topology and shape only, rotated (and scaled) onto the first
+        match (:meth:`stack_similar_uv_shells`).
+
+        Parameters:
+            objects (str/obj/list): Objects and/or components. None uses the
+                selection.
+            tolerance (float): Similar's shape tolerance, or None.
+            pin (bool): Pin the UVs of *objects* once stacked.
+
+        Returns:
+            list: The UVs that took part; ``[]`` when none did (Similar: no match).
+        """
+        items = CoreUtils.as_strings(objects)
+        if tolerance is None:
+            uvs = (cmds.polyListComponentConversion(items, toUV=True) or []) if items else []
+            if not uvs:
+                return []
+            # texStackShells stacks the shells of the SELECTED UVs (an object
+            # selection is "No UVs selected" unless Maya's auto-convert
+            # preference is on): run it on the UVs, then give the selection back.
+            cls._run_on_selection(uvs, "texStackShells {}")
+            stacked = cmds.ls(uvs, flatten=True) or []
+        else:
+            stacked = cls.stack_similar_uv_shells(items, tolerance)
+        if stacked and pin:
+            cmds.polyPinUV(cls._flat_uvs(items), value=1.0)
+        return stacked
+
+    @staticmethod
+    def uv_scope_key(objects=None) -> tuple:
+        """A key that changes when the UV scope *objects* name changes: the
+        objects and components themselves (a Maya selection names its
+        components). What a toggle compares to start a fresh cycle on a new
+        selection. Twin of blendertk's (which reads the Edit-Mode vertex
+        selection).
+
+        Parameters:
+            objects (str/obj/list): None reads the selection.
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True) or []
+        return tuple(CoreUtils.as_strings(objects))
+
+    @staticmethod
+    def export_uv_image() -> str:
+        """Export the UV layout as an image through the host's own dialog:
+        Maya's UV Snapshot options (``UVCreateSnapshot``). Twin of blendertk's
+        (Export UV Layout there).
+
+        Returns:
+            str: The runtime command run.
+        """
+        mel.eval("UVCreateSnapshot")
+        return "UVCreateSnapshot"
 
     @staticmethod
     def classify_unfold3d_error(error) -> str:
@@ -2076,7 +2557,8 @@ class UvUtils(ptk.HelpMixin):
                 :meth:`get_auto_seam_edges`). Default 20.
             camera (str/tuple, optional): View to hide the seam from -- a
                 camera name or a world-space eye position. None assumes Maya's
-                default perspective direction.
+                default perspective direction; True takes the active 3D view's
+                camera (none open, as in batch: as None).
             flat_angle (float): Ring-vs-sector threshold in degrees (see
                 :meth:`get_auto_seam_edges`). Default 60.
             trim_ratio (float): Fillet size as a fraction of the radius (see

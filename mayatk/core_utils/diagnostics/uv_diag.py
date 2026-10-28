@@ -11,6 +11,9 @@ except ImportError:
 from typing import Optional, Sequence, Union
 from dataclasses import dataclass, field
 
+# Eager: ``CoreUtils.undoable`` decorates ``cleanup_uv_sets`` while the class body runs.
+from mayatk.core_utils._core_utils import CoreUtils
+
 
 # Type aliases keep Maya stubs optional during static analysis
 NodeLike = Union[str, object]
@@ -165,6 +168,7 @@ class UvDiagnostics:
         )
 
     @classmethod
+    @CoreUtils.undoable
     def cleanup_uv_sets(
         cls,
         objects: NodeSeq,

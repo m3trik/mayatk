@@ -6747,14 +6747,14 @@
         {
           "name": "UvSetCleanupResult",
           "summary": "Result of a UV set cleanup operation for a single mesh.",
-          "line": 21,
+          "line": 24,
           "bases": [],
           "members": []
         },
         {
           "name": "UvDiagnostics",
           "summary": "Operations for inspecting and fixing common UV issues.",
-          "line": 43,
+          "line": 46,
           "bases": [],
           "members": [
             {
@@ -6763,7 +6763,7 @@
               "kind": "staticmethod",
               "signature": "(objects: NodeSeq) -> dict",
               "summary": "Map each mesh in *objects* to its non-manifold UVs, via ``polyInfo``.",
-              "line": 54,
+              "line": 57,
               "deprecated": false
             },
             {
@@ -6772,7 +6772,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: NodeSeq) -> dict",
               "summary": "Repair non-manifold UVs on *objects* by re-mapping the affected faces.",
-              "line": 78,
+              "line": 81,
               "deprecated": false
             },
             {
@@ -6781,7 +6781,7 @@
               "kind": "classmethod",
               "signature": "(cls, shape, all_sets=None, names=None)",
               "summary": "Detect a lightmap UV set on *shape*, or ``None``.",
-              "line": 107,
+              "line": 110,
               "deprecated": false
             },
             {
@@ -6790,7 +6790,7 @@
               "kind": "classmethod",
               "signature": "(cls, shape, uv_set) -> bool",
               "summary": "True if *uv_set* is usable as a lightmap: has UVs, non-overlapping,",
-              "line": 151,
+              "line": 154,
               "deprecated": false
             },
             {
@@ -6799,7 +6799,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: NodeSeq, remove_empty: bool = True, keep_only_primary: bool = True, rename_to_map1: bool = True, force_rename: bool = False, prefer_largest_area: bool = False, protect: Sequence[str] = (), protect_lightmaps: bool = True, dry_run: bool = False, quiet: bool = False) -> list[UvSetCleanupResult]",
               "summary": "Cleanup UV sets by removing empty/secondary sets and renaming the primary to 'map1'.",
-              "line": 168,
+              "line": 172,
               "deprecated": false
             }
           ]
@@ -28243,7 +28243,17 @@
           "summary": "Per-object outcome of a :meth:`mayatk.UvUtils.pack_uvs` run.",
           "line": 68,
           "bases": [],
-          "members": []
+          "members": [
+            {
+              "name": "objects",
+              "qualname": "PackUvsResult.objects",
+              "kind": "property",
+              "signature": "(self) -> List[str]",
+              "summary": "The objects that packed, once each: a component-scoped pack reports",
+              "line": 90,
+              "deprecated": false
+            }
+          ]
         }
       ],
       "constants": [
@@ -28264,9 +28274,16 @@
       "functions": [],
       "classes": [
         {
+          "name": "UnfoldResult",
+          "summary": "What a :meth:`UvUtils.unfold_uvs` run did.",
+          "line": 26,
+          "bases": [],
+          "members": []
+        },
+        {
           "name": "UvUtils",
           "summary": "",
-          "line": 24,
+          "line": 45,
           "bases": [
             "pythontk.HelpMixin"
           ],
@@ -28277,7 +28294,7 @@
               "kind": "staticmethod",
               "signature": "(map_size: int, normalize: bool = False, factor: int = 256) -> float",
               "summary": "The texture gutter for a given map size — Maya-side name for the ecosystem rule.",
-              "line": 31,
+              "line": 70,
               "deprecated": false
             },
             {
@@ -28286,7 +28303,7 @@
               "kind": "staticmethod",
               "signature": "(udim: int) -> Tuple[int, int]",
               "summary": "UDIM tile number to its (u, v) tile offset — Maya-side name for the",
-              "line": 66,
+              "line": 105,
               "deprecated": false
             },
             {
@@ -28295,7 +28312,7 @@
               "kind": "staticmethod",
               "signature": "(objects, to_edge: bool = False) -> int",
               "summary": "Rotate UV shells to run parallel with the most adjacent U or V axis of their bounding box.",
-              "line": 86,
+              "line": 125,
               "deprecated": false
             },
             {
@@ -28304,7 +28321,7 @@
               "kind": "staticmethod",
               "signature": "(objects, u, v, relative=True)",
               "summary": "Move objects to the given u and v coordinates.",
-              "line": 127,
+              "line": 166,
               "deprecated": false
             },
             {
@@ -28313,7 +28330,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, angle: float) -> int",
               "summary": "Rotate the UVs of *objects* by *angle* degrees, counter-clockwise, about",
-              "line": 180,
+              "line": 219,
               "deprecated": false
             },
             {
@@ -28322,7 +28339,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, u: bool = True, v: bool = True, angle: float = 30.0) -> int",
               "summary": "Straighten the UV edges of *objects* lying within *angle* degrees of",
-              "line": 205,
+              "line": 244,
               "deprecated": false
             },
             {
@@ -28331,7 +28348,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> int",
               "summary": "Straighten each UV shell of *objects* into a grid by unfolding it around",
-              "line": 228,
+              "line": 267,
               "deprecated": false
             },
             {
@@ -28340,7 +28357,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int",
               "summary": "Lay the UV shells of *objects* out in a row -- Maya's",
-              "line": 239,
+              "line": 278,
               "deprecated": false
             },
             {
@@ -28349,7 +28366,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'u', mode: str = 'avg') -> int",
               "summary": "Align the UVs of *objects* -- Maya's Align UVs: ``\"min\"`` / ``\"max\"`` /",
-              "line": 258,
+              "line": 297,
               "deprecated": false
             },
             {
@@ -28358,7 +28375,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> int",
               "summary": "Gather the UV shells of *objects* back into the 0-1 tile -- Maya's",
-              "line": 283,
+              "line": 322,
               "deprecated": false
             },
             {
@@ -28367,7 +28384,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, seed: Optional[int] = None) -> int",
               "summary": "Randomly offset the UV shells of *objects* -- Maya's Randomize Shells,",
-              "line": 294,
+              "line": 333,
               "deprecated": false
             },
             {
@@ -28376,7 +28393,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> Optional[Tuple[float, float, float, float]]",
               "summary": "The UV-space bounding box of *objects*, as one box over the whole input.",
-              "line": 308,
+              "line": 347,
               "deprecated": false
             },
             {
@@ -28385,7 +28402,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str, uv_set: Optional[str] = None)",
               "summary": "``(N, 3, 2)`` array of *shape*'s UV-space triangles for *uv_set*.",
-              "line": 334,
+              "line": 373,
               "deprecated": false
             },
             {
@@ -28394,7 +28411,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str, uv_set: Optional[str] = None)",
               "summary": "*shape*'s UV-space triangles paired with the world-space corners they map.",
-              "line": 384,
+              "line": 423,
               "deprecated": false
             },
             {
@@ -28403,7 +28420,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, udim: Optional[int] = None, map_size: int = 4096) -> Optional[int]",
               "summary": "Move UV shells sitting outside the target UDIM tile into it.",
-              "line": 468,
+              "line": 507,
               "deprecated": false
             },
             {
@@ -28412,7 +28429,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> List[Tuple[float, float, float, float]]",
               "summary": "Per-shell UV boxes that share *objects*' UV space, excluding their own.",
-              "line": 531,
+              "line": 570,
               "deprecated": false
             },
             {
@@ -28421,7 +28438,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'u', pivot: tuple | None = None, per_shell: bool = True, preserve_position: bool = True)",
               "summary": "Mirror UVs across U or V.",
-              "line": 619,
+              "line": 658,
               "deprecated": false
             },
             {
@@ -28430,7 +28447,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, returned_type='shell', whole_shells=False)",
               "summary": "Get UV shells and their corresponding sets of faces.",
-              "line": 747,
+              "line": 786,
               "deprecated": false
             },
             {
@@ -28439,7 +28456,7 @@
               "kind": "staticmethod",
               "signature": "(uvs) -> List[float]",
               "summary": "Pin weight of each UV in *uvs* (flat component names), in argument order.",
-              "line": 878,
+              "line": 917,
               "deprecated": false
             },
             {
@@ -28448,7 +28465,7 @@
               "kind": "staticmethod",
               "signature": "(uvs, weights) -> None",
               "summary": "Set per-UV pin weights (``zip(uvs, weights)``) with one ``polyPinUV``",
-              "line": 898,
+              "line": 937,
               "deprecated": false
             },
             {
@@ -28457,7 +28474,7 @@
               "kind": "staticmethod",
               "signature": "(uvs)",
               "summary": "Zero the pin weights of *uvs* inside the block, then put each one back.",
-              "line": 911,
+              "line": 950,
               "deprecated": false
             },
             {
@@ -28466,7 +28483,7 @@
               "kind": "staticmethod",
               "signature": "(items, tolerance: float = 1.0) -> List[str]",
               "summary": "Stack shells of the same topology and shape onto the first matching",
-              "line": 953,
+              "line": 992,
               "deprecated": false
             },
             {
@@ -28475,7 +28492,7 @@
               "kind": "staticmethod",
               "signature": "(reference, candidates=None, tolerance: float = 1.0, include_reference: bool = False) -> List[List[str]]",
               "summary": "The UV shells that Stack Similar would stack together with *reference*'s",
-              "line": 978,
+              "line": 1017,
               "deprecated": false
             },
             {
@@ -28484,7 +28501,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the edges that make up any UV islands of the given objects.",
-              "line": 1092,
+              "line": 1131,
               "deprecated": false
             },
             {
@@ -28493,7 +28510,7 @@
               "kind": "classmethod",
               "signature": "(cls, mesh, sections=None, invert_seam: bool = False, cap_faces=None)",
               "summary": "Identify the UV seam edges for unwrapping a smooth cylinder / tube.",
-              "line": 1172,
+              "line": 1211,
               "deprecated": false
             },
             {
@@ -28502,7 +28519,7 @@
               "kind": "classmethod",
               "signature": "(cls, mesh, angle: float = 45.0, invert_seam: bool = False, taper_angle: float = 20.0, camera=None, flat_angle: float = 60.0, trim_ratio: float = 0.12)",
               "summary": "Seam edges that auto-unwrap a cylinder / tube / turned mesh -- clean",
-              "line": 1293,
+              "line": 1332,
               "deprecated": false
             },
             {
@@ -28511,7 +28528,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, angle=45.0, invert_seam=False, history=True, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)",
               "summary": "Cut auto UV seams for cylinder / tube unwrapping on each mesh.",
-              "line": 1474,
+              "line": 1520,
               "deprecated": false
             },
             {
@@ -28520,7 +28537,7 @@
               "kind": "staticmethod",
               "signature": "(edges, history: bool = True)",
               "summary": "Cut (split) UV shells along the given edges, spanning any number of objects.",
-              "line": 1531,
+              "line": 1577,
               "deprecated": false
             },
             {
@@ -28529,16 +28546,115 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, method: str = 'hard', map_size: int = 4096, pack: Optional[bool] = None, orient: bool = True, engine_params: Optional[dict] = None)",
               "summary": "Automatically unwrap meshes with an external unwrapping engine.",
-              "line": 1551,
+              "line": 1597,
               "deprecated": false
             },
             {
               "name": "pack_uvs",
               "qualname": "UvUtils.pack_uvs",
               "kind": "classmethod",
-              "signature": "(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1))",
+              "signature": "(cls, objects=None, map_size: int = 1024, udim: int = 1001, coverage: Tuple[float, float] = (1.0, 1.0), rotate: bool = True, brute_force: bool = False, preserve_3d: bool = True, padding: Optional[float] = None, engine: str = 'xatlas', pre_rotate: int = 0, rotate_step: int = 0, rotate_min: int = 0, rotate_max: int = 0, mutations: int = 1, scale_mode: int = 2, tiles: Tuple[int, int] = (1, 1), skip_instances: bool = False)",
               "summary": "Pack existing UV shells into a UDIM tile (or a grid of tiles).",
-              "line": 1617,
+              "line": 1664,
+              "deprecated": false
+            },
+            {
+              "name": "auto_project",
+              "qualname": "UvUtils.auto_project",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, map_size: int = 4096, scale_mode: int = 1, angle_limit: float = 66.0, margin: Optional[float] = None, progress_callback=None)",
+              "summary": "Project UVs with the host's own automatic projection: Maya's",
+              "line": 1818,
+              "deprecated": false
+            },
+            {
+              "name": "unfold_uvs",
+              "qualname": "UvUtils.unfold_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, optimize: bool = True, orient: bool = True, stack_similar: bool = True, tolerance: float = 1.0, map_size: int = 4096, repair: bool = False, method: str = 'angle_based', margin: float = 0.0)",
+              "summary": "Unfold the meshes' UVs (``u3dUnfold``): flatten the existing shells",
+              "line": 1886,
+              "deprecated": false
+            },
+            {
+              "name": "cut_uvs",
+              "qualname": "UvUtils.cut_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None) -> List[str]",
+              "summary": "Cut UVs: split the UV shells along the edges in *objects*, or, with no",
+              "line": 1987,
+              "deprecated": false
+            },
+            {
+              "name": "sew_uvs",
+              "qualname": "UvUtils.sew_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None) -> List[str]",
+              "summary": "Sew UVs: stitch the UV shells back together along the edges in",
+              "line": 2005,
+              "deprecated": false
+            },
+            {
+              "name": "cut_hard_edges",
+              "qualname": "UvUtils.cut_hard_edges",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, low_angle: float = 70.0, high_angle: float = 180.0, uv_borders: bool = False, auto_seams: bool = False) -> List[str]",
+              "summary": "Cut the UVs along the meshes' hard edges -- those whose normal angle",
+              "line": 2051,
+              "deprecated": false
+            },
+            {
+              "name": "pin_uvs",
+              "qualname": "UvUtils.pin_uvs",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, pin: bool = True) -> List[str]",
+              "summary": "Pin (or unpin) the UVs of *objects*: an object pins its whole map, a",
+              "line": 2098,
+              "deprecated": false
+            },
+            {
+              "name": "get_uv_coords",
+              "qualname": "UvUtils.get_uv_coords",
+              "kind": "classmethod",
+              "signature": "(cls, objects, pins: bool = False) -> dict",
+              "summary": "``{uv: (u, v)}`` for every UV *objects* hold (a component scopes it),",
+              "line": 2113,
+              "deprecated": false
+            },
+            {
+              "name": "set_uv_coords",
+              "qualname": "UvUtils.set_uv_coords",
+              "kind": "classmethod",
+              "signature": "(cls, objects, snapshot) -> List[str]",
+              "summary": "Put a :meth:`get_uv_coords` snapshot back.",
+              "line": 2135,
+              "deprecated": false
+            },
+            {
+              "name": "stack_uv_shells",
+              "qualname": "UvUtils.stack_uv_shells",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, tolerance: Optional[float] = None, pin: bool = False) -> List[str]",
+              "summary": "Stack UV shells on top of each other.",
+              "line": 2164,
+              "deprecated": false
+            },
+            {
+              "name": "uv_scope_key",
+              "qualname": "UvUtils.uv_scope_key",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> tuple",
+              "summary": "A key that changes when the UV scope *objects* name changes: the",
+              "line": 2201,
+              "deprecated": false
+            },
+            {
+              "name": "export_uv_image",
+              "qualname": "UvUtils.export_uv_image",
+              "kind": "staticmethod",
+              "signature": "() -> str",
+              "summary": "Export the UV layout as an image through the host's own dialog:",
+              "line": 2216,
               "deprecated": false
             },
             {
@@ -28547,7 +28663,7 @@
               "kind": "staticmethod",
               "signature": "(error) -> str",
               "summary": "A short, human-readable reason for an Unfold3D failure.",
-              "line": 1747,
+              "line": 2228,
               "deprecated": false
             },
             {
@@ -28556,7 +28672,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, map_size: int = 4096, density: Optional[float] = None, scale: Optional[float] = None, pages: Optional[int] = None, density_from: str = 'preserve', group_by: str = 'mesh', collapse_stacked: bool = True, read_textures: bool = True, mip_levels: int = 0, padding_factor: int = 256, fill: Optional[float] = None, level: bool = False, alternates: bool = True)",
               "summary": "How many texture maps these surfaces need, and at what texel density.",
-              "line": 1766,
+              "line": 2247,
               "deprecated": false
             },
             {
@@ -28565,7 +28681,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, angle=45.0, invert_seam=False, unfold=True, orient=True, map_size=4096, sew=True, taper_angle=20.0, camera=None, flat_angle=60.0, trim_ratio=0.12)",
               "summary": "Auto-unwrap cylinder / tube / turned meshes: seam, then unfold flat.",
-              "line": 2038,
+              "line": 2519,
               "deprecated": false
             },
             {
@@ -28574,7 +28690,7 @@
               "kind": "staticmethod",
               "signature": "(objects, map_size)",
               "summary": "Calculate the texel density for the given objects' faces.",
-              "line": 2155,
+              "line": 2637,
               "deprecated": false
             },
             {
@@ -28583,7 +28699,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, density=1.0, map_size=4096)",
               "summary": "Set the texel density for the given objects.",
-              "line": 2197,
+              "line": 2679,
               "deprecated": false
             },
             {
@@ -28592,7 +28708,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> List[UvSnapshot]",
               "summary": "Copy each object's active UV set into a uniquely-named backup set.",
-              "line": 2317,
+              "line": 2799,
               "deprecated": false
             },
             {
@@ -28601,7 +28717,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap') -> Iterator[List[UvSnapshot]]",
               "summary": "Back up each object's active UV set for the length of a block.",
-              "line": 2379,
+              "line": 2861,
               "deprecated": false
             },
             {
@@ -28610,7 +28726,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Restore UVs captured by ``snapshot_uv_sets``.",
-              "line": 2408,
+              "line": 2890,
               "deprecated": false
             },
             {
@@ -28619,7 +28735,7 @@
               "kind": "staticmethod",
               "signature": "(snapshots: Sequence[UvSnapshot]) -> None",
               "summary": "Delete the snapshot UV sets without restoring them.",
-              "line": 2439,
+              "line": 2921,
               "deprecated": false
             },
             {
@@ -28628,7 +28744,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Sequence[Union[str, object]], prefix: str = '_uv_snap', stale_only: bool = False) -> List[UvSnapshot]",
               "summary": "The snapshot UV sets ``snapshot_uv_sets`` left on *objects*.",
-              "line": 2459,
+              "line": 2941,
               "deprecated": false
             },
             {
@@ -28637,7 +28753,7 @@
               "kind": "classmethod",
               "signature": "(cls, source: Union[str, object, List[Union[str, object]]], target: Union[str, object, List[Union[str, object]]], tolerance: float = 0.1, match_by_similarity: bool = True, sample_space: str = 'auto', preserve_uv_ids: bool = False) -> List[Tuple[str, str, str]]",
               "summary": "Transfers UVs from source meshes to target meshes.",
-              "line": 2719,
+              "line": 3201,
               "deprecated": false
             },
             {
@@ -28646,7 +28762,7 @@
               "kind": "classmethod",
               "signature": "(cls, source: Union[str, object], candidates: Optional[List[Union[str, object]]] = None, tolerance: float = 0.9) -> List[str]",
               "summary": "Transfer UVs from one source mesh to every geometrically similar mesh.",
-              "line": 2851,
+              "line": 3333,
               "deprecated": false
             },
             {
@@ -28655,7 +28771,7 @@
               "kind": "staticmethod",
               "signature": "(obj: str, new_order: list[str]) -> None",
               "summary": "Reorder UV sets of the given object to match the specified new order.",
-              "line": 2923,
+              "line": 3405,
               "deprecated": false
             },
             {
@@ -28664,7 +28780,7 @@
               "kind": "staticmethod",
               "signature": "(objects, uv_set: str = None) -> dict",
               "summary": "Read each mesh's *uv_set* as a per-loop layout, for :meth:`apply_uv_layout`.",
-              "line": 3128,
+              "line": 3610,
               "deprecated": false
             },
             {
@@ -28673,7 +28789,7 @@
               "kind": "staticmethod",
               "signature": "(layouts: dict, uv_set: str = None, quiet: bool = False) -> dict",
               "summary": "Write UV layouts authored in ANOTHER application onto these meshes.",
-              "line": 3197,
+              "line": 3679,
               "deprecated": false
             },
             {
@@ -28682,7 +28798,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, uv_set: str = None, map_size: int = 1024, planes: int = 6, force: bool = False, freeze_history: bool = False, quiet: bool = False) -> dict",
               "summary": "Ensure each mesh has a packed, non-overlapping lightmap UV set.",
-              "line": 3370,
+              "line": 3852,
               "deprecated": false
             },
             {
@@ -28691,7 +28807,7 @@
               "kind": "staticmethod",
               "signature": "(objects, quiet: bool = False) -> None",
               "summary": "Remove empty UV sets from the given objects.",
-              "line": 3608,
+              "line": 4090,
               "deprecated": false
             }
           ]
