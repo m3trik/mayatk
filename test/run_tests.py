@@ -140,10 +140,6 @@ GUI_REQUIRED = {
         "loads the texture_combine panel; its uitk TableWidget hard-crashes "
         "mayapy in batch (same 0xC0000409 as test_sequencer)"
     ),
-    "test_lightmap_baker_panel": (
-        "loads the lightmap_baker panel through MayaUiHandler; native-crashes "
-        "mayapy on load (re-confirmed ALONE, 2026-10-21)"
-    ),
     "test_reference_manager": (
         "TestToggleReferenceOnCurrentSceneIsOneClick builds a real uitk "
         "TableWidget, which hard-crashes mayapy in batch (re-confirmed ALONE in "

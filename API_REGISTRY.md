@@ -143,7 +143,6 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`light_utils/light_rig.py`](#light_utils--light_rig) — Light Rig manager: save, manage, swap and restore named light rigs.
 - [`light_utils/lightmap_baker/_probe_placement.py`](#light_utils--lightmap_baker--_probe_placement) — Where a lightmap bake's reflection probe stands -- Maya's scene for the placement.
 - [`light_utils/lightmap_baker/lightmap_baker.py`](#light_utils--lightmap_baker--lightmap_baker) — High-level lightmap baking workflow for Maya -> game engines (Unity-first).
-- [`light_utils/lightmap_baker/lightmap_baker_slots.py`](#light_utils--lightmap_baker--lightmap_baker_slots) — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
 - [`light_utils/lightmap_baker/lightmap_records.py`](#light_utils--lightmap_baker--lightmap_records) — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - [`mat_utils/_mat_utils.py`](#mat_utils--_mat_utils) — ``MatUtils`` -- the public index of mayatk's material and texture operations.
 - [`mat_utils/arnold_bridge.py`](#mat_utils--arnold_bridge) — Arnold render-bridge management.
@@ -251,7 +250,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L259) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L261) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -2836,13 +2835,14 @@ Where a lightmap bake's reflection probe stands -- Maya's scene for the placemen
 
 High-level lightmap baking workflow for Maya -> game engines (Unity-first).
 
-- **[`class LightmapBakeResult`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L72)** — What one :meth:`LightmapBaker.bake` did -- the same shape in mayatk and blendertk.
+- **[`class LightmapBakeResult`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L73)** — What one :meth:`LightmapBaker.bake` did -- the same shape in mayatk and blendertk.
   - `LightmapBakeResult.files(self) -> List[str]` *(property)* — The distinct map files, sorted: an atlas 40 objects share counts once.
   - `LightmapBakeResult.folders(self) -> List[str]` *(property)* — The distinct folders the maps go in, compared the way the disk does
-- **[`class LightmapBaker(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L256)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
+- **[`class LightmapBaker(pythontk.LoggingMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker.py#L257)** — Orchestrate the lightmap workflow: check -> bake -> dilate -> record.
   - `LightmapBaker.device(self) -> Optional[str]` *(property)* — Which device Arnold bakes on -- ``"AUTO"`` (the default: the GPU
   - `LightmapBaker.adaptive(self) -> bool` *(property)* — Whether a GPU bake spends its samples adaptively: the preset's AA on
   - `LightmapBaker.preset_store() -> 'ptk.PresetStore'` *(static)* — Shared store of lightmap quality presets (built-in + user tiers).
+  - `LightmapBaker.preset_name(cls, name: str) -> str` *(class)* — *name* as the preset store knows it now: itself when the store has
   - `LightmapBaker.from_preset(cls, name: str, **overrides) -> 'LightmapBaker'` *(class)* — Construct a baker from a named quality preset.
   - `LightmapBaker.bake_targets(cls, objects: Optional[List[str]] = None) -> List[str]` *(class)* — The meshes a bake of *objects* acts on (default: the selection).
   - `LightmapBaker.bake(self, objects: Optional[List[str]] = None, packing: str = 'atlas', output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', on_progress: Optional[Callable[[int, int, str], bool]] = None, intensity: float = 1.0, **kwargs) -> LightmapBakeResult` — Bake *objects*' lightmaps and record them: the whole workflow, as the panel runs it.
@@ -2870,44 +2870,9 @@ High-level lightmap baking workflow for Maya -> game engines (Unity-first).
   - `LightmapBaker.track(self, objects: Optional[List[str]] = None) -> List[str]` — Start tracking *objects*' untracked maps as they stand -- no render.
   - `LightmapBaker.combine_sizes(self, maps: Optional[List[str]] = None) -> List[Tuple[int, float]]` — ``[(size, kept)]`` -- the atlas sizes :meth:`combine` of *maps* can
   - `LightmapBaker.combine(self, maps: Optional[List[str]] = None, size: Optional[int] = None, merge_materials: bool = True, on_progress: Optional[Callable[[int, int, str], Any]] = None) -> LightmapBakeResult` — Pack each split group *maps* belong to into one atlas -- no render.
-
-<a id="light_utils--lightmap_baker--lightmap_baker_slots"></a>
-### `light_utils/lightmap_baker/lightmap_baker_slots.py`
-
-The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
-
-- **[`class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/lightmap_baker/lightmap_baker_slots.py#L33)** — Switchboard slots for the ``lightmap_baker.ui`` panel.
-  - `LightmapBakerSlots.header_init(self, widget) -> None` — Configure the header and its help text.
-  - `LightmapBakerSlots.cmb000_init(self, widget) -> None` — Wire the Preset combo: uitk's preset template over the shared store.
-  - `LightmapBakerSlots.btn_reset_defaults_init(self, widget) -> None` — Wire Reset to Defaults to uitk's shared reset grammar.
-  - `LightmapBakerSlots.cmb002_init(self, widget) -> None` — Populate the Packing combobox (Atlas by Material is the default) and
-  - `LightmapBakerSlots.cmb_scope_init(self, widget) -> None` — Populate the Scope combobox (Selected is the default) and hang the
-  - `LightmapBakerSlots.set_exclusions_init(self, widget) -> None` — Hang Select / Clear off the Exclude row (:meth:`_init_set_row`).
-  - `LightmapBakerSlots.set_exclusions(self) -> None` — Make the selection the Exclude set;
-  - `LightmapBakerSlots.select_exclusions(self) -> None` — Select the Exclude set's members, hidden ones included.
-  - `LightmapBakerSlots.clear_exclusions(self) -> None` — Delete the Exclude set;
-  - `LightmapBakerSlots.set_isolation_init(self, widget) -> None` — Hang Select / Clear off the Isolate row (:meth:`_init_set_row`).
-  - `LightmapBakerSlots.set_isolation(self) -> None` — Make the selection the Isolate set;
-  - `LightmapBakerSlots.select_isolation(self) -> None` — Select the Isolate set's members, hidden ones included.
-  - `LightmapBakerSlots.clear_isolation(self) -> None` — Delete the Isolate set;
-  - `LightmapBakerSlots.cmb_resolution_init(self, widget) -> None` — Populate the Resolution combobox (value carried as item data,
-  - `LightmapBakerSlots.spn_samples_init(self, widget) -> None` — Hang the Adaptive Sampling switch off the Samples field.
-  - `LightmapBakerSlots.cmb_device_init(self, widget) -> None` — Populate the Processor combobox (value carried as item data);
-  - `LightmapBakerSlots.txt_output_dir_init(self, widget) -> None` — Add the folder browser and the Beside Material Textures toggle.
-  - `LightmapBakerSlots.txt000_init(self, widget) -> None` — Add the Prefix / Suffix / Auto picker to the name-affix field.
-  - `LightmapBakerSlots.b000(self) -> None` — The Bake page's run button: bake the Scope minus the Exclude set
-  - `LightmapBakerSlots.cmb_page_init(self, widget) -> None` — Populate the page picker (Bake first);
-  - `LightmapBakerSlots.cmb_page(self, index) -> None` — Show the picked page (:meth:`_refresh_page`).
-  - `LightmapBakerSlots.tbl_maps_init(self, widget) -> None` — The Manage table: one row per map the scene reads
-  - `LightmapBakerSlots.select_by_state(self, kind: str) -> None` — The footer's **Select**: highlight the maps in *kind*'s state on
-  - `LightmapBakerSlots.open_map_folder(self) -> None` — Open the highlighted map's folder in the file manager.
-  - `LightmapBakerSlots.combine_selected(self) -> None` — Pack the highlighted split maps' groups into one atlas each, no
-  - `LightmapBakerSlots.fix_all(self) -> None` — The footer's **Fix All**: every map that needs it, once confirmed
-  - `LightmapBakerSlots.track_selected(self) -> None` — Start tracking the selected untracked objects as they stand
-  - `LightmapBakerSlots.revert_selected(self) -> None` — Take the lightmaps off the selected objects, once confirmed.
-  - `LightmapBakerSlots.rebake_selected(self) -> None` — Re-bake the selected baked objects the way each was baked, changed
-  - `LightmapBakerSlots.show_bake_state(self) -> None` — Show the scene's bake state, map by map, in a viewer
-  - `LightmapBakerSlots.open_output(self) -> None` — Open the bake's output folder in the file manager.
+  - `LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]` *(static)* — The meshes a Scope word names, before the Exclude set: what the
+  - `LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]` *(class)* — The light shapes a Scope word holds: what lights a bake of
+  - `LightmapBaker.select(objects) -> List[str]` *(static)* — Make *objects* the selection -- those that exist, by name or DAG
 
 <a id="light_utils--lightmap_baker--lightmap_records"></a>
 ### `light_utils/lightmap_baker/lightmap_records.py`

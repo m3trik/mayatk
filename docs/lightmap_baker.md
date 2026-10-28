@@ -13,9 +13,10 @@ It builds on `mtk.TextureBaker`, the generic Arnold bake primitive in
 What a bake leaves in the scene is `mtk.LightmapRecords`
 ([`lightmap_records.py`](../mayatk/light_utils/lightmap_baker/lightmap_records.py)):
 the markers, the export manifest, and where the maps are on disk, on top of
-pythontk's generic `FileDependencies`. The panel (`LightmapBakerSlots` in
-`lightmap_baker_slots.py`, with `lightmap_baker.ui`) sits in the same folder.
-blendertk ships a Cycles twin; see [Blender twin](#blender-twin).
+pythontk's generic `FileDependencies`. The panel is tentacle's
+(`slots/tools/lightmap_baker.py` with `ui/tools/lightmap_baker.ui`): one Slots
+class over this engine and blendertk's Cycles twin; see
+[Blender twin](#blender-twin).
 
 ## Panel
 
@@ -817,8 +818,8 @@ The record's methods live on `LightmapRecords` (`lightmap_dependencies`,
 
 ## Blender twin
 
-blendertk's `LightmapBaker` and its panel bake with Cycles and mirror this
-one control for control: the same layout, the preset template (its presets
+blendertk's `LightmapBaker` bakes with Cycles under the same panel
+(tentacle's one Slots class drives both engines): the same layout, the preset template (its presets
 store `bounces` for `gi_depth`), the Bake and Manage pages, the Exclude and
 Isolate sets (stamped collections that change nothing about what renders),
 the packed atlas (`ptk.ImgUtils.pack_atlas_rects`,
@@ -832,8 +833,8 @@ linked library's own folder record (as a referenced module's is read here),
 the legacy migration, and `LightmapRecords`. It returns the same
 `LightmapBakeResult`, whose two copies `check_dcc_twins.py` keeps identical.
 
-The differences are the renderer's. Cycles has no GI Samples: one sample count
-covers every ray. Its adaptive sampling works on the CPU and the GPU alike, so
+The differences are the renderer's. Cycles has no GI Samples (the panel hides
+that dial): one sample count covers every ray. Its adaptive sampling works on the CPU and the GPU alike, so
 the switch is never greyed out, and it stops a clean texel early instead of
 adding samples to a noisy one. A hidden mesh bakes (it is shown for its own
 bake) instead of being skipped. Blender's preflight refuses a scene whose

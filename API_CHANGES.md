@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (408)
+## Moved out (440)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -218,6 +218,38 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `light_utils/hdr_manager.py::HdrManagerSlots.spn_resolution` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.spn_samples` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.spn_specular` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.b000` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.btn_reset_defaults_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.clear_exclusions` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.clear_isolation` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb000_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb002_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb_device_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb_page` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb_page_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb_resolution_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.cmb_scope_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.combine_selected` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.fix_all` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.header_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.open_map_folder` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.open_output` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.rebake_selected` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.revert_selected` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.select_by_state` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.select_exclusions` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.select_isolation` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.set_exclusions` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.set_exclusions_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.set_isolation` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.set_isolation_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.show_bake_state` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.spn_samples_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.tbl_maps_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.track_selected` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.txt000_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
+- `light_utils/lightmap_baker/lightmap_baker_slots.py::LightmapBakerSlots.txt_output_dir_init` → `tentacle.slots.tools.lightmap_baker.LightmapBakerSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b000` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
 - `mat_utils/emissive_groups.py::EmissiveGroupsSlots.b001` → `tentacle.slots.tools.emissive_groups.EmissiveGroupsSlots` (from 0.30.0)
@@ -413,7 +445,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 - `uv_utils/shell_xform.py::ShellXformSlots.tb008_init` → `tentacle.slots.tools.shell_xform.ShellXformSlots` (from 0.30.0)
 
-## Added (103)
+## Added (107)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -453,6 +485,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/snap.py::Snap.source_and_target()`
 - `light_utils/hdr_manager.py::HdrManager.defer_apply(callback: Callable[[], None]) -> None`
 - `light_utils/hdr_manager.py::HdrManager.select(self, part: str = 'skydome') -> Optional[str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.preset_name(cls, name: str) -> str`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]`
+- `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.select(objects) -> List[str]`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups(class)`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.add_members(self, store: str, face_map: FaceMap) -> None`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.carrier_weights(self, prefix: str) -> List[str]`

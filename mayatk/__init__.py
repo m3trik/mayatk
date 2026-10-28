@@ -211,9 +211,11 @@ DEFAULT_INCLUDE = {
     "mat_utils.emissive_groups": "EmissiveGroups",
     # Render utils
     "render_utils._render_utils": "RenderUtils",
-    # Light utils. The Lightmap Baker and Light Rigs panels (``LightmapBakerSlots``,
-    # ``LightRigSlots``) are discovered by MayaUiHandler, not registered here.
+    # Light utils. Lightmap Baker's panel is tentacle's shared tool; the Light Rigs
+    # panel (``LightRigSlots``) is discovered by MayaUiHandler, not registered here.
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
+    # The bake's Exclude / Isolate sets (the shared panel's rows read them).
+    "mat_utils.bake_sets": ["LightmapExcludeSet", "LightmapIsolateSet"],
     "light_utils.lightmap_baker.lightmap_records": "LightmapRecords",
     "light_utils.light_rig": "LightRig",
     "light_utils.light_layer_baker": "LightLayerBaker",
@@ -508,6 +510,10 @@ MOVED_NAMES = {
     ),
     "MODE_WEIGHT": (
         "tentacle.slots.tools.blendshape_animator.MODE_WEIGHT",
+        "0.30.0",
+    ),
+    "LightmapBakerSlots": (
+        "tentacle.slots.tools.lightmap_baker.LightmapBakerSlots",
         "0.30.0",
     ),
 }

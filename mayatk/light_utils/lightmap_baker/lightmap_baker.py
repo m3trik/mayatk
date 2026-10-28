@@ -38,7 +38,8 @@ ever added a mode to choose wrongly from.
 Quality tiers come from :meth:`from_preset` (pythontk ``PresetStore``). HDR EXR
 throughout; 8-bit/encoded targets are a later (mostly engine-side) stage. For the
 bake primitive alone (no lightmap workflow), use :class:`TextureBaker` directly.
-The panel is :class:`~mayatk.light_utils.lightmap_baker.lightmap_baker_slots.LightmapBakerSlots`.
+Its panel is tentacle's Lightmap Baker (``slots/tools/lightmap_baker.py``): one Slots
+class over this engine and blendertk's.
 """
 
 import contextlib
@@ -494,6 +495,14 @@ class LightmapBaker(ptk.LoggingMixin):
         "beside_textures",
         "reflection_probe",
     )
+    #: The Samples range a panel offers, in this renderer's units: Arnold
+    #: camera (AA) samples, squared, so a few hundred is already extreme.
+    #: blendertk's counts Cycles paths, in the thousands.
+    SAMPLES_RANGE: Tuple[int, int] = (1, 256)
+    #: The processors (:attr:`device` values) that sample adaptively: Arnold's
+    #: GPU only -- a CPU bake ignores :attr:`adaptive`. Cycles adapts on every
+    #: one (blendertk's).
+    ADAPTIVE_DEVICES: Tuple[str, ...] = ("AUTO", "GPU")
     #: Retired built-in tier names -> the current one, warning until they go.
     #: ``"quest"`` (until 2026-09-23) named one headset for a tier that serves
     #: every mobile / standalone-VR target; a script or the panel's preset
@@ -523,6 +532,17 @@ class LightmapBaker(ptk.LoggingMixin):
         return ptk.PresetStore("lightmap", package="mayatk", builtin_dir=builtin)
 
     @classmethod
+    def preset_name(cls, name: str) -> str:
+        """*name* as the preset store knows it now: itself when the store has
+        it -- a user preset saved under a retired tier name still wins -- else
+        the tier a retired name became (with a notice), else unchanged. What
+        :meth:`from_preset` loads, and the panel's Preset pointer follows.
+        Mirror of blendertk's."""
+        if cls.preset_store().exists(name):
+            return name
+        return cls._resolve_retired_preset(name)
+
+    @classmethod
     def from_preset(cls, name: str, **overrides) -> "LightmapBaker":
         """Construct a baker from a named quality preset.
 
@@ -540,8 +560,7 @@ class LightmapBaker(ptk.LoggingMixin):
         (``quest``) still resolves, with a notice.
         """
         store = cls.preset_store()
-        if not store.exists(name):
-            name = cls._resolve_retired_preset(name)
+        name = cls.preset_name(name)
         if not store.exists(name):
             raise ValueError(
                 f"Unknown lightmap preset {name!r}. Available: {store.list()}"
@@ -5272,6 +5291,96 @@ class LightmapBaker(ptk.LoggingMixin):
             return float(cmds.getAttr(f"{light}.intensity")) != 0.0
         except (RuntimeError, ValueError, TypeError):
             return False
+
+    @staticmethod
+    def scope_meshes(scope: str = "selected") -> List[str]:
+        """The meshes a Scope word names, before the Exclude set: what the
+        Lightmap Baker panel's Bake hands :meth:`bake` (its lights ride beside
+        them, :meth:`scope_lights`).
+
+        The words are :class:`pythontk.HandoffScope`'s -- ``selected``,
+        ``visible``, ``scene`` (its synonym for ``all``); anything unknown
+        reads the selection. ``visible`` and ``scene`` gather across the scene
+        so a bake needn't be preceded by a manual select-all; ``selected``
+        takes the selection, a group standing for the meshes under it (a bake
+        set's members are often groups). Every word resolves through
+        :meth:`TextureBaker.resolve_meshes` -- the one definition of
+        "bakeable" -- so a selection that also holds the room's lights bakes
+        the geometry instead of asking Arnold to render a light, and a
+        lights-only selection reads as nothing to bake. Mirror of blendertk's
+        (mesh objects there).
+        """
+        if cmds is None:
+            return []
+
+        def scene_meshes():
+            # Every DAG PATH of every mesh: an instanced shape is ONE node
+            # under several transforms, and a listing of nodes names it once
+            # -- the production room's Scene scope reached 21 of its 61
+            # visible meshes, its 40 instanced walls and props missed (a
+            # group instance hides from a transform listing the same way).
+            # ``or []``: an empty scene is an answer, not "can't enumerate".
+            return (
+                cmds.ls(
+                    type="mesh", dag=True, allPaths=True, noIntermediate=True, long=True
+                )
+                or []
+            )
+
+        def visible_meshes():
+            return [path for path in scene_meshes() if DisplayUtils.is_visible(path)]
+
+        pool = ptk.HandoffScope.resolve(
+            scope,
+            selected=lambda: cmds.ls(selection=True, long=True),
+            all=scene_meshes,
+            visible=visible_meshes,
+        )
+        return TextureBaker.resolve_meshes(pool or [], descendants=True)
+
+    @classmethod
+    def scope_lights(cls, scope: str = "selected") -> List[str]:
+        """The light shapes a Scope word holds: what lights a bake of
+        :meth:`scope_meshes` with :attr:`include_scene_lights` off.
+
+        The same words, read for lights: the lights selected or under the
+        selection (:meth:`_scope_lights`), every visible one, or every one in
+        the scene. Mirror of blendertk's (light objects there).
+        """
+        if cmds is None:
+            return []
+        return list(
+            ptk.HandoffScope.resolve(
+                scope,
+                selected=lambda: cls._scope_lights(None),
+                all=LightUtils.all_lights,
+                visible=lambda: [
+                    light
+                    for light in LightUtils.all_lights()
+                    if DisplayUtils.is_visible(light, consider_templated_visible=True)
+                ],
+            )
+            or []
+        )
+
+    @staticmethod
+    def select(objects) -> List[str]:
+        """Make *objects* the selection -- those that exist, by name or DAG
+        path, hidden ones too -- or clear it when none does: what the Lightmap
+        Baker panel's set rows and map picks select with. Returns the long
+        names selected. Mirror of blendertk's, which leaves out what its view
+        layer cannot select.
+        """
+        if cmds is None:
+            return []
+        names = [str(obj) for obj in objects or () if obj]
+        # ``cmds.ls([])`` would list the whole scene: no names, nothing selected.
+        nodes = (cmds.ls(names, long=True) or []) if names else []
+        if nodes:
+            cmds.select(nodes, replace=True)
+        else:
+            cmds.select(clear=True)
+        return nodes
 
     @staticmethod
     def _scope_lights(objects: Optional[List[str]] = None) -> List[str]:

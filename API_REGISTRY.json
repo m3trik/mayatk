@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 259,
+          "line": 261,
           "deprecated": false
         }
       ]
@@ -17524,7 +17524,7 @@
         {
           "name": "LightmapBakeResult",
           "summary": "What one :meth:`LightmapBaker.bake` did -- the same shape in mayatk and blendertk.",
-          "line": 72,
+          "line": 73,
           "bases": [],
           "members": [
             {
@@ -17533,7 +17533,7 @@
               "kind": "property",
               "signature": "(self) -> List[str]",
               "summary": "The distinct map files, sorted: an atlas 40 objects share counts once.",
-              "line": 130,
+              "line": 131,
               "deprecated": false
             },
             {
@@ -17542,7 +17542,7 @@
               "kind": "property",
               "signature": "(self) -> List[str]",
               "summary": "The distinct folders the maps go in, compared the way the disk does",
-              "line": 135,
+              "line": 136,
               "deprecated": false
             }
           ]
@@ -17550,7 +17550,7 @@
         {
           "name": "LightmapBaker",
           "summary": "Orchestrate the lightmap workflow: check -> bake -> dilate -> record.",
-          "line": 256,
+          "line": 257,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -17561,7 +17561,7 @@
               "kind": "property",
               "signature": "(self) -> Optional[str]",
               "summary": "Which device Arnold bakes on -- ``\"AUTO\"`` (the default: the GPU",
-              "line": 442,
+              "line": 443,
               "deprecated": false
             },
             {
@@ -17570,7 +17570,7 @@
               "kind": "property",
               "signature": "(self) -> bool",
               "summary": "Whether a GPU bake spends its samples adaptively: the preset's AA on",
-              "line": 460,
+              "line": 461,
               "deprecated": false
             },
             {
@@ -17579,7 +17579,16 @@
               "kind": "staticmethod",
               "signature": "() -> 'ptk.PresetStore'",
               "summary": "Shared store of lightmap quality presets (built-in + user tiers).",
-              "line": 515,
+              "line": 524,
+              "deprecated": false
+            },
+            {
+              "name": "preset_name",
+              "qualname": "LightmapBaker.preset_name",
+              "kind": "classmethod",
+              "signature": "(cls, name: str) -> str",
+              "summary": "*name* as the preset store knows it now: itself when the store has",
+              "line": 535,
               "deprecated": false
             },
             {
@@ -17588,7 +17597,7 @@
               "kind": "classmethod",
               "signature": "(cls, name: str, **overrides) -> 'LightmapBaker'",
               "summary": "Construct a baker from a named quality preset.",
-              "line": 526,
+              "line": 546,
               "deprecated": false
             },
             {
@@ -17597,7 +17606,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "The meshes a bake of *objects* acts on (default: the selection).",
-              "line": 566,
+              "line": 585,
               "deprecated": false
             },
             {
@@ -17606,7 +17615,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, packing: str = 'atlas', output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', on_progress: Optional[Callable[[int, int, str], bool]] = None, intensity: float = 1.0, **kwargs) -> LightmapBakeResult",
               "summary": "Bake *objects*' lightmaps and record them: the whole workflow, as the panel runs it.",
-              "line": 678,
+              "line": 697,
               "deprecated": false
             },
             {
@@ -17615,7 +17624,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, reach: Optional[float] = None, output_dir: Optional[str] = None, relocate: bool = False) -> 'ptk.StaleReport'",
               "summary": "What a re-bake of the changed objects would redo, and why -- the dry run.",
-              "line": 886,
+              "line": 905,
               "deprecated": false
             },
             {
@@ -17624,7 +17633,7 @@
               "kind": "method",
               "signature": "(self, packing: Optional[str] = None, reach: Optional[float] = None, lighting: bool = True, relocate: bool = False, **bake_kwargs) -> LightmapBakeResult",
               "summary": "Re-bake what changed since the last bake, and what that change shades.",
-              "line": 1023,
+              "line": 1042,
               "deprecated": false
             },
             {
@@ -17633,7 +17642,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, relocate: bool = False, intensity: Optional[float] = None) -> 'ptk.StaleReport'",
               "summary": "What :meth:`rebake` of *objects* would redo -- its dry run.",
-              "line": 1082,
+              "line": 1101,
               "deprecated": false
             },
             {
@@ -17642,7 +17651,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, packing: Optional[str] = None, relocate: bool = False, **bake_kwargs) -> LightmapBakeResult",
               "summary": "Re-bake *objects* the way each was baked, changed or not.",
-              "line": 1114,
+              "line": 1133,
               "deprecated": false
             },
             {
@@ -17651,7 +17660,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> Dict[str, List[str]]",
               "summary": "``{folder: [map file names]}`` -- where the maps *objects* read are",
-              "line": 1234,
+              "line": 1253,
               "deprecated": false
             },
             {
@@ -17660,7 +17669,7 @@
               "kind": "method",
               "signature": "(self, output_dir: Optional[str] = None, relocate: bool = False) -> 'ptk.ReportDoc'",
               "summary": "The scene's bake state, map by map -- the Bake State viewer.",
-              "line": 1248,
+              "line": 1267,
               "deprecated": false
             },
             {
@@ -17669,7 +17678,7 @@
               "kind": "method",
               "signature": "(self, report: Optional['ptk.StaleReport'] = None, output_dir: Optional[str] = None, relocate: bool = False) -> List[Dict[str, Any]]",
               "summary": "The lightmaps the scene reads, each with its state -- the Lightmap",
-              "line": 1265,
+              "line": 1284,
               "deprecated": false
             },
             {
@@ -17678,7 +17687,7 @@
               "kind": "method",
               "signature": "(self, maps: Optional[Dict[str, str]] = None) -> Optional[str]",
               "summary": "Capture the room the scene's bake lit as a reflection probe, and record it.",
-              "line": 1549,
+              "line": 1568,
               "deprecated": false
             },
             {
@@ -17687,7 +17696,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> Optional[str]",
               "summary": "Why this scene cannot bake *objects* now, or ``None``;",
-              "line": 1741,
+              "line": 1760,
               "deprecated": false
             },
             {
@@ -17696,7 +17705,7 @@
               "kind": "classmethod",
               "signature": "(cls, paths) -> Dict[str, Tuple[float, float]]",
               "summary": "``{path: (mean RGB, fraction of channels at the half-float ceiling)}``.",
-              "line": 1858,
+              "line": 1877,
               "deprecated": false
             },
             {
@@ -17705,7 +17714,7 @@
               "kind": "classmethod",
               "signature": "(cls, paths) -> Optional[Tuple[str, float, float]]",
               "summary": "``(path, mean, saturated)`` for the BRIGHTEST map, or ``None`` if none reads.",
-              "line": 1889,
+              "line": 1908,
               "deprecated": false
             },
             {
@@ -17714,7 +17723,7 @@
               "kind": "method",
               "signature": "(self, paths) -> Optional[str]",
               "summary": "A warning about a finished bake's level, or ``None`` when it is plausible.",
-              "line": 1902,
+              "line": 1921,
               "deprecated": false
             },
             {
@@ -17723,7 +17732,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = 'lightmap_irr_', batch: bool = True, **kwargs) -> Dict[str, str]",
               "summary": "Bake a **lighting-only** (white-card) irradiance lightmap per object.",
-              "line": 2306,
+              "line": 2325,
               "deprecated": false
             },
             {
@@ -17732,7 +17741,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None, output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', **kwargs) -> Dict[str, Tuple[str, List[float]]]",
               "summary": "Bake a material-atlased lighting-only lightmap set -- plan first, then bake to plan.",
-              "line": 2668,
+              "line": 2687,
               "deprecated": false
             },
             {
@@ -17741,7 +17750,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> Dict[str, List[Tuple[str, List[float]]]]",
               "summary": "``{material: [(object, rect), ...]}`` -- the atlas layout, decided before baking.",
-              "line": 3437,
+              "line": 3456,
               "deprecated": false
             },
             {
@@ -17750,7 +17759,7 @@
               "kind": "method",
               "signature": "(self, plan: Dict[str, List[Tuple[str, List[float]]]]) -> Dict[str, Tuple[int, int]]",
               "summary": "``{object: (width, height)}`` -- the pixel footprint each object occupies.",
-              "line": 3589,
+              "line": 3608,
               "deprecated": false
             },
             {
@@ -17759,7 +17768,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str], output_dir: Optional[str] = None, prefix: str = '', suffix: str = '_Lightmap', keep_sources: bool = False, plan: Optional[Dict[str, List[Tuple[str, List[float]]]]] = None, claims: Optional[Dict[str, Any]] = None, regions: Optional[Dict[str, Tuple[float, float, float, float]]] = None) -> Dict[str, Tuple[str, List[float]]]",
               "summary": "Consolidate per-object lightmaps into one atlas EXR per primary material.",
-              "line": 3917,
+              "line": 3936,
               "deprecated": false
             },
             {
@@ -17768,7 +17777,7 @@
               "kind": "method",
               "signature": "(self, mapping: Dict[str, str], *, scale_offsets: Optional[Dict[str, List[float]]] = None) -> Dict[str, str]",
               "summary": "Record maps baked elsewhere: :meth:`LightmapRecords.commit`.",
-              "line": 4823,
+              "line": 4842,
               "deprecated": false
             },
             {
@@ -17777,7 +17786,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Take the lightmaps off *objects*, or off every baked object for ``None``.",
-              "line": 4841,
+              "line": 4860,
               "deprecated": false
             },
             {
@@ -17786,7 +17795,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": ":meth:`revert`, under its original name.",
-              "line": 4850,
+              "line": 4869,
               "deprecated": false
             },
             {
@@ -17795,7 +17804,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "The objects :meth:`revert` would take the lightmap from.",
-              "line": 4854,
+              "line": 4873,
               "deprecated": false
             },
             {
@@ -17804,7 +17813,7 @@
               "kind": "method",
               "signature": "(self, objects: Optional[List[str]] = None) -> List[str]",
               "summary": "Start tracking *objects*' untracked maps as they stand -- no render.",
-              "line": 4862,
+              "line": 4881,
               "deprecated": false
             },
             {
@@ -17813,7 +17822,7 @@
               "kind": "method",
               "signature": "(self, maps: Optional[List[str]] = None) -> List[Tuple[int, float]]",
               "summary": "``[(size, kept)]`` -- the atlas sizes :meth:`combine` of *maps* can",
-              "line": 4885,
+              "line": 4904,
               "deprecated": false
             },
             {
@@ -17822,305 +17831,34 @@
               "kind": "method",
               "signature": "(self, maps: Optional[List[str]] = None, size: Optional[int] = None, merge_materials: bool = True, on_progress: Optional[Callable[[int, int, str], Any]] = None) -> LightmapBakeResult",
               "summary": "Pack each split group *maps* belong to into one atlas -- no render.",
-              "line": 4921,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "light_utils/lightmap_baker/lightmap_baker_slots.py",
-      "summary": "The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "LightmapBakerSlots",
-          "summary": "Switchboard slots for the ``lightmap_baker.ui`` panel.",
-          "line": 33,
-          "bases": [
-            "pythontk.LoggingMixin",
-            "pythontk.HelpMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "LightmapBakerSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Configure the header and its help text.",
-              "line": 317,
+              "line": 4940,
               "deprecated": false
             },
             {
-              "name": "cmb000_init",
-              "qualname": "LightmapBakerSlots.cmb000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Wire the Preset combo: uitk's preset template over the shared store.",
-              "line": 388,
+              "name": "scope_meshes",
+              "qualname": "LightmapBaker.scope_meshes",
+              "kind": "staticmethod",
+              "signature": "(scope: str = 'selected') -> List[str]",
+              "summary": "The meshes a Scope word names, before the Exclude set: what the",
+              "line": 5296,
               "deprecated": false
             },
             {
-              "name": "btn_reset_defaults_init",
-              "qualname": "LightmapBakerSlots.btn_reset_defaults_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Wire Reset to Defaults to uitk's shared reset grammar.",
-              "line": 437,
+              "name": "scope_lights",
+              "qualname": "LightmapBaker.scope_lights",
+              "kind": "classmethod",
+              "signature": "(cls, scope: str = 'selected') -> List[str]",
+              "summary": "The light shapes a Scope word holds: what lights a bake of",
+              "line": 5342,
               "deprecated": false
             },
             {
-              "name": "cmb002_init",
-              "qualname": "LightmapBakerSlots.cmb002_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the Packing combobox (Atlas by Material is the default) and",
-              "line": 622,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_scope_init",
-              "qualname": "LightmapBakerSlots.cmb_scope_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the Scope combobox (Selected is the default) and hang the",
-              "line": 665,
-              "deprecated": false
-            },
-            {
-              "name": "set_exclusions_init",
-              "qualname": "LightmapBakerSlots.set_exclusions_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Hang Select / Clear off the Exclude row (:meth:`_init_set_row`).",
-              "line": 936,
-              "deprecated": false
-            },
-            {
-              "name": "set_exclusions",
-              "qualname": "LightmapBakerSlots.set_exclusions",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Make the selection the Exclude set;",
-              "line": 940,
-              "deprecated": false
-            },
-            {
-              "name": "select_exclusions",
-              "qualname": "LightmapBakerSlots.select_exclusions",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the Exclude set's members, hidden ones included.",
-              "line": 944,
-              "deprecated": false
-            },
-            {
-              "name": "clear_exclusions",
-              "qualname": "LightmapBakerSlots.clear_exclusions",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the Exclude set;",
-              "line": 948,
-              "deprecated": false
-            },
-            {
-              "name": "set_isolation_init",
-              "qualname": "LightmapBakerSlots.set_isolation_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Hang Select / Clear off the Isolate row (:meth:`_init_set_row`).",
-              "line": 957,
-              "deprecated": false
-            },
-            {
-              "name": "set_isolation",
-              "qualname": "LightmapBakerSlots.set_isolation",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Make the selection the Isolate set;",
-              "line": 961,
-              "deprecated": false
-            },
-            {
-              "name": "select_isolation",
-              "qualname": "LightmapBakerSlots.select_isolation",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the Isolate set's members, hidden ones included.",
-              "line": 965,
-              "deprecated": false
-            },
-            {
-              "name": "clear_isolation",
-              "qualname": "LightmapBakerSlots.clear_isolation",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the Isolate set;",
-              "line": 969,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_resolution_init",
-              "qualname": "LightmapBakerSlots.cmb_resolution_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the Resolution combobox (value carried as item data,",
-              "line": 977,
-              "deprecated": false
-            },
-            {
-              "name": "spn_samples_init",
-              "qualname": "LightmapBakerSlots.spn_samples_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Hang the Adaptive Sampling switch off the Samples field.",
-              "line": 1011,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_device_init",
-              "qualname": "LightmapBakerSlots.cmb_device_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the Processor combobox (value carried as item data);",
-              "line": 1037,
-              "deprecated": false
-            },
-            {
-              "name": "txt_output_dir_init",
-              "qualname": "LightmapBakerSlots.txt_output_dir_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Add the folder browser and the Beside Material Textures toggle.",
-              "line": 1072,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "LightmapBakerSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Add the Prefix / Suffix / Auto picker to the name-affix field.",
-              "line": 1169,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "LightmapBakerSlots.b000",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "The Bake page's run button: bake the Scope minus the Exclude set",
-              "line": 1205,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_page_init",
-              "qualname": "LightmapBakerSlots.cmb_page_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "Populate the page picker (Bake first);",
-              "line": 1419,
-              "deprecated": false
-            },
-            {
-              "name": "cmb_page",
-              "qualname": "LightmapBakerSlots.cmb_page",
-              "kind": "method",
-              "signature": "(self, index) -> None",
-              "summary": "Show the picked page (:meth:`_refresh_page`).",
-              "line": 1425,
-              "deprecated": false
-            },
-            {
-              "name": "tbl_maps_init",
-              "qualname": "LightmapBakerSlots.tbl_maps_init",
-              "kind": "method",
-              "signature": "(self, widget) -> None",
-              "summary": "The Manage table: one row per map the scene reads",
-              "line": 1449,
-              "deprecated": false
-            },
-            {
-              "name": "select_by_state",
-              "qualname": "LightmapBakerSlots.select_by_state",
-              "kind": "method",
-              "signature": "(self, kind: str) -> None",
-              "summary": "The footer's **Select**: highlight the maps in *kind*'s state on",
-              "line": 1649,
-              "deprecated": false
-            },
-            {
-              "name": "open_map_folder",
-              "qualname": "LightmapBakerSlots.open_map_folder",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open the highlighted map's folder in the file manager.",
-              "line": 1718,
-              "deprecated": false
-            },
-            {
-              "name": "combine_selected",
-              "qualname": "LightmapBakerSlots.combine_selected",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Pack the highlighted split maps' groups into one atlas each, no",
-              "line": 1733,
-              "deprecated": false
-            },
-            {
-              "name": "fix_all",
-              "qualname": "LightmapBakerSlots.fix_all",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "The footer's **Fix All**: every map that needs it, once confirmed",
-              "line": 1811,
-              "deprecated": false
-            },
-            {
-              "name": "track_selected",
-              "qualname": "LightmapBakerSlots.track_selected",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Start tracking the selected untracked objects as they stand",
-              "line": 1924,
-              "deprecated": false
-            },
-            {
-              "name": "revert_selected",
-              "qualname": "LightmapBakerSlots.revert_selected",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Take the lightmaps off the selected objects, once confirmed.",
-              "line": 1950,
-              "deprecated": false
-            },
-            {
-              "name": "rebake_selected",
-              "qualname": "LightmapBakerSlots.rebake_selected",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Re-bake the selected baked objects the way each was baked, changed",
-              "line": 2001,
-              "deprecated": false
-            },
-            {
-              "name": "show_bake_state",
-              "qualname": "LightmapBakerSlots.show_bake_state",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Show the scene's bake state, map by map, in a viewer",
-              "line": 2038,
-              "deprecated": false
-            },
-            {
-              "name": "open_output",
-              "qualname": "LightmapBakerSlots.open_output",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Open the bake's output folder in the file manager.",
-              "line": 2114,
+              "name": "select",
+              "qualname": "LightmapBaker.select",
+              "kind": "staticmethod",
+              "signature": "(objects) -> List[str]",
+              "summary": "Make *objects* the selection -- those that exist, by name or DAG",
+              "line": 5367,
               "deprecated": false
             }
           ]

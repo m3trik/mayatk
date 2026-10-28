@@ -723,11 +723,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class LightmapBakeResult`
   - methods: files, folders
 - `class LightmapBaker(pythontk.LoggingMixin)`
-  - methods: device, adaptive, preset_store, from_preset, bake_targets, bake, stale_report, rebake_changed, rebake_report, rebake, map_folders, bake_breakdown, bake_maps, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, track, combine_sizes, combine
-
-### `light_utils/lightmap_baker/lightmap_baker_slots.py` — The Lightmap Baker panel: Switchboard slots for ``lightmap_baker.ui``.
-- `class LightmapBakerSlots(pythontk.LoggingMixin, pythontk.HelpMixin)`
-  - methods: header_init, cmb000_init, btn_reset_defaults_init, cmb002_init, cmb_scope_init, set_exclusions_init, set_exclusions, select_exclusions, clear_exclusions, set_isolation_init, set_isolation, select_isolation, clear_isolation, cmb_resolution_init, spn_samples_init, cmb_device_init, txt_output_dir_init, txt000_init, b000, cmb_page_init, cmb_page, tbl_maps_init, select_by_state, open_map_folder, combine_selected, fix_all, track_selected, revert_selected, rebake_selected, show_bake_state, open_output
+  - methods: device, adaptive, preset_store, preset_name, from_preset, bake_targets, bake, stale_report, rebake_changed, rebake_report, rebake, map_folders, bake_breakdown, bake_maps, bake_probe, preflight, map_levels, peak_level, bake_verdict, bake_separated, bake_atlas, atlas_plan, plan_sizes, pack_atlas, commit_lightmap, revert, revert_lightmap, baked_objects, track, combine_sizes, combine, scope_meshes, scope_lights, select
 
 ### `light_utils/lightmap_baker/lightmap_records.py` — The scene record a lightmap bake leaves in Maya: markers, manifest, and the files they name.
 - `class LightmapRecords(pythontk.LoggingMixin)`
