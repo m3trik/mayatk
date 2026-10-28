@@ -8,6 +8,10 @@ in the request's carrier, FBX (including the strip-materials path) or USD -- so 
 Blender bridge, the Unity bridge, and any future Maya->X bridge don't each
 re-implement them.
 
+:class:`BridgeHost` is the host half of tentacle's shared bridge panels
+(``mtk.BridgeHost``; blendertk's mirrors it): a Scope's objects, what a send of them
+ships, and where an optional package installs.
+
 Per-bridge specifics (target discovery, delivery, export option tweaks) stay on the
 bridge subclass; only the genuinely shared Maya plumbing lives here. ``import
 maya.cmds`` is deferred so the engine surface still resolves headlessly; ``FbxUtils``
@@ -199,8 +203,8 @@ class MayaExportMixin:
 
         Sibling of :meth:`_scene_objects`, and the same kind of host read: the two
         widening scopes ``uitk.bridge.Parameters.scope_spec`` declares. Static
-        because it consults only the scene -- which lets the bridge-slots resolver
-        (``MayaBridgeSlotsBase.resolve_scope_objects``) call it for panels whose
+        because it consults only the scene -- which lets the scope resolver
+        (:meth:`BridgeHost.resolve_scope`) call it for panels whose
         bridge has no export mixin at all, so there is one implementation of
         "visible" rather than one per caller.
 
@@ -853,3 +857,85 @@ class MayaExportMixin:
                 if frames:
                     out.setdefault(spell(node), {})[channel] = frames
         return out
+
+
+class BridgeHost:
+    """What a bridge panel asks of Maya: a Scope's objects, what a send of them
+    ships, and where an optional package installs.
+
+    The host half of tentacle's shared bridge panels (``slots/tools/_bridge``),
+    reached as ``mtk.BridgeHost``; blendertk's ``BridgeHost`` mirrors it by name
+    and signature. Stateless: each call reads the scene it is made in.
+    """
+
+    @staticmethod
+    def resolve_scope(scope: str, bridge=None) -> List[str]:
+        """The objects a ``SCOPE`` word names (``uitk.bridge.Parameters.scope_spec``).
+
+        Mesh shapes and transforms come back as they are; the engines'
+        :class:`MayaExportMixin` coerces them to transforms. ``"selected"`` is the
+        default AND the fallback for an unknown word: an unrecognised scope must
+        never silently widen a send to the whole scene. The precedence is
+        :class:`pythontk.HandoffScope`'s; this supplies Maya's scene reads.
+
+        Parameters:
+            scope: ``"selected"``, ``"all"`` or ``"visible"``.
+            bridge: The panel's engine, or ``None``. Entire Scene asks its
+                whole-scene hook first (``MayaExportMixin._scene_objects``: the DAG
+                roots minus the startup cameras, the set ``save_as`` ships), so
+                group and locator transforms reach the exporter and the hierarchy
+                travels -- a mesh-only read re-rooted every child on the far side.
+                With no engine, or one whose hook does not answer (an RPC baker's),
+                Entire Scene is the scene's meshes.
+
+        Returns:
+            The long names in scope.
+        """
+
+        def scene_hook():
+            hook = getattr(bridge, "_scene_objects", None)
+            return hook() if hook is not None else None
+
+        return ptk.HandoffScope.resolve(
+            scope,
+            selected=lambda: cmds.ls(selection=True, long=True) or [],
+            all=(
+                scene_hook,
+                lambda: cmds.ls(type="mesh", noIntermediate=True, long=True) or [],
+            ),
+            # The export mixin's static read, with or without an engine: one
+            # implementation of "visible".
+            visible=lambda: MayaExportMixin._visible_objects(),
+        )
+
+    @staticmethod
+    def scope_closure(objects, params: Optional[Dict[str, Any]] = None) -> List[str]:
+        """What a send of the scoped *objects* ships: the objects as they are.
+
+        Maya's export-selection writes each object's subtree itself, so a scoped
+        group ships its group with no closure here (blendertk's mirror adds the
+        hierarchy Blender's FBX would otherwise drop).
+
+        Parameters:
+            objects: What :meth:`resolve_scope` returned.
+            params: The send's parameters (unread here; the mirror reads ``SCOPE``).
+
+        Returns:
+            *objects*, as a list.
+        """
+        return list(objects)
+
+    @staticmethod
+    def install_package(spec: str) -> None:
+        """Install the pip requirement *spec* where this session imports from.
+
+        Maya's interpreter keeps its user site on ``sys.path``, so uitk's default
+        install is the answer: ``pip install --user`` driven through mayapy, never
+        ``maya.exe`` (blendertk's mirror installs into Blender's user modules).
+
+        Parameters:
+            spec: A requirement, e.g. ``unitytk>=0.1.0``.
+        """
+        from uitk import OptionalPackageManager
+
+        OptionalPackageManager.default_install(spec)

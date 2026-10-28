@@ -562,6 +562,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `env_utils/handoff_export.py` — Maya-side selection + export hooks shared by the hand-off bridge engines.
 - `class MayaExportMixin`
   - methods: lightmap_search_dirs, stepped_keys
+- `class BridgeHost`
+  - methods: resolve_scope, scope_closure, install_package
 
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
 - constants: MAYA_DEFAULT_CAMERAS
@@ -639,19 +641,11 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/unity_bridge/_unity_bridge.py` — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 - `class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`
-  - methods: list_template_modes, params_defaults, list_delivery_modes
-
-### `env_utils/unity_bridge/_unity_panel.py` — What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.
-- `class UnityPanelMixin`
-  - methods: template_dir, list_template_modes, default_output_dir
+  - methods: list_template_modes, params_registry, params_defaults, list_delivery_modes
 
 ### `env_utils/unity_bridge/parameters.py` — User-tunable parameters for the Maya->Unity bridge panel.
 - constants: PARAMS
 - `class Parameters(ParamRegistry)`
-
-### `env_utils/unity_bridge/unity_bridge_slots.py` — Slots for the Unity bridge panel.
-- `class UnityBridgeSlots(UnityPanelMixin, MayaBridgeSlotsBase)`
-  - methods: params_module, make_bridge, b000
 
 ### `env_utils/usd.py` — USD import / export over Maya's native ``mayaUsd`` runtime.
 - `class UsdReadRefused(RuntimeError)`
@@ -716,7 +710,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/bake_sets.py` — Scene-stored bake sets: named object sets the bake tools read.
 - `class BakeSet`
-  - methods: conventional_name, name, exists, members, meshes, define, respell, clear
+  - methods: conventional_name, name, exists, members, member_names, select, meshes, define, respell, clear
 - `class BakeSourceSet(BakeSet)`
   - methods: companion_path
 - `class LightmapExcludeSet(BakeSet)`
@@ -752,7 +746,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/marmoset_bridge/marmoset_bridge_slots.py` — Slots for the Marmoset Toolbag bridge panel.
 - `class MarmosetBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
+  - methods: params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/marmoset_bridge/marmoset_rpc/connection.py` — JSON-RPC client bound to the marmoset_rpc Toolbag plugin.
 - constants: DEFAULT_HOST, DEFAULT_PORT
@@ -884,7 +878,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `mat_utils/substance_bridge/substance_bridge_slots.py` — Slots for the Substance Painter bridge panel.
 - `class SubstanceBridgeSlots(MayaBridgeSlotsBase)`
-  - methods: set_bake_source_from_selection, select_bake_source, clear_bake_source, params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
+  - methods: params_module, template_dir, make_bridge, list_template_modes, select_initial_template_index, b000
 
 ### `mat_utils/substance_bridge/substance_rpc/client.py` — HTTP RPC client for the Painter-side ``substance_rpc`` plugin.
 - constants: DEFAULT_RPC_PORT
@@ -1083,7 +1077,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/maya_bridge_slots_base.py` — Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 - `class MayaBridgeSlotsBase(BridgeSlotsBase)`
-  - methods: live_param_tooltip_blocks, resolve_scope_objects
+  - methods: live_param_tooltip_blocks, set_bake_source_from_selection, select_bake_source, clear_bake_source, resolve_scope_objects
 
 ### `ui_utils/maya_native_menus.py`
 - `class MayaNativeMenus(pythontk.LoggingMixin)`

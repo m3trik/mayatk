@@ -82,7 +82,7 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     # Header = the base panel-level utilities only (Clear Log). Template
     # management lives on the template combo's own menu; the Bake Source set
     # actions are the bake template's BAKE_SOURCE_SET param row (parameters.py)
-    # -- the base auto-wires its buttons to the same-named methods below.
+    # -- the base auto-wires its buttons to the same-named methods it carries.
 
     HELP_SPEC = {
         "title": "Marmoset Bridge",
@@ -139,8 +139,17 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
     }
 
     # ------------------------------------------------------------------
-    # Bake Source set (bake param-row actions; shared with the substance bridge)
+    # Bake Source set (the row's actions live on the shared base; this bridge
+    # adds what the set means for ITS send -- mirror of blendertk's)
     # ------------------------------------------------------------------
+
+    BAKE_SOURCE_DEFINED_NOTE = (
+        "Bake sends now export it as the bake source "
+        "(the Source/Target Suffix fallback is inactive while it exists)."
+    )
+    BAKE_SOURCE_CLEARED_NOTE = (
+        "Pairing falls back to the Source/Target Suffix convention."
+    )
 
     #: Rows that only apply when the scene has NO Bake Source set -- the
     #: name-suffix pairing fallback. An explicit set classifies both sides
@@ -166,50 +175,6 @@ class MarmosetBridgeSlots(MayaBridgeSlotsBase):
             self.set_param_enabled(
                 key, not has_set, self._SUFFIX_DISABLED_REASON if has_set else ""
             )
-
-    def set_bake_source_from_selection(self) -> None:
-        """Store the current selection as the scene's bake source."""
-        if cmds is None:
-            return
-        members = BakeSourceSet.define()
-        self._refresh_param_enablement()
-        if not members:
-            self.bridge.logger.warning(
-                "Nothing selected; the bake-source set was cleared."
-            )
-            return
-        self.bridge.logger.info(
-            f"Bake Source set: {len(members)} object(s) -> {BakeSourceSet.SET_NAME}. "
-            f"Bake sends now export it as the bake source "
-            f"(the Source/Target Suffix fallback is inactive while it exists)."
-        )
-
-    def select_bake_source(self) -> None:
-        """Select the bake-source set's members (hidden ones included)."""
-        if cmds is None:
-            return
-        members = BakeSourceSet.members()
-        # Also resyncs the suffix rows if the set was deleted outside the panel.
-        self._refresh_param_enablement()
-        if not members:
-            self.bridge.logger.warning("This scene has no bake-source set.")
-            return
-        cmds.select(members, replace=True)
-        self.bridge.logger.info(f"Selected {len(members)} bake-source object(s).")
-
-    def clear_bake_source(self) -> None:
-        """Delete the bake-source set node; its members are left alone."""
-        if cmds is None:
-            return
-        if not BakeSourceSet.exists():
-            self.bridge.logger.warning("This scene has no bake-source set.")
-            return
-        BakeSourceSet.clear()
-        self._refresh_param_enablement()
-        self.bridge.logger.info(
-            "Bake-source set cleared. Pairing falls back to the Source/Target "
-            "Suffix convention."
-        )
 
     # ------------------------------------------------------------------
     # Required base-class hooks

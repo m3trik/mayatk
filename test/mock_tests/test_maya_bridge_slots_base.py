@@ -1,6 +1,9 @@
 # !/usr/bin/python
 # coding=utf-8
-"""``MayaBridgeSlotsBase.resolve_scope_objects`` precedence, with no Maya.
+"""``BridgeHost.resolve_scope`` precedence, with no Maya.
+
+The resolver tentacle's bridge panels call (``mtk.BridgeHost``) and
+``MayaBridgeSlotsBase.resolve_scope_objects`` delegates to.
 
 The scene reads are mocked (``maya.cmds`` from this dir's conftest, the export
 mixin's static visible read patched); what is pinned is WHICH read answers each
@@ -43,9 +46,9 @@ class TestScopePrecedence(unittest.TestCase):
 
     @staticmethod
     def _resolve(scope, owner):
-        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+        from mayatk.env_utils.handoff_export import BridgeHost
 
-        return MayaBridgeSlotsBase.resolve_scope_objects(owner, scope)
+        return BridgeHost.resolve_scope(scope, getattr(owner, "bridge", None))
 
     def test_selected_and_unknown_read_the_selection(self):
         owner = types.SimpleNamespace()  # no .bridge: must not be needed
@@ -74,6 +77,22 @@ class TestScopePrecedence(unittest.TestCase):
     def test_visible_reads_the_export_mixin_without_a_bridge(self):
         owner = types.SimpleNamespace()
         self.assertEqual(self._resolve("visible", owner), ["|visible"])
+
+    def test_a_bridge_without_the_hook_falls_back_to_the_meshes(self):
+        """An engine with no whole-scene hook at all (an RPC baker) answers
+        nothing, so Entire Scene is the scene's meshes."""
+        owner = types.SimpleNamespace(bridge=types.SimpleNamespace())
+        self.assertEqual(self._resolve("all", owner), ["|meshShape"])
+
+    def test_the_slots_base_delegates_to_the_host(self):
+        from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
+
+        owner = types.SimpleNamespace(
+            bridge=types.SimpleNamespace(_scene_objects=lambda: ["|root"])
+        )
+        self.assertEqual(
+            MayaBridgeSlotsBase.resolve_scope_objects(owner, "all"), ["|root"]
+        )
 
 
 if __name__ == "__main__":

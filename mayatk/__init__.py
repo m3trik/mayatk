@@ -181,8 +181,10 @@ DEFAULT_INCLUDE = {
     # Retired 2026-10-20 (removed in 0.29.0): the sections of live-scene state
     # a GLB took beside its FBX -- the materials record states every material.
     "env_utils.scene_state": "SceneState",
-    # Unity bridge engine (``btk.UnityBridge`` twin); its panel is discovered.
+    # Unity bridge engine (``btk.UnityBridge`` twin); its panel is tentacle's shared tool.
     "env_utils.unity_bridge._unity_bridge": "UnityBridge",
+    # What every bridge panel asks of the host: scope, closure, package install.
+    "env_utils.handoff_export": "BridgeHost",
     # Material utils
     "mat_utils.game_shader": "GameShader",
     "light_utils.hdr_manager": "HdrManager",
@@ -218,7 +220,7 @@ DEFAULT_INCLUDE = {
     # panel (``LightRigSlots``) is discovered by MayaUiHandler, not registered here.
     "light_utils.lightmap_baker.lightmap_baker": "LightmapBaker",
     # The bake's Exclude / Isolate sets (the shared panel's rows read them).
-    "mat_utils.bake_sets": ["LightmapExcludeSet", "LightmapIsolateSet"],
+    "mat_utils.bake_sets": ["BakeSourceSet", "LightmapExcludeSet", "LightmapIsolateSet"],
     "light_utils.lightmap_baker.lightmap_records": "LightmapRecords",
     "light_utils.light_rig": "LightRig",
     "light_utils.light_layer_baker": "LightLayerBaker",
@@ -558,6 +560,14 @@ MOVED_NAMES = {
     ),
     "TreePathMatcher": (
         "tentacle.slots.tools._hierarchy_sync.tree_matcher.TreePathMatcher",
+        "0.30.0",
+    ),
+    "UnityBridgeSlots": (
+        "tentacle.slots.tools.unity_bridge.UnityBridgeSlots",
+        "0.30.0",
+    ),
+    "UnityPanelMixin": (
+        "tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin",
         "0.30.0",
     ),
 }

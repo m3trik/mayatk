@@ -102,6 +102,25 @@ class TestBakeSourceSet(MayaTkTestCase):
         self.assertFalse(BakeSourceSet.exists())
         self.assertEqual(BakeSourceSet.members(), [])
 
+    def test_member_names_are_short_for_display(self):
+        """The Bake Source row's tooltip lists these (tentacle's bridge base)."""
+        grp = cmds.group(self.cube, name="bakeset_grp")
+        BakeSourceSet.define([grp])
+        self.assertEqual(BakeSourceSet.member_names(), ["bakeset_grp"])
+
+    def test_select_takes_every_member_hidden_ones_too(self):
+        BakeSourceSet.define([self.cube, self.other])
+        cmds.setAttr(f"{self.other}.visibility", 0)
+        cmds.select(clear=True)
+        selected = BakeSourceSet.select()
+        self.assertEqual(sorted(selected), sorted(BakeSourceSet.members()))
+        self.assertEqual(sorted(cmds.ls(selection=True, long=True)), sorted(selected))
+
+    def test_select_without_a_set_leaves_the_selection(self):
+        cmds.select(self.cube, replace=True)
+        self.assertEqual(BakeSourceSet.select(), [])
+        self.assertEqual(cmds.ls(selection=True), [self.cube])
+
 
 class TestLightmapExcludeSet(MayaTkTestCase):
     """The lightmap Exclude set: a second :class:`BakeSet` with its own node.

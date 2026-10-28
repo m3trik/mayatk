@@ -10,7 +10,6 @@ with an ``Assets/`` directory, and ``LAUNCH_MODE`` defaults to no-launch.
 Run inside a live Maya session via ``run_tests.py`` (``run_tests.py unity_bridge``).
 """
 
-import contextlib
 import shutil
 import tempfile
 import unittest
@@ -68,54 +67,25 @@ class TestUnityBridgeUnit(unittest.TestCase):
         self.assertEqual(d["SCOPE"], "selected")
         self.assertEqual(d["UNITY_VERSION"], "")  # auto/newest
 
-    def test_slot_delivery_and_manage_modes_no_studio(self):
-        """The slot exposes copy-to-Assets plus the Manage Unity Scripts flow;
-        the 'Unity Studio' mode is gone.
+    def test_the_panel_reads_its_registry_off_the_engine(self):
+        """tentacle's shared Unity Bridge builds its rows from
+        ``UnityBridge.params_registry()``; the engine's defaults read the same."""
+        from mayatk.env_utils.unity_bridge import parameters as P
 
-        Unity Studio is a separate paid, browser-based product (Unity Cloud Asset
-        Manager), not this desktop FBX hand-off, so it was removed. Script
-        management is panel-native (its own SCRIPTS checklist + SCRIPTS_ACTION
-        parameters), not a buried menu button.
-        """
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
-            UnityBridgeSlots as S,
-        )
-
-        self.assertEqual(S.MODE_COPY, "copy_to_assets")
-        self.assertEqual(S.MODE_MANAGE, "manage_scripts")
-        self.assertEqual(
-            S.MODE_LABELS,
-            {S.MODE_COPY: "Copy to Project", S.MODE_MANAGE: "Manage Unity Scripts"},
-        )
-        self.assertEqual(
-            S.list_template_modes(S), [(S.MODE_COPY, ""), (S.MODE_MANAGE, "")]
-        )
-        # The management flow is a template, not a field-menu button.
-        self.assertTrue(hasattr(S, "_manage_unity_scripts"))
-        self.assertFalse(hasattr(S, "_deploy_unity_scripts"))
-        # No leftover Unity Studio surface.
-        self.assertFalse(hasattr(S, "MODE_STUDIO"))
-        self.assertFalse(hasattr(S, "MODE_EXISTING"))
-        self.assertFalse(hasattr(S, "MODE_PARAM_KEYS"))
+        self.assertIs(UnityBridge.params_registry(), P.Parameters)
+        self.assertEqual(UnityBridge().params_defaults(), P.Parameters.defaults())
 
     def test_script_params_are_a_runtime_populated_checklist(self):
         """The Manage Unity Scripts mode owns a checkable script list + the
         action combo; the list's entries are filled from the installed unitytk
-        release at panel init, so the registry hard-codes no C# filenames."""
+        release by the panel, so the registry hard-codes no C# filenames."""
         from mayatk.env_utils.unity_bridge import parameters as P
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import (
-            UnityBridgeSlots as S,
-        )
 
         spec = P.PARAMS["SCRIPTS"]
         self.assertEqual(spec.kind, "check_list")
         self.assertEqual(list(spec.choices), [])  # runtime-populated
         self.assertEqual(spec.default, [])
-        self.assertEqual(S.SCRIPT_PARAM_KEYS, frozenset({"SCRIPTS", "SCRIPTS_ACTION"}))
-        # Both are gated off the export mode (they only apply to manage mode).
-        self.assertTrue(S.SCRIPT_PARAM_KEYS.issubset(set(P.PARAMS)))
-        self.assertTrue(hasattr(S, "_populate_script_components"))
-        self.assertTrue(hasattr(S, "_script_selection"))
+        self.assertTrue({"SCRIPTS", "SCRIPTS_ACTION"}.issubset(set(P.PARAMS)))
 
     def test_deployable_components_back_the_checklist(self):
         """The checklist rows are unitytk's deployable components -- optional
@@ -325,36 +295,24 @@ class TestUnityBridgeSend(MayaTkTestCase):
 _MISSING = object()  # "not passed" -- distinct from an explicit bridge=None
 
 
-class _ScopeSelf:
-    """The only part of a slots instance ``resolve_scope_objects`` reads."""
-
-    def __init__(self, bridge):
-        if bridge is not None:
-            self.bridge = bridge  # absent entirely when None -- the no-hook case
-
-
 class TestUnityScopeResolution(MayaTkTestCase):
-    """Scope resolution for the shared ``SCOPE`` param.
-
-    Exercised through ``UnityBridgeSlots`` but IMPLEMENTED once on
-    :class:`mayatk.ui_utils.maya_bridge_slots_base.MayaBridgeSlotsBase`, so every
-    Maya bridge (Blender / Unity / Marmoset / Substance / Rizom) resolves scope
-    identically. It reads only ``self.bridge`` (for the whole-scene hook), so it
-    runs against a stub without building the Qt panel."""
+    """Scope resolution for the shared ``SCOPE`` param: :meth:`BridgeHost.resolve_scope`,
+    which tentacle's bridge panels call (``mtk.BridgeHost``) and the Maya
+    bridge-slots base delegates to, so every Maya bridge resolves scope
+    identically. The Unity engine is the whole-scene hook; no Qt panel needed."""
 
     def _resolve(self, scope, bridge=_MISSING):
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
+        from mayatk.env_utils.handoff_export import BridgeHost
 
-        # ``self`` is only read for ``.bridge`` (the whole-scene hook), so a stub
-        # carrying one is enough -- no Qt panel needed. Default: the real bridge,
-        # i.e. the production path. Pass ``bridge=None`` for the no-hook fallback.
-        stub = _ScopeSelf(UnityBridge() if bridge is _MISSING else bridge)
-        return UnityBridgeSlots.resolve_scope_objects(stub, scope)
+        # Default: the real engine, i.e. the production path. Pass ``bridge=None``
+        # for the no-hook fallback.
+        return BridgeHost.resolve_scope(
+            scope, UnityBridge() if bridge is _MISSING else bridge
+        )
 
     def test_resolver_is_shared_not_per_bridge(self):
-        """Every Maya bridge slot must inherit the ONE resolver, not carry a copy."""
+        """Every Maya bridge slot not yet moved inherits the ONE resolver."""
         from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
         from mayatk.env_utils.blender_bridge.blender_bridge_slots import (
             BlenderBridgeSlots,
         )
@@ -368,7 +326,6 @@ class TestUnityScopeResolution(MayaTkTestCase):
 
         shared = MayaBridgeSlotsBase.resolve_scope_objects
         for slots in (
-            UnityBridgeSlots,
             BlenderBridgeSlots,
             MarmosetBridgeSlots,
             SubstanceBridgeSlots,
@@ -411,8 +368,8 @@ class TestUnityScopeResolution(MayaTkTestCase):
         self.assertTrue(any(o.split("|")[-1] == grp for o in resolved), resolved)
 
     def test_scope_all_without_the_hook_falls_back_to_meshes(self):
-        """Documented fallback: a slots instance with no bridge (or a bridge with no
-        whole-scene hook) still resolves "all" to the renderable geometry."""
+        """Documented fallback: no engine (or one with no whole-scene hook) still
+        resolves "all" to the renderable geometry."""
         cmds.polyCube()
         cmds.select(clear=True)
         resolved = self._resolve("all", bridge=None)
@@ -437,94 +394,13 @@ class TestUnityScopeResolution(MayaTkTestCase):
         self.assertTrue(any("VisibleCube" in o for o in resolved))
         self.assertFalse(any("HiddenCube" in o for o in resolved))
 
+    def test_a_maya_scope_ships_as_resolved(self):
+        """Maya's export-selection writes a group's subtree: no closure."""
+        from mayatk.env_utils.handoff_export import BridgeHost
 
-class _RecordingLogger:
-    """Collects what the slot logs, so a header line can be asserted on."""
-
-    def __init__(self):
-        self.infos = []
-        self.errors = []
-
-    def info(self, msg, *a, **k):
-        self.infos.append(str(msg))
-
-    def error(self, msg, *a, **k):
-        self.errors.append(str(msg))
-
-    def __getattr__(self, name):  # warning / success / debug -- swallowed
-        return lambda *a, **k: None
-
-
-class _RecordingBridge:
-    """The only bridge surface ``b000`` touches."""
-
-    def __init__(self):
-        self.logger = _RecordingLogger()
-        self.project_path = None
-        self.sent = None
-
-    def send(self, **kwargs):
-        self.sent = kwargs
-        return {}
-
-
-class _StubSwitchboard:
-    """``self.sb.progress(...)`` is the only Switchboard call in ``b000``."""
-
-    @staticmethod
-    @contextlib.contextmanager
-    def progress(text=""):
-        yield
-
-
-class TestUnityBridgeSendSlot(unittest.TestCase):
-    """``b000`` end to end over a stub panel -- no Qt, no Unity, no export.
-
-    Built with ``__new__`` so the REAL ``b000`` runs (and the real ``bridge``
-    property, fed through its ``_bridge`` cache); only the panel-side hooks it
-    calls are replaced.
-    """
-
-    def _slot(self, params, objects=("|pCube1",), project="C:/proj"):
-        from mayatk.env_utils.unity_bridge.unity_bridge_slots import UnityBridgeSlots
-
-        slot = UnityBridgeSlots.__new__(UnityBridgeSlots)
-        slot._bridge = _RecordingBridge()
-        slot.sb = _StubSwitchboard()
-        slot._output_dir_edit = None
-        slot._selected_template_mode = lambda: (UnityBridgeSlots.MODE_COPY, "")
-        slot.collect_param_values = lambda: dict(params)
-        slot.scoped_objects = lambda p: list(objects)
-        slot.resolved_output_dir = lambda: project
-        return slot
-
-    def test_send_logs_the_scope_it_collected_under(self):
-        """Regression: the header line read an undefined ``scope``, so the
-        panel's primary action raised NameError before the bridge ever ran --
-        unconditionally, on every non-MANAGE run past the project guard.
-
-        The name must resolve to the SCOPE the objects were collected under
-        (``scoped_objects``' own default when the panel doesn't expose one),
-        or the header describes a different export than the one that ran.
-        Added: 2026-08-18
-        """
-        slot = self._slot({"SCOPE": "visible"})
-        slot.b000()
-
-        header = next(m for m in slot.bridge.logger.infos if m.startswith("--- "))
-        self.assertIn("(visible)", header)
-        self.assertIn("1 object(s)", header)
-        self.assertEqual(slot.bridge.logger.errors, [])
-        self.assertIsNotNone(slot.bridge.sent, "the bridge never ran")
-
-    def test_send_header_defaults_to_the_selection_scope(self):
-        """A panel with no SCOPE row resolves "selected" -- the same default
-        ``scoped_objects`` uses, so the two can never disagree."""
-        slot = self._slot({})
-        slot.b000()
-
-        header = next(m for m in slot.bridge.logger.infos if m.startswith("--- "))
-        self.assertIn("(selected)", header)
+        grp = cmds.group(cmds.polyCube()[0], name="closure_group")
+        resolved = cmds.ls(grp, long=True)
+        self.assertEqual(BridgeHost.scope_closure(resolved, {"SCOPE": "all"}), resolved)
 
 
 if __name__ == "__main__":

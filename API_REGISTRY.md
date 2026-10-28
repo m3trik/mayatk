@@ -124,9 +124,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 - [`env_utils/scene_state.py`](#env_utils--scene_state) — Read named sections of live-scene state for transport.
 - [`env_utils/script_output.py`](#env_utils--script_output)
 - [`env_utils/unity_bridge/_unity_bridge.py`](#env_utils--unity_bridge--_unity_bridge) — Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
-- [`env_utils/unity_bridge/_unity_panel.py`](#env_utils--unity_bridge--_unity_panel) — What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.
 - [`env_utils/unity_bridge/parameters.py`](#env_utils--unity_bridge--parameters) — User-tunable parameters for the Maya->Unity bridge panel.
-- [`env_utils/unity_bridge/unity_bridge_slots.py`](#env_utils--unity_bridge--unity_bridge_slots) — Slots for the Unity bridge panel.
 - [`env_utils/usd.py`](#env_utils--usd) — USD import / export over Maya's native ``mayaUsd`` runtime.
 - [`env_utils/webxr_preview.py`](#env_utils--webxr_preview) — Push the Maya selection to a live browser / WebXR preview.
 - [`env_utils/workspace_manager.py`](#env_utils--workspace_manager)
@@ -241,7 +239,7 @@ _Auto-generated. Do not edit by hand. Refresh via `m3trik/scripts/generate_api_r
 ### `__init__.py`
 
 - [`DEFAULT_INCLUDE`](mayatk/mayatk/__init__.py#L17) — constant
-- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L264) — constant
+- [`MOVED_NAMES`](mayatk/mayatk/__init__.py#L266) — constant
 
 <a id="anim_utils--_anim_utils"></a>
 ### `anim_utils/_anim_utils.py`
@@ -2174,9 +2172,13 @@ Import the bridged payload (FBX or USD) into Blender, with optional clean-slate 
 
 Maya-side selection + export hooks shared by the hand-off bridge engines.
 
-- **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L36)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
+- **[`class MayaExportMixin`](mayatk/mayatk/env_utils/handoff_export.py#L40)** — The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).
   - `MayaExportMixin.lightmap_search_dirs(self) -> List[str]` — Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).
   - `MayaExportMixin.stepped_keys(nodes: Optional[List[str]] = None, spell: Optional[Callable] = None) -> Dict[str, Dict[str, List[float]]]` *(static)* — The hand-off manifest's ``stepped_keys`` (``ptk.HandoffManifest.
+- **[`class BridgeHost`](mayatk/mayatk/env_utils/handoff_export.py#L862)** — What a bridge panel asks of Maya: a Scope's objects, what a send of them
+  - `BridgeHost.resolve_scope(scope: str, bridge=None) -> List[str]` *(static)* — The objects a ``SCOPE`` word names (``uitk.bridge.Parameters.scope_spec``).
+  - `BridgeHost.scope_closure(objects, params: Optional[Dict[str, Any]] = None) -> List[str]` *(static)* — What a send of the scoped *objects* ships: the objects as they are.
+  - `BridgeHost.install_package(spec: str) -> None` *(static)* — Install the pip requirement *spec* where this session imports from.
 
 <a id="env_utils--hierarchy_sync--_hierarchy_sync"></a>
 ### `env_utils/hierarchy_sync/_hierarchy_sync.py`
@@ -2525,18 +2527,9 @@ Unity bridge engine -- export the Maya selection into a Unity project's Assets/.
 
 - **[`class UnityBridge(MayaExportMixin, pythontk.HandoffBridge)`](mayatk/mayatk/env_utils/unity_bridge/_unity_bridge.py#L37)** — Export the Maya selection and copy it into a Unity project's ``Assets/``.
   - `UnityBridge.list_template_modes(self)`
+  - `UnityBridge.params_registry(cls)` *(class)* — The panel's parameter registry (``parameters.Parameters``, a
   - `UnityBridge.params_defaults(self)`
   - `UnityBridge.list_delivery_modes(cls) -> List[Tuple[str, str]]` *(class)* — ``[(mode_stem, ""), ...]`` for the panel's delivery combo.
-
-<a id="env_utils--unity_bridge--_unity_panel"></a>
-### `env_utils/unity_bridge/_unity_panel.py`
-
-What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.
-
-- **[`class UnityPanelMixin`](mayatk/mayatk/env_utils/unity_bridge/_unity_panel.py#L34)** — Unity-panel behavior shared by the three Unity Slots classes.
-  - `UnityPanelMixin.template_dir(self) -> Path` *(property)*
-  - `UnityPanelMixin.list_template_modes(self)`
-  - `UnityPanelMixin.default_output_dir(self) -> str`
 
 <a id="env_utils--unity_bridge--parameters"></a>
 ### `env_utils/unity_bridge/parameters.py`
@@ -2545,16 +2538,6 @@ User-tunable parameters for the Maya->Unity bridge panel.
 
 - [`PARAMS`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L24) — constant
 - **[`class Parameters(ParamRegistry)`](mayatk/mayatk/env_utils/unity_bridge/parameters.py#L165)** — Parameters — module namespace.
-
-<a id="env_utils--unity_bridge--unity_bridge_slots"></a>
-### `env_utils/unity_bridge/unity_bridge_slots.py`
-
-Slots for the Unity bridge panel.
-
-- **[`class UnityBridgeSlots(UnityPanelMixin, MayaBridgeSlotsBase)`](mayatk/mayatk/env_utils/unity_bridge/unity_bridge_slots.py#L41)** — Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
-  - `UnityBridgeSlots.params_module(self)` *(property)*
-  - `UnityBridgeSlots.make_bridge(self)` — Build the engine, or ``None`` when the optional unitytk is absent.
-  - `UnityBridgeSlots.b000(self)` — Run the selected template: export-and-copy, or script management.
 
 <a id="env_utils--usd"></a>
 ### `env_utils/usd.py`
@@ -2923,14 +2906,16 @@ Scene-stored bake sets: named object sets the bake tools read.
   - `BakeSet.name(cls) -> Optional[str]` *(class)* — The name the set is stored under in this scene, or ``None``.
   - `BakeSet.exists(cls) -> bool` *(class)* — Whether the set node (canonical or legacy) is present.
   - `BakeSet.members(cls) -> List[str]` *(class)* — Long names of the set's surviving members (deleted nodes drop out).
+  - `BakeSet.member_names(cls) -> List[str]` *(class)* — The members' short names, for display (a live tooltip, a report).
+  - `BakeSet.select(cls) -> List[str]` *(class)* — Select the set's members, hidden ones too;
   - `BakeSet.meshes(cls) -> List[str]` *(class)* — The mesh transforms the set covers -- a group member counts its descendants.
   - `BakeSet.define(cls, objects: Optional[List[str]] = None, conventional: bool = False) -> List[str]` *(class)* — Replace the set's contents with *objects* (default: the selection).
   - `BakeSet.respell(cls, conventional: bool) -> Optional[str]` *(class)* — Rename an existing set to its plain or conventional spelling;
   - `BakeSet.clear(cls) -> None` *(class)* — Delete the set node under every spelling (members themselves are untouched).
-- **[`class BakeSourceSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L202)** — The scene's bake source, shared by the Substance and Marmoset bridges.
+- **[`class BakeSourceSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L220)** — The scene's bake source, shared by the Substance and Marmoset bridges.
   - `BakeSourceSet.companion_path(cls, export_path: str) -> str` *(class)* — ``.../asset.fbx`` -> ``.../asset_source.fbx``.
-- **[`class LightmapExcludeSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L230)** — Objects every lightmap bake of the scene gives no map of their own.
-- **[`class LightmapIsolateSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L247)** — Objects that bake in a pass of their own, out of every other bake's render.
+- **[`class LightmapExcludeSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L248)** — Objects every lightmap bake of the scene gives no map of their own.
+- **[`class LightmapIsolateSet(BakeSet)`](mayatk/mayatk/mat_utils/bake_sets.py#L265)** — Objects that bake in a pass of their own, out of every other bake's render.
   - `LightmapIsolateSet.groups(cls) -> List[List[str]]` *(class)* — The set's meshes by member: what lies under each one moves together.
   - `LightmapIsolateSet.meshes(cls) -> List[str]` *(class)* — Every mesh :meth:`groups` holds: each member with all it carries.
 
@@ -3054,9 +3039,6 @@ Shared helpers for Marmoset Toolbag template scripts.
 Slots for the Marmoset Toolbag bridge panel.
 
 - **[`class MarmosetBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/marmoset_bridge/marmoset_bridge_slots.py#L43)** — Slots wired to ``marmoset_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
-  - `MarmosetBridgeSlots.set_bake_source_from_selection(self) -> None` — Store the current selection as the scene's bake source.
-  - `MarmosetBridgeSlots.select_bake_source(self) -> None` — Select the bake-source set's members (hidden ones included).
-  - `MarmosetBridgeSlots.clear_bake_source(self) -> None` — Delete the bake-source set node;
   - `MarmosetBridgeSlots.params_module(self)` *(property)*
   - `MarmosetBridgeSlots.template_dir(self) -> Path` *(property)*
   - `MarmosetBridgeSlots.make_bridge(self) -> MarmosetBridge`
@@ -3473,10 +3455,7 @@ Registry of user-tunable Substance Painter parameters exposed to the bridge UI.
 
 Slots for the Substance Painter bridge panel.
 
-- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L50)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
-  - `SubstanceBridgeSlots.set_bake_source_from_selection(self) -> None` — Store the current selection as the scene's bake source.
-  - `SubstanceBridgeSlots.select_bake_source(self) -> None` — Select the bake-source set's members (hidden ones included).
-  - `SubstanceBridgeSlots.clear_bake_source(self) -> None` — Delete the bake-source set node;
+- **[`class SubstanceBridgeSlots(MayaBridgeSlotsBase)`](mayatk/mayatk/mat_utils/substance_bridge/substance_bridge_slots.py#L49)** — Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.
   - `SubstanceBridgeSlots.params_module(self)` *(property)*
   - `SubstanceBridgeSlots.template_dir(self) -> Path` *(property)*
   - `SubstanceBridgeSlots.make_bridge(self) -> SubstanceBridge`
@@ -4384,8 +4363,11 @@ Maya hotkey collision checker for the uitk ShortcutEditor.
 
 Maya-flavored :class:`BridgeSlotsBase` -- adds Maya-side defaults.
 
-- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L28)** — Adds the Maya-side Scope resolution and live tooltips to
+- **[`class MayaBridgeSlotsBase(BridgeSlotsBase)`](mayatk/mayatk/ui_utils/maya_bridge_slots_base.py#L30)** — Adds the Maya-side Scope resolution and the Bake Source row to
   - `MayaBridgeSlotsBase.live_param_tooltip_blocks(self)` — Make the Bake Source row report the scene's CURRENT members.
+  - `MayaBridgeSlotsBase.set_bake_source_from_selection(self) -> None` — Store the current selection as the scene's bake source.
+  - `MayaBridgeSlotsBase.select_bake_source(self) -> None` — Select the bake-source set's members (hidden ones included).
+  - `MayaBridgeSlotsBase.clear_bake_source(self) -> None` — Delete the bake-source set node;
   - `MayaBridgeSlotsBase.resolve_scope_objects(self, scope: str)` — Objects to export for the chosen ``SCOPE`` param.
 
 <a id="ui_utils--maya_native_menus"></a>

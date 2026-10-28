@@ -32,7 +32,6 @@ from mayatk.ui_utils.maya_bridge_slots_base import MayaBridgeSlotsBase
 from mayatk.mat_utils.substance_bridge._substance_bridge import (
     ROUND_TRIP,
     SEND_TO,
-    BakeSourceSet,
     SubstanceBridge,
     _TEMPLATE_DIR,
 )
@@ -76,7 +75,7 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
     # Header = the base panel-level utilities only (Clear Log). Template
     # management lives on the template combo's own menu; the Bake Source set
     # actions are the BAKE_SOURCE_SET param row (parameters.py) -- the base
-    # auto-wires its buttons to the same-named methods below. The set's
+    # auto-wires its buttons to the same-named methods it carries. The set's
     # CONTENTS decide whether a send ships a bake source; there is no
     # companion checkbox.
 
@@ -192,53 +191,6 @@ class SubstanceBridgeSlots(MayaBridgeSlotsBase):
 
         KindFactory.connect_changed(include_widget, _sync)
         _sync()
-
-    # ------------------------------------------------------------------
-    # Bake Source set (param-row actions; shared with the marmoset bridge)
-    # ------------------------------------------------------------------
-
-    def set_bake_source_from_selection(self) -> None:
-        """Store the current selection as the scene's bake source.
-
-        Defining the set IS the opt-in: every send from here on exports it as
-        the companion ``<name>_source.fbx``. There is no second checkbox to
-        tick -- the pairing this replaced could be silently half-on (a set
-        defined, the box left clear), which reads as the tool ignoring you.
-        """
-        if cmds is None:
-            return
-        members = BakeSourceSet.define()
-        if not members:
-            self.bridge.logger.warning(
-                "Nothing selected; the bake-source set was cleared."
-            )
-            return
-        self.bridge.logger.info(
-            f"Bake Source set: {len(members)} object(s) "
-            f"-> {BakeSourceSet.SET_NAME}. Sends now ship it as the "
-            f"companion bake source."
-        )
-
-    def select_bake_source(self) -> None:
-        """Select the bake-source set's members (hidden ones included)."""
-        if cmds is None:
-            return
-        members = BakeSourceSet.members()
-        if not members:
-            self.bridge.logger.warning("This scene has no bake-source set.")
-            return
-        cmds.select(members, replace=True)
-        self.bridge.logger.info(f"Selected {len(members)} bake-source object(s).")
-
-    def clear_bake_source(self) -> None:
-        """Delete the bake-source set node; its members are left alone."""
-        if cmds is None:
-            return
-        if not BakeSourceSet.exists():
-            self.bridge.logger.warning("This scene has no bake-source set.")
-            return
-        BakeSourceSet.clear()
-        self.bridge.logger.info("Bake-source set cleared.")
 
     # ------------------------------------------------------------------
     # Required base-class hooks

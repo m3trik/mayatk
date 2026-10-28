@@ -23,7 +23,7 @@
           "kind": "constant",
           "signature": "",
           "summary": "",
-          "line": 264,
+          "line": 266,
           "deprecated": false
         }
       ]
@@ -13088,7 +13088,7 @@
         {
           "name": "MayaExportMixin",
           "summary": "The Maya producer hooks for hand-off bridges (``_resolve_objects`` + ``_produce``).",
-          "line": 36,
+          "line": 40,
           "bases": [],
           "members": [
             {
@@ -13097,7 +13097,7 @@
               "kind": "method",
               "signature": "(self) -> List[str]",
               "summary": "Where Maya's map files live now (:class:`pythontk.PreviewBridge` hook).",
-              "line": 140,
+              "line": 144,
               "deprecated": false
             },
             {
@@ -13106,7 +13106,42 @@
               "kind": "staticmethod",
               "signature": "(nodes: Optional[List[str]] = None, spell: Optional[Callable] = None) -> Dict[str, Dict[str, List[float]]]",
               "summary": "The hand-off manifest's ``stepped_keys`` (``ptk.HandoffManifest.",
-              "line": 748,
+              "line": 752,
+              "deprecated": false
+            }
+          ]
+        },
+        {
+          "name": "BridgeHost",
+          "summary": "What a bridge panel asks of Maya: a Scope's objects, what a send of them",
+          "line": 862,
+          "bases": [],
+          "members": [
+            {
+              "name": "resolve_scope",
+              "qualname": "BridgeHost.resolve_scope",
+              "kind": "staticmethod",
+              "signature": "(scope: str, bridge=None) -> List[str]",
+              "summary": "The objects a ``SCOPE`` word names (``uitk.bridge.Parameters.scope_spec``).",
+              "line": 872,
+              "deprecated": false
+            },
+            {
+              "name": "scope_closure",
+              "qualname": "BridgeHost.scope_closure",
+              "kind": "staticmethod",
+              "signature": "(objects, params: Optional[Dict[str, Any]] = None) -> List[str]",
+              "summary": "What a send of the scoped *objects* ships: the objects as they are.",
+              "line": 912,
+              "deprecated": false
+            },
+            {
+              "name": "install_package",
+              "qualname": "BridgeHost.install_package",
+              "kind": "staticmethod",
+              "signature": "(spec: str) -> None",
+              "summary": "Install the pip requirement *spec* where this session imports from.",
+              "line": 929,
               "deprecated": false
             }
           ]
@@ -15605,12 +15640,21 @@
               "deprecated": false
             },
             {
+              "name": "params_registry",
+              "qualname": "UnityBridge.params_registry",
+              "kind": "classmethod",
+              "signature": "(cls)",
+              "summary": "The panel's parameter registry (``parameters.Parameters``, a",
+              "line": 93,
+              "deprecated": false
+            },
+            {
               "name": "params_defaults",
               "qualname": "UnityBridge.params_defaults",
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 92,
+              "line": 103,
               "deprecated": false
             },
             {
@@ -15619,50 +15663,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[Tuple[str, str]]",
               "summary": "``[(mode_stem, \"\"), ...]`` for the panel's delivery combo.",
-              "line": 123,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
-    },
-    {
-      "relpath": "env_utils/unity_bridge/_unity_panel.py",
-      "summary": "What every Unity panel shares: the 'Unity Project' row, the Editor combo, script management.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "UnityPanelMixin",
-          "summary": "Unity-panel behavior shared by the three Unity Slots classes.",
-          "line": 34,
-          "bases": [],
-          "members": [
-            {
-              "name": "template_dir",
-              "qualname": "UnityPanelMixin.template_dir",
-              "kind": "property",
-              "signature": "(self) -> Path",
-              "summary": "",
-              "line": 90,
-              "deprecated": false
-            },
-            {
-              "name": "list_template_modes",
-              "qualname": "UnityPanelMixin.list_template_modes",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 95,
-              "deprecated": false
-            },
-            {
-              "name": "default_output_dir",
-              "qualname": "UnityPanelMixin.default_output_dir",
-              "kind": "method",
-              "signature": "(self) -> str",
-              "summary": "",
-              "line": 102,
+              "line": 132,
               "deprecated": false
             }
           ]
@@ -15696,52 +15697,6 @@
           "deprecated": false
         }
       ]
-    },
-    {
-      "relpath": "env_utils/unity_bridge/unity_bridge_slots.py",
-      "summary": "Slots for the Unity bridge panel.",
-      "functions": [],
-      "classes": [
-        {
-          "name": "UnityBridgeSlots",
-          "summary": "Slots wired to ``unity_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 41,
-          "bases": [
-            "UnityPanelMixin",
-            "MayaBridgeSlotsBase"
-          ],
-          "members": [
-            {
-              "name": "params_module",
-              "qualname": "UnityBridgeSlots.params_module",
-              "kind": "property",
-              "signature": "(self)",
-              "summary": "",
-              "line": 105,
-              "deprecated": false
-            },
-            {
-              "name": "make_bridge",
-              "qualname": "UnityBridgeSlots.make_bridge",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Build the engine, or ``None`` when the optional unitytk is absent.",
-              "line": 108,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "UnityBridgeSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Run the selected template: export-and-copy, or script management.",
-              "line": 122,
-              "deprecated": false
-            }
-          ]
-        }
-      ],
-      "constants": []
     },
     {
       "relpath": "env_utils/usd.py",
@@ -18468,12 +18423,30 @@
               "deprecated": false
             },
             {
+              "name": "member_names",
+              "qualname": "BakeSet.member_names",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "The members' short names, for display (a live tooltip, a report).",
+              "line": 121,
+              "deprecated": false
+            },
+            {
+              "name": "select",
+              "qualname": "BakeSet.select",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Select the set's members, hidden ones too;",
+              "line": 126,
+              "deprecated": false
+            },
+            {
               "name": "meshes",
               "qualname": "BakeSet.meshes",
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "The mesh transforms the set covers -- a group member counts its descendants.",
-              "line": 121,
+              "line": 139,
               "deprecated": false
             },
             {
@@ -18482,7 +18455,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[List[str]] = None, conventional: bool = False) -> List[str]",
               "summary": "Replace the set's contents with *objects* (default: the selection).",
-              "line": 137,
+              "line": 155,
               "deprecated": false
             },
             {
@@ -18491,7 +18464,7 @@
               "kind": "classmethod",
               "signature": "(cls, conventional: bool) -> Optional[str]",
               "summary": "Rename an existing set to its plain or conventional spelling;",
-              "line": 173,
+              "line": 191,
               "deprecated": false
             },
             {
@@ -18500,7 +18473,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Delete the set node under every spelling (members themselves are untouched).",
-              "line": 195,
+              "line": 213,
               "deprecated": false
             }
           ]
@@ -18508,7 +18481,7 @@
         {
           "name": "BakeSourceSet",
           "summary": "The scene's bake source, shared by the Substance and Marmoset bridges.",
-          "line": 202,
+          "line": 220,
           "bases": [
             "BakeSet"
           ],
@@ -18519,7 +18492,7 @@
               "kind": "classmethod",
               "signature": "(cls, export_path: str) -> str",
               "summary": "``.../asset.fbx`` -> ``.../asset_source.fbx``.",
-              "line": 219,
+              "line": 237,
               "deprecated": false
             }
           ]
@@ -18527,7 +18500,7 @@
         {
           "name": "LightmapExcludeSet",
           "summary": "Objects every lightmap bake of the scene gives no map of their own.",
-          "line": 230,
+          "line": 248,
           "bases": [
             "BakeSet"
           ],
@@ -18536,7 +18509,7 @@
         {
           "name": "LightmapIsolateSet",
           "summary": "Objects that bake in a pass of their own, out of every other bake's render.",
-          "line": 247,
+          "line": 265,
           "bases": [
             "BakeSet"
           ],
@@ -18547,7 +18520,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[List[str]]",
               "summary": "The set's meshes by member: what lies under each one moves together.",
-              "line": 264,
+              "line": 282,
               "deprecated": false
             },
             {
@@ -18556,7 +18529,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every mesh :meth:`groups` holds: each member with all it carries.",
-              "line": 298,
+              "line": 316,
               "deprecated": false
             }
           ]
@@ -19357,39 +19330,12 @@
           ],
           "members": [
             {
-              "name": "set_bake_source_from_selection",
-              "qualname": "MarmosetBridgeSlots.set_bake_source_from_selection",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Store the current selection as the scene's bake source.",
-              "line": 170,
-              "deprecated": false
-            },
-            {
-              "name": "select_bake_source",
-              "qualname": "MarmosetBridgeSlots.select_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the bake-source set's members (hidden ones included).",
-              "line": 187,
-              "deprecated": false
-            },
-            {
-              "name": "clear_bake_source",
-              "qualname": "MarmosetBridgeSlots.clear_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the bake-source set node;",
-              "line": 200,
-              "deprecated": false
-            },
-            {
               "name": "params_module",
               "qualname": "MarmosetBridgeSlots.params_module",
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 219,
+              "line": 184,
               "deprecated": false
             },
             {
@@ -19398,7 +19344,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 223,
+              "line": 188,
               "deprecated": false
             },
             {
@@ -19407,7 +19353,7 @@
               "kind": "method",
               "signature": "(self) -> MarmosetBridge",
               "summary": "",
-              "line": 226,
+              "line": 191,
               "deprecated": false
             },
             {
@@ -19416,7 +19362,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 229,
+              "line": 194,
               "deprecated": false
             },
             {
@@ -19425,7 +19371,7 @@
               "kind": "method",
               "signature": "(self, pairs)",
               "summary": "Prefer 'bake (roundtrip)' then 'bake (send_to)', else first entry.",
-              "line": 232,
+              "line": 197,
               "deprecated": false
             },
             {
@@ -19434,7 +19380,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process selected transforms with the chosen template + mode.",
-              "line": 247,
+              "line": 212,
               "deprecated": false
             }
           ]
@@ -21964,45 +21910,18 @@
         {
           "name": "SubstanceBridgeSlots",
           "summary": "Slots wired to ``substance_bridge.ui`` via :class:`MayaBridgeSlotsBase`.",
-          "line": 50,
+          "line": 49,
           "bases": [
             "MayaBridgeSlotsBase"
           ],
           "members": [
-            {
-              "name": "set_bake_source_from_selection",
-              "qualname": "SubstanceBridgeSlots.set_bake_source_from_selection",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Store the current selection as the scene's bake source.",
-              "line": 200,
-              "deprecated": false
-            },
-            {
-              "name": "select_bake_source",
-              "qualname": "SubstanceBridgeSlots.select_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Select the bake-source set's members (hidden ones included).",
-              "line": 222,
-              "deprecated": false
-            },
-            {
-              "name": "clear_bake_source",
-              "qualname": "SubstanceBridgeSlots.clear_bake_source",
-              "kind": "method",
-              "signature": "(self) -> None",
-              "summary": "Delete the bake-source set node;",
-              "line": 233,
-              "deprecated": false
-            },
             {
               "name": "params_module",
               "qualname": "SubstanceBridgeSlots.params_module",
               "kind": "property",
               "signature": "(self)",
               "summary": "",
-              "line": 248,
+              "line": 200,
               "deprecated": false
             },
             {
@@ -22011,7 +21930,7 @@
               "kind": "property",
               "signature": "(self) -> Path",
               "summary": "",
-              "line": 252,
+              "line": 204,
               "deprecated": false
             },
             {
@@ -22020,7 +21939,7 @@
               "kind": "method",
               "signature": "(self) -> SubstanceBridge",
               "summary": "",
-              "line": 255,
+              "line": 207,
               "deprecated": false
             },
             {
@@ -22029,7 +21948,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "",
-              "line": 258,
+              "line": 210,
               "deprecated": false
             },
             {
@@ -22038,7 +21957,7 @@
               "kind": "method",
               "signature": "(self, pairs)",
               "summary": "Default the panel to ``import (send_to)`` when it's available.",
-              "line": 261,
+              "line": 213,
               "deprecated": false
             },
             {
@@ -22047,7 +21966,7 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Process the selected transforms with the chosen template + mode.",
-              "line": 270,
+              "line": 222,
               "deprecated": false
             }
           ]
@@ -28442,8 +28361,8 @@
       "classes": [
         {
           "name": "MayaBridgeSlotsBase",
-          "summary": "Adds the Maya-side Scope resolution and live tooltips to",
-          "line": 28,
+          "summary": "Adds the Maya-side Scope resolution and the Bake Source row to",
+          "line": 30,
           "bases": [
             "BridgeSlotsBase"
           ],
@@ -28454,7 +28373,34 @@
               "kind": "method",
               "signature": "(self)",
               "summary": "Make the Bake Source row report the scene's CURRENT members.",
-              "line": 40,
+              "line": 59,
+              "deprecated": false
+            },
+            {
+              "name": "set_bake_source_from_selection",
+              "qualname": "MayaBridgeSlotsBase.set_bake_source_from_selection",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Store the current selection as the scene's bake source.",
+              "line": 99,
+              "deprecated": false
+            },
+            {
+              "name": "select_bake_source",
+              "qualname": "MayaBridgeSlotsBase.select_bake_source",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Select the bake-source set's members (hidden ones included).",
+              "line": 123,
+              "deprecated": false
+            },
+            {
+              "name": "clear_bake_source",
+              "qualname": "MayaBridgeSlotsBase.clear_bake_source",
+              "kind": "method",
+              "signature": "(self) -> None",
+              "summary": "Delete the bake-source set node;",
+              "line": 135,
               "deprecated": false
             },
             {
@@ -28463,7 +28409,7 @@
               "kind": "method",
               "signature": "(self, scope: str)",
               "summary": "Objects to export for the chosen ``SCOPE`` param.",
-              "line": 84,
+              "line": 152,
               "deprecated": false
             }
           ]

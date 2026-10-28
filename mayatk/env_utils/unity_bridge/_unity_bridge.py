@@ -89,10 +89,19 @@ class UnityBridge(MayaExportMixin, ptk.HandoffBridge):
     def list_template_modes(self):
         return UnityBridge.list_delivery_modes()
 
-    def params_defaults(self):
+    @classmethod
+    def params_registry(cls):
+        """The panel's parameter registry (``parameters.Parameters``, a
+        ``uitk.bridge.ParamRegistry``): what tentacle's Unity Bridge builds its
+        rows from, and :meth:`params_defaults` reads. Imported on use, as the
+        defaults always were: the registry is uitk's, and the engine surface
+        imports without uitk (a headless Blender ships no Qt binding)."""
         from mayatk.env_utils.unity_bridge import parameters as _params
 
-        return _params.Parameters.defaults()
+        return _params.Parameters
+
+    def params_defaults(self):
+        return self.params_registry().defaults()
 
     def _produce(self, objects, request) -> ptk.Payload:
         """Export the FBX (via the mixin), embed what it depends on, and stamp

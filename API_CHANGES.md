@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (606)
+## Moved out (614)
 
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
 - `anim_utils/blendshape_animator/blendshape_animator_slots.py::BlendshapeAnimatorSlots.b000` → `tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots` (from 0.30.0)
@@ -299,6 +299,14 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.txt000_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.txt001_init` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
 - `env_utils/scene_exporter/scene_exporter_slots.py::SceneExporterSlots.workspace` → `tentacle.slots.tools.scene_exporter.SceneExporterSlots` (from 0.30.0)
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin` → `tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin` (from 0.30.0)
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.default_output_dir` → `tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin` (from 0.30.0)
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.list_template_modes` → `tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin` (from 0.30.0)
+- `env_utils/unity_bridge/_unity_panel.py::UnityPanelMixin.template_dir` → `tentacle.slots.tools._unity_bridge._unity_panel.UnityPanelMixin` (from 0.30.0)
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.b000` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.make_bridge` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
+- `env_utils/unity_bridge/unity_bridge_slots.py::UnityBridgeSlots.params_module` → `tentacle.slots.tools.unity_bridge.UnityBridgeSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.add_hdr` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
 - `light_utils/hdr_manager.py::HdrManagerSlots.clear_network` → `tentacle.slots.tools.hdr_manager.HdrManagerSlots` (from 0.30.0)
@@ -611,7 +619,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (189)
+## Added (199)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -672,6 +680,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/handoff_export.py::BridgeHost(class)`
+- `env_utils/handoff_export.py::BridgeHost.install_package(spec: str) -> None`
+- `env_utils/handoff_export.py::BridgeHost.resolve_scope(scope: str, bridge=None) -> List[str]`
+- `env_utils/handoff_export.py::BridgeHost.scope_closure(objects, params: Optional[Dict[str, Any]] = None) -> List[str]`
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession(class)`
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.analyze(self, reference_path: str, fuzzy_matching: bool = True, dry_run: bool = True, filter_meshes: bool = False, filter_cameras: bool = False, filter_lights: bool = False) -> bool`
 - `env_utils/hierarchy_sync/hierarchy_sync_session.py::HierarchySyncSession.clean_path(path: str) -> str`
@@ -703,12 +715,15 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.objects_to_export(export_mode: str = 'visible') -> List[str]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.refresh_fbx_presets(self) -> Dict[str, Optional[str]]`
 - `env_utils/scene_exporter/_scene_exporter.py::SceneExporter.restore_fbx_preset(self, metadata: Optional[Dict[str, str]]) -> Optional[str]`
+- `env_utils/unity_bridge/_unity_bridge.py::UnityBridge.params_registry(cls)`
 - `light_utils/hdr_manager.py::HdrManager.defer_apply(callback: Callable[[], None]) -> None`
 - `light_utils/hdr_manager.py::HdrManager.select(self, part: str = 'skydome') -> Optional[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.preset_name(cls, name: str) -> str`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.select(objects) -> List[str]`
+- `mat_utils/bake_sets.py::BakeSet.member_names(cls) -> List[str]`
+- `mat_utils/bake_sets.py::BakeSet.select(cls) -> List[str]`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups(class)`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.add_members(self, store: str, face_map: FaceMap) -> None`
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.carrier_weights(self, prefix: str) -> List[str]`
@@ -784,6 +799,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `rig_utils/wheel_rig.py::WheelRig.default_rig_name(cls, control=None) -> Optional[str]`
 - `rig_utils/wheel_rig.py::WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'`
 - `rig_utils/wheel_rig.py::WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]`
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.clear_bake_source(self) -> None`
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.select_bake_source(self) -> None`
+- `ui_utils/maya_bridge_slots_base.py::MayaBridgeSlotsBase.set_bake_source_from_selection(self) -> None`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_utils.py::UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int`
 - `uv_utils/_uv_utils.py::UvUtils.distribute_uv_shells(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int`
@@ -825,7 +843,7 @@ _Live retirement debt, earliest deadline first. An **EXPIRED** row has outlived 
 - `env_utils/_env_utils.py::EnvUtils.set_scene_source` — remove in 0.30.0, not before 2026-11-24
 - `env_utils/_env_utils.py::EnvUtils.twin_save_target` — remove in 0.30.0, not before 2026-11-24
 
-## Moved (19)
+## Moved (25)
 
 _Still resolvable at the same call site -- hoisted to a base class or re-exported from another module. NOT a removal: no alias or minor bump is owed._
 
@@ -847,6 +865,12 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_in`
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_out`
 - `mat_utils/emissive_groups.py::EmissiveGroups.validate`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.clear_bake_source`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.select_bake_source`
+- `mat_utils/marmoset_bridge/marmoset_bridge_slots.py::MarmosetBridgeSlots.set_bake_source_from_selection`
+- `mat_utils/substance_bridge/substance_bridge_slots.py::SubstanceBridgeSlots.clear_bake_source`
+- `mat_utils/substance_bridge/substance_bridge_slots.py::SubstanceBridgeSlots.select_bake_source`
+- `mat_utils/substance_bridge/substance_bridge_slots.py::SubstanceBridgeSlots.set_bake_source_from_selection`
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 
 ## Signature changed (5)
