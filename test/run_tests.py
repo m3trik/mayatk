@@ -135,10 +135,6 @@ GUI_REQUIRED = {
     "test_shots_panel": (
         "loads the shots panel through MayaUiHandler, which is built against a GUI Maya"
     ),
-    "test_tube_rig_panel": (
-        "loads the tube_rig panel through MayaUiHandler; native-crashes mayapy "
-        "on load (2026-10-06)"
-    ),
     "test_light_rig_panel": "loads the light_rig panel through MayaUiHandler (a GUI Maya)",
     "test_texture_combine_panel": (
         "loads the texture_combine panel; its uitk TableWidget hard-crashes "

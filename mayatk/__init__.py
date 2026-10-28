@@ -472,6 +472,44 @@ MOVED_NAMES = {
         "tentacle.slots.tools.naming.NamingSlots",
         "0.30.0",
     ),
+    "TubeRigSlots": (
+        "tentacle.slots.tools.tube_rig.TubeRigSlots",
+        "0.30.0",
+    ),
+    # The panel's mode table stayed in the library, beside the strategies it names.
+    "RIG_MODES": ("mayatk.rig_utils.tube_rig.strategies.RIG_MODES", "0.30.0"),
+    "BlendshapeAnimatorSlots": (
+        "tentacle.slots.tools.blendshape_animator.BlendshapeAnimatorSlots",
+        "0.30.0",
+    ),
+    "COL_FRAME": (
+        "tentacle.slots.tools.blendshape_animator.COL_FRAME",
+        "0.30.0",
+    ),
+    "COL_NAME": (
+        "tentacle.slots.tools.blendshape_animator.COL_NAME",
+        "0.30.0",
+    ),
+    "COL_STATUS": (
+        "tentacle.slots.tools.blendshape_animator.COL_STATUS",
+        "0.30.0",
+    ),
+    "COL_TOPOLOGY": (
+        "tentacle.slots.tools.blendshape_animator.COL_TOPOLOGY",
+        "0.30.0",
+    ),
+    "COL_WEIGHT": (
+        "tentacle.slots.tools.blendshape_animator.COL_WEIGHT",
+        "0.30.0",
+    ),
+    "MODE_FRAME": (
+        "tentacle.slots.tools.blendshape_animator.MODE_FRAME",
+        "0.30.0",
+    ),
+    "MODE_WEIGHT": (
+        "tentacle.slots.tools.blendshape_animator.MODE_WEIGHT",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

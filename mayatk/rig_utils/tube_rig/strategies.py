@@ -5,6 +5,8 @@
 Each :class:`TubeStrategy` is a thin composition of :class:`TubeRig` step
 methods (the same ones the panel's step-by-step buttons call); the engine's
 ``TubeRig.STRATEGIES`` registry maps a strategy name to its class.
+:data:`RIG_MODES` (``TubeRig.MODES``) is the modes tentacle's Tube Rig panel
+offers: each one's strategy, option defaults and supported options.
 """
 
 from abc import ABC, abstractmethod
@@ -32,6 +34,92 @@ class TubeRigBundle:
     #: ``controls`` — end-control resolution and control-spacing checks read
     #: ``controls[0]/[-1]`` and must keep meaning the DRIVER controls.
     tweak_controls: Optional[List[str]] = None
+
+
+# ======================================================================
+# Rig modes (what the panel offers per strategy)
+# ======================================================================
+
+
+@dataclass
+class RigModeConfig:
+    """A rig mode: its strategy, its option defaults, and which options it
+    supports (an option a strategy implements no system for is not editable).
+    Mirrored by blendertk's."""
+
+    name: str
+    strategy: str
+
+    num_joints: int
+    num_controls: int
+    enable_stretch: bool
+    enable_squash: bool
+    enable_volume: bool
+    enable_auto_bend: bool
+    enable_twist: bool
+
+    # Which options the mode lets the user change (default: all).
+    num_joints_editable: bool = True
+    num_controls_editable: bool = True
+    stretch_editable: bool = True
+    squash_editable: bool = True
+    volume_editable: bool = True
+    auto_bend_editable: bool = True
+    twist_editable: bool = True
+
+
+#: The modes, in the panel's Mode combo order (the combo saves an index).
+RIG_MODES: List[RigModeConfig] = [
+    RigModeConfig(
+        name="Spline (Hose/Cable)",
+        strategy="spline",
+        num_joints=-1,
+        num_controls=3,
+        enable_stretch=True,
+        enable_squash=True,
+        enable_volume=True,
+        enable_auto_bend=True,  # hoses bow on compression, not accordion
+        enable_twist=True,
+    ),
+    RigModeConfig(
+        name="Anchor (Piston/Hydraulic)",
+        strategy="anchor",
+        num_joints=2,
+        num_controls=2,
+        enable_stretch=True,
+        enable_squash=False,
+        enable_volume=False,
+        enable_auto_bend=False,
+        enable_twist=False,
+        num_joints_editable=False,
+        num_controls_editable=False,
+        twist_editable=False,
+        volume_editable=False,  # AnchorStrategy implements no volume system
+        squash_editable=False,  # ...nor squash
+        auto_bend_editable=False,  # ...nor a mid control to bend
+    ),
+    RigModeConfig(
+        name="FK Chain (Tail/Tentacle)",
+        strategy="fk",
+        num_joints=-1,
+        # A handful of controls, each spreading its rotation across the
+        # joints it owns. One control per joint is technically FK and
+        # practically unanimatable: an Auto build puts a joint on every edge
+        # loop, so a single curve costs twenty-odd keys in lockstep and one
+        # missed control corners the tube.
+        num_controls=5,
+        enable_stretch=False,
+        enable_squash=False,
+        enable_volume=False,
+        enable_auto_bend=False,
+        enable_twist=False,
+        stretch_editable=False,
+        squash_editable=False,
+        volume_editable=False,
+        auto_bend_editable=False,
+        twist_editable=False,
+    ),
+]
 
 
 # ======================================================================

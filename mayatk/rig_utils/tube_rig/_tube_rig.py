@@ -4,8 +4,11 @@
 
 :class:`TubeRig` holds the step methods (joints, controls, IK, skin) the
 build strategies (``strategies.py``) orchestrate; the centerline comes from
-:class:`~mayatk.rig_utils.tube_rig.tube_path.TubePath`. The panel is
-``tube_rig_slots.py`` + ``tube_rig.ui``.
+:class:`~mayatk.rig_utils.tube_rig.tube_path.TubePath`. Its panel is
+tentacle's ``slots/tools/tube_rig.py`` (one Slots class for both hosts), which
+reads the selection and runs the steps through this class: ``MODES``,
+``selected_tubes``, ``for_build``, ``undo_step``, ``create_joints`` and the
+``*_from_selection`` steps.
 """
 
 import contextlib
@@ -35,8 +38,10 @@ from mayatk.xform_utils.matrices import Matrices
 from mayatk.rig_utils.tube_rig.tube_path import TubePath
 from mayatk.edit_utils.naming._naming import Naming
 from mayatk.rig_utils.tube_rig.strategies import (
+    RIG_MODES,
     AnchorStrategy,
     FKChainStrategy,
+    RigModeConfig,
     SplineIKStrategy,
     TubeStrategy,
 )
@@ -192,8 +197,9 @@ class _TubeRigInternal(object):
 
         Note: this is a per-call invariant, so it cannot see a caller that
         hands BOTH anchors to the same end — that input is degenerate either
-        way. Callers holding both anchors (``TubeRigSlots.b004``) assign them
-        pairwise first, which keeps one anchor per end.
+        way. Callers holding both anchors
+        (:meth:`TubeRig.constrain_ends_from_selection`) assign them pairwise
+        first, which keeps one anchor per end.
         """
         n = len(joints)
         if n < 2:
@@ -433,6 +439,11 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         "anchor": AnchorStrategy,
         "fk": FKChainStrategy,
     }
+
+    #: The modes tentacle's Tube Rig panel offers, in its Mode combo's order
+    #: (the combo saves an index): each one's strategy, option defaults and
+    #: supported options (``strategies.RIG_MODES``).
+    MODES: List[RigModeConfig] = RIG_MODES
 
     #: Channel-box contract for every animatable control: translate/rotate
     #: keyable, scale locked AND hidden (a keyed scale on a stretch-driven
@@ -734,6 +745,497 @@ class TubeRig(ptk.LoggingMixin, _TubeRigInternal):
         rig.skin_cluster = SkinUtils.get_skin_cluster(mesh) if mesh else None
         rig.ik_handle = (cmds.ls(f"{name}_ikHandle", long=True) or [None])[0]
         return rig
+
+    # ------------------------------------------------------------------
+    # Selection API (what tentacle's Tube Rig panel acts on)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unique_auto_rig_name(leaf: str) -> str:
+        """An unused ``<leaf>_RIG`` for a rig the user did not name.
+
+        ``short_name`` drops the DAG path AND the namespace, so two tubes in
+        one batch -- ``machineA:hose`` / ``machineB:hose``, or plain duplicates
+        under different parents -- derive the same name. Left alone, tube 2's
+        ``build()`` finds tube 1's ``<name>_GRP``, tears it down (taking its
+        skinCluster, joints and controls) and the summary still reports both as
+        built, leaving tube 1's mesh unbound and display-locked.
+
+        Only the DERIVED name is uniquified: a name the artist typed still
+        means "rebuild that rig", which is the rerun path.
+        """
+        base = f"{leaf}_RIG"
+        name, i = base, 1
+        while cmds.objExists(f"{name}_GRP"):
+            name = f"{base}_{i:02d}"
+            i += 1
+        return name
+
+    @classmethod
+    def for_build(cls, obj, rig_name: Optional[str] = None) -> Optional["TubeRig"]:
+        """The rig an operation on *obj* acts on: the rig that already owns it
+        (the mesh, a joint, a control, anything under the rig group), else a
+        new one. Mirrored by blendertk's.
+
+        Parameters:
+            obj (str): A tube mesh (a group above it is fine), or a joint /
+                transform of a chain built step by step.
+            rig_name (str): Names a NEW rig (a batch build's per-tube name).
+                Default: an unused ``<mesh>_RIG``. An existing rig keeps its
+                own name.
+
+        Returns:
+            TubeRig: The rig, or None for no *obj*.
+        """
+        if obj is None:
+            return None
+        # for_node resolves raw nodes itself -- pre-resolving a joint through
+        # get_transform_node yields a *list*, which defeats the lookup.
+        rig = cls.for_node(str(obj))
+        if rig is not None:
+            return rig
+        # A new rig binds to the mesh transform when one resolves (tolerates
+        # group picks); otherwise to the plain transform (Step 2 constructs
+        # from a joint after a restart, when the registry is empty).
+        shape = TubePath._resolve_mesh_shape(obj)
+        if shape:
+            target = NodeUtils.get_parent(shape, type=None, full_path=True) or str(
+                shape
+            )
+        else:
+            target = NodeUtils.get_transform_node(str(obj)) or str(obj)
+            if isinstance(target, (set, list, tuple)):
+                target = next(iter(target), str(obj))
+        if not rig_name:
+            rig_name = cls._unique_auto_rig_name(CoreUtils.short_name(target))
+        return cls(target, rig_name=rig_name)
+
+    @staticmethod
+    def selected_tubes() -> List[str]:
+        """The tube meshes a build acts on: every selected object (one rig
+        each), or -- for an edge selection, which names a path on ONE mesh --
+        just that mesh. Mirrored by blendertk's."""
+        objs = cmds.ls(selection=True, objectsOnly=True, flatten=True) or []
+        if cmds.filterExpand(selectionMask=32):
+            return objs[:1]
+        return list(dict.fromkeys(objs))
+
+    @staticmethod
+    def selected_edges() -> Optional[List[str]]:
+        """The selected polygon edges -- the path a build or Step 1 reads the
+        centerline from instead of the mesh -- or None."""
+        return cmds.filterExpand(selectionMask=32) or None
+
+    @classmethod
+    def selected_rigs(cls) -> List["TubeRig"]:
+        """The distinct rigs the selection touches (mesh, joint, control,
+        group), read back from the scene record when this session never saw
+        them (a rig built before a restart)."""
+        rigs: List[TubeRig] = []
+        for obj in cmds.ls(selection=True, objectsOnly=True, flatten=True) or []:
+            rig = cls.for_node(obj)
+            if rig is not None and rig not in rigs:
+                rigs.append(rig)
+        return rigs
+
+    @classmethod
+    def _orphan_meshes(cls) -> List[str]:
+        """Selected meshes that resolve to no rig.
+
+        A rig built before the scene record existed is reachable from its mesh
+        only through the skinCluster's first influence, so once the bind is
+        destroyed -- the very thing Rebind Skin repairs -- the tube looks like
+        plain geometry. Pairing it with a selected joint / control is the only
+        way back in.
+        """
+        orphans = []
+        for obj in cmds.ls(selection=True, objectsOnly=True, flatten=True) or []:
+            if not TubePath._resolve_mesh_shape(obj):
+                continue
+            if cls.for_node(obj) is not None:
+                continue
+            path = NodeUtils.get_transform_node(obj)
+            if isinstance(path, (list, tuple, set)):
+                path = next(iter(path), None)
+            if path and str(path) not in orphans:
+                orphans.append(str(path))
+        return orphans
+
+    @classmethod
+    def selected_rebind_targets(cls) -> Tuple[List["TubeRig"], Optional[str]]:
+        """The rigs Rebind Skin acts on, and the mesh to bind them to.
+
+        One rig plus one unlinked mesh (:meth:`_orphan_meshes`) is an
+        unambiguous pairing; more than one of either is not, and guessing would
+        bind the wrong tube.
+
+        Returns:
+            tuple: ``(rigs, mesh)`` -- *mesh* is None when nothing needs
+            pairing; pass it to :meth:`rebind_skin`.
+
+        Raises:
+            ValueError: The selection touches no rig, or pairs ambiguously
+                (the message says what to select instead).
+        """
+        rigs = cls.selected_rigs()
+        orphans = cls._orphan_meshes()
+        if not rigs:
+            raise ValueError(
+                "Select the tube mesh, or any joint / control of the rig(s) to rebind."
+                + (
+                    "\n\nThe selected mesh isn't linked to any rig — if its bind "
+                    "was already destroyed, Shift-select one of the rig's joints "
+                    "or controls as well."
+                    if orphans
+                    else ""
+                )
+            )
+        if not orphans:
+            return rigs, None
+        if len(rigs) == 1 and len(orphans) == 1:
+            return rigs, orphans[0]
+        raise ValueError(
+            f"Can't tell which mesh belongs to which rig "
+            f"({len(rigs)} rig(s), {len(orphans)} unlinked mesh(es)).\n"
+            "Rebind one rig at a time: select its tube plus one of its "
+            "joints or controls."
+        )
+
+    @staticmethod
+    def _expand_joints(joints: List[str], strategy: str = "spline") -> List[str]:
+        """A single joint expanded to its rig's joint set: its chain, or -- for
+        an Anchor rig (sibling end joints, no chain) -- the two joints sharing
+        its parent group. Several joints are taken as given."""
+        joints = [str(j) for j in joints]
+        if len(joints) != 1:
+            return joints
+        if strategy == "anchor":
+            parent = NodeUtils.get_parent(joints[0], type=None, full_path=True)
+            siblings = (
+                cmds.listRelatives(parent, children=True, type="joint", fullPath=True)
+                if parent
+                else None
+            )
+            if siblings and len(siblings) == 2:
+                return [str(j) for j in siblings]
+            return joints
+        return [str(j) for j in RigUtils.get_joint_chain_from_root(joints[0])]
+
+    @classmethod
+    def _selected_joints(cls, strategy: str = "spline") -> List[str]:
+        """The selected joints for a step, chain-expanded (:meth:`_expand_joints`)."""
+        sel = cmds.ls(selection=True, flatten=True) or []
+        if not sel:  # cmds.ls([], type=...) lists every joint in the scene
+            return []
+        return cls._expand_joints(cmds.ls(sel, type="joint", flatten=True) or [], strategy)
+
+    def _existing_controls(self) -> Optional[str]:
+        """First pre-existing control-rig node of this rig, or None.
+
+        Delegates control lookup to :meth:`_end_control`, the SSoT for the
+        builders' naming conventions (a hand-rolled name check once tested
+        ``<rig>_start``, which never exists: the builders suffix ``_CTRL``).
+        """
+        ik = f"{self.rig_name}_ikHandle"
+        if cmds.objExists(ik):
+            return ik
+        return self._end_control(0) or self._end_control(-1)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def undo_step(name: str = "Tube Rig"):
+        """ONE undo step for everything the block does, the viewport held still
+        meanwhile: how a batch of builds, removals or rebinds (the Tube Rig
+        panel's) stays a single Ctrl+Z. The operations inside keep their own
+        chunks, folded into this one. Mirrored by blendertk's.
+
+        Parameters:
+            name (str): The step's name on the Edit menu ("Tube Rig: Full Rig").
+        """
+        with CoreUtils.undo_chunk(name), CoreUtils.suspended_refresh():
+            yield
+
+    @CoreUtils.undoable(name="Tube Rig: Create Joints", suspend_refresh=True)
+    def create_joints(
+        self,
+        strategy: str = "spline",
+        num_joints: int = -1,
+        radius: float = -1.0,
+        reverse: bool = False,
+        edges: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Step 1 of a step-by-step build: this rig's joints along the tube's
+        centerline, as the mode's strategy makes them. Mirrored by blendertk's.
+
+        Parameters:
+            strategy (str): The mode the joints are for: "anchor" makes the two
+                sibling end joints, any other a chain.
+            num_joints (int): The chain's joint count; ``-1`` = one per edge
+                loop. Ignored for "anchor".
+            radius (float): Joint display radius; ``<= 0`` = Auto (half the
+                measured tube radius).
+            reverse (bool): Root the chain at the tube's other end.
+            edges (list): Selected edges to read the path from, else the mesh.
+
+        Returns:
+            List[str]: The joints, root first.
+
+        Raises:
+            ValueError: No centerline could be read from the mesh.
+        """
+        if strategy == "anchor":
+            num_joints = 2
+        centerline, num_joints = self.resolve_centerline(num_joints, edges=edges)
+        if not centerline or len(centerline) < 2:
+            raise ValueError("Failed to extract a valid centerline from the tube mesh.")
+        if reverse:
+            centerline = list(centerline)[::-1]
+        joint_radius, _ = self.resolve_sizes(centerline, radius)
+        if strategy == "anchor":
+            return self.create_anchor_joints(centerline, radius=joint_radius)
+        return self.generate_joint_chain(
+            centerline=centerline, num_joints=num_joints, radius=joint_radius
+        )
+
+    @classmethod
+    @CoreUtils.undoable(name="Tube Rig: Create Controls", suspend_refresh=True)
+    def create_controls_from_selection(
+        cls,
+        strategy: str = "spline",
+        num_controls: int = 3,
+        rig_name: Optional[str] = None,
+        enable_stretch: bool = True,
+        enable_squash: bool = True,
+        enable_volume: bool = True,
+        enable_twist: bool = True,
+        enable_auto_bend: bool = False,
+    ) -> Tuple[str, List[str], List[str]]:
+        """Step 2 of a step-by-step build: the mode's controls on the selected
+        joint chain (its root; Anchor: either or both end joints). Mirrored by
+        blendertk's, which reads the selected armature.
+
+        Parameters:
+            strategy (str): "spline", "anchor" or "fk".
+            num_controls (int): Driver controls (Spline / FK).
+            rig_name (str): Names the rig when the chain belongs to none yet.
+            enable_stretch, enable_squash, enable_volume, enable_twist,
+                enable_auto_bend (bool): The Spline rig's systems (Anchor reads
+                ``enable_stretch`` only).
+
+        Returns:
+            tuple: ``(kind, joints, controls)`` -- the rig kind for a report
+            ("Spline IK" / "Anchor" / "FK"), the chain, and the controls' leaf
+            names.
+
+        Raises:
+            ValueError: The selection holds no fitting chain, or the chain
+                already has controls (the message says what to do instead).
+        """
+        joints = cls._selected_joints(strategy)
+        if not joints:
+            raise ValueError(
+                "Select the root joint created in Step 1.\n"
+                "(Anchor: either or both end joints.)"
+            )
+        if strategy == "anchor" and len(joints) != 2:
+            raise ValueError(
+                f"Anchor rigs use exactly 2 end joints (got {len(joints)}).\n"
+                "Run Step 1 in Anchor mode to create them."
+            )
+        if strategy == "spline" and len(joints) < 2:
+            raise ValueError(
+                "Spline IK needs a chain of at least 2 joints — select its root."
+            )
+
+        rig = cls.for_build(joints[0], rig_name=rig_name)
+        rig.joints = joints  # step-created or manual chains alike
+        existing = rig._existing_controls()
+        if existing:
+            raise ValueError(
+                f"Controls already exist for '{rig.rig_name}' ({existing}).\n"
+                "Delete the previous controls or rebuild with One-Click Rig."
+            )
+
+        # Control size follows the measured tube radius (falls back to the
+        # joints' display radii when the rig has no resolvable mesh).
+        _, size = rig.resolve_sizes()
+        if strategy == "spline":
+            controls, _, _ = rig.create_spline_controls(
+                joints,
+                size=size,
+                num_controls=num_controls,
+                enable_stretch=enable_stretch,
+                enable_squash=enable_squash,
+                enable_volume=enable_volume,
+                enable_twist=enable_twist,
+                enable_auto_bend=enable_auto_bend,
+            )
+            kind = "Spline IK"
+        elif strategy == "anchor":
+            controls = rig.create_anchor_controls(
+                joints, size=size, enable_stretch=enable_stretch
+            )
+            kind = "Anchor"
+        else:
+            controls = rig.create_fk_controls(
+                joints, size=size, num_controls=num_controls
+            )
+            kind = "FK"
+        return kind, joints, [CoreUtils.leaf_name(c) for c in controls]
+
+    @classmethod
+    @CoreUtils.undoable(name="Tube Rig: Bind Skin", suspend_refresh=True)
+    def bind_from_selection(
+        cls, strategy: str = "spline", rig_name: Optional[str] = None
+    ) -> Tuple[str, int, str]:
+        """Step 3 of a step-by-step build: bind the tube mesh selected LAST to
+        the chain of the root joint selected before it (:meth:`bind_joint_chain`,
+        the one-click build's solver). Mirrored by blendertk's.
+
+        Parameters:
+            strategy (str): The mode (an Anchor rig's two sibling end joints
+                expand from either one).
+            rig_name (str): Names the rig when the mesh belongs to none yet.
+
+        Returns:
+            tuple: ``(mesh, joint_count, skin)`` -- leaf names, for a report.
+
+        Raises:
+            ValueError: The selection is not ``[root joint] -> [tube mesh]``.
+            RuntimeError: The bind itself failed.
+        """
+        sel = cmds.ls(selection=True, flatten=True) or []
+        if len(sel) < 2:
+            raise ValueError(
+                "Select the root joint, then Shift-select the tube mesh last.\n"
+                "Usage: [Root Joint] → [Tube Mesh]"
+            )
+        obj = sel[-1]
+        if not TubePath._resolve_mesh_shape(obj):
+            raise ValueError(
+                f"'{CoreUtils.leaf_name(obj)}' is not a polygon mesh — select the "
+                "tube mesh last."
+            )
+        joints = cls._selected_joints(strategy)
+        if len(joints) < 2:
+            raise ValueError(
+                "Select the root joint of the chain (at least 2 joints), then "
+                "the tube mesh."
+            )
+        rig = cls.for_build(obj, rig_name=rig_name)
+        skin_cluster = rig.bind_joint_chain(obj, joints)
+        if not skin_cluster:
+            raise RuntimeError(
+                "Failed to bind the joint chain — see the Script Editor for details."
+            )
+        return (
+            CoreUtils.leaf_name(obj),
+            len(joints),
+            CoreUtils.leaf_name(skin_cluster),
+        )
+
+    @classmethod
+    @CoreUtils.undoable(name="Tube Rig: End Constraints", suspend_refresh=True)
+    def constrain_ends_from_selection(
+        cls,
+        strategy: str = "spline",
+        rig_name: Optional[str] = None,
+        progress: Callable = None,
+    ) -> List[Tuple[str, str, Optional[str]]]:
+        """Constrain one or both ends of the selected bound rig to anchors:
+        the root joint first, then one anchor per end to constrain. Mirrored by
+        blendertk's, which reads the selected armature.
+
+        Each anchor constrains its NEAREST tube end (:meth:`constrain_end_with_falloff`,
+        falloff ≈2× the tube radius). A single anchor leaves the other end free
+        (a plugged-in loom whose base is part of the module the rig rides). Two
+        anchors must sit at different ends: forcing a pair onto both ends and
+        leaving the primitive's own nearest-end guard to override one of them
+        silently replaced the first anchor with the second (production wire
+        looms -- the base object's pivot sat nearer the PLUG end), so that case
+        is refused with the reason instead.
+
+        Parameters:
+            strategy (str): The mode (an Anchor rig's end joints expand from
+                its root).
+            rig_name (str): Names the rig when the chain belongs to none yet.
+            progress (callable): ``callable(current, total, message)``, ticked
+                per end -- see :meth:`build`.
+
+        Returns:
+            list: ``(end, anchor, anchor_joint)`` per anchor -- leaf names,
+            ``anchor_joint`` None where the constraint failed.
+
+        Raises:
+            ValueError: The selection is not a root joint plus one or two
+                anchors at different ends, or the rig is not bound yet.
+        """
+        sel = cmds.ls(selection=True, flatten=True) or []
+        root = (cmds.ls(sel[:1], type="joint", flatten=True) or []) if sel else []
+        anchors = [s for s in sel[1:] if not cmds.ls(s, type="joint")]
+        if not root or not anchors:
+            raise ValueError(
+                "Select the root joint, then the anchor object for each tube end "
+                "to constrain (one or two)."
+            )
+        if len(anchors) > 2:
+            raise ValueError(
+                f"A tube has two ends — got {len(anchors)} anchors. Select one "
+                "anchor per end to constrain."
+            )
+        joints = cls._expand_joints([root[0]], strategy)
+        if len(joints) < 2:
+            raise ValueError(
+                "Could not derive the joint chain from the selection — "
+                "select the rig's ROOT joint (the chain start)."
+            )
+
+        rig = cls.for_build(joints[0], rig_name=rig_name)
+        # Falloff weighting needs a bound mesh — fail up front with the fix.
+        bound = rig.skin_cluster or (
+            cmds.listConnections(f"{joints[0]}.worldMatrix[0]", type="skinCluster")
+        )
+        if not bound:
+            raise ValueError(
+                "The joints aren't bound to a mesh yet — run Step 3 (Bind Skin) first."
+            )
+
+        # Each anchor to its nearest end — selection order can't cross the
+        # constraints, and two anchors off one end are refused rather than
+        # silently collapsed onto it.
+        p_start = om.MVector(*_TubeRigInternal._xform_t_ws(joints[0]))
+        p_end = om.MVector(*_TubeRigInternal._xform_t_ws(joints[-1]))
+        nearest = []
+        for anchor in anchors:
+            a = om.MVector(*_TubeRigInternal._xform_t_ws(anchor))
+            nearest.append(0 if (a - p_start).length() <= (a - p_end).length() else -1)
+        if len(anchors) == 2 and nearest[0] == nearest[1]:
+            which = "start" if nearest[0] == 0 else "end"
+            raise ValueError(
+                f"Both anchors sit nearest the tube's {which} end "
+                f"({CoreUtils.leaf_name(anchors[0])}, "
+                f"{CoreUtils.leaf_name(anchors[1])}).\n"
+                "Select one anchor per end — or a single anchor to constrain "
+                "just that end."
+            )
+
+        _, size = rig.resolve_sizes()  # falloff proportional to the tube: ≈2× its radius
+        results = []
+        with rig._reporting(progress):
+            for anchor, idx in zip(anchors, nearest):
+                end = "start" if idx == 0 else "end"
+                rig._report(f"Constraining {end} to {CoreUtils.leaf_name(anchor)}…")
+                result = rig.constrain_end_with_falloff(
+                    joints, anchor, falloff=size * 2.0, joint_index=idx
+                )
+                results.append(
+                    (
+                        end,
+                        CoreUtils.leaf_name(anchor),
+                        CoreUtils.leaf_name(result) if result else None,
+                    )
+                )
+        return results
 
     def _rig_home(self) -> Optional[str]:
         """Long path of the mesh's parent — where a new rig group is created —

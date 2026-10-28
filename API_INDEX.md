@@ -15,17 +15,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `anim_utils/blendshape_animator/_blendshape_animator.py` — Main workflow facade for blendShape morph-animation creation, editing, and export.
 - `class BlendshapeAnimator(pythontk.LoggingMixin)`
-  - methods: create, edit_weight_based, edit_frame_based, edit_apply_tweens, basic_workflow, apply_all_edits, finalize_for_export, from_existing, recover_animation, diagnose_topology_issues, cleanup_topology_mismatches, remove_target_for_export, recover_setup
+  - methods: create, edit_weight_based, edit_frame_based, edit_apply_tweens, has_setup, selected_base, tween_topology, apply_tweens, delete_tweens, select_tweens, basic_workflow, apply_all_edits, finalize_for_export, from_existing, recover_animation, diagnose_topology_issues, cleanup_topology_mismatches, remove_target_for_export, recover_setup
 
 ### `anim_utils/blendshape_animator/applicator.py` — Applies tween mesh edits back to blendShape in-between targets.
 - `class ApplyStatus(Enum)`
 - `class Applicator(pythontk.LoggingMixin)`
   - methods: validate_topology, apply_tweens
-
-### `anim_utils/blendshape_animator/blendshape_animator_slots.py` — Switchboard slots controller for blendshape_animator.ui.
-- constants: COL_NAME, COL_WEIGHT, COL_FRAME, COL_TOPOLOGY, COL_STATUS, MODE_WEIGHT, MODE_FRAME
-- `class BlendshapeAnimatorSlots(BlendshapeAnimator)`
-  - methods: header_init, b000_init, b000, cmb000_init, le000_init, le001_init, b001_init, b001, b003, b004_init, b004, b005, b006_init, b006, b007, b008_init, b008
 
 ### `anim_utils/blendshape_animator/creator.py` — Creates in-between target meshes for custom blendShape animation curves.
 - `class Creator(pythontk.LoggingMixin)`
@@ -1079,10 +1074,12 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/tube_rig/_tube_rig.py` — Tube Rig engine — rigs a tube-shaped mesh (hose, cable, piston, tail).
 - `class TubeRig(pythontk.LoggingMixin, _TubeRigInternal)`
-  - methods: for_mesh, for_node, scene_data, from_scene, rename, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, rebind_skin, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_settings_control, setup_space_switching, set_custom_space, create_spline_controls, create_fk_controls, create_tweak_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
+  - methods: for_mesh, for_node, scene_data, from_scene, for_build, selected_tubes, selected_edges, selected_rigs, selected_rebind_targets, undo_step, create_joints, create_controls_from_selection, bind_from_selection, constrain_ends_from_selection, rename, rig_name, rig_group, teardown, build, resolve_centerline, estimate_tube_radius, resolve_sizes, generate_joint_chain, create_anchor_joints, skin_mesh, rebind_skin, create_logic_curve, create_spline_drivers, skin_curve_to_drivers, create_settings_control, setup_space_switching, set_custom_space, create_spline_controls, create_fk_controls, create_tweak_controls, create_anchor_controls, setup_spline_twist, setup_auto_bend, setup_spline_stretch, create_ik, create_pole_vector, bind_joint_chain, constrain_end_with_falloff
 
 ### `rig_utils/tube_rig/strategies.py` — Tube Rig build strategies and the bundle they return.
+- constants: RIG_MODES
 - `class TubeRigBundle`
+- `class RigModeConfig`
 - `class TubeStrategy(ABC)`
   - methods: build
 - `class FKChainStrategy(TubeStrategy)`
@@ -1095,12 +1092,6 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 ### `rig_utils/tube_rig/tube_path.py` — Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 - `class TubePath(_TubePathInternal)`
   - methods: get_centerline, order_cycle, get_vertex_rings, get_edge_loop_centers, get_end_normals, estimate_radius, get_centerline_using_edges, get_centerline_from_surface_normals, get_centerline_from_bounding_box
-
-### `rig_utils/tube_rig/tube_rig_slots.py` — Tube Rig panel — the Switchboard slots for ``tube_rig.ui``.
-- constants: RIG_MODES
-- `class RigModeConfig`
-- `class TubeRigSlots`
-  - methods: txt000_init, header_init, apply_mode, get_mode, get_strategy, get_tube_rig, create_joints_from_tube, b000, b001, b002, b003, b004, b005, b006, b007
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(pythontk.LoggingMixin)`

@@ -1,6 +1,12 @@
 # !/usr/bin/python
 # coding=utf-8
-"""Main workflow facade for blendShape morph-animation creation, editing, and export."""
+"""Main workflow facade for blendShape morph-animation creation, editing, and export.
+
+Its panel is tentacle's ``slots/tools/blendshape_animator.py`` (one Slots class for
+both hosts), which holds one :class:`BlendshapeAnimator` and reads it through the
+PANEL API section (``has_setup``, ``selected_base``, ``tween_topology``,
+``apply_tweens``, ``delete_tweens``, ``select_tweens``). Mirrored by blendertk's.
+"""
 
 from typing import List, Optional, Tuple, Union
 
@@ -49,6 +55,10 @@ class BlendshapeAnimator(ptk.LoggingMixin):
 
     DEFAULT_START_FRAME = 5500
     DEFAULT_END_FRAME = 5800
+
+    #: The group new tween meshes go under unless one is named (the Add Tweens
+    #: option box's default). blendertk's is an Empty, ``_morphInbetweens``.
+    TWEEN_GROUP = Targets.DEFAULT_GROUPS[0]
 
     @CoreUtils.undoable
     def create(
@@ -265,6 +275,116 @@ class BlendshapeAnimator(ptk.LoggingMixin):
             self.logger.info("Tween edits applied! Scrub timeline to see custom curve")
 
         return applied
+
+    # =============================================================================
+    # PANEL API (what tentacle's Blendshape Animator panel reads; blendertk mirrors it)
+    # =============================================================================
+
+    def has_setup(self) -> bool:
+        """True while a setup is bound and its base mesh and blendShape still
+        exist -- the quiet check (:meth:`_validate_setup` logs its refusal)."""
+        return bool(
+            self.base_mesh
+            and self.blendshape
+            and self.keyframes
+            and cmds.objExists(self.base_mesh)
+            and cmds.objExists(self.blendshape)
+        )
+
+    @classmethod
+    def selected_base(cls) -> Optional[str]:
+        """The first selected mesh that carries a blendShape -- the setup a
+        panel binds to when the selection changes -- or None. A tween mesh is
+        a target, never a base, so it is skipped.
+
+        Returns:
+            str: The base mesh, as the selection names it.
+        """
+        for node in cmds.ls(selection=True, long=False) or []:
+            if not cmds.objExists(node) or cls._is_tween_geometry(node):
+                continue
+            try:
+                history = BlendshapeHistory.list_history(node, type_filter="blendShape")
+            except RuntimeError:
+                continue
+            if history:
+                return node
+        return None
+
+    def tween_topology(self) -> Tuple[Optional[int], List[Tuple[Target, Optional[int]]]]:
+        """This setup's tweens with their vertex counts, beside the base mesh's
+        -- what a tween list shows as a topology match or mismatch.
+
+        Returns:
+            tuple: ``(base_count, [(tween, count), ...])`` -- a count is None
+            where it can't be read; ``(None, [])`` without a bound setup.
+        """
+        if not self.has_setup():
+            return None, []
+
+        def count(mesh):
+            try:
+                value = cmds.polyEvaluate(mesh, vertex=True)
+            except RuntimeError:
+                return None
+            # polyEvaluate answers a message string, not an error, for a non-mesh
+            return value if isinstance(value, int) else None
+
+        tweens = Targets.find_all_targets(
+            blendshape=self.blendshape, base_mesh=self.base_mesh
+        )
+        return count(self.base_mesh), [(t, count(t.mesh)) for t in tweens]
+
+    @CoreUtils.undoable
+    def apply_tweens(
+        self,
+        tweens: Optional[List[Target]] = None,
+        skip_duplicates: bool = True,
+        validate_topology: bool = False,
+    ) -> List[Tuple[Target, ApplyStatus]]:
+        """Apply tween edits back to the blendShape as ONE undo step and report
+        each tween (:meth:`Applicator.apply_tweens`) -- a panel's Apply All
+        Edits, or its re-apply of chosen rows.
+
+        Parameters:
+            tweens (list): The tweens; ``None`` applies every tween of this setup.
+            skip_duplicates (bool): A weight the blendShape already holds is a
+                skip, not an error.
+            validate_topology (bool): Drop tweens whose vertex count no longer
+                matches the base first.
+
+        Returns:
+            list: ``(tween, ApplyStatus)`` per tween; ``[]`` without a setup.
+        """
+        if not self._validate_setup():
+            return []
+        return self.tween_applicator.apply_tweens(
+            tweens, skip_duplicates=skip_duplicates, validate_topology=validate_topology
+        )
+
+    @CoreUtils.undoable
+    def delete_tweens(self, tweens: List[Target]) -> List[str]:
+        """Delete tween meshes, and any default tween group they leave empty, as
+        ONE undo step.
+
+        Returns:
+            list: The meshes deleted.
+        """
+        deleted = Targets._delete_targets(tweens)
+        Targets._delete_empty_groups()
+        return deleted
+
+    @staticmethod
+    def select_tweens(tweens: List[Target]) -> List[str]:
+        """Select the tweens' meshes that still exist, replacing the selection.
+
+        Returns:
+            list: The meshes selected.
+        """
+        meshes = [t.mesh for t in tweens if cmds.objExists(t.mesh)]
+        if meshes:
+            cmds.select(meshes, replace=True)
+        return meshes
 
     # =============================================================================
     # INTERNAL
@@ -595,6 +715,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         cls.logger.info(f"Loaded existing setup: {base_mesh} -> {target_mesh}")
         return animator
 
+    @CoreUtils.undoable
     def recover_animation(self) -> bool:
         """Recover lost animation keyframes and validate setup."""
         self.logger.info("=== RECOVERING ANIMATION ===")
@@ -711,6 +832,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         self.logger.info("All meshes have matching topology")
         return True
 
+    @CoreUtils.undoable
     def cleanup_topology_mismatches(
         self,
         delete_mismatched: bool = True,
@@ -798,6 +920,7 @@ class BlendshapeAnimator(ptk.LoggingMixin):
         except RuntimeError as e:
             self.logger.warning(f"  Could not clean up target mesh: {e}")
 
+    @CoreUtils.undoable
     def remove_target_for_export(self) -> bool:
         """Remove target mesh for clean export."""
         self.logger.info("=== REMOVING TARGET MESH FOR EXPORT ===")

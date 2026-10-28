@@ -4237,5 +4237,143 @@ class TestTubeRigOpmShearContract(unittest.TestCase):
                     )
 
 
+
+class TestPanelSelectionApi(unittest.TestCase):
+    """The selection API tentacle's Tube Rig panel acts through: ``MODES``,
+    ``selected_tubes`` / ``selected_edges``, ``for_build``, ``undo_step``,
+    ``create_joints`` and the ``*_from_selection`` steps. The panel itself is
+    tentacle's ``test/test_tube_rig_panel.py``."""
+
+    def setUp(self):
+        cmds.file(new=True, force=True)
+
+    def test_modes_name_registered_strategies_in_combo_order(self):
+        self.assertEqual(
+            [mode.strategy for mode in TubeRig.MODES], ["spline", "anchor", "fk"]
+        )
+        for mode in TubeRig.MODES:
+            self.assertIn(mode.strategy, TubeRig.STRATEGIES)
+
+    def test_selected_tubes_batch_objects_but_an_edge_pick_names_one_mesh(self):
+        a, b = _make_tube(), _make_tube()
+        cmds.select(a, b)
+        self.assertEqual(len(TubeRig.selected_tubes()), 2)
+        self.assertIsNone(TubeRig.selected_edges())
+        cmds.select(f"{a}.e[0:3]", f"{b}.e[0]")
+        self.assertEqual(len(TubeRig.selected_tubes()), 1)
+        self.assertTrue(TubeRig.selected_edges())
+
+    def test_for_build_names_same_named_tubes_apart(self):
+        """Two tubes whose short names match (one per module) must not derive
+        one rig name: the second build would tear the first rig down."""
+        for grp in ("modA", "modB"):
+            cmds.group(_make_tube(), name=grp)
+            cmds.rename(
+                cmds.listRelatives(grp, children=True, fullPath=True)[0], "hose"
+            )
+        a = cmds.ls("modA|hose", long=True)[0]
+        b = cmds.ls("modB|hose", long=True)[0]
+        rig_a = TubeRig.for_build(a)
+        rig_a.build(strategy="fk", num_joints=4, num_controls=2)
+        rig_b = TubeRig.for_build(b)
+        self.assertEqual(rig_a.rig_name, "hose_RIG")
+        self.assertEqual(rig_b.rig_name, "hose_RIG_01")
+        self.assertIs(TubeRig.for_build(a), rig_a)  # its own rig, found again
+
+    def test_undo_step_is_one_undo_for_a_batch(self):
+        cmds.undoInfo(state=True, infinity=True)
+        with TubeRig.undo_step("Tube Rig: Test Batch"):
+            cubes = [cmds.polyCube(name=f"batchCube{i}")[0] for i in range(3)]
+        self.assertEqual(cmds.undoInfo(q=True, undoName=True), "Tube Rig: Test Batch")
+        cmds.undo()
+        self.assertFalse([c for c in cubes if cmds.objExists(c)])
+
+    def test_create_joints_makes_anchor_ends_or_a_reversed_chain(self):
+        tube = _make_tube()  # spans x in [-5, 5]
+        ends = TubeRig.for_build(tube, rig_name="StepEnds").create_joints("anchor")
+        self.assertEqual(len(ends), 2)
+
+        cmds.file(new=True, force=True)
+        tube = _make_tube()
+        chain = TubeRig.for_build(tube, rig_name="StepRev").create_joints(
+            "fk", num_joints=5, reverse=True
+        )
+        self.assertGreaterEqual(len(chain), 2)
+        self.assertGreater(_ws(chain[0])[0], 4.0, "root not at the reversed end")
+
+    def test_create_controls_refuses_no_chain_and_a_chain_that_has_them(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError):
+            TubeRig.create_controls_from_selection("spline")
+
+        tube = _make_tube()
+        joints = TubeRig.for_build(tube, rig_name="StepCtl").create_joints(
+            "spline", num_joints=6
+        )
+        cmds.select(joints[0])
+        kind, chain, controls = TubeRig.create_controls_from_selection(
+            "spline", num_controls=3
+        )
+        self.assertEqual(kind, "Spline IK")
+        self.assertEqual(len(chain), len(joints))
+        self.assertEqual(len(controls), 3)
+
+        cmds.select("StepCtl_jnt_1")  # the root, wherever the build parked it
+        with self.assertRaises(ValueError) as caught:
+            TubeRig.create_controls_from_selection("spline", num_controls=3)
+        self.assertIn("already exist", str(caught.exception))
+
+    def test_bind_from_selection_wants_the_mesh_last(self):
+        tube = _make_tube()
+        joints = TubeRig.for_build(tube, rig_name="StepBind").create_joints(
+            "spline", num_joints=6
+        )
+        cmds.select(tube)
+        with self.assertRaises(ValueError):
+            TubeRig.bind_from_selection()
+        cmds.select(joints[0], tube)
+        mesh, count, skin = TubeRig.bind_from_selection()
+        self.assertEqual(count, len(joints))
+        self.assertTrue(cmds.objExists(skin))
+
+    def test_constrain_ends_takes_one_anchor_per_end(self):
+        tube = _make_tube()
+        rig = TubeRig.for_build(tube, rig_name="StepEnd")
+        rig.build(strategy="spline", num_joints=6, num_controls=3)
+        joints = [str(j) for j in rig.bundle.joints]
+        start, end = _ws(joints[0]), _ws(joints[-1])
+        near = cmds.spaceLocator(name="nearA")[0]
+        nearer = cmds.spaceLocator(name="nearB")[0]
+        far = cmds.spaceLocator(name="farA")[0]
+        cmds.xform(near, ws=True, t=start)
+        cmds.xform(nearer, ws=True, t=(start[0], start[1] + 0.5, start[2]))
+        cmds.xform(far, ws=True, t=end)
+
+        cmds.select(joints[0], near, nearer)
+        with self.assertRaises(ValueError) as caught:
+            TubeRig.constrain_ends_from_selection()
+        self.assertIn("Both anchors", str(caught.exception))
+
+        cmds.select(joints[0], far, near)  # order doesn't cross the ends
+        results = TubeRig.constrain_ends_from_selection()
+        self.assertEqual(
+            sorted((e, a) for e, a, _ in results), [("end", "farA"), ("start", "nearA")]
+        )
+        self.assertTrue(all(joint for _, _, joint in results))
+
+    def test_rebind_targets_need_a_rig_in_the_selection(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError):
+            TubeRig.selected_rebind_targets()
+        tube = _make_tube()
+        TubeRig.for_build(tube, rig_name="StepRebind").build(
+            strategy="fk", num_joints=4, num_controls=2
+        )
+        cmds.select(tube)
+        rigs, mesh = TubeRig.selected_rebind_targets()
+        self.assertEqual([r.rig_name for r in rigs], ["StepRebind"])
+        self.assertIsNone(mesh)
+
+
 if __name__ == "__main__":
     unittest.main()
