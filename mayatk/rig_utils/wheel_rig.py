@@ -12,7 +12,6 @@ from typing import List, Tuple, Optional
 import pythontk as ptk
 
 # from this package:
-from mayatk.core_utils.script_job_manager import ScriptJobManager
 from mayatk.core_utils._core_utils import CoreUtils
 from mayatk.node_utils._node_utils import NodeUtils
 from mayatk.xform_utils._xform_utils import XformUtils
@@ -48,11 +47,7 @@ class WheelRig(ptk.LoggingMixin):
             raise ValueError("Invalid control or wheel inputs.")
 
         # Check for persistent rig ID
-        stored_name = (
-            cmds.getAttr(f"{self.control}.wheelRigId")
-            if cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
-            else None
-        )
+        stored_name = self._stored_name(self.control)
         self._rig_name = (
             rig_name or stored_name or Naming.generate_unique_name("wheel_rig")
         )
@@ -78,6 +73,125 @@ class WheelRig(ptk.LoggingMixin):
     def rig_name(self, name: str):
         self._rig_name = name
         self.logger.debug(f"Rig name set to: {self._rig_name}")
+
+    # ------------------------------------------------------------------
+    # The selection (what tentacle's Wheel Rig panel runs)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _stored_name(control) -> Optional[str]:
+        """The rig ID an earlier rig stamped on *control* (``wheelRigId``), or ``None``."""
+        node = str(control)
+        try:
+            if cmds.attributeQuery("wheelRigId", node=node, exists=True):
+                return cmds.getAttr(f"{node}.wheelRigId") or None
+        except (RuntimeError, ValueError):  # not a node: a component, a stale name
+            pass
+        return None
+
+    @staticmethod
+    def _control_and_wheels() -> Tuple[str, List[str]]:
+        """The selection as ``(control, wheels)``: the LAST selected object
+        drives, every other selected object is a wheel.
+
+        Raises:
+            ValueError: Fewer than two objects are selected, or one is not a
+                transform.
+        """
+        sel = cmds.ls(sl=True, flatten=True) or []
+        if len(sel) < 2:
+            raise ValueError("Select one or more wheel objects, then the driver (last).")
+        control = NodeUtils.get_transform_node(sel[-1])
+        wheels = NodeUtils.get_transform_node(sel[:-1])
+        if not control or not wheels or not all(wheels):
+            raise ValueError(
+                "Invalid selection. Make sure all selected objects are valid transforms."
+            )
+        return control, wheels
+
+    @classmethod
+    def default_rig_name(cls, control=None) -> Optional[str]:
+        """The name a rig on *control* takes when none is given: the rig ID an
+        earlier rig stamped on it (a re-run updates that rig in place), else
+        ``<control>_wheel_rig``.
+
+        Parameters:
+            control (str/None): The driver. ``None`` (the default) takes the
+                selection's: its last selected object.
+
+        Returns:
+            str/None: The name, or ``None`` with nothing selected.
+        """
+        if control is None:
+            sel = cmds.ls(sl=True, flatten=True) or []
+            if not sel:
+                return None
+            control = sel[-1]
+        return cls._stored_name(control) or f"{CoreUtils.short_name(control)}_wheel_rig"
+
+    @classmethod
+    def from_selection(
+        cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs
+    ) -> "WheelRig":
+        """Rig the selected wheels to the selected driver as ONE undo step: what
+        tentacle's Wheel Rig panel runs.
+
+        The LAST selected object drives; every other selected object is a
+        wheel. The rig takes the driver's stored rig ID when an earlier rig
+        left one -- a re-run updates that rig in place -- else *rig_name*, else
+        ``<driver>_wheel_rig`` (:meth:`default_rig_name`).
+
+        Parameters:
+            rig_name (str): The name for a driver that carries no rig ID yet.
+            freeze_transforms (bool): Freeze translation on the driver and the
+                wheels first (see the constructor).
+            **kwargs: :meth:`rig_rotation`'s options (``movement_axis``,
+                ``rotation_axis``, ``wheel_height``, ``use_world_space``).
+
+        Returns:
+            WheelRig: The rig.
+
+        Raises:
+            ValueError: An invalid selection or wheel height -- checked before
+                the undo chunk opens, so a refused click leaves no step.
+        """
+        control, wheels = cls._control_and_wheels()
+        if kwargs.get("wheel_height", 1.0) <= 0:
+            raise ValueError(f"Invalid wheel height: {kwargs['wheel_height']}")
+        name = cls._stored_name(control) or rig_name or cls.default_rig_name(control)
+        with CoreUtils.undo_chunk("Wheel Rig"):
+            rig = cls(control, wheels, rig_name=name, freeze_transforms=freeze_transforms)
+            rig.rig_rotation(wheels=rig.wheels, **kwargs)
+        return rig
+
+    @staticmethod
+    def wheel_size(obj=None, movement_axis: str = "translateZ") -> Optional[float]:
+        """A wheel's diameter from *obj*'s bounding box: its larger extent
+        across the two axes the wheel turns in for *movement_axis* (Move X
+        rolls on Z: the X/Y extents; Move Y spins on Y: X/Z; Move Z pitches on
+        X: Y/Z).
+
+        Parameters:
+            obj (str/None): The wheel. ``None`` (the default) takes the first
+                selected object.
+            movement_axis (str): The driver's travel channel (``translateX`` /
+                ``translateY`` / ``translateZ``).
+
+        Returns:
+            float/None: The diameter, or ``None`` with nothing to measure.
+        """
+        if obj is None:
+            sel = cmds.ls(sl=True, flatten=True) or []
+            if not sel:
+                return None
+            obj = sel[0]
+        bbox = cmds.xform(obj, q=True, bb=True)
+        width, height, depth = bbox[3] - bbox[0], bbox[4] - bbox[1], bbox[5] - bbox[2]
+        if "X" in movement_axis:
+            return max(width, height)
+        if "Y" in movement_axis:
+            return max(width, depth)
+        return max(height, depth)
 
     def get_expressions(self, filter_by_rig: bool = False) -> List[object]:
         """Return all expression nodes connected to the control.
@@ -309,406 +423,3 @@ class WheelRig(ptk.LoggingMixin):
         self.logger.info(
             f"Wheel rig rotation updated for wheels: {[w.split('|')[-1].split(':')[-1] for w in wheels]}"
         )
-
-
-class WheelRigSlots:
-    def __init__(self, switchboard):
-        self.sb = switchboard
-        # Use the actual UI name loaded from the wheel_rig.ui file
-        # Avoid creating a placeholder UI ("wheel_rig_slots") which has no widgets
-        self.ui = self.sb.loaded_ui.wheel_rig
-
-        # Populate axis combo box showing both movement and rotation axes
-        self.ui.cmb000.clear()
-        self.ui.cmb000.addItems(
-            [
-                "Move X \u2192 Rotate Z",
-                "Move Y \u2192 Rotate Y",
-                "Move Z \u2192 Rotate X",
-            ]
-        )
-        self.ui.cmb000.setCurrentIndex(2)  # Default to Move Z \u2192 Rotate X
-
-        # Remove redundant UI elements
-        for widget_name in ["chk000", "cmb001"]:
-            if hasattr(self.ui, widget_name):
-                getattr(self.ui, widget_name).deleteLater()
-
-        # 1) update placeholder right away
-        mgr = ScriptJobManager.instance()
-        mgr.subscribe(
-            "SelectionChanged",
-            self._on_selection_changed,
-            owner=self,
-        )
-        mgr.connect_cleanup(self.ui, owner=self)
-        self.update_rig_name_placeholder()
-
-        # 2) cleanup on actual window close
-        self.ui.on_close.connect(self.cleanup)
-
-        # 3) Setup Tooltips
-        self._init_tooltips()
-
-        # 4) World-space mode flag (toggled via header menu)
-        self._use_world_space = False
-
-    def header_init(self, widget):
-        """Configure header menu with mode toggle and instructions."""
-        widget.menu.add("Separator", setTitle="Mode")
-        # Local vs World Space is a two-valued mode, not a modifier \u2014 a combobox
-        # names both states; extend with a third space here without a relayout.
-        cmb_space = widget.menu.add(
-            "QComboBox",
-            setObjectName="cmb_space",
-            setToolTip=self.sb.tooltip.fmt(
-                title="Space",
-                bullets=[
-                    "<b>Local</b> (default) \u2014 reads the driver's local "
-                    "translate directly. Simpler, and sufficient when the "
-                    "driver itself is animated.",
-                    "<b>World Space</b> \u2014 rotation reads a decomposeMatrix on "
-                    "the driver's <i>worldMatrix</i>, so movement inherited from "
-                    "parent transforms is captured.",
-                ],
-            ),
-        )
-        cmb_space.addItems(["Local", "World Space"])
-        cmb_space.setCurrentText(
-            "Local"
-        )  # preserve prior default (checkbox off = local)
-        cmb_space.currentTextChanged.connect(self._on_space_changed)
-
-        widget.set_help_text(
-            self.sb.tooltip.fmt(
-                title="Wheel Rig",
-                body="Drive wheel rotation from a control's linear movement. "
-                "Wheel diameter (Wheel Height) and travel axis determine the "
-                "rotation speed.",
-                sections=[
-                    (
-                        "Selection order",
-                        [
-                            "Select one or more <b>wheel</b> objects "
-                            "(or locators driving them).",
-                            f"{self.sb.tooltip.kbd('Shift')}-select the <b>driver / control</b> "
-                            "object last.",
-                            "Click <b>Rig Rotation</b>.",
-                        ],
-                    ),
-                    (
-                        "Settings",
-                        [
-                            "<b>Axis</b> \u2014 which translation axis drives which "
-                            "rotation axis. e.g. <i>Move Z \u2192 Rotate X</i> means "
-                            "forward Z movement produces pitch on X.",
-                            "<b>Wheel Height</b> \u2014 diameter used to compute "
-                            "rotation speed. Use <b>Get Wheel Size</b> (slider "
-                            "option box) to auto-detect from the bounding box.",
-                        ],
-                    ),
-                    (
-                        "Modes",
-                        [
-                            "<b>Local</b> (default) \u2014 reads the driver's local "
-                            "translate. Best when the driver itself is animated.",
-                            "<b>World Space</b> \u2014 uses a decomposeMatrix node so "
-                            "parent transform movement is captured. Toggle via "
-                            "the header menu.",
-                        ],
-                    ),
-                    (
-                        "Driver attributes added",
-                        [
-                            "<b>wheelHeight</b> \u2014 animation-friendly diameter control.",
-                            "<b>enableRotation</b> \u2014 on/off toggle (0..1).",
-                            "<b>spinDirection</b> \u2014 flip direction (+1 / -1).",
-                        ],
-                    ),
-                ],
-                notes=[
-                    "Re-running on the same driver updates the existing "
-                    "expression in place (a <i>wheelRigId</i> string attribute "
-                    "on the driver acts as the idempotency key \u2014 no duplicates).",
-                ],
-            )
-        )
-
-    def _on_space_changed(self, text: str):
-        self._use_world_space = text == "World Space"
-
-    @property
-    def rig_name(self) -> str:
-        """Get the rig name from the text box."""
-        return self.ui.txt000.text()
-
-    @rig_name.setter
-    def rig_name(self, name: str):
-        self.ui.txt000.setText(name)
-
-    @property
-    def movement_axis(self) -> str:
-        """Get the movement axis from the combo box."""
-        axis_map = {
-            0: "translateX",
-            1: "translateY",
-            2: "translateZ",
-        }
-        return axis_map.get(self.ui.cmb000.currentIndex(), "translateZ")
-
-    @property
-    def rotation_axis(self) -> Optional[str]:
-        """Get the rotation axis that corresponds to the selected movement axis."""
-        rot_map = {
-            0: "rotateZ",  # Move X -> Rotate Z
-            1: "rotateY",  # Move Y -> Rotate Y
-            2: "rotateX",  # Move Z -> Rotate X
-        }
-        return rot_map.get(self.ui.cmb000.currentIndex(), "rotateX")
-
-    def resolve_selection(
-        self,
-    ) -> Tuple["object", List["object"]]:
-        """Resolve the current selection into control (driver) and wheels.
-
-        The driver is expected to be the **last** selected object.
-        All preceding objects are treated as wheel transforms.
-
-        Returns:
-            Tuple of (control, list of wheels).
-        Raises:
-            ValueError if selection is invalid.
-        """
-        sel = cmds.ls(sl=True, flatten=True)
-        if len(sel) < 2:
-            raise ValueError(
-                "Select one or more wheel objects, then the driver (last)."
-            )
-
-        control = NodeUtils.get_transform_node(sel[-1])
-        wheels = NodeUtils.get_transform_node(sel[:-1])
-
-        if not control or not all(wheels):
-            raise ValueError(
-                "Invalid selection. Make sure all selected objects are valid transforms."
-            )
-
-        return control, wheels
-
-    def set_wheel_height(self):
-        """Get the wheel height from the selected object's bounding box."""
-        selected = cmds.ls(sl=True, flatten=True)
-        try:
-            obj = selected[0]
-        except IndexError:
-            cmds.warning("Select a single object to determine wheel height.")
-            return
-
-        bbox = cmds.xform(obj, q=True, bb=True)
-        # Determine dimension based on inferred rotation axis
-        # Move Z -> Rotate X -> Diameter is Y or Z (Height/Depth)
-        # Move X -> Rotate Z -> Diameter is X or Y (Width/Height)
-        # Move Y -> Rotate Y -> Diameter is X or Z
-
-        # We will use the max dimension perpendicular to the rotation axis to ensure we get diameter
-        move_axis = self.movement_axis
-
-        if "X" in move_axis:  # Moving X, Rotating Z
-            # Perpendiculars are X and Y.
-            # bbox size: X=(3-0), Y=(4-1), Z=(5-2)
-            width = bbox[3] - bbox[0]
-            height = bbox[4] - bbox[1]
-            wheel_size = max(width, height)
-
-        elif "Y" in move_axis:  # Moving Y, Rotating Y
-            # Perpendiculars X and Z
-            width = bbox[3] - bbox[0]
-            depth = bbox[5] - bbox[2]
-            wheel_size = max(width, depth)
-
-        else:  # Moving Z, Rotating X (Default)
-            # Perpendiculars Y and Z
-            height = bbox[4] - bbox[1]
-            depth = bbox[5] - bbox[2]
-            wheel_size = max(height, depth)
-
-        self.ui.s000.setText(str(round(wheel_size, 3)))
-
-    def _init_tooltips(self):
-        """Set the polished (uitk ``fmt``) tooltips for every option and action."""
-        ui = self.ui
-
-        ui.txt000.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Rig Name",
-                body="Base name for the expression (and its decomposeMatrix "
-                "node, in World Space mode) that this rig creates.",
-                notes=["Empty = derived from the driver (control) name."],
-            )
-        )
-        ui.s000.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Wheel Height",
-                body="Wheel diameter, used to convert the driver's travel into "
-                "rotation — a larger wheel turns slower over the same distance.",
-                notes=[
-                    "Use the <b>Get Wheel Size</b> option box to auto-detect "
-                    "this from the selected object's bounding box.",
-                ],
-            )
-        )
-        ui.cmb000.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Movement → Rotation Axis",
-                body="Which translation axis drives which rotation axis.",
-                rows=[
-                    ("Move X → Rotate Z", "sideways X travel rolls on Z"),
-                    ("Move Y → Rotate Y", "vertical Y travel spins on Y"),
-                    ("Move Z → Rotate X", "forward Z travel pitches on X (default)"),
-                ],
-            )
-        )
-        ui.chk010.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Freeze Transforms",
-                body="Freezes <b>translation</b> on the driver and wheel(s) "
-                "before rigging, so travel is measured from a clean zero.",
-                notes=[
-                    "Rotation is preserved (needed for mirrored-wheel auto-flip).",
-                ],
-            )
-        )
-        ui.b000.setToolTip(
-            self.sb.tooltip.fmt(
-                title="Rig Rotation",
-                body="Creates (or updates) the expression that spins the "
-                "wheel(s) from the driver's movement.",
-                steps=[
-                    "Select one or more <b>wheel</b> objects.",
-                    "<b>Shift</b>-select the <b>driver / control</b> last.",
-                    "Press <b>Rig Rotation</b>.",
-                ],
-                notes=[
-                    "Freeze or correctly set transforms first (or tick "
-                    "<b>Freeze Transforms</b>).",
-                    "Re-running on the same driver updates the existing "
-                    "expression in place — no duplicates.",
-                ],
-            )
-        )
-
-    def txt000_init(self, widget):
-        """Rig-name field — optional, so clearing back to auto-naming is a state."""
-        widget.option_box.clear_option = True
-
-    def s000_init(self, widget):
-        """Initialize the wheel height slider."""
-        widget.option_box.menu.add(
-            "QPushButton",
-            setText="Get Wheel Size",
-            setObjectName="b010",
-            setToolTip=self.sb.tooltip.fmt(
-                title="Get Wheel Size",
-                body="Sets <b>Wheel Height</b> from the selected object's "
-                "bounding box, based on the current movement axis.",
-            ),
-        )
-        widget.option_box.menu.b010.clicked.connect(self.set_wheel_height)
-
-    def _on_selection_changed(self):
-        """Handle selection change: invalidate cached rig and update UI."""
-        # Discard the cached WheelRig so the property re-resolves from
-        # the current selection next time it is accessed.
-        self._wheel_rig = None
-        self.update_rig_name_placeholder()
-
-    def update_rig_name_placeholder(self):
-        """Update the rig name placeholder based on the driver (last selected)."""
-        selected = cmds.ls(sl=True, flatten=True)
-        if not selected:
-            return
-
-        control = selected[-1]
-
-        default_name = f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
-        self.ui.txt000.setPlaceholderText(default_name)
-
-    def cleanup(self):
-        """Unsubscribe from the centralized ScriptJobManager."""
-        ScriptJobManager.instance().unsubscribe_all(self)
-
-    @property
-    def wheel_rig(self) -> Optional[WheelRig]:
-        """Get or create the wheel rig attached to the selected control.
-
-        Returns None if the current selection is invalid, so the property
-        is safe for introspection (e.g. ``inspect.getmembers``).
-        """
-        try:
-            rig = self._wheel_rig
-            if rig is None:
-                raise AttributeError
-            if not rig.control or not cmds.objExists(rig.control):
-                self._wheel_rig = None
-                raise AttributeError
-            return rig
-        except AttributeError:
-            try:
-                control, wheels = self.resolve_selection()
-            except ValueError:
-                return None
-
-            # Check persistent ID on control to recover correct name
-            if cmds.attributeQuery("wheelRigId", node=control, exists=True):
-                rig_name = cmds.getAttr(f"{control}.wheelRigId")
-                self.rig_name = rig_name  # Sync UI
-            else:
-                rig_name = (
-                    self.rig_name
-                    or f"{control.split('|')[-1].split(':')[-1]}_wheel_rig"
-                )
-
-            self._wheel_rig = WheelRig(
-                control,
-                wheels,
-                rig_name=rig_name,
-                freeze_transforms=self.ui.chk010.isChecked(),
-            )
-            print(f"Created new wheel rig: {self._wheel_rig.rig_name}")
-
-            return self._wheel_rig
-
-    @CoreUtils.undoable
-    def b000(self):
-        """Create or update Wheel Rig."""
-        wheel_rig = self.wheel_rig
-        if not wheel_rig:
-            self.sb.message_box(
-                "Select one or more wheel objects, then the driver (last)."
-            )
-            return
-
-        _, wheels = self.resolve_selection()
-
-        wheel_rig.rig_rotation(
-            movement_axis=self.movement_axis,
-            rotation_axis=self.rotation_axis,
-            wheel_height=float(self.ui.s000.text()),
-            wheels=wheels,
-            use_world_space=self._use_world_space,
-        )
-
-
-# -----------------------------------------------------------------------------
-
-
-if __name__ == "__main__":
-    from mayatk.ui_utils.maya_ui_handler import MayaUiHandler
-
-    ui = MayaUiHandler.instance().get("wheel_rig", reload=True)
-    ui.header.config_buttons("hide")
-    ui.show(pos="screen", app_exec=True)
-
-# -----------------------------------------------------------------------------
-# Notes
-# -----------------------------------------------------------------------------

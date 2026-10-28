@@ -2,7 +2,7 @@
 
 _Diff vs the last release (origin/main @ f58c05fa)._
 
-## Moved out (159)
+## Moved out (176)
 
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
 - `anim_utils/shots/shot_manifest/export_preview.py::ExportPreviewMixin.export` → `tentacle.slots.tools._shot_manifest.export_preview.ExportPreviewMixin` (from 0.30.0)
@@ -152,6 +152,23 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `nurbs_utils/image_tracer.py::ImageTracerSlots.chk000` → `tentacle.slots.tools.image_tracer.ImageTracerSlots` (from 0.30.0)
 - `nurbs_utils/image_tracer.py::ImageTracerSlots.header_init` → `tentacle.slots.tools.image_tracer.ImageTracerSlots` (from 0.30.0)
 - `nurbs_utils/image_tracer.py::ImageTracerSlots.txt000_init` → `tentacle.slots.tools.image_tracer.ImageTracerSlots` (from 0.30.0)
+- `rig_utils/telescope_rig.py::TelescopeRigSlots` → `tentacle.slots.tools.telescope_rig.TelescopeRigSlots` (from 0.30.0)
+- `rig_utils/telescope_rig.py::TelescopeRigSlots.build_rig` → `tentacle.slots.tools.telescope_rig.TelescopeRigSlots` (from 0.30.0)
+- `rig_utils/telescope_rig.py::TelescopeRigSlots.header_init` → `tentacle.slots.tools.telescope_rig.TelescopeRigSlots` (from 0.30.0)
+- `rig_utils/telescope_rig.py::TelescopeRigSlots.remove_rig` → `tentacle.slots.tools.telescope_rig.TelescopeRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.b000` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.cleanup` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.header_init` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.movement_axis` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.resolve_selection` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.rig_name` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.rotation_axis` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.s000_init` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.set_wheel_height` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.txt000_init` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.update_rig_name_placeholder` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
+- `rig_utils/wheel_rig.py::WheelRigSlots.wheel_rig` → `tentacle.slots.tools.wheel_rig.WheelRigSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.frames_to_sec` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.get_current_time` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
@@ -164,7 +181,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `ui_utils/calculator.py::CalculatorSlots.on_input` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 - `ui_utils/calculator.py::CalculatorSlots.sec_to_frames` → `tentacle.slots.tools.calculator.CalculatorSlots` (from 0.30.0)
 
-## Added (37)
+## Added (41)
 
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.behaviors_cls()`
 - `anim_utils/shots/shot_manifest/manifest_host.py::ManifestHost.range_resolver_cls()`
@@ -202,6 +219,10 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/emissive_groups.py::MayaEmissiveGroups.write_colors(self, obj: str, channels, color_set: str) -> None`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`
+- `rig_utils/telescope_rig.py::TelescopeRig.partition_selection(cls, selection: Optional[List[str]] = None) -> Tuple[Optional[str], List[str], Optional[str]]`
+- `rig_utils/wheel_rig.py::WheelRig.default_rig_name(cls, control=None) -> Optional[str]`
+- `rig_utils/wheel_rig.py::WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'`
+- `rig_utils/wheel_rig.py::WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 
 ## Deprecations (17)
@@ -248,3 +269,9 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_in`
 - `mat_utils/emissive_groups.py::EmissiveGroups.transfer_out`
 - `mat_utils/emissive_groups.py::EmissiveGroups.validate`
+
+## Signature changed (1)
+
+- `rig_utils/telescope_rig.py::TelescopeRig.teardown`
+  - was: `(self, bundle: Optional[TelescopeRigBundle] = None) -> bool`
+  - now: `(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool`

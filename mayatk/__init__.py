@@ -405,6 +405,14 @@ MOVED_NAMES = {
         "tentacle.slots.tools.curve_to_tube.CurveToTubeSlots",
         "0.30.0",
     ),
+    "TelescopeRigSlots": (
+        "tentacle.slots.tools.telescope_rig.TelescopeRigSlots",
+        "0.30.0",
+    ),
+    "WheelRigSlots": (
+        "tentacle.slots.tools.wheel_rig.WheelRigSlots",
+        "0.30.0",
+    ),
 }
 
 bootstrap_package(

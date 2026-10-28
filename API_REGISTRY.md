@@ -4538,14 +4538,11 @@ Skinning utilities: binding, batch weight I/O, transfer, procedural weights.
   - `TelescopeRigBundle.to_json(self) -> str`
   - `TelescopeRigBundle.from_json(cls, payload: str) -> 'TelescopeRigBundle'` *(class)* — Rebuild a bundle from :meth:`to_json` output, ignoring unknown keys
 - **[`class TelescopeRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L58)** — Telescope Rig
+  - `TelescopeRig.partition_selection(cls, selection: Optional[List[str]] = None) -> Tuple[Optional[str], List[str], Optional[str]]` *(class)* — Split an ordered selection into ``(base_locator, segments, end_locator)``.
   - `TelescopeRig.setup_telescope_rig(self, base_locator: Optional[Union[str, List[str]]] = None, end_locator: Optional[Union[str, List[str]]] = None, segments: Optional[List[str]] = None, collapsed_distance: Optional[float] = None, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle` — Sets up constraints and driven keys to make a series of segments telescope between two locators.
   - `TelescopeRig.scene_bundles(cls) -> List[TelescopeRigBundle]` *(class)* — Every telescope-rig bundle stamped into the current scene.
   - `TelescopeRig.find_bundles(cls, nodes) -> List[TelescopeRigBundle]` *(class)* — Bundles whose locators or segments intersect *nodes*.
-  - `TelescopeRig.teardown(self, bundle: Optional[TelescopeRigBundle] = None) -> bool` — Remove a telescope rig built by this class.
-- **[`class TelescopeRigSlots(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/telescope_rig.py#L838)**
-  - `TelescopeRigSlots.header_init(self, widget)` — Configure header help text.
-  - `TelescopeRigSlots.build_rig(self)`
-  - `TelescopeRigSlots.remove_rig(self)`
+  - `TelescopeRig.teardown(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool` — Remove a telescope rig built by this class.
 
 <a id="rig_utils--tube_rig--_tube_rig"></a>
 ### `rig_utils/tube_rig/_tube_rig.py`
@@ -4645,24 +4642,14 @@ Tube Rig panel — the Switchboard slots for ``tube_rig.ui``.
 <a id="rig_utils--wheel_rig"></a>
 ### `rig_utils/wheel_rig.py`
 
-- **[`class WheelRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/wheel_rig.py#L22)** — Handles basic wheel rigging by linking rotation to linear control movement.
+- **[`class WheelRig(pythontk.LoggingMixin)`](mayatk/mayatk/rig_utils/wheel_rig.py#L21)** — Handles basic wheel rigging by linking rotation to linear control movement.
   - `WheelRig.rig_name(self) -> str` *(property)*
+  - `WheelRig.default_rig_name(cls, control=None) -> Optional[str]` *(class)* — The name a rig on *control* takes when none is given: the rig ID an
+  - `WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'` *(class)* — Rig the selected wheels to the selected driver as ONE undo step: what
+  - `WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]` *(static)* — A wheel's diameter from *obj*'s bounding box: its larger extent
   - `WheelRig.get_expressions(self, filter_by_rig: bool = False) -> List[object]` — Return all expression nodes connected to the control.
   - `WheelRig.delete_expressions(self, filter_by_rig: bool = True) -> None` — Delete expression nodes associated with this rig.
   - `WheelRig.rig_rotation(self, movement_axis: str = 'translateZ', rotation_axis: Optional[str] = None, wheel_height: float = 1.0, wheels: Optional[List['object']] = None, use_world_space: bool = False) -> None` — Rig wheels to rotate based on control movement.
-- **[`class WheelRigSlots`](mayatk/mayatk/rig_utils/wheel_rig.py#L314)**
-  - `WheelRigSlots.header_init(self, widget)` — Configure header menu with mode toggle and instructions.
-  - `WheelRigSlots.rig_name(self) -> str` *(property)* — Get the rig name from the text box.
-  - `WheelRigSlots.movement_axis(self) -> str` *(property)* — Get the movement axis from the combo box.
-  - `WheelRigSlots.rotation_axis(self) -> Optional[str]` *(property)* — Get the rotation axis that corresponds to the selected movement axis.
-  - `WheelRigSlots.resolve_selection(self) -> Tuple['object', List['object']]` — Resolve the current selection into control (driver) and wheels.
-  - `WheelRigSlots.set_wheel_height(self)` — Get the wheel height from the selected object's bounding box.
-  - `WheelRigSlots.txt000_init(self, widget)` — Rig-name field — optional, so clearing back to auto-naming is a state.
-  - `WheelRigSlots.s000_init(self, widget)` — Initialize the wheel height slider.
-  - `WheelRigSlots.update_rig_name_placeholder(self)` — Update the rig name placeholder based on the driver (last selected).
-  - `WheelRigSlots.cleanup(self)` — Unsubscribe from the centralized ScriptJobManager.
-  - `WheelRigSlots.wheel_rig(self) -> Optional[WheelRig]` *(property)* — Get or create the wheel rig attached to the selected control.
-  - `WheelRigSlots.b000(self)` — Create or update Wheel Rig.
 
 <a id="ui_utils--_ui_utils"></a>
 ### `ui_utils/_ui_utils.py`

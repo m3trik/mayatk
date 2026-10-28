@@ -453,6 +453,77 @@ class TestWheelRig(MayaTkTestCase):
         self.assertFalse(cmds.objExists(f"kill_b_{self.wheel2}_expr"))
 
     # ------------------------------------------------------------------
+    # The selection: what tentacle's Wheel Rig panel runs
+    # ------------------------------------------------------------------
+
+    def test_from_selection_the_last_selected_drives(self):
+        """The last selected object is the driver, the others its wheels."""
+        cmds.select(self.wheel1, self.wheel2, self.control)
+        rig = WheelRig.from_selection(
+            freeze_transforms=False,
+            movement_axis="translateZ",
+            rotation_axis="rotateX",
+            wheel_height=2.0,
+        )
+        self.assertEqual(rig.rig_name, "Control_wheel_rig")
+        self.assertEqual(cmds.getAttr(f"{self.control}.wheelRigId"), "Control_wheel_rig")
+        for wheel in self.wheels:
+            self.assertTrue(cmds.objExists(f"Control_wheel_rig_{wheel}_expr"))
+
+    def test_from_selection_rerun_keeps_the_stored_rig_id(self):
+        """A re-run on the same driver updates its rig, whatever name is given."""
+        cmds.select(self.wheel1, self.control)
+        first = WheelRig.from_selection(rig_name="car", freeze_transforms=False)
+        cmds.select(self.wheel1, self.control)
+        again = WheelRig.from_selection(rig_name="other", freeze_transforms=False)
+        self.assertEqual(first.rig_name, "car")
+        self.assertEqual(again.rig_name, "car")
+        self.assertEqual(WheelRig.default_rig_name(self.control), "car")
+
+    def test_from_selection_is_one_undo_step(self):
+        """One undo takes the click back: the stamp, the freeze, the expressions."""
+        cmds.xform(self.control, translation=[1, 2, 3], worldSpace=True)
+        cmds.select(self.wheel1, self.control)
+        WheelRig.from_selection(freeze_transforms=True)
+        cmds.undo()
+        self.assertFalse(
+            cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
+        )
+        self.assertFalse(cmds.ls(type="expression"))
+        t = cmds.xform(self.control, query=True, objectSpace=True, translation=True)
+        self.assertAlmostEqual(t[2], 3.0, places=4)
+
+    def test_from_selection_refuses_a_lone_object_before_any_change(self):
+        cmds.select(self.control)
+        with self.assertRaises(ValueError):
+            WheelRig.from_selection()
+        self.assertFalse(
+            cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
+        )
+        cmds.select(self.wheel1, self.control)
+        with self.assertRaises(ValueError):
+            WheelRig.from_selection(wheel_height=0.0)
+        self.assertFalse(
+            cmds.attributeQuery("wheelRigId", node=str(self.control), exists=True)
+        )
+
+    def test_default_rig_name_follows_the_selections_driver(self):
+        cmds.select(clear=True)
+        self.assertIsNone(WheelRig.default_rig_name())
+        cmds.select(self.wheel1, self.control)
+        self.assertEqual(WheelRig.default_rig_name(), "Control_wheel_rig")
+
+    def test_wheel_size_reads_the_axes_the_wheel_turns_in(self):
+        """A radius-2 wheel, 0.5 thick along Y: Move Z measures Y/Z, Move Y X/Z."""
+        wheel = cmds.polyCylinder(n="SizedWheel", radius=2.0, height=0.5)[0]
+        self.assertAlmostEqual(WheelRig.wheel_size(wheel, "translateZ"), 4.0, places=3)
+        self.assertAlmostEqual(WheelRig.wheel_size(wheel, "translateY"), 4.0, places=3)
+        cmds.select(wheel)
+        self.assertAlmostEqual(WheelRig.wheel_size(movement_axis="translateX"), 4.0, places=3)
+        cmds.select(clear=True)
+        self.assertIsNone(WheelRig.wheel_size())
+
+    # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
 

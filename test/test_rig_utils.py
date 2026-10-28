@@ -1268,6 +1268,43 @@ class TestRigUtils(MayaTkTestCase):
         self.assertFalse(cmds.objExists(bundle.distance_node))
         self.assertEqual(TelescopeRig.scene_bundles(), [])
 
+    def test_telescope_rig_partition_selection_reads_the_selection_order(self):
+        """The roles tentacle's Telescope Rig panel builds from: a leading /
+        trailing locator is the base / end, the rest are the segments."""
+        base = cmds.spaceLocator(n="part_base")[0]
+        end = cmds.spaceLocator(n="part_end")[0]
+        segs = [cmds.polyCube(n=f"part_seg{i}")[0] for i in range(2)]
+        grp = cmds.group(cmds.polyCube(n="part_inner")[0], n="part_grp")
+
+        cmds.select(base, *segs, end)
+        self.assertEqual(TelescopeRig.partition_selection(), (base, segs, end))
+        cmds.select(segs[0], grp)  # a group whose mesh hangs below is a segment
+        self.assertEqual(
+            TelescopeRig.partition_selection(), (None, [segs[0], grp], None)
+        )
+        cmds.select(clear=True)
+        self.assertEqual(TelescopeRig.partition_selection(), (None, [], None))
+
+    def test_telescope_rig_teardown_of_two_rigs_is_one_undo_step(self):
+        """A Remove over a selection spanning two rigs: one call, one Ctrl+Z."""
+        rigs = []
+        for k in range(2):
+            segs = []
+            for i in range(2):
+                seg = cmds.polyCube(n=f"pair{k}_seg{i}", h=4)[0]
+                cmds.xform(seg, ws=True, t=(k * 10, 2 + i * 3, 0))
+                segs.append(seg)
+            rigs.append(TelescopeRig().setup_telescope_rig(segments=segs, name=f"pair{k}"))
+
+        self.assertTrue(TelescopeRig().teardown(rigs))
+        self.assertEqual(TelescopeRig.scene_bundles(), [])
+        self.assertFalse(cmds.ls("pair*_LOC"))
+
+        cmds.undo()  # both rigs come back together
+        self.assertEqual(
+            sorted(b.name for b in TelescopeRig.scene_bundles()), ["pair0", "pair1"]
+        )
+
     def test_create_switch(self):
         """Test create_switch method via Attributes."""
         # Test 1: Bool — production returns the plug string

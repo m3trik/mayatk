@@ -29261,12 +29261,21 @@
           ],
           "members": [
             {
+              "name": "partition_selection",
+              "qualname": "TelescopeRig.partition_selection",
+              "kind": "classmethod",
+              "signature": "(cls, selection: Optional[List[str]] = None) -> Tuple[Optional[str], List[str], Optional[str]]",
+              "summary": "Split an ordered selection into ``(base_locator, segments, end_locator)``.",
+              "line": 255,
+              "deprecated": false
+            },
+            {
               "name": "setup_telescope_rig",
               "qualname": "TelescopeRig.setup_telescope_rig",
               "kind": "method",
               "signature": "(self, base_locator: Optional[Union[str, List[str]]] = None, end_locator: Optional[Union[str, List[str]]] = None, segments: Optional[List[str]] = None, collapsed_distance: Optional[float] = None, aim_axis: str = 'y', world_up_type: str = 'scene', lock_attributes: bool = True, name: str = 'telescope') -> TelescopeRigBundle",
               "summary": "Sets up constraints and driven keys to make a series of segments telescope between two locators.",
-              "line": 235,
+              "line": 293,
               "deprecated": false
             },
             {
@@ -29275,7 +29284,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[TelescopeRigBundle]",
               "summary": "Every telescope-rig bundle stamped into the current scene.",
-              "line": 725,
+              "line": 783,
               "deprecated": false
             },
             {
@@ -29284,53 +29293,16 @@
               "kind": "classmethod",
               "signature": "(cls, nodes) -> List[TelescopeRigBundle]",
               "summary": "Bundles whose locators or segments intersect *nodes*.",
-              "line": 742,
+              "line": 800,
               "deprecated": false
             },
             {
               "name": "teardown",
               "qualname": "TelescopeRig.teardown",
               "kind": "method",
-              "signature": "(self, bundle: Optional[TelescopeRigBundle] = None) -> bool",
+              "signature": "(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool",
               "summary": "Remove a telescope rig built by this class.",
-              "line": 798,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "TelescopeRigSlots",
-          "summary": "",
-          "line": 838,
-          "bases": [
-            "pythontk.LoggingMixin"
-          ],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "TelescopeRigSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header help text.",
-              "line": 867,
-              "deprecated": false
-            },
-            {
-              "name": "build_rig",
-              "qualname": "TelescopeRigSlots.build_rig",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 1028,
-              "deprecated": false
-            },
-            {
-              "name": "remove_rig",
-              "qualname": "TelescopeRigSlots.remove_rig",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "",
-              "line": 1081,
+              "line": 856,
               "deprecated": false
             }
           ]
@@ -30020,7 +29992,7 @@
         {
           "name": "WheelRig",
           "summary": "Handles basic wheel rigging by linking rotation to linear control movement.",
-          "line": 22,
+          "line": 21,
           "bases": [
             "pythontk.LoggingMixin"
           ],
@@ -30031,7 +30003,34 @@
               "kind": "property",
               "signature": "(self) -> str",
               "summary": "",
-              "line": 74,
+              "line": 69,
+              "deprecated": false
+            },
+            {
+              "name": "default_rig_name",
+              "qualname": "WheelRig.default_rig_name",
+              "kind": "classmethod",
+              "signature": "(cls, control=None) -> Optional[str]",
+              "summary": "The name a rig on *control* takes when none is given: the rig ID an",
+              "line": 113,
+              "deprecated": false
+            },
+            {
+              "name": "from_selection",
+              "qualname": "WheelRig.from_selection",
+              "kind": "classmethod",
+              "signature": "(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'",
+              "summary": "Rig the selected wheels to the selected driver as ONE undo step: what",
+              "line": 133,
+              "deprecated": false
+            },
+            {
+              "name": "wheel_size",
+              "qualname": "WheelRig.wheel_size",
+              "kind": "staticmethod",
+              "signature": "(obj=None, movement_axis: str = 'translateZ') -> Optional[float]",
+              "summary": "A wheel's diameter from *obj*'s bounding box: its larger extent",
+              "line": 168,
               "deprecated": false
             },
             {
@@ -30040,7 +30039,7 @@
               "kind": "method",
               "signature": "(self, filter_by_rig: bool = False) -> List[object]",
               "summary": "Return all expression nodes connected to the control.",
-              "line": 82,
+              "line": 196,
               "deprecated": false
             },
             {
@@ -30049,7 +30048,7 @@
               "kind": "method",
               "signature": "(self, filter_by_rig: bool = True) -> None",
               "summary": "Delete expression nodes associated with this rig.",
-              "line": 101,
+              "line": 215,
               "deprecated": false
             },
             {
@@ -30058,123 +30057,7 @@
               "kind": "method",
               "signature": "(self, movement_axis: str = 'translateZ', rotation_axis: Optional[str] = None, wheel_height: float = 1.0, wheels: Optional[List['object']] = None, use_world_space: bool = False) -> None",
               "summary": "Rig wheels to rotate based on control movement.",
-              "line": 124,
-              "deprecated": false
-            }
-          ]
-        },
-        {
-          "name": "WheelRigSlots",
-          "summary": "",
-          "line": 314,
-          "bases": [],
-          "members": [
-            {
-              "name": "header_init",
-              "qualname": "WheelRigSlots.header_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Configure header menu with mode toggle and instructions.",
-              "line": 356,
-              "deprecated": false
-            },
-            {
-              "name": "rig_name",
-              "qualname": "WheelRigSlots.rig_name",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Get the rig name from the text box.",
-              "line": 441,
-              "deprecated": false
-            },
-            {
-              "name": "movement_axis",
-              "qualname": "WheelRigSlots.movement_axis",
-              "kind": "property",
-              "signature": "(self) -> str",
-              "summary": "Get the movement axis from the combo box.",
-              "line": 450,
-              "deprecated": false
-            },
-            {
-              "name": "rotation_axis",
-              "qualname": "WheelRigSlots.rotation_axis",
-              "kind": "property",
-              "signature": "(self) -> Optional[str]",
-              "summary": "Get the rotation axis that corresponds to the selected movement axis.",
-              "line": 460,
-              "deprecated": false
-            },
-            {
-              "name": "resolve_selection",
-              "qualname": "WheelRigSlots.resolve_selection",
-              "kind": "method",
-              "signature": "(self) -> Tuple['object', List['object']]",
-              "summary": "Resolve the current selection into control (driver) and wheels.",
-              "line": 469,
-              "deprecated": false
-            },
-            {
-              "name": "set_wheel_height",
-              "qualname": "WheelRigSlots.set_wheel_height",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Get the wheel height from the selected object's bounding box.",
-              "line": 498,
-              "deprecated": false
-            },
-            {
-              "name": "txt000_init",
-              "qualname": "WheelRigSlots.txt000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Rig-name field — optional, so clearing back to auto-naming is a state.",
-              "line": 600,
-              "deprecated": false
-            },
-            {
-              "name": "s000_init",
-              "qualname": "WheelRigSlots.s000_init",
-              "kind": "method",
-              "signature": "(self, widget)",
-              "summary": "Initialize the wheel height slider.",
-              "line": 604,
-              "deprecated": false
-            },
-            {
-              "name": "update_rig_name_placeholder",
-              "qualname": "WheelRigSlots.update_rig_name_placeholder",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Update the rig name placeholder based on the driver (last selected).",
-              "line": 625,
-              "deprecated": false
-            },
-            {
-              "name": "cleanup",
-              "qualname": "WheelRigSlots.cleanup",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Unsubscribe from the centralized ScriptJobManager.",
-              "line": 636,
-              "deprecated": false
-            },
-            {
-              "name": "wheel_rig",
-              "qualname": "WheelRigSlots.wheel_rig",
-              "kind": "property",
-              "signature": "(self) -> Optional[WheelRig]",
-              "summary": "Get or create the wheel rig attached to the selected control.",
-              "line": 641,
-              "deprecated": false
-            },
-            {
-              "name": "b000",
-              "qualname": "WheelRigSlots.b000",
-              "kind": "method",
-              "signature": "(self)",
-              "summary": "Create or update Wheel Rig.",
-              "line": 682,
+              "line": 238,
               "deprecated": false
             }
           ]

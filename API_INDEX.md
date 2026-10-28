@@ -1115,9 +1115,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class TelescopeRigBundle`
   - methods: to_json, from_json
 - `class TelescopeRig(pythontk.LoggingMixin)`
-  - methods: setup_telescope_rig, scene_bundles, find_bundles, teardown
-- `class TelescopeRigSlots(pythontk.LoggingMixin)`
-  - methods: header_init, build_rig, remove_rig
+  - methods: partition_selection, setup_telescope_rig, scene_bundles, find_bundles, teardown
 
 ### `rig_utils/tube_rig/_tube_rig.py` — Tube Rig engine — rigs a tube-shaped mesh (hose, cable, piston, tail).
 - `class TubeRig(pythontk.LoggingMixin, _TubeRigInternal)`
@@ -1146,9 +1144,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `rig_utils/wheel_rig.py`
 - `class WheelRig(pythontk.LoggingMixin)`
-  - methods: rig_name, get_expressions, delete_expressions, rig_rotation
-- `class WheelRigSlots`
-  - methods: header_init, rig_name, movement_axis, rotation_axis, resolve_selection, set_wheel_height, txt000_init, s000_init, update_rig_name_placeholder, cleanup, wheel_rig, b000
+  - methods: rig_name, default_rig_name, from_selection, wheel_size, get_expressions, delete_expressions, rig_rotation
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
