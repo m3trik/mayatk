@@ -29,6 +29,10 @@ class EnvUtils(ptk.HelpMixin):
         "mile": "mi",
     }
 
+    #: The host application's display name, for UI text naming the app a panel
+    #: drives ("Maya Preferences"). Twin of blendertk's ``EnvUtils.APP_NAME``.
+    APP_NAME: ClassVar[str] = "Maya"
+
     #: Glob patterns that make a workspace "non-empty" for :meth:`find_workspaces`
     #: (also the default scan set for :meth:`get_workspace_scenes`). A consumer
     #: referencing more formats overrides it — the Reference Manager adds FBX and USD.
@@ -183,6 +187,73 @@ class EnvUtils(ptk.HelpMixin):
         scene_path = cmds.file(query=True, sceneName=True) or ""
         return scene_path if os.path.splitext(scene_path)[1] else ""
 
+    @staticmethod
+    def get_linear_unit() -> str:
+        """The working linear unit's full name (``"centimeter"``), a key of
+        :attr:`SCENE_UNIT_VALUES`. Twin of blendertk's ``EnvUtils.get_linear_unit``."""
+        return cmds.currentUnit(query=True, fullName=True, linear=True)
+
+    @staticmethod
+    def set_linear_unit(unit: str) -> str:
+        """Set the working linear unit: *unit* a key of :attr:`SCENE_UNIT_VALUES`,
+        in any case. Twin of blendertk's ``EnvUtils.set_linear_unit``.
+
+        Returns:
+            (str): The unit set.
+
+        Raises:
+            ValueError: *unit* is no key of :attr:`SCENE_UNIT_VALUES`.
+        """
+        unit = str(unit).lower()
+        if unit not in EnvUtils.SCENE_UNIT_VALUES:
+            raise ValueError(
+                f"Unknown linear unit {unit!r}; use one of "
+                f"{list(EnvUtils.SCENE_UNIT_VALUES)}."
+            )
+        cmds.currentUnit(linear=unit)
+        return unit
+
+    @staticmethod
+    def frame_rates() -> Dict[str, float]:
+        """``{time unit: fps}`` for the rates the working time unit takes: Maya's
+        named units (``ptk.VidUtils.FRAME_RATES``), each set from its fps by
+        :meth:`apply_scene_settings`. Twin of blendertk's ``EnvUtils.frame_rates``.
+        """
+        return dict(ptk.VidUtils.FRAME_RATES)
+
+    @staticmethod
+    def autosave_settings() -> Dict[str, float]:
+        """Maya's autosave as ``{"max_backups": int, "interval": minutes}``;
+        ``max_backups`` is 0 while autosave is off. Twin of blendertk's
+        ``EnvUtils.autosave_settings``."""
+        enabled = cmds.autoSave(query=True, enable=True)
+        return {
+            "max_backups": cmds.autoSave(query=True, maxBackups=True) if enabled else 0,
+            "interval": cmds.autoSave(query=True, int=True) / 60.0,
+        }
+
+    @staticmethod
+    def set_autosave_settings(
+        max_backups: Optional[int] = None, interval: Optional[float] = None
+    ) -> None:
+        """Set Maya's autosave; ``None`` leaves a setting as it is. Twin of
+        blendertk's ``EnvUtils.set_autosave_settings``.
+
+        Parameters:
+            max_backups (int): The autosave files kept (``limitBackups``); 0 turns
+                autosave off.
+            interval (float): Minutes between autosaves.
+        """
+        if max_backups is not None:
+            if max_backups <= 0:
+                cmds.autoSave(enable=False)
+            else:
+                cmds.autoSave(
+                    enable=True, maxBackups=int(max_backups), limitBackups=True
+                )
+        if interval is not None:
+            cmds.autoSave(int=int(interval * 60))
+
     @classmethod
     def default_artifact_dir(cls) -> str:
         """Return a sensible default directory for exported/baked artifacts.
@@ -322,6 +393,17 @@ class EnvUtils(ptk.HelpMixin):
                         cmds.unloadPlugin(plugin)
         except Exception as error:
             print(error)
+
+    @staticmethod
+    def python_executable() -> Optional[str]:
+        """This Maya's own interpreter (``bin/mayapy``): the one pip must drive to
+        install into Maya's environment. Twin of blendertk's
+        ``EnvUtils.python_executable`` (Blender's bundled Python).
+
+        Returns:
+            (str/None): The path; None without ``MAYA_LOCATION``.
+        """
+        return EnvUtils.get_env_info("mayapy")
 
     @staticmethod
     def get_recent_files(index=None):
@@ -789,6 +871,15 @@ class EnvUtils(ptk.HelpMixin):
         ws = ptk.Workspace.find_containing(scene_path)
         return ws.root if ws is not None else None
 
+    @staticmethod
+    def is_workspace(path: str) -> bool:
+        """True if *path* is a Maya workspace root: a folder holding a
+        ``workspace.mel``, what :meth:`set_current_workspace` opens as it is. Twin
+        of blendertk's ``EnvUtils.is_workspace`` (which also takes a folder of
+        .blend files).
+        """
+        return bool(path) and os.path.isfile(os.path.join(str(path), "workspace.mel"))
+
     # ----------------------------------------------------------- shared project workspace
     # Maya owns the ACTIVE project natively (`cmds.workspace`), so these are not a second
     # project system — they are the creation / template / rule-resolution half that
@@ -816,12 +907,29 @@ class EnvUtils(ptk.HelpMixin):
 
     @staticmethod
     def set_current_workspace(root: str) -> str:
-        """Make *root* Maya's active project (``workspace -openWorkspace``). Twin of
-        ``btk.set_current_workspace``. Returns the opened root, or '' when invalid."""
+        """Make *root* Maya's active project the way File > Set Project does:
+        through MEL ``setProject`` (its no-prompt form), so Maya's recent-projects
+        list, the Project Window and the file browsers follow. Twin of
+        ``btk.set_current_workspace``.
+
+        ``workspace -openWorkspace`` opens it instead in batch, which has none of
+        those and where ``setProject``'s GUI tail (``savePrefs``) errors, and for a
+        folder that is no workspace yet (:meth:`is_workspace`), which
+        ``setProject`` would mark with Maya's bare default ``workspace.mel``;
+        callers that want the template's folders build them first
+        (:meth:`create_workspace`).
+
+        Returns:
+            (str): The opened root, or '' when *root* is no folder.
+        """
         if not (root and os.path.isdir(root)):
             return ""
         root = os.path.normpath(root)
-        cmds.workspace(root, openWorkspace=True)
+        if cmds.about(batch=True) or not EnvUtils.is_workspace(root):
+            cmds.workspace(root, openWorkspace=True)
+        else:
+            mel_path = root.replace("\\", "/").replace('"', '\\"')
+            mel.eval(f'setProject "{mel_path}"')
         return root
 
     @staticmethod

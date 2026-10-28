@@ -175,6 +175,11 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
     # — the widget's own visibility path is silently replaced by a workspace-control
     # facade. The procedural entry points are the collision-free ``show_console`` and
     # ``toggle`` (``toggle`` is not a QWidget method, so it is safe as a classmethod).
+    #: The layout a bare :meth:`toggle` creates the console in: docked above the
+    #: Time Slider, tabbed on the right, 50 px tall (the editors panel's Script
+    #: Output button, which calls it bare in both hosts, as blendertk's twin).
+    TOGGLE_DEFAULTS = {"dock": ("TimeSlider", "top"), "tab_position": "right", "height": 50}
+
     @classmethod
     def toggle(cls, *args, **kwargs):
         """Toggle the Script Output panel.
@@ -188,6 +193,8 @@ class ScriptConsole(MayaQWidgetDockableMixin, QtWidgets.QDialog):
             visible = cmds.workspaceControl(ws, query=True, visible=True)
             cmds.workspaceControl(ws, edit=True, visible=not visible)
             return
+        if not args:  # keywords given override the defaults one by one
+            kwargs = {**cls.TOGGLE_DEFAULTS, **kwargs}
         return cls.show_console(*args, **kwargs)
 
     @classmethod

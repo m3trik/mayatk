@@ -1053,7 +1053,7 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
 <a id="core_utils--components"></a>
 ### `core_utils/components.py`
 
-- **[`class GetComponentsMixin`](mayatk/mayatk/core_utils/components.py#L21)**
+- **[`class GetComponentsMixin`](mayatk/mayatk/core_utils/components.py#L22)**
   - `GetComponentsMixin.get_component_type(cls, component, returned_type='abv')` *(class)* — Get the type of a given component.
   - `GetComponentsMixin.convert_alias(cls, component_type, returned_type='abv')` *(class)* — Return an alternate component alias for the given alias.
   - `GetComponentsMixin.convert_component_type(cls, components, component_type, returned_type='str', flatten=False)` *(class)* — Convert component(s) to its sub-components of the given type.
@@ -1061,7 +1061,7 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `GetComponentsMixin.convert_int_to_component(cls, obj, integers, component_type, returned_type='str', flatten=False)` *(class)* — Convert the given integers to components of the given object.
   - `GetComponentsMixin.filter_components(cls, components, inc=None, exc=None, flatten=False)` *(class)* — Filter the given components.
   - `GetComponentsMixin.get_components(cls, objects, component_type, returned_type='str', inc=None, exc=None, randomize=0, flatten=False)` *(class)* — Get the components of the given type from the given object(s).
-- **[`class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L456)**
+- **[`class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`](mayatk/mayatk/core_utils/components.py#L471)**
   - `Components.get_mesh_transforms(objects) -> List[str]` *(static)* — Full paths of every mesh TRANSFORM in *objects*, descendants included.
   - `Components.get_standoff_distances(cls, objects, target, sample_limit: Optional[int] = None) -> Dict[str, float]` *(class)* — Measure how far each mesh in *objects* stands off *target*'s surface.
   - `Components.map_components_to_objects(components_list)` *(static)* — Map a list of components to their respective objects.
@@ -1090,6 +1090,8 @@ AutoInstancer's instancing strategy: the Maya binding of the ptk engine.
   - `Components.reverse_normals(cls, objects, mode: int = 0) -> None` *(class)* — Reverse the normals of *objects* (meshes, or just the given faces).
   - `Components.toggle_normal_lock(objects) -> Optional[bool]` *(static)* — Lock the vertex normals of *objects*, or unlock them when every one
   - `Components.transfer_normals(objects, space: str = 'world')` *(static)* — Transfer vertex normals from the first mesh of *objects* to the rest
+  - `Components.get_transfer_types(cls) -> Dict[str, str]` *(class)* — The Transfer menu: ``{label: what it does}`` in menu order, each a
+  - `Components.transfer(cls, objects, transfer_type: str)` *(class)* — Run a :meth:`get_transfer_types` transfer from the first surface of
   - `Components.filter_components_by_connection_count(cls, components, num_of_connected=(0, 2), connected_type='', returned_type='str')` *(class)* — Get a list of components filtered by the number of their connected components.
   - `Components.get_vertex_normal(cls, vertex, angle_weighted=False)` *(class)* — Return the normal at the given vertex.
   - `Components.get_vector_from_components(components)` *(static)* — Get a vector representing the averaged and normalized vertex-face normals.
@@ -1155,8 +1157,9 @@ Scene-audit data contract: profiles, per-asset records, and the SceneReport tree
 
 Mesh diagnostics and repair helpers.
 
-- **[`class MeshDiagnostics`](mayatk/mayatk/core_utils/diagnostics/mesh_diag.py#L19)** — Operations for inspecting and fixing common mesh issues.
+- **[`class MeshDiagnostics(_MeshDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/mesh_diag.py#L77)** — Operations for inspecting and fixing common mesh issues.
   - `MeshDiagnostics.clean_geometry(objects: NodeSeq, allMeshes: bool = False, repair: bool = False, quads: bool = False, nsided: bool = False, concave: bool = False, holed: bool = False, nonplanar: bool = False, zeroGeom: bool = False, zeroGeomTol: float = 1e-05, zeroEdge: bool = False, zeroEdgeTol: float = 1e-05, zeroMap: bool = False, zeroMapTol: float = 1e-05, sharedUVs: bool = False, nonmanifold: bool = False, lamina: bool = False, invalidComponents: bool = False, historyOn: bool = True, bakePartialHistory: bool = False) -> list` *(static)* — Select or remove unwanted geometry from a mesh via ``polyCleanupArgList``.
+  - `MeshDiagnostics.cleanup_meshes(cls, scope: str = 'selected', repair: bool = False, *, checks=(), area_tolerance: float = 1e-05, edge_length_tolerance: float = 1e-05, uv_area_tolerance: float = 1e-05, merge_vertices: bool = False, merge_distance: float = 0.0001, delete_history: bool = False, delete_loose: bool = False, dissolve_degenerate: bool = False, recalculate_normals: bool = False, fill_holes: bool = False, overlapping_faces: bool = False, overlapping_objects: bool = False, omit_selected: bool = False) -> dict` *(class)* — Mesh Cleanup: select, or repair, common topology problems on the meshes
   - `MeshDiagnostics.get_ngons(objects: Optional[NodeSeq] = None, repair: bool = False) -> list` *(static)* — Find N-gons and optionally convert them to quads.
   - `MeshDiagnostics.find_non_manifold_vertices(objects: NodeSeq) -> dict` *(static)* — Map each mesh in *objects* to its non-manifold vertices, via ``polyInfo``.
   - `MeshDiagnostics.select_non_manifold(cls, objects: NodeSeq) -> tuple` *(class)* — Select what makes *objects* non-manifold: its vertices, else its UVs.
@@ -1406,6 +1409,8 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `EditUtils.invert_geometry(objects: Optional[List] = None, select: bool = False) -> List[str]` *(static)* — Invert selection to unselected mesh transforms.
   - `EditUtils.invert_components(objects: Optional[List] = None, select: bool = False) -> List[str]` *(static)* — Invert selection of mesh components (verts, edges, or faces).
   - `EditUtils.delete_selected()` *(static)* — Delete selected components and/or objects in Autodesk Maya.
+  - `EditUtils.get_conversion_types(cls) -> Dict[str, str]` *(class)* — The Convert menu: ``{label: MEL}`` in menu order, each a conversion
+  - `EditUtils.convert_objects(cls, objects, conversion: str) -> List[str]` *(class)* — Convert *objects* (``None``: the selection) by a :meth:`get_conversion_types`
   - `EditUtils.create_curve_from_edges(edges: Optional[List[str]] = None, **kwargs)` *(static)* — Create a curve from selected polygon edges or a provided list of edges.
 
 <a id="edit_utils--bevel"></a>
@@ -1590,6 +1595,8 @@ Primitive creation utilities for Maya.
 
 - **[`class Primitives`](mayatk/mayatk/edit_utils/primitives.py#L26)** — Utilities for creating primitive objects in Maya.
   - `Primitives.create_default_primitive(cls, baseType, subType, **kwargs)` *(class)* — Create a primitive object with flexible parameters.
+  - `Primitives.get_primitive_types(cls) -> dict` *(class)* — The Create menu: ``{category: [label, ...]}`` in menu order, each label
+  - `Primitives.create(cls, category: str, name: str)` *(class)* — Make one Create-menu item (:meth:`get_primitive_types`): a primitive or
   - `Primitives.create_circle(axis='y', numPoints=12, radius=5, center=[0, 0, 0], mode=0, name='pCircle', history=False)` *(static)* — Create a circular polygon plane.
 
 <a id="edit_utils--rack_builder"></a>
@@ -1635,12 +1642,18 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
 - **[`class EnvUtils(pythontk.HelpMixin)`](mayatk/mayatk/env_utils/_env_utils.py#L18)**
   - `EnvUtils.get_env_info(key=None)` *(static)* — Fetch information about the current Maya environment.
   - `EnvUtils.saved_scene_path() -> str` *(static)* — The open scene's path, or ``""`` when it has never been saved.
+  - `EnvUtils.get_linear_unit() -> str` *(static)* — The working linear unit's full name (``"centimeter"``), a key of
+  - `EnvUtils.set_linear_unit(unit: str) -> str` *(static)* — Set the working linear unit: *unit* a key of :attr:`SCENE_UNIT_VALUES`,
+  - `EnvUtils.frame_rates() -> Dict[str, float]` *(static)* — ``{time unit: fps}`` for the rates the working time unit takes: Maya's
+  - `EnvUtils.autosave_settings() -> Dict[str, float]` *(static)* — Maya's autosave as ``{"max_backups": int, "interval": minutes}``;
+  - `EnvUtils.set_autosave_settings(max_backups: Optional[int] = None, interval: Optional[float] = None) -> None` *(static)* — Set Maya's autosave; ``None`` leaves a setting as it is.
   - `EnvUtils.default_artifact_dir(cls) -> str` *(class)* — Return a sensible default directory for exported/baked artifacts.
   - `EnvUtils.scene_artifact_path(cls, suffix: str) -> str` *(class)* — A file named for the open scene, beside it: ``<scene dir>/<stem><suffix>``.
   - `EnvUtils.append_maya_paths(maya_version=None)` *(static)* — Appends various Maya-related paths to the system's Python environment and sys.path.
   - `EnvUtils.is_plugin_loaded(plugin_name) -> bool` *(static)* **DEPRECATED (remove in 0.23.0)** — Moved to :meth:`Plugins.is_loaded`, beside the one plug-in door.
   - `EnvUtils.load_plugin(cls, plugin_name)` *(class)* **DEPRECATED (remove in 0.23.0)** — Moved to :meth:`Plugins.load`, the one door every plug-in load goes
   - `EnvUtils.vray_plugin(load=False, unload=False, query=False)` *(static)* — Load/Unload/Query the Maya Vray Plugin.
+  - `EnvUtils.python_executable() -> Optional[str]` *(static)* — This Maya's own interpreter (``bin/mayapy``): the one pip must drive to
   - `EnvUtils.get_recent_files(index=None)` *(static)* — Get a list of recent files sorted by modification time.
   - `EnvUtils.get_recent_projects(index=None, format='standard')` *(static)* — Get a list of recently set projects.
   - `EnvUtils.find_autosave_directories()` *(static)* — Search for and compile a list of existing autosave directories based on
@@ -1652,8 +1665,9 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.scene_settings() -> Dict[str, float]` *(static)* — The live scene's time setup as the bridges' ``scene`` record (see
   - `EnvUtils.apply_scene_settings(settings: Dict[str, Any]) -> list` *(static)* — Apply a ``scene`` record (any subset of :attr:`SCENE_SETTINGS_KEYS`) to the
   - `EnvUtils.find_workspace_using_path(cls, scene_path: Optional[str] = None) -> Optional[str]` *(class)* — Determine the workspace directory for a given scene by moving up directory levels until a workspace…
+  - `EnvUtils.is_workspace(path: str) -> bool` *(static)* — True if *path* is a Maya workspace root: a folder holding a
   - `EnvUtils.current_workspace(path: Optional[str] = None) -> Optional[ptk.Workspace]` *(static)* — The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.
-  - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project (``workspace -openWorkspace``).
+  - `EnvUtils.set_current_workspace(root: str) -> str` *(static)* — Make *root* Maya's active project the way File > Set Project does:
   - `EnvUtils.workspace_root(path: Optional[str] = None) -> str` *(static)* — Absolute root of the current workspace, or ''.
   - `EnvUtils.set_scene_source(scene: str, source: Optional[str] = None) -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.set_scene_source`, which records the stand-in
   - `EnvUtils.twin_save_target(scene: Optional[str] = None) -> Optional[str]` *(static)* **DEPRECATED (remove in 0.30.0)** — Moved to :meth:`DataNodes.twin_save_target`.
@@ -3435,6 +3449,8 @@ Texture Path Editor engine: the scene's texture paths and the commands that fix 
   - `NodeUtils.get_deformers(cls, obj) -> List[str]` *(class)* — Deformers driving *obj* (skinCluster, blendShape, lattice, …).
   - `NodeUtils.get_input_shape(cls, mesh) -> Optional[str]` *(class)* — The INPUT (intermediate) shape of a deformed mesh, else its renderable one.
   - `NodeUtils.delete_history(cls, objects, preserve_deformers: bool = True) -> List[str]` *(class)* — Delete construction history — keeping the deformer stack by default.
+  - `NodeUtils.delete_history_in_scope(cls, scope: str = 'selected', preserve_deformers: bool = True, delete_unused: bool = False, optimize_scene: bool = False) -> List[str]` *(class)* — Delete History on the objects *scope* names, with the viewport held.
+  - `NodeUtils.lock_nodes(objects=None, lock: bool = True) -> List[str]` *(static)* — Lock nodes against deletion, renaming and reparenting (``lockNode``), or
   - `NodeUtils.bake_onto_input_shape(cls, target, transfer_nodes, capture, apply, label: str = 'transfer') -> bool` *(class)* — Move a just-sampled result off the live shape onto the input shape,
   - `NodeUtils.static_copy(cls, obj, name: Optional[str] = None, strip_children: bool = True) -> str` *(class)* — A throwaway copy of *obj* that shares NOTHING with its source.
   - `NodeUtils.deformers_preserved(cls, objects, label: str = '')` *(class)* — Fail loudly if the block unbinds or re-topologizes *objects*.
@@ -3762,7 +3778,7 @@ The viewport grab for articulated rigs: press on a rigged part, drag, let go.
 - **[`class Controls(pythontk.HelpMixin)`](mayatk/mayatk/rig_utils/controls.py#L59)** — Factory for creating NURBS animation controls.
   - `Controls.register_preset(cls, name: str, builder: Callable[..., str]) -> None` *(class)* — Register a new control preset.
   - `Controls.shapes(cls) -> List[str]` *(class)* — Sorted names of the registered presets (for a UI combo / validation).
-  - `Controls.create(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]` *(class)* — Create a NURBS control.
+  - `Controls.create(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, select: bool = False, **kwargs) -> Union[str, ControlNodes]` *(class)* — Create a NURBS control.
   - `Controls.set_channel_state(cls, node, *, keyable=None, lock=None, hide=None) -> None` *(class)* — Declare a control's channel-box contract in one call.
   - `Controls.combine(cls, controls: Iterable[Any], name: Optional[str] = None, *, parent: Optional[str] = None, match: Any = None, color: Union[int, Tuple[float, float, float], None] = None, delete_sources: bool = True, ctrl_suffix: Optional[str] = None) -> str` *(class)* — Combine multiple control transforms into a single selectable transform.
 
@@ -4024,12 +4040,16 @@ Tube-mesh centerline extraction — pure geometry analysis, no scene objects.
 
 - **[`class UiUtils`](mayatk/mayatk/ui_utils/_ui_utils.py#L12)**
   - `UiUtils.get_editor_types(cls) -> dict` *(class)* — The friendly-name -> runtime-command map understood by :meth:`open_editor`.
+  - `UiUtils.get_editor_categories(cls) -> dict` *(class)* — ``{category: [editor name, ...]}``: the editors a browsing UI lists,
+  - `UiUtils.toggle_editor(cls, editor: str) -> bool` *(class)* — Show or hide a main-window UI component: a key of :attr:`_UI_COMPONENTS`,
   - `UiUtils.open_editor(cls, editor: str) -> Optional[str]` *(class)* — Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a
   - `UiUtils.annotate() -> Optional[str]` *(static)* — Annotate the host's way: Maya's Create > Annotation
   - `UiUtils.open_pencil() -> str` *(static)* — Open Blue Pencil, Maya's 2D sketching over the viewport
   - `UiUtils.get_tool_types(cls) -> dict` *(class)* — The friendly-name -> MEL map understood by :meth:`set_tool`.
   - `UiUtils.set_tool(cls, tool: str) -> str` *(class)* — Activate a viewport tool: a friendly name from :meth:`get_tool_types`,
   - `UiUtils.current_tool(cls) -> Optional[str]` *(class)* — The active tool: its friendly name from :meth:`get_tool_types` when
+  - `UiUtils.browse_directory(start: str = '', caption: str = 'Select Folder', ok_caption: str = 'Select') -> str` *(static)* — Pick a directory in Maya's own browser (``fileDialog2 -fileMode 3``).
+  - `UiUtils.open_preferences(cls, section: Optional[str] = None) -> str` *(class)* — Open Maya's own preferences: ``"general"`` (the default) the Preferences
   - `UiUtils.get_main_window()` *(static)* — Get the main Maya window as a QMainWindow instance.
   - `UiUtils.get_menu_name(qt_object_name: str) -> Optional[str]` *(static)* — Retrieve the internal Maya name of a menu given its Qt object name.
   - `UiUtils.get_panel(*args, **kwargs)` *(static)* — Returns panel and panel configuration information.
@@ -4363,6 +4383,8 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
   - `XformUtils.get_operation_axis_pos(cls, node, pivot, axis_index=None)` *(class)* — Determines the pivot position for mirroring/cutting along a specified axis or all axes.
   - `XformUtils.align_pivot_to_selection(align_from=None, align_to=None, translate=True)` *(static)* — Align one object's pivot point to another using 3-point alignment.
   - `XformUtils.reset_pivot_transforms(objects=None) -> None` *(static)* — Reset Pivot Transforms for the specified objects or selected objects.
+  - `XformUtils.reset_pivot(objects=None, position: bool = True, orientation: bool = True) -> list` *(static)* — Reset the manipulator pivot's position and/or orientation
+  - `XformUtils.center_pivot(objects=None, mode: str = 'object') -> list` *(static)* — Center the pivots -- Maya's Center Pivot -- after resetting the
   - `XformUtils.world_align_pivot(objects=None, pivot_type: str = 'object', mode: str = 'set')` *(static)* — Get or set a world-aligned pivot for the specified objects or components.
   - `XformUtils.bake_pivot(objects, position=False, orientation=False, preserve_instancing=True)` *(static)* — Bake the pivot orientation and position of the given object(s).
   - `XformUtils.transfer_pivot(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = True, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)` *(class)* — Transfer the pivot from the first given object to the remaining given objects.

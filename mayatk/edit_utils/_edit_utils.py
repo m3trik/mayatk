@@ -3040,6 +3040,7 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         return inverted
 
     @staticmethod
+    @CoreUtils.undoable
     def delete_selected():
         """Delete selected components and/or objects in Autodesk Maya.
 
@@ -3102,6 +3103,65 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
             cmds.delete(other_components)
         if whole_objects:
             cmds.delete(whole_objects)
+
+    #: The Convert menu (:meth:`get_conversion_types` / :meth:`convert_objects`):
+    #: label -> the MEL that converts the selection, with its saved options.
+    _CONVERSIONS = {
+        "NURBS to Polygons": "performnurbsToPoly 0;",
+        "NURBS to Subdiv": "performSubdivCreate 0;",
+        "Polygons to Subdiv": "performSubdivCreate 0;",
+        "Smooth Mesh Preview to Polygons": "performSmoothMeshPreviewToPolygon;",
+        "Polygon Edges to Curve": "polyToCurve -form 2 -degree 3 -conformToSmoothMeshPreview 1;",
+        "Type to Curves": "convertTypeCapsToCurves;",
+        "Subdiv to Polygons": "performSubdivTessellate  false;",
+        "Subdiv to NURBS": "performSubdToNurbs 0;",
+        "NURBS Curve to Bezier": "nurbsCurveToBezier;",
+        "Bezier Curve to NURBS": "bezierCurveToNurbs;",
+        "Paint Effects to NURBS": "performPaintEffectsToNurbs  false;",
+        "Paint Effects to Curves": "performPaintEffectsToCurve  false;",
+        "Texture to Geometry": "performTextureToGeom 0;",
+        "Displacement to Polygons": "displacementToPoly;",
+        "Displacement to Poly w/ History": "setupAnimatedDisplacement;",
+        "Fluid to Polygons": "fluidToPoly;",
+        "nParticle to Polygons": "particleToPoly;",
+        "Instance to Object": "convertInstanceToObject;",
+        "Geometry to Bounding Box": "performGeomToBBox 0;",
+    }
+
+    @classmethod
+    def get_conversion_types(cls) -> Dict[str, str]:
+        """The Convert menu: ``{label: MEL}`` in menu order, each a conversion
+        :meth:`convert_objects` runs. Twin of blendertk's
+        ``EditUtils.get_conversion_types`` (Blender's own conversions there). A
+        copy: editing it changes nothing."""
+        return dict(cls._CONVERSIONS)
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def convert_objects(cls, objects, conversion: str) -> List[str]:
+        """Convert *objects* (``None``: the selection) by a :meth:`get_conversion_types`
+        label, as Maya's Modify > Convert menu does. Twin of blendertk's
+        ``EditUtils.convert_objects``.
+
+        Returns:
+            List[str]: The selection the conversion left (what it made); ``[]``
+                with nothing selected.
+
+        Raises:
+            ValueError: An unknown *conversion*.
+            RuntimeError: Maya refused it.
+        """
+        command = cls._CONVERSIONS.get(conversion)
+        if command is None:
+            raise ValueError(
+                f"Unknown conversion '{conversion}': {', '.join(cls._CONVERSIONS)}."
+            )
+        nodes = [str(o) for o in CoreUtils.as_strings(objects)]
+        if set(nodes) != set(cmds.ls(selection=True) or []):
+            cmds.select(nodes, replace=True)
+        mel.eval(command)
+        return cmds.ls(selection=True) or []
 
     @staticmethod
     @DisplayUtils.add_to_isolation

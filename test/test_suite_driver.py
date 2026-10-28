@@ -380,6 +380,12 @@ class _WorkspaceCmds:
         self.root = root
         self.opened = []
 
+    @staticmethod
+    def about(**kwargs):
+        """A batch session: ``EnvUtils.set_current_workspace`` opens a root with
+        ``workspace -openWorkspace`` there (``setProject`` is the GUI's)."""
+        return bool(kwargs.get("batch"))
+
     def workspace(self, *args, **kwargs):
         if kwargs.get("query") or kwargs.get("q"):
             return self.root

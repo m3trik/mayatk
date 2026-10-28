@@ -40,6 +40,45 @@ class Primitives:
         "aiLightPortal": "portal",
     }
 
+    #: The Create menu's Polygon / NURBS / Light rows: :meth:`create_default_primitive`
+    #: types, in menu order (Arnold's come from ``_arnold_light_subtypes``).
+    _PRIMITIVE_LABELS = {
+        "Polygon": [
+            "Cube",
+            "Sphere",
+            "Cylinder",
+            "Plane",
+            "Circle",
+            "Cone",
+            "Pyramid",
+            "Torus",
+            "Helix",
+            "Tube",
+            "GeoSphere",
+            "Platonic Solids",
+        ],
+        "NURBS": ["Cube", "Sphere", "Cylinder", "Cone", "Plane", "Torus", "Circle", "Square"],
+        "Light": ["Ambient", "Directional", "Point", "Spot", "Area", "Volume"],
+    }
+
+    #: Create > Curve: Maya's curve tools, each opened with its options (the tool
+    #: takes the clicks that place the curve).
+    _CURVE_TOOLS = {
+        "Ep Curve Tool": "EPCurveToolOptions;",
+        "CV Curve Tool": "CVCurveToolOptions;",
+        "Bezier Curve Tool": "CreateBezierCurveToolOptions;",
+        "Pencil Curve Tool": "PencilCurveToolOptions;",
+        "2 Point Circular Arc": "TwoPointArcToolOptions;",
+        "3 Point Circular Arc": "ThreePointArcToolOptions;",
+    }
+
+    #: Create > Helper: what each creates.
+    _HELPERS = {
+        "Null Group": lambda: cmds.group(empty=True, name="null"),
+        "Locator": lambda: cmds.spaceLocator(p=[0, 0, 0]),
+        "Set": lambda: cmds.sets(name="set1"),
+    }
+
     @classmethod
     def _arnold_light_subtypes(cls) -> dict:
         """{friendly name: node type}, derived from ``LightUtils.ARNOLD_LIGHT_TYPES``.
@@ -455,6 +494,50 @@ class Primitives:
                 XformUtils.match_scale(node[0], selection, average=True)
 
         return NodeUtils.get_history_node(node[0])
+
+    @classmethod
+    def get_primitive_types(cls) -> dict:
+        """The Create menu: ``{category: [label, ...]}`` in menu order, each label
+        an item :meth:`create` makes. Twin of blendertk's
+        ``Primitives.get_primitive_types`` (Blender's own primitives there)."""
+        return {
+            "Polygon": list(cls._PRIMITIVE_LABELS["Polygon"]),
+            "NURBS": list(cls._PRIMITIVE_LABELS["NURBS"]),
+            "Curve": list(cls._CURVE_TOOLS),
+            "Helper": list(cls._HELPERS),
+            "Light": list(cls._PRIMITIVE_LABELS["Light"]),
+            "Arnold": [name.title() for name in cls._arnold_light_subtypes()],
+        }
+
+    @classmethod
+    @CoreUtils.undoable
+    def create(cls, category: str, name: str):
+        """Make one Create-menu item (:meth:`get_primitive_types`): a primitive or
+        light at its default size, left in object mode; a helper (a null group, a
+        locator, a set), added to the isolated view; or, for a Curve, the curve
+        tool with its options, which takes the clicks. Twin of blendertk's
+        ``Primitives.create``.
+
+        Returns:
+            The created node(s); ``None`` for a curve tool.
+
+        Raises:
+            ValueError: *name* is not in *category* (or an Arnold light's plug-in
+                is missing).
+            RuntimeError: Maya refused it.
+        """
+        if name not in cls.get_primitive_types().get(category, ()):
+            raise ValueError(f"Create > {category} has no '{name}'.")
+        if category == "Curve":
+            mel.eval(cls._CURVE_TOOLS[name])
+            return None
+        if category == "Helper":
+            node = cls._HELPERS[name]()
+            DisplayUtils.add_to_isolation_set(node)
+            return node
+        node = cls.create_default_primitive(category, name)
+        CoreUtils.ensure_object_mode()
+        return node
 
     @staticmethod
     @CoreUtils.undoable

@@ -725,6 +725,48 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
 
     @staticmethod
     @CoreUtils.undoable
+    def reset_pivot(
+        objects=None, position: bool = True, orientation: bool = True
+    ) -> list:
+        """Reset the manipulator pivot's position and/or orientation
+        (``manipPivotReset``): the offset and re-orientation a Customize Pivot
+        left on the selection's manipulator go.
+
+        Twin of blendertk's ``XformUtils.reset_pivot`` (the origin back on the
+        bounding-box center there). Maya's manipulator follows the selection, so
+        *objects* other than None are selected first.
+
+        Returns:
+            (list): The selection reset; ``[]`` with nothing selected (nothing runs).
+        """
+        return XformUtils._reset_pivot(objects, position, orientation)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def center_pivot(objects=None, mode: str = "object") -> list:
+        """Center the pivots -- Maya's Center Pivot -- after resetting the
+        manipulator pivot (``manipPivotReset 1 1``), so the manipulator follows.
+
+        Twin of blendertk's ``XformUtils.center_pivot`` (the object origin there).
+
+        Parameters:
+            objects (str/list/None): Objects or components; None takes the
+                selection.
+            mode (str): ``"object"``: each object's bounding-box center
+                (``xform -centerPivots``); ``"component"`` (or ``"median"``): the
+                given components' center (``-centerPivotsOnComponents``);
+                ``"world"``: the world origin.
+
+        Returns:
+            (list): The nodes centered; ``[]`` with nothing selected (nothing runs).
+
+        Raises:
+            ValueError: An unknown *mode*.
+        """
+        return XformUtils._center_pivot(objects, mode)
+
+    @staticmethod
+    @CoreUtils.undoable
     def world_align_pivot(
         objects=None,
         pivot_type: str = "object",
@@ -772,13 +814,22 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
         stays put.  The scope forks the shared shapes for the duration and
         re-instances them in place afterwards; pass False for the raw
         (sibling-moving) behavior.
+
+        ``objects`` None takes the selection (components resolve to their
+        transforms). Returns the transforms baked; ``[]`` (nothing runs) when
+        there are none.
         """
-        objects = _XformUtilsInternal._resolve_transforms(objects)
+        objects = _XformUtilsInternal._resolve_transforms(
+            _XformUtilsInternal._selection_if_none(objects)
+        )
+        if not objects:
+            return []
 
         with contextlib.ExitStack() as stack:
             if preserve_instancing:
                 stack.enter_context(NodeUtils.preserve_instancing(objects))
             _XformUtilsInternal._bake_pivot(objects, position, orientation)
+        return objects
 
     @classmethod
     @CoreUtils.undoable
@@ -827,6 +878,11 @@ class XformUtils(_XformUtilsInternal, ptk.HelpMixin):
                 source). The reflection is taken in the operating space — world when
                 ``world_space`` is True (the usual mirrored-copy case), otherwise the object's
                 local space. Empty (the default) transfers the pivot unmirrored.
+
+        ``objects`` None takes the selected transforms, the first selected the
+        source. Returns the targets; ``[]``, after a warning and with nothing
+        changed, when fewer than two transforms are given (an empty selection
+        never reads as the whole scene).
         """
         return cls._transfer_pivot(
             objects=objects,

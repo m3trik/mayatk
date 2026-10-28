@@ -1349,5 +1349,58 @@ class TestCreaseOperations(MayaTkTestCase):
         self.assertIn("target", str(caught.exception))
 
 
+class TestTransferMenu(MayaTkTestCase):
+    """``Components.get_transfer_types`` / ``transfer``: the shared Edit panel's
+    Transfer menu; ``_transfer_surfaces`` resolves the selection, source first."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="A")[0]
+        self.b = cmds.polySphere(name="B")[0]
+        self.c = cmds.polyCylinder(name="C")[0]
+
+    def test_surfaces_keep_the_selection_order(self):
+        cmds.select([self.c, self.a, self.b], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["C", "A", "B"])
+
+    def test_a_component_counts_as_its_surface(self):
+        cmds.select([self.b + ".vtx[0:3]", self.a], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["B", "A"])
+
+    def test_surfaces_are_each_listed_once(self):
+        cmds.select([self.a, self.a + ".f[0]"], replace=True)
+        self.assertEqual(Components._transfer_surfaces(), ["A"])
+
+    def test_the_menu_is_mayas_transfer_items(self):
+        self.assertEqual(
+            list(Components.get_transfer_types()),
+            ["Maps", "Attribute Values", "Shading Sets", "Vertex Order"],
+        )
+
+    def test_nothing_selected_is_empty(self):
+        cmds.select(clear=True)
+        self.assertEqual(Components.transfer(None, "Shading Sets"), [])
+
+    def test_one_surface_asks_for_a_target(self):
+        cmds.select(self.a)
+        with self.assertRaises(ValueError) as caught:
+            Components.transfer(None, "Shading Sets")
+        self.assertIn("1 of 2", str(caught.exception))
+
+    def test_shading_sets_reach_the_target(self):
+        shader = cmds.shadingNode("lambert", asShader=True, name="xferLambert")
+        group = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name="xferSG")
+        cmds.connectAttr(f"{shader}.outColor", f"{group}.surfaceShader")
+        cmds.sets(self.a, edit=True, forceElement=group)
+        cmds.select([self.a, self.b], replace=True)
+        try:
+            got = Components.transfer(None, "Shading Sets")
+        except RuntimeError as error:  # a MEL proc mayapy has not sourced
+            self.skipTest(f"performTransferShadingSets unavailable here: {error}")
+        self.assertEqual(got, ["A", "B"])
+        shapes = cmds.listRelatives(self.b, shapes=True) or []
+        self.assertIn(group, cmds.listConnections(shapes, type="shadingEngine") or [])
+
+
 if __name__ == "__main__":
     unittest.main()

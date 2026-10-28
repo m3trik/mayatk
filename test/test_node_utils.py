@@ -2157,5 +2157,90 @@ class TestSelectionSummary(MayaTkTestCase):
         )
 
 
+class TestDeleteHistoryInScope(MayaTkTestCase):
+    """``NodeUtils.delete_history_in_scope``: what the shared Edit panel's Delete
+    History calls (its slot-level regressions run in tentacle's test_edit.py)."""
+
+    def test_selected_scope_limits_deletion_to_the_selection(self):
+        a = cmds.polyCube(name="histA")[0]
+        cmds.polyCube(name="histB")
+        cmds.select(a)
+        done = NodeUtils.delete_history_in_scope("selected", preserve_deformers=False)
+        self.assertTrue(done)
+        self.assertEqual(len(cmds.ls(type="polyCube")), 1)
+
+    def test_an_empty_scope_returns_nothing(self):
+        cmds.polyCube(name="histC")
+        cmds.select(clear=True)
+        self.assertEqual(NodeUtils.delete_history_in_scope("selected"), [])
+        self.assertEqual(len(cmds.ls(type="polyCube")), 1)
+
+    def test_delete_unused_spares_rig_nodes_and_connected_groups(self):
+        cmds.polyCube(name="histKeep")
+        start = cmds.joint(name="histStart", position=(0, 0, 0))
+        end = cmds.joint(name="histEnd", position=(0, 5, 0))
+        handle = cmds.ikHandle(sj=start, ee=end)[0]
+        source = cmds.group(empty=True, name="histMatrixSource")
+        mult = cmds.createNode("multMatrix", name="histConsumer")
+        cmds.connectAttr(f"{source}.worldMatrix[0]", f"{mult}.matrixIn[0]")
+        cmds.connectAttr(f"{mult}.matrixSum", "histKeep.offsetParentMatrix")
+        junk = cmds.group(empty=True, name="histJunk")
+        NodeUtils.delete_history_in_scope("all", delete_unused=True)
+        self.assertTrue(all(cmds.objExists(n) for n in (handle, end, source)))
+        self.assertFalse(cmds.objExists(junk))
+
+    def test_optimize_restores_the_env_flag(self):
+        mel.eval('putenv "MAYA_TESTING_CLEANUP" "preexisting";')
+        try:
+            NodeUtils.delete_history_in_scope("selected", optimize_scene=True)
+            self.assertEqual(mel.eval('getenv "MAYA_TESTING_CLEANUP"'), "preexisting")
+        finally:
+            mel.eval('putenv "MAYA_TESTING_CLEANUP" "";')
+
+    def test_never_combines_dag_with_exact_type(self):
+        """``ls -dag -exactType`` is NOT exact: under -dag the type test inherits,
+        matching joints, ikHandles and constraints, which the empty-group sweep
+        once deleted scene-wide. AST guard over the sweep and its helpers."""
+        import ast
+        import inspect
+        import textwrap
+
+        offenders = []
+        for fn in (
+            NodeUtils.delete_history_in_scope,
+            NodeUtils._is_disposable_group,
+            NodeUtils._history_scope,
+        ):
+            tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+            for call in ast.walk(tree):
+                if isinstance(call, ast.Call) and getattr(call.func, "attr", "") == "ls":
+                    flags = {kw.arg for kw in call.keywords}
+                    if "exactType" in flags and flags & {"dag", "dagObjects"}:
+                        offenders.append(fn.__name__)
+        self.assertEqual(offenders, [])
+
+
+class TestLockNodes(MayaTkTestCase):
+    """``NodeUtils.lock_nodes``: the shared Edit panel's Lock / Unlock."""
+
+    def test_locks_and_unlocks_the_selection(self):
+        cube = cmds.polyCube(name="lockCube")[0]
+        cmds.select(cube)
+        self.assertEqual(NodeUtils.lock_nodes(None, lock=True), [cube])
+        self.assertTrue(cmds.lockNode(cube, q=True, lock=True)[0])
+        cmds.select(cube)
+        NodeUtils.lock_nodes(None, lock=False)
+        self.assertFalse(cmds.lockNode(cube, q=True, lock=True)[0])
+
+    def test_nothing_selected_takes_every_node(self):
+        cube = cmds.polyCube(name="lockAll")[0]
+        cmds.select(clear=True)
+        try:
+            self.assertIn(cube, NodeUtils.lock_nodes(None, lock=True))
+            self.assertTrue(cmds.lockNode(cube, q=True, lock=True)[0])
+        finally:
+            NodeUtils.lock_nodes(None, lock=False)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

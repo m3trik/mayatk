@@ -1700,5 +1700,56 @@ class TestSymmetry(MayaTkTestCase):
         self.assertNotEqual(EditUtils.get_symmetry()["space"], "topo")
 
 
+class TestEditMenus(MayaTkTestCase):
+    """The shared Edit panel's menus: Create (``Primitives``), Convert and Delete."""
+
+    def test_the_create_menu_lists_what_create_makes(self):
+        types = mtk.Primitives.get_primitive_types()
+        self.assertEqual(
+            list(types), ["Polygon", "NURBS", "Curve", "Helper", "Light", "Arnold"]
+        )
+        self.assertNotIn("Text", types["Polygon"])  # never had a creator
+        self.assertIn("Skydome", types["Arnold"])
+
+    def test_create_a_polygon_and_a_helper(self):
+        mtk.Primitives.create("Polygon", "Cube")
+        self.assertTrue(cmds.ls(type="polyCube"))
+        mtk.Primitives.create("Helper", "Locator")
+        self.assertTrue(cmds.ls(type="locator"))
+
+    def test_create_refuses_an_unknown_item(self):
+        with self.assertRaises(ValueError):
+            mtk.Primitives.create("Polygon", "Text")
+
+    def test_conversion_types_are_mel(self):
+        types = EditUtils.get_conversion_types()
+        self.assertIn("NURBS to Polygons", types)
+        self.assertTrue(all(isinstance(v, str) and v for v in types.values()))
+
+    def test_convert_nothing_selected_is_empty(self):
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.convert_objects(None, "NURBS to Polygons"), [])
+
+    def test_convert_refuses_an_unknown_conversion(self):
+        cmds.select(cmds.polyCube()[0])
+        with self.assertRaises(ValueError):
+            EditUtils.convert_objects(None, "Bogus to Bogus")
+
+    def test_delete_selected_is_one_undo_step(self):
+        """An edge of one cube and a whole other: two commands, one undo."""
+        a = cmds.polyCube(name="delA")[0]
+        b = cmds.polyCube(name="delB")[0]
+        cmds.undoInfo(state=True, infinity=True)
+        cmds.select([f"{a}.e[0]", b])
+        EditUtils.delete_selected()
+        self.assertEqual(
+            (cmds.polyEvaluate(a, face=True), cmds.objExists(b)), (5, False)
+        )
+        cmds.undo()
+        self.assertEqual(
+            (cmds.polyEvaluate(a, face=True), cmds.objExists(b)), (6, True)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

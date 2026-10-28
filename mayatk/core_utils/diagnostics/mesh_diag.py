@@ -11,12 +11,70 @@ try:
 except ImportError:  # pragma: no cover - Maya runtime specific
     pass
 
+# Eager: ``CoreUtils.undoable`` decorates ``cleanup_meshes`` while the class body runs.
+from mayatk.core_utils._core_utils import CoreUtils
+
 # Type aliases keep Maya stubs optional during static analysis
 NodeLike = Union[str, object]
 NodeSeq = Union[NodeLike, Sequence[NodeLike]]
 
 
-class MeshDiagnostics:
+class _MeshDiagnosticsInternal(object):
+    """Internal helpers for MeshDiagnostics."""
+
+    #: Mesh Cleanup's check names (``cleanup_meshes(checks=...)``) -> the
+    #: :meth:`MeshDiagnostics.clean_geometry` (``polyCleanupArgList``) flag that
+    #: runs each. Twin of blendertk's ``_CLEANUP_CHECKS``.
+    _CLEANUP_FLAGS = {
+        "ngons": "nsided",
+        "nonplanar": "nonplanar",
+        "quads": "quads",
+        "concave": "concave",
+        "holed": "holed",
+        "zero_area_faces": "zeroGeom",
+        "zero_length_edges": "zeroEdge",
+        "zero_uv_area": "zeroMap",
+        "shared_uvs": "sharedUVs",
+        "nonmanifold": "nonmanifold",
+        "lamina": "lamina",
+    }
+
+    @staticmethod
+    def _cleanup_pool(scope: str) -> list:
+        """The mesh transforms Mesh Cleanup's *scope* names: ``"selected"`` the
+        selected transforms; ``"visible"`` / ``"all"`` the transforms of every
+        visible / every mesh shape, intermediate shapes skipped, each once."""
+        if scope == "selected":
+            return cmds.ls(selection=True, transforms=True) or []
+        kwargs = {"type": "mesh"}
+        if scope == "visible":
+            kwargs["visible"] = True
+        shapes = [
+            s
+            for s in (cmds.ls(**kwargs) or [])
+            if not cmds.getAttr(f"{s}.intermediateObject")
+        ]
+        if not shapes:
+            return []
+        transforms = cmds.listRelatives(shapes, parent=True, fullPath=True) or []
+        return list(dict.fromkeys(transforms))  # each once, in order
+
+    @staticmethod
+    def _poly_counts(objects) -> tuple:
+        """``(vertices, faces)`` across *objects* (``polyEvaluate``); an empty or
+        incompatible set counts 0 (``polyEvaluate`` answers it with a string)."""
+
+        def _count(**kw):
+            try:
+                value = cmds.polyEvaluate(objects, **kw)
+            except (RuntimeError, ValueError):
+                return 0
+            return value if isinstance(value, int) else 0
+
+        return _count(vertex=True), _count(face=True)
+
+
+class MeshDiagnostics(_MeshDiagnosticsInternal):
     """Operations for inspecting and fixing common mesh issues."""
 
     @staticmethod
@@ -99,6 +157,146 @@ class MeshDiagnostics:
         # selection — the whole point of "select only" — instead of clobbering it by reselecting the
         # objects (the prior behavior, which made Select mode a no-op), and return the components.
         return cmds.ls(selection=True, flatten=True) or []
+
+    @classmethod
+    @CoreUtils.undoable
+    def cleanup_meshes(
+        cls,
+        scope: str = "selected",
+        repair: bool = False,
+        *,
+        checks=(),
+        area_tolerance: float = 0.00001,
+        edge_length_tolerance: float = 0.00001,
+        uv_area_tolerance: float = 0.00001,
+        merge_vertices: bool = False,
+        merge_distance: float = 0.0001,
+        delete_history: bool = False,
+        delete_loose: bool = False,
+        dissolve_degenerate: bool = False,
+        recalculate_normals: bool = False,
+        fill_holes: bool = False,
+        overlapping_faces: bool = False,
+        overlapping_objects: bool = False,
+        omit_selected: bool = False,
+    ) -> dict:
+        """Mesh Cleanup: select, or repair, common topology problems on the meshes
+        *scope* names -- one undo step. Twin of blendertk's
+        ``MeshDiagnostics.cleanup_meshes``: the call a panel shared by both hosts
+        makes, wording the report itself.
+
+        Parameters:
+            scope (str): ``"selected"``, ``"visible"`` or ``"all"`` meshes.
+            repair (bool): Repair in place; False selects the matches.
+            checks (iterable): The checks to run, Maya's Mesh Cleanup options:
+                ``ngons``, ``nonplanar``, ``quads``, ``concave``, ``holed``,
+                ``zero_area_faces``, ``zero_length_edges``, ``zero_uv_area``,
+                ``shared_uvs``, ``nonmanifold``, ``lamina``.
+            area_tolerance / edge_length_tolerance / uv_area_tolerance (float):
+                The zero-area, zero-length and zero-UV-area thresholds.
+            merge_vertices (bool): Repair: first merge vertices closer than
+                *merge_distance*.
+            delete_history (bool): First bake the non-deformer history.
+            delete_loose / dissolve_degenerate / recalculate_normals / fill_holes
+                (bool): Blender's repair passes, taken for the shared panel;
+                ``polyCleanup`` repairs what the checks find instead.
+            overlapping_faces (bool): Also find faces coincident with another:
+                repair deletes them, select adds them to the selection.
+            overlapping_objects (bool): Find duplicate objects overlapping in the
+                scene instead (the scope is not read): repair deletes them, select
+                selects them; with a selection, only its duplicates.
+            omit_selected (bool): With *overlapping_objects*, keep the selected
+                objects (report their duplicates only).
+
+        Returns:
+            dict: ``objects`` (the meshes in scope; empty: nothing done), ``checks``
+            (the checks run), ``duplicates`` (how many overlapping objects; None
+            unless searched), ``overlapping_faces`` (how many), ``problems``
+            (matches per check: ``{}``, ``polyCleanup`` selects them together),
+            ``selected`` (the matched components selected), ``repairs`` (the
+            passes run), ``vertices`` / ``faces`` (``(before, after)``, repair).
+            Select with no check and no *overlapping_faces* does nothing.
+
+        Raises:
+            RuntimeError / ValueError: Maya's report from a pass.
+        """
+        from mayatk.edit_utils._edit_utils import EditUtils
+
+        report = {
+            "objects": [],
+            "checks": [],
+            "duplicates": None,
+            "overlapping_faces": 0,
+            "problems": {},
+            "selected": 0,
+            "repairs": [],
+            "vertices": (0, 0),
+            "faces": (0, 0),
+        }
+        if overlapping_objects:
+            found = sorted(
+                EditUtils.get_overlapping_duplicates(
+                    retain_given_objects=omit_selected, select=not repair, verbose=True
+                )
+            )
+            if repair and found:
+                cmds.delete(found)
+            report["duplicates"] = len(found)
+            return report
+
+        pool = cls._cleanup_pool(scope)
+        wanted = set(checks)
+        report["objects"] = pool
+        report["checks"] = [name for name in cls._CLEANUP_FLAGS if name in wanted]
+        if not pool or not (repair or report["checks"] or overlapping_faces):
+            return report
+
+        faces = (EditUtils.get_overlapping_faces(pool) or []) if overlapping_faces else []
+        report["overlapping_faces"] = len(faces)
+        if repair and faces:
+            cmds.delete(faces)  # reported apart, so counted before ``before``
+        if not (repair or report["checks"]):  # overlapping faces alone
+            cmds.select(faces, replace=True) if faces else cmds.select(clear=True)
+            return report
+
+        before = cls._poly_counts(pool) if repair else (0, 0)
+        if repair and merge_vertices:
+            EditUtils.merge_vertices(pool, tolerance=merge_distance)
+        matched = []
+        if report["checks"] or delete_history:  # else polyCleanup has nothing to do
+            matched = cls.clean_geometry(
+                pool,
+                repair=repair,
+                zeroGeomTol=area_tolerance,
+                zeroEdgeTol=edge_length_tolerance,
+                zeroMapTol=uv_area_tolerance,
+                bakePartialHistory=delete_history,
+                **{
+                    flag: name in report["checks"]
+                    for name, flag in cls._CLEANUP_FLAGS.items()
+                },
+            )
+        if repair:
+            after = cls._poly_counts(pool)
+            report["vertices"], report["faces"] = (
+                (before[0], after[0]),
+                (before[1], after[1]),
+            )
+            report["repairs"] = [
+                label
+                for on, label in (
+                    (delete_history, "delete history"),
+                    (merge_vertices, "merge vertices"),
+                    (bool(report["checks"]), "polygon cleanup"),
+                )
+                if on
+            ]
+            return report
+        # Select: polyCleanup left its matches selected; the overlapping faces join them.
+        report["selected"] = len(matched or [])
+        if faces:
+            cmds.select(faces, add=True)
+        return report
 
     @staticmethod
     def get_ngons(objects: Optional[NodeSeq] = None, repair: bool = False) -> list:

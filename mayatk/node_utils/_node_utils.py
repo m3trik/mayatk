@@ -939,6 +939,154 @@ class NodeUtils(ptk.HelpMixin):
             done.append(node)
         return done
 
+    #: Connections that only FILE a node -- display-layer and set membership.
+    #: They say nothing about anything depending on it, so they never keep a
+    #: leftover group alive: artists put whole hierarchies in layers, and counting
+    #: that as a dependency would retire the cleanup for the scenes that need it.
+    _ORGANIZATIONAL_CONNECTION_TYPES = ("displayLayer", "objectSet")
+
+    @classmethod
+    def _is_disposable_group(cls, node) -> bool:
+        """Is this empty transform junk, or is something depending on it?
+
+        Type alone does not make an empty transform disposable: rigs use them as
+        constraint targets, matrix sources and space-switch pivots, and every one
+        of those carries a DATA connection, so anything still wired to another
+        node stays. Referenced and locked nodes are never disposable either.
+        """
+        try:
+            if cmds.referenceQuery(node, isNodeReferenced=True):
+                return False
+            if cmds.lockNode(node, q=True, lock=True)[0]:
+                return False
+            connected = cmds.listConnections(node, source=True, destination=True) or []
+            if not connected:
+                return True
+            organizational = set(
+                cmds.ls(connected, type=cls._ORGANIZATIONAL_CONNECTION_TYPES) or []
+            )
+            return not (set(connected) - organizational)
+        except Exception:  # a node an earlier step of the cleanup consumed
+            return False
+
+    @staticmethod
+    def _history_scope(scope: str) -> Tuple[List[str], set]:
+        """``(objects, mesh shapes)`` for Delete History's *scope*: ``"selected"``
+        the selected objects and their shapes; ``"visible"`` / ``"all"`` every
+        visible / every non-intermediate mesh shape (as both). Long names."""
+        if scope == "selected":
+            objects = cmds.ls(selection=True, objectsOnly=True, long=True) or []
+            shapes = set(
+                cmds.listRelatives(
+                    objects, shapes=True, fullPath=True, noIntermediate=True
+                )
+                or []
+                if objects
+                else []
+            )
+            return objects, shapes
+        kwargs = {"type": "mesh", "long": True}
+        if scope == "visible":
+            kwargs["visible"] = True
+        intermediates = set(cmds.ls(intermediateObjects=True, long=True) or [])
+        shapes = set(cmds.ls(**kwargs) or []) - intermediates
+        return list(shapes), shapes
+
+    @staticmethod
+    def _optimize_scene() -> None:
+        """Maya's Optimize Scene Size (``OptimizeScene``), silently.
+
+        ``OptimizeScene`` (``performCleanUpScene``) pops a non-undoable-op OK/Cancel
+        dialog unless ``MAYA_TESTING_CLEANUP`` is set -- Autodesk's own suppression
+        hook. Set it around the call (through MEL, so MEL's ``getenv`` sees it) and
+        restore the prior value, so nothing leaks into the session.
+        """
+        prior = mel.eval('getenv "MAYA_TESTING_CLEANUP"')
+        mel.eval('putenv "MAYA_TESTING_CLEANUP" "1"')
+        try:
+            mel.eval("OptimizeScene")
+        except RuntimeError as error:
+            cmds.warning(f"Optimize Scene failed: {error}")
+        finally:
+            mel.eval(f'putenv "MAYA_TESTING_CLEANUP" "{prior}"')
+
+    @classmethod
+    @CoreUtils.undoable
+    def delete_history_in_scope(
+        cls,
+        scope: str = "selected",
+        preserve_deformers: bool = True,
+        delete_unused: bool = False,
+        optimize_scene: bool = False,
+    ) -> List[str]:
+        """Delete History on the objects *scope* names, with the viewport held.
+
+        Parameters:
+            scope (str): ``"selected"``, ``"visible"`` or ``"all"`` meshes.
+            preserve_deformers (bool): Keep the deformer stack (Delete Non-Deformer
+                History, on the mesh shapes); False is a full Delete History.
+            delete_unused (bool): First delete unused shading nodes
+                (``MLdeleteUnused``, scene-wide: Maya's cannot be scoped) and the
+                empty groups nothing depends on.
+            optimize_scene (bool): Last, run Optimize Scene Size, silently.
+
+        Returns:
+            List[str]: The nodes whose history was deleted; ``[]`` when the scope
+                holds none (the scene-wide steps still run).
+        """
+        objects, shapes = cls._history_scope(scope)
+        pool = sorted(shapes) if preserve_deformers else objects
+        done: List[str] = []
+        try:
+            with CoreUtils.suspended_refresh():
+                if delete_unused:
+                    mel.eval("MLdeleteUnused")
+                    # ``get_groups`` tests ``objectType == "transform"``, which is
+                    # exact; ``ls -dag -exactType transform`` is NOT (under -dag it
+                    # also matches joints, ikHandles and constraints).
+                    disposable = [
+                        group
+                        for group in cls.get_groups(empty=True)
+                        if cls._is_disposable_group(group)
+                    ]
+                    if disposable:
+                        cmds.delete(disposable)
+                if pool:
+                    done = cls.delete_history(
+                        pool, preserve_deformers=preserve_deformers
+                    )
+                if optimize_scene:
+                    cls._optimize_scene()
+        finally:
+            cmds.refresh(force=True)
+        return done
+
+    @staticmethod
+    @CoreUtils.undoable
+    def lock_nodes(objects=None, lock: bool = True) -> List[str]:
+        """Lock nodes against deletion, renaming and reparenting (``lockNode``), or
+        unlock them. Twin of blendertk's ``NodeUtils.lock_nodes`` (an unselectable
+        object there).
+
+        Parameters:
+            objects (str/obj/list): The nodes; ``None`` takes the selection, or
+                every node in the scene when nothing is selected.
+            lock (bool): Lock, or unlock.
+
+        Returns:
+            List[str]: The nodes changed (one Maya refuses is skipped).
+        """
+        if objects is None:
+            objects = cmds.ls(selection=True) or cmds.ls() or []
+        done = []
+        for node in CoreUtils.as_strings(objects):
+            try:
+                cmds.lockNode(node, lock=lock)
+            except RuntimeError:
+                continue
+            done.append(str(node))
+        return done
+
     @classmethod
     def bake_onto_input_shape(
         cls, target, transfer_nodes, capture, apply, label: str = "transfer"

@@ -392,5 +392,14 @@ class TestControlsExtended(MayaTkTestCase):
             mtk.Controls.text(name="testEmptyText", text="")
 
 
+class TestCreateSelects(MayaTkTestCase):
+    """``Controls.create(select=True)``: what the shared Edit panel's Create >
+    Control calls."""
+
+    def test_select_leaves_the_control_selected(self):
+        ctrl = mtk.Controls.create("diamond", name="selCtrl", select=True)
+        self.assertEqual(cmds.ls(selection=True), cmds.ls(ctrl))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

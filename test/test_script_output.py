@@ -210,5 +210,22 @@ class TestScriptOutput(unittest.TestCase):
                     pass
 
 
+    def test_a_bare_toggle_opens_the_docked_layout(self):
+        """A bare ``toggle()`` -- the shared Editors panel's Script Output button --
+        creates the console in ``TOGGLE_DEFAULTS``' layout; keywords override one by
+        one."""
+        module = self._import_script_output()
+        console = module.ScriptConsole
+        with unittest.mock.patch.object(
+            module.cmds, "workspaceControl", return_value=False
+        ), unittest.mock.patch.object(console, "show_console") as show:
+            console.toggle()
+            console.toggle(height=80)
+        first, second = show.call_args_list
+        self.assertEqual(first.kwargs, console.TOGGLE_DEFAULTS)
+        self.assertEqual(second.kwargs["height"], 80)
+        self.assertEqual(second.kwargs["dock"], ("TimeSlider", "top"))
+
+
 if __name__ == "__main__":
     unittest.main()

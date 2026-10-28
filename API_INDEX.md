@@ -203,7 +203,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 - `class GetComponentsMixin`
   - methods: get_component_type, convert_alias, convert_component_type, get_component_index, convert_int_to_component, filter_components, get_components
 - `class Components(GetComponentsMixin, pythontk.HelpMixin, _ComponentsInternal)`
-  - methods: get_mesh_transforms, get_standoff_distances, map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, closest_point_probe, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, set_edge_softness, set_to_face_normals, reverse_normals, toggle_normal_lock, transfer_normals, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges
+  - methods: get_mesh_transforms, get_standoff_distances, map_components_to_objects, get_contiguous_edges, get_contiguous_islands, get_islands, get_border_components, get_furthest_vertices, get_closest_verts, closest_point_probe, get_closest_vertex, get_vertices_within_threshold, adjusted_distance_between_vertices, bridge_connected_edges, get_edge_path, get_shortest_path, get_normal, get_normal_vector, get_normal_angle, get_edges_by_normal_angle, set_edge_hardness, get_faces_with_similar_normals, average_normals, set_edge_softness, set_to_face_normals, reverse_normals, toggle_normal_lock, transfer_normals, get_transfer_types, transfer, filter_components_by_connection_count, get_vertex_normal, get_vector_from_components, crease_edges, get_creased_edges, transfer_creased_edges
 
 ### `core_utils/diagnostics/animation_diag.py` — Animation-curve diagnostics and optional repair helpers.
 - `class AnimCurveDiagnostics`
@@ -244,8 +244,8 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
   - methods: normalize
 
 ### `core_utils/diagnostics/mesh_diag.py` — Mesh diagnostics and repair helpers.
-- `class MeshDiagnostics`
-  - methods: clean_geometry, get_ngons, find_non_manifold_vertices, select_non_manifold, repair_non_manifold
+- `class MeshDiagnostics(_MeshDiagnosticsInternal)`
+  - methods: clean_geometry, cleanup_meshes, get_ngons, find_non_manifold_vertices, select_non_manifold, repair_non_manifold
 
 ### `core_utils/diagnostics/scene_audit.py` — Scene audit engine — game-readiness analysis over meshes, materials, and textures.
 - `class SceneAnalyzer(pythontk.LoggingMixin)`
@@ -309,7 +309,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/_edit_utils.py`
 - `class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`
-  - methods: get_symmetry, set_symmetry, combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, create_curve_from_edges
+  - methods: get_symmetry, set_symmetry, combine_objects, group_objects, ungroup_objects, separate_objects, merge_vertices, merge_vertex_pairs, detach_components, decimate, dissolve_coplanar, get_all_faces_on_axis, cut_along_axis, delete_along_axis, mirror, mirror_instance, separate_mirrored_mesh, get_overlapping_duplicates, find_non_manifold_vertex, split_non_manifold_vertex, get_overlapping_vertices, get_overlapping_faces, get_similar_mesh, get_similar_topo, invert_geometry, invert_components, delete_selected, get_conversion_types, convert_objects, create_curve_from_edges
 
 ### `edit_utils/bevel.py`
 - `class Bevel`
@@ -374,7 +374,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `edit_utils/primitives.py` — Primitive creation utilities for Maya.
 - `class Primitives`
-  - methods: create_default_primitive, create_circle
+  - methods: create_default_primitive, get_primitive_types, create, create_circle
 
 ### `edit_utils/rack_builder.py` — Parametric EIA-310 (19-inch) equipment-rack generator.
 - `class EIA310`
@@ -395,7 +395,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `env_utils/_env_utils.py`
 - `class EnvUtils(pythontk.HelpMixin)`
-  - methods: get_env_info, saved_scene_path, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_status, scene_settings, apply_scene_settings, find_workspace_using_path, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, clear_orphan_foster_parents, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
+  - methods: get_env_info, saved_scene_path, get_linear_unit, set_linear_unit, frame_rates, autosave_settings, set_autosave_settings, default_artifact_dir, scene_artifact_path, append_maya_paths, is_plugin_loaded, load_plugin, vray_plugin, python_executable, get_recent_files, get_recent_projects, find_autosave_directories, get_recent_autosave, find_workspaces, get_workspace_scenes, scene_has_content, scene_status, scene_settings, apply_scene_settings, find_workspace_using_path, is_workspace, current_workspace, set_current_workspace, workspace_root, set_scene_source, twin_save_target, scene_source, scene_project_root, scene_workspace, scene_source_images_dir, scenes_dir, source_images_dir, texture_search_dirs, list_workspace_templates, workspace_template_rules, save_workspace_template, delete_workspace_template, create_workspace, promote_workspace, reference_scene, remove_reference, clear_orphan_foster_parents, is_referenced, get_reference_nodes, list_reference_nodes, list_references, export_scene_as_fbx, export_scene_as_obj, sanitize_namespace, resolve_file_path_in_workspaces, get_workspace_file_cache, matches_autosave_pattern, save_scene_backup, find_original_for_autosave, save_autosave_to_original
 
 ### `env_utils/blender_bridge/_blender_bridge.py` — Blender bridge engine -- export the Maya selection and run a chosen import template in Blender.
 - constants: DEFAULTS
@@ -858,7 +858,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `node_utils/_node_utils.py`
 - `class NodeUtils(pythontk.HelpMixin)`
-  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, expand_sets, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, selection_summary, get_instances, select_instances, replace_with_instances, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
+  - methods: get_type, get_inherited_types, is_mesh, is_locator, is_group, is_geometry, is_constraint, is_expression, is_ik_effector, is_driven_key_curve, is_muted, is_motion_path, is_ik_handle, get_constraint_targets, get_groups, get_parent, get_children, get_shapes, get_shape, is_intermediate, node_is, list_transforms, expand_sets, get_unique_children, get_transform_node, get_shape_node, get_history_node, get_deformers, get_input_shape, delete_history, delete_history_in_scope, lock_nodes, bake_onto_input_shape, static_copy, deformers_preserved, get_classification_tokens, create_render_node, incoming_connections, get_connected_nodes, create_assembly, selection_summary, get_instances, select_instances, replace_with_instances, get_instanced_shapes, uninstance, preserve_instancing, filter_duplicate_instances
 
 ### `node_utils/attributes/_attributes.py` — Consolidated attribute utilities for Maya.
 - `class AttributeTemplate`
@@ -968,7 +968,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `ui_utils/_ui_utils.py`
 - `class UiUtils`
-  - methods: get_editor_types, open_editor, annotate, open_pencil, get_tool_types, set_tool, current_tool, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
+  - methods: get_editor_types, get_editor_categories, toggle_editor, open_editor, annotate, open_pencil, get_tool_types, set_tool, current_tool, browse_directory, open_preferences, get_main_window, get_menu_name, get_panel, get_model_panel, main_progress_bar, list_ui_objects, clear_scrollfield_reporters, reveal_in_outliner, refresh_outliners, dispatch_log_link
 
 ### `ui_utils/calculator.py`
 - `class CalculatorController`
@@ -1046,7 +1046,7 @@ _Auto-generated. Do not edit by hand. Compact symbol index — grep this for a n
 
 ### `xform_utils/_xform_utils.py` — ``XformUtils`` -- the public index of mayatk's transform operations.
 - `class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`
-  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix, set_rotate_order
+  - methods: convert_axis, move_to, drop_to_grid, match_scale, scale_connected_edges, store_transforms, freeze_instanced_group, freeze_transforms, freeze_to_opm, unfreeze_from_opm, unfreeze_to_parent, restore_transforms, clear_stored_transforms, repair_stored_transforms, has_stored_transforms, channels_at_identity, get_stored_transforms, reset_translation, set_translation_to_pivot, get_manip_pivot_matrix, set_manip_pivot_matrix, restore_original_axes, get_pivot_options, clear_manip_cache, snapshot_manip_pivot, get_operation_axis_matrix, get_operation_axis_pos, align_pivot_to_selection, reset_pivot_transforms, reset_pivot, center_pivot, world_align_pivot, bake_pivot, transfer_pivot, aim_object_at_point, orient_to_vector, rotate_axis, get_orientation, get_dist_between_two_objects, get_center_point, get_bounding_box, sort_by_bounding_box_value, align_using_three_points, is_overlapping, check_objects_against_plane, get_vertex_positions, get_matching_verts, order_by_distance, align_vertices, get_translation, get_object_matrix, set_object_matrix, set_rotate_order
 
 ### `xform_utils/matrices.py` — Matrix utilities for Maya rigging and animation.
 - constants: SPACE_OBJECT, SPACE_WORLD

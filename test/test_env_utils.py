@@ -1180,5 +1180,132 @@ class TestSceneStatus(MayaTkTestCase):
             cmds.currentUnit(time=unit)
 
 
+class TestWorkspaceSwitching(MayaTkTestCase):
+    """``is_workspace`` / ``set_current_workspace``: what tentacle's shared
+    Workspace tab calls through ``self.tk`` (blendertk's twins answer in Blender).
+    """
+
+    def setUp(self):
+        super().setUp()
+        import tempfile
+
+        self.root = os.path.realpath(tempfile.mkdtemp(prefix="ws_switch_test_"))
+        self._before = cmds.workspace(query=True, rd=True)
+
+    def tearDown(self):
+        import shutil
+
+        cmds.workspace(self._before, openWorkspace=True)  # before the folder goes
+        shutil.rmtree(self.root, ignore_errors=True)
+        super().tearDown()
+
+    def test_is_workspace_needs_a_workspace_mel(self):
+        self.assertFalse(EnvUtils.is_workspace(self.root))
+        self.assertFalse(EnvUtils.is_workspace(""))
+        with open(os.path.join(self.root, "workspace.mel"), "w") as f:
+            f.write("//Maya workspace stub\n")
+        self.assertTrue(EnvUtils.is_workspace(self.root))
+
+    def test_batch_opens_with_workspace_open(self):
+        from mayatk.env_utils import _env_utils
+
+        with unittest.mock.patch.object(_env_utils.cmds, "about", return_value=True):
+            opened = EnvUtils.set_current_workspace(self.root + os.sep)
+        self.assertEqual(opened, os.path.normpath(self.root))
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(cmds.workspace(query=True, rd=True))),
+            os.path.normcase(self.root),
+        )
+
+    def test_the_gui_opens_a_workspace_through_set_project(self):
+        """File > Set Project's own MEL, so Maya's recent projects follow."""
+        from mayatk.env_utils import _env_utils
+
+        with open(os.path.join(self.root, "workspace.mel"), "w") as f:
+            f.write("//Maya workspace stub\n")
+        with unittest.mock.patch.object(
+            _env_utils.cmds, "about", return_value=False
+        ), unittest.mock.patch.object(_env_utils.mel, "eval") as ev:
+            EnvUtils.set_current_workspace(self.root)
+        ev.assert_called_once_with(f'setProject "{self.root.replace(os.sep, "/")}"')
+
+    def test_the_gui_opens_an_unmarked_folder_without_set_project(self):
+        """``setProject`` would write Maya's bare default marker into it."""
+        from mayatk.env_utils import _env_utils
+
+        with unittest.mock.patch.object(
+            _env_utils.cmds, "about", return_value=False
+        ), unittest.mock.patch.object(_env_utils.mel, "eval") as ev:
+            EnvUtils.set_current_workspace(self.root)
+        ev.assert_not_called()
+        self.assertFalse(os.path.isfile(os.path.join(self.root, "workspace.mel")))
+        self.assertEqual(
+            os.path.normcase(os.path.normpath(cmds.workspace(query=True, rd=True))),
+            os.path.normcase(self.root),
+        )
+
+    def test_no_folder_opens_nothing(self):
+        self.assertEqual(
+            EnvUtils.set_current_workspace(os.path.join(self.root, "missing")), ""
+        )
+
+
+class TestHostPreferences(MayaTkTestCase):
+    """Working units and autosave: what tentacle's shared Preferences panel reads
+    and writes through ``self.tk`` (blendertk's twins answer in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self._unit = cmds.currentUnit(query=True, linear=True)
+        self._autosave = (
+            cmds.autoSave(query=True, enable=True),
+            cmds.autoSave(query=True, maxBackups=True),
+            cmds.autoSave(query=True, int=True),
+        )
+
+    def tearDown(self):
+        cmds.currentUnit(linear=self._unit)
+        enabled, backups, interval = self._autosave
+        cmds.autoSave(enable=enabled, maxBackups=backups, int=interval)
+        super().tearDown()
+
+    def test_the_app_names_itself(self):
+        self.assertEqual(EnvUtils.APP_NAME, "Maya")
+
+    def test_linear_unit_round_trip(self):
+        self.assertEqual(EnvUtils.set_linear_unit("Meter"), "meter")
+        self.assertEqual(EnvUtils.get_linear_unit(), "meter")
+        self.assertIn(EnvUtils.get_linear_unit(), EnvUtils.SCENE_UNIT_VALUES)
+        with self.assertRaises(ValueError):
+            EnvUtils.set_linear_unit("parsec")
+
+    def test_frame_rates_are_mayas_named_units(self):
+        import pythontk as ptk
+
+        rates = EnvUtils.frame_rates()
+        self.assertEqual(rates, dict(ptk.VidUtils.FRAME_RATES))
+        self.assertEqual(rates["film"], 24.0)
+
+    def test_autosave_round_trip(self):
+        EnvUtils.set_autosave_settings(max_backups=0)
+        self.assertEqual(EnvUtils.autosave_settings()["max_backups"], 0)
+        self.assertFalse(cmds.autoSave(query=True, enable=True))
+        EnvUtils.set_autosave_settings(max_backups=5, interval=7)
+        settings = EnvUtils.autosave_settings()
+        self.assertEqual(settings["max_backups"], 5)
+        self.assertAlmostEqual(settings["interval"], 7.0)
+        self.assertTrue(cmds.autoSave(query=True, limitBackups=True))
+
+
+class TestPythonExecutable(MayaTkTestCase):
+    """``python_executable``: the interpreter tentacle's updater drives pip with
+    (blendertk's twin answers Blender's bundled Python)."""
+
+    def test_it_is_this_mayas_mayapy(self):
+        path = EnvUtils.python_executable()
+        self.assertEqual(path, EnvUtils.get_env_info("mayapy"))
+        self.assertTrue(os.path.isfile(path), path)
+
+
 if __name__ == "__main__":
     unittest.main()

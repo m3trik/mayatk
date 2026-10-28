@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (364)
+## Added (386)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1036,10 +1036,13 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/_core_utils.py::CoreUtils.ensure_component_mode(object_type: str = 'mesh', component: Optional[str] = None) -> Optional[str]`
 - `core_utils/_core_utils.py::CoreUtils.ensure_object_mode() -> bool`
 - `core_utils/_core_utils.py::CoreUtils.selected_objects(**kwargs) -> List[str]`
+- `core_utils/components.py::Components.get_transfer_types(cls) -> Dict[str, str]`
 - `core_utils/components.py::Components.reverse_normals(cls, objects, mode: int = 0) -> None`
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
+- `core_utils/components.py::Components.transfer(cls, objects, transfer_type: str)`
+- `core_utils/diagnostics/mesh_diag.py::MeshDiagnostics.cleanup_meshes(cls, scope: str = 'selected', repair: bool = False, *, checks=(), area_tolerance: float = 1e-05, edge_length_tolerance: float = 1e-05, uv_area_tolerance: float = 1e-05, merge_vertices: bool = False, merge_distance: float = 0.0001, delete_history: bool = False, delete_loose: bool = False, dissolve_degenerate: bool = False, recalculate_normals: bool = False, fill_holes: bool = False, overlapping_faces: bool = False, overlapping_objects: bool = False, omit_selected: bool = False) -> dict`
 - `display_utils/_display_utils.py::DisplayUtils.clear_xray(cls) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_component_ids() -> Optional[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
@@ -1061,6 +1064,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/color_id.py::ColorId.select_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]`
 - `display_utils/color_id.py::ColorUtils.get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]`
 - `display_utils/color_id.py::ColorUtils.get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]`
+- `edit_utils/_edit_utils.py::EditUtils.convert_objects(cls, objects, conversion: str) -> List[str]`
+- `edit_utils/_edit_utils.py::EditUtils.get_conversion_types(cls) -> Dict[str, str]`
 - `edit_utils/_edit_utils.py::EditUtils.get_symmetry() -> dict`
 - `edit_utils/_edit_utils.py::EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict`
 - `edit_utils/curtain/_curtain.py::Curtain(class)`
@@ -1074,8 +1079,17 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.scope_objects(cls, scene: bool = False) -> List[str]`
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
+- `edit_utils/primitives.py::Primitives.create(cls, category: str, name: str)`
+- `edit_utils/primitives.py::Primitives.get_primitive_types(cls) -> dict`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/_env_utils.py::EnvUtils.autosave_settings() -> Dict[str, float]`
+- `env_utils/_env_utils.py::EnvUtils.frame_rates() -> Dict[str, float]`
+- `env_utils/_env_utils.py::EnvUtils.get_linear_unit() -> str`
+- `env_utils/_env_utils.py::EnvUtils.is_workspace(path: str) -> bool`
+- `env_utils/_env_utils.py::EnvUtils.python_executable() -> Optional[str]`
 - `env_utils/_env_utils.py::EnvUtils.scene_status() -> Dict[str, Any]`
+- `env_utils/_env_utils.py::EnvUtils.set_autosave_settings(max_backups: Optional[int] = None, interval: Optional[float] = None) -> None`
+- `env_utils/_env_utils.py::EnvUtils.set_linear_unit(unit: str) -> str`
 - `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.params_registry(cls)`
 - `env_utils/handoff_export.py::BridgeHost(class)`
 - `env_utils/handoff_export.py::BridgeHost.install_package(spec: str) -> None`
@@ -1216,6 +1230,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/texture_path_editor.py::TexturePathEditor.stored_path(node) -> str`
 - `mat_utils/texture_path_editor.py::TexturePathEditor.texture_dir(self) -> str`
 - `mat_utils/texture_path_editor.py::TexturePathEditor.unresolved_file_nodes(self, file_nodes)`
+- `node_utils/_node_utils.py::NodeUtils.delete_history_in_scope(cls, scope: str = 'selected', preserve_deformers: bool = True, delete_unused: bool = False, optimize_scene: bool = False) -> List[str]`
+- `node_utils/_node_utils.py::NodeUtils.lock_nodes(objects=None, lock: bool = True) -> List[str]`
 - `node_utils/_node_utils.py::NodeUtils.select_instances(cls, objects=None, whole_scene: bool = False) -> List[str]`
 - `node_utils/_node_utils.py::NodeUtils.selection_summary(limit: int = 10) -> Optional[Dict[str, Any]]`
 - `node_utils/attributes/channels/_channels.py::Channels.channel_box_selection(self)`
@@ -1260,10 +1276,14 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `rig_utils/wheel_rig.py::WheelRig.from_selection(cls, rig_name: Optional[str] = None, freeze_transforms: bool = True, **kwargs) -> 'WheelRig'`
 - `rig_utils/wheel_rig.py::WheelRig.wheel_size(obj=None, movement_axis: str = 'translateZ') -> Optional[float]`
 - `ui_utils/_ui_utils.py::UiUtils.annotate() -> Optional[str]`
+- `ui_utils/_ui_utils.py::UiUtils.browse_directory(start: str = '', caption: str = 'Select Folder', ok_caption: str = 'Select') -> str`
 - `ui_utils/_ui_utils.py::UiUtils.current_tool(cls) -> Optional[str]`
+- `ui_utils/_ui_utils.py::UiUtils.get_editor_categories(cls) -> dict`
 - `ui_utils/_ui_utils.py::UiUtils.get_tool_types(cls) -> dict`
 - `ui_utils/_ui_utils.py::UiUtils.open_pencil() -> str`
+- `ui_utils/_ui_utils.py::UiUtils.open_preferences(cls, section: Optional[str] = None) -> str`
 - `ui_utils/_ui_utils.py::UiUtils.set_tool(cls, tool: str) -> str`
+- `ui_utils/_ui_utils.py::UiUtils.toggle_editor(cls, editor: str) -> bool`
 - `ui_utils/node_icons.py::NodeIcons.audio_icon(size: int = 16)`
 - `uv_utils/_uv_utils.py::UvUtils.align_uvs(cls, objects, axis: str = 'u', mode: str = 'avg') -> int`
 - `uv_utils/_uv_utils.py::UvUtils.distribute_uv_shells(cls, objects, axis: str = 'u', spacing: float = 0.0) -> int`
@@ -1287,6 +1307,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_transfer.py::TextureTransfer.meshes(objects) -> List[str]`
 - `uv_utils/texture_transfer.py::TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
+- `xform_utils/_xform_utils.py::XformUtils.center_pivot(objects=None, mode: str = 'object') -> list`
+- `xform_utils/_xform_utils.py::XformUtils.reset_pivot(objects=None, position: bool = True, orientation: bool = True) -> list`
 
 ## Deprecations (13)
 
@@ -1331,7 +1353,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (9)
+## Signature changed (10)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
@@ -1351,6 +1373,9 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `node_utils/_node_utils.py::NodeUtils.uninstance`
   - was: `(cls, objects, freeze=False, delete_history=False, quiet=True)`
   - now: `(cls, objects=None, freeze=False, delete_history=False, quiet=True)`
+- `rig_utils/controls.py::Controls.create`
+  - was: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, **kwargs) -> Union[str, ControlNodes]`
+  - now: `(cls, preset: str = 'diamond', name: Optional[str] = None, *, size: float = 1.0, axis: str = 'y', match: Any = None, parent: Optional[str] = None, color: Union[int, Tuple[float, float, float], None] = None, offset_group: bool = True, group_suffix: Optional[str] = None, ctrl_suffix: Optional[str] = None, freeze: bool = True, tag_as_controller: bool = True, return_nodes: bool = False, select: bool = False, **kwargs) -> Union[str, ControlNodes]`
 - `rig_utils/telescope_rig.py::TelescopeRig.teardown`
   - was: `(self, bundle: Optional[TelescopeRigBundle] = None) -> bool`
   - now: `(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool`

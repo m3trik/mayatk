@@ -838,6 +838,54 @@ class _PivotInternal:
             cmds.delete(plane)
 
     @staticmethod
+    def _selection_if_none(objects):
+        """*objects*, or the selection (``cmds.ls``, components included) for
+        ``None``: what a pivot operation called bare acts on."""
+        return (cmds.ls(selection=True) or []) if objects is None else objects
+
+    @staticmethod
+    def _reset_pivot(objects, position, orientation):
+        """Body of :meth:`XformUtils.reset_pivot`."""
+        if objects is not None:
+            nodes = CoreUtils.as_strings(objects)
+            if nodes:
+                cmds.select(nodes, replace=True)
+            else:
+                cmds.select(clear=True)
+        selection = cmds.ls(selection=True) or []
+        if not selection:
+            return []
+        if position or orientation:
+            mel.eval(f"manipPivotReset {int(bool(position))} {int(bool(orientation))}")
+        return selection
+
+    #: :meth:`XformUtils.center_pivot` mode -> its ``xform`` flags.
+    _CENTER_PIVOT_FLAGS = {
+        "object": {"centerPivots": True},
+        "component": {"centerPivotsOnComponents": True},
+        "median": {"centerPivotsOnComponents": True},
+        "world": {"worldSpace": True, "pivots": [0, 0, 0]},
+    }
+
+    @classmethod
+    def _center_pivot(cls, objects, mode):
+        """Body of :meth:`XformUtils.center_pivot`."""
+        flags = cls._CENTER_PIVOT_FLAGS.get(str(mode).lower())
+        if flags is None:
+            raise ValueError(
+                f"Invalid mode {mode!r}; use 'object', 'component' or 'world'."
+            )
+        nodes = CoreUtils.as_strings(cls._selection_if_none(objects))
+        if not nodes:
+            return []
+        try:
+            mel.eval("manipPivotReset 1 1")
+        except RuntimeError:  # no manipulator to follow (batch)
+            pass
+        cmds.xform(nodes, **flags)
+        return nodes
+
+    @staticmethod
     def _reset_pivot_transforms(objects):
         """Body of :meth:`XformUtils.reset_pivot_transforms`."""
         if objects is None:
@@ -945,12 +993,15 @@ class _PivotInternal:
         preserve_instancing,
     ):
         """Body of :meth:`XformUtils.transfer_pivot`."""
+        objects = CoreUtils.as_strings(cls._selection_if_none(objects))
+        # Guarded: an EMPTY list makes the filtered ``ls`` list every transform in
+        # the scene, which transferred one pivot onto all of them.
         objects = (
-            cmds.ls(CoreUtils.as_strings(objects), type="transform", long=True) or []
+            cmds.ls(objects, type="transform", long=True) or [] if objects else []
         )
-        if not objects or len(objects) < 2:
+        if len(objects) < 2:
             cmds.warning("At least two objects are required to transfer pivot.")
-            return
+            return []
 
         mirror = (mirror or "").lower()
         if mirror not in ("", "x", "y", "z"):
@@ -1007,3 +1058,4 @@ class _PivotInternal:
 
         if select_targets_after_transfer:
             cmds.select(targets, replace=True)
+        return targets

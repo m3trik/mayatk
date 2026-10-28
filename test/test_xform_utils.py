@@ -15,6 +15,7 @@ Tests for XformUtils class functionality including:
 
 import math
 import unittest
+import unittest.mock
 import mayatk as mtk
 from mayatk.xform_utils._xform_utils import XformUtils, _XformUtilsInternal
 from mayatk.node_utils.attributes._attributes import Attributes
@@ -2815,6 +2816,77 @@ class TestFreezeUnlocksLockedDescendants(MayaTkTestCase):
                     cmds.getAttr(f"{node}.{attr}", lock=True),
                     msg=f"{node}.{attr} came back LOCKED",
                 )
+
+
+class TestPivotMenuOperations(MayaTkTestCase):
+    """``reset_pivot`` / ``center_pivot`` and the selection forms of
+    ``bake_pivot`` / ``transfer_pivot``: what tentacle's shared Pivot panel calls
+    with ``None`` (the selection). blendertk's twins answer in Blender."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="pv_a")[0]
+        self.b = cmds.polyCube(name="pv_b")[0]
+        cmds.move(5, 0, 0, self.b)
+
+    @staticmethod
+    def _rp(node):
+        return [round(v, 4) for v in cmds.xform(node, q=True, ws=True, rotatePivot=True)]
+
+    def test_nothing_selected_runs_nothing(self):
+        cmds.select(clear=True)
+        self.assertEqual(XformUtils.reset_pivot(), [])
+        self.assertEqual(XformUtils.center_pivot(), [])
+        self.assertEqual(XformUtils.bake_pivot(None, position=True), [])
+        self.assertEqual(XformUtils.transfer_pivot(None, translate=True), [])
+
+    def test_an_empty_selection_never_transfers_onto_the_scene(self):
+        """``cmds.ls([], type="transform")`` lists every transform: an empty
+        selection once fed it, moving one pivot onto every object."""
+        cmds.xform(self.a, worldSpace=True, rotatePivot=(1, 2, 3))
+        before = self._rp(self.b)
+        cmds.select(clear=True)
+        XformUtils.transfer_pivot(None, translate=True)
+        self.assertEqual(self._rp(self.b), before)
+
+    def test_transfer_from_the_first_selected(self):
+        cmds.xform(self.a, worldSpace=True, pivots=(1, 2, 3))
+        cmds.select(self.a, self.b)
+        targets = XformUtils.transfer_pivot(None, translate=True)
+        self.assertEqual([cmds.ls(t)[0] for t in targets], [self.b])
+        self.assertEqual(self._rp(self.b), [1.0, 2.0, 3.0])
+
+    def test_center_pivot_modes(self):
+        cmds.xform(self.b, worldSpace=True, pivots=(9, 9, 9))
+        cmds.select(self.b)
+        self.assertEqual(XformUtils.center_pivot(mode="object"), [self.b])
+        self.assertEqual(self._rp(self.b), [5.0, 0.0, 0.0])
+        cmds.select(self.b)
+        XformUtils.center_pivot(mode="world")
+        self.assertEqual(self._rp(self.b), [0.0, 0.0, 0.0])
+        with self.assertRaises(ValueError):
+            XformUtils.center_pivot([self.b], mode="nowhere")
+
+    def test_reset_pivot_resets_the_selections_manipulator(self):
+        from mayatk.xform_utils import _pivots
+
+        with unittest.mock.patch.object(_pivots.mel, "eval") as ev:
+            self.assertEqual(
+                XformUtils.reset_pivot([self.a], position=True, orientation=False),
+                [self.a],
+            )
+        ev.assert_called_once_with("manipPivotReset 1 0")
+        self.assertEqual(cmds.ls(selection=True), [self.a])
+
+    def test_bake_pivot_takes_the_selection(self):
+        cmds.xform(self.b, worldSpace=True, pivots=(6, 1, 0))
+        cmds.select(self.b)
+        baked = XformUtils.bake_pivot(None, position=True)
+        self.assertEqual([cmds.ls(n)[0] for n in baked], [self.b])
+        self.assertEqual(
+            [round(v, 4) for v in cmds.getAttr(f"{self.b}.translate")[0]],
+            [6.0, 1.0, 0.0],
+        )
 
 
 if __name__ == "__main__":

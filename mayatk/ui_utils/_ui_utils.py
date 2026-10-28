@@ -37,6 +37,9 @@ class UiUtils:
         "Command Shell": "CommandShell",
         "Profiler": "ProfilerTool",
         "Evaluation Toolkit": "EvaluationToolkit",
+        "Project Window": "ProjectWindow",
+        "Outliner": "OutlinerWindow",
+        "Node Editor": "NodeEditorWindow",
         # Modeling
         "Modeling Toolkit": "OpenModelingToolkit",
         "Paint Effects": "PaintEffectsWindow",
@@ -89,6 +92,139 @@ class UiUtils:
         are area ``ui_type``s). A copy: editing it changes nothing.
         """
         return dict(cls._EDITOR_COMMANDS)
+
+    #: Category -> the editors a browsing UI lists under it, grouped as Maya's
+    #: Windows menu groups them. Every name is a key of :attr:`_EDITOR_COMMANDS`.
+    #: Mirror of blendertk's ``UiUtils._EDITOR_CATEGORIES``.
+    _EDITOR_CATEGORIES = {
+        "General Editors": (
+            "Attribute Editor",
+            "Channel Box",
+            "Layer Editor",
+            "Content Browser",
+            "Tool Settings",
+            "Hypergraph: Hierarchy",
+            "Hypergraph: Connections",
+            "Viewport",
+            "Adobe After Effects Live Link",
+            "Asset Editor",
+            "Attribute Spread Sheet",
+            "Component Editor",
+            "Channel Control",
+            "Display Layer Editor",
+            "File Path Editor",
+            "Namespace Editor",
+            "Reference Editor",
+            "Script Editor",
+            "Command Shell",
+            "Profiler",
+            "Evaluation Toolkit",
+        ),
+        "Modeling Editors": (
+            "Modeling Toolkit",
+            "Paint Effects",
+            "UV Editor",
+            "XGen Editor",
+            "Crease Sets",
+        ),
+        "Animation Editors": (
+            "Graph Editor",
+            "Time Editor",
+            "Trax Editor",
+            "Camera Sequencer",
+            "Dope Sheet",
+            "Quick Rig",
+            "HumanIK",
+            "Shape Editor",
+            "Pose Editor",
+            "Expression Editor",
+        ),
+        "Rendering Editors": (
+            "Render View",
+            "Render Settings",
+            "Hypershade",
+            "Render Setup",
+            "Light Editor",
+            "Custom Stereo Rig Editor",
+            "Rendering Flags",
+            "Shading Group Attributes",
+        ),
+        "Relationship Editors": (
+            "Animation Layers",
+            "Camera Sets",
+            "Character Sets",
+            "Deformer Sets",
+            "Display Layers",
+            "Dynamic Relationships",
+            "Light Linking: Light Centric",
+            "Light Linking: Object Centric",
+            "Partitions",
+            "Render Pass Sets",
+            "Sets",
+            "UV Linking: Texture-Centric",
+            "UV Linking: UV-Centric",
+            "UV Linking: Paint Effects/UV",
+            "UV Linking: Hair/UV",
+        ),
+    }
+
+    @classmethod
+    def get_editor_categories(cls) -> dict:
+        """``{category: [editor name, ...]}``: the editors a browsing UI lists,
+        grouped as Maya's Windows menu groups them; every name opens with
+        :meth:`open_editor`. Mirror of blendertk's ``UiUtils.get_editor_categories``.
+        A copy: editing it changes nothing.
+        """
+        return {
+            category: [name for name in names if name in cls._EDITOR_COMMANDS]
+            for category, names in cls._EDITOR_CATEGORIES.items()
+        }
+
+    #: A main-window UI component (the name ``isUIComponentVisible`` takes) -> the
+    #: runtime command that toggles it: the docked strips :meth:`toggle_editor`
+    #: shows and hides (blendertk's ``toggle_editor`` docks areas instead).
+    _UI_COMPONENTS = {
+        "Time Slider": "ToggleTimeSlider",
+        "Range Slider": "ToggleRangeSlider",
+        "Status Line": "ToggleStatusLine",
+        "Shelf": "ToggleShelf",
+        "Command Line": "ToggleCommandLine",
+        "Help Line": "ToggleHelpLine",
+        "Tool Box": "ToggleToolbox",
+    }
+    #: A name for components toggled as one: Maya's timeline is the Time Slider
+    #: and the Range Slider below it (Blender's docked Timeline).
+    _UI_COMPONENT_GROUPS = {"Timeline": ("Time Slider", "Range Slider")}
+
+    @classmethod
+    def toggle_editor(cls, editor: str) -> bool:
+        """Show or hide a main-window UI component: a key of :attr:`_UI_COMPONENTS`,
+        or ``"Timeline"`` for the Time and Range Sliders together.
+
+        Mirror of blendertk's ``UiUtils.toggle_editor`` (a docked area there), the
+        call a panel shared by both hosts makes. When any component of *editor* is
+        visible, the visible ones hide; otherwise all of them show, so a timeline
+        showing one slider hides it rather than flipping the pair out of step.
+
+        Parameters:
+            editor (str): A component name, or ``"Timeline"``.
+
+        Returns:
+            (bool): True when *editor* shows afterwards, False when it is hidden.
+
+        Raises:
+            ValueError: *editor* names no main-window component.
+        """
+        components = cls._UI_COMPONENT_GROUPS.get(editor, (editor,))
+        if any(c not in cls._UI_COMPONENTS for c in components):
+            known = sorted([*cls._UI_COMPONENTS, *cls._UI_COMPONENT_GROUPS])
+            raise ValueError(
+                f"No main-window component named {editor!r}; use one of {known}."
+            )
+        visible = [c for c in components if mel.eval(f'isUIComponentVisible "{c}"')]
+        for component in visible or components:
+            mel.eval(cls._UI_COMPONENTS[component])
+        return not visible
 
     @classmethod
     def open_editor(cls, editor: str) -> Optional[str]:
@@ -214,6 +350,65 @@ class UiUtils:
             ),
             context,
         )
+
+    @staticmethod
+    def browse_directory(
+        start: str = "", caption: str = "Select Folder", ok_caption: str = "Select"
+    ) -> str:
+        """Pick a directory in Maya's own browser (``fileDialog2 -fileMode 3``).
+
+        Twin of blendertk's ``UiUtils.browse_directory`` (the platform dialog
+        there): what a panel shared by both hosts calls to ask for a folder.
+
+        Parameters:
+            start (str): The folder it opens in; '' for Maya's default.
+            caption (str): The dialog's title.
+            ok_caption (str): The accept button's label.
+
+        Returns:
+            (str): The picked folder as Maya names it, or '' when dismissed.
+        """
+        options = {"startingDirectory": start} if start else {}
+        picked = cmds.fileDialog2(
+            fileMode=3,
+            caption=caption,
+            okCaption=ok_caption,
+            setProjectBtnEnabled=False,
+            **options,
+        )
+        return picked[0] if picked else ""
+
+    #: Preferences section -> the MEL that opens it (Maya's own windows). Mirror
+    #: of blendertk's ``UiUtils._PREFERENCE_SECTIONS`` (its Preferences tabs).
+    _PREFERENCE_SECTIONS = {
+        "general": "PreferencesWindow",
+        "colors": "colorPrefWnd",
+        "hotkeys": "HotkeyPreferencesWindow",
+        "plugins": "PluginManager",
+    }
+
+    @classmethod
+    def open_preferences(cls, section: Optional[str] = None) -> str:
+        """Open Maya's own preferences: ``"general"`` (the default) the Preferences
+        window, ``"colors"`` the Colors editor, ``"hotkeys"`` the Hotkey Editor,
+        ``"plugins"`` the Plug-in Manager. Mirror of blendertk's
+        ``UiUtils.open_preferences`` (its Preferences editor, on the matching tab).
+
+        Returns:
+            (str): The MEL that ran.
+
+        Raises:
+            ValueError: An unknown *section*.
+            RuntimeError: Maya refused it.
+        """
+        command = cls._PREFERENCE_SECTIONS.get(section or "general")
+        if command is None:
+            raise ValueError(
+                f"Unknown preferences section {section!r}; use one of "
+                f"{sorted(cls._PREFERENCE_SECTIONS)}."
+            )
+        mel.eval(command)
+        return command
 
     @staticmethod
     def get_main_window():

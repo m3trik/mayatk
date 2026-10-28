@@ -385,6 +385,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         freeze: bool = True,
         tag_as_controller: bool = True,
         return_nodes: bool = False,
+        select: bool = False,
         **kwargs,
     ) -> Union[str, ControlNodes]:
         """Create a NURBS control.
@@ -404,6 +405,7 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
             tag_as_controller: If True, tag the control as a Maya animation controller
                 (enables pick-walking, controller filter in outliner, etc.).
             return_nodes: If True, return ControlNodes(control, group).
+            select: If True, select the control (what a menu click that creates one does).
             **kwargs: Forwarded to the preset builder (preset-specific parameters).
 
         Returns:
@@ -490,6 +492,8 @@ class Controls(ptk.HelpMixin, metaclass=_ControlsMeta):
         # stale ``top`` can be an ambiguous name.
         DisplayUtils.add_to_isolation_set(grp if grp is not None else ctrl)
 
+        if select:
+            cmds.select(ctrl, replace=True)
         if return_nodes:
             return ControlNodes(control=ctrl, group=grp)
         return ctrl

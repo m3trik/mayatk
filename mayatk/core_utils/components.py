@@ -8,9 +8,10 @@ from typing import Union, List, Dict, Set, Tuple, Optional
 
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
     import maya.api.OpenMaya as om
 except Exception:
-    cmds = None
+    cmds = mel = None
     om = None
 import pythontk as ptk
 
@@ -271,6 +272,20 @@ class GetComponentsMixin:
 
 class _ComponentsInternal(object):
     """Internal helpers for Components."""
+
+    @staticmethod
+    def _transfer_surfaces() -> List[str]:
+        """The selection's surface transforms in selection order -- the transfer
+        source first -- each once; a selected component counts as its object
+        (``list_transforms`` cannot resolve a ``.vtx[...]`` string itself)."""
+        from mayatk.node_utils._node_utils import NodeUtils
+
+        objects = [node.split(".")[0] for node in cmds.ls(selection=True, flatten=True) or []]
+        if not objects:
+            return []
+        return NodeUtils.list_transforms(
+            objects, dag=True, type="surfaceShape", noIntermediate=True
+        )
 
     @staticmethod
     def _split_component(comp: str) -> Tuple[str, Optional[str], Optional[int]]:
@@ -1680,6 +1695,84 @@ class Components(GetComponentsMixin, ptk.HelpMixin, _ComponentsInternal):
                 Components._bake_normals_through_deformers(target_mesh, nodes)
             else:
                 cmds.delete(target_mesh, constructionHistory=True)
+
+    #: The Transfer menu (:meth:`get_transfer_types` / :meth:`transfer`): Maya's
+    #: Transfer items -- label -> (MEL, the fewest source + target surfaces it
+    #: needs, whether it opens a window or tool the user finishes, what it does).
+    _TRANSFERS = {
+        "Maps": (
+            "performSurfaceSampling 1",
+            0,
+            True,
+            "Add source and target surfaces in the window, then bake.",
+        ),
+        "Attribute Values": (
+            "TransferAttributeValues",
+            2,
+            False,
+            "UVs, vertex positions and colors, source → targets.",
+        ),
+        "Shading Sets": (
+            "performTransferShadingSets 0",
+            2,
+            False,
+            "Shader assignments, source → targets.",
+        ),
+        "Vertex Order": (
+            "TransferVertexOrder",
+            2,
+            True,
+            "Click a source vertex, then the matching target vertex.",
+        ),
+    }
+
+    @classmethod
+    def get_transfer_types(cls) -> Dict[str, str]:
+        """The Transfer menu: ``{label: what it does}`` in menu order, each a
+        transfer :meth:`transfer` runs. Twin of blendertk's
+        ``Components.get_transfer_types`` (Blender's Data Transfer layers there)."""
+        return {label: spec[3] for label, spec in cls._TRANSFERS.items()}
+
+    @classmethod
+    @CoreUtils.undoable
+    def transfer(cls, objects, transfer_type: str):
+        """Run a :meth:`get_transfer_types` transfer from the first surface of
+        *objects* to the rest, as Maya's Transfer menu does. Twin of blendertk's
+        ``Components.transfer``.
+
+        Parameters:
+            objects (list/None): The surfaces, the source first; ``None`` takes the
+                selection, the source selected first (a selected component counts
+                as its object).
+            transfer_type (str): A :meth:`get_transfer_types` label.
+
+        Returns:
+            (list/None): ``[source, *targets]``; ``None`` for a window or tool the
+                user finishes (Maps, Vertex Order); ``[]`` with nothing selected.
+
+        Raises:
+            ValueError: An unknown type, or too few surfaces.
+            RuntimeError: Maya refused it.
+        """
+        spec = cls._TRANSFERS.get(transfer_type)
+        if spec is None:
+            raise ValueError(
+                f"Unknown transfer '{transfer_type}': {', '.join(cls._TRANSFERS)}."
+            )
+        command, needed, interactive, _ = spec
+        if objects is not None:
+            nodes = [str(o) for o in CoreUtils.as_strings(objects)]
+            cmds.select(nodes, replace=True) if nodes else cmds.select(clear=True)
+        surfaces = cls._transfer_surfaces()
+        if needed and not surfaces:
+            return []
+        if len(surfaces) < needed:
+            raise ValueError(
+                "A source and at least one target surface are needed: select the "
+                f"source first, then the target(s) ({len(surfaces)} of {needed} selected)."
+            )
+        mel.eval(command)
+        return None if interactive else surfaces
 
     @staticmethod
     def _bake_normals_through_deformers(target: str, transfer_nodes) -> None:
