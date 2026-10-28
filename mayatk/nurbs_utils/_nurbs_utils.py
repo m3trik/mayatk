@@ -302,10 +302,10 @@ class NurbsUtils(ptk.HelpMixin):
 
         a1 = ptk.get_angle_from_two_vectors(
             v1, v3a, degree=1
-        )  # SlotsMaya.get_angle_from_three_points(v1, p1, p2, degree=1)
+        )
         a2 = ptk.get_angle_from_two_vectors(
             v2, v3b, degree=1
-        )  # SlotsMaya.get_angle_from_three_points(v2, p1, p2, degree=1)
+        )
 
         try:
             d1, d2 = ptk.get_two_sides_of_asa_triangle(
