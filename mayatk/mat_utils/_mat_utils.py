@@ -124,6 +124,65 @@ class MatUtils(_MatUtilsInternal):
             include_displacement=include_displacement,
         )
 
+    @classmethod
+    def get_mat_names(cls, objects=None) -> List[str]:
+        """The names of the materials on *objects*, in the order :meth:`get_mats`
+        reaches them. Twin of blendertk's ``MatUtils.get_mat_names`` (a material is
+        a datablock there): what a list shared by both hosts reads.
+
+        Parameters:
+            objects: Objects or components; None reads the selection.
+
+        Returns:
+            list[str]: Material names; ``[]`` when nothing is selected.
+        """
+        return cls._get_mat_names(objects=objects)
+
+    @classmethod
+    def get_scene_mat_names(
+        cls, exclude_defaults: bool = False, exc_renderer=None
+    ) -> List[str]:
+        """The names of the scene's materials, sorted: what a material list
+        shows. Twin of blendertk's ``MatUtils.get_scene_mat_names``.
+
+        Parameters:
+            exclude_defaults (bool): Drop Maya's built-in defaults (``lambert1``,
+                ``standardSurface1``, ...).
+            exc_renderer (str/list): Drop these renderers' shaders: ``"arnold"``
+                is the ``rendernode/arnold*`` classification (the parallel preview
+                shaders the Arnold bridge adds, say).
+
+        Returns:
+            list[str]: Material names, sorted by short name.
+        """
+        return cls._get_scene_mat_names(
+            exclude_defaults=exclude_defaults, exc_renderer=exc_renderer
+        )
+
+    @classmethod
+    def get_mat_facts(cls, materials) -> Dict[str, Dict[str, Any]]:
+        """What a material list shows per material, and what needs attention:
+        ``{name: {"type", "users", "textures", "missing", "duplicate_of",
+        "unused"}}``. Twin of blendertk's ``MatUtils.get_mat_facts``.
+
+        - ``type``: the node type. ``users``: the objects in the shading engines
+          downstream of it. ``textures``: the file nodes in its network.
+        - ``missing``: the file names whose stored path does not resolve the way
+          Maya will (:meth:`resolve_path`, no search).
+        - ``duplicate_of``: the material it is a verified duplicate of, among
+          *materials* (:meth:`find_duplicate_materials`), or None.
+        - ``unused``: nothing renders it (:meth:`is_mat_assigned`: a lambert
+          inside an assigned layered network is in use, as Maya's Delete Unused
+          reads it). A built-in default never counts as unused.
+
+        Parameters:
+            materials: Material names; one that no longer exists is left out.
+
+        Returns:
+            dict: ``{name: facts}`` for each existing material in *materials*.
+        """
+        return cls._get_mat_facts(materials=materials)
+
     @staticmethod
     def group_objects_by_material(
         objects, cluster_by_distance=False, threshold=10000.0
@@ -196,18 +255,49 @@ class MatUtils(_MatUtilsInternal):
         )
 
     @classmethod
+    def get_texture_scopes(cls) -> Dict[str, Callable[[], List[str]]]:
+        """``{label: () -> [path]}``: the selections a texture-file tool (Map
+        Converter) can read its files from, Maya's way -- Selected Objects,
+        Selected Materials, Selected File Nodes. Each provider reads the CURRENT
+        selection when called and leaves Maya's bundled maps out
+        (:meth:`get_texture_paths` ``exclude_bundled``: those tools write).
+        Twin of blendertk's ``MatUtils.get_texture_scopes``.
+        """
+        return cls._get_texture_scopes()
+
+    @classmethod
     def get_texture_info(
         cls,
         objects=None,
         materials=None,
         file_nodes=None,
         texture_names=None,
+        exclude_defaults: bool = False,
+        exclude_unassigned: bool = False,
     ):
         """Get image metadata (size, mode, format) for texture files in scope.
 
         Heavy: opens every texture with PIL. For path-only callers, use
         :meth:`get_texture_paths` instead.
+
+        Parameters:
+            objects / materials / file_nodes / texture_names: The scope (see
+                :meth:`get_texture_paths`); none given: every scene texture.
+            exclude_defaults (bool): With no scope given, read the textures of the
+                scene's materials but Maya's built-in defaults (the
+                :meth:`get_mat_info` filter).
+            exclude_unassigned (bool): With no scope given, read only the textures
+                of the materials geometry uses (:meth:`is_mat_assigned`).
         """
+        unscoped = all(
+            scope is None for scope in (objects, materials, file_nodes, texture_names)
+        )
+        if unscoped and (exclude_defaults or exclude_unassigned):
+            materials = cls.get_scene_mats(exclude_defaults=exclude_defaults) or []
+            if exclude_unassigned:
+                materials = [m for m in materials if cls.is_mat_assigned(m)]
+            if not materials:
+                return []
         return cls._get_texture_info(
             objects=objects,
             materials=materials,
@@ -587,9 +677,78 @@ class MatUtils(_MatUtilsInternal):
 
     @staticmethod
     @CoreUtils.undoable
-    def assign_mat(objects, mat_name):
-        """Assigns a material to a list of objects or components."""
-        return MatUtils._assign_mat(objects=objects, mat_name=mat_name)
+    def assign_mat(objects, mat_name, create: bool = True):
+        """Assigns a material to a list of objects or components.
+
+        Parameters:
+            objects: The objects or components (faces) to assign it to.
+            mat_name (str): The material.
+            create (bool): Make a standard material of that name when there is
+                none (the historic behavior). False raises ``ValueError``
+                instead: a list assigning the material it shows must not
+                conjure a new one when that one was deleted meanwhile.
+        """
+        return MatUtils._assign_mat(objects=objects, mat_name=mat_name, create=create)
+
+    @classmethod
+    @CoreUtils.undoable
+    def assign_random_mat(cls, objects=None, previous=None) -> str:
+        """Assign a new random-colored material to *objects*, one undo step.
+        Twin of blendertk's ``MatUtils.assign_random_mat``.
+
+        A re-roll replaces: *previous* (what an earlier call made) is deleted
+        when nothing uses it any more. The selection is kept (making the shader
+        would select it).
+
+        Parameters:
+            objects: Objects or components; None: the selection.
+            previous (str, optional): The material an earlier call made.
+
+        Returns:
+            str: The new material's name.
+
+        Raises:
+            ValueError: Nothing to assign it to.
+        """
+        return cls._assign_random_mat(objects=objects, previous=previous)
+
+    @classmethod
+    def assign_new_mat(cls, objects=None) -> Optional[str]:
+        """Assign a new material Maya's way: its Assign New Material window, over
+        the selection (*objects* are selected first when given). Returns None:
+        what is made is the user's pick there. Twin of blendertk's
+        ``MatUtils.assign_new_mat``, which makes one and returns its name.
+
+        Raises:
+            ValueError: No renderable geometry is selected.
+        """
+        return cls._assign_new_mat(objects=objects)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def rename_mat(material: str, name: str) -> str:
+        """Rename *material* to *name*, one undo step. Twin of blendertk's
+        ``MatUtils.rename_mat``.
+
+        Returns:
+            str: The name Maya gave it (it adjusts invalid characters and clashes).
+
+        Raises:
+            ValueError: No material named *material*.
+            RuntimeError: Maya refused (a read-only or locked node).
+        """
+        return MatUtils._rename_mat(material=material, name=name)
+
+    @staticmethod
+    @CoreUtils.undoable
+    def delete_mats(materials) -> List[str]:
+        """Delete the named materials, one undo step; a name that no longer
+        exists is skipped. Twin of blendertk's ``MatUtils.delete_mats``.
+
+        Returns:
+            list[str]: The materials deleted.
+        """
+        return MatUtils._delete_mats(materials=materials)
 
     @staticmethod
     def claim_material_name(shading_group: str, desired: str) -> str:
@@ -818,6 +977,61 @@ class MatUtils(_MatUtilsInternal):
             list[str]: Full-path transforms, in scene order.
         """
         return cls._find_unassigned(objects=objects, include_default=include_default)
+
+    @classmethod
+    @CoreUtils.undoable
+    def select_by_mat(
+        cls, material: str, objects=None, shell: bool = False, add: bool = False
+    ) -> List[str]:
+        """Select what carries *material* (:meth:`find_by_mat_id`), one undo
+        step. Twin of blendertk's ``MatUtils.select_by_mat``.
+
+        Parameters:
+            material (str): The material.
+            objects: Search only these (a component stands for its object);
+                None or empty: the whole scene.
+            shell (bool): Whole objects instead of the faces it is assigned to.
+            add (bool): Add to the selection instead of replacing it.
+
+        Returns:
+            list[str]: What was selected; ``[]``, the selection untouched, when
+            nothing carries it.
+
+        Raises:
+            ValueError: No material named *material*.
+        """
+        return cls._select_by_mat(
+            material=material, objects=objects, shell=shell, add=add
+        )
+
+    @classmethod
+    @CoreUtils.undoable
+    def select_unassigned(cls, objects=None, add: bool = False) -> List[str]:
+        """Select the objects carrying no material (:meth:`find_unassigned`), one
+        undo step. Twin of blendertk's ``MatUtils.select_unassigned``.
+
+        Parameters:
+            objects: Search only these; None or empty: the whole scene.
+            add (bool): Add to the selection instead of replacing it.
+
+        Returns:
+            list[str]: What was selected; ``[]`` when every object has one.
+        """
+        return cls._select_unassigned(objects=objects, add=add)
+
+    @classmethod
+    def show_mat_attributes(cls, material: str) -> List[str]:
+        """Show *material*'s attributes: select its node and open the Attribute
+        Editor on it. Twin of blendertk's ``MatUtils.show_mat_attributes`` (the
+        Material Properties there).
+
+        Returns:
+            list[str]: ``[material]``.
+
+        Raises:
+            ValueError: No material named *material*.
+        """
+        return cls._show_mat_attributes(material=material)
 
     @staticmethod
     @ptk.filter_results
@@ -1258,6 +1472,40 @@ class MatUtils(_MatUtilsInternal):
             materials=materials, delete=delete, strict=strict, verify=verify
         )
 
+    @classmethod
+    def find_duplicate_materials(cls, materials=None) -> Dict[str, str]:
+        """``{duplicate: original}``: each verified duplicate among *materials*
+        (None: every scene material) and the material it duplicates
+        (:meth:`find_materials_with_duplicate_textures`, flattened). Twin of
+        blendertk's ``MatUtils.find_duplicate_materials``.
+        """
+        return cls._find_duplicate_materials(materials=materials)
+
+    @classmethod
+    @CoreUtils.undoable
+    def merge_duplicate_materials(cls, pairs: Dict[str, str]) -> int:
+        """Merge each ``{duplicate: original}`` pair into its original
+        (:meth:`reassign_duplicate_materials`, re-verified), one undo step. Twin
+        of blendertk's ``MatUtils.merge_duplicate_materials``.
+
+        Returns:
+            int: How many duplicates went -- counted after, as the merge skips an
+            original with no shading engine and only warns on a failed pair.
+        """
+        return cls._merge_duplicate_materials(pairs=pairs)
+
+    @classmethod
+    @CoreUtils.undoable
+    def delete_unused_materials(cls) -> List[str]:
+        """Delete what nothing uses, Maya's way (the Hypershade's Delete Unused
+        Nodes, ``MLdeleteUnused``: an unused material's textures go with it), one
+        undo step. Twin of blendertk's ``MatUtils.delete_unused_materials``.
+
+        Returns:
+            list[str]: The materials deleted, sorted.
+        """
+        return cls._delete_unused_materials()
+
     @staticmethod
     def filter_materials_by_objects(
         objects: List[str],
@@ -1279,9 +1527,15 @@ class MatUtils(_MatUtilsInternal):
         refresh_viewport=False,
         refresh_hypershade=False,
         texture_types: Optional[List[str]] = None,
+        reset_viewport: bool = False,
     ):
-        """Reloads textures connected to specified materials with inclusion/exclusion filters."""
-        return MatUtils._reload_textures(
+        """Reloads textures connected to specified materials with inclusion/exclusion filters.
+
+        ``reset_viewport`` then restarts Viewport 2.0
+        (``DisplayUtils.reset_viewport``), clearing the scrambled textures a
+        reload can leave on screen. Twin of blendertk's ``reload_textures``.
+        """
+        result = MatUtils._reload_textures(
             materials=materials,
             inc=inc,
             exc=exc,
@@ -1290,6 +1544,11 @@ class MatUtils(_MatUtilsInternal):
             refresh_hypershade=refresh_hypershade,
             texture_types=texture_types,
         )
+        if reset_viewport:
+            from mayatk.display_utils._display_utils import DisplayUtils
+
+            DisplayUtils.reset_viewport()
+        return result
 
     @classmethod
     def move_texture_files(

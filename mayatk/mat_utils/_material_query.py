@@ -28,6 +28,87 @@ class _MaterialQueryInternal:
     """Private helpers and ``MatUtils`` method bodies; see the module docstring."""
 
     @classmethod
+    def _get_mat_names(cls, objects):
+        """Body of :meth:`MatUtils.get_mat_names`."""
+        return [str(m) for m in cls.get_mats(objects)]
+
+    @classmethod
+    def _get_scene_mat_names(cls, exclude_defaults, exc_renderer):
+        """Body of :meth:`MatUtils.get_scene_mat_names`."""
+        classifications = [
+            f"rendernode/{str(r).lower()}*" for r in ptk.make_iterable(exc_renderer) if r
+        ]
+        mats = cls.get_scene_mats(
+            sort=True,
+            exclude_defaults=exclude_defaults,
+            exc_classification=classifications or None,
+        )
+        return [str(m) for m in mats or []]
+
+    @staticmethod
+    def _mat_history_nodes(node, node_type, **flags):
+        """The *node_type* nodes in *node*'s history (``listHistory`` *flags*);
+        none for an empty history (an argless ``ls`` would list the scene)."""
+        history = cmds.listHistory(node, **flags) or []
+        return (cmds.ls(history, type=node_type) or []) if history else []
+
+    @classmethod
+    def _get_mat_facts(cls, materials):
+        """Body of :meth:`MatUtils.get_mat_facts`."""
+        live = [
+            str(m) for m in ptk.make_iterable(materials) if m and cmds.objExists(str(m))
+        ]
+        defaults = set(cmds.ls(defaultNodes=True) or [])
+        duplicate_of = cls._find_duplicate_materials(live) if len(live) > 1 else {}
+        facts = {}
+        for name in live:
+            users = {
+                member.split(".", 1)[0]
+                for sg in set(cls._mat_history_nodes(name, "shadingEngine", future=True))
+                for member in cmds.sets(sg, query=True) or []
+            }
+            files = cls._mat_history_nodes(name, "file", pruneDagObjects=True)
+            missing = [
+                os.path.basename(path)
+                for path in (cmds.getAttr(f"{node}.fileTextureName") for node in files)
+                if path and not cls._resolve_path(path=path, search=False)
+            ]
+            facts[name] = {
+                "type": cmds.nodeType(name),
+                "users": len(users),
+                "textures": len(files),
+                "missing": missing,
+                "duplicate_of": duplicate_of.get(name),
+                "unused": name not in defaults and not cls._is_mat_assigned(mat=name),
+            }
+        return facts
+
+    @classmethod
+    def _get_texture_scopes(cls):
+        """Body of :meth:`MatUtils.get_texture_scopes`."""
+
+        def _paths(**scope):
+            return cls.get_texture_paths(exclude_bundled=True, **scope)
+
+        def _objects():
+            selection = cmds.ls(selection=True, long=True) or []
+            return _paths(objects=selection) if selection else []
+
+        def _materials():
+            mats = cmds.ls(selection=True, materials=True) or []
+            return _paths(materials=mats) if mats else []
+
+        def _file_nodes():
+            nodes = cmds.ls(selection=True, type="file") or []
+            return _paths(file_nodes=nodes) if nodes else []
+
+        return {
+            "Selected Objects": _objects,
+            "Selected Materials": _materials,
+            "Selected File Nodes": _file_nodes,
+        }
+
+    @classmethod
     def _resolve_texture_targets(
         cls,
         objects: Optional[List[Any]] = None,

@@ -2630,10 +2630,14 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
 - **[`class MatUtils(_MatUtilsInternal)`](mayatk/mayatk/mat_utils/_mat_utils.py#L65)**
   - `MatUtils.resolve_path(path: str, search: bool = True) -> Union[str, None]` *(static)* — Resolve a texture path, expanding env vars and tile/frame tokens.
   - `MatUtils.get_mats(objs=None, *, mat_type=None, include_displacement=False) -> List[str]` *(static)* — Returns the materials assigned to a given list of objects or components.
+  - `MatUtils.get_mat_names(cls, objects=None) -> List[str]` *(class)* — The names of the materials on *objects*, in the order :meth:`get_mats`
+  - `MatUtils.get_scene_mat_names(cls, exclude_defaults: bool = False, exc_renderer=None) -> List[str]` *(class)* — The names of the scene's materials, sorted: what a material list
+  - `MatUtils.get_mat_facts(cls, materials) -> Dict[str, Dict[str, Any]]` *(class)* — What a material list shows per material, and what needs attention:
   - `MatUtils.group_objects_by_material(objects, cluster_by_distance=False, threshold=10000.0)` *(static)* — Groups objects based on their assigned material(s).
   - `MatUtils.is_bundled_texture(path: str) -> bool` *(static)* — Does *path* live inside Maya's own installation?
   - `MatUtils.get_texture_paths(cls, objects: Optional[List[Any]] = None, materials: Optional[List[Any]] = None, file_nodes: Optional[List[Any]] = None, texture_names: Optional[List[str]] = None, absolute: bool = True, exclude_bundled: bool = False) -> List[str]` *(class)* — Resolve unique texture file paths for the given scope.
-  - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
+  - `MatUtils.get_texture_scopes(cls) -> Dict[str, Callable[[], List[str]]]` *(class)* — ``{label: () -> [path]}``: the selections a texture-file tool (Map
+  - `MatUtils.get_texture_info(cls, objects=None, materials=None, file_nodes=None, texture_names=None, exclude_defaults: bool = False, exclude_unassigned: bool = False)` *(class)* — Get image metadata (size, mode, format) for texture files in scope.
   - `MatUtils.get_mat_info(cls, materials: Optional[List[Any]] = None, objects: Optional[List[Any]] = None, optimize_check: bool = False, progress_callback: Optional[Callable[[int, int, str], None]] = None, exclude_defaults: bool = False, exclude_unassigned: bool = False, include_textures: bool = True, include_image_metadata: bool = True, **optimize_kwargs) -> List[Dict[str, Any]]` *(class)* — Aggregate per-material info: name, type, textures + image metadata.
   - `MatUtils.format_texture_info_text(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as a plain-text report (``pythontk.MatReport``).
   - `MatUtils.format_texture_info_html(cls, info_list: List[Dict[str, Any]]) -> str` *(class)* — Render :meth:`get_texture_info` output as styled HTML (``pythontk.MatReport``).
@@ -2652,7 +2656,11 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `MatUtils.is_mat_assigned(mat: object) -> bool` *(static)* — True iff a shading engine downstream of *mat* has a DAG member.
   - `MatUtils.is_connected(mat: object, delete: bool = False) -> bool` *(static)* — True when *mat* reaches no shading engine -- its own or one it feeds
   - `MatUtils.create_mat(mat_type, prefix='', name='')` *(static)* — Creates a material based on the provided type or a random material if 'mat_type' is 'random'.
-  - `MatUtils.assign_mat(objects, mat_name)` *(static)* — Assigns a material to a list of objects or components.
+  - `MatUtils.assign_mat(objects, mat_name, create: bool = True)` *(static)* — Assigns a material to a list of objects or components.
+  - `MatUtils.assign_random_mat(cls, objects=None, previous=None) -> str` *(class)* — Assign a new random-colored material to *objects*, one undo step.
+  - `MatUtils.assign_new_mat(cls, objects=None) -> Optional[str]` *(class)* — Assign a new material Maya's way: its Assign New Material window, over
+  - `MatUtils.rename_mat(material: str, name: str) -> str` *(static)* — Rename *material* to *name*, one undo step.
+  - `MatUtils.delete_mats(materials) -> List[str]` *(static)* — Delete the named materials, one undo step;
   - `MatUtils.claim_material_name(shading_group: str, desired: str) -> str` *(static)* — Rename a rebuilt network to *desired* once that name is free.
   - `MatUtils.get_shading_assignments(obj) -> Dict[str, Optional[List[int]]]` *(static)* — Snapshot a mesh's shading-group membership as plain data.
   - `MatUtils.apply_shading_assignments(obj, assignments: Dict[str, Optional[List[int]]])` *(static)* — Apply a :meth:`get_shading_assignments` snapshot onto *obj*.
@@ -2665,6 +2673,9 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `MatUtils.create_stingray_shader(cls, name, *, opacity_mode=None)` *(class)* — Create a StingrayPBS shader by loading a ShaderFX preset graph.
   - `MatUtils.find_by_mat_id(cls, material: str, objects: Optional[List[str]] = None, shell: bool = False) -> List[str]` *(class)* — Find objects or faces by the material ID.
   - `MatUtils.find_unassigned(cls, objects: Optional[List[str]] = None, include_default: bool = True) -> List[str]` *(class)* — Objects carrying no material — the complement of :meth:`find_by_mat_id`.
+  - `MatUtils.select_by_mat(cls, material: str, objects=None, shell: bool = False, add: bool = False) -> List[str]` *(class)* — Select what carries *material* (:meth:`find_by_mat_id`), one undo
+  - `MatUtils.select_unassigned(cls, objects=None, add: bool = False) -> List[str]` *(class)* — Select the objects carrying no material (:meth:`find_unassigned`), one
+  - `MatUtils.show_mat_attributes(cls, material: str) -> List[str]` *(class)* — Show *material*'s attributes: select its node and open the Attribute
   - `MatUtils.collect_material_paths(materials: Optional[List[str]] = None, attributes: Optional[List[str]] = None, inc_mat_name: bool = False, inc_path_type: bool = False, resolve_full_path: bool = False) -> Union[List[str], List[Tuple[str, ...]]]` *(static)* — Collects specified attributes file paths for given materials.
   - `MatUtils.remap_file_nodes(file_paths: List[str], target_dir: str, silent: bool = False, limit_to_nodes: Optional[List[str]] = None, as_strings: bool = True) -> List[str]` *(static)* — Internal helper to remap file nodes to target_dir, preserving relative subfolders inside sourceimag…
   - `MatUtils.remap_texture_paths(cls, materials: Optional[List[str]] = None, new_dir: Optional[str] = None, silent: bool = False, file_nodes: Optional[List[str]] = None, objects: Optional[List[str]] = None, as_strings: bool = True) -> None` *(class)* — Remaps file texture paths for materials to new_dir.
@@ -2676,8 +2687,11 @@ The scene record a lightmap bake leaves in Maya: markers, manifest, and the file
   - `MatUtils.is_duplicate_material(material1: str, material2: str) -> bool` *(static)* — Check if two materials are duplicates based on their textures.
   - `MatUtils.find_materials_with_duplicate_textures(cls, materials: Optional[List[str]] = None, strict: bool = False, verify: bool = True) -> Dict[str, List[str]]` *(class)* — Find duplicate materials based on their texture file names or full paths.
   - `MatUtils.reassign_duplicate_materials(cls, materials: Optional[List[str]] = None, delete: bool = False, strict: bool = False, verify: bool = True) -> None` *(class)* — Find duplicate materials, remove duplicates, and reassign them to the original material.
+  - `MatUtils.find_duplicate_materials(cls, materials=None) -> Dict[str, str]` *(class)* — ``{duplicate: original}``: each verified duplicate among *materials*
+  - `MatUtils.merge_duplicate_materials(cls, pairs: Dict[str, str]) -> int` *(class)* — Merge each ``{duplicate: original}`` pair into its original
+  - `MatUtils.delete_unused_materials(cls) -> List[str]` *(class)* — Delete what nothing uses, Maya's way (the Hypershade's Delete Unused
   - `MatUtils.filter_materials_by_objects(objects: List[str], *, include_displacement: bool = False) -> List[str]` *(static)* — Filter materials assigned to the given objects.
-  - `MatUtils.reload_textures(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)` *(static)* — Reloads textures connected to specified materials with inclusion/exclusion filters.
+  - `MatUtils.reload_textures(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None, reset_viewport: bool = False)` *(static)* — Reloads textures connected to specified materials with inclusion/exclusion filters.
   - `MatUtils.move_texture_files(cls, found_files: List[Union[str, Tuple[str, str]]], new_dir: str, delete_old: bool = False, create_dir: bool = True, per_file_timeout: float = 120.0, max_workers: int = 8, progress_callback: Optional[Callable[[int, int, str], bool]] = None) -> List[Tuple[str, str]]` *(class)* — Move or copy found texture files to a new directory.
   - `MatUtils.copy_textures_to_sourceimages(cls, objects: Optional[List[str]] = None, materials: Optional[List[str]] = None, file_nodes: Optional[List[str]] = None, sourceimages_dir: Optional[str] = None, delete_old: bool = False) -> List[Tuple[str, str]]` *(class)* — Copy referenced textures that live outside ``sourceimages`` into it.
   - `MatUtils.find_texture_files(cls, objects: Optional[List[str]] = None, source_dir: str = '', recursive: bool = True, return_dir: bool = False, quiet: bool = False, file_nodes: Optional[List[str]] = None, materials: Optional[List[str]] = None, progress_callback: Optional[Callable[[int, int, str], None]] = None, filenames: Optional[List[str]] = None) -> List[Union[str, Tuple[str, str]]]` *(class)* — Find texture files for given objects' materials inside source_dir.

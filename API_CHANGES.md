@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (440)
+## Added (454)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1193,6 +1193,20 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_lights(cls, scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.scope_meshes(scope: str = 'selected') -> List[str]`
 - `light_utils/lightmap_baker/lightmap_baker.py::LightmapBaker.select(objects) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.assign_new_mat(cls, objects=None) -> Optional[str]`
+- `mat_utils/_mat_utils.py::MatUtils.assign_random_mat(cls, objects=None, previous=None) -> str`
+- `mat_utils/_mat_utils.py::MatUtils.delete_mats(materials) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.delete_unused_materials(cls) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.find_duplicate_materials(cls, materials=None) -> Dict[str, str]`
+- `mat_utils/_mat_utils.py::MatUtils.get_mat_facts(cls, materials) -> Dict[str, Dict[str, Any]]`
+- `mat_utils/_mat_utils.py::MatUtils.get_mat_names(cls, objects=None) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.get_scene_mat_names(cls, exclude_defaults: bool = False, exc_renderer=None) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.get_texture_scopes(cls) -> Dict[str, Callable[[], List[str]]]`
+- `mat_utils/_mat_utils.py::MatUtils.merge_duplicate_materials(cls, pairs: Dict[str, str]) -> int`
+- `mat_utils/_mat_utils.py::MatUtils.rename_mat(material: str, name: str) -> str`
+- `mat_utils/_mat_utils.py::MatUtils.select_by_mat(cls, material: str, objects=None, shell: bool = False, add: bool = False) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.select_unassigned(cls, objects=None, add: bool = False) -> List[str]`
+- `mat_utils/_mat_utils.py::MatUtils.show_mat_attributes(cls, material: str) -> List[str]`
 - `mat_utils/arnold_bridge.py::ArnoldBridge.base_materials() -> List[str]`
 - `mat_utils/arnold_bridge.py::ArnoldBridge.select_bridged(self) -> List[str]`
 - `mat_utils/bake_sets.py::BakeSet.member_names(cls) -> List[str]`
@@ -1407,7 +1421,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (19)
+## Signature changed (22)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
@@ -1433,6 +1447,15 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `edit_utils/selection.py::Selection.select_by_type`
   - was: `(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace') -> List[object]`
   - now: `(selection_type: str, objects: List[Union[str, object]] = None, mode: str = 'replace', scope: str = None) -> List[object]`
+- `mat_utils/_mat_utils.py::MatUtils.assign_mat`
+  - was: `(objects, mat_name)`
+  - now: `(objects, mat_name, create: bool = True)`
+- `mat_utils/_mat_utils.py::MatUtils.get_texture_info`
+  - was: `(cls, objects=None, materials=None, file_nodes=None, texture_names=None)`
+  - now: `(cls, objects=None, materials=None, file_nodes=None, texture_names=None, exclude_defaults: bool = False, exclude_unassigned: bool = False)`
+- `mat_utils/_mat_utils.py::MatUtils.reload_textures`
+  - was: `(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None)`
+  - now: `(materials=None, inc=None, exc=None, log=False, refresh_viewport=False, refresh_hypershade=False, texture_types: Optional[List[str]] = None, reset_viewport: bool = False)`
 - `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.restore_template`
   - was: `(file_path, texture_paths=None, name=None, logger=None)`
   - now: `(cls, file_path, texture_paths=None, name=None, logger=None)`

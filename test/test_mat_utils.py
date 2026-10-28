@@ -2681,5 +2681,174 @@ class TestFindTextureFilesByName(MayaTkTestCase):
         self.assertEqual([os.path.basename(d) for _s, d in copied], ["dup.png"])
 
 
+class TestNamedMaterialOperations(MayaTkTestCase):
+    """The name-based operations a material list drives (tentacle's Materials
+    panel, through ``self.tk``): one material fine, its duplicate, one missing
+    its texture, one nothing uses.
+    Added: 2026-10-28 (were the hooks of tentacle's per-host material slots)."""
+
+    def setUp(self):
+        super().setUp()
+        import pythontk as ptk
+
+        store = ptk.TempArtifacts.scoped("mtk_named_mats")
+        self.addCleanup(store.cleanup, force=True)
+        tex = os.path.join(store.dir_path(), "Crate_BaseColor.png").replace("\\", "/")
+        with open(tex, "wb") as fh:
+            fh.write(b"crate")
+        gone = os.path.join(store.dir_path(), "gone", "Wood_BaseColor.png")
+        gone = gone.replace("\\", "/")
+        for name, path in (("crateA", tex), ("crateB", tex), ("wood", gone)):
+            cube = cmds.polyCube(name=f"{name}_geo")[0]
+            mat = cmds.shadingNode("lambert", asShader=True, name=f"{name}_mat")
+            node = cmds.shadingNode("file", asTexture=True, name=f"{name}_file")
+            cmds.setAttr(f"{node}.fileTextureName", path, type="string")
+            cmds.connectAttr(f"{node}.outColor", f"{mat}.color")
+            MatUtils.assign_mat(cube, mat)
+        cmds.shadingNode("lambert", asShader=True, name="old_mat")
+        cmds.select(clear=True)
+
+    def test_scene_mat_names_are_sorted_names(self):
+        names = MatUtils.get_scene_mat_names()
+        self.assertLessEqual({"crateA_mat", "crateB_mat", "wood_mat", "old_mat"}, set(names))
+        self.assertEqual(names, sorted(names, key=mtk.CoreUtils.short_name))
+        self.assertIn("lambert1", names)
+        self.assertNotIn("lambert1", MatUtils.get_scene_mat_names(exclude_defaults=True))
+
+    def test_mat_names_of_the_selection_or_given_objects(self):
+        self.assertEqual(MatUtils.get_mat_names(), [], "nothing selected")
+        cmds.select("crateA_geo", "wood_geo")
+        self.assertEqual(sorted(MatUtils.get_mat_names()), ["crateA_mat", "wood_mat"])
+        self.assertEqual(MatUtils.get_mat_names(["wood_geo"]), ["wood_mat"])
+
+    def test_the_facts_flag_what_needs_attention(self):
+        names = ["crateA_mat", "crateB_mat", "wood_mat", "old_mat", "lambert1", "nope"]
+        facts = MatUtils.get_mat_facts(names)
+        self.assertNotIn("nope", facts, "a name gone is left out")
+        self.assertEqual(facts["crateB_mat"]["duplicate_of"], "crateA_mat")
+        self.assertIsNone(facts["crateA_mat"]["duplicate_of"])
+        self.assertEqual(facts["wood_mat"]["missing"], ["Wood_BaseColor.png"])
+        self.assertEqual(facts["crateA_mat"]["missing"], [])
+        self.assertTrue(facts["old_mat"]["unused"])
+        self.assertFalse(facts["lambert1"]["unused"], "a default is never unused")
+        self.assertEqual(
+            (facts["crateA_mat"]["users"], facts["crateA_mat"]["textures"]), (1, 1)
+        )
+        self.assertEqual(facts["crateA_mat"]["type"], "lambert")
+
+    def test_a_material_inside_an_assigned_layered_network_is_in_use(self):
+        """A lambert feeding an assigned layeredShader is used (Maya's Delete
+        Unused keeps it)."""
+        cube = cmds.polyCube(name="layered_geo")[0]
+        layer = cmds.shadingNode("lambert", asShader=True, name="layer_mat")
+        layered = cmds.shadingNode("layeredShader", asShader=True, name="layered_mat")
+        cmds.connectAttr(f"{layer}.outColor", f"{layered}.inputs[0].color")
+        MatUtils.assign_mat(cube, layered)
+        facts = MatUtils.get_mat_facts(["layer_mat", "layered_mat"])
+        self.assertFalse(facts["layer_mat"]["unused"])
+        self.assertEqual(facts["layer_mat"]["users"], 1)
+        self.assertFalse(facts["layered_mat"]["unused"])
+
+    def test_a_duplicate_is_found_and_merged_into_its_original(self):
+        self.assertEqual(MatUtils.find_duplicate_materials(), {"crateB_mat": "crateA_mat"})
+        self.assertEqual(MatUtils.find_duplicate_materials([]), {})
+        self.assertEqual(MatUtils.merge_duplicate_materials({"crateB_mat": "crateA_mat"}), 1)
+        self.assertFalse(cmds.objExists("crateB_mat"))
+        self.assertEqual(MatUtils.get_mat_names(["crateB_geo"]), ["crateA_mat"])
+
+    def test_the_merge_counts_what_went_not_what_was_asked(self):
+        """An original with no shading engine: the merge skips the pair."""
+        for mat in ("crateA_mat", "crateB_mat"):
+            cmds.delete(sorted(set(cmds.listConnections(mat, type="shadingEngine"))))
+        self.assertEqual(MatUtils.merge_duplicate_materials({"crateB_mat": "crateA_mat"}), 0)
+        self.assertTrue(cmds.objExists("crateB_mat"))
+        self.assertEqual(MatUtils.merge_duplicate_materials({"nope": "crateA_mat"}), 0)
+
+    def test_delete_mats_is_one_undo(self):
+        cmds.undoInfo(state=True)
+        self.assertEqual(
+            MatUtils.delete_mats(["old_mat", "wood_mat", "nope"]), ["old_mat", "wood_mat"]
+        )
+        self.assertFalse(cmds.objExists("old_mat") or cmds.objExists("wood_mat"))
+        cmds.undo()
+        self.assertTrue(cmds.objExists("old_mat") and cmds.objExists("wood_mat"))
+
+    def test_rename_mat_returns_the_name_maya_gave(self):
+        self.assertEqual(MatUtils.rename_mat("old_mat", "retired_mat"), "retired_mat")
+        self.assertTrue(cmds.objExists("retired_mat"))
+        with self.assertRaises(ValueError):
+            MatUtils.rename_mat("nope", "anything")
+
+    def test_assign_mat_without_create_refuses_a_missing_material(self):
+        with self.assertRaises(ValueError):
+            MatUtils.assign_mat(["wood_geo"], "nope", create=False)
+        self.assertFalse(cmds.objExists("nope"))
+        MatUtils.assign_mat(["wood_geo"], "made_mat")  # the historic default
+        self.assertEqual(MatUtils.get_mat_names(["wood_geo"]), ["made_mat"])
+
+    def test_select_by_mat_selects_its_objects_and_add_keeps_the_rest(self):
+        self.assertEqual(len(MatUtils.select_by_mat("wood_mat", shell=True)), 1)
+        self.assertEqual(cmds.ls(sl=True), ["wood_geo"])
+        MatUtils.select_by_mat("crateA_mat", shell=True, add=True)
+        self.assertEqual(sorted(cmds.ls(sl=True)), ["crateA_geo", "wood_geo"])
+        with self.assertRaises(ValueError):
+            MatUtils.select_by_mat("nope")
+
+    def test_select_by_mat_within_objects_and_nothing_found_keeps_the_selection(self):
+        cmds.select("crateA_geo.f[0]")
+        self.assertEqual(
+            MatUtils.select_by_mat("wood_mat", ["crateA_geo.f[0]"], shell=True), []
+        )
+        self.assertEqual(cmds.ls(sl=True), ["crateA_geo.f[0]"])
+        found = MatUtils.select_by_mat("crateA_mat", ["crateA_geo.f[0]"], shell=True)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(cmds.ls(sl=True), ["crateA_geo"])
+
+    def test_select_unassigned(self):
+        bare = cmds.polyCube(name="bare_geo")[0]
+        found = MatUtils.select_unassigned()
+        self.assertEqual([n.rsplit("|", 1)[-1] for n in found], [bare])
+        self.assertEqual(cmds.ls(sl=True), [bare])
+
+    def test_assign_random_mat_replaces_what_the_last_one_made(self):
+        cube = cmds.polyCube(name="rnd_geo")[0]
+        cmds.select(cube)
+        first = MatUtils.assign_random_mat()
+        self.assertEqual(MatUtils.get_mat_names([cube]), [first])
+        self.assertEqual(cmds.ls(sl=True), [cube], "the selection is kept")
+        second = MatUtils.assign_random_mat([cube], previous=first)
+        self.assertFalse(cmds.objExists(first), "nothing used it any more")
+        self.assertEqual(MatUtils.get_mat_names([cube]), [second])
+        third = MatUtils.assign_random_mat(["wood_geo"], previous=second)
+        self.assertTrue(cmds.objExists(second), "still on rnd_geo")
+        self.assertNotEqual(third, second)
+
+    def test_assign_random_and_new_mat_need_something_selected(self):
+        cmds.select(clear=True)
+        with self.assertRaises(ValueError):
+            MatUtils.assign_random_mat()
+        with self.assertRaises(ValueError):
+            MatUtils.assign_new_mat()
+
+    def test_delete_unused_materials_names_what_went(self):
+        removed = MatUtils.delete_unused_materials()
+        self.assertIn("old_mat", removed)
+        self.assertFalse(cmds.objExists("old_mat"))
+        self.assertNotIn("crateA_mat", removed)
+        self.assertTrue(cmds.objExists("crateA_mat"))
+
+    def test_texture_scopes_read_the_current_selection(self):
+        scopes = MatUtils.get_texture_scopes()
+        self.assertEqual(
+            list(scopes), ["Selected Objects", "Selected Materials", "Selected File Nodes"]
+        )
+        self.assertTrue(all(scope() == [] for scope in scopes.values()), "nothing selected")
+        cmds.select("crateA_geo")
+        self.assertEqual(
+            [os.path.basename(p) for p in scopes["Selected Objects"]()],
+            ["Crate_BaseColor.png"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
