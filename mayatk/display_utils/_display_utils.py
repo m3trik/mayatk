@@ -638,16 +638,22 @@ class DisplayUtils(ptk.HelpMixin):
         return shapes
 
     @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
     def toggle_xray(
-        cls, objects: Union[str, object, List]
+        cls, objects: Union[str, object, List] = None
     ) -> Optional[Tuple[bool, int]]:
         """Uniform x-ray toggle: if ANY shape is off, turn them ALL on; only a
         fully x-rayed set turns off. A blind per-object invert would desync a
-        set that a topology op had already knocked out of step.
+        set that a topology op had already knocked out of step. Twin of
+        blendertk's ``DisplayUtils.toggle_xray`` (``show_in_front``).
+
+        Parameters:
+            objects: Node(s) or component(s); ``None``: the selection.
 
         Returns:
             tuple: (applied state, shape count), or None when there was nothing
-            to operate on.
+            to operate on; ``[]`` with nothing selected.
         """
         shapes = cls.get_surface_shapes(objects)
         if not shapes:
@@ -670,6 +676,320 @@ class DisplayUtils(ptk.HelpMixin):
             state = cmds.modelEditor(panel, query=True, xray=True)
             cmds.modelEditor(panel, edit=True, xray=not state)
             cmds.modelEditor(panel, edit=True, xray=state)
+
+    @classmethod
+    @CoreUtils.undoable
+    def clear_xray(cls) -> List[str]:
+        """Turn x-ray off on every surface shape in the scene ("Un-Xray All").
+        Twin of blendertk's ``DisplayUtils.clear_xray``.
+
+        Returns:
+            list: The shapes cleared.
+        """
+        shapes = cmds.ls(type="surfaceShape", noIntermediate=True, long=True) or []
+        return cls.set_xray(shapes, False)
+
+    @classmethod
+    @CoreUtils.undoable
+    def toggle_xray_others(cls, objects=None) -> Optional[Tuple[bool, int]]:
+        """Uniform x-ray toggle (:meth:`toggle_xray`) over every surface shape in
+        the scene EXCEPT those at or under *objects* ("X-Ray Other"). Twin of
+        blendertk's ``DisplayUtils.toggle_xray_others``.
+
+        Parameters:
+            objects: Node(s) or component(s) to leave out; ``None``: the
+                selection, and nothing selected toggles every shape.
+
+        Returns:
+            tuple: (applied state, shape count), or None when nothing is left.
+        """
+        if objects is None:
+            objects = CoreUtils.selected_objects()
+        every = cmds.ls(type="surfaceShape", noIntermediate=True, long=True) or []
+        mine = set(cls.get_surface_shapes(objects))
+        return cls.toggle_xray(sorted(set(every) - mine))
+
+    # --- display toggles --------------------------------------------------
+    # The Display menu's rows (tentacle) and the display macros' bodies. Each
+    # answers what it did -- the nodes, the state it set, the mode now shown --
+    # or None when there was nothing to act on, never a message: the caller
+    # words it. Twins of blendertk's ``DisplayUtils`` toggles.
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def hide_objects(objects=None) -> List[str]:
+        """Hide *objects* (``cmds.hide``). Twin of blendertk's ``DisplayUtils.hide_objects``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+
+        Returns:
+            list: The nodes hidden; ``[]`` with nothing selected.
+        """
+        nodes = CoreUtils.as_strings(objects)
+        cmds.hide(nodes)
+        return nodes
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def show_objects(objects=None) -> List[str]:
+        """Show hidden *objects* (``cmds.showHidden``) -- a selection made in the
+        Outliner, where Maya selects hidden nodes. Twin of blendertk's
+        ``DisplayUtils.show_objects``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+
+        Returns:
+            list: The nodes shown; ``[]`` with nothing selected.
+        """
+        nodes = CoreUtils.as_strings(objects)
+        cmds.showHidden(nodes)
+        return nodes
+
+    @staticmethod
+    def cycle_component_ids() -> Optional[str]:
+        """Step the selected meshes' component-ID display: vertex, edge, face,
+        UV, off. Twin of blendertk's (an on / off viewport overlay there).
+
+        Returns:
+            (str/None): The display now shown: ``"vertex"``, ``"edge"``,
+            ``"face"``, ``"uv"`` or ``"off"``; None with no polygon mesh selected.
+        """
+        # polyOptions answers None when no polygon mesh is in the selection.
+        state = cmds.polyOptions(query=True, displayItemNumbers=True)
+        if not state:
+            return None
+        current = list(state[:4])
+        index = (current.index(True) + 1) % 5 if True in current else 0
+        flags = [0, 0, 0, 0]
+        if index < 4:
+            flags[index] = 1
+        cmds.polyOptions(activeObjects=True, displayItemNumbers=tuple(flags))
+        return ("vertex", "edge", "face", "uv", "off")[index]
+
+    @staticmethod
+    def cycle_normals_display() -> Optional[str]:
+        """Step the selected meshes' normals display: face, vertex, tangent, off.
+        Twin of blendertk's (face, vertex, off: Blender draws no tangents).
+
+        Returns:
+            (str/None): The display now shown: ``"face"``, ``"vertex"``,
+            ``"tangent"`` or ``"off"``; None with no polygon mesh selected.
+        """
+        tangent = cmds.polyOptions(query=True, displayTangent=True)
+        if not tangent:
+            return None
+        normal = cmds.polyOptions(query=True, displayNormal=True)[0]
+        if tangent[0]:
+            current = 3
+        elif normal and cmds.polyOptions(query=True, point=True)[0]:
+            current = 2
+        elif normal and cmds.polyOptions(query=True, facet=True)[0]:
+            current = 1
+        else:
+            current = 0
+        index = (current + 1) % 4
+        cmds.polyOptions(
+            **(
+                {"displayNormal": False, "displayTangent": False},
+                {"displayNormal": True, "facet": True, "point": False,
+                 "displayTangent": False, "sizeNormal": 1},
+                {"displayNormal": True, "point": True, "facet": False,
+                 "displayTangent": False, "sizeNormal": 1},
+                {"displayTangent": True, "displayNormal": False},
+            )[index]
+        )
+        return ("off", "face", "vertex", "tangent")[index]
+
+    @staticmethod
+    def toggle_soft_edge_display() -> Optional[bool]:
+        """Toggle the selected meshes between soft edges only and all edges.
+        Twin of blendertk's (the viewport's sharp-edge overlay).
+
+        Returns:
+            (bool/None): True: soft edges only; False: all edges; None with no
+            polygon mesh selected.
+        """
+        state = cmds.polyOptions(query=True, allEdges=True)
+        if not state:
+            return None
+        if state[0]:
+            cmds.polyOptions(allEdges=False, softEdge=True)
+            return True
+        cmds.polyOptions(softEdge=False, allEdges=True)
+        return False
+
+    @staticmethod
+    @CoreUtils.selected
+    def toggle_uv_border_edges(objects=None) -> Optional[bool]:
+        """Uniform toggle of the UV-border-edge display on *objects*' meshes, at
+        the user's border width (Preferences): any hidden turns them all on.
+
+        Parameters:
+            objects: Node(s) or component(s); ``None``: the selection.
+
+        Returns:
+            (bool/None): The state set (True: shown); None when nothing given
+            is a polygon mesh; ``[]`` with nothing selected.
+        """
+        # polyOptions answers None when nothing given is a polygon mesh, and
+        # selecting a locator / joint / curve is routine.
+        state = cmds.polyOptions(objects, query=True, displayMapBorder=True)
+        if not state:
+            return None
+        shown = not all(state)
+        width = cmds.optionVar(query="displayPolyBorderEdgeSize")
+        flags = {"displayMapBorder": shown}
+        if isinstance(width, (list, tuple)) and len(width) > 1:
+            flags["sizeBorder"] = width[1]
+        cmds.polyOptions(objects, **flags)
+        return shown
+
+    @staticmethod
+    def toggle_material_override() -> Optional[bool]:
+        """Toggle the focused viewport's default-material override: every
+        material reads as Maya's flat default, for silhouette and form. Twin of
+        blendertk's (every 3D viewport's solid colour: Single).
+
+        Returns:
+            (bool/None): The state set; None with no 3D viewport.
+        """
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            return None
+        state = not cmds.modelEditor(panel, query=True, useDefaultMaterial=True)
+        cmds.modelEditor(panel, edit=True, useDefaultMaterial=state)
+        return state
+
+    @staticmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def set_wireframe(objects=None, state: bool = True) -> List[str]:
+        """Draw *objects* as wireframe, or shaded again (*state* False), through
+        their drawing override. Twin of blendertk's (``display_type``).
+
+        Parameters:
+            objects: Node(s); a component stands for its shape. ``None``: the selection.
+            state (bool): Wireframe (True) or shaded (False).
+
+        Returns:
+            list: The nodes set; ``[]`` with nothing selected.
+        """
+        nodes = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True) or []
+        for node in nodes:
+            cmds.setAttr(f"{node}.overrideEnabled", 1)
+            # overrideShading off draws the node as wireframe.
+            cmds.setAttr(f"{node}.overrideShading", 0 if state else 1)
+        return nodes
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def toggle_wireframe(cls, objects=None):
+        """Toggle *objects* between wireframe and shaded, together: the first
+        one's state decides. Twin of blendertk's ``DisplayUtils.toggle_wireframe``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+
+        Returns:
+            (bool/list): True when they are now wireframe; ``[]`` with nothing selected.
+        """
+        nodes = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True) or []
+        if not nodes:
+            return []
+        first = nodes[0]
+        wire = not (
+            cmds.getAttr(f"{first}.overrideEnabled")
+            and not cmds.getAttr(f"{first}.overrideShading")
+        )
+        cls.set_wireframe(nodes, wire)
+        return wire
+
+    @staticmethod
+    def toggle_wireframe_inactive() -> Optional[bool]:
+        """Toggle the focused viewport's wireframe-on-inactive: only the selected
+        objects shaded. Twin of blendertk's (every unselected mesh's
+        ``display_type``).
+
+        Returns:
+            (bool/None): The state set; None with no 3D viewport.
+        """
+        from mayatk.ui_utils._ui_utils import UiUtils
+
+        panel = UiUtils.get_model_panel(with_focus=True)
+        if not panel:
+            return None
+        state = not cmds.modelEditor(panel, query=True, activeOnly=True)
+        cmds.modelEditor(panel, edit=True, activeOnly=state)
+        return state
+
+    @classmethod
+    @CoreUtils.undoable
+    @CoreUtils.selected
+    def toggle_template(cls, objects=None):
+        """Template *objects* (drawn dimmed, not selectable in the viewport), or
+        untemplate them when every one already is. Twin of blendertk's
+        ``DisplayUtils.toggle_template``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+
+        Returns:
+            (tuple/list): ``(templated, nodes)``; ``[]`` with nothing selected.
+        """
+        nodes = cmds.ls(CoreUtils.as_strings(objects), objectsOnly=True) or []
+        if not nodes:
+            return []
+        state = not all(cls.is_templated(node) for node in nodes)
+        for node in nodes:
+            try:
+                cmds.setAttr(f"{node}.template", state)
+            except RuntimeError:  # a locked or connected template plug
+                continue
+        return state, nodes
+
+    @staticmethod
+    def _uv_editor_panel() -> Optional[str]:
+        """The UV Editor's panel (it exists while hidden), or None in batch."""
+        panels = cmds.getPanel(scriptType="polyTexturePlacementPanel") or []
+        return panels[0] if panels else None
+
+    @classmethod
+    def toggle_uv_checker(cls) -> Optional[bool]:
+        """Toggle the UV Editor's checker display. Twin of blendertk's (a
+        generated UV grid in the UV editors).
+
+        Returns:
+            (bool/None): The state set; None with no UV Editor.
+        """
+        panel = cls._uv_editor_panel()
+        if panel is None:
+            return None
+        state = not cmds.textureWindow(panel, query=True, displayCheckered=True)
+        cmds.textureWindow(panel, edit=True, displayCheckered=state)
+        return state
+
+    @classmethod
+    def toggle_uv_distortion(cls) -> Optional[str]:
+        """Toggle the UV Editor's distortion shading. Twin of blendertk's, which
+        steps Blender's stretch overlay through angle, area and off.
+
+        Returns:
+            (str/None): The display now shown: ``"on"`` or ``"off"``; None with
+            no UV Editor.
+        """
+        panel = cls._uv_editor_panel()
+        if panel is None:
+            return None
+        state = not cmds.textureWindow(panel, query=True, displayDistortion=True)
+        cmds.textureWindow(panel, edit=True, displayDistortion=state)
+        return "on" if state else "off"
 
     @staticmethod
     def reset_viewport(max_res=4096):

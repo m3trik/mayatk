@@ -1002,7 +1002,7 @@ Scene auto-instancer: convert geometrically identical meshes to instances.
   - `AutoInstancer.verbose(self)` *(property)*
   - `AutoInstancer.run(self, nodes: Optional[Sequence[object]] = None) -> List[str]` — Discover and instance matching meshes.
   - `AutoInstancer.find_instance_groups(self, nodes: Optional[Sequence[object]] = None, check_hierarchy: Optional[bool] = None) -> List[InstanceGroup]` — Find groups of identical objects.
-  - `AutoInstancer.run_once(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]` *(class)* — One-shot: build an ``AutoInstancer`` from ``config`` and run it.
+  - `AutoInstancer.run_once(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]` *(class)* — One-shot: build an ``AutoInstancer`` from ``config`` and run it.
 
 <a id="core_utils--auto_instancer--assembly_reconstructor"></a>
 ### `core_utils/auto_instancer/assembly_reconstructor.py`
@@ -1318,8 +1318,23 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `DisplayUtils.get_surface_shapes(objects: Union[str, object, List]) -> List[str]` *(static)* — Visible (non-intermediate) surface shapes at or under the given nodes.
   - `DisplayUtils.is_xray(cls, objects: Union[str, object, List]) -> bool` *(class)* — True when EVERY surface shape at or under *objects* is x-rayed.
   - `DisplayUtils.set_xray(cls, objects: Union[str, object, List], state: bool = True, resync: bool = True) -> List[str]` *(class)* — Set the x-ray flag on every surface shape at or under *objects*.
-  - `DisplayUtils.toggle_xray(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]` *(class)* — Uniform x-ray toggle: if ANY shape is off, turn them ALL on;
+  - `DisplayUtils.toggle_xray(cls, objects: Union[str, object, List] = None) -> Optional[Tuple[bool, int]]` *(class)* — Uniform x-ray toggle: if ANY shape is off, turn them ALL on;
   - `DisplayUtils.resync_viewport_xray() -> None` *(static)* — Force VP2 to re-apply every object's per-object x-ray flag.
+  - `DisplayUtils.clear_xray(cls) -> List[str]` *(class)* — Turn x-ray off on every surface shape in the scene ("Un-Xray All").
+  - `DisplayUtils.toggle_xray_others(cls, objects=None) -> Optional[Tuple[bool, int]]` *(class)* — Uniform x-ray toggle (:meth:`toggle_xray`) over every surface shape in
+  - `DisplayUtils.hide_objects(objects=None) -> List[str]` *(static)* — Hide *objects* (``cmds.hide``).
+  - `DisplayUtils.show_objects(objects=None) -> List[str]` *(static)* — Show hidden *objects* (``cmds.showHidden``) -- a selection made in the
+  - `DisplayUtils.cycle_component_ids() -> Optional[str]` *(static)* — Step the selected meshes' component-ID display: vertex, edge, face,
+  - `DisplayUtils.cycle_normals_display() -> Optional[str]` *(static)* — Step the selected meshes' normals display: face, vertex, tangent, off.
+  - `DisplayUtils.toggle_soft_edge_display() -> Optional[bool]` *(static)* — Toggle the selected meshes between soft edges only and all edges.
+  - `DisplayUtils.toggle_uv_border_edges(objects=None) -> Optional[bool]` *(static)* — Uniform toggle of the UV-border-edge display on *objects*' meshes, at
+  - `DisplayUtils.toggle_material_override() -> Optional[bool]` *(static)* — Toggle the focused viewport's default-material override: every
+  - `DisplayUtils.set_wireframe(objects=None, state: bool = True) -> List[str]` *(static)* — Draw *objects* as wireframe, or shaded again (*state* False), through
+  - `DisplayUtils.toggle_wireframe(cls, objects=None)` *(class)* — Toggle *objects* between wireframe and shaded, together: the first
+  - `DisplayUtils.toggle_wireframe_inactive() -> Optional[bool]` *(static)* — Toggle the focused viewport's wireframe-on-inactive: only the selected
+  - `DisplayUtils.toggle_template(cls, objects=None)` *(class)* — Template *objects* (drawn dimmed, not selectable in the viewport), or
+  - `DisplayUtils.toggle_uv_checker(cls) -> Optional[bool]` *(class)* — Toggle the UV Editor's checker display.
+  - `DisplayUtils.toggle_uv_distortion(cls) -> Optional[str]` *(class)* — Toggle the UV Editor's distortion shading.
   - `DisplayUtils.reset_viewport(max_res=4096)` *(static)* — Resets Viewport 2.0 to fix graphical glitches (e.g.
 
 <a id="display_utils--color_id"></a>
@@ -1512,7 +1527,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `DisplayMacros.m_back_face_culling(objects) -> None` *(static)* — Toggle Back-Face Culling on selected objects, or on all objects if none are selected.
   - `DisplayMacros.m_isolate_selected() -> None` *(static)* — Isolate the current selection in the active 3D viewport.
   - `DisplayMacros.m_cycle_display_state(objects) -> None` *(static)* — Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.
-  - `DisplayMacros.m_wireframe_toggle(objects) -> None` *(static)* — Toggle Wireframe Display on selected objects, or on all objects if none are selected.
+  - `DisplayMacros.m_wireframe_toggle(objects) -> None` *(static)* — Toggle the selected objects between wireframe and shaded, together.
   - `DisplayMacros.m_grid() -> bool` *(static)* — Toggle the grid.
   - `DisplayMacros.m_grid_and_image_planes() -> None` *(static)* — Toggle grid and image plane visibility together.
   - `DisplayMacros.m_frame(cls, steps: int = 2, adjust_clipping: bool = True) -> None` *(class)* — Frame the selection at the ideal working distance;
@@ -1522,7 +1537,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `DisplayMacros.m_shading(cls) -> None` *(class)* — Toggles viewport display mode between wireframe, smooth shaded with textures off,
   - `DisplayMacros.m_lighting(cls) -> None` *(class)* — Toggles viewport lighting between different states: default, all lights, active lights,
   - `DisplayMacros.m_cycle_background(cls) -> str` *(class)* — Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.
-- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1667)**
+- **[`class EditMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1560)**
   - `EditMacros.m_group(objects=None)` *(static)* — Group the given objects (or selection), center the pivot, and rename the group.
   - `EditMacros.m_ungroup(objects=None)` *(static)* — Ungroup the selected group(s) — children keep their world transforms.
   - `EditMacros.m_combine(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1531,7 +1546,7 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `EditMacros.m_paste_and_rename() -> None` *(static)* — Paste and rename by removing 'pasted__' prefix and reference file names,
   - `EditMacros.m_multi_component() -> None` *(static)* — Enable the multi-component selection mask.
   - `EditMacros.m_merge_vertices(objects, tolerance=0.001) -> None` *(static)* — Merge vertices within a small distance tolerance.
-- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1926)**
+- **[`class SelectionMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1819)**
   - `SelectionMacros.m_object_selection() -> None` *(static)* — Set object selection mask.
   - `SelectionMacros.m_vertex_selection() -> None` *(static)* — Set vertex selection mask.
   - `SelectionMacros.m_edge_selection() -> None` *(static)* — Set edge selection mask.
@@ -1540,12 +1555,12 @@ Procedural draped-cloth (curtain) drape engine — pure geometry, no DCC.
   - `SelectionMacros.m_toggle_selectability(objects)` *(static)* — Toggle selectability of the given objects.
   - `SelectionMacros.m_toggle_UV_select_type() -> None` *(static)* — Toggles between UV shell and UV component selection.
   - `SelectionMacros.m_invert_component_selection() -> None` *(static)* — Invert the component selection on the currently selected objects.
-- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2089)**
+- **[`class UiMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L1982)**
   - `UiMacros.m_toggle_panels(toggle_menu: bool = True, toggle_panels: bool = True) -> None` *(static)* — Toggle UI toolbars and menu bar in sync.
-- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2125)**
+- **[`class AnimationMacros`](mayatk/mayatk/edit_utils/macros/_macros.py#L2018)**
   - `AnimationMacros.m_set_selected_keys(objects) -> None` *(static)* — Set keys for any attributes (channels) that are selected in the channel box.
   - `AnimationMacros.m_unset_selected_keys(objects) -> None` *(static)* — Un-set keys for any attributes (channels) that are selected in the channel box.
-- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2152)**
+- **[`class Macros(MacroManager, DisplayMacros, EditMacros, SelectionMacros, AnimationMacros, UiMacros)`](mayatk/mayatk/edit_utils/macros/_macros.py#L2045)**
 
 <a id="edit_utils--naming--_naming"></a>
 ### `edit_utils/naming/_naming.py`
@@ -1633,6 +1648,7 @@ Parametric EIA-310 (19-inch) equipment-rack generator.
   - `EnvUtils.find_workspaces(root_dir: str, return_type: str = 'dir', ignore_empty: bool = True, recursive: bool = True, file_types: Optional[tuple] = None) -> list` *(static)* — Find Maya workspaces under a root directory.
   - `EnvUtils.get_workspace_scenes(root_dir: Optional[str] = None, full_path: bool = True, recursive: bool = False, omit_autosave: bool = True, file_types=None) -> list[str]` *(static)* — Return a list of Maya scene files (.ma/.mb) from the given or current workspace directory.
   - `EnvUtils.scene_has_content() -> bool` *(static)* — True if the open scene holds authored data — any transform beyond Maya's
+  - `EnvUtils.scene_status() -> Dict[str, Any]` *(static)* — The scene's modelling and session state as plain values: what a
   - `EnvUtils.scene_settings() -> Dict[str, float]` *(static)* — The live scene's time setup as the bridges' ``scene`` record (see
   - `EnvUtils.apply_scene_settings(settings: Dict[str, Any]) -> list` *(static)* — Apply a ``scene`` record (any subset of :attr:`SCENE_SETTINGS_KEYS`) to the
   - `EnvUtils.find_workspace_using_path(cls, scene_path: Optional[str] = None) -> Optional[str]` *(class)* — Determine the workspace directory for a given scene by moving up directory levels until a workspace…
@@ -2374,7 +2390,7 @@ Push the Maya selection to a live browser / WebXR preview.
 
 Light utilities — building real scene lights from the geometry that represents them.
 
-- **[`class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L233)** — Scene-light authoring (mirror of ``btk.LightUtils``).
+- **[`class LightUtils(_LightUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/light_utils/_light_utils.py#L234)** — Scene-light authoring (mirror of ``btk.LightUtils``).
   - `LightUtils.environment_lights(cls) -> List[str]` *(class)* — Every environment (image-based) light SHAPE in the scene.
   - `LightUtils.all_lights(cls) -> List[str]` *(class)* — Every light SHAPE in the scene -- Maya's and Arnold's.
   - `LightUtils.contributing_lights(cls) -> List[str]` *(class)* — The scene's light SHAPES that can actually light a render.
@@ -3427,10 +3443,12 @@ Texture Path Editor engine: the scene's texture paths and the commands that fix 
   - `NodeUtils.incoming_connections(sources: List[str]) -> List[Tuple[str, str]]` *(static)* — ``(destination plug, source plug)`` for every incoming wire on *sources*.
   - `NodeUtils.get_connected_nodes(node, node_type=None, direction=None, exact=True, first_match=False)` *(static)* — Finds connected nodes of a given type and direction (incoming/outgoing).
   - `NodeUtils.create_assembly(nodes, assembly_name='assembly#', duplicate=False)` *(static)* — Create an assembly by parenting the input nodes to a new assembly node.
+  - `NodeUtils.selection_summary(limit: int = 10) -> Optional[Dict[str, Any]]` *(static)* — What is selected, as plain values: what a status readout (tentacle's
   - `NodeUtils.get_instances(objects=None, return_parent_objects=False)` *(static)* — Get any instances of given object, or if None given, get all instanced objects in the scene.
+  - `NodeUtils.select_instances(cls, objects=None, whole_scene: bool = False) -> List[str]` *(class)* — Select *objects* together with their instances, or every instanced
   - `NodeUtils.replace_with_instances(cls, objects=None, append='', freeze_transforms=False, center_pivot=True, delete_history=True, retain_bbox_scale=False, retain_bbox_per_axis=False)` *(class)* — Replace target objects with instances of the source object.
   - `NodeUtils.get_instanced_shapes(cls, node, intermediate: bool = True, descendants: bool = False) -> List[str]` *(class)* — Every shape under *node* that is shared with another transform.
-  - `NodeUtils.uninstance(cls, objects, freeze=False, delete_history=False, quiet=True)` *(class)* — Un-Instance the given objects.
+  - `NodeUtils.uninstance(cls, objects=None, freeze=False, delete_history=False, quiet=True)` *(class)* — Un-Instance the given objects (``None``: the selection, ``[]`` with
   - `NodeUtils.preserve_instancing(cls, objects, delete_history: bool = False, quiet: bool = True)` *(class)* — Run a shape-editing operation on instanced objects without dragging their siblings along.
   - `NodeUtils.filter_duplicate_instances(nodes) -> List[str]` *(static)* — Keep only one transform per instance group.
 

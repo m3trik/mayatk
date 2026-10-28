@@ -1385,6 +1385,75 @@ class NodeUtils(ptk.HelpMixin):
         return _AssemblyHandle(assembly_node)
 
     @staticmethod
+    def selection_summary(limit: int = 10) -> Optional[Dict[str, Any]]:
+        """What is selected, as plain values: what a status readout (tentacle's
+        HUD) lists. Twin of blendertk's ``NodeUtils.selection_summary``.
+
+        Parameters:
+            limit (int): Name the objects only up to this many.
+
+        Returns:
+            (dict/None): None with nothing selected. In component mode
+            ``{"mode": "component", "component": "Verts" | "Edges" | "Faces" |
+            "UVs" | None, "selected": int, "total": int}``; else ``{"mode":
+            "object", "count": int, "objects": [(name, type), ...]`` (empty
+            past *limit*) ``, "instances": int`` (a lone mesh's instance
+            paths) ``, "normals_locked": bool`` (a lone mesh's are all locked)
+            ``, "faces", "tris", "uvs"}``: ints, None when no polygon mesh is
+            selected.
+        """
+        selection = cmds.ls(selection=True) or []
+        if not selection:
+            return None
+        if cmds.selectMode(query=True, component=True):
+            for flag, label, picked, total in (
+                ("vertex", "Verts", "vertexComponent", "vertex"),
+                ("edge", "Edges", "edgeComponent", "edge"),
+                ("facet", "Faces", "faceComponent", "face"),
+                ("polymeshUV", "UVs", "uvComponent", "uvcoord"),
+            ):
+                if cmds.selectType(query=True, **{flag: True}):
+                    return {
+                        "mode": "component",
+                        "component": label,
+                        "selected": cmds.polyEvaluate(**{picked: True}),
+                        "total": cmds.polyEvaluate(selection, **{total: True}),
+                    }
+            return {"mode": "component", "component": None, "selected": 0, "total": 0}
+
+        locked, instances = False, 0
+        if len(selection) == 1 and cmds.nodeType(selection[0]) == "transform":
+            shapes = cmds.listRelatives(
+                selection[0], shapes=True, noIntermediate=True, fullPath=True
+            ) or []
+            if shapes and cmds.objectType(shapes[0]) == "mesh":
+                flags = cmds.polyNormalPerVertex(
+                    f"{shapes[0]}.vtxFace[*][*]", query=True, allLocked=True
+                )
+                locked = bool(flags and any(flags))
+                instances = len(cmds.ls(shapes[0], allPaths=True) or [])
+
+        def count(**flag):
+            # polyEvaluate answers a sentence, not a number, with no mesh selected.
+            value = cmds.polyEvaluate(selection, **flag)
+            return value if isinstance(value, int) else None
+
+        return {
+            "mode": "object",
+            "count": len(selection),
+            "objects": (
+                [(n, cmds.objectType(n)) for n in selection]
+                if len(selection) <= limit
+                else []
+            ),
+            "instances": instances,
+            "normals_locked": locked,
+            "faces": count(face=True),
+            "tris": count(triangle=True),
+            "uvs": count(uvcoord=True),
+        }
+
+    @staticmethod
     def get_instances(objects=None, return_parent_objects=False):
         """Get any instances of given object, or if None given, get all instanced objects in the scene."""
         instances = []
@@ -1407,6 +1476,32 @@ class NodeUtils(ptk.HelpMixin):
                 instances = [i for i in instances if i not in obj_set]
 
         return instances
+
+    @classmethod
+    @CoreUtils.undoable
+    def select_instances(cls, objects=None, whole_scene: bool = False) -> List[str]:
+        """Select *objects* together with their instances, or every instanced
+        object in the scene. Twin of blendertk's ``NodeUtils.select_instances``.
+
+        Parameters:
+            objects: Node(s); ``None``: the selection.
+            whole_scene (bool): Select every instanced object in the scene instead.
+
+        Returns:
+            list: What was selected; ``[]`` -- the selection left as it was --
+            when nothing given has an instance.
+        """
+        if whole_scene:
+            selection = cls.get_instances()
+        else:
+            if objects is None:
+                objects = CoreUtils.selected_objects()
+            objects = cmds.ls(CoreUtils.as_strings(objects), long=True) if objects else []
+            instances = cls.get_instances(objects) if objects else []
+            selection = list(objects) + instances if instances else []
+        if selection:
+            cmds.select(selection, replace=True)
+        return selection
 
     @staticmethod
     def _local_bbox_size(node):
@@ -1489,8 +1584,9 @@ class NodeUtils(ptk.HelpMixin):
         (channel copy), where the ``retain_bbox_*`` options apply.
 
         Parameters:
-            objects (list): Source first, then targets (selection order
-                when None).
+            objects (list): Source first, then targets. ``None``: the
+                selected transforms in selection order (the first selected
+                is the source); nothing selected returns ``[]``.
             freeze_transforms (bool): Freeze TRANSLATION only before
                 instancing.  Rotation and scale are deliberately left
                 unfrozen — freezing them would bake the source's pose into
@@ -1517,18 +1613,24 @@ class NodeUtils(ptk.HelpMixin):
 
         Returns:
             list: The newly created instance objects.
+
+        Raises:
+            ValueError: Fewer than two objects (twin of blendertk's).
         """
         from mayatk import XformUtils
 
         if objects is None:
-            objects = cmds.ls(orderedSelection=True, long=True) or []
+            objects = cmds.ls(orderedSelection=True, transforms=True, long=True) or []
+            if not objects:
+                return []
         else:
             objects = cmds.ls(CoreUtils.as_strings(objects), long=True) or []
-        try:
-            source, targets = objects[0], objects[1:]
-        except IndexError:
-            cmds.warning("Operation requires a selection of at least two objects.")
-            return
+        if len(objects) < 2:
+            raise ValueError(
+                "Convert to Instances needs at least two objects: the source "
+                "(selected first) and one or more targets."
+            )
+        source, targets = objects[0], objects[1:]
 
         if freeze_transforms:
             XformUtils.freeze_transforms(
@@ -1816,8 +1918,11 @@ class NodeUtils(ptk.HelpMixin):
 
     @classmethod
     @CoreUtils.undoable
-    def uninstance(cls, objects, freeze=False, delete_history=False, quiet=True):
-        """Un-Instance the given objects.
+    @CoreUtils.selected
+    def uninstance(cls, objects=None, freeze=False, delete_history=False, quiet=True):
+        """Un-Instance the given objects (``None``: the selection, ``[]`` with
+        nothing selected; ``"all"``: every instance in the scene). Twin of
+        blendertk's ``NodeUtils.uninstance``.
 
         ``freeze`` (optional additional step): after breaking the link, bake the
         object's SCALE into the now-unique geometry. Breaking the link alone

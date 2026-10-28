@@ -23,6 +23,7 @@ class UiUtils:
         "Hypergraph: Hierarchy": "HypergraphHierarchyWindow",
         "Hypergraph: Connections": "HypergraphDGWindow",
         "Viewport": "DisplayViewport",
+        "Wireframe Color": "objectColorPalette",
         "Adobe After Effects Live Link": "OpenAELiveLink",
         "Asset Editor": "AssetEditor",
         "Attribute Spread Sheet": "SpreadSheetEditor",

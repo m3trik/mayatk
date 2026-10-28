@@ -2356,6 +2356,25 @@ class TestAutoInstancerProductionSafety(MayaTkTestCase):
         self.assertEqual(self._shape_parent_count("Outside2"), 1)
 
 
+class TestRunOnceSelect(MayaTkTestCase):
+    """``run_once(select=True)``: what the Duplicate menu's Auto Instance calls."""
+
+    def test_selects_and_returns_what_survives(self):
+        a = cmds.polyCube(name="ros_a")[0]
+        b = cmds.polyCube(name="ros_b")[0]
+        cmds.move(5, 0, 0, b)
+        cmds.select(clear=True)
+        made = AutoInstancer.run_once(  # dynamic: instanced however simple
+            [a, b], is_static=False, combine_non_instanced=False, select=True
+        )
+        self.assertTrue(made)
+        self.assertTrue(all(cmds.objExists(n) for n in made))
+        self.assertEqual(
+            {n.split("|")[-1] for n in cmds.ls(selection=True, long=True)},
+            {n.split("|")[-1] for n in made},
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

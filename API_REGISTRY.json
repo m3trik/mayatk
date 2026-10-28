@@ -5299,9 +5299,9 @@
               "name": "run_once",
               "qualname": "AutoInstancer.run_once",
               "kind": "classmethod",
-              "signature": "(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]",
+              "signature": "(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]",
               "summary": "One-shot: build an ``AutoInstancer`` from ``config`` and run it.",
-              "line": 1072,
+              "line": 1073,
               "deprecated": false
             }
           ]
@@ -7320,9 +7320,9 @@
               "name": "toggle_xray",
               "qualname": "DisplayUtils.toggle_xray",
               "kind": "classmethod",
-              "signature": "(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]",
+              "signature": "(cls, objects: Union[str, object, List] = None) -> Optional[Tuple[bool, int]]",
               "summary": "Uniform x-ray toggle: if ANY shape is off, turn them ALL on;",
-              "line": 641,
+              "line": 643,
               "deprecated": false
             },
             {
@@ -7331,7 +7331,142 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Force VP2 to re-apply every object's per-object x-ray flag.",
-              "line": 660,
+              "line": 666,
+              "deprecated": false
+            },
+            {
+              "name": "clear_xray",
+              "qualname": "DisplayUtils.clear_xray",
+              "kind": "classmethod",
+              "signature": "(cls) -> List[str]",
+              "summary": "Turn x-ray off on every surface shape in the scene (\"Un-Xray All\").",
+              "line": 682,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_xray_others",
+              "qualname": "DisplayUtils.toggle_xray_others",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None) -> Optional[Tuple[bool, int]]",
+              "summary": "Uniform x-ray toggle (:meth:`toggle_xray`) over every surface shape in",
+              "line": 694,
+              "deprecated": false
+            },
+            {
+              "name": "hide_objects",
+              "qualname": "DisplayUtils.hide_objects",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Hide *objects* (``cmds.hide``).",
+              "line": 721,
+              "deprecated": false
+            },
+            {
+              "name": "show_objects",
+              "qualname": "DisplayUtils.show_objects",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Show hidden *objects* (``cmds.showHidden``) -- a selection made in the",
+              "line": 737,
+              "deprecated": false
+            },
+            {
+              "name": "cycle_component_ids",
+              "qualname": "DisplayUtils.cycle_component_ids",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[str]",
+              "summary": "Step the selected meshes' component-ID display: vertex, edge, face,",
+              "line": 753,
+              "deprecated": false
+            },
+            {
+              "name": "cycle_normals_display",
+              "qualname": "DisplayUtils.cycle_normals_display",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[str]",
+              "summary": "Step the selected meshes' normals display: face, vertex, tangent, off.",
+              "line": 774,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_soft_edge_display",
+              "qualname": "DisplayUtils.toggle_soft_edge_display",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[bool]",
+              "summary": "Toggle the selected meshes between soft edges only and all edges.",
+              "line": 808,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_uv_border_edges",
+              "qualname": "DisplayUtils.toggle_uv_border_edges",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> Optional[bool]",
+              "summary": "Uniform toggle of the UV-border-edge display on *objects*' meshes, at",
+              "line": 827,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_material_override",
+              "qualname": "DisplayUtils.toggle_material_override",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[bool]",
+              "summary": "Toggle the focused viewport's default-material override: every",
+              "line": 852,
+              "deprecated": false
+            },
+            {
+              "name": "set_wireframe",
+              "qualname": "DisplayUtils.set_wireframe",
+              "kind": "staticmethod",
+              "signature": "(objects=None, state: bool = True) -> List[str]",
+              "summary": "Draw *objects* as wireframe, or shaded again (*state* False), through",
+              "line": 872,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_wireframe",
+              "qualname": "DisplayUtils.toggle_wireframe",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None)",
+              "summary": "Toggle *objects* between wireframe and shaded, together: the first",
+              "line": 893,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_wireframe_inactive",
+              "qualname": "DisplayUtils.toggle_wireframe_inactive",
+              "kind": "staticmethod",
+              "signature": "() -> Optional[bool]",
+              "summary": "Toggle the focused viewport's wireframe-on-inactive: only the selected",
+              "line": 915,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_template",
+              "qualname": "DisplayUtils.toggle_template",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None)",
+              "summary": "Template *objects* (drawn dimmed, not selectable in the viewport), or",
+              "line": 935,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_uv_checker",
+              "qualname": "DisplayUtils.toggle_uv_checker",
+              "kind": "classmethod",
+              "signature": "(cls) -> Optional[bool]",
+              "summary": "Toggle the UV Editor's checker display.",
+              "line": 964,
+              "deprecated": false
+            },
+            {
+              "name": "toggle_uv_distortion",
+              "qualname": "DisplayUtils.toggle_uv_distortion",
+              "kind": "classmethod",
+              "signature": "(cls) -> Optional[str]",
+              "summary": "Toggle the UV Editor's distortion shading.",
+              "line": 979,
               "deprecated": false
             },
             {
@@ -7340,7 +7475,7 @@
               "kind": "staticmethod",
               "signature": "(max_res=4096)",
               "summary": "Resets Viewport 2.0 to fix graphical glitches (e.g.",
-              "line": 675,
+              "line": 995,
               "deprecated": false
             }
           ]
@@ -8586,7 +8721,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle face normals, vertex normals, tangents, and off.",
-              "line": 917,
+              "line": 896,
               "deprecated": false
             },
             {
@@ -8595,7 +8730,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle Soft Edge Display.",
-              "line": 977,
+              "line": 911,
               "deprecated": false
             },
             {
@@ -8604,7 +8739,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle visibility of the selected objects, keeping them selected.",
-              "line": 1001,
+              "line": 921,
               "deprecated": false
             },
             {
@@ -8613,7 +8748,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle the display of UV border edges for the given objects.",
-              "line": 1011,
+              "line": 931,
               "deprecated": false
             },
             {
@@ -8622,7 +8757,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Toggle Back-Face Culling on selected objects, or on all objects if none are selected.",
-              "line": 1046,
+              "line": 957,
               "deprecated": false
             },
             {
@@ -8631,7 +8766,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Isolate the current selection in the active 3D viewport.",
-              "line": 1085,
+              "line": 996,
               "deprecated": false
             },
             {
@@ -8640,7 +8775,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Cycle the display state of the selection: Visible -> XRay -> Templated -> Hidden.",
-              "line": 1106,
+              "line": 1017,
               "deprecated": false
             },
             {
@@ -8648,8 +8783,8 @@
               "qualname": "DisplayMacros.m_wireframe_toggle",
               "kind": "staticmethod",
               "signature": "(objects) -> None",
-              "summary": "Toggle Wireframe Display on selected objects, or on all objects if none are selected.",
-              "line": 1206,
+              "summary": "Toggle the selected objects between wireframe and shaded, together.",
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -8658,7 +8793,7 @@
               "kind": "staticmethod",
               "signature": "() -> bool",
               "summary": "Toggle the grid.",
-              "line": 1227,
+              "line": 1128,
               "deprecated": false
             },
             {
@@ -8667,7 +8802,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggle grid and image plane visibility together.",
-              "line": 1245,
+              "line": 1146,
               "deprecated": false
             },
             {
@@ -8676,7 +8811,7 @@
               "kind": "classmethod",
               "signature": "(cls, steps: int = 2, adjust_clipping: bool = True) -> None",
               "summary": "Frame the selection at the ideal working distance;",
-              "line": 1320,
+              "line": 1221,
               "deprecated": false
             },
             {
@@ -8685,7 +8820,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects) -> None",
               "summary": "Cycle smooth mesh preview: off -> on / no wireframe -> on / full wireframe.",
-              "line": 1391,
+              "line": 1292,
               "deprecated": false
             },
             {
@@ -8694,7 +8829,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles the wireframe display state.",
-              "line": 1438,
+              "line": 1339,
               "deprecated": false
             },
             {
@@ -8703,7 +8838,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Toggle the viewport's default-material override.",
-              "line": 1470,
+              "line": 1371,
               "deprecated": false
             },
             {
@@ -8712,7 +8847,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport display mode between wireframe, smooth shaded with textures off,",
-              "line": 1500,
+              "line": 1393,
               "deprecated": false
             },
             {
@@ -8721,7 +8856,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> None",
               "summary": "Toggles viewport lighting between different states: default, all lights, active lights,",
-              "line": 1549,
+              "line": 1442,
               "deprecated": false
             },
             {
@@ -8730,7 +8865,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> str",
               "summary": "Cycle the viewport background: Maya's Alt+B cycle plus Mid Gray and White.",
-              "line": 1626,
+              "line": 1519,
               "deprecated": false
             }
           ]
@@ -8738,7 +8873,7 @@
         {
           "name": "EditMacros",
           "summary": "",
-          "line": 1667,
+          "line": 1560,
           "bases": [],
           "members": [
             {
@@ -8747,7 +8882,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 1672,
+              "line": 1565,
               "deprecated": false
             },
             {
@@ -8756,7 +8891,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Ungroup the selected group(s) — children keep their world transforms.",
-              "line": 1682,
+              "line": 1575,
               "deprecated": false
             },
             {
@@ -8765,7 +8900,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 1692,
+              "line": 1585,
               "deprecated": false
             },
             {
@@ -8774,7 +8909,7 @@
               "kind": "staticmethod",
               "signature": "(objects, repair_mesh=True, keep_boolean=True, **kwargs)",
               "summary": "Perform a boolean operation on two meshes using cmds, managing shorthand and full parameter names d…",
-              "line": 1724,
+              "line": 1617,
               "deprecated": false
             },
             {
@@ -8783,7 +8918,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle lock/unlock vertex normals.",
-              "line": 1768,
+              "line": 1661,
               "deprecated": false
             },
             {
@@ -8792,7 +8927,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Paste and rename by removing 'pasted__' prefix and reference file names,",
-              "line": 1790,
+              "line": 1683,
               "deprecated": false
             },
             {
@@ -8801,7 +8936,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Enable the multi-component selection mask.",
-              "line": 1864,
+              "line": 1757,
               "deprecated": false
             },
             {
@@ -8810,7 +8945,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.001) -> None",
               "summary": "Merge vertices within a small distance tolerance.",
-              "line": 1879,
+              "line": 1772,
               "deprecated": false
             }
           ]
@@ -8818,7 +8953,7 @@
         {
           "name": "SelectionMacros",
           "summary": "",
-          "line": 1926,
+          "line": 1819,
           "bases": [],
           "members": [
             {
@@ -8827,7 +8962,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set object selection mask.",
-              "line": 1930,
+              "line": 1823,
               "deprecated": false
             },
             {
@@ -8836,7 +8971,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set vertex selection mask.",
-              "line": 1938,
+              "line": 1831,
               "deprecated": false
             },
             {
@@ -8845,7 +8980,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set edge selection mask.",
-              "line": 1944,
+              "line": 1837,
               "deprecated": false
             },
             {
@@ -8854,7 +8989,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Set face selection mask.",
-              "line": 1950,
+              "line": 1843,
               "deprecated": false
             },
             {
@@ -8863,7 +8998,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the current selection of geometry or components.",
-              "line": 1956,
+              "line": 1849,
               "deprecated": false
             },
             {
@@ -8872,7 +9007,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Toggle selectability of the given objects.",
-              "line": 1974,
+              "line": 1867,
               "deprecated": false
             },
             {
@@ -8881,7 +9016,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Toggles between UV shell and UV component selection.",
-              "line": 2033,
+              "line": 1926,
               "deprecated": false
             },
             {
@@ -8890,7 +9025,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Invert the component selection on the currently selected objects.",
-              "line": 2057,
+              "line": 1950,
               "deprecated": false
             }
           ]
@@ -8898,7 +9033,7 @@
         {
           "name": "UiMacros",
           "summary": "",
-          "line": 2089,
+          "line": 1982,
           "bases": [],
           "members": [
             {
@@ -8907,7 +9042,7 @@
               "kind": "staticmethod",
               "signature": "(toggle_menu: bool = True, toggle_panels: bool = True) -> None",
               "summary": "Toggle UI toolbars and menu bar in sync.",
-              "line": 2093,
+              "line": 1986,
               "deprecated": false
             }
           ]
@@ -8915,7 +9050,7 @@
         {
           "name": "AnimationMacros",
           "summary": "",
-          "line": 2125,
+          "line": 2018,
           "bases": [],
           "members": [
             {
@@ -8924,7 +9059,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2130,
+              "line": 2023,
               "deprecated": false
             },
             {
@@ -8933,7 +9068,7 @@
               "kind": "staticmethod",
               "signature": "(objects) -> None",
               "summary": "Un-set keys for any attributes (channels) that are selected in the channel box.",
-              "line": 2140,
+              "line": 2033,
               "deprecated": false
             }
           ]
@@ -8941,7 +9076,7 @@
         {
           "name": "Macros",
           "summary": "",
-          "line": 2152,
+          "line": 2045,
           "bases": [
             "MacroManager",
             "DisplayMacros",
@@ -9537,12 +9672,21 @@
               "deprecated": false
             },
             {
+              "name": "scene_status",
+              "qualname": "EnvUtils.scene_status",
+              "kind": "staticmethod",
+              "signature": "() -> Dict[str, Any]",
+              "summary": "The scene's modelling and session state as plain values: what a",
+              "line": 657,
+              "deprecated": false
+            },
+            {
               "name": "scene_settings",
               "qualname": "EnvUtils.scene_settings",
               "kind": "staticmethod",
               "signature": "() -> Dict[str, float]",
               "summary": "The live scene's time setup as the bridges' ``scene`` record (see",
-              "line": 657,
+              "line": 702,
               "deprecated": false
             },
             {
@@ -9551,7 +9695,7 @@
               "kind": "staticmethod",
               "signature": "(settings: Dict[str, Any]) -> list",
               "summary": "Apply a ``scene`` record (any subset of :attr:`SCENE_SETTINGS_KEYS`) to the",
-              "line": 676,
+              "line": 721,
               "deprecated": false
             },
             {
@@ -9560,7 +9704,7 @@
               "kind": "classmethod",
               "signature": "(cls, scene_path: Optional[str] = None) -> Optional[str]",
               "summary": "Determine the workspace directory for a given scene by moving up directory levels until a workspace…",
-              "line": 726,
+              "line": 771,
               "deprecated": false
             },
             {
@@ -9569,7 +9713,7 @@
               "kind": "staticmethod",
               "signature": "(path: Optional[str] = None) -> Optional[ptk.Workspace]",
               "summary": "The active project as a ``pythontk.Workspace`` (root + parsed file rules), or None.",
-              "line": 755,
+              "line": 800,
               "deprecated": false
             },
             {
@@ -9578,7 +9722,7 @@
               "kind": "staticmethod",
               "signature": "(root: str) -> str",
               "summary": "Make *root* Maya's active project (``workspace -openWorkspace``).",
-              "line": 773,
+              "line": 818,
               "deprecated": false
             },
             {
@@ -9587,7 +9731,7 @@
               "kind": "staticmethod",
               "signature": "(path: Optional[str] = None) -> str",
               "summary": "Absolute root of the current workspace, or ''.",
-              "line": 783,
+              "line": 828,
               "deprecated": false
             },
             {
@@ -9596,7 +9740,7 @@
               "kind": "staticmethod",
               "signature": "(scene: str, source: Optional[str] = None) -> Optional[str]",
               "summary": "Moved to :meth:`DataNodes.set_scene_source`, which records the stand-in",
-              "line": 794,
+              "line": 839,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9606,7 +9750,7 @@
               "kind": "staticmethod",
               "signature": "(scene: Optional[str] = None) -> Optional[str]",
               "summary": "Moved to :meth:`DataNodes.twin_save_target`.",
-              "line": 805,
+              "line": 850,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9616,7 +9760,7 @@
               "kind": "staticmethod",
               "signature": "(scene: Optional[str] = None) -> Optional[str]",
               "summary": "Moved to :meth:`DataNodes.scene_source`.",
-              "line": 815,
+              "line": 860,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9626,7 +9770,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "Moved to :meth:`DataNodes.scene_project_root`.",
-              "line": 825,
+              "line": 870,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9636,7 +9780,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[ptk.Workspace]",
               "summary": "Moved to :meth:`DataNodes.scene_workspace`.",
-              "line": 835,
+              "line": 880,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9646,7 +9790,7 @@
               "kind": "staticmethod",
               "signature": "(subfolder: str = '', create: bool = False) -> str",
               "summary": "Moved to :meth:`DataNodes.scene_source_images_dir`.",
-              "line": 845,
+              "line": 890,
               "deprecated": true,
               "remove_in": "0.30.0"
             },
@@ -9656,7 +9800,7 @@
               "kind": "staticmethod",
               "signature": "(path: Optional[str] = None) -> str",
               "summary": "The workspace's scene folder — its ``scene`` rule → an existing ``scenes/`` →",
-              "line": 852,
+              "line": 897,
               "deprecated": false
             },
             {
@@ -9665,7 +9809,7 @@
               "kind": "staticmethod",
               "signature": "(path: Optional[str] = None) -> str",
               "summary": "The workspace's texture folder — its ``sourceImages`` rule → an existing",
-              "line": 859,
+              "line": 904,
               "deprecated": false
             },
             {
@@ -9674,7 +9818,7 @@
               "kind": "staticmethod",
               "signature": "(path: Optional[str] = None) -> List[str]",
               "summary": "Where this scene's map files can be found NOW, most specific first.",
-              "line": 871,
+              "line": 916,
               "deprecated": false
             },
             {
@@ -9683,7 +9827,7 @@
               "kind": "staticmethod",
               "signature": "() -> list",
               "summary": "Saved workspace-template names.",
-              "line": 909,
+              "line": 954,
               "deprecated": false
             },
             {
@@ -9692,7 +9836,7 @@
               "kind": "staticmethod",
               "signature": "(name: Optional[str] = None) -> dict",
               "summary": "File rules for building a NEW workspace: the *name*d (default: active /",
-              "line": 915,
+              "line": 960,
               "deprecated": false
             },
             {
@@ -9701,7 +9845,7 @@
               "kind": "staticmethod",
               "signature": "(name: str, rules: Optional[dict] = None) -> str",
               "summary": "Save *rules* as workspace template *name* and make it the active default for new",
-              "line": 921,
+              "line": 966,
               "deprecated": false
             },
             {
@@ -9710,7 +9854,7 @@
               "kind": "staticmethod",
               "signature": "(name: str) -> bool",
               "summary": "Delete the user template *name*.",
-              "line": 935,
+              "line": 980,
               "deprecated": false
             },
             {
@@ -9719,7 +9863,7 @@
               "kind": "staticmethod",
               "signature": "(root: str, rules: Optional[dict] = None, create_dirs: bool = True) -> Optional[ptk.Workspace]",
               "summary": "Create a marked workspace at *root* — File ▸ Project Window ▸ New, scripted.",
-              "line": 940,
+              "line": 985,
               "deprecated": false
             },
             {
@@ -9728,7 +9872,7 @@
               "kind": "staticmethod",
               "signature": "(root: Optional[str] = None) -> Optional[ptk.Workspace]",
               "summary": "Mark *root* (default: the active project's folder) as a shared Maya/Blender",
-              "line": 958,
+              "line": 1003,
               "deprecated": false
             },
             {
@@ -9737,7 +9881,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Reference a scene file — a Maya scene, an FBX, or a USD layer.",
-              "line": 974,
+              "line": 1019,
               "deprecated": false
             },
             {
@@ -9746,7 +9890,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Remove a reference to a Maya scene.",
-              "line": 1019,
+              "line": 1064,
               "deprecated": false
             },
             {
@@ -9755,7 +9899,7 @@
               "kind": "staticmethod",
               "signature": "() -> list",
               "summary": "Dissolve the foster parents no reference owns any more.",
-              "line": 1034,
+              "line": 1079,
               "deprecated": false
             },
             {
@@ -9764,7 +9908,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Check if a Maya scene is referenced.",
-              "line": 1072,
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -9773,7 +9917,7 @@
               "kind": "staticmethod",
               "signature": "(file_path)",
               "summary": "Get the nodes from a referenced Maya scene.",
-              "line": 1087,
+              "line": 1132,
               "deprecated": false
             },
             {
@@ -9782,7 +9926,7 @@
               "kind": "staticmethod",
               "signature": "(top_level: bool = True, file_less: bool = False) -> list",
               "summary": "The scene's reference nodes, screened to the ones Maya can answer for.",
-              "line": 1105,
+              "line": 1150,
               "deprecated": false
             },
             {
@@ -9791,7 +9935,7 @@
               "kind": "classmethod",
               "signature": "(cls, top_level: bool = True) -> list",
               "summary": "The file behind each reference in the current Maya scene.",
-              "line": 1158,
+              "line": 1203,
               "deprecated": false
             },
             {
@@ -9800,7 +9944,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, *, selection_only: bool = False, **fbx_options: Any) -> None",
               "summary": "Export the Maya scene as an FBX file with flexible MEL command options.",
-              "line": 1175,
+              "line": 1220,
               "deprecated": false
             },
             {
@@ -9809,7 +9953,7 @@
               "kind": "staticmethod",
               "signature": "(file_path: str = None, *, selection_only: bool = False, materials: bool = True, smoothing: bool = True, normals: bool = True, groups: bool = True) -> str",
               "summary": "Export the Maya scene as a Wavefront OBJ.",
-              "line": 1278,
+              "line": 1323,
               "deprecated": false
             },
             {
@@ -9818,7 +9962,7 @@
               "kind": "staticmethod",
               "signature": "(namespace: str) -> str",
               "summary": "Sanitize the namespace by replacing or removing illegal characters.",
-              "line": 1351,
+              "line": 1396,
               "deprecated": false
             },
             {
@@ -9827,7 +9971,7 @@
               "kind": "staticmethod",
               "signature": "(selected_file: str, workspace_files: dict) -> Optional[str]",
               "summary": "Resolve a file name to its full path by searching in workspace files.",
-              "line": 1365,
+              "line": 1410,
               "deprecated": false
             },
             {
@@ -9836,7 +9980,7 @@
               "kind": "classmethod",
               "signature": "(cls, workspaces: list, recursive: bool = True) -> dict",
               "summary": "Build a cache of workspace files for multiple workspaces.",
-              "line": 1388,
+              "line": 1433,
               "deprecated": false
             },
             {
@@ -9845,7 +9989,7 @@
               "kind": "staticmethod",
               "signature": "(filename: str) -> bool",
               "summary": "Check if a file matches the Maya autosave pattern.",
-              "line": 1413,
+              "line": 1458,
               "deprecated": false
             },
             {
@@ -9854,7 +9998,7 @@
               "kind": "staticmethod",
               "signature": "(backup_path: Optional[Union[str, bool]] = True, suffix: str = '_backup', file_type: str = 'mayaAscii', force: bool = True, preserve_scene_name: bool = True) -> Optional[str]",
               "summary": "Save a backup copy of the current scene.",
-              "line": 1428,
+              "line": 1473,
               "deprecated": false
             },
             {
@@ -9863,7 +10007,7 @@
               "kind": "classmethod",
               "signature": "(cls, autosave_path: Optional[str] = None) -> Optional[str]",
               "summary": "Resolve the original scene file an autosave was generated from.",
-              "line": 1531,
+              "line": 1576,
               "deprecated": false
             },
             {
@@ -9872,7 +10016,7 @@
               "kind": "classmethod",
               "signature": "(cls, original_path: Optional[str] = None, backup_existing: bool = True) -> Optional[str]",
               "summary": "Save the currently open autosave scene back to its original path.",
-              "line": 1632,
+              "line": 1677,
               "deprecated": false
             }
           ]
@@ -14934,7 +15078,7 @@
         {
           "name": "LightUtils",
           "summary": "Scene-light authoring (mirror of ``btk.LightUtils``).",
-          "line": 233,
+          "line": 234,
           "bases": [
             "_LightUtilsInternal",
             "pythontk.HelpMixin"
@@ -14946,7 +15090,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every environment (image-based) light SHAPE in the scene.",
-              "line": 274,
+              "line": 275,
               "deprecated": false
             },
             {
@@ -14955,7 +15099,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every light SHAPE in the scene -- Maya's and Arnold's.",
-              "line": 295,
+              "line": 296,
               "deprecated": false
             },
             {
@@ -14964,7 +15108,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "The scene's light SHAPES that can actually light a render.",
-              "line": 316,
+              "line": 317,
               "deprecated": false
             },
             {
@@ -14973,7 +15117,7 @@
               "kind": "staticmethod",
               "signature": "(shape: str) -> bool",
               "summary": "Can this one light SHAPE light a render -- visible and non-zero?",
-              "line": 349,
+              "line": 350,
               "deprecated": false
             },
             {
@@ -14982,7 +15126,7 @@
               "kind": "classmethod",
               "signature": "(cls, shapes: Optional[Sequence[str]] = None, limit: Optional[int] = None, near: Optional[Sequence[float]] = None, lit: Optional[Iterable[str]] = None) -> List[Dict[str, Any]]",
               "summary": "The lights, as the lightmap manifest carries them for their highlights.",
-              "line": 398,
+              "line": 399,
               "deprecated": false
             },
             {
@@ -14991,7 +15135,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[Sequence[Any]] = None, intensity: float = 100.0, kelvin: Optional[float] = None, color: Optional[Sequence[float]] = None, offset: float = 1.0, toward: Optional[Sequence[float]] = None, prefix: str = '', emit_specular: bool = False, cluster: str = 'shell') -> List[str]",
               "summary": "Create a real area light matched to each selected fixture, or face set.",
-              "line": 584,
+              "line": 586,
               "deprecated": false
             },
             {
@@ -15000,7 +15144,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Every light this tool generated.",
-              "line": 837,
+              "line": 839,
               "deprecated": false
             },
             {
@@ -15009,7 +15153,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Bring generated lights up to per-area emission;",
-              "line": 857,
+              "line": 859,
               "deprecated": false
             },
             {
@@ -15018,7 +15162,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Delete this tool's generated lights;",
-              "line": 904,
+              "line": 906,
               "deprecated": false
             },
             {
@@ -15027,7 +15171,7 @@
               "kind": "classmethod",
               "signature": "(cls, lights: Optional[Sequence[Any]] = None, offset: float = 1.0) -> List[str]",
               "summary": "Re-fit generated lights to their source geometry;",
-              "line": 920,
+              "line": 922,
               "deprecated": false
             }
           ]
@@ -22019,12 +22163,30 @@
               "deprecated": false
             },
             {
+              "name": "selection_summary",
+              "qualname": "NodeUtils.selection_summary",
+              "kind": "staticmethod",
+              "signature": "(limit: int = 10) -> Optional[Dict[str, Any]]",
+              "summary": "What is selected, as plain values: what a status readout (tentacle's",
+              "line": 1388,
+              "deprecated": false
+            },
+            {
               "name": "get_instances",
               "qualname": "NodeUtils.get_instances",
               "kind": "staticmethod",
               "signature": "(objects=None, return_parent_objects=False)",
               "summary": "Get any instances of given object, or if None given, get all instanced objects in the scene.",
-              "line": 1388,
+              "line": 1457,
+              "deprecated": false
+            },
+            {
+              "name": "select_instances",
+              "qualname": "NodeUtils.select_instances",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, whole_scene: bool = False) -> List[str]",
+              "summary": "Select *objects* together with their instances, or every instanced",
+              "line": 1482,
               "deprecated": false
             },
             {
@@ -22033,7 +22195,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, append='', freeze_transforms=False, center_pivot=True, delete_history=True, retain_bbox_scale=False, retain_bbox_per_axis=False)",
               "summary": "Replace target objects with instances of the source object.",
-              "line": 1471,
+              "line": 1566,
               "deprecated": false
             },
             {
@@ -22042,16 +22204,16 @@
               "kind": "classmethod",
               "signature": "(cls, node, intermediate: bool = True, descendants: bool = False) -> List[str]",
               "summary": "Every shape under *node* that is shared with another transform.",
-              "line": 1641,
+              "line": 1743,
               "deprecated": false
             },
             {
               "name": "uninstance",
               "qualname": "NodeUtils.uninstance",
               "kind": "classmethod",
-              "signature": "(cls, objects, freeze=False, delete_history=False, quiet=True)",
-              "summary": "Un-Instance the given objects.",
-              "line": 1819,
+              "signature": "(cls, objects=None, freeze=False, delete_history=False, quiet=True)",
+              "summary": "Un-Instance the given objects (``None``: the selection, ``[]`` with",
+              "line": 1922,
               "deprecated": false
             },
             {
@@ -22060,7 +22222,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, delete_history: bool = False, quiet: bool = True)",
               "summary": "Run a shape-editing operation on instanced objects without dragging their siblings along.",
-              "line": 2039,
+              "line": 2144,
               "deprecated": false
             },
             {
@@ -22069,7 +22231,7 @@
               "kind": "staticmethod",
               "signature": "(nodes) -> List[str]",
               "summary": "Keep only one transform per instance group.",
-              "line": 2195,
+              "line": 2300,
               "deprecated": false
             }
           ]
@@ -26315,7 +26477,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> dict",
               "summary": "The friendly-name -> runtime-command map understood by :meth:`open_editor`.",
-              "line": 84,
+              "line": 85,
               "deprecated": false
             },
             {
@@ -26324,7 +26486,7 @@
               "kind": "classmethod",
               "signature": "(cls, editor: str) -> Optional[str]",
               "summary": "Open ``editor`` -- a friendly name from :meth:`get_editor_types`, or a",
-              "line": 93,
+              "line": 94,
               "deprecated": false
             },
             {
@@ -26333,7 +26495,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "Annotate the host's way: Maya's Create > Annotation",
-              "line": 115,
+              "line": 116,
               "deprecated": false
             },
             {
@@ -26342,7 +26504,7 @@
               "kind": "staticmethod",
               "signature": "() -> str",
               "summary": "Open Blue Pencil, Maya's 2D sketching over the viewport",
-              "line": 132,
+              "line": 133,
               "deprecated": false
             },
             {
@@ -26351,7 +26513,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> dict",
               "summary": "The friendly-name -> MEL map understood by :meth:`set_tool`.",
-              "line": 164,
+              "line": 165,
               "deprecated": false
             },
             {
@@ -26360,7 +26522,7 @@
               "kind": "classmethod",
               "signature": "(cls, tool: str) -> str",
               "summary": "Activate a viewport tool: a friendly name from :meth:`get_tool_types`,",
-              "line": 173,
+              "line": 174,
               "deprecated": false
             },
             {
@@ -26369,7 +26531,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "The active tool: its friendly name from :meth:`get_tool_types` when",
-              "line": 202,
+              "line": 203,
               "deprecated": false
             },
             {
@@ -26378,7 +26540,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Get the main Maya window as a QMainWindow instance.",
-              "line": 218,
+              "line": 219,
               "deprecated": false
             },
             {
@@ -26387,7 +26549,7 @@
               "kind": "staticmethod",
               "signature": "(qt_object_name: str) -> Optional[str]",
               "summary": "Retrieve the internal Maya name of a menu given its Qt object name.",
-              "line": 247,
+              "line": 248,
               "deprecated": false
             },
             {
@@ -26396,7 +26558,7 @@
               "kind": "staticmethod",
               "signature": "(*args, **kwargs)",
               "summary": "Returns panel and panel configuration information.",
-              "line": 269,
+              "line": 270,
               "deprecated": false
             },
             {
@@ -26405,7 +26567,7 @@
               "kind": "staticmethod",
               "signature": "(with_focus: bool = True) -> Optional[str]",
               "summary": "Return a 3D model panel (viewport), suitable for commands like isolateSelect.",
-              "line": 286,
+              "line": 287,
               "deprecated": false
             },
             {
@@ -26414,7 +26576,7 @@
               "kind": "staticmethod",
               "signature": "(size, name='progressBar#', step_amount=1)",
               "summary": "# add esc key pressed return False",
-              "line": 326,
+              "line": 327,
               "deprecated": false
             },
             {
@@ -26423,7 +26585,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "List all UI objects.",
-              "line": 364,
+              "line": 365,
               "deprecated": false
             },
             {
@@ -26432,7 +26594,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Clears the contents of all cmdScrollFieldReporter UI objects in the current Maya session.",
-              "line": 380,
+              "line": 381,
               "deprecated": false
             },
             {
@@ -26441,7 +26603,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Select *objects* and scroll the Outliner to them.",
-              "line": 425,
+              "line": 426,
               "deprecated": false
             },
             {
@@ -26450,7 +26612,7 @@
               "kind": "staticmethod",
               "signature": "() -> int",
               "summary": "Redraw every Outliner panel.",
-              "line": 443,
+              "line": 444,
               "deprecated": false
             },
             {
@@ -26459,7 +26621,7 @@
               "kind": "staticmethod",
               "signature": "(url, logger=None) -> bool",
               "summary": "Handle ``action://`` links emitted by ``log_link()`` in a QTextBrowser.",
-              "line": 461,
+              "line": 462,
               "deprecated": false
             }
           ]

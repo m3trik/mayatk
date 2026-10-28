@@ -1019,5 +1019,125 @@ class TestIsolationSet(MayaTkTestCase):
             self.assertIn(tube.split("|")[-1], members, f"{tube} not isolated")
 
 
+class TestDisplayToggles(MayaTkTestCase):
+    """The Display menu's toggles (``tentacle/slots/display.py`` calls them
+    through ``self.tk``; blendertk's twins answer the same in Blender)."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = cmds.polyCube(name="dt_a")[0]
+        self.b = cmds.polyCube(name="dt_b")[0]
+        self.c = cmds.polyCube(name="dt_c")[0]
+        cmds.select(clear=True)
+
+    def _xray(self, node):
+        shape = cmds.listRelatives(node, shapes=True, fullPath=True)[0]
+        return bool(cmds.displaySurface(shape, query=True, xRay=True)[0])
+
+    def test_hide_and_show_act_on_the_selection(self):
+        cmds.select(self.a)
+        self.assertEqual(mtk.DisplayUtils.hide_objects(), ["dt_a"])
+        self.assertFalse(cmds.getAttr(f"{self.a}.visibility"))
+        cmds.select(self.a)  # Maya selects a hidden node (the Outliner)
+        self.assertEqual(mtk.DisplayUtils.show_objects(), ["dt_a"])
+        self.assertTrue(cmds.getAttr(f"{self.a}.visibility"))
+
+    def test_nothing_selected_is_an_empty_list(self):
+        for op in (
+            mtk.DisplayUtils.hide_objects,
+            mtk.DisplayUtils.show_objects,
+            mtk.DisplayUtils.toggle_xray,
+            mtk.DisplayUtils.toggle_wireframe,
+            mtk.DisplayUtils.toggle_template,
+            mtk.DisplayUtils.toggle_uv_border_edges,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(), [])
+        self.assertTrue(cmds.getAttr(f"{self.a}.visibility"))
+
+    def test_toggle_xray_takes_the_selection(self):
+        cmds.select([self.a, f"{self.b}.f[0]"])  # a component stands for its mesh
+        self.assertEqual(mtk.DisplayUtils.toggle_xray(), (True, 2))
+        self.assertTrue(self._xray(self.a) and self._xray(self.b))
+        self.assertFalse(self._xray(self.c))
+
+    def test_xray_others_and_clear(self):
+        cmds.select(self.a)
+        self.assertEqual(mtk.DisplayUtils.toggle_xray_others(), (True, 2))
+        self.assertEqual(
+            [self._xray(n) for n in (self.a, self.b, self.c)], [False, True, True]
+        )
+        cmds.select(clear=True)  # nothing selected: every shape is "other"
+        self.assertEqual(mtk.DisplayUtils.toggle_xray_others(), (True, 3))
+        mtk.DisplayUtils.clear_xray()
+        self.assertFalse(any(self._xray(n) for n in (self.a, self.b, self.c)))
+
+    def test_wireframe_toggles_together_and_set_shades_again(self):
+        mtk.DisplayUtils.set_wireframe([self.b])
+        cmds.select([self.a, self.b])  # the first, shaded, decides: all wireframe
+        self.assertIs(mtk.DisplayUtils.toggle_wireframe(), True)
+        for node in (self.a, self.b):
+            self.assertEqual(cmds.getAttr(f"{node}.overrideShading"), 0)
+        self.assertIs(mtk.DisplayUtils.toggle_wireframe(), False)
+        self.assertEqual(cmds.getAttr(f"{self.a}.overrideShading"), 1)
+        mtk.DisplayUtils.set_wireframe([self.c])
+        self.assertEqual(mtk.DisplayUtils.set_wireframe([self.c], False), ["dt_c"])
+        self.assertEqual(cmds.getAttr(f"{self.c}.overrideShading"), 1)
+
+    def test_template_is_uniform(self):
+        cmds.setAttr(f"{self.b}.template", True)
+        cmds.select([self.a, self.b])  # mixed: template both
+        state, nodes = mtk.DisplayUtils.toggle_template()
+        self.assertTrue(state)
+        self.assertEqual(sorted(nodes), ["dt_a", "dt_b"])
+        self.assertTrue(mtk.DisplayUtils.is_templated(self.a))
+        state, _nodes = mtk.DisplayUtils.toggle_template([self.a, self.b])
+        self.assertFalse(state)
+        self.assertFalse(mtk.DisplayUtils.is_templated(self.b))
+
+    def test_uv_border_edges_toggle_uniformly(self):
+        cmds.select([self.a, self.b])
+        shown = mtk.DisplayUtils.toggle_uv_border_edges()
+        self.assertTrue(shown)
+        self.assertTrue(all(cmds.polyOptions(self.a, query=True, displayMapBorder=True)))
+        self.assertFalse(mtk.DisplayUtils.toggle_uv_border_edges())
+        locator = cmds.spaceLocator()[0]
+        self.assertIsNone(mtk.DisplayUtils.toggle_uv_border_edges([locator]))
+
+    def test_polygon_display_cycles(self):
+        cmds.select(self.a)
+        ids = [mtk.DisplayUtils.cycle_component_ids() for _ in range(5)]
+        self.assertEqual(ids, ["vertex", "edge", "face", "uv", "off"])
+        normals = [mtk.DisplayUtils.cycle_normals_display() for _ in range(4)]
+        self.assertEqual(normals, ["face", "vertex", "tangent", "off"])
+        first = mtk.DisplayUtils.toggle_soft_edge_display()
+        self.assertIsInstance(first, bool)
+        self.assertEqual(mtk.DisplayUtils.toggle_soft_edge_display(), not first)
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.cycle_component_ids())
+        self.assertIsNone(mtk.DisplayUtils.cycle_normals_display())
+        self.assertIsNone(mtk.DisplayUtils.toggle_soft_edge_display())
+
+    @skipIfBatch("needs a model panel and the UV Editor's")
+    def test_viewport_toggles_flip_and_return(self):
+        for op in (
+            mtk.DisplayUtils.toggle_material_override,
+            mtk.DisplayUtils.toggle_wireframe_inactive,
+            mtk.DisplayUtils.toggle_uv_checker,
+        ):
+            with self.subTest(op=op.__name__):
+                first = op()
+                self.assertIsInstance(first, bool)
+                self.assertEqual(op(), not first)
+        first = mtk.DisplayUtils.toggle_uv_distortion()
+        self.assertIn(first, ("on", "off"))
+        self.assertNotEqual(mtk.DisplayUtils.toggle_uv_distortion(), first)
+
+    def test_the_wireframe_color_editor_has_a_friendly_name(self):
+        self.assertEqual(
+            mtk.UiUtils.get_editor_types()["Wireframe Color"], "objectColorPalette"
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

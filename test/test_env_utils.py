@@ -1147,5 +1147,38 @@ class TestReferenceScene(MayaTkTestCase):
         self.assertIn("merged", " ".join(logs.output))
 
 
+class TestSceneStatus(MayaTkTestCase):
+    """``EnvUtils.scene_status``: the facts tentacle's HUD shows and warns on
+    (blendertk's twin answers the same keys in Blender)."""
+
+    def test_a_new_scene(self):
+        cmds.file(new=True, force=True)
+        status = EnvUtils.scene_status()
+        self.assertEqual(
+            set(status),
+            {"symmetry", "xform_constraint", "workspace", "units", "fps",
+             "time_unit", "default_fps", "autosave", "autosave_scene", "saved"},
+        )
+        self.assertFalse(status["saved"])
+        self.assertFalse(status["autosave_scene"])
+        self.assertEqual(status["units"], cmds.currentUnit(query=True, fullName=True))
+        self.assertEqual(status["time_unit"], cmds.currentUnit(query=True, time=True))
+        self.assertGreater(status["fps"], 0)
+        self.assertIsInstance(status["autosave"], bool)
+        self.assertIsNone(status["xform_constraint"])
+
+    def test_the_default_rate_is_named(self):
+        cmds.file(new=True, force=True)
+        default = cmds.optionVar(query="workingUnitTimeDefault") or "film"
+        unit = cmds.currentUnit(query=True, time=True)
+        try:
+            cmds.currentUnit(time=default)
+            self.assertTrue(EnvUtils.scene_status()["default_fps"])
+            cmds.currentUnit(time="ntsc" if default != "ntsc" else "pal")
+            self.assertFalse(EnvUtils.scene_status()["default_fps"])
+        finally:
+            cmds.currentUnit(time=unit)
+
+
 if __name__ == "__main__":
     unittest.main()

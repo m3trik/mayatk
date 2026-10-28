@@ -1069,11 +1069,13 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
             )
 
     @classmethod
+    @CoreUtils.undoable
     def run_once(
         cls,
         nodes: Optional[Sequence[object]] = None,
         *,
         return_summary: bool = False,
+        select: bool = False,
         **config,
     ) -> Union[List[str], Tuple[List[str], Dict[str, object]]]:
         """One-shot: build an ``AutoInstancer`` from ``config`` and run it.
@@ -1084,9 +1086,18 @@ class AutoInstancer(ptk.LoggingMixin, _AutoInstancerInternal):
         …); ``nodes`` and ``return_summary`` are the :meth:`run` arguments. With
         ``return_summary=True`` returns ``(created, summary)`` — the run's
         :attr:`last_run_summary` — otherwise just ``created``.
+
+        With ``select``, what the run made that still exists -- a later pass
+        (combining what was not instanced) can consume an instance it made --
+        is selected and is all that is returned. One undo step (twin of
+        blendertk's ``AutoInstancer.run_once``).
         """
         instancer = cls(**config)
         created = instancer.run(nodes)
+        if select:
+            created = [node for node in created if cmds.objExists(node)]
+            if created:
+                cmds.select(created, replace=True)
         if return_summary:
             return created, instancer.last_run_summary
         return created

@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (346)
+## Added (364)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1040,6 +1040,21 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `core_utils/components.py::Components.set_edge_softness(cls, objects, soft: bool = True) -> None`
 - `core_utils/components.py::Components.set_to_face_normals(objects) -> None`
 - `core_utils/components.py::Components.toggle_normal_lock(objects) -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.clear_xray(cls) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.cycle_component_ids() -> Optional[str]`
+- `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
+- `display_utils/_display_utils.py::DisplayUtils.hide_objects(objects=None) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.set_wireframe(objects=None, state: bool = True) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.show_objects(objects=None) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_material_override() -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_soft_edge_display() -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_template(cls, objects=None)`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_uv_border_edges(objects=None) -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_uv_checker(cls) -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_uv_distortion(cls) -> Optional[str]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_wireframe(cls, objects=None)`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_wireframe_inactive() -> Optional[bool]`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_xray_others(cls, objects=None) -> Optional[Tuple[bool, int]]`
 - `display_utils/color_id.py::ColorId.get_color(cls, obj: str, check_material_color: bool = False, check_vertex_color: bool = False, check_wireframe_color: bool = False, check_outliner_color: bool = False, check_set: bool = False) -> Optional[Tuple[float, float, float]]`
 - `display_utils/color_id.py::ColorId.lead_object() -> Optional[str]`
 - `display_utils/color_id.py::ColorId.scene_objects() -> List[str]`
@@ -1060,6 +1075,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `edit_utils/naming/_naming.py::Naming.select_by_name(cls, pattern: str, regex: bool = False, ignore_case: bool = False, locators_only: bool = False) -> Tuple[List[str], int]`
 - `edit_utils/naming/_naming.py::Naming.select_link(cls, node: str) -> str`
 - `edit_utils/snap.py::Snap.source_and_target()`
+- `env_utils/_env_utils.py::EnvUtils.scene_status() -> Dict[str, Any]`
 - `env_utils/blender_bridge/_blender_bridge.py::BlenderBridge.params_registry(cls)`
 - `env_utils/handoff_export.py::BridgeHost(class)`
 - `env_utils/handoff_export.py::BridgeHost.install_package(spec: str) -> None`
@@ -1200,6 +1216,8 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `mat_utils/texture_path_editor.py::TexturePathEditor.stored_path(node) -> str`
 - `mat_utils/texture_path_editor.py::TexturePathEditor.texture_dir(self) -> str`
 - `mat_utils/texture_path_editor.py::TexturePathEditor.unresolved_file_nodes(self, file_nodes)`
+- `node_utils/_node_utils.py::NodeUtils.select_instances(cls, objects=None, whole_scene: bool = False) -> List[str]`
+- `node_utils/_node_utils.py::NodeUtils.selection_summary(limit: int = 10) -> Optional[Dict[str, Any]]`
 - `node_utils/attributes/channels/_channels.py::Channels.channel_box_selection(self)`
 - `node_utils/attributes/channels/_channels.py::Channels.defer(fn)`
 - `node_utils/attributes/channels/_channels.py::Channels.get_custom_attrs(node)`
@@ -1313,17 +1331,26 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (6)
+## Signature changed (9)
 
+- `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
+  - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
+  - now: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, select: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
 - `core_utils/components.py::Components.transfer_creased_edges`
   - was: `(frm, to)`
   - now: `(frm=None, to=None)`
+- `display_utils/_display_utils.py::DisplayUtils.toggle_xray`
+  - was: `(cls, objects: Union[str, object, List]) -> Optional[Tuple[bool, int]]`
+  - now: `(cls, objects: Union[str, object, List] = None) -> Optional[Tuple[bool, int]]`
 - `edit_utils/bridge.py::Bridge.bridge`
   - was: `(edges, **kwargs)`
   - now: `(edges, *, curve_type=None, divisions=None, smoothing_angle=None, offset=None, taper=None, twist=None, cleanup_curves=False, **kwargs)`
 - `mat_utils/shader_templates/_shader_templates.py::ShaderTemplates.restore_template`
   - was: `(file_path, texture_paths=None, name=None, logger=None)`
   - now: `(cls, file_path, texture_paths=None, name=None, logger=None)`
+- `node_utils/_node_utils.py::NodeUtils.uninstance`
+  - was: `(cls, objects, freeze=False, delete_history=False, quiet=True)`
+  - now: `(cls, objects=None, freeze=False, delete_history=False, quiet=True)`
 - `rig_utils/telescope_rig.py::TelescopeRig.teardown`
   - was: `(self, bundle: Optional[TelescopeRigBundle] = None) -> bool`
   - now: `(self, bundle: Union[TelescopeRigBundle, List[TelescopeRigBundle], None] = None) -> bool`

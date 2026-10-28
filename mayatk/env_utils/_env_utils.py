@@ -654,6 +654,51 @@ class EnvUtils(ptk.HelpMixin):
         return any(t not in startup for t in cmds.ls(type="transform", long=True) or [])
 
     @staticmethod
+    def scene_status() -> Dict[str, Any]:
+        """The scene's modelling and session state as plain values: what a
+        status readout (tentacle's HUD) shows and warns on. Twin of blendertk's
+        ``EnvUtils.scene_status``; a fact a host has no answer for is ``None``.
+
+        Returns:
+            dict: ``symmetry`` (the symmetry axis, upper case) and
+            ``xform_constraint`` (the active transform constraint), each None
+            when off; ``workspace`` (the project folder's name, None for the
+            default); ``units`` (the linear working unit's name); ``fps``
+            (float) and ``time_unit`` (Maya's name for it); ``default_fps``
+            (the time unit is the one new scenes get); ``autosave`` (autosave
+            is on); ``autosave_scene`` (the open scene is an autosave);
+            ``saved`` (the scene is a file on disk).
+        """
+        scene = str(cmds.file(query=True, sceneName=True) or "")
+        symmetry = None
+        if cmds.symmetricModelling(query=True, symmetry=True):
+            symmetry = str(cmds.symmetricModelling(query=True, axis=True)).upper()
+        constraint = cmds.xformConstraint(query=True, type=True)
+        workspace = EnvUtils.get_env_info("workspace_dir")
+        time_unit = cmds.currentUnit(query=True, time=True)
+        # The unit new scenes get (Preferences); an unset optionVar reads 0,
+        # which is Maya's factory film.
+        default_unit = cmds.optionVar(query="workingUnitTimeDefault") or "film"
+        try:
+            folders = EnvUtils.find_autosave_directories() if scene else []
+        except Exception:  # a folder probe must not break a status readout
+            folders = []
+        return {
+            "symmetry": symmetry,
+            "xform_constraint": constraint if constraint not in (None, "none") else None,
+            "workspace": workspace if workspace and workspace != "default" else None,
+            "units": cmds.currentUnit(query=True, fullName=True, linear=True),
+            "fps": EnvUtils.scene_settings()["fps"],
+            "time_unit": time_unit,
+            "default_fps": time_unit == default_unit,
+            "autosave": bool(cmds.autoSave(query=True, enable=True)),
+            # is_under: case folds only where the filesystem does, on a folder
+            # boundary (a startswith put /proj/autosave2 inside /proj/autosave).
+            "autosave_scene": any(ptk.FileUtils.is_under(scene, f) for f in folders),
+            "saved": bool(scene) and os.path.isfile(scene),
+        }
+
+    @staticmethod
     def scene_settings() -> Dict[str, float]:
         """The live scene's time setup as the bridges' ``scene`` record (see
         :attr:`SCENE_SETTINGS_KEYS`). The fps comes from the API, so a custom rate

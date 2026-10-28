@@ -875,40 +875,19 @@ class DisplayMacros:
     @staticmethod
     def m_component_id_display():
         """Toggle Component Id Display through vertices, edges, faces, UVs, and off."""
-        # Query the current state of component ID display settings for vertices, edges, faces, and UVs.
-        # polyOptions returns None when no polygon mesh is in the selection.
-        state = cmds.polyOptions(q=True, displayItemNumbers=True)
-        if not state:
+        state = DisplayUtils.cycle_component_ids()
+        if state is None:
             cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
-        current_state = state[:4]
-
-        # Determine the next state to switch to
-        if True not in current_state:
-            next_state_index = 0  # If all are False, start with vertices
-        else:
-            # Find the first True, switch to the next state or turn all off if it's the last one
-            current_index = current_state.index(True)
-            next_state_index = (
-                current_index + 1
-            ) % 5  # Cycle through 0-4 (vertices, edges, faces, UVs, off)
-
-        # Define the configurations for toggling component IDs
-        configurations = [
-            {"displayItemNumbers": (1, 0, 0, 0)},  # Vertex IDs
-            {"displayItemNumbers": (0, 1, 0, 0)},  # Edge IDs
-            {"displayItemNumbers": (0, 0, 1, 0)},  # Face IDs
-            {"displayItemNumbers": (0, 0, 0, 1)},  # UV IDs
-            {"displayItemNumbers": (0, 0, 0, 0)},  # Turn all off
-        ]
-        labels = ["vertex IDs", "edge IDs", "face IDs", "UV IDs", "Off"]
-
-        # Apply the selected configuration
-        cmds.polyOptions(activeObjects=True, **configurations[next_state_index])
-
-        # Display message in the viewport
+        labels = {
+            "vertex": "vertex IDs",
+            "edge": "edge IDs",
+            "face": "face IDs",
+            "uv": "UV IDs",
+            "off": "Off",
+        }
         cmds.inViewMessage(
-            amg=f"Component ID Display: <hl>{labels[next_state_index]}</hl>.",
+            amg=f"Component ID Display: <hl>{labels[state]}</hl>.",
             pos="topCenter",
             fade=True,
         )
@@ -916,86 +895,27 @@ class DisplayMacros:
     @staticmethod
     def m_normals_display():
         """Toggle face normals, vertex normals, tangents, and off."""
-        # polyOptions returns None when no polygon mesh is in the selection.
-        tangent_state = cmds.polyOptions(q=True, displayTangent=True)
-        if not tangent_state:
+        state = DisplayUtils.cycle_normals_display()
+        if state is None:
             cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
-
-        current_tangent = tangent_state[0]
-        current_normal = cmds.polyOptions(q=True, displayNormal=True)[0]
-        is_facet = cmds.polyOptions(q=True, facet=True)[0]
-        is_vertex = cmds.polyOptions(q=True, point=True)[0]
-
-        # Define the current state based on queries
-        if current_tangent:
-            current_state = 3  # Tangents are displayed
-        elif current_normal and is_vertex:
-            current_state = 2  # Vertex normals are displayed
-        elif current_normal and is_facet:
-            current_state = 1  # Facet normals are displayed
-        else:
-            current_state = 0  # All displays are off
-
-        # Determine the next state to switch to
-        next_state = (current_state + 1) % 4  # Cycle through the states: 0, 1, 2, 3
-
-        # Configuration for each state
-        if next_state == 0:
-            cmds.polyOptions(displayNormal=False, displayTangent=False)
-        elif next_state == 1:
-            cmds.polyOptions(
-                displayNormal=True,
-                facet=True,
-                point=False,
-                displayTangent=False,
-                sizeNormal=1,
-            )
-        elif next_state == 2:
-            cmds.polyOptions(
-                displayNormal=True,
-                point=True,
-                facet=False,
-                displayTangent=False,
-                sizeNormal=1,
-            )
-        elif next_state == 3:
-            cmds.polyOptions(displayTangent=True, displayNormal=False)
-
-        # Messages for each state
-        messages = [
-            "Normals Display <hl>Off</hl>",
-            "<hl>Facet</hl> Normals Display <hl>On</hl>",
-            "<hl>Vertex</hl> Normals Display <hl>On</hl>",
-            "<hl>Tangent</hl> Display <hl>On</hl>",
-        ]
-
-        # Display message in the viewport using inViewMessage
-        cmds.inViewMessage(amg=messages[next_state], pos="topCenter", fade=True)
+        messages = {
+            "off": "Normals Display <hl>Off</hl>",
+            "face": "<hl>Facet</hl> Normals Display <hl>On</hl>",
+            "vertex": "<hl>Vertex</hl> Normals Display <hl>On</hl>",
+            "tangent": "<hl>Tangent</hl> Display <hl>On</hl>",
+        }
+        cmds.inViewMessage(amg=messages[state], pos="topCenter", fade=True)
 
     @staticmethod
     def m_soft_edge_display():
         """Toggle Soft Edge Display."""
-        # Query the current setting for all edges display.
-        # polyOptions returns None when no polygon mesh is in the selection.
-        res = cmds.polyOptions(q=True, ae=True)
-        if not res:
+        soft = DisplayUtils.toggle_soft_edge_display()
+        if soft is None:
             cmds.inViewMessage(amg="Select a polygon mesh.", pos="topCenter", fade=True)
             return
-        all_edges_visible = res[0]
-
-        # Toggle the edge display based on the current state
-        if all_edges_visible:
-            # If all edges are currently visible, switch to soft edges only
-            cmds.polyOptions(ae=False, se=True)
-            message = "Soft Edge Display <hl>On</hl>"
-        else:
-            # If not all edges are visible, it implies soft edges are active; switch to show all edges
-            cmds.polyOptions(se=False, ae=True)
-            message = "All Edges Display <hl>On</hl>"
-
-        # Display message in the viewport using inViewMessage
-        cmds.inViewMessage(amg=message, pos="topCenter", fade=True)
+        message = "Soft Edge Display" if soft else "All Edges Display"
+        cmds.inViewMessage(amg=f"{message} <hl>On</hl>", pos="topCenter", fade=True)
 
     @staticmethod
     def m_toggle_visibility():
@@ -1018,23 +938,14 @@ class DisplayMacros:
             )
             return
 
-        # polyOptions answers None when nothing given is a polygon mesh, and
-        # selecting a locator / joint / curve is routine -- the old per-object
-        # loop subscripted that None and dropped every mesh queued behind it.
-        state = cmds.polyOptions(objects, query=True, displayMapBorder=True)
-        if not state:
+        shown = DisplayUtils.toggle_uv_border_edges(objects)
+        if shown is None:
             cmds.inViewMessage(
                 statusMessage="<hl>No polygon objects in the selection.</hl>",
                 pos="topCenter",
                 fade=True,
             )
             return
-
-        # Uniform, not per-object: toggling each one against its own state left
-        # a mixed selection mixed, and the loop's message reported only whatever
-        # the last object happened to do.
-        shown = not all(state)
-        cmds.polyOptions(objects, displayMapBorder=shown)
         cmds.inViewMessage(
             statusMessage=f"UV Border Edges <hl>{'Shown' if shown else 'Hidden'}</hl>.",
             pos="topCenter",
@@ -1204,24 +1115,14 @@ class DisplayMacros:
     @staticmethod
     @CoreUtils.selected
     def m_wireframe_toggle(objects) -> None:
-        """Toggle Wireframe Display on selected objects, or on all objects if none are selected."""
-        objects = objects or cmds.ls(type="mesh")
-        if objects:
-            # Check the current state of the first object in the list
-            current_state: bool = cmds.getAttr(f"{objects[0]}.overrideShading") == 1
-            # Toggle the overrideDisplayType attribute for all objects
-            for obj in objects:
-                cmds.setAttr(f"{obj}.overrideEnabled", 1)
-                new_state = 0 if current_state else 1  # 0: Normal, 1: Wireframe
-                cmds.setAttr(f"{obj}.overrideShading", new_state)
-
-            # Provide feedback message
-            message = "Wireframe" if not current_state else "Shaded"
-            cmds.inViewMessage(
-                statusMessage=f"Display mode is now <hl>{message}</hl>.",
-                pos="topCenter",
-                fade=True,
-            )
+        """Toggle the selected objects between wireframe and shaded, together."""
+        wire = DisplayUtils.toggle_wireframe(objects)
+        message = "Wireframe" if wire else "Shaded"
+        cmds.inViewMessage(
+            statusMessage=f"Display mode is now <hl>{message}</hl>.",
+            pos="topCenter",
+            fade=True,
+        )
 
     @staticmethod
     def m_grid() -> bool:
@@ -1474,24 +1375,16 @@ class DisplayMacros:
         default material so you can read silhouette and form without texture or
         shading distraction. Press again to restore the real materials.
         """
-        panel = UiUtils.get_model_panel(with_focus=True)
-        if not panel:
+        state = DisplayUtils.toggle_material_override()
+        if state is None:
             cmds.inViewMessage(
                 statusMessage="Material Override requires an active <hl>3D viewport</hl>.",
                 pos="topCenter",
                 fade=True,
             )
             return
-
-        # Query the current state of default material usage
-        state = cmds.modelEditor(panel, q=True, useDefaultMaterial=True)
-
-        # Toggle the state of the default material
-        cmds.modelEditor(panel, edit=True, useDefaultMaterial=not state)
-
-        # Display the toggle state in the viewport
         cmds.inViewMessage(
-            statusMessage=f"Default Material Override: <hl>{'On' if not state else 'Off'}</hl>.",
+            statusMessage=f"Default Material Override: <hl>{'On' if state else 'Off'}</hl>.",
             pos="topCenter",
             fade=True,
         )

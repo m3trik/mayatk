@@ -277,6 +277,15 @@ class TestLightsFromGeometry(MayaTkTestCase):
         cmds.select(clear=True)
         self.assertEqual(mtk.LightUtils.lights_from_geometry(), [])
 
+    def test_one_click_is_one_undo_step(self):
+        """The Lighting menu's button: every light it made goes with one undo."""
+        self._floor()
+        cmds.select([self._troffer("undo_a"), self._troffer("undo_b", x=500.0)])
+        created = mtk.LightUtils.lights_from_geometry()
+        self.assertEqual(len(created), 2)
+        cmds.undo()
+        self.assertEqual([n for n in created if cmds.objExists(n)], [])
+
 
 class TestClusteringAndOrientation(MayaTkTestCase):
     """Connected-face clustering, and the oriented solve that replaces the box."""
