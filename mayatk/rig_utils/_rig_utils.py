@@ -753,6 +753,32 @@ class RigUtils(ptk.HelpMixin):
     )
 
     @classmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def freeze_and_reanchor(
+        cls, objects=None, reanchor: bool = True, **freeze_options
+    ) -> list:
+        """Freeze Transforms, then -- *reanchor* -- restore the world anchor of each
+        GRP > LOC > GEO rig the freeze collapsed (:meth:`restore_rig_anchors`):
+        the Freeze Transforms panel's one call. ``XformUtils`` cannot make the
+        second step itself (rigs are the part above it). Twin of blendertk's
+        ``RigUtils.freeze_and_reanchor``. One undo step.
+
+        Parameters:
+            objects (str/list/None): The transforms; None takes the selection.
+            reanchor (bool): Restore the rig anchors after the freeze.
+            **freeze_options: :meth:`XformUtils.freeze_transforms` keywords.
+
+        Returns:
+            (list): The freeze's result; ``[]`` (nothing runs) with nothing
+                selected.
+        """
+        frozen = XformUtils.freeze_transforms(objects, **freeze_options)
+        if reanchor:
+            cls.restore_rig_anchors(objects, traverse=True)
+        return frozen
+
+    @classmethod
     @CoreUtils.undoable
     def restore_rig_anchors(
         cls,

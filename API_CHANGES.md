@@ -921,7 +921,7 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.t_tt_dst_uvset_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 - `uv_utils/texture_combine/texture_combine_slots.py::TextureCombineSlots.tbl_sources_init` → `tentacle.slots.tools.texture_combine.TextureCombineSlots` (from 0.30.0)
 
-## Added (417)
+## Added (432)
 
 - `anim_utils/_anim_utils.py::AnimUtils.get_current_frame() -> float`
 - `anim_utils/blendshape_animator/_blendshape_animator.py::BlendshapeAnimator.apply_tweens(self, tweens: Optional[List[Target]] = None, skip_duplicates: bool = True, validate_topology: bool = False) -> List[Tuple[Target, ApplyStatus]]`
@@ -1060,7 +1060,9 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/_display_utils.py::DisplayUtils.clear_xray(cls) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_component_ids() -> Optional[str]`
 - `display_utils/_display_utils.py::DisplayUtils.cycle_normals_display() -> Optional[str]`
+- `display_utils/_display_utils.py::DisplayUtils.get_smooth_level(objects=None) -> Optional[dict]`
 - `display_utils/_display_utils.py::DisplayUtils.hide_objects(objects=None) -> List[str]`
+- `display_utils/_display_utils.py::DisplayUtils.set_smooth_level(cls, objects=None, level: int = None, adaptive_level: int = None) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.set_wireframe(objects=None, state: bool = True) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.show_objects(objects=None) -> List[str]`
 - `display_utils/_display_utils.py::DisplayUtils.toggle_material_override() -> Optional[bool]`
@@ -1078,12 +1080,16 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `display_utils/color_id.py::ColorId.select_by_color(cls, target_color: Tuple[float, float, float], threshold: float = 0.1, **checks) -> List[str]`
 - `display_utils/color_id.py::ColorUtils.get_average_vertex_color(obj: str) -> Optional[Tuple[float, float, float]]`
 - `display_utils/color_id.py::ColorUtils.get_outliner_color(obj: str) -> Optional[Tuple[float, float, float]]`
+- `edit_utils/_edit_utils.py::EditUtils.apply_subdivision(objects=None) -> List[str]`
 - `edit_utils/_edit_utils.py::EditUtils.boolean_objects(objects=None, operation='difference', interactive=False)`
 - `edit_utils/_edit_utils.py::EditUtils.convert_objects(cls, objects, conversion: str) -> List[str]`
 - `edit_utils/_edit_utils.py::EditUtils.get_conversion_types(cls) -> Dict[str, str]`
 - `edit_utils/_edit_utils.py::EditUtils.get_symmetry() -> dict`
+- `edit_utils/_edit_utils.py::EditUtils.quadrangulate(objects=None) -> List[str]`
 - `edit_utils/_edit_utils.py::EditUtils.select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0)`
 - `edit_utils/_edit_utils.py::EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict`
+- `edit_utils/_edit_utils.py::EditUtils.subdivide_mesh(objects=None) -> List[str]`
+- `edit_utils/_edit_utils.py::EditUtils.triangulate(objects=None) -> List[str]`
 - `edit_utils/_edit_utils.py::EditUtils.wedge(objects=None, angle=None, divisions=None)`
 - `edit_utils/curtain/_curtain.py::Curtain(class)`
 - `edit_utils/curtain/_curtain.py::Curtain.create(rail: Sequence[Vec], **opts) -> str`
@@ -1280,8 +1286,11 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `node_utils/attributes/channels/_channels.py::Channels.unwatch(owner=None, tokens=())`
 - `node_utils/attributes/channels/_channels.py::Channels.watch_nodes(cls, owner, nodes, on_rebuild, on_attr, on_values)`
 - `node_utils/attributes/channels/_channels.py::Channels.watch_scene(cls, owner, on_rebuild, on_values, widget=None)`
+- `nurbs_utils/_nurbs_utils.py::NurbsUtils.curve_action(cls, action: str, curves=None) -> List[str]`
+- `nurbs_utils/_nurbs_utils.py::NurbsUtils.revolve(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]`
 - `nurbs_utils/curve_to_tube.py::CurveToTube.describe(tubes) -> str`
 - `nurbs_utils/image_tracer.py::BluePencilMixin.open_blue_pencil() -> None`
+- `rig_utils/_rig_utils.py::RigUtils.freeze_and_reanchor(cls, objects=None, reanchor: bool = True, **freeze_options) -> list`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.group_uuid(self) -> Optional[str]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.parts_of(self, nodes: Sequence[str]) -> List[str]`
 - `rig_utils/articulated_rig/_articulated_rig.py::ArticulatedRig.select(nodes: Sequence[str]) -> None`
@@ -1338,8 +1347,14 @@ _Diff vs the last release (origin/main @ f58c05fa)._
 - `uv_utils/texture_transfer.py::TextureTransfer.meshes(objects) -> List[str]`
 - `uv_utils/texture_transfer.py::TextureTransfer.selection_sides(cls, mode: str = 'auto', stored=()) -> Tuple[str, Optional[List[str]], List[str]]`
 - `uv_utils/texture_transfer.py::TextureTransfer.shader_types() -> Dict[str, str]`
+- `xform_utils/_xform_utils.py::XformUtils.align_to(cls, mode, objects=None) -> List[str]`
 - `xform_utils/_xform_utils.py::XformUtils.center_pivot(objects=None, mode: str = 'object') -> list`
+- `xform_utils/_xform_utils.py::XformUtils.get_transform_constraint(cls) -> dict`
+- `xform_utils/_xform_utils.py::XformUtils.get_transform_snap(cls) -> dict`
+- `xform_utils/_xform_utils.py::XformUtils.move_to_target(cls, objects=None, pivot='center', all_to_last=True, match_scale=False) -> List[str]`
 - `xform_utils/_xform_utils.py::XformUtils.reset_pivot(objects=None, position: bool = True, orientation: bool = True) -> list`
+- `xform_utils/_xform_utils.py::XformUtils.set_transform_constraint(cls, kind, state=True) -> dict`
+- `xform_utils/_xform_utils.py::XformUtils.set_transform_snap(cls, kind, state=None, increment=None) -> dict`
 
 ## Deprecations (13)
 
@@ -1384,7 +1399,7 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `rig_utils/tube_rig/tube_rig_slots.py::RigModeConfig`
 - `ui_utils/maya_ui_handler.py::MayaUiHandler.default_persistence`
 
-## Signature changed (14)
+## Signature changed (17)
 
 - `core_utils/auto_instancer/_auto_instancer.py::AutoInstancer.run_once`
   - was: `(cls, nodes: Optional[Sequence[object]] = None, *, return_summary: bool = False, **config) -> Union[List[str], Tuple[List[str], Dict[str, object]]]`
@@ -1428,3 +1443,12 @@ _Still resolvable at the same call site -- hoisted to a base class or re-exporte
 - `uv_utils/texture_combine/texture_combine.py::TextureCombine.default_name`
   - was: `(self, transforms: Sequence[str]) -> str`
   - now: `(self, transforms: Sequence[str], fallback: str = 'combined') -> str`
+- `xform_utils/_xform_utils.py::XformUtils.drop_to_grid`
+  - was: `(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)`
+  - now: `(cls, objects=None, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)`
+- `xform_utils/_xform_utils.py::XformUtils.match_scale`
+  - was: `(cls, a, b, scale=True, average=False)`
+  - now: `(cls, a=None, b=None, scale=True, average=False)`
+- `xform_utils/_xform_utils.py::XformUtils.scale_connected_edges`
+  - was: `(objects, scale_factor=1.1) -> None`
+  - now: `(objects=None, scale_factor=1.1) -> int`

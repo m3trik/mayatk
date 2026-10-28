@@ -13,6 +13,7 @@ Tests for XformUtils class functionality including:
 - Orientation (aim, orient to vector, get orientation)
 """
 
+import contextlib
 import math
 import unittest
 import unittest.mock
@@ -2887,6 +2888,126 @@ class TestPivotMenuOperations(MayaTkTestCase):
             [round(v, 4) for v in cmds.getAttr(f"{self.b}.translate")[0]],
             [6.0, 1.0, 0.0],
         )
+
+
+class TestTransformPanelOps(MayaTkTestCase):
+    """The transform panel's operations (tentacle's composed TransformSlots)."""
+
+    def _cube(self, name, x=0.0, y=0.0):
+        cube = cmds.polyCube(name=name)[0]
+        cmds.move(x, y, 0, cube)
+        return cube
+
+    def _center(self, node):
+        return XformUtils.get_bounding_box(node, "center")
+
+    def test_move_to_target_moves_all_to_the_last(self):
+        a, b, c = self._cube("mt_a", 0), self._cube("mt_b", 3), self._cube("mt_c", 9)
+        moved = XformUtils.move_to_target([a, b, c], pivot="center")
+        self.assertEqual(moved, [a, b])
+        for node in (a, b):
+            self.assertAlmostEqual(self._center(node)[0], 9.0, places=4)
+        self.assertEqual(sorted(cmds.ls(selection=True)), sorted([a, b]))
+
+    def test_move_to_target_first_to_the_rest(self):
+        a, b, c = self._cube("mt_d", 0), self._cube("mt_e", 4), self._cube("mt_f", 8)
+        self.assertEqual(XformUtils.move_to_target([a, b, c], all_to_last=False), [a])
+        self.assertAlmostEqual(self._center(a)[0], 6.0, places=4)
+
+    def test_move_to_target_needs_two(self):
+        self.assertEqual(XformUtils.move_to_target([self._cube("mt_g")]), [])
+
+    def test_match_scale_from_the_ordered_selection(self):
+        cmds.selectPref(trackSelectionOrder=True)
+        a, b = self._cube("ms_a"), self._cube("ms_b", 4)
+        cmds.scale(2, 3, 4, b)
+        cmds.select(a)
+        cmds.select(b, add=True)
+        self.assertTrue(XformUtils.match_scale(None, None))
+        size = XformUtils.get_bounding_box(a, "size")
+        self.assertAlmostEqual(size[1], 3.0, places=3)
+        cmds.select(a)
+        self.assertEqual(XformUtils.match_scale(None, None), [])
+
+    def test_drop_to_grid_takes_and_keeps_the_selection(self):
+        cube = self._cube("dg_cube", y=5)
+        cmds.select(cube)
+        self.assertEqual(
+            [n.rsplit("|", 1)[-1] for n in XformUtils.drop_to_grid(None, align="Min")],
+            [cube],
+        )
+        self.assertAlmostEqual(XformUtils.get_bounding_box(cube, "ymin"), 0.0, places=4)
+        self.assertEqual(cmds.ls(selection=True), [cube])
+        cmds.select(clear=True)
+        self.assertEqual(XformUtils.drop_to_grid(None), [])
+
+    def test_scale_connected_edges_counts_the_sets(self):
+        cube = self._cube("sce_cube")
+        top = [
+            f"{cube}.e[{i}]"
+            for i in range(cmds.polyEvaluate(cube, edge=True))
+            if all(
+                abs(cmds.pointPosition(v, world=True)[1] - 0.5) < 1e-4
+                for v in cmds.ls(
+                    cmds.polyListComponentConversion(f"{cube}.e[{i}]", toVertex=True),
+                    flatten=True,
+                )
+            )
+        ]
+        self.assertEqual(XformUtils.scale_connected_edges(top, scale_factor=2.0), 1)
+
+    def test_align_to_refuses_an_unknown_mode(self):
+        with self.assertRaises(ValueError):
+            XformUtils.align_to("Nowhere")
+
+    def test_move_to_pivots_are_pivot_options(self):
+        self.assertLessEqual(
+            set(XformUtils.MOVE_TO_PIVOTS), set(XformUtils.get_pivot_options())
+        )
+
+    def test_transform_constraint_round_trip(self):
+        try:
+            self.assertTrue(XformUtils.set_transform_constraint("edge", True)["edge"])
+            state = XformUtils.set_transform_constraint("surface", False)  # not current
+            self.assertTrue(state["edge"])
+            self.assertFalse(XformUtils.set_transform_constraint("edge", False)["edge"])
+            with self.assertRaises(ValueError):
+                XformUtils.set_transform_constraint("vertex", True)
+        finally:
+            cmds.xformConstraint(type="none")
+
+    def test_transform_snap_maps_state_to_snap_and_relative(self):
+        calls = []
+
+        def fake(*args, **kwargs):
+            calls.append((args, kwargs))
+            return 0
+
+        names = ("manipMoveContext", "manipScaleContext", "manipRotateContext",
+                 "texMoveContext", "texScaleContext", "texRotateContext")
+        with contextlib.ExitStack() as stack:
+            for name in names:
+                stack.enter_context(unittest.mock.patch.object(cmds, name, fake))
+            for state, snap, relative in ((0, False, False), (True, True, True),
+                                          (2, True, False)):
+                calls.clear()
+                XformUtils.set_transform_snap("move", state)
+                edit = calls[0][1]
+                self.assertEqual((edit["snap"], edit["snapRelative"]), (snap, relative))
+            calls.clear()
+            XformUtils.set_transform_snap("rotate", increment=15.0)
+            self.assertEqual(calls[0], (("Rotate",), {"edit": True, "snapValue": 15.0}))
+        with self.assertRaises(ValueError):
+            XformUtils.set_transform_snap("shear", True)
+
+    def test_freeze_and_reanchor_freezes_and_stamps(self):
+        cube = self._cube("fz_cube", 3)
+        cmds.select(cube)
+        mtk.RigUtils.freeze_and_reanchor(None, reanchor=True, translate=True)
+        self.assertTrue(cmds.attributeQuery("original_T_bake", node=cube, exists=True))
+        self.assertAlmostEqual(cmds.getAttr(f"{cube}.translateX"), 0.0, places=4)
+        cmds.select(clear=True)
+        self.assertEqual(mtk.RigUtils.freeze_and_reanchor(None), [])
 
 
 if __name__ == "__main__":

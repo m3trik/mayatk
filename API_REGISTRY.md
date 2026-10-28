@@ -1211,7 +1211,7 @@ Scene repair helpers: OCIO / color management, unknown nodes and plugins,
 
 Transform diagnostics and repair helpers.
 
-- **[`class TransformDiagnostics(_TransformDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/transform_diag.py#L107)** — Operations for inspecting and fixing common transform issues.
+- **[`class TransformDiagnostics(_TransformDiagnosticsInternal)`](mayatk/mayatk/core_utils/diagnostics/transform_diag.py#L108)** — Operations for inspecting and fixing common transform issues.
   - `TransformDiagnostics.get_sheared(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None) -> List[str]` *(class)* — Return the transforms carrying their own shear.
   - `TransformDiagnostics.get_non_orthogonal(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, detailed: bool = False) -> Union[List[str], Dict[str, dict]]` *(class)* — Return the transforms whose evaluated (world) axes are not perpendicular.
   - `TransformDiagnostics.get_non_orthogonal_local(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, frames: Optional[Sequence[float]] = None) -> Dict[str, float]` *(class)* — Return ``{transform: worst skew}`` for PARENT-RELATIVE axes that are
@@ -1333,6 +1333,8 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `DisplayUtils.get_isolated_panels() -> List[str]` *(static)* — Every model panel that currently has Isolate Select turned on.
   - `DisplayUtils.add_to_isolation_set(cls, objects: Union[str, object, List[Union[str, object]]]) -> List[str]` *(class)* — Add transform(s) to the isolation set of every isolated viewport.
   - `DisplayUtils.set_smooth_preview(cls, objects, display: int = None, level: int = None, adaptive_level: int = None, subd_comps: bool = None) -> List[str]` *(class)* — Configure smooth-mesh preview on the mesh shapes under *objects*.
+  - `DisplayUtils.get_smooth_level(objects=None) -> Optional[dict]` *(static)* — The smooth-preview levels of the first mesh under *objects* (None: the
+  - `DisplayUtils.set_smooth_level(cls, objects=None, level: int = None, adaptive_level: int = None) -> List[str]` *(class)* — Show the smooth mesh preview on the meshes under *objects* (None: the
   - `DisplayUtils.get_surface_shapes(objects: Union[str, object, List]) -> List[str]` *(static)* — Visible (non-intermediate) surface shapes at or under the given nodes.
   - `DisplayUtils.is_xray(cls, objects: Union[str, object, List]) -> bool` *(class)* — True when EVERY surface shape at or under *objects* is x-rayed.
   - `DisplayUtils.set_xray(cls, objects: Union[str, object, List], state: bool = True, resync: bool = True) -> List[str]` *(class)* — Set the x-ray flag on every surface shape at or under *objects*.
@@ -1396,7 +1398,7 @@ Maya's lengths and angles, converted by the kind of query that read them.
 <a id="edit_utils--_edit_utils"></a>
 ### `edit_utils/_edit_utils.py`
 
-- **[`class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L674)**
+- **[`class EditUtils(pythontk.HelpMixin, _EditUtilsInternal)`](mayatk/mayatk/edit_utils/_edit_utils.py#L690)**
   - `EditUtils.get_symmetry() -> dict` *(static)* — Maya's modeling symmetry (``symmetricModelling``): what tentacle's
   - `EditUtils.set_symmetry(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict` *(static)* — Set Maya's modeling symmetry: an axis on or off, and/or its space.
   - `EditUtils.combine_objects(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)` *(static)* — Combine multiple meshes.
@@ -1409,6 +1411,10 @@ Maya's lengths and angles, converted by the kind of query that read them.
   - `EditUtils.select_edges_by_angle(objects=None, low_angle=0.0, high_angle=180.0)` *(static)* — Select the edges whose two faces meet at an angle within
   - `EditUtils.merge_vertex_pairs(vertices)` *(static)* — Merge vertices in pairs by moving them to their center and merging.
   - `EditUtils.detach_components(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]` *(static)* — Detach mesh components (vertices or faces) from their parent mesh.
+  - `EditUtils.quadrangulate(objects=None) -> List[str]` *(static)* — Quadrangulate the meshes or faces of *objects* (None: the selection):
+  - `EditUtils.triangulate(objects=None) -> List[str]` *(static)* — Triangulate the meshes or faces of *objects* (None: the selection)
+  - `EditUtils.subdivide_mesh(objects=None) -> List[str]` *(static)* — Add Divisions to the meshes or faces of *objects* (None: the selection):
+  - `EditUtils.apply_subdivision(objects=None) -> List[str]` *(static)* — Convert the smooth mesh preview of the meshes in *objects* (None: the
   - `EditUtils.decimate(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]` *(static)* — Decimate (``polyReduce``) meshes toward a target reduction percentage.
   - `EditUtils.dissolve_coplanar(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]` *(static)* — Planar decimation (limited dissolve) — merge faces across near-coplanar edges.
   - `EditUtils.get_all_faces_on_axis(obj, axis='x', pivot='center', axis_frame=None)` *(static)* — Get all faces on the specified axis of an object.
@@ -3657,6 +3663,8 @@ The Maya scene store: two carrier nodes behind ``ptk.SceneStoreBase``.
 ### `nurbs_utils/_nurbs_utils.py`
 
 - **[`class NurbsUtils(pythontk.HelpMixin)`](mayatk/mayatk/nurbs_utils/_nurbs_utils.py#L22)**
+  - `NurbsUtils.curve_action(cls, action: str, curves=None) -> List[str]` *(class)* — Run the curve action *action* (a :attr:`CURVE_ACTIONS` key) on *curves*.
+  - `NurbsUtils.revolve(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]` *(class)* — Revolve each profile curve about *axis* through its own pivot into a
   - `NurbsUtils.loft(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)` *(class)* — Create a loft between two selections.
   - `NurbsUtils.create_curve_between_two_objs(cls, start, end)` *(class)* — Create a bezier curve between starting and end object(s).
   - `NurbsUtils.duplicate_along_curve(path, start, count=6, geometry='Instancer')` *(static)* — Duplicate objects along a given curve using MASH.
@@ -3718,6 +3726,7 @@ Render-control helpers.
   - `RigUtils.create_locator(*, scale: float = 1, size: float = 1, parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create a locator with the given scale.
   - `RigUtils.create_locator_at_object(cls, objects: Union[str, List[str]], parent: bool = True, freeze_object: bool = True, freeze_locator: bool = True, loc_scale: float = 1.0, lock_translate: bool = False, lock_rotation: bool = False, lock_scale: bool = False, grp_suffix: Optional[str] = None, grp_affix_mode: str = 'auto', loc_suffix: Optional[str] = None, loc_affix_mode: str = 'auto', obj_suffix: Optional[str] = None, obj_affix_mode: str = 'auto', strip_digits: bool = False, strip_trailing_underscores: bool = True, strip_suffix: bool = True, rotate_order: str = 'xyz') -> List[str]` *(class)* — Rig object under a zeroed locator aligned to its manip pivot.
   - `RigUtils.remove_locator(cls, objects)` *(class)* — Remove a parented locator from the child object.
+  - `RigUtils.freeze_and_reanchor(cls, objects=None, reanchor: bool = True, **freeze_options) -> list` *(class)* — Freeze Transforms, then -- *reanchor* -- restore the world anchor of each
   - `RigUtils.restore_rig_anchors(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]` *(class)* — Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.
   - `RigUtils.connect_switch_to_constraint(cls, constraint_node: str, constraint_targets: Optional[List[str]] = None, attr_name: str = 'parent_switch', overwrite_existing: bool = False, node: Optional[str] = None, weighted: bool = False, anchor: Optional[str] = None) -> dict` *(class)* — Create a space switch attribute to drive a constraint node.
   - `RigUtils.create_ik_handle(start_joint: str, end_joint: str, solver: str = 'ikRPsolver', name: str = 'ikHandle', parent: Optional[str] = None, **kwargs) -> str` *(static)* — Create an IK handle.
@@ -4394,9 +4403,9 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
 - **[`class XformUtils(_XformUtilsInternal, pythontk.HelpMixin)`](mayatk/mayatk/xform_utils/_xform_utils.py#L54)** — Transform utilities for Maya objects.
   - `XformUtils.convert_axis(value, invert=False, ortho=False, to_integer=False)` *(static)* — Converts between axis representations and optionally inverts the axis or returns an orthogonal axis.
   - `XformUtils.move_to(cls, source, target, pivot='center', group_move=False)` *(class)* — Move source object(s) to align with the target object(s).
-  - `XformUtils.drop_to_grid(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(class)* — Align objects to Y origin on the grid using a helper plane.
-  - `XformUtils.match_scale(cls, a, b, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
-  - `XformUtils.scale_connected_edges(objects, scale_factor=1.1) -> None` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
+  - `XformUtils.drop_to_grid(cls, objects=None, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)` *(class)* — Align objects to Y origin on the grid using a helper plane.
+  - `XformUtils.match_scale(cls, a=None, b=None, scale=True, average=False)` *(class)* — Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.
+  - `XformUtils.scale_connected_edges(objects=None, scale_factor=1.1) -> int` *(static)* — Scales each set of connected edges separately, either uniformly or non-uniformly.
   - `XformUtils.store_transforms(objects, prefix='original', accumulate=True, traverse=False, channels=None)` *(static)* — Capture the current local TRS as a cumulative per-channel bake history.
   - `XformUtils.freeze_instanced_group(cls, master: str, translate: bool = True, rotate: bool = True, scale: bool = True, quiet: bool = True) -> bool` *(class)* — Freeze *master* while keeping its instance group intact.
   - `XformUtils.freeze_transforms(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, store=True, **kwargs)` *(class)* — Freezes transformations on the given objects.
@@ -4415,6 +4424,12 @@ Transfer a mesh's textures from one UV layout to another -- no rays, no bake.
   - `XformUtils.set_manip_pivot_matrix(obj, matrix, **kwargs) -> None` *(static)* — Apply a transformation matrix's position and orientation to the manip pivot.
   - `XformUtils.restore_original_axes(cls, objects=None, prefix='original')` *(class)* — Aim the manipulator at an object's PRE-FREEZE axes, without un-freezing it.
   - `XformUtils.get_pivot_options(cls)` *(class)* — Returns a list of supported pivot options.
+  - `XformUtils.move_to_target(cls, objects=None, pivot='center', all_to_last=True, match_scale=False) -> List[str]` *(class)* — Move To: the objects move onto their target by *pivot*.
+  - `XformUtils.align_to(cls, mode, objects=None) -> List[str]` *(class)* — Align To: run the :attr:`ALIGN_MODES` command *mode* on *objects* (None:
+  - `XformUtils.get_transform_snap(cls) -> dict` *(class)* — The move / scale / rotate tools' increment snapping:
+  - `XformUtils.set_transform_snap(cls, kind, state=None, increment=None) -> dict` *(class)* — Set the *kind* tool's increment snapping (``"move"``, ``"scale"`` or
+  - `XformUtils.get_transform_constraint(cls) -> dict` *(class)* — The transform constraints: ``{"edge": bool, "surface": bool, "live":
+  - `XformUtils.set_transform_constraint(cls, kind, state=True) -> dict` *(class)* — Turn a transform constraint on or off: *kind* ``"edge"`` or
   - `XformUtils.clear_manip_cache(cls)` *(class)* — Clears the cached manipulator pivot data.
   - `XformUtils.snapshot_manip_pivot(cls, node)` *(class)* — Snapshot the current manipulator pivot state for the given node into the cache.
   - `XformUtils.get_operation_axis_matrix(cls, node, pivot: str)` *(class)* — Determines the pivot matrix (orientation + position) for transformations.

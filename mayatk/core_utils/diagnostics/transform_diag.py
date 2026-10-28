@@ -35,6 +35,7 @@ import pythontk as ptk
 from mayatk.xform_utils._xform_utils import XformUtils
 from mayatk.xform_utils.matrices import Matrices
 from mayatk.node_utils._node_utils import NodeUtils
+from mayatk.core_utils._core_utils import CoreUtils
 
 # Type aliases keep Maya stubs optional during static analysis
 NodeLike = Union[str, object]
@@ -355,6 +356,7 @@ class TransformDiagnostics(_TransformDiagnosticsInternal):
         return worst
 
     @classmethod
+    @CoreUtils.undoable
     def fix_non_orthogonal_axes(
         cls,
         objects: Optional[NodeSeq] = None,

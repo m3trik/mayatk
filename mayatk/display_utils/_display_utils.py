@@ -552,6 +552,76 @@ class DisplayUtils(ptk.HelpMixin):
                 Attributes.set_plug(f"{mesh}.{attr}", value)
         return meshes
 
+    @staticmethod
+    def get_smooth_level(objects=None) -> Optional[dict]:
+        """The smooth-preview levels of the first mesh under *objects* (None: the
+        selection): ``{"level": smoothLevel, "adaptive_level": smoothTessLevel}``,
+        or None with no mesh. What a panel seeds its level controls from. Twin of
+        blendertk's ``DisplayUtils.get_smooth_level`` (a Subdivision Surface
+        modifier's viewport / render levels there).
+        """
+        nodes = (
+            cmds.ls(selection=True) if objects is None else CoreUtils.as_strings(objects)
+        )
+        if not nodes:
+            return None
+        shapes = NodeUtils.get_shapes(nodes, descend=True, type="mesh")
+        if not shapes:
+            return None
+        return {
+            "level": cmds.getAttr(f"{shapes[0]}.smoothLevel"),
+            "adaptive_level": cmds.getAttr(f"{shapes[0]}.smoothTessLevel"),
+        }
+
+    @classmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def set_smooth_level(
+        cls, objects=None, level: int = None, adaptive_level: int = None
+    ) -> List[str]:
+        """Show the smooth mesh preview on the meshes under *objects* (None: the
+        selection) at *level* divisions and/or *adaptive_level* (OpenSubdiv
+        adaptive tessellation; see :meth:`set_smooth_preview`), then read the
+        plugs back: a locked or connected plug keeps its value, so only the meshes
+        that took every value count. A *level* that took also becomes Maya's
+        Subdiv Proxy division default (``proxyDivisions``). Twin of blendertk's
+        ``DisplayUtils.set_smooth_level`` (a Subdivision Surface modifier's
+        viewport / render levels there). One undo step.
+
+        Returns:
+            (list): The mesh shapes that took the values; ``[]`` when *objects*
+                holds no mesh. Skipped meshes are warned about.
+
+        Raises:
+            ValueError: Meshes were found but none took the value (all locked
+                or connected).
+        """
+        meshes = cls.set_smooth_preview(
+            objects, display=2, level=level, adaptive_level=adaptive_level
+        )
+        wanted = {"smoothLevel": level, "smoothTessLevel": adaptive_level}
+        applied = []
+        for mesh in meshes:
+            try:
+                if all(
+                    cmds.getAttr(f"{mesh}.{attr}") == value
+                    for attr, value in wanted.items()
+                    if value is not None
+                ):
+                    applied.append(mesh)
+            except (RuntimeError, ValueError):  # the plug went with its shape
+                continue
+        if meshes and not applied:
+            raise ValueError("no mesh accepted the change (locked or connected).")
+        if len(applied) < len(meshes):
+            cmds.warning(
+                f"set_smooth_level: {len(meshes) - len(applied)} mesh(es) skipped "
+                "(locked or connected)."
+            )
+        if applied and level is not None:
+            cmds.optionVar(intValue=("proxyDivisions", int(level)))
+        return applied
+
     # --- x-ray -----------------------------------------------------------
     # ``displaySurface -xRay`` is a per-SHAPE draw flag, not an attribute: it
     # is invisible to ``listAttr``, is not saved with the scene, and is dropped

@@ -6684,7 +6684,7 @@
         {
           "name": "TransformDiagnostics",
           "summary": "Operations for inspecting and fixing common transform issues.",
-          "line": 107,
+          "line": 108,
           "bases": [
             "_TransformDiagnosticsInternal"
           ],
@@ -6695,7 +6695,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None) -> List[str]",
               "summary": "Return the transforms carrying their own shear.",
-              "line": 115,
+              "line": 116,
               "deprecated": false
             },
             {
@@ -6704,7 +6704,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, detailed: bool = False) -> Union[List[str], Dict[str, dict]]",
               "summary": "Return the transforms whose evaluated (world) axes are not perpendicular.",
-              "line": 156,
+              "line": 157,
               "deprecated": false
             },
             {
@@ -6713,7 +6713,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[NodeSeq] = None, tolerance: Optional[float] = None, frames: Optional[Sequence[float]] = None) -> Dict[str, float]",
               "summary": "Return ``{transform: worst skew}`` for PARENT-RELATIVE axes that are",
-              "line": 239,
+              "line": 240,
               "deprecated": false
             },
             {
@@ -6722,7 +6722,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Optional[NodeSeq] = None, dry_run: bool = False, tolerance: Optional[float] = None, quiet: bool = False, break_connections: bool = False, instance_strategy: str = 'preserve', delete_history: bool = False) -> List[str]",
               "summary": "Fix non-orthogonal axes by freezing the offending transforms.",
-              "line": 358,
+              "line": 360,
               "deprecated": false
             }
           ]
@@ -7445,12 +7445,30 @@
               "deprecated": false
             },
             {
+              "name": "get_smooth_level",
+              "qualname": "DisplayUtils.get_smooth_level",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> Optional[dict]",
+              "summary": "The smooth-preview levels of the first mesh under *objects* (None: the",
+              "line": 556,
+              "deprecated": false
+            },
+            {
+              "name": "set_smooth_level",
+              "qualname": "DisplayUtils.set_smooth_level",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, level: int = None, adaptive_level: int = None) -> List[str]",
+              "summary": "Show the smooth mesh preview on the meshes under *objects* (None: the",
+              "line": 579,
+              "deprecated": false
+            },
+            {
               "name": "get_surface_shapes",
               "qualname": "DisplayUtils.get_surface_shapes",
               "kind": "staticmethod",
               "signature": "(objects: Union[str, object, List]) -> List[str]",
               "summary": "Visible (non-intermediate) surface shapes at or under the given nodes.",
-              "line": 562,
+              "line": 632,
               "deprecated": false
             },
             {
@@ -7459,7 +7477,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, object, List]) -> bool",
               "summary": "True when EVERY surface shape at or under *objects* is x-rayed.",
-              "line": 600,
+              "line": 670,
               "deprecated": false
             },
             {
@@ -7468,7 +7486,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, object, List], state: bool = True, resync: bool = True) -> List[str]",
               "summary": "Set the x-ray flag on every surface shape at or under *objects*.",
-              "line": 618,
+              "line": 688,
               "deprecated": false
             },
             {
@@ -7477,7 +7495,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects: Union[str, object, List] = None) -> Optional[Tuple[bool, int]]",
               "summary": "Uniform x-ray toggle: if ANY shape is off, turn them ALL on;",
-              "line": 643,
+              "line": 713,
               "deprecated": false
             },
             {
@@ -7486,7 +7504,7 @@
               "kind": "staticmethod",
               "signature": "() -> None",
               "summary": "Force VP2 to re-apply every object's per-object x-ray flag.",
-              "line": 666,
+              "line": 736,
               "deprecated": false
             },
             {
@@ -7495,7 +7513,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> List[str]",
               "summary": "Turn x-ray off on every surface shape in the scene (\"Un-Xray All\").",
-              "line": 682,
+              "line": 752,
               "deprecated": false
             },
             {
@@ -7504,7 +7522,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None) -> Optional[Tuple[bool, int]]",
               "summary": "Uniform x-ray toggle (:meth:`toggle_xray`) over every surface shape in",
-              "line": 694,
+              "line": 764,
               "deprecated": false
             },
             {
@@ -7513,7 +7531,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> List[str]",
               "summary": "Hide *objects* (``cmds.hide``).",
-              "line": 721,
+              "line": 791,
               "deprecated": false
             },
             {
@@ -7522,7 +7540,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> List[str]",
               "summary": "Show hidden *objects* (``cmds.showHidden``) -- a selection made in the",
-              "line": 737,
+              "line": 807,
               "deprecated": false
             },
             {
@@ -7531,7 +7549,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "Step the selected meshes' component-ID display: vertex, edge, face,",
-              "line": 753,
+              "line": 823,
               "deprecated": false
             },
             {
@@ -7540,7 +7558,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[str]",
               "summary": "Step the selected meshes' normals display: face, vertex, tangent, off.",
-              "line": 774,
+              "line": 844,
               "deprecated": false
             },
             {
@@ -7549,7 +7567,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[bool]",
               "summary": "Toggle the selected meshes between soft edges only and all edges.",
-              "line": 808,
+              "line": 878,
               "deprecated": false
             },
             {
@@ -7558,7 +7576,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> Optional[bool]",
               "summary": "Uniform toggle of the UV-border-edge display on *objects*' meshes, at",
-              "line": 827,
+              "line": 897,
               "deprecated": false
             },
             {
@@ -7567,7 +7585,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[bool]",
               "summary": "Toggle the focused viewport's default-material override: every",
-              "line": 852,
+              "line": 922,
               "deprecated": false
             },
             {
@@ -7576,7 +7594,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, state: bool = True) -> List[str]",
               "summary": "Draw *objects* as wireframe, or shaded again (*state* False), through",
-              "line": 872,
+              "line": 942,
               "deprecated": false
             },
             {
@@ -7585,7 +7603,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None)",
               "summary": "Toggle *objects* between wireframe and shaded, together: the first",
-              "line": 893,
+              "line": 963,
               "deprecated": false
             },
             {
@@ -7594,7 +7612,7 @@
               "kind": "staticmethod",
               "signature": "() -> Optional[bool]",
               "summary": "Toggle the focused viewport's wireframe-on-inactive: only the selected",
-              "line": 915,
+              "line": 985,
               "deprecated": false
             },
             {
@@ -7603,7 +7621,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None)",
               "summary": "Template *objects* (drawn dimmed, not selectable in the viewport), or",
-              "line": 935,
+              "line": 1005,
               "deprecated": false
             },
             {
@@ -7612,7 +7630,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[bool]",
               "summary": "Toggle the UV Editor's checker display.",
-              "line": 964,
+              "line": 1034,
               "deprecated": false
             },
             {
@@ -7621,7 +7639,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Optional[str]",
               "summary": "Toggle the UV Editor's distortion shading.",
-              "line": 979,
+              "line": 1049,
               "deprecated": false
             },
             {
@@ -7630,7 +7648,7 @@
               "kind": "staticmethod",
               "signature": "(max_res=4096)",
               "summary": "Resets Viewport 2.0 to fix graphical glitches (e.g.",
-              "line": 995,
+              "line": 1065,
               "deprecated": false
             }
           ]
@@ -7931,7 +7949,7 @@
         {
           "name": "EditUtils",
           "summary": "",
-          "line": 674,
+          "line": 690,
           "bases": [
             "pythontk.HelpMixin",
             "_EditUtilsInternal"
@@ -7943,7 +7961,7 @@
               "kind": "staticmethod",
               "signature": "() -> dict",
               "summary": "Maya's modeling symmetry (``symmetricModelling``): what tentacle's",
-              "line": 684,
+              "line": 700,
               "deprecated": false
             },
             {
@@ -7952,7 +7970,7 @@
               "kind": "staticmethod",
               "signature": "(axis: Optional[str] = None, state: bool = True, space: Optional[str] = None) -> dict",
               "summary": "Set Maya's modeling symmetry: an axis on or off, and/or its space.",
-              "line": 709,
+              "line": 725,
               "deprecated": false
             },
             {
@@ -7961,7 +7979,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, group_by_material=False, cluster_by_distance=False, threshold=10000.0, uninstance=False, **kwargs)",
               "summary": "Combine multiple meshes.",
-              "line": 756,
+              "line": 772,
               "deprecated": false
             },
             {
@@ -7970,7 +7988,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None)",
               "summary": "Group the given objects (or selection), center the pivot, and rename the group.",
-              "line": 855,
+              "line": 871,
               "deprecated": false
             },
             {
@@ -7979,7 +7997,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> List[str]",
               "summary": "Inverse of `group_objects` — dissolve the given group(s) (or selection).",
-              "line": 885,
+              "line": 901,
               "deprecated": false
             },
             {
@@ -7988,7 +8006,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, by_material: bool = False, group_by_material: bool = False, center_pivots: bool = True, rename: bool = False, uninstance: bool = False, select: bool = False) -> List",
               "summary": "Separate meshes into individual objects.",
-              "line": 939,
+              "line": 955,
               "deprecated": false
             },
             {
@@ -7997,7 +8015,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, tolerance=0.001, selected_only=None)",
               "summary": "Merge the vertices within *tolerance*.",
-              "line": 1141,
+              "line": 1157,
               "deprecated": false
             },
             {
@@ -8006,7 +8024,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, operation='difference', interactive=False)",
               "summary": "Boolean meshes: the first is the base, the rest its operands.",
-              "line": 1210,
+              "line": 1226,
               "deprecated": false
             },
             {
@@ -8015,7 +8033,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, angle=None, divisions=None)",
               "summary": "Wedge the selected faces about a selected edge of theirs: they sweep",
-              "line": 1252,
+              "line": 1268,
               "deprecated": false
             },
             {
@@ -8024,7 +8042,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, low_angle=0.0, high_angle=180.0)",
               "summary": "Select the edges whose two faces meet at an angle within",
-              "line": 1291,
+              "line": 1307,
               "deprecated": false
             },
             {
@@ -8033,7 +8051,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Merge vertices in pairs by moving them to their center and merging.",
-              "line": 1328,
+              "line": 1344,
               "deprecated": false
             },
             {
@@ -8042,7 +8060,43 @@
               "kind": "staticmethod",
               "signature": "(components=None, duplicate: bool = True, separate: bool = True, offset: bool = False, keep_faces_together: bool = True, center_pivot: bool = True) -> Optional[List]",
               "summary": "Detach mesh components (vertices or faces) from their parent mesh.",
-              "line": 1368,
+              "line": 1384,
+              "deprecated": false
+            },
+            {
+              "name": "quadrangulate",
+              "qualname": "EditUtils.quadrangulate",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Quadrangulate the meshes or faces of *objects* (None: the selection):",
+              "line": 1567,
+              "deprecated": false
+            },
+            {
+              "name": "triangulate",
+              "qualname": "EditUtils.triangulate",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Triangulate the meshes or faces of *objects* (None: the selection)",
+              "line": 1581,
+              "deprecated": false
+            },
+            {
+              "name": "subdivide_mesh",
+              "qualname": "EditUtils.subdivide_mesh",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Add Divisions to the meshes or faces of *objects* (None: the selection):",
+              "line": 1594,
+              "deprecated": false
+            },
+            {
+              "name": "apply_subdivision",
+              "qualname": "EditUtils.apply_subdivision",
+              "kind": "staticmethod",
+              "signature": "(objects=None) -> List[str]",
+              "summary": "Convert the smooth mesh preview of the meshes in *objects* (None: the",
+              "line": 1608,
               "deprecated": false
             },
             {
@@ -8051,7 +8105,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, percentage: float = 50.0, preserve_borders: bool = True, preserve_hard_edges: bool = True, preserve_uv_borders: bool = True, preserve_quads: bool = True, symmetry: bool = False, symmetry_tolerance: float = 0.01, delete_history: bool = True) -> List[str]",
               "summary": "Decimate (``polyReduce``) meshes toward a target reduction percentage.",
-              "line": 1533,
+              "line": 1642,
               "deprecated": false
             },
             {
@@ -8060,7 +8114,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, angle_tolerance: float = 1.0, delete_history: bool = True) -> List[str]",
               "summary": "Planar decimation (limited dissolve) — merge faces across near-coplanar edges.",
-              "line": 1606,
+              "line": 1715,
               "deprecated": false
             },
             {
@@ -8069,7 +8123,7 @@
               "kind": "staticmethod",
               "signature": "(obj, axis='x', pivot='center', axis_frame=None)",
               "summary": "Get all faces on the specified axis of an object.",
-              "line": 1695,
+              "line": 1804,
               "deprecated": false
             },
             {
@@ -8078,7 +8132,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='x', pivot='center', amount=1, offset=0, spacing=0.0, distribution='linear', weight_bias=0.5, weight_curve=2.0, invert=False, ortho=False, delete=False, mirror=False, axis_frame=None)",
               "summary": "Cut objects along the specified axis.",
-              "line": 1874,
+              "line": 1983,
               "deprecated": false
             },
             {
@@ -8087,7 +8141,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis='-x', pivot='center', delete_history=True, mirror=False, axis_frame=None)",
               "summary": "Delete faces along the specified axis and optionally mirror the result.",
-              "line": 2074,
+              "line": 2183,
               "deprecated": false
             },
             {
@@ -8096,7 +8150,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, axis: str = 'x', pivot: Union[str, tuple] = 'object', mergeMode: int = -1, axis_frame: Optional[str] = None, delete_original: bool = False, center_pivot: bool = True, **kwargs)",
               "summary": "Mirror geometry across a given axis.",
-              "line": 2163,
+              "line": 2272,
               "deprecated": false
             },
             {
@@ -8105,7 +8159,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, axis: str = 'x', pivot: Union[str, tuple] = 'object', axis_frame: Optional[str] = None) -> list",
               "summary": "Mirror as **instances**: each object gets a linked copy reflected",
-              "line": 2306,
+              "line": 2415,
               "deprecated": false
             },
             {
@@ -8114,7 +8168,7 @@
               "kind": "staticmethod",
               "signature": "(mirror_node: str, center_pivot: bool = True, delete_original: bool = False) -> Optional[str]",
               "summary": "Separate mirrored geometry and clean up hierarchy, history, and parenting.",
-              "line": 2376,
+              "line": 2485,
               "deprecated": false
             },
             {
@@ -8123,7 +8177,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, retain_given_objects: bool = False, select: bool = False, verbose: bool = False) -> set",
               "summary": "Find duplicate, overlapping geometry at the object (transform) level.",
-              "line": 2542,
+              "line": 2651,
               "deprecated": false
             },
             {
@@ -8132,7 +8186,7 @@
               "kind": "staticmethod",
               "signature": "(objects, select=1)",
               "summary": "Locate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2716,
+              "line": 2825,
               "deprecated": false
             },
             {
@@ -8141,7 +8195,7 @@
               "kind": "staticmethod",
               "signature": "(vertex, select=True)",
               "summary": "Separate a connected vertex of non-manifold geometry where the faces share a single vertex.",
-              "line": 2784,
+              "line": 2893,
               "deprecated": false
             },
             {
@@ -8150,7 +8204,7 @@
               "kind": "staticmethod",
               "signature": "(objects, threshold=0.0003)",
               "summary": "Query the given objects for overlapping vertices.",
-              "line": 2847,
+              "line": 2956,
               "deprecated": false
             },
             {
@@ -8159,7 +8213,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, delete_history=False)",
               "summary": "Get any duplicate overlapping faces of the given objects.",
-              "line": 2879,
+              "line": 2988,
               "deprecated": false
             },
             {
@@ -8168,7 +8222,7 @@
               "kind": "staticmethod",
               "signature": "(objects, tolerance=0.0, inc_orig=False, select=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyEvaluate command.",
-              "line": 2955,
+              "line": 3064,
               "deprecated": false
             },
             {
@@ -8177,7 +8231,7 @@
               "kind": "staticmethod",
               "signature": "(obj, inc_orig=False, **kwargs)",
               "summary": "Find similar geometry objects using the polyCompare command.",
-              "line": 3053,
+              "line": 3162,
               "deprecated": false
             },
             {
@@ -8186,7 +8240,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection to unselected mesh transforms.",
-              "line": 3092,
+              "line": 3201,
               "deprecated": false
             },
             {
@@ -8195,7 +8249,7 @@
               "kind": "staticmethod",
               "signature": "(objects: Optional[List] = None, select: bool = False) -> List[str]",
               "summary": "Invert selection of mesh components (verts, edges, or faces).",
-              "line": 3130,
+              "line": 3239,
               "deprecated": false
             },
             {
@@ -8204,7 +8258,7 @@
               "kind": "staticmethod",
               "signature": "()",
               "summary": "Delete selected components and/or objects in Autodesk Maya.",
-              "line": 3192,
+              "line": 3301,
               "deprecated": false
             },
             {
@@ -8213,7 +8267,7 @@
               "kind": "classmethod",
               "signature": "(cls) -> Dict[str, str]",
               "summary": "The Convert menu: ``{label: MEL}`` in menu order, each a conversion",
-              "line": 3280,
+              "line": 3389,
               "deprecated": false
             },
             {
@@ -8222,7 +8276,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, conversion: str) -> List[str]",
               "summary": "Convert *objects* (``None``: the selection) by a :meth:`get_conversion_types`",
-              "line": 3290,
+              "line": 3399,
               "deprecated": false
             },
             {
@@ -8231,7 +8285,7 @@
               "kind": "staticmethod",
               "signature": "(edges: Optional[List[str]] = None, **kwargs)",
               "summary": "Create a curve from selected polygon edges or a provided list of edges.",
-              "line": 3316,
+              "line": 3425,
               "deprecated": false
             }
           ]
@@ -23871,12 +23925,30 @@
           ],
           "members": [
             {
+              "name": "curve_action",
+              "qualname": "NurbsUtils.curve_action",
+              "kind": "classmethod",
+              "signature": "(cls, action: str, curves=None) -> List[str]",
+              "summary": "Run the curve action *action* (a :attr:`CURVE_ACTIONS` key) on *curves*.",
+              "line": 62,
+              "deprecated": false
+            },
+            {
+              "name": "revolve",
+              "qualname": "NurbsUtils.revolve",
+              "kind": "classmethod",
+              "signature": "(cls, curves=None, axis: str = 'y', start_sweep: float = 0.0, end_sweep: float = 360.0, sections: int = 8, degree: int = 3, range_: bool = False, polygon: bool = True, use_tolerance: bool = False, tolerance: float = 0.001, auto_correct_normal: bool = False) -> List[str]",
+              "summary": "Revolve each profile curve about *axis* through its own pivot into a",
+              "line": 103,
+              "deprecated": false
+            },
+            {
               "name": "loft",
               "qualname": "NurbsUtils.loft",
               "kind": "classmethod",
               "signature": "(cls, uniform=True, close=False, degree=3, autoReverse=False, sectionSpans=1, range_=False, polygon=True, reverseSurfaceNormals=True, angle_loft_between_two_curves=False, angleLoftSpans=6)",
               "summary": "Create a loft between two selections.",
-              "line": 28,
+              "line": 181,
               "deprecated": false
             },
             {
@@ -23885,7 +23957,7 @@
               "kind": "classmethod",
               "signature": "(cls, start, end)",
               "summary": "Create a bezier curve between starting and end object(s).",
-              "line": 128,
+              "line": 283,
               "deprecated": false
             },
             {
@@ -23894,7 +23966,7 @@
               "kind": "staticmethod",
               "signature": "(path, start, count=6, geometry='Instancer')",
               "summary": "Duplicate objects along a given curve using MASH.",
-              "line": 202,
+              "line": 357,
               "deprecated": false
             },
             {
@@ -23903,7 +23975,7 @@
               "kind": "classmethod",
               "signature": "(cls, start, end, count=6, cleanup=False, uniform=1, close=0, autoReverse=0, degree=3, sectionSpans=1, range=0, polygon=1, reverseSurfaceNormals=0)",
               "summary": "Perform a loft between two nurbs curves or polygon sets of edges (that will be extracted as curves).",
-              "line": 248,
+              "line": 403,
               "deprecated": false
             },
             {
@@ -23912,7 +23984,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve) -> float",
               "summary": "World-space arc length of the given curve (transform or shape).",
-              "line": 324,
+              "line": 479,
               "deprecated": false
             },
             {
@@ -23921,7 +23993,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve, points) -> List[float]",
               "summary": "Arc length along *curve* of the closest curve point to each given point.",
-              "line": 329,
+              "line": 484,
               "deprecated": false
             },
             {
@@ -23930,7 +24002,7 @@
               "kind": "classmethod",
               "signature": "(cls, curve) -> List[float]",
               "summary": "Arc length of each CV's Greville abscissa, in CV index order.",
-              "line": 355,
+              "line": 510,
               "deprecated": false
             },
             {
@@ -23939,7 +24011,7 @@
               "kind": "staticmethod",
               "signature": "(x, curves, tolerance=0.0)",
               "summary": "Find the closest control vertex between the given vertices, CVs, or objects and each of the given c…",
-              "line": 398,
+              "line": 553,
               "deprecated": false
             },
             {
@@ -23948,7 +24020,7 @@
               "kind": "classmethod",
               "signature": "(cls, c, returned_type='cv', filter_=[])",
               "summary": "Get a dict containing CV's of the given curve(s) and their corresponding point positions (based on…",
-              "line": 438,
+              "line": 593,
               "deprecated": false
             },
             {
@@ -23957,7 +24029,7 @@
               "kind": "classmethod",
               "signature": "(cls, curves, normalize=1, values=False)",
               "summary": "Get the cross product of two vectors using points derived from the given curves.",
-              "line": 527,
+              "line": 682,
               "deprecated": false
             }
           ]
@@ -24277,12 +24349,21 @@
               "deprecated": false
             },
             {
+              "name": "freeze_and_reanchor",
+              "qualname": "RigUtils.freeze_and_reanchor",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, reanchor: bool = True, **freeze_options) -> list",
+              "summary": "Freeze Transforms, then -- *reanchor* -- restore the world anchor of each",
+              "line": 758,
+              "deprecated": false
+            },
+            {
               "name": "restore_rig_anchors",
               "qualname": "RigUtils.restore_rig_anchors",
               "kind": "classmethod",
               "signature": "(cls, objects, traverse: bool = True, skip_animated: bool = True, pivot_source: str = 'bbox') -> List[str]",
               "summary": "Restore the world-space anchor on a GRP > LOC > GEO rig after a freeze.",
-              "line": 757,
+              "line": 783,
               "deprecated": false
             },
             {
@@ -24291,7 +24372,7 @@
               "kind": "classmethod",
               "signature": "(cls, constraint_node: str, constraint_targets: Optional[List[str]] = None, attr_name: str = 'parent_switch', overwrite_existing: bool = False, node: Optional[str] = None, weighted: bool = False, anchor: Optional[str] = None) -> dict",
               "summary": "Create a space switch attribute to drive a constraint node.",
-              "line": 1133,
+              "line": 1159,
               "deprecated": false
             },
             {
@@ -24300,7 +24381,7 @@
               "kind": "staticmethod",
               "signature": "(start_joint: str, end_joint: str, solver: str = 'ikRPsolver', name: str = 'ikHandle', parent: Optional[str] = None, **kwargs) -> str",
               "summary": "Create an IK handle.",
-              "line": 1344,
+              "line": 1370,
               "deprecated": false
             },
             {
@@ -24309,7 +24390,7 @@
               "kind": "staticmethod",
               "signature": "(ik_handle: str, mid_joint: str, distance: float = 5.0, name: str = 'poleVector_LOC', parent: Optional[str] = None) -> str",
               "summary": "Create a pole vector locator based on the mid joint's position.",
-              "line": 1381,
+              "line": 1407,
               "deprecated": false
             },
             {
@@ -24318,7 +24399,7 @@
               "kind": "staticmethod",
               "signature": "(joint: str) -> List[str]",
               "summary": "Find IK handles that control a given joint.",
-              "line": 1449,
+              "line": 1475,
               "deprecated": false
             },
             {
@@ -24327,7 +24408,7 @@
               "kind": "staticmethod",
               "signature": "(handles: Optional[Iterable[str]] = None) -> Dict[str, List[str]]",
               "summary": "``{joint (long path): [ikHandle, ...]}`` for every joint an IK chain spans.",
-              "line": 1481,
+              "line": 1507,
               "deprecated": false
             },
             {
@@ -24336,7 +24417,7 @@
               "kind": "staticmethod",
               "signature": "(joint: str, start_joint: str, end_joint: str) -> bool",
               "summary": "Check if a joint is part of an IK chain between start and end.",
-              "line": 1530,
+              "line": 1556,
               "deprecated": false
             },
             {
@@ -24345,7 +24426,7 @@
               "kind": "staticmethod",
               "signature": "(root_joint: Union[str, List[str]], reverse: bool = False) -> List[str]",
               "summary": "Get the joint chain from the root joint or the first joint in the list if more than one joint is gi…",
-              "line": 1567,
+              "line": 1593,
               "deprecated": false
             },
             {
@@ -24354,7 +24435,7 @@
               "kind": "staticmethod",
               "signature": "(root_joint, keep_original=False)",
               "summary": "Create a new joint chain with the same positions as the original, but with reversed hierarchy.",
-              "line": 1604,
+              "line": 1630,
               "deprecated": false
             },
             {
@@ -24363,7 +24444,7 @@
               "kind": "classmethod",
               "signature": "(cls, meshes: Optional[List[str]] = None, temp_dir: Optional[str] = None, inherits_transform: Optional[bool] = None) -> Dict[str, list]",
               "summary": "Rebinds skinClusters on the given meshes, preserving weights, bind pose, and transform lock state.",
-              "line": 1677,
+              "line": 1703,
               "deprecated": false
             }
           ]
@@ -29081,27 +29162,27 @@
               "name": "drop_to_grid",
               "qualname": "XformUtils.drop_to_grid",
               "kind": "classmethod",
-              "signature": "(cls, objects, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)",
+              "signature": "(cls, objects=None, align='Mid', origin=False, center_pivot=False, freeze_transforms=False)",
               "summary": "Align objects to Y origin on the grid using a helper plane.",
-              "line": 108,
+              "line": 109,
               "deprecated": false
             },
             {
               "name": "match_scale",
               "qualname": "XformUtils.match_scale",
               "kind": "classmethod",
-              "signature": "(cls, a, b, scale=True, average=False)",
+              "signature": "(cls, a=None, b=None, scale=True, average=False)",
               "summary": "Scale each of the given objects in 'a' to the combined bounding box of the objects in 'b'.",
-              "line": 134,
+              "line": 139,
               "deprecated": false
             },
             {
               "name": "scale_connected_edges",
               "qualname": "XformUtils.scale_connected_edges",
               "kind": "staticmethod",
-              "signature": "(objects, scale_factor=1.1) -> None",
+              "signature": "(objects=None, scale_factor=1.1) -> int",
               "summary": "Scales each set of connected edges separately, either uniformly or non-uniformly.",
-              "line": 151,
+              "line": 159,
               "deprecated": false
             },
             {
@@ -29110,7 +29191,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original', accumulate=True, traverse=False, channels=None)",
               "summary": "Capture the current local TRS as a cumulative per-channel bake history.",
-              "line": 164,
+              "line": 172,
               "deprecated": false
             },
             {
@@ -29119,7 +29200,7 @@
               "kind": "classmethod",
               "signature": "(cls, master: str, translate: bool = True, rotate: bool = True, scale: bool = True, quiet: bool = True) -> bool",
               "summary": "Freeze *master* while keeping its instance group intact.",
-              "line": 207,
+              "line": 215,
               "deprecated": false
             },
             {
@@ -29128,7 +29209,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, center_pivot=0, force=True, delete_history=False, freeze_children=False, unlock_children=True, connection_strategy='preserve', instance_strategy='skip', from_channel_box=False, store=True, **kwargs)",
               "summary": "Freezes transformations on the given objects.",
-              "line": 258,
+              "line": 266,
               "deprecated": false
             },
             {
@@ -29137,7 +29218,7 @@
               "kind": "staticmethod",
               "signature": "(objects, reset_rotate_axis: bool = False, reset_joint_orient: bool = False, store: bool = True) -> None",
               "summary": "Freeze transforms into offsetParentMatrix while preserving pivot placement.",
-              "line": 327,
+              "line": 335,
               "deprecated": false
             },
             {
@@ -29146,7 +29227,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, prefix='original', delete_attrs=True) -> List[str]",
               "summary": "Inverse of :meth:`freeze_to_opm`: clear ``offsetParentMatrix`` and put",
-              "line": 354,
+              "line": 362,
               "deprecated": false
             },
             {
@@ -29155,7 +29236,7 @@
               "kind": "staticmethod",
               "signature": "(objects, traverse: bool = False, preserve_root: bool = True) -> List[str]",
               "summary": "Push a child transform's local matrix up into its parent and zero the child.",
-              "line": 384,
+              "line": 392,
               "deprecated": false
             },
             {
@@ -29164,7 +29245,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, prefix='original', delete_attrs=True, channels=None, traverse=False)",
               "summary": "Compose stored bake history with current local TRS, per channel.",
-              "line": 422,
+              "line": 430,
               "deprecated": false
             },
             {
@@ -29173,7 +29254,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original') -> List[str]",
               "summary": "Delete the per-channel bake attrs without restoring.",
-              "line": 496,
+              "line": 504,
               "deprecated": false
             },
             {
@@ -29182,7 +29263,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, prefix='original', dry_run=False, clear_stale=False, tolerance=0.0001)",
               "summary": "Triage bake history left by earlier tool versions, restore only",
-              "line": 515,
+              "line": 523,
               "deprecated": false
             },
             {
@@ -29191,7 +29272,7 @@
               "kind": "staticmethod",
               "signature": "(objects, prefix='original')",
               "summary": "Check if objects have any stored bake history.",
-              "line": 571,
+              "line": 579,
               "deprecated": false
             },
             {
@@ -29200,7 +29281,7 @@
               "kind": "staticmethod",
               "signature": "(node, tolerance=0.0001)",
               "summary": "True when *node*'s T/R/S channels sit at identity.",
-              "line": 581,
+              "line": 589,
               "deprecated": false
             },
             {
@@ -29209,7 +29290,7 @@
               "kind": "staticmethod",
               "signature": "(node, prefix='original')",
               "summary": "Read one node's stored pre-freeze channels back as plain values.",
-              "line": 594,
+              "line": 602,
               "deprecated": false
             },
             {
@@ -29218,7 +29299,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects)",
               "summary": "Reset the translation transformations on the given object(s).",
-              "line": 621,
+              "line": 629,
               "deprecated": false
             },
             {
@@ -29227,7 +29308,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Set an object's translation value from its pivot location.",
-              "line": 626,
+              "line": 634,
               "deprecated": false
             },
             {
@@ -29236,7 +29317,7 @@
               "kind": "staticmethod",
               "signature": "(obj, **kwargs)",
               "summary": "Return the object's transform matrix using xform, allowing kwargs override.",
-              "line": 631,
+              "line": 639,
               "deprecated": false
             },
             {
@@ -29245,7 +29326,7 @@
               "kind": "staticmethod",
               "signature": "(obj, matrix, **kwargs) -> None",
               "summary": "Apply a transformation matrix's position and orientation to the manip pivot.",
-              "line": 640,
+              "line": 648,
               "deprecated": false
             },
             {
@@ -29254,7 +29335,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects=None, prefix='original')",
               "summary": "Aim the manipulator at an object's PRE-FREEZE axes, without un-freezing it.",
-              "line": 646,
+              "line": 654,
               "deprecated": false
             },
             {
@@ -29263,7 +29344,61 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Returns a list of supported pivot options.",
-              "line": 670,
+              "line": 678,
+              "deprecated": false
+            },
+            {
+              "name": "move_to_target",
+              "qualname": "XformUtils.move_to_target",
+              "kind": "classmethod",
+              "signature": "(cls, objects=None, pivot='center', all_to_last=True, match_scale=False) -> List[str]",
+              "summary": "Move To: the objects move onto their target by *pivot*.",
+              "line": 714,
+              "deprecated": false
+            },
+            {
+              "name": "align_to",
+              "qualname": "XformUtils.align_to",
+              "kind": "classmethod",
+              "signature": "(cls, mode, objects=None) -> List[str]",
+              "summary": "Align To: run the :attr:`ALIGN_MODES` command *mode* on *objects* (None:",
+              "line": 743,
+              "deprecated": false
+            },
+            {
+              "name": "get_transform_snap",
+              "qualname": "XformUtils.get_transform_snap",
+              "kind": "classmethod",
+              "signature": "(cls) -> dict",
+              "summary": "The move / scale / rotate tools' increment snapping:",
+              "line": 758,
+              "deprecated": false
+            },
+            {
+              "name": "set_transform_snap",
+              "qualname": "XformUtils.set_transform_snap",
+              "kind": "classmethod",
+              "signature": "(cls, kind, state=None, increment=None) -> dict",
+              "summary": "Set the *kind* tool's increment snapping (``\"move\"``, ``\"scale\"`` or",
+              "line": 766,
+              "deprecated": false
+            },
+            {
+              "name": "get_transform_constraint",
+              "qualname": "XformUtils.get_transform_constraint",
+              "kind": "classmethod",
+              "signature": "(cls) -> dict",
+              "summary": "The transform constraints: ``{\"edge\": bool, \"surface\": bool, \"live\":",
+              "line": 786,
+              "deprecated": false
+            },
+            {
+              "name": "set_transform_constraint",
+              "qualname": "XformUtils.set_transform_constraint",
+              "kind": "classmethod",
+              "signature": "(cls, kind, state=True) -> dict",
+              "summary": "Turn a transform constraint on or off: *kind* ``\"edge\"`` or",
+              "line": 793,
               "deprecated": false
             },
             {
@@ -29272,7 +29407,7 @@
               "kind": "classmethod",
               "signature": "(cls)",
               "summary": "Clears the cached manipulator pivot data.",
-              "line": 675,
+              "line": 808,
               "deprecated": false
             },
             {
@@ -29281,7 +29416,7 @@
               "kind": "classmethod",
               "signature": "(cls, node)",
               "summary": "Snapshot the current manipulator pivot state for the given node into the cache.",
-              "line": 680,
+              "line": 813,
               "deprecated": false
             },
             {
@@ -29290,7 +29425,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot: str)",
               "summary": "Determines the pivot matrix (orientation + position) for transformations.",
-              "line": 685,
+              "line": 818,
               "deprecated": false
             },
             {
@@ -29299,7 +29434,7 @@
               "kind": "classmethod",
               "signature": "(cls, node, pivot, axis_index=None)",
               "summary": "Determines the pivot position for mirroring/cutting along a specified axis or all axes.",
-              "line": 707,
+              "line": 840,
               "deprecated": false
             },
             {
@@ -29308,7 +29443,7 @@
               "kind": "staticmethod",
               "signature": "(align_from=None, align_to=None, translate=True)",
               "summary": "Align one object's pivot point to another using 3-point alignment.",
-              "line": 715,
+              "line": 848,
               "deprecated": false
             },
             {
@@ -29317,7 +29452,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None) -> None",
               "summary": "Reset Pivot Transforms for the specified objects or selected objects.",
-              "line": 722,
+              "line": 855,
               "deprecated": false
             },
             {
@@ -29326,7 +29461,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, position: bool = True, orientation: bool = True) -> list",
               "summary": "Reset the manipulator pivot's position and/or orientation",
-              "line": 728,
+              "line": 861,
               "deprecated": false
             },
             {
@@ -29335,7 +29470,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, mode: str = 'object') -> list",
               "summary": "Center the pivots -- Maya's Center Pivot -- after resetting the",
-              "line": 746,
+              "line": 879,
               "deprecated": false
             },
             {
@@ -29344,7 +29479,7 @@
               "kind": "staticmethod",
               "signature": "(objects=None, pivot_type: str = 'object', mode: str = 'set')",
               "summary": "Get or set a world-aligned pivot for the specified objects or components.",
-              "line": 770,
+              "line": 903,
               "deprecated": false
             },
             {
@@ -29353,7 +29488,7 @@
               "kind": "staticmethod",
               "signature": "(objects, position=False, orientation=False, preserve_instancing=True)",
               "summary": "Bake the pivot orientation and position of the given object(s).",
-              "line": 802,
+              "line": 935,
               "deprecated": false
             },
             {
@@ -29362,7 +29497,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, translate: bool = False, rotate: bool = False, scale: bool = False, bake: bool = True, world_space: bool = True, mirror: str = '', select_targets_after_transfer: bool = False, preserve_instancing: bool = True)",
               "summary": "Transfer the pivot from the first given object to the remaining given objects.",
-              "line": 836,
+              "line": 969,
               "deprecated": false
             },
             {
@@ -29371,7 +29506,7 @@
               "kind": "staticmethod",
               "signature": "(objects, target_pos, aim_vect=(1, 0, 0), up_vect=(0, 1, 0))",
               "summary": "Aim the given object(s) at the given world space position.",
-              "line": 901,
+              "line": 1034,
               "deprecated": false
             },
             {
@@ -29380,7 +29515,7 @@
               "kind": "staticmethod",
               "signature": "(transform, aim_vector=(1, 0, 0), up_vector=(0, 1, 0))",
               "summary": "Orients a transform so its local +X aims along the given world-space vector.",
-              "line": 908,
+              "line": 1041,
               "deprecated": false
             },
             {
@@ -29389,7 +29524,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, target_pos)",
               "summary": "Aim the given object at the given world space position.",
-              "line": 920,
+              "line": 1053,
               "deprecated": false
             },
             {
@@ -29398,7 +29533,7 @@
               "kind": "staticmethod",
               "signature": "(objects, returned_type='point')",
               "summary": "Get an objects orientation as a point or vector.",
-              "line": 927,
+              "line": 1060,
               "deprecated": false
             },
             {
@@ -29407,7 +29542,7 @@
               "kind": "staticmethod",
               "signature": "(a, b)",
               "summary": "Get the magnatude of a vector using the center points of two given objects.",
-              "line": 936,
+              "line": 1069,
               "deprecated": false
             },
             {
@@ -29416,7 +29551,7 @@
               "kind": "staticmethod",
               "signature": "(objects)",
               "summary": "Get the bounding box center point of any given object(s).",
-              "line": 945,
+              "line": 1078,
               "deprecated": false
             },
             {
@@ -29425,7 +29560,7 @@
               "kind": "staticmethod",
               "signature": "(objects, value='', world_space=True, return_valid_keys=False)",
               "summary": "Calculate and retrieve specific properties of the bounding box for the given object(s) or component…",
-              "line": 954,
+              "line": 1087,
               "deprecated": false
             },
             {
@@ -29434,7 +29569,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, value='volume', descending=True, also_return_value=False)",
               "summary": "Sort the given objects by their bounding box value.",
-              "line": 971,
+              "line": 1104,
               "deprecated": false
             },
             {
@@ -29443,7 +29578,7 @@
               "kind": "staticmethod",
               "signature": "(vertices)",
               "summary": "Move and align the object defined by the first 3 points to the last 3 points.",
-              "line": 984,
+              "line": 1117,
               "deprecated": false
             },
             {
@@ -29452,7 +29587,7 @@
               "kind": "staticmethod",
               "signature": "(a, b, tolerance=0.001)",
               "summary": "Check if the vertices in a and b are overlapping within the given tolerance.",
-              "line": 989,
+              "line": 1122,
               "deprecated": false
             },
             {
@@ -29461,7 +29596,7 @@
               "kind": "staticmethod",
               "signature": "(objects, plane_point, plane_normal, return_type: str = 'bool')",
               "summary": "General method to check if any object's geometry is below a defined plane.",
-              "line": 994,
+              "line": 1127,
               "deprecated": false
             },
             {
@@ -29470,7 +29605,7 @@
               "kind": "staticmethod",
               "signature": "(objects, worldSpace=True)",
               "summary": "Get all vertex positions for the given objects.",
-              "line": 1009,
+              "line": 1142,
               "deprecated": false
             },
             {
@@ -29479,7 +29614,7 @@
               "kind": "classmethod",
               "signature": "(cls, a, b, world_space=False)",
               "summary": "Find any vertices which point locations match between two given mesh.",
-              "line": 1018,
+              "line": 1151,
               "deprecated": false
             },
             {
@@ -29488,7 +29623,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, reference_point=None, reverse=False)",
               "summary": "Order the given objects by their distance from the given reference point.",
-              "line": 1027,
+              "line": 1160,
               "deprecated": false
             },
             {
@@ -29497,7 +29632,7 @@
               "kind": "staticmethod",
               "signature": "(mode, average=False, edgeloop=False)",
               "summary": "Align selected vertices along one or more axes.",
-              "line": 1039,
+              "line": 1172,
               "deprecated": false
             },
             {
@@ -29506,7 +29641,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = False)",
               "summary": "Translation as ``om.MVector``.",
-              "line": 1044,
+              "line": 1177,
               "deprecated": false
             },
             {
@@ -29515,7 +29650,7 @@
               "kind": "staticmethod",
               "signature": "(node, world: bool = False)",
               "summary": "Local or world matrix as ``om.MMatrix``.",
-              "line": 1053,
+              "line": 1186,
               "deprecated": false
             },
             {
@@ -29524,7 +29659,7 @@
               "kind": "staticmethod",
               "signature": "(node, value, world: bool = False) -> None",
               "summary": "Apply *value* to *node*'s local or world transformation matrix.",
-              "line": 1058,
+              "line": 1191,
               "deprecated": false
             },
             {
@@ -29533,7 +29668,7 @@
               "kind": "classmethod",
               "signature": "(cls, objects, order, preserve: bool = True) -> List[str]",
               "summary": "Change the rotate order of transforms, keeping their pose and animation.",
-              "line": 1068,
+              "line": 1201,
               "deprecated": false
             }
           ]

@@ -2,10 +2,10 @@
 # coding=utf-8
 try:
     import maya.cmds as cmds
+    import maya.mel as mel
     import maya.api.OpenMaya as om
 except ImportError:
-    cmds = None
-    om = None
+    cmds = mel = om = None
 
 from typing import List, Tuple, Union, Optional
 
@@ -21,6 +21,159 @@ from mayatk.xform_utils._xform_utils import XformUtils
 
 class NurbsUtils(ptk.HelpMixin):
     """ """
+
+    #: The curve actions tentacle's Nurbs list (and its Extrude button) offers ->
+    #: the Maya runtime command each runs: Maya's own menu item, with the
+    #: settings its option box last applied (an ``...Options`` command opens that
+    #: option box). The keys are the vocabulary :meth:`curve_action` shares with
+    #: blendertk's ``NurbsUtils.CURVE_ACTIONS``, which carries the ones Blender
+    #: can serve.
+    CURVE_ACTIONS = {
+        "project": "ProjectCurveOnMesh",
+        "extract": "CreateCurveFromPoly",
+        "duplicate": "DuplicateCurve",
+        "lock_length": "LockCurveLength",
+        "unlock_length": "UnlockCurveLength",
+        "bend": "BendCurves",
+        "curl": "CurlCurves",
+        "scale_curvature": "ScaleCurvature",
+        "smooth": "SmoothHairCurves",
+        "straighten": "StraightenCurves",
+        "planar": "Planar",
+        "insert_isoparm": "InsertIsoparms",
+        "attach": "AttachCurveOptions",
+        "detach": "DetachCurve",
+        "cut": "CutCurve",
+        "open_close": "OpenCloseCurve",
+        "insert_knot": "InsertKnot",
+        "rebuild": "RebuildCurveOptions",
+        "reverse": "ReverseCurve",
+        "extend_options": "ExtendCurveOptions",
+        "extend": "ExtendCurve",
+        "extend_on_surface": "ExtendCurveOnSurface",
+        "extrude": "Extrude",
+    }
+
+    #: Revolve axes by name (``cmds.revolve -axis``).
+    REVOLVE_AXES = {"x": (1, 0, 0), "y": (0, 1, 0), "z": (0, 0, 1)}
+
+    @classmethod
+    @CoreUtils.undoable
+    def curve_action(cls, action: str, curves=None) -> List[str]:
+        """Run the curve action *action* (a :attr:`CURVE_ACTIONS` key) on *curves*.
+
+        Twin of blendertk's ``NurbsUtils.curve_action``: one call per action for
+        a panel shared by both hosts. Maya's runtime command acts on the
+        selection, so *curves* other than None are selected first; Maya's own
+        warnings (a wrong selection) stay Maya's. One undo step.
+
+        Parameters:
+            action (str): A :attr:`CURVE_ACTIONS` key (``"reverse"``, ``"planar"``).
+            curves (str/list/None): What to act on; None keeps the selection.
+
+        Returns:
+            (list): The selection the command left -- its result, for an action
+                that creates (Extract, Duplicate, Planar); ``[]`` when none.
+
+        Raises:
+            ValueError: *action* is not a :attr:`CURVE_ACTIONS` key.
+            RuntimeError: Maya refused it (its message, after the command's name).
+        """
+        command = cls.CURVE_ACTIONS.get(action)
+        if command is None:
+            raise ValueError(
+                f"Unknown curve action {action!r}: expected one of "
+                f"{', '.join(sorted(cls.CURVE_ACTIONS))}."
+            )
+        if curves is not None:
+            curves = CoreUtils.as_strings(curves)
+            if not curves:
+                return []
+            cmds.select(curves, replace=True)
+        try:
+            mel.eval(command)
+        except RuntimeError as error:
+            raise RuntimeError(f"{command}: {error}") from error
+        return cmds.ls(selection=True) or []
+
+    @classmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    @DisplayUtils.add_to_isolation
+    def revolve(
+        cls,
+        curves=None,
+        axis: str = "y",
+        start_sweep: float = 0.0,
+        end_sweep: float = 360.0,
+        sections: int = 8,
+        degree: int = 3,
+        range_: bool = False,
+        polygon: bool = True,
+        use_tolerance: bool = False,
+        tolerance: float = 0.001,
+        auto_correct_normal: bool = False,
+    ) -> List[str]:
+        """Revolve each profile curve about *axis* through its own pivot into a
+        surface (``cmds.revolve``), one surface per curve as Maya's Revolve does.
+
+        Twin of blendertk's ``NurbsUtils.revolve`` (a Screw modifier there, which
+        has no degree, range, polygon toggle or tolerance). One undo step; the
+        surfaces join an isolated viewport and end selected.
+
+        Parameters:
+            curves (str/list/None): NURBS curves, curves on surface, isoparms or
+                polygon edges; None takes the selection.
+            axis (str): ``"x"``, ``"y"`` or ``"z"``.
+            start_sweep (float): The start angle of the sweep (degrees).
+            end_sweep (float): The end angle of the sweep (degrees).
+            sections (int): The number of sections around the revolution.
+            degree (int): The surface degree.
+            range_ (bool): Force a curve range on the complete input curve.
+            polygon (bool): Output a polygon mesh rather than a NURBS surface.
+            use_tolerance (bool): Build to *tolerance* rather than *sections*.
+            tolerance (float): The tolerance to build to.
+            auto_correct_normal (bool): Reverse the axis where needed for the
+                normals to point outward.
+
+        Returns:
+            (list): The surfaces (or meshes) made; ``[]`` when *curves* holds no
+                curve to revolve.
+
+        Raises:
+            ValueError: An unknown *axis*.
+        """
+        vector = cls.REVOLVE_AXES.get(str(axis).lower())
+        if vector is None:
+            raise ValueError(f"axis must be 'x', 'y' or 'z', not {axis!r}.")
+        nodes = CoreUtils.as_strings(curves)
+        if not nodes:
+            return []
+        # Maya's own Revolve takes the same set (revolvePreset.mel): NURBS curves,
+        # curves on surface, isoparms and mesh edges, one revolve each.
+        profiles = (
+            cmds.filterExpand(nodes, expand=True, selectionMask=(9, 11, 32, 45)) or []
+        )
+        surfaces = []
+        for profile in profiles:
+            result = cmds.revolve(
+                profile,
+                polygon=int(bool(polygon)),
+                range=bool(range_),
+                startSweep=start_sweep,
+                endSweep=end_sweep,
+                useTolerance=bool(use_tolerance),
+                tolerance=tolerance,
+                degree=degree,
+                sections=sections,
+                useLocalPivot=True,
+                axis=vector,
+                autoCorrectNormal=bool(auto_correct_normal),
+            )
+            surfaces.append(result[0])
+        if surfaces:
+            cmds.select(surfaces, replace=True)
+        return surfaces
 
     @classmethod
     @CoreUtils.undoable
@@ -53,7 +206,9 @@ class NurbsUtils(ptk.HelpMixin):
                 angleLoftSpans (int): Angle loft: Number of duplicated points (spans).
 
         Returns:
-                (obj) nurbsToPoly history node.
+                (list) The loft's nodes (its nurbsToPoly nodes when ``polygon``);
+                ``[]`` with fewer than two profiles selected. Twin of blendertk's
+                ``NurbsUtils.loft``.
         """
         # cmds.undoInfo(openChunk=1)
         sel = cmds.ls(sl=True, long=True)
@@ -88,7 +243,7 @@ class NurbsUtils(ptk.HelpMixin):
                     rsn=reverseSurfaceNormals,
                 )
         else:
-            return "# Error: Operation requires the selection of two curves or polygon edge sets. #"
+            return []  # fewer than two profiles: nothing to loft across
 
         if polygon:  # convert nurb surface to polygon.
             converted = cmds.nurbsToPoly(

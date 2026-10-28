@@ -17,7 +17,7 @@ import unittest
 import mayatk as mtk
 from mayatk.edit_utils._edit_utils import EditUtils
 
-from base_test import MayaTkTestCase
+from base_test import MayaTkTestCase, skipIfBatch
 import maya.cmds as cmds
 import maya.api.OpenMaya as om
 
@@ -1821,6 +1821,61 @@ class TestSelectEdgesByAngle(MayaTkTestCase):
     def test_nothing_selected_is_an_empty_list(self):
         cmds.select(clear=True)
         self.assertEqual(EditUtils.select_edges_by_angle(None), [])
+
+
+class TestSubdivisionOps(MayaTkTestCase):
+    """The subdivision panel's ops: Maya's menu commands on the given meshes."""
+
+    def _faces(self, obj):
+        return cmds.polyEvaluate(obj, face=True)
+
+    def test_triangulate_then_quadrangulate(self):
+        cube = cmds.polyCube(name="sub_ops_cube", ch=False)[0]
+        cmds.select(clear=True)
+        self.assertEqual(EditUtils.triangulate(cube), [cube])
+        self.assertEqual(self._faces(cube), 12)
+        EditUtils.quadrangulate(cube)
+        self.assertEqual(self._faces(cube), 6)
+
+    @skipIfBatch("Add Divisions (SubdividePolygon) changes nothing under mayapy")
+    def test_subdivide_adds_faces(self):
+        cube = cmds.polyCube(name="sub_ops_div", ch=False)[0]
+        before = self._faces(cube)
+        EditUtils.subdivide_mesh(cube)
+        self.assertGreater(self._faces(cube), before)
+
+    def test_apply_subdivision_converts_only_a_previewed_mesh(self):
+        plain = cmds.polyCube(name="sub_ops_plain", ch=False)[0]
+        smooth = cmds.polyCube(name="sub_ops_smooth", ch=False)[0]
+        cmds.setAttr(f"{smooth}.displaySmoothMesh", 2)
+        converted = EditUtils.apply_subdivision([plain, smooth])
+        self.assertEqual([c.rsplit("|", 1)[-1] for c in converted], [smooth])
+        self.assertGreater(self._faces(smooth), 6)
+        self.assertEqual(self._faces(plain), 6)
+        self.assertEqual(EditUtils.apply_subdivision(plain), [])
+
+    def test_nothing_selected_runs_nothing(self):
+        cmds.select(clear=True)
+        for op in (
+            EditUtils.quadrangulate,
+            EditUtils.triangulate,
+            EditUtils.subdivide_mesh,
+            EditUtils.apply_subdivision,
+        ):
+            with self.subTest(op=op.__name__):
+                self.assertEqual(op(None), [])
+
+    def test_decimate_options_are_the_ops_keywords(self):
+        import inspect
+
+        for algorithm, op in (
+            ("reduce", EditUtils.decimate),
+            ("planar", EditUtils.dissolve_coplanar),
+        ):
+            params = inspect.signature(op).parameters
+            for option in EditUtils.DECIMATE_OPTIONS[algorithm]:
+                with self.subTest(algorithm=algorithm, option=option):
+                    self.assertIn(option, params)
 
 
 if __name__ == "__main__":

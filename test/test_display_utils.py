@@ -1139,5 +1139,41 @@ class TestDisplayToggles(MayaTkTestCase):
         )
 
 
+class TestSmoothLevel(MayaTkTestCase):
+    """get_smooth_level / set_smooth_level: the subdivision panel's level controls."""
+
+    def setUp(self):
+        super().setUp()
+        self.cube = cmds.polyCube(name="smooth_level_cube")[0]
+        self.shape = cmds.listRelatives(self.cube, shapes=True, fullPath=True)[0]
+
+    def test_get_reads_the_first_mesh(self):
+        cmds.setAttr(f"{self.shape}.smoothLevel", 3)
+        self.assertEqual(mtk.DisplayUtils.get_smooth_level(self.cube)["level"], 3)
+        cmds.select(clear=True)
+        self.assertIsNone(mtk.DisplayUtils.get_smooth_level())
+
+    def test_set_turns_the_preview_on_and_reports_the_meshes(self):
+        took = mtk.DisplayUtils.set_smooth_level(self.cube, level=4)
+        self.assertEqual(len(took), 1)
+        self.assertEqual(cmds.getAttr(f"{self.shape}.smoothLevel"), 4)
+        self.assertEqual(cmds.getAttr(f"{self.shape}.displaySmoothMesh"), 2)
+        self.assertEqual(cmds.optionVar(q="proxyDivisions"), 4)
+
+    def test_a_locked_plug_raises_value_error(self):
+        cmds.setAttr(f"{self.shape}.smoothLevel", lock=True)
+        try:
+            with self.assertRaises(ValueError):
+                mtk.DisplayUtils.set_smooth_level(self.cube, level=5)
+        finally:
+            cmds.setAttr(f"{self.shape}.smoothLevel", lock=False)
+
+    def test_no_mesh_returns_empty(self):
+        curve = cmds.curve(degree=1, point=[(0, 0, 0), (1, 0, 0)])
+        self.assertEqual(mtk.DisplayUtils.set_smooth_level(curve, level=2), [])
+        cmds.select(clear=True)
+        self.assertEqual(mtk.DisplayUtils.set_smooth_level(None, level=2), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

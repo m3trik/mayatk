@@ -27,6 +27,22 @@ from mayatk.edit_utils.naming._naming import Naming
 class _EditUtilsInternal(object):
     """Internal helpers for EditUtils."""
 
+    @staticmethod
+    def _mesh_command(objects, command: str) -> List[str]:
+        """Run the MEL menu command *command* (it acts on the selection) on the
+        meshes and poly faces of *objects*, selected first: what the panel ops
+        that keep Maya's own option-box settings share. Returns the mesh
+        transforms; ``[]`` (nothing runs) when *objects* holds none."""
+        targets = _EditUtilsInternal._mesh_targets(objects, "f")
+        if not targets:
+            return []
+        members = []
+        for obj, faces in targets.items():
+            members.extend(faces or [obj])
+        cmds.select(members, replace=True)
+        mel.eval(command)
+        return list(targets)
+
     # polyListComponentConversion-able poly components: vtx, edge, face, uv, vtxFace.
     _POLY_COMPONENT_MASKS = (31, 32, 34, 35, 70)
 
@@ -1527,6 +1543,99 @@ class EditUtils(ptk.HelpMixin, _EditUtilsInternal):
         else:
             mel.eval("DetachComponent")
             return None
+
+    #: The keywords each Decimate algorithm honors -- ``"reduce"``
+    #: (:meth:`decimate`) and ``"planar"`` (:meth:`dissolve_coplanar`): what a
+    #: panel offers per algorithm. Twin of blendertk's ``DECIMATE_OPTIONS``.
+    #: Maya's planar dissolve always keeps open borders and dissolves across
+    #: hard edges and UV borders alike.
+    DECIMATE_OPTIONS = {
+        "reduce": (
+            "percentage",
+            "preserve_borders",
+            "preserve_hard_edges",
+            "preserve_uv_borders",
+            "preserve_quads",
+            "symmetry",
+        ),
+        "planar": ("angle_tolerance",),
+    }
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def quadrangulate(objects=None) -> List[str]:
+        """Quadrangulate the meshes or faces of *objects* (None: the selection):
+        Maya's Quadrangulate (``performPolyQuadrangulate``), with the settings its
+        option box last applied. Twin of blendertk's ``EditUtils.quadrangulate``.
+        One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        return _EditUtilsInternal._mesh_command(objects, "performPolyQuadrangulate 0")
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def triangulate(objects=None) -> List[str]:
+        """Triangulate the meshes or faces of *objects* (None: the selection)
+        (``polyTriangulate``). Twin of blendertk's ``EditUtils.triangulate``.
+        One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        return _EditUtilsInternal._mesh_command(objects, "polyTriangulate")
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def subdivide_mesh(objects=None) -> List[str]:
+        """Add Divisions to the meshes or faces of *objects* (None: the selection):
+        Maya's Add Divisions (``SubdividePolygon``), with the settings its option
+        box last applied. Twin of blendertk's ``EditUtils.subdivide_mesh`` (one
+        cut by default there). One undo step.
+
+        Returns:
+            (list): The mesh transforms; ``[]`` (nothing runs) with no mesh.
+        """
+        return _EditUtilsInternal._mesh_command(objects, "SubdividePolygon")
+
+    @staticmethod
+    @CoreUtils.selected
+    @CoreUtils.undoable
+    def apply_subdivision(objects=None) -> List[str]:
+        """Convert the smooth mesh preview of the meshes in *objects* (None: the
+        selection) into polygons: Maya's ``performSmoothMeshPreviewToPolygon`` (a
+        ``polySmooth`` at each mesh's preview level, the preview switched off).
+        Twin of blendertk's ``EditUtils.apply_subdivision`` (it applies the
+        Subdivision Surface modifier). One undo step; the selection is kept.
+
+        Returns:
+            (list): The mesh transforms converted; ``[]`` when none shows a
+                smooth preview.
+        """
+        meshes = (
+            cmds.filterExpand(
+                CoreUtils.as_strings(objects),
+                expand=True,
+                fullPath=True,
+                selectionMask=12,
+            )
+            or []
+        )
+        previewed = [m for m in meshes if cmds.getAttr(f"{m}.displaySmoothMesh")]
+        if not previewed:
+            return []
+        with CoreUtils.preserved_selection():
+            cmds.select(previewed, replace=True)
+            mel.eval("performSmoothMeshPreviewToPolygon")
+        # filterExpand names the shapes; the contract is their transforms.
+        return [
+            (cmds.listRelatives(m, parent=True, fullPath=True) or [m])[0]
+            for m in previewed
+        ]
 
     @staticmethod
     @CoreUtils.undoable

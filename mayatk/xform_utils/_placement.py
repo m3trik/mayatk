@@ -30,6 +30,111 @@ from mayatk.xform_utils.matrices import Matrices
 class _PlacementInternal:
     """Private helpers and ``XformUtils`` method bodies; see the module docstring."""
 
+    #: Transform-snap kinds -> (the manipulator context command, its context, the
+    #: UV editor's twin command, named as its context).
+    _SNAP_CONTEXTS = {
+        "move": ("manipMoveContext", "Move", "texMoveContext"),
+        "scale": ("manipScaleContext", "Scale", "texScaleContext"),
+        "rotate": ("manipRotateContext", "Rotate", "texRotateContext"),
+    }
+
+    @classmethod
+    def _move_to_target(cls, objects, pivot, all_to_last, match_scale):
+        """Body of :meth:`XformUtils.move_to_target`."""
+        if objects is None:
+            nodes = cmds.ls(orderedSelection=True, transforms=True) or []
+        else:
+            names = CoreUtils.as_strings(objects)
+            nodes = (cmds.ls(names, transforms=True) or []) if names else []
+        if len(nodes) < 2:
+            return []
+        if all_to_last:  # every object but the last moves to the last
+            source, target = nodes[:-1], nodes[-1]
+        else:  # the first moves to the others' combined bounding box
+            source, target = nodes[0], nodes[1:]
+        if match_scale:  # uniform: no per-axis distortion
+            cls.match_scale(source, target, average=True)
+        cls.move_to(source, target, pivot=pivot)
+        cmds.select(source)
+        return source if isinstance(source, list) else [source]
+
+    @classmethod
+    def _align_to(cls, mode, objects):
+        """Body of :meth:`XformUtils.align_to`."""
+        command = cls.ALIGN_MODES.get(mode)
+        if command is None:
+            raise ValueError(
+                f"Unknown Align To mode {mode!r}: expected one of "
+                f"{', '.join(cls.ALIGN_MODES)}."
+            )
+        if objects is not None:
+            names = CoreUtils.as_strings(objects)
+            if not names:
+                return []
+            cmds.select(names, replace=True)
+        mel.eval(command)
+        return cmds.ls(selection=True) or []
+
+    @classmethod
+    def _get_transform_snap(cls):
+        """Body of :meth:`XformUtils.get_transform_snap`."""
+        snap = {}
+        for kind, (manip, context, _uv) in cls._SNAP_CONTEXTS.items():
+            command = getattr(cmds, manip)
+            snap[kind] = {
+                "enabled": bool(command(context, query=True, snap=True)),
+                "increment": command(context, query=True, snapValue=True),
+            }
+        return snap
+
+    @classmethod
+    def _set_transform_snap(cls, kind, state, increment):
+        """Body of :meth:`XformUtils.set_transform_snap`."""
+        try:
+            manip, context, uv = cls._SNAP_CONTEXTS[kind]
+        except KeyError:
+            raise ValueError(
+                f"kind must be 'move', 'scale' or 'rotate', not {kind!r}."
+            ) from None
+        command, uv_command = getattr(cmds, manip), getattr(cmds, uv)
+        if state is not None:
+            command(context, edit=True, snap=bool(state), snapRelative=state == 1)
+            uv_command(uv, edit=True, snap=bool(state))
+        if increment is not None:
+            command(context, edit=True, snapValue=increment)
+            uv_command(uv, edit=True, snapValue=increment)
+        return cls._get_transform_snap()[kind]
+
+    @staticmethod
+    def _get_transform_constraint():
+        """Body of :meth:`XformUtils.get_transform_constraint`."""
+        kind = cmds.xformConstraint(query=True, type=True)
+        return {
+            "edge": kind == "edge",
+            "surface": kind == "surface",
+            "live": bool(cmds.ls(live=True)),
+        }
+
+    @classmethod
+    def _set_transform_constraint(cls, kind, state):
+        """Body of :meth:`XformUtils.set_transform_constraint`."""
+        if kind in ("edge", "surface"):
+            if state:
+                cmds.xformConstraint(type=kind)
+            elif cmds.xformConstraint(query=True, type=True) == kind:
+                cmds.xformConstraint(type="none")
+        elif kind == "live":
+            transforms = cmds.ls(selection=True, objectsOnly=True, type="transform") or []
+            if state and transforms:
+                cmds.makeLive(transforms[0])
+            else:
+                cmds.makeLive(none=True)
+        else:
+            raise ValueError(
+                f"kind must be 'edge', 'surface' or 'live', not {kind!r}."
+            )
+        return cls._get_transform_constraint()
+
     @staticmethod
     def _convert_axis(value, invert, ortho, to_integer):
         """Body of :meth:`XformUtils.convert_axis`."""
@@ -170,10 +275,16 @@ class _PlacementInternal:
             # engine reports a per-call summary, and a drop of fifty objects
             # should not print fifty lines.
             cls.freeze_transforms(targets, force=True)
+        return targets
 
     @classmethod
     def _match_scale(cls, a, b, scale, average):
         """Body of :meth:`XformUtils.match_scale`."""
+        if a is None and b is None:  # the ordered selection: first -> the rest
+            ordered = cmds.ls(orderedSelection=True, flatten=True) or []
+            if len(ordered) < 2:
+                return []
+            a, b = ordered[0], ordered[1:]
         to_scale = cmds.ls(CoreUtils.as_strings(a), flatten=True, long=True) or []
 
         bx, by, bz = cls.get_bounding_box(b, "size", world_space=True)
@@ -204,7 +315,7 @@ class _PlacementInternal:
         """Body of :meth:`XformUtils.scale_connected_edges`."""
         if not objects:
             cmds.warning("No edges selected.")
-            return
+            return 0
 
         connected_edges_sets = Components.get_contiguous_edges(objects)
 
@@ -238,6 +349,7 @@ class _PlacementInternal:
                     center_point.z + direction.z * scale_z,
                 )
                 cmds.xform(vertex, ws=True, t=[new_pos.x, new_pos.y, new_pos.z])
+        return len(connected_edges_sets)
 
     @classmethod
     def _reset_translation(cls, objects):
